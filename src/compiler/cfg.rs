@@ -36,9 +36,15 @@ pub struct BasicBlock {
 
 #[derive(Clone, Debug)]
 pub enum Statement {
+    /// Nonconsuming initialized-place read needed while evaluating an index.
+    /// This has no runtime load or value result.
+    Inspect(Place),
     StorageLive(LocalId),
     StorageDead(LocalId),
-    Assign { destination: Place, value: Rvalue },
+    Assign {
+        destination: Place,
+        value: Rvalue,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -58,6 +64,10 @@ pub enum Operand {
 
 #[derive(Clone, Debug)]
 pub enum Rvalue {
+    Repeat {
+        ty: Ty,
+        value: Operand,
+    },
     EnumVariant {
         ty: ir::EnumTy,
         variant: usize,
@@ -113,6 +123,16 @@ fn coerces(got: &Ty, want: &Ty) -> bool {
         return true;
     }
     match (got, want) {
+        (
+            Ty::Array {
+                element: a,
+                len: an,
+            },
+            Ty::Array {
+                element: b,
+                len: bn,
+            },
+        ) if an == bn => coerces(a, b),
         (Ty::Tuple(a), Ty::Tuple(b)) if a.len() == b.len() => {
             a.iter().zip(b.iter()).all(|(a, b)| coerces(a, b))
         }
@@ -125,6 +145,7 @@ fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
     let mut work = 0usize;
     let mut nominals = std::collections::HashSet::new();
     let mut tuples = std::collections::HashSet::new();
+    let mut arrays = std::collections::HashSet::new();
     while let Some((ty, depth)) = pending.pop() {
         work += 1;
         if work > ir::MAX_PATTERN_PROJECTION_WORK {
@@ -134,6 +155,15 @@ fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
             return Err("CFG type nesting exceeds limit 128".into());
         }
         match ty {
+            Ty::Array { element, len } => {
+                if *len > ir::MAX_ARRAY_LEN {
+                    return Err("CFG array length exceeds limit 4096".into());
+                }
+                if arrays.insert(std::sync::Arc::as_ptr(element)) {
+                    // Validate element metadata even for an empty array.
+                    pending.push((element, depth + 1));
+                }
+            }
             Ty::Enum(ty) if nominals.insert((true, ty.def().id)) => {
                 ty.validate()?;
                 for variant in ty.def().variants.iter() {
@@ -200,7 +230,18 @@ impl Function {
                 }
                 Ok(ty.clone())
             }
-            Operand::Move(place) => self.place_ty(place).cloned(),
+            Operand::Move(place) => {
+                let ty = self.place_ty(place)?;
+                if !ty.is_copy()
+                    && place
+                        .projection
+                        .iter()
+                        .any(|part| matches!(part, Projection::ConstantIndex(_)))
+                {
+                    return Err("cannot move non-Copy value out of array index".into());
+                }
+                Ok(ty.clone())
+            }
         }
     }
 
@@ -215,6 +256,19 @@ impl Function {
 
     fn rvalue_ty(&self, value: &Rvalue) -> Result<Ty, String> {
         match value {
+            Rvalue::Repeat { ty, value } => {
+                validate_type(ty, 0)?;
+                let Ty::Array { element, len } = ty else {
+                    return Err("CFG repeat requires array type".into());
+                };
+                self.require_operand(value, element)?;
+                if *len > 1 && !element.is_copy() {
+                    return Err(
+                        "CFG array repeat requires Copy element for length greater than one".into(),
+                    );
+                }
+                Ok(ty.clone())
+            }
             Rvalue::EnumVariant {
                 ty,
                 variant,
@@ -282,7 +336,9 @@ impl Function {
                 } else {
                     Ty::I32
                 };
-                if operand_ty.field_count().is_some() || matches!(operand_ty, Ty::Enum(_)) {
+                if operand_ty.field_count().is_some()
+                    || matches!(operand_ty, Ty::Enum(_) | Ty::Array { .. })
+                {
                     return Err("CFG aggregate comparison is unsupported".into());
                 }
                 self.require_operand(left, &operand_ty)?;
@@ -291,6 +347,15 @@ impl Function {
             }
             Rvalue::Aggregate { ty, fields } => {
                 validate_type(ty, 0)?;
+                if let Ty::Array { element, len } = ty {
+                    if fields.len() != *len {
+                        return Err("CFG array aggregate length mismatch".into());
+                    }
+                    for field in fields {
+                        self.require_operand(field, element)?;
+                    }
+                    return Ok(ty.clone());
+                }
                 let count = ty
                     .field_count()
                     .ok_or("CFG aggregate requires aggregate type")?;
@@ -340,6 +405,9 @@ impl Function {
         for item in &self.blocks {
             for statement in &item.statements {
                 match &statement.value {
+                    Statement::Inspect(place) => {
+                        self.place_ty(place)?;
+                    }
                     Statement::StorageLive(local) | Statement::StorageDead(local) => {
                         self.place_ty(&place(*local))?;
                     }
@@ -625,20 +693,6 @@ impl Lowerer<'_> {
         self.statement(Statement::Assign { destination, value }, origin);
     }
 
-    /// Place context does not read or consume its aggregate base. Only the
-    /// selected subtree is read when this place enters a value context.
-    fn expression_place(&self, id: ExprId) -> Option<Place> {
-        match &self.source.exprs.get(id.0)?.kind {
-            ir::ExprKind::Local(local) => Some(place(*local)),
-            ir::ExprKind::Field { base, index } => {
-                let mut p = self.expression_place(*base)?;
-                p.projection.push(Projection::Field(*index));
-                Some(p)
-            }
-            _ => None,
-        }
-    }
-
     fn consume(&self, place: Place) -> Result<Operand, String> {
         if self.result.place_ty(&place)?.is_copy() {
             Ok(Operand::Copy(place))
@@ -647,12 +701,12 @@ impl Lowerer<'_> {
         }
     }
 
-    /// Evaluate only the non-place root of a pattern initializer. A field chain
-    /// remains an address even when rooted in a call/temporary: ignoring that
-    /// field must not accidentally load or move it merely to obtain its place.
+    /// Evaluate the non-place root once, retaining field/index chains as
+    /// addresses. Fields do not read their parent. An index inspects its array
+    /// base even when the selected element is ignored, but never moves it.
     fn pattern_source(&mut self, id: ExprId) -> Result<Place, String> {
         let mut root = id;
-        let mut fields = Vec::new();
+        let mut projection = Vec::new();
         let mut source = loop {
             let expression = self
                 .source
@@ -661,23 +715,51 @@ impl Lowerer<'_> {
                 .ok_or("invalid pattern initializer expression")?;
             match &expression.kind {
                 ir::ExprKind::Local(local) => break place(*local),
-                ir::ExprKind::Field { base, index } => {
-                    if fields.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+                ir::ExprKind::Field { base, index } | ir::ExprKind::Index { base, index } => {
+                    if projection.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
                         return Err("pattern initializer projection depth exceeds limit 128".into());
                     }
-                    fields.push(*index);
+                    projection.push(if matches!(expression.kind, ir::ExprKind::Index { .. }) {
+                        Projection::ConstantIndex(*index)
+                    } else {
+                        Projection::Field(*index)
+                    });
                     root = *base;
                 }
                 _ => break self.materialize_expression(root)?,
             }
         };
-        source
-            .projection
-            .extend(fields.into_iter().rev().map(Projection::Field));
-        // Static metadata validation is not a value read. Moved and partially
-        // initialized places are deliberately addressable in pattern context.
+        for part in projection.into_iter().rev() {
+            if matches!(part, Projection::ConstantIndex(_)) {
+                self.result.place_ty(&source)?;
+                self.statement(Statement::Inspect(source.clone()), Some(id));
+            }
+            source.projection.push(part);
+        }
+        // Final structural metadata validation is not an additional value read.
+        // Field-only pattern places remain addressable after partial moves.
         self.result.place_ty(&source)?;
         Ok(source)
+    }
+
+    fn inspect_index_prefixes(
+        &mut self,
+        destination: &Place,
+        origin: Option<ExprId>,
+    ) -> Result<(), String> {
+        self.result.place_ty(destination)?;
+        for (index, part) in destination.projection.iter().enumerate() {
+            if matches!(part, Projection::ConstantIndex(_)) {
+                self.statement(
+                    Statement::Inspect(Place {
+                        local: destination.local,
+                        projection: destination.projection[..index].to_vec(),
+                    }),
+                    origin,
+                );
+            }
+        }
+        Ok(())
     }
 
     fn body(&mut self, body: &ir::Block, destination: Option<Place>) -> Result<(), String> {
@@ -733,6 +815,7 @@ impl Lowerer<'_> {
                 }
                 ir::Stmt::AssignPlace { place, value } => {
                     let operand = self.expression(*value)?;
+                    self.inspect_index_prefixes(place, Some(*value))?;
                     self.assign(place.clone(), Rvalue::Use(operand), Some(*value));
                 }
                 ir::Stmt::Expr(value) => {
@@ -846,6 +929,45 @@ impl Lowerer<'_> {
         self.live(destination.local, Some(id));
         let origin = Some(id);
         match &expression.kind {
+            ir::ExprKind::Array(elements) => {
+                let Ty::Array { len, .. } = &expression.ty else {
+                    return Err("checked array expression requires array type".into());
+                };
+                if *len > ir::MAX_ARRAY_LEN || elements.len() != *len {
+                    return Err("checked array length mismatch".into());
+                }
+                let fields = elements
+                    .iter()
+                    .map(|id| self.expression(*id))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::Aggregate {
+                        ty: expression.ty.clone(),
+                        fields,
+                    },
+                    origin,
+                );
+            }
+            ir::ExprKind::Repeat { value, len } => {
+                let Ty::Array { len: count, .. } = &expression.ty else {
+                    return Err("checked repeat requires array type".into());
+                };
+                if len != count || *len > ir::MAX_ARRAY_LEN {
+                    return Err("checked array repeat length mismatch".into());
+                }
+                // The operand is evaluated and consumed exactly once, even
+                // when no array element is produced for a zero-length repeat.
+                let value = self.expression(*value)?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::Repeat {
+                        ty: expression.ty.clone(),
+                        value,
+                    },
+                    origin,
+                );
+            }
             ir::ExprKind::EnumVariant {
                 ty,
                 variant,
@@ -896,14 +1018,8 @@ impl Lowerer<'_> {
                 Rvalue::Use(self.consume(place(*local))?),
                 origin,
             ),
-            ir::ExprKind::Field { base, index } => {
-                let p = if let Some(p) = self.expression_place(id) {
-                    p
-                } else {
-                    let mut p = self.materialize_expression(*base)?;
-                    p.projection.push(Projection::Field(*index));
-                    p
-                };
+            ir::ExprKind::Field { .. } | ir::ExprKind::Index { .. } => {
+                let p = self.pattern_source(id)?;
                 self.assign(destination.clone(), Rvalue::Use(self.consume(p)?), origin);
             }
             ir::ExprKind::Tuple(fields) => {
@@ -1264,6 +1380,274 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn array_wildcard_index_inspects_base_without_moving_element() {
+        let item = Ty::Struct(nominal(vec![Ty::I32]));
+        let root = Ty::Array {
+            element: std::sync::Arc::new(item.clone()),
+            len: 2,
+        };
+        let mut source = with_root(
+            root.clone(),
+            vec![
+                expr(root, ir::ExprKind::Local(LocalId(0))),
+                expr(
+                    item.clone(),
+                    ir::ExprKind::Index {
+                        base: ExprId(0),
+                        index: 0,
+                    },
+                ),
+            ],
+            vec![ir::Stmt::LetPattern {
+                value: ExprId(1),
+                ty: item,
+                bindings: vec![],
+            }],
+        );
+        let function = nominal_lowered(&source);
+        assert!(root_reads(&function).is_empty());
+        let inspections: Vec<_> = function
+            .blocks
+            .iter()
+            .flat_map(|b| &b.statements)
+            .filter_map(|statement| match &statement.value {
+                Statement::Inspect(place) => Some(place),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(inspections, [&place(LocalId(0))]);
+        assert!(super::super::ownership::analyze(&function).passed());
+        assert_storage_paths(&function);
+        source.body.statements.insert(0, ir::Stmt::Expr(ExprId(0)));
+        assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
+        source.body.statements[0] = ir::Stmt::Declare { local: LocalId(0) };
+        source.params.clear();
+        assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
+    }
+
+    #[test]
+    fn array_index_copy_subfields_do_not_move_noncopy_parent() {
+        let item = Ty::Struct(nominal(vec![Ty::I32]));
+        let root = Ty::Array {
+            element: std::sync::Arc::new(item.clone()),
+            len: 1,
+        };
+        let source = with_root(
+            root.clone(),
+            vec![
+                expr(root, ir::ExprKind::Local(LocalId(0))),
+                expr(
+                    item,
+                    ir::ExprKind::Index {
+                        base: ExprId(0),
+                        index: 0,
+                    },
+                ),
+                expr(
+                    Ty::I32,
+                    ir::ExprKind::Field {
+                        base: ExprId(1),
+                        index: 0,
+                    },
+                ),
+                expr(
+                    Ty::I32,
+                    ir::ExprKind::Field {
+                        base: ExprId(1),
+                        index: 0,
+                    },
+                ),
+            ],
+            vec![ir::Stmt::Expr(ExprId(2)), ir::Stmt::Expr(ExprId(3))],
+        );
+        let function = nominal_lowered(&source);
+        let reads = root_reads(&function);
+        assert_eq!(reads.len(), 2);
+        assert!(reads.iter().all(|operand| matches!(operand, Operand::Copy(place) if place.projection == [Projection::ConstantIndex(0), Projection::Field(0)])));
+        assert!(super::super::ownership::analyze(&function).passed());
+        assert_storage_paths(&function);
+        assert_eq!(
+            function
+                .operand_ty(&Operand::Move(Place {
+                    local: LocalId(0),
+                    projection: vec![Projection::ConstantIndex(0), Projection::Field(0)]
+                }))
+                .unwrap(),
+            Ty::I32
+        );
+        assert!(
+            function
+                .operand_ty(&Operand::Move(Place {
+                    local: LocalId(0),
+                    projection: vec![Projection::ConstantIndex(0)]
+                }))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn zero_and_single_repeats_consume_noncopy_operand_once() {
+        for len in [0, 1] {
+            let item = Ty::Struct(nominal(vec![Ty::I32]));
+            let array = Ty::Array {
+                element: std::sync::Arc::new(item.clone()),
+                len,
+            };
+            let source = with_root(
+                item.clone(),
+                vec![
+                    expr(item, ir::ExprKind::Local(LocalId(0))),
+                    expr(
+                        array,
+                        ir::ExprKind::Repeat {
+                            value: ExprId(0),
+                            len,
+                        },
+                    ),
+                ],
+                vec![ir::Stmt::Expr(ExprId(1))],
+            );
+            let function = nominal_lowered(&source);
+            assert_eq!(root_reads(&function).len(), 1);
+            assert!(matches!(root_reads(&function)[0], Operand::Move(_)));
+            assert_eq!(
+                function
+                    .blocks
+                    .iter()
+                    .flat_map(|b| &b.statements)
+                    .filter(|s| matches!(
+                        s.value,
+                        Statement::Assign {
+                            value: Rvalue::Repeat { .. },
+                            ..
+                        }
+                    ))
+                    .count(),
+                1
+            );
+            assert!(super::super::ownership::analyze(&function).passed());
+            assert_storage_paths(&function);
+        }
+    }
+
+    #[test]
+    fn indexed_assignment_inspects_after_rhs_initializes_array() {
+        let root = Ty::Array {
+            element: std::sync::Arc::new(Ty::I32),
+            len: 1,
+        };
+        let destination = Place {
+            local: LocalId(0),
+            projection: vec![Projection::ConstantIndex(0)],
+        };
+        let mut source = with_root(
+            root.clone(),
+            vec![
+                expr(Ty::I32, ir::ExprKind::Int(1)),
+                expr(root, ir::ExprKind::Array(vec![ExprId(0)])),
+                expr(Ty::I32, ir::ExprKind::Int(7)),
+                expr(
+                    Ty::I32,
+                    ir::ExprKind::Block(ir::Block {
+                        statements: vec![ir::Stmt::Assign {
+                            local: LocalId(0),
+                            value: ExprId(1),
+                        }],
+                        tail: Some(ExprId(2)),
+                    }),
+                ),
+            ],
+            vec![
+                ir::Stmt::Declare { local: LocalId(0) },
+                ir::Stmt::AssignPlace {
+                    place: destination,
+                    value: ExprId(3),
+                },
+            ],
+        );
+        source.params.clear();
+        let function = nominal_lowered(&source);
+        assert!(super::super::ownership::analyze(&function).passed());
+        assert_storage_paths(&function);
+        let statements: Vec<_> = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .collect();
+        let initialize = statements.iter().position(|s| matches!(&s.value, Statement::Assign { destination, .. } if destination.local == LocalId(0) && destination.projection.is_empty())).unwrap();
+        let inspect = statements
+            .iter()
+            .position(|s| matches!(&s.value, Statement::Inspect(p) if p.local == LocalId(0)))
+            .unwrap();
+        let write = statements.iter().position(|s| matches!(&s.value, Statement::Assign { destination, .. } if destination.local == LocalId(0) && !destination.projection.is_empty())).unwrap();
+        assert!(initialize < inspect && inspect < write);
+        let ir::Stmt::AssignPlace { value, .. } = &mut source.body.statements[1] else {
+            unreachable!()
+        };
+        *value = ExprId(2);
+        assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
+    }
+
+    #[test]
+    fn nested_array_index_inspects_each_exact_base_prefix_once() {
+        let child = Ty::Array {
+            element: std::sync::Arc::new(Ty::I32),
+            len: 1,
+        };
+        let root = Ty::Array {
+            element: std::sync::Arc::new(child.clone()),
+            len: 1,
+        };
+        let source = with_root(
+            root.clone(),
+            vec![
+                expr(root, ir::ExprKind::Local(LocalId(0))),
+                expr(
+                    child,
+                    ir::ExprKind::Index {
+                        base: ExprId(0),
+                        index: 0,
+                    },
+                ),
+                expr(
+                    Ty::I32,
+                    ir::ExprKind::Index {
+                        base: ExprId(1),
+                        index: 0,
+                    },
+                ),
+            ],
+            vec![ir::Stmt::LetPattern {
+                value: ExprId(2),
+                ty: Ty::I32,
+                bindings: vec![],
+            }],
+        );
+        let function = nominal_lowered(&source);
+        let inspections: Vec<_> = function
+            .blocks
+            .iter()
+            .flat_map(|b| &b.statements)
+            .filter_map(|s| match &s.value {
+                Statement::Inspect(place) => Some(place.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            inspections,
+            [
+                place(LocalId(0)),
+                Place {
+                    local: LocalId(0),
+                    projection: vec![Projection::ConstantIndex(0)]
+                }
+            ]
+        );
+        assert!(super::super::ownership::analyze(&function).passed());
+        assert_storage_paths(&function);
     }
 
     #[test]
@@ -1951,6 +2335,9 @@ mod tests {
             assert!(seen.len() < 10_000, "fixture state exploration limit");
             for statement in &function.blocks[id.0].statements {
                 match &statement.value {
+                    Statement::Inspect(place) => {
+                        assert!(live[place.local.0], "inspection reads dead storage");
+                    }
                     Statement::StorageLive(local) => {
                         assert!(
                             !live[local.0],
@@ -1970,9 +2357,9 @@ mod tests {
                     Statement::Assign { destination, value } => {
                         assert!(live[destination.local.0], "destination local is not live");
                         match value {
-                            Rvalue::Use(value) | Rvalue::Unary { value, .. } => {
-                                live_operand(value, &live)
-                            }
+                            Rvalue::Use(value)
+                            | Rvalue::Unary { value, .. }
+                            | Rvalue::Repeat { value, .. } => live_operand(value, &live),
                             Rvalue::Binary { left, right, .. } => {
                                 live_operand(left, &live);
                                 live_operand(right, &live);

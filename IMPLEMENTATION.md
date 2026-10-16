@@ -21,6 +21,7 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Fieldless nominal enums and scalar/enum match with exhaustive coverage.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
 - [x] Payload enums, typed downcasts, bounded selection proofs and native tagged values.
+- [x] Fixed arrays, repeat effects, literal indexing and private by-value array ABI.
 - [x] Hosted acceptance, stock differential cases and qualified benchmark receipts.
 
 ## Remaining implementation program
@@ -54,6 +55,14 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       libraries, real projects and self-hosting. Self-hosting alone is not enough.
 
 ## Active slice
+
+Fixed arrays and decimal literal indexing now pass 591 hosted tests and strict
+all-target lint under `ARRAYS.md`. The bound is 4096 elements, with independent
+expanded-path, work and frame limits. Repeats evaluate once even at length zero,
+indexed wildcards inspect initialized array storage, and non-Copy indexed moves
+reject. The independent 30-case corpus separates 12 supported, 13 invalid and
+five legal-unsupported programs. Dynamic `usize` indices, slices and array
+patterns remain later work. Full Rust completion remains open.
 
 Payload enums now pass 533 hosted tests plus strict all-target lint.
 `PAYLOAD-ENUMS.md` defines tuple/braced/unit construction, selected payload

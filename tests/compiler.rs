@@ -452,7 +452,6 @@ fn invalid_programs_fail_without_publishing_an_executable() {
         ("nonliteral println", "fn main() { println!(1); }"),
         ("for loop", "fn main() { for x in 0..2 {} }"),
         ("struct", "struct X {} fn main() {}"),
-        ("array", "fn main() { let x = [1, 2]; }"),
         ("malformed syntax", "fn main( {"),
     ];
     for (label, source) in cases {
@@ -465,6 +464,15 @@ fn invalid_programs_fail_without_publishing_an_executable() {
         assert!(!result.stderr.is_empty(), "{label}: missing diagnostic");
         assert!(!output.exists(), "{label}: published invalid executable");
     }
+}
+
+#[test]
+fn historical_array_fixture_now_compiles_and_executes() {
+    let scratch = Scratch::new();
+    let input = scratch.write("input.rs", "fn main() { let x = [1, 2]; }");
+    let output = scratch.path("program");
+    capture(&mut compiler(&input, &output), &scratch, COMPILE_TIMEOUT).success();
+    capture(&mut Command::new(&output), &scratch, RUN_TIMEOUT).success();
 }
 
 #[test]

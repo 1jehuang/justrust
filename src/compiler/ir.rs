@@ -1,4 +1,4 @@
-//! Checked scalar, tuple and nominal struct bodies shared by analysis and codegen.
+//! Checked scalar, aggregate and nominal bodies shared by analysis and codegen.
 //!
 //! IDs are local to one immutable function, not persistent cache identities.
 //! Allocate a new LocalId for every binding, including shadowing. Names are for
@@ -42,6 +42,7 @@ pub struct DefId {
 
 pub const MAX_ENUM_VARIANTS: usize = 4096;
 pub const MAX_MATCH_ARMS: usize = 4096;
+pub const MAX_ARRAY_LEN: usize = 4096;
 
 #[derive(Clone)]
 pub struct EnumTy(Arc<EnumDef>);
@@ -141,6 +142,7 @@ pub struct VariantId {
 pub enum Projection {
     Field(usize),
     Downcast(VariantId),
+    ConstantIndex(usize),
 }
 
 /// Checks structural typing, not the runtime proof needed to read a payload.
@@ -152,6 +154,15 @@ pub fn projected_ty<'a>(root: &'a Ty, path: &[Projection]) -> Result<&'a Ty, Str
     let mut path = path.iter();
     while let Some(projection) = path.next() {
         ty = match *projection {
+            Projection::ConstantIndex(index) => {
+                let Ty::Array { element, len } = ty else {
+                    return Err("constant index requires array type".into());
+                };
+                if *len > MAX_ARRAY_LEN || index >= *len {
+                    return Err("array index out of bounds".into());
+                }
+                element
+            }
             Projection::Field(index) => ty.field_ty(index).ok_or("invalid field projection")?,
             Projection::Downcast(variant) => {
                 let Ty::Enum(owner) = ty else {
@@ -267,6 +278,10 @@ pub enum Ty {
     /// Nonempty structural tuple. The empty tuple is canonically Unit.
     /// Rust Copy semantics for admitted tuples do not make this host enum Copy.
     Tuple(Arc<[Ty]>),
+    Array {
+        element: Arc<Ty>,
+        len: usize,
+    },
     /// Nominal and always non-Copy in this slice, even with only scalar fields.
     Struct(StructTy),
     Enum(EnumTy),
@@ -295,14 +310,19 @@ impl Ty {
         match self {
             Self::I32 | Self::Bool | Self::Unit | Self::Never => true,
             Self::Struct(_) | Self::Enum(_) => false,
-            Self::Tuple(_) => {
+            Self::Tuple(_) | Self::Array { .. } => {
                 let mut pending = vec![self];
                 let mut seen = std::collections::HashSet::new();
+                let mut arrays = std::collections::HashSet::new();
                 while let Some(ty) = pending.pop() {
                     match ty {
                         Self::Struct(_) | Self::Enum(_) => return false,
                         Self::Tuple(fields) if seen.insert(fields.as_ptr()) => {
                             pending.extend(fields.iter());
+                        }
+                        Self::Array { element, .. } if arrays.insert(Arc::as_ptr(element)) => {
+                            // Zero length does not grant implicit Copy permission.
+                            pending.push(element);
                         }
                         _ => {}
                     }
@@ -374,9 +394,9 @@ pub struct Block {
     pub tail: Option<ExprId>,
 }
 
-/// A resolved local-rooted storage location. Field indices are in source
-/// projection order and are checked against tuple/struct types by typing.
-/// Empty fields denote the whole local. No byte offsets or target ABI here.
+/// A resolved local-rooted storage location. Projections retain source order
+/// and distinguish fields, variant payloads and literal array indices.
+/// An empty projection denotes the whole local. No byte offsets or target ABI.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Place {
     pub local: LocalId,
@@ -415,6 +435,20 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
             | (Ty::Never, Ty::Never) => {}
             (Ty::Struct(a), Ty::Struct(b)) if a == b => {}
             (Ty::Enum(a), Ty::Enum(b)) if a == b => {}
+            (
+                Ty::Array {
+                    element: a,
+                    len: an,
+                },
+                Ty::Array {
+                    element: b,
+                    len: bn,
+                },
+            ) if an == bn => {
+                if !Arc::ptr_eq(a, b) {
+                    pending.push((a, b, depth + 1));
+                }
+            }
             (Ty::Tuple(a), Ty::Tuple(b)) if a.len() == b.len() => {
                 if Arc::ptr_eq(a, b) {
                     continue;
@@ -490,6 +524,15 @@ pub struct MatchArm {
 
 #[derive(Clone, Debug)]
 pub enum ExprKind {
+    Array(Vec<ExprId>),
+    Repeat {
+        value: ExprId,
+        len: usize,
+    },
+    Index {
+        base: ExprId,
+        index: usize,
+    },
     EnumVariant {
         ty: EnumTy,
         variant: usize,
@@ -724,6 +767,37 @@ impl CheckedFunction {
         let mut blocks = vec![&self.body];
         for value in &self.exprs {
             match &value.kind {
+                ExprKind::Array(elements) => {
+                    let Ty::Array { len, .. } = &value.ty else {
+                        return Err("array expression requires array type".into());
+                    };
+                    if *len > MAX_ARRAY_LEN || elements.len() != *len {
+                        return Err("array expression length mismatch".into());
+                    }
+                    for &id in elements {
+                        expr(id)?;
+                    }
+                }
+                ExprKind::Repeat {
+                    value: operand,
+                    len,
+                } => {
+                    expr(*operand)?;
+                    let Ty::Array {
+                        element,
+                        len: count,
+                    } = &value.ty
+                    else {
+                        return Err("array repeat requires array type".into());
+                    };
+                    if len != count || *len > MAX_ARRAY_LEN || (*len > 1 && !element.is_copy()) {
+                        return Err("invalid array repeat type, length or Copy requirement".into());
+                    }
+                }
+                ExprKind::Index { base, index } => {
+                    expr(*base)?;
+                    projected_ty(&self.exprs[base.0].ty, &[Projection::ConstantIndex(*index)])?;
+                }
                 ExprKind::EnumVariant {
                     ty,
                     variant,
@@ -844,6 +918,87 @@ impl CheckedFunction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arrays_are_structural_indexed_and_copy_depends_on_element_even_when_empty() {
+        let scalar = Ty::Array {
+            element: Arc::new(Ty::I32),
+            len: 2,
+        };
+        assert!(scalar.is_copy());
+        assert_eq!(scalar.field_count(), None);
+        assert_eq!(scalar.field_ty(0), None);
+        assert_eq!(
+            projected_ty(&scalar, &[Projection::ConstantIndex(1)]).unwrap(),
+            &Ty::I32
+        );
+        assert!(projected_ty(&scalar, &[Projection::Field(0)]).is_err());
+        assert!(projected_ty(&scalar, &[Projection::ConstantIndex(2)]).is_err());
+        let empty = Ty::Array {
+            element: Arc::new(Ty::I32),
+            len: 0,
+        };
+        assert!(projected_ty(&empty, &[Projection::ConstantIndex(0)]).is_err());
+        let noncopy = Ty::Struct(nominal(
+            DefId {
+                snapshot: SnapshotId::allocate().unwrap(),
+                index: 0,
+            },
+            "S",
+            vec![Ty::I32],
+        ));
+        for len in [0, 1, 2] {
+            assert!(
+                !Ty::Array {
+                    element: Arc::new(noncopy.clone()),
+                    len
+                }
+                .is_copy()
+            );
+        }
+        let mut work = 0;
+        assert!(
+            pattern_types_equal(
+                &scalar,
+                &Ty::Array {
+                    element: Arc::new(Ty::I32),
+                    len: 2
+                },
+                &mut work
+            )
+            .unwrap()
+        );
+        assert!(!pattern_types_equal(&scalar, &empty, &mut work).unwrap());
+        let mut function = fixture();
+        function.locals[0].ty = noncopy.clone();
+        function.exprs[0].ty = noncopy.clone();
+        for len in [0, 1] {
+            function.exprs.push(TypedExpr {
+                ty: Ty::Array {
+                    element: Arc::new(noncopy.clone()),
+                    len,
+                },
+                completion: Completion::Returns,
+                kind: ExprKind::Repeat {
+                    value: ExprId(0),
+                    len,
+                },
+            });
+        }
+        function.validate().unwrap();
+        function.exprs.push(TypedExpr {
+            ty: Ty::Array {
+                element: Arc::new(noncopy),
+                len: 2,
+            },
+            completion: Completion::Returns,
+            kind: ExprKind::Repeat {
+                value: ExprId(0),
+                len: 2,
+            },
+        });
+        assert!(function.validate().unwrap_err().contains("Copy"));
+    }
 
     fn unit_variant(name: &str) -> VariantDef {
         VariantDef {

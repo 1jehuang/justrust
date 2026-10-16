@@ -119,6 +119,15 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
                     Some(field) => field,
                     None => return Ok(()),
                 },
+                Projection::ConstantIndex(index) => {
+                    let Ty::Array { element, len } = ty else {
+                        return Ok(());
+                    };
+                    if *index >= *len {
+                        return Ok(());
+                    }
+                    element
+                }
                 Projection::Downcast(variant) => {
                     let Ty::Enum(enumeration) = ty else {
                         return Ok(());
@@ -161,11 +170,18 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
         budget.spend(1)?;
         for item in &block.statements {
             budget.spend(1)?;
+            if let Statement::Inspect(place) = &item.value {
+                place_type(f, place, &mut budget)?;
+            }
             if let Statement::Assign { destination, value } = &item.value {
                 place_type(f, destination, &mut budget)?;
                 match value {
                     Rvalue::Discriminant(place) => place_type(f, place, &mut budget)?,
                     Rvalue::Use(op) | Rvalue::Unary { value: op, .. } => operand(op, &mut budget)?,
+                    Rvalue::Repeat { ty, value } => {
+                        preflight_ty(ty, 0, &mut budget)?;
+                        operand(value, &mut budget)?;
+                    }
                     Rvalue::Binary { left, right, .. } => {
                         operand(left, &mut budget)?;
                         operand(right, &mut budget)?;
@@ -220,6 +236,17 @@ fn preflight_ty(ty: &Ty, depth: usize, budget: &mut Budget) -> Result<(), Exhaus
     if depth > 128 {
         return Err(Exhausted);
     }
+    if let Ty::Array { element, len } = ty {
+        if *len > super::ir::MAX_ARRAY_LEN {
+            return Err(Exhausted);
+        }
+        // Zero arrays still validate their element type and Copy semantics.
+        // Nonempty arrays expand before allocation, bounding repeated shared
+        // types as well as their distinct element move paths.
+        for _ in 0..(*len).max(1) {
+            preflight_ty(element, depth + 1, budget)?;
+        }
+    }
     if let Ty::Enum(ty) = ty {
         budget.spend(ty.def().variants.len())?;
         for variant in ty.def().variants.iter() {
@@ -272,6 +299,15 @@ impl Paths {
                     paths.nodes[id].children.push(child);
                 }
             }
+            if let Ty::Array { element, len } = ty {
+                if *len > super::ir::MAX_ARRAY_LEN || *len > limit - paths.nodes.len() {
+                    return Err(Exhausted);
+                }
+                for _ in 0..*len {
+                    let child = add(paths, element, Some(id), limit)?;
+                    paths.nodes[id].children.push(child);
+                }
+            }
             if let Ty::Enum(enumeration) = ty {
                 for variant in enumeration.def().variants.iter() {
                     let offset = paths.nodes[id].children.len();
@@ -300,7 +336,7 @@ impl Paths {
         let mut projection = place.projection.iter();
         while let Some(step) = projection.next() {
             let index = match step {
-                Projection::Field(index) => *index,
+                Projection::Field(index) | Projection::ConstantIndex(index) => *index,
                 Projection::Downcast(variant) => {
                     let Some(Projection::Field(index)) = projection.next() else {
                         unreachable!("validated downcast has a field")
@@ -466,7 +502,7 @@ impl Transfer<'_> {
         let mut projection = place.projection.iter();
         while let Some(step) = projection.next() {
             let index = match step {
-                Projection::Field(index) => *index,
+                Projection::Field(index) | Projection::ConstantIndex(index) => *index,
                 Projection::Downcast(variant) => {
                     if let Some(report) = &mut self.report {
                         report.stats.variant_proof_checks += 1;
@@ -552,6 +588,29 @@ impl Transfer<'_> {
         if let Some(report) = &mut self.report {
             report.stats.operands_read += 1;
         }
+        if let Operand::Move(place) = op {
+            self.budget.spend(place.projection.len() + 1)?;
+            if place
+                .projection
+                .iter()
+                .any(|p| matches!(p, Projection::ConstantIndex(_)))
+            {
+                // The CFG verifier also rejects this, including in dead blocks.
+                // Keep transfer fail-closed independently, and meter repeated
+                // element Copy checks rather than recursively walking for free.
+                let ty = self.f.place_ty(place).expect("structurally verified place");
+                preflight_ty(ty, 0, self.budget)?;
+                if !ty.is_copy() {
+                    self.diagnostic(
+                        ErrorKind::InvalidCfg(
+                            "non-Copy move through array indexing is unsupported".into(),
+                        ),
+                        place.clone(),
+                    );
+                    return Ok(());
+                }
+            }
+        }
         if let Operand::Copy(place) | Operand::Move(place) = op {
             self.read(state, place)?;
             if matches!(op, Operand::Move(_)) {
@@ -598,6 +657,8 @@ impl Transfer<'_> {
             // require the entire enum, including active payloads, initialized.
             Rvalue::Discriminant(place) => self.read(state, place)?,
             Rvalue::Use(op) | Rvalue::Unary { value: op, .. } => self.operand(state, op)?,
+            // Repetition evaluates once even for a zero-length destination.
+            Rvalue::Repeat { value, .. } => self.operand(state, value)?,
             Rvalue::Binary { left, right, .. } => {
                 self.operand(state, left)?;
                 self.operand(state, right)?;
@@ -617,6 +678,7 @@ impl Transfer<'_> {
             self.statement = Some(index);
             self.origin = item.origin;
             match &item.value {
+                Statement::Inspect(place) => self.read(state, place)?,
                 Statement::StorageLive(local) => {
                     if let Some(report) = &mut self.report {
                         report.stats.storage_events += 1;
@@ -1075,6 +1137,429 @@ mod tests {
                 terminator: located(Terminator::Return),
             },
         ]);
+    }
+
+    fn array(element: Ty, len: usize) -> Ty {
+        Ty::Array {
+            element: std::sync::Arc::new(element),
+            len,
+        }
+    }
+
+    fn indexed(local: usize, index: usize) -> Place {
+        Place {
+            local: LocalId(local),
+            projection: vec![Projection::ConstantIndex(index)],
+        }
+    }
+
+    #[test]
+    fn array_paths_are_distinct_and_zero_arrays_have_only_a_root() {
+        let mut f = fixture();
+        f.locals
+            .extend([local(array(array(Ty::I32, 2), 2)), local(array(Ty::I32, 0))]);
+        let paths = Paths::new(&f, 9).unwrap();
+        assert_eq!(paths.nodes.len(), 9);
+        assert!(Paths::new(&f, 8).is_err());
+        assert_ne!(paths.resolve(&indexed(1, 0)), paths.resolve(&indexed(1, 1)));
+        let nested = |index| Place {
+            local: LocalId(1),
+            projection: vec![
+                Projection::ConstantIndex(index),
+                Projection::ConstantIndex(1),
+            ],
+        };
+        assert_ne!(paths.resolve(&nested(0)), paths.resolve(&nested(1)));
+        assert!(paths.nodes[paths.roots[2]].children.is_empty());
+    }
+
+    #[test]
+    fn repeat_zero_and_one_consume_noncopy_operand_once() {
+        for len in [0, 1] {
+            let element = nominal(vec![Ty::I32]);
+            let ty = array(element.clone(), len);
+            let mut f = fixture();
+            f.locals.extend([local(element), local(ty.clone())]);
+            f.params.push(LocalId(1));
+            f.blocks[0].statements.extend([
+                located(Statement::StorageLive(LocalId(2))),
+                located(Statement::Assign {
+                    destination: place(2),
+                    value: Rvalue::Repeat {
+                        ty,
+                        value: Operand::Move(place(1)),
+                    },
+                }),
+                located(Statement::Inspect(place(2))),
+            ]);
+            let result = analyze(&f);
+            assert!(result.passed(), "len={len}: {:?}", result.diagnostics);
+            assert_eq!(result.stats.moves, 1);
+            assert_eq!(result.stats.operands_read, 3);
+            f.blocks[0]
+                .statements
+                .push(located(Statement::Inspect(place(1))));
+            let result = analyze(&f);
+            assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+            assert_eq!(
+                result.diagnostics[0].kind,
+                ErrorKind::ReadNotDefinitelyInitialized
+            );
+        }
+    }
+
+    #[test]
+    fn repeat_copy_operand_is_evaluated_once_and_noncopy_many_is_rejected() {
+        let mut f = fixture();
+        let ty = array(Ty::I32, 4);
+        f.locals.extend([local(Ty::I32), local(ty.clone())]);
+        f.params.push(LocalId(1));
+        f.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(2))),
+            located(Statement::Assign {
+                destination: place(2),
+                value: Rvalue::Repeat {
+                    ty,
+                    value: Operand::Copy(place(1)),
+                },
+            }),
+            located(Statement::Inspect(place(2))),
+            located(Statement::Inspect(place(1))),
+        ]);
+        let result = analyze(&f);
+        assert!(result.passed(), "{:?}", result.diagnostics);
+        assert_eq!(result.stats.operands_read, 3);
+        assert_eq!(result.stats.moves, 0);
+
+        let element = nominal(vec![Ty::I32]);
+        f.locals[1].ty = element.clone();
+        f.locals[2].ty = array(element, 2);
+        let Statement::Assign { value, .. } = &mut f.blocks[0].statements[3].value else {
+            unreachable!()
+        };
+        *value = Rvalue::Repeat {
+            ty: f.locals[2].ty.clone(),
+            value: Operand::Move(place(1)),
+        };
+        let result = analyze(&f);
+        assert!(matches!(
+            &result.diagnostics[0].kind,
+            ErrorKind::InvalidCfg(_)
+        ));
+    }
+
+    #[test]
+    fn zero_length_noncopy_array_whole_move_clears_root_marker() {
+        let ty = array(nominal(vec![Ty::I32]), 0);
+        assert!(!ty.is_copy());
+        let mut f = fixture();
+        f.locals.extend([local(ty.clone()), local(ty)]);
+        f.params.push(LocalId(1));
+        f.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(2))),
+            located(Statement::Inspect(place(1))),
+            located(Statement::Assign {
+                destination: place(2),
+                value: Rvalue::Use(Operand::Move(place(1))),
+            }),
+            located(Statement::Inspect(place(2))),
+            located(Statement::Inspect(place(1))),
+        ]);
+        let result = analyze(&f);
+        assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(result.diagnostics[0].place, Some(place(1)));
+        assert_eq!(
+            result.diagnostics[0].kind,
+            ErrorKind::ReadNotDefinitelyInitialized
+        );
+    }
+
+    #[test]
+    fn indexed_copy_field_reads_preserve_noncopy_array_for_whole_move() {
+        let element = nominal(vec![nominal(vec![Ty::I32]), Ty::I32]);
+        let ty = array(element, 2);
+        let mut f = fixture();
+        f.locals
+            .extend([local(ty.clone()), local(Ty::I32), local(ty)]);
+        f.params.push(LocalId(1));
+        let mut scalar = indexed(1, 0);
+        scalar.projection.push(Projection::Field(1));
+        f.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(2))),
+            located(Statement::StorageLive(LocalId(3))),
+            located(Statement::Inspect(place(1))),
+            read_payload(scalar.clone()),
+            read_payload(scalar),
+            located(Statement::Assign {
+                destination: place(3),
+                value: Rvalue::Use(Operand::Move(place(1))),
+            }),
+        ]);
+        let result = analyze(&f);
+        assert!(result.passed(), "{:?}", result.diagnostics);
+        assert_eq!(result.stats.moves, 1);
+    }
+
+    #[test]
+    fn indexed_noncopy_moves_are_rejected_even_through_projected_subfields() {
+        let inner = nominal(vec![Ty::I32]);
+        let element = nominal(vec![inner.clone(), Ty::I32]);
+        for nested in [false, true] {
+            let mut f = fixture();
+            f.locals.extend([
+                local(array(element.clone(), 2)),
+                local(if nested {
+                    inner.clone()
+                } else {
+                    element.clone()
+                }),
+            ]);
+            f.params.push(LocalId(1));
+            let mut source = indexed(1, 0);
+            if nested {
+                source.projection.push(Projection::Field(0));
+            }
+            f.blocks[0].statements.extend([
+                located(Statement::StorageLive(LocalId(2))),
+                located(Statement::Assign {
+                    destination: place(2),
+                    value: Rvalue::Use(Operand::Move(source)),
+                }),
+            ]);
+            let result = analyze(&f);
+            assert!(!result.passed());
+            assert!(matches!(
+                result.diagnostics[0].kind,
+                ErrorKind::InvalidCfg(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn indexed_private_copy_move_remains_a_consuming_transfer() {
+        let mut f = fixture();
+        f.locals.extend([local(array(Ty::I32, 2)), local(Ty::I32)]);
+        f.params.push(LocalId(1));
+        f.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(2))),
+            located(Statement::Assign {
+                destination: place(2),
+                value: Rvalue::Use(Operand::Move(indexed(1, 0))),
+            }),
+            located(Statement::Inspect(indexed(1, 1))),
+            located(Statement::Inspect(indexed(1, 0))),
+        ]);
+        let result = analyze(&f);
+        assert!(result.complete);
+        assert_eq!(result.stats.moves, 1);
+        assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(
+            result.diagnostics[0].kind,
+            ErrorKind::ReadNotDefinitelyInitialized
+        );
+        assert_eq!(result.diagnostics[0].place, Some(indexed(1, 0)));
+    }
+
+    #[test]
+    fn array_base_inspection_rejects_uninitialized_or_moved_wildcard_bases() {
+        let ty = array(nominal(vec![Ty::I32]), 2);
+        for moved in [false, true] {
+            let mut f = fixture();
+            f.locals.extend([local(ty.clone()), local(ty.clone())]);
+            if moved {
+                f.params.push(LocalId(1));
+                f.blocks[0].statements.extend([
+                    located(Statement::StorageLive(LocalId(2))),
+                    located(Statement::Inspect(place(1))),
+                    located(Statement::Assign {
+                        destination: place(2),
+                        value: Rvalue::Use(Operand::Move(place(1))),
+                    }),
+                ]);
+            } else {
+                f.blocks[0]
+                    .statements
+                    .push(located(Statement::StorageLive(LocalId(1))));
+            }
+            f.blocks[0]
+                .statements
+                .push(located(Statement::Inspect(place(1))));
+            let result = analyze(&f);
+            assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+            assert_eq!(
+                result.diagnostics[0].kind,
+                ErrorKind::ReadNotDefinitelyInitialized
+            );
+        }
+    }
+
+    #[test]
+    fn projected_array_inspection_does_not_read_unrelated_aggregate_siblings() {
+        let mut f = fixture();
+        f.locals.extend([
+            local(Ty::Tuple(vec![array(Ty::I32, 2), Ty::I32].into())),
+            local(Ty::I32),
+        ]);
+        f.params.push(LocalId(1));
+        let field = |index| Place {
+            local: LocalId(1),
+            projection: vec![Projection::Field(index)],
+        };
+        f.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(2))),
+            located(Statement::Assign {
+                destination: place(2),
+                value: Rvalue::Use(Operand::Move(field(1))),
+            }),
+            located(Statement::Inspect(field(0))),
+        ]);
+        assert!(analyze(&f).passed());
+        f.blocks[0]
+            .statements
+            .push(located(Statement::Inspect(place(1))));
+        let result = analyze(&f);
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(
+            result.diagnostics[0].kind,
+            ErrorKind::ReadNotDefinitelyInitialized
+        );
+    }
+
+    #[test]
+    fn indexed_assignment_requires_mutable_initialized_ancestors() {
+        for (mutable, initialized, expected) in [
+            (true, true, None),
+            (false, true, Some(ErrorKind::ImmutableReassignment)),
+            (
+                true,
+                false,
+                Some(ErrorKind::WriteIntoUninitializedAggregate),
+            ),
+        ] {
+            let mut f = fixture();
+            f.locals.push(local(array(Ty::I32, 2)));
+            f.locals[1].mutable = mutable;
+            if initialized {
+                f.params.push(LocalId(1));
+            } else {
+                f.blocks[0]
+                    .statements
+                    .push(located(Statement::StorageLive(LocalId(1))));
+            }
+            f.blocks[0].statements.push(located(Statement::Assign {
+                destination: indexed(1, 0),
+                value: Rvalue::Use(if initialized {
+                    Operand::Copy(indexed(1, 1))
+                } else {
+                    Operand::Constant(Constant::I32(4))
+                }),
+            }));
+            let result = analyze(&f);
+            if let Some(expected) = expected {
+                assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+                assert_eq!(result.diagnostics[0].kind, expected);
+            } else {
+                assert!(result.passed(), "{:?}", result.diagnostics);
+            }
+        }
+    }
+
+    #[test]
+    fn array_element_variant_proofs_are_independent_and_inspection_preserves_them() {
+        let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        let mut f = fixture();
+        f.locals
+            .extend([local(array(Ty::Enum(ty.clone()), 2)), local(Ty::I32)]);
+        f.params.push(LocalId(1));
+        f.blocks[0]
+            .statements
+            .push(located(Statement::StorageLive(LocalId(2))));
+        split_payload(&mut f, &ty);
+        f.blocks[0].terminator = located(Terminator::SwitchVariant {
+            place: indexed(1, 0),
+            variant: variant(&ty, 0),
+            then_block: BlockId(1),
+            else_block: BlockId(2),
+        });
+        let field = |index| {
+            let mut place = indexed(1, index);
+            place
+                .projection
+                .extend([Projection::Downcast(variant(&ty, 0)), Projection::Field(0)]);
+            place
+        };
+        f.blocks[1].statements.extend([
+            located(Statement::Inspect(place(1))),
+            read_payload(field(0)),
+            located(Statement::Assign {
+                destination: indexed(1, 1),
+                value: Rvalue::EnumVariant {
+                    ty: ty.clone(),
+                    variant: 1,
+                    fields: vec![Operand::Constant(Constant::I32(9))],
+                },
+            }),
+            read_payload(field(0)),
+        ]);
+        let result = analyze(&f);
+        assert!(result.passed(), "{:?}", result.diagnostics);
+        assert_eq!(result.stats.variant_proofs_killed, 0);
+        f.blocks[1].statements.push(read_payload(field(1)));
+        let result = analyze(&f);
+        assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(
+            result.diagnostics[0].kind,
+            ErrorKind::VariantNotDefinitelySelected
+        );
+        f.blocks[1].statements.pop();
+        f.blocks[1].statements.extend([
+            located(Statement::Assign {
+                destination: indexed(1, 0),
+                value: Rvalue::EnumVariant {
+                    ty: ty.clone(),
+                    variant: 1,
+                    fields: vec![Operand::Constant(Constant::I32(8))],
+                },
+            }),
+            read_payload(field(0)),
+        ]);
+        let result = analyze(&f);
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(
+            result.diagnostics[0].kind,
+            ErrorKind::VariantNotDefinitelySelected
+        );
+        assert_eq!(result.stats.variant_proofs_killed, 1);
+    }
+
+    #[test]
+    fn array_preflight_bounds_expansion_and_checks_zero_element_types() {
+        let ty = array(Ty::I32, super::super::ir::MAX_ARRAY_LEN);
+        assert!(preflight_ty(&ty, 0, &mut Budget(8192)).is_err());
+        assert!(preflight_ty(&ty, 0, &mut Budget(8193)).is_ok());
+        assert!(
+            preflight_ty(
+                &array(Ty::I32, super::super::ir::MAX_ARRAY_LEN + 1),
+                0,
+                &mut Budget(1_000_000)
+            )
+            .is_err()
+        );
+        let mut huge = Ty::I32;
+        for _ in 0..8 {
+            huge = array(huge, 16);
+        }
+        let mut f = fixture();
+        f.locals.push(local(huge));
+        let result = analyze(&f);
+        assert!(!result.complete);
+        assert_eq!(result.stats.move_paths, 0);
+        assert_eq!(result.diagnostics[0].kind, ErrorKind::ResourceLimit);
+        let mut deep = Ty::I32;
+        for _ in 0..130 {
+            deep = array(deep, 0);
+        }
+        assert!(preflight_ty(&deep, 0, &mut Budget(1_000_000)).is_err());
     }
 
     #[test]

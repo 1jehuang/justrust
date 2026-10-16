@@ -1,5 +1,40 @@
 # Findings: where agent build time goes
 
+## 2026-10-16: Fixed arrays preserve operand effects and indexed storage reads
+
+Implemented bounded `[T; N]` values, left-to-right literals, once-only repeats,
+contextual empty literals and decimal literal indexing. Every array is an owning
+indirect value, even lengths zero and one. Empty backing has a zeroed eight-byte
+sentinel in this private ABI. Repeat and large-copy code generation uses bounded
+native loops rather than expanding one instruction sequence per copied word.
+This is a code-size/correctness property, not a measured performance claim.
+
+Stock oracles established that `[s; 0]` still consumes a non-Copy operand and
+`let _ = a[0]` still requires initialized array storage. CFG Inspect marks that
+non-consuming indexed-base read without moving the enclosing value or unrelated
+siblings. Assignment snapshots RHS before inspecting the LHS, allowing RHS code
+to initialize a previously uninitialized array. Non-Copy moves through any index
+remain invalid, including nested fields. Distinct element move paths keep enum
+selection proofs isolated, and whole/element writes invalidate appropriate facts.
+Shared limits fail closed before expanded path allocation.
+
+The exact historical `fn main() { let x = [1, 2]; }` fixture was promoted unchanged
+from rejected to native execution. The independent 30-case array corpus contains
+12 supported programs, 13 invalid programs and five legal-unsupported boundaries.
+Coordinator stock-only verification passed all 30. Runtime usize indices, array
+patterns, slices, general constants and later-use inference remain unsupported.
+
+Final frozen hosted gates passed:
+- check `20261016-000203898-1877035`;
+- all 591 tests `20261016-000204707-1877151`;
+- strict all-target lint `20261016-000206557-1877244`.
+
+Three exported profiles are retained in
+`data/runs/prototype-bootstrap/2026-10-arrays.jsonl`. Formatting and diff checks
+passed, independent read-only review reported no remaining blocker. Tracked
+M8a eleven-corpus execution is the next validation gate. No full-Rust, cold-build
+or comparative speed claim follows from these tests.
+
 ## 2026-10-16: Payload enums preserve explicit selection and initialization facts
 
 Implemented unit/tuple/braced enum variants, mixed struct/enum declaration DAG

@@ -88,11 +88,13 @@ pub struct FieldDecl {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FieldSelector {
+    ConstantIndex(usize),
     Tuple(usize),
     Named(String),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Type {
+    Array(Box<Type>, usize),
     I32,
     Bool,
     Unit,
@@ -173,6 +175,15 @@ pub enum Stmt {
 }
 #[derive(Clone, Debug)]
 pub enum Expr {
+    Array(Vec<Expr>),
+    Repeat {
+        value: Box<Expr>,
+        len: usize,
+    },
+    Index {
+        base: Box<Expr>,
+        index: usize,
+    },
     EnumVariant {
         name: String,
         shape: ir::VariantShape,
@@ -445,6 +456,8 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 "(" | ")"
                     | "{"
                     | "}"
+                    | "["
+                    | "]"
                     | ":"
                     | "::"
                     | ";"
@@ -561,7 +574,13 @@ impl Parser {
         if self.is("_") || self.is("!") {
             return Err(self.error("inferred and never source type annotations are unsupported"));
         }
-        if self.eat("i32") {
+        if self.eat("[") {
+            let element = self.ty()?;
+            self.expect(";")?;
+            let len = self.array_number("array length")?;
+            self.expect("]")?;
+            Ok(Type::Array(Box::new(element), len))
+        } else if self.eat("i32") {
             Ok(Type::I32)
         } else if self.eat("bool") {
             Ok(Type::Bool)
@@ -614,6 +633,27 @@ impl Parser {
             parts.push(self.ident()?);
         }
         Ok(parts.join("::"))
+    }
+    fn array_number(&mut self, context: &str) -> Result<usize, String> {
+        let token = self.token();
+        if token.string || token.text.is_empty() || !token.text.bytes().all(|b| b.is_ascii_digit())
+        {
+            return Err(self.error(&format!("{context} requires a decimal literal; dynamic and const-expression indices/lengths are unsupported")));
+        }
+        let number = token
+            .text
+            .parse::<usize>()
+            .map_err(|_| self.error(&format!("{context} exceeds usize")))?;
+        if number > ir::MAX_ARRAY_LEN {
+            return Err(self.error("array length/index exceeds supported limit"));
+        }
+        self.at += 1;
+        if !self.is("]") {
+            return Err(self.error(
+                "const-expression array lengths/indices are unsupported; use a decimal literal",
+            ));
+        }
+        Ok(number)
     }
     fn items(&mut self, module: &str, parsed: &mut ParsedProgram) -> Result<(), String> {
         if self.nesting >= 128 {
@@ -1078,6 +1118,7 @@ impl Parser {
             match expr {
                 Expr::Var(local) => { fields.reverse(); return Ok(Place { local, fields }); }
                 Expr::Field { base, field } => { fields.push(field); expr = *base; }
+                Expr::Index { base,index } => {fields.push(FieldSelector::ConstantIndex(index));expr = *base;}
                 _ => return Err(self.error("assignment requires a local-rooted place; destructuring and temporary assignment are unsupported")),
             }
         }
@@ -1130,7 +1171,7 @@ impl Parser {
                 body: self.block()?,
             }
         } else if self.eat("break") {
-            let value = if matches!(self.token().text.as_str(), ";" | "}" | ")" | "," | "") {
+            let value = if matches!(self.token().text.as_str(), ";" | "}" | ")" | "]" | "," | "") {
                 None
             } else {
                 Some(Box::new(self.expr(0)?))
@@ -1204,6 +1245,30 @@ impl Parser {
             }
         } else if self.is("{") {
             Expr::Block(self.block()?)
+        } else if self.eat("[") {
+            if self.eat("]") {
+                Expr::Array(Vec::new())
+            } else {
+                let first = self.nested_expr()?;
+                if self.eat(";") {
+                    let len = self.array_number("array repeat length")?;
+                    self.expect("]")?;
+                    Expr::Repeat {
+                        value: Box::new(first),
+                        len,
+                    }
+                } else {
+                    let mut values = vec![first];
+                    while self.eat(",") && !self.is("]") {
+                        if values.len() >= ir::MAX_ARRAY_LEN {
+                            return Err(self.error("array literal exceeds supported length"));
+                        }
+                        values.push(self.nested_expr()?);
+                    }
+                    self.expect("]")?;
+                    Expr::Array(values)
+                }
+            }
         } else if self.eat("(") {
             if self.eat(")") {
                 Expr::Block(Block {
@@ -1287,6 +1352,16 @@ impl Parser {
         };
         let mut compared = false;
         loop {
+            if self.eat("[") {
+                let index = self.array_number("array index")?;
+                self.expect("]")?;
+                left = Expr::Index {
+                    base: Box::new(left),
+                    index,
+                };
+                validate_depth(DepthNode::Expr(&left)).map_err(|e| self.error(&e))?;
+                continue;
+            }
             if self.eat(".") {
                 let field = if self.token().text.starts_with(|c: char| c.is_ascii_digit()) {
                     let token = self.token();
@@ -1592,6 +1667,7 @@ impl Resolver<'_> {
     }
     fn ty(&mut self, ty: &mut Type, module: &str) -> Result<(), String> {
         match ty {
+            Type::Array(element, _) => self.ty(element, module)?,
             Type::Named(name) => {
                 let item = self
                     .path(name, module, true, false)?
@@ -1770,6 +1846,13 @@ impl Resolver<'_> {
         locals: &mut Vec<std::collections::HashSet<String>>,
     ) -> Result<(), String> {
         match expr {
+            Expr::Array(elements) => {
+                for e in elements {
+                    self.expr(e, module, locals)?;
+                }
+            }
+            Expr::Repeat { value, .. } => self.expr(value, module, locals)?,
+            Expr::Index { base, .. } => self.expr(base, module, locals)?,
             Expr::Var(name) => {
                 if !name.contains("::") && locals.iter().rev().any(|scope| scope.contains(name)) {
                     return Ok(());
@@ -1959,6 +2042,7 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
         }
         let mut push = |node| stack.push((node, depth + 1));
         match node {
+            DepthNode::Type(Type::Array(element, _)) => push(DepthNode::Type(element)),
             DepthNode::Type(Type::Tuple(fields)) => {
                 for field in fields {
                     push(DepthNode::Type(field));
@@ -1990,6 +2074,13 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
                 }
             }
             DepthNode::Expr(expr) => match expr {
+                Expr::Array(elements) => {
+                    for e in elements {
+                        push(DepthNode::Expr(e));
+                    }
+                }
+                Expr::Repeat { value, .. } => push(DepthNode::Expr(value)),
+                Expr::Index { base, .. } => push(DepthNode::Expr(base)),
                 Expr::EnumVariant { fields, .. } => {
                     for (_, e) in fields {
                         push(DepthNode::Expr(e));
@@ -2183,6 +2274,12 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
         let mut deps = Vec::new();
         while let Some(ty) = pending.pop() {
             match ty {
+                Type::Array(element, len) => {
+                    if *len > ir::MAX_ARRAY_LEN {
+                        return Err("array length exceeds supported limit".into());
+                    }
+                    pending.push(element);
+                }
                 Type::Named(name) => {
                     let index = *indices
                         .get(name)
@@ -2275,6 +2372,7 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
     }
     fn height(ty: &Type, indices: &HashMap<String, usize>, heights: &[usize]) -> usize {
         match ty {
+            Type::Array(element, _) => 1 + height(element, indices, heights),
             Type::Named(n) => heights[indices[n]],
             Type::Tuple(f) => {
                 1 + f
@@ -2419,6 +2517,15 @@ impl Flow {
 }
 fn checked_ty(ty: &Type, env: &TypeEnv) -> Result<ir::Ty, String> {
     match ty {
+        Type::Array(element, len) => {
+            if *len > ir::MAX_ARRAY_LEN {
+                return Err("array length exceeds supported limit".into());
+            }
+            Ok(ir::Ty::Array {
+                element: std::sync::Arc::new(checked_ty(element, env)?),
+                len: *len,
+            })
+        }
         Type::I32 => Ok(ir::Ty::I32),
         Type::Bool => Ok(ir::Ty::Bool),
         Type::Unit => Ok(ir::Ty::Unit),
@@ -2444,6 +2551,11 @@ fn inhabited(ty: &ir::Ty) -> bool {
     let mut seen = std::collections::HashSet::new();
     while let Some(ty) = work.pop() {
         match ty {
+            ir::Ty::Array { element, len } => {
+                if *len > 0 {
+                    work.push(element);
+                }
+            }
             ir::Ty::Never => return false,
             ir::Ty::Tuple(fields) => work.extend(fields.iter()),
             ir::Ty::Struct(ty) if seen.insert(ty.def().id) => {
@@ -2459,6 +2571,16 @@ fn coerces(got: &ir::Ty, want: &ir::Ty) -> bool {
         return true;
     }
     match (got, want) {
+        (
+            ir::Ty::Array {
+                element: a,
+                len: na,
+            },
+            ir::Ty::Array {
+                element: b,
+                len: nb,
+            },
+        ) if na == nb => coerces(a, b),
         (ir::Ty::Tuple(a), ir::Ty::Tuple(b)) if a.len() == b.len() => {
             a.iter().zip(b.iter()).all(|(a, b)| coerces(a, b))
         }
@@ -2551,6 +2673,23 @@ impl<'a> Checker<'a> {
         if *b == ir::Ty::Never || a == b {
             return Ok(a.clone());
         }
+        if let (
+            ir::Ty::Array {
+                element: a,
+                len: na,
+            },
+            ir::Ty::Array {
+                element: b,
+                len: nb,
+            },
+        ) = (a, b)
+            && na == nb
+        {
+            return Ok(ir::Ty::Array {
+                element: std::sync::Arc::new(self.join(a, b, context)?),
+                len: *na,
+            });
+        }
         if let (ir::Ty::Tuple(a), ir::Ty::Tuple(b)) = (a, b)
             && a.len() == b.len()
         {
@@ -2567,6 +2706,7 @@ impl<'a> Checker<'a> {
         let mut work = vec![ty];
         while let Some(ty) = work.pop() {
             match ty {
+                ir::Ty::Array { element, .. } => work.push(element),
                 ir::Ty::Tuple(fields) => work.extend(fields.iter()),
                 ir::Ty::Enum(ty)
                     if !ty.def().public && !visible_from(&ty.def().module, &self.module) =>
@@ -2590,6 +2730,18 @@ impl<'a> Checker<'a> {
             }
         }
         Ok(())
+    }
+    fn index_type(&self, ty: &ir::Ty, index: usize) -> Result<ir::Ty, String> {
+        let ir::Ty::Array { element, len } = ty else {
+            return Err("indexing requires an array".into());
+        };
+        if index >= *len {
+            return Err(format!(
+                "array index {index} out of bounds for length {len}"
+            ));
+        }
+        self.accessible(element)?;
+        Ok(element.as_ref().clone())
     }
     fn field_type(&self, ty: &ir::Ty, field: &FieldSelector) -> Result<(usize, ir::Ty), String> {
         let (index, projected) = match (ty, field) {
@@ -2772,9 +2924,17 @@ impl<'a> Checker<'a> {
         Ok(())
     }
     fn expr_when(&mut self, e: &Expr, reachable: bool) -> Result<ir::ExprId, String> {
+        self.expr_expected_when(e, reachable, None)
+    }
+    fn expr_expected_when(
+        &mut self,
+        e: &Expr,
+        reachable: bool,
+        expected: Option<&ir::Ty>,
+    ) -> Result<ir::ExprId, String> {
         let previous = self.reachable;
         self.reachable = reachable;
-        let result = self.expr(e);
+        let result = self.expr_expected(e, expected);
         self.reachable = previous;
         result
     }
@@ -2856,13 +3016,28 @@ impl<'a> Checker<'a> {
         Ok((ty, variant, selected))
     }
     fn block_when(&mut self, b: &Block, reachable: bool) -> Result<(ir::Block, Flow), String> {
+        self.block_expected_when(b, reachable, None)
+    }
+    fn block_expected_when(
+        &mut self,
+        b: &Block,
+        reachable: bool,
+        expected: Option<&ir::Ty>,
+    ) -> Result<(ir::Block, Flow), String> {
         let previous = self.reachable;
         self.reachable = reachable;
-        let result = self.block(b);
+        let result = self.block_expected(b, expected);
         self.reachable = previous;
         result
     }
     fn block(&mut self, b: &Block) -> Result<(ir::Block, Flow), String> {
+        self.block_expected(b, None)
+    }
+    fn block_expected(
+        &mut self,
+        b: &Block,
+        expected: Option<&ir::Ty>,
+    ) -> Result<(ir::Block, Flow), String> {
         let entered_reachable = self.reachable;
         self.scopes.push(HashMap::new());
         let mut live = true;
@@ -2887,7 +3062,12 @@ impl<'a> Checker<'a> {
                     ty,
                     value,
                 } => {
-                    let value = self.expr(value)?;
+                    let annotation = if *ty == Type::Infer {
+                        None
+                    } else {
+                        Some(checked_ty(ty, self.signatures)?)
+                    };
+                    let value = self.expr_expected(value, annotation.as_ref())?;
                     let f = self.flow(value);
                     let t = if *ty == Type::Infer {
                         f.ty.clone()
@@ -2902,7 +3082,12 @@ impl<'a> Checker<'a> {
                 }
                 Stmt::LetPattern { pattern, ty, value } => {
                     // Resolve/check every initializer against the complete old scope.
-                    let value = self.expr(value)?;
+                    let annotation = if *ty == Type::Infer {
+                        None
+                    } else {
+                        Some(checked_ty(ty, self.signatures)?)
+                    };
+                    let value = self.expr_expected(value, annotation.as_ref())?;
                     let flow = self.flow(value);
                     let seed = if *ty == Type::Infer {
                         flow.ty.clone()
@@ -2946,7 +3131,7 @@ impl<'a> Checker<'a> {
                     let local = self.lookup(name)?;
                     let declaration = &self.locals[local.0];
                     let t = declaration.ty.clone();
-                    let value = self.expr(value)?;
+                    let value = self.expr_expected(value, Some(&t))?;
                     let f = self.flow(value);
                     self.require(&f, &t)?;
                     (ir::Stmt::Assign { local, value }, f.completes)
@@ -2960,11 +3145,16 @@ impl<'a> Checker<'a> {
                     let mut ty = declaration.ty.clone();
                     let mut fields = Vec::with_capacity(place.fields.len());
                     for field in &place.fields {
-                        let (index, field_ty) = self.field_type(&ty, field)?;
-                        ty = field_ty;
-                        fields.push(ir::Projection::Field(index));
+                        if let FieldSelector::ConstantIndex(index) = field {
+                            ty = self.index_type(&ty, *index)?;
+                            fields.push(ir::Projection::ConstantIndex(*index));
+                        } else {
+                            let (index, field_ty) = self.field_type(&ty, field)?;
+                            ty = field_ty;
+                            fields.push(ir::Projection::Field(index));
+                        }
                     }
-                    let value = self.expr(value)?;
+                    let value = self.expr_expected(value, Some(&ty))?;
                     let flow = self.flow(value);
                     self.require(&flow, &ty)?;
                     (
@@ -2987,7 +3177,11 @@ impl<'a> Checker<'a> {
                     (ir::Stmt::Expr(value), f.completes)
                 }
                 Stmt::Return(e) => {
-                    let value = e.as_ref().map(|e| self.expr(e)).transpose()?;
+                    let result_ty = self.result.clone();
+                    let value = e
+                        .as_ref()
+                        .map(|e| self.expr_expected(e, Some(&result_ty)))
+                        .transpose()?;
                     let f = value.map_or(Flow::value(ir::Ty::Unit), |e| self.flow(e));
                     self.require(&f, &self.result)?;
                     (ir::Stmt::Return(value), false)
@@ -3016,7 +3210,11 @@ impl<'a> Checker<'a> {
             live &= completes;
         }
         self.reachable = entered_reachable && live;
-        let tail = b.tail.as_ref().map(|e| self.expr(e)).transpose()?;
+        let tail = b
+            .tail
+            .as_ref()
+            .map(|e| self.expr_expected(e, expected))
+            .transpose()?;
         self.reachable = entered_reachable;
         let mut flow = tail.map_or_else(
             || {
@@ -3033,7 +3231,90 @@ impl<'a> Checker<'a> {
         Ok((ir::Block { statements, tail }, flow))
     }
     fn expr(&mut self, e: &Expr) -> Result<ir::ExprId, String> {
+        self.expr_expected(e, None)
+    }
+    fn expr_expected(&mut self, e: &Expr, expected: Option<&ir::Ty>) -> Result<ir::ExprId, String> {
         let (kind, flow) = match e {
+            Expr::Array(elements) => {
+                if elements.len() > ir::MAX_ARRAY_LEN {
+                    return Err("array literal exceeds supported length".into());
+                }
+                let hint = match expected {
+                    Some(ir::Ty::Array { element, .. }) => Some(element.as_ref()),
+                    _ => None,
+                };
+                if elements.is_empty() && hint.is_none() {
+                    return Err("empty array literal inference is unsupported; provide a concrete expected array type".into());
+                }
+                let mut element = hint.cloned().unwrap_or(ir::Ty::Never);
+                let mut values = Vec::new();
+                let mut completes = true;
+                for expression in elements {
+                    let value =
+                        self.expr_expected_when(expression, self.reachable && completes, hint)?;
+                    let flow = self.flow(value);
+                    completes &= flow.completes;
+                    if let Some(expected) = hint {
+                        self.require(&flow, expected)?;
+                    } else {
+                        element = self.join(&element, &flow.ty, "array elements")?;
+                    }
+                    values.push(value);
+                }
+                (
+                    ir::ExprKind::Array(values),
+                    Flow {
+                        ty: ir::Ty::Array {
+                            element: std::sync::Arc::new(element),
+                            len: elements.len(),
+                        },
+                        completes,
+                    },
+                )
+            }
+            Expr::Repeat { value, len } => {
+                if *len > ir::MAX_ARRAY_LEN {
+                    return Err("array repeat exceeds supported length".into());
+                }
+                let hint = match expected {
+                    Some(ir::Ty::Array { element, .. }) => Some(element.as_ref()),
+                    _ => None,
+                };
+                let value = self.expr_expected(value, hint)?;
+                let flow = self.flow(value);
+                if let Some(expected) = hint {
+                    self.require(&flow, expected)?;
+                }
+                let element = hint.cloned().unwrap_or(flow.ty);
+                if *len > 1 && !element.is_copy() {
+                    return Err("array repeat of more than one element requires Copy".into());
+                }
+                (
+                    ir::ExprKind::Repeat { value, len: *len },
+                    Flow {
+                        ty: ir::Ty::Array {
+                            element: std::sync::Arc::new(element),
+                            len: *len,
+                        },
+                        completes: flow.completes,
+                    },
+                )
+            }
+            Expr::Index { base, index } => {
+                let base = self.expr(base)?;
+                let flow = self.flow(base);
+                let ty = self.index_type(&flow.ty, *index)?;
+                (
+                    ir::ExprKind::Index {
+                        base,
+                        index: *index,
+                    },
+                    Flow {
+                        ty,
+                        completes: flow.completes,
+                    },
+                )
+            }
             Expr::EnumVariant {
                 name,
                 shape,
@@ -3076,7 +3357,11 @@ impl<'a> Checker<'a> {
                         return Err("duplicate variant constructor field".into());
                     }
                     self.accessible(&field.ty)?;
-                    let value = self.expr_when(value, self.reachable && completes)?;
+                    let value = self.expr_expected_when(
+                        value,
+                        self.reachable && completes,
+                        Some(&field.ty),
+                    )?;
                     let flow = self.flow(value);
                     self.require(&flow, &field.ty)?;
                     completes &= flow.completes;
@@ -3218,8 +3503,11 @@ impl<'a> Checker<'a> {
                     let useful = !catchall
                         && !fully_covered
                         && key.is_none_or(|key| !covered.contains(&key));
-                    let body =
-                        self.expr_when(&arm.body, self.reachable && source.completes && useful)?;
+                    let body = self.expr_expected_when(
+                        &arm.body,
+                        self.reachable && source.completes && useful,
+                        expected,
+                    )?;
                     self.scopes.pop();
                     let arm_flow = self.flow(body);
                     // Even unreachable arms impose their source type obligation.
@@ -3262,8 +3550,13 @@ impl<'a> Checker<'a> {
                 let mut values = Vec::with_capacity(fields.len());
                 let mut types = Vec::with_capacity(fields.len());
                 let mut completes = true;
-                for field in fields {
-                    let value = self.expr_when(field, self.reachable && completes)?;
+                for (index, field) in fields.iter().enumerate() {
+                    let hint = match expected {
+                        Some(ir::Ty::Tuple(types)) => types.get(index),
+                        _ => None,
+                    };
+                    let value =
+                        self.expr_expected_when(field, self.reachable && completes, hint)?;
                     let flow = self.flow(value);
                     completes &= flow.completes;
                     types.push(flow.ty);
@@ -3298,7 +3591,11 @@ impl<'a> Checker<'a> {
                     if !seen.insert(index) {
                         return Err(format!("duplicate field {name}"));
                     }
-                    let value = self.expr_when(value, self.reachable && completes)?;
+                    let value = self.expr_expected_when(
+                        value,
+                        self.reachable && completes,
+                        Some(&expected),
+                    )?;
                     let flow = self.flow(value);
                     self.require(&flow, &expected)?;
                     completes &= flow.completes;
@@ -3436,7 +3733,7 @@ impl<'a> Checker<'a> {
                 let mut completes = true;
                 let mut arguments = Vec::with_capacity(args.len());
                 for (a, t) in args.iter().zip(&signature.params) {
-                    let value = self.expr_when(a, self.reachable && completes)?;
+                    let value = self.expr_expected_when(a, self.reachable && completes, Some(t))?;
                     let f = self.flow(value);
                     self.require(&f, t)?;
                     completes &= f.completes;
@@ -3464,8 +3761,8 @@ impl<'a> Checker<'a> {
                 let c = self.flow(condition);
                 self.require(&c, &ir::Ty::Bool)?;
                 let reachable = self.reachable && c.completes;
-                let (then_block, t) = self.block_when(then_block, reachable)?;
-                let (else_block, e) = self.block_when(else_block, reachable)?;
+                let (then_block, t) = self.block_expected_when(then_block, reachable, expected)?;
+                let (else_block, e) = self.block_expected_when(else_block, reachable, expected)?;
                 let ty = self.join(&t.ty, &e.ty, "if branches")?;
                 let completes = c.completes && (t.completes || e.completes);
                 (
@@ -3517,7 +3814,7 @@ impl<'a> Checker<'a> {
                 (ir::ExprKind::Continue { target }, Flow::never())
             }
             Expr::Block(b) => {
-                let (block, flow) = self.block(b)?;
+                let (block, flow) = self.block_expected(b, expected)?;
                 (ir::ExprKind::Block(block), flow)
             }
         };
@@ -3601,7 +3898,7 @@ pub fn type_function_with_env(
         );
     }
     let (body, flow) = c
-        .block(&f.body)
+        .block_expected(&f.body, Some(&signature.result))
         .map_err(|e| format!("in function {}: {e}", f.name))?;
     c.require(&flow, &c.result)
         .map_err(|e| format!("in function {}: {e}", f.name))?;
@@ -3625,6 +3922,44 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod typed_tests {
     use super::*;
+
+    #[test]
+    fn arrays_contextualize_empty_literals_and_keep_constant_index_projection() {
+        let source = "struct S{x:[i32;0]}enum E{V([i32;0])}fn make()->[i32;0]{[]}fn explicit()->[i32;0]{return [];}fn take(x:[i32;0]){}fn main(){let z:[i32;0]=[];take([]);let s=S{x:[]};let e=E::V([]);let nested:[[i32;0];2]=[[],[]];let mut a=[1,2];a[0]=3;let n=a[0];let t:([i32;0],)=([],);let q:[i32;0]=if true{[]}else{[]};let r:[i32;0]=match true{_=>[]};}";
+        let program = parse(source).unwrap();
+        check(&program).unwrap();
+        let function = type_function_with_signatures(
+            &program,
+            program.functions.len() - 1,
+            &signature_table(&program).unwrap(),
+        )
+        .unwrap();
+        assert!(function.body.statements.iter().any(|s|matches!(s,ir::Stmt::AssignPlace{place,..} if place.projection==vec![ir::Projection::ConstantIndex(0)])));
+    }
+
+    #[test]
+    fn arrays_reject_bounds_types_repeat_moves_and_unsupported_inference() {
+        for source in [
+            "fn main(){let a=[1,2];let n=a[2];}",
+            "fn main(){let a=[1,true];}",
+            "fn main(){let a:[i32;1]=[];}",
+            "struct S{x:i32}fn main(){let a=[S{x:1};2];}",
+            "struct S{x:i32}fn main(){let a=[S{x:1}];let s=a[0];}",
+            "fn main(){let a=[1;4097];}",
+            "fn main(){let a=[];}",
+            "fn main(){let a=[1];let i=0;let n=a[i];}",
+        ] {
+            assert!(
+                parse(source).and_then(|p| check(&p)).is_err(),
+                "accepted {source}"
+            );
+        }
+        check(
+            &parse("struct S{x:i32}fn main(){let a=[S{x:1};0];let b=[S{x:2};1];let n=b[0].x;}")
+                .unwrap(),
+        )
+        .unwrap();
+    }
 
     #[test]
     fn payload_variants_preserve_constructor_shape_source_order_and_projection_ids() {

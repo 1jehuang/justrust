@@ -10,6 +10,8 @@
 //! an eight-byte tag followed by the largest variant's concatenated fields.
 //! Any non-unit variant shape makes the entire enum use aggregate transport,
 //! including unit variants of that enum and zero-field tuple/struct variants.
+//! Arrays are always indirect and concatenate element storage. Empty arrays
+//! own one initialized eight-byte dummy word, including when nested as elements.
 //! Aggregate arguments carry snapshot pointers. Aggregate results use a
 //! caller-owned destination, passed last at rbp+16, even for a one-field aggregate.
 use super::cfg;
@@ -24,10 +26,29 @@ const BASE: u64 = 0x400000;
 const PAGE: usize = 4096;
 
 fn indirect(ty: &ir::Ty) -> bool {
-    ty.field_count().is_some() || matches!(ty, ir::Ty::Enum(ty) if ty.has_payload())
+    ty.field_count().is_some()
+        || matches!(ty, ir::Ty::Array { .. })
+        || matches!(ty, ir::Ty::Enum(ty) if ty.has_payload())
 }
 
 fn value_size(ty: &ir::Ty) -> Result<i32, String> {
+    if let ir::Ty::Array { element, len } = ty {
+        if *len > ir::MAX_ARRAY_LEN {
+            return Err("array length exceeds private backend limit".into());
+        }
+        if *len == 0 {
+            return Ok(8);
+        }
+        // Empty arrays still own an initialized dummy word. This rule also
+        // determines the stride of arrays whose elements are empty arrays.
+        let stride = value_size(element)?;
+        let len = i32::try_from(*len).map_err(|_| "array length exceeds private frame limit")?;
+        return stride
+            .checked_mul(len)
+            .filter(|size| *size <= MAX_FRAME_BYTES)
+            .map(|size| size.max(8))
+            .ok_or_else(|| "array exceeds private frame limit".into());
+    }
     if let ir::Ty::Enum(ty) = ty {
         let payload = ty
             .def()
@@ -69,6 +90,20 @@ fn field_offset(ty: &ir::Ty, index: usize) -> Result<(i32, &ir::Ty), String> {
             .ok_or_else(|| "aggregate layout too large".to_string())
     })?;
     Ok((offset, field))
+}
+
+fn array_offset(ty: &ir::Ty, index: usize) -> Result<(i32, &ir::Ty), String> {
+    let ir::Ty::Array { element, len } = ty else {
+        return Err("constant index requires array storage".into());
+    };
+    if index >= *len {
+        return Err("constant array index out of bounds".into());
+    }
+    let offset = value_size(element)?
+        .checked_mul(i32::try_from(index).map_err(|_| "array index exceeds private frame limit")?)
+        .filter(|offset| *offset < MAX_FRAME_BYTES)
+        .ok_or("array index offset exceeds private frame limit")?;
+    Ok((offset, element))
 }
 
 fn allocate_value(frame: &mut i32, ty: &ir::Ty) -> Result<i32, String> {
@@ -144,6 +179,7 @@ impl<'a> Emitter<'a> {
         while let Some(projection) = projections.next() {
             let (field, next) = match projection {
                 ir::Projection::Field(index) => field_offset(ty, *index)?,
+                ir::Projection::ConstantIndex(index) => array_offset(ty, *index)?,
                 ir::Projection::Downcast(variant) => {
                     let ir::Ty::Enum(enum_ty) = ty else {
                         return Err("downcast requires enum storage".into());
@@ -190,6 +226,15 @@ impl<'a> Emitter<'a> {
         self.i32(offset);
     }
     fn copy_pointer_value(&mut self, size: i32) {
+        if size > 64 {
+            // Large array transport must not expand generated code per element.
+            // Preserve both pointers, especially rdi used by return epilogues.
+            self.bytes(&[0x49, 0x89, 0xfb, 0x49, 0x89, 0xf2, 0xb9]);
+            self.i32(size / 8);
+            self.bytes(&[0xfc, 0xf3, 0x48, 0xa5]);
+            self.bytes(&[0x4c, 0x89, 0xdf, 0x4c, 0x89, 0xd6]);
+            return;
+        }
         // All private scalar/unit leaves are initialized eight-byte words.
         for offset in (0..size).step_by(8) {
             self.bytes(&[0x48, 0x8b, 0x8e]);
@@ -290,6 +335,39 @@ impl<'a> Emitter<'a> {
         self.address(scratch);
         Ok(())
     }
+    fn repeat(&mut self, ty: &ir::Ty, value: &cfg::Operand) -> Result<(), String> {
+        let ir::Ty::Array { element, len } = ty else {
+            return Err("repeat requires array storage".into());
+        };
+        value_size(ty)?;
+        // The CFG operand is a stable source snapshot. Transport it once even
+        // for a zero-length repeat, without inventing another semantic Copy.
+        self.operand(value)?;
+        if *len == 0 {
+            self.immediate(0);
+            self.store_value(self.aggregate_scratch, &ir::Ty::Unit)?;
+        } else {
+            self.bytes(&[0x48, 0x8d, 0xbd]); // rdi = backing destination
+            self.i32(self.aggregate_scratch);
+            if indirect(element) {
+                self.bytes(&[0x48, 0x89, 0xc2, 0x41, 0xb8]); // rdx = source, r8d = len
+                self.i32(i32::try_from(*len).map_err(|_| "repeat length exceeds limit")?);
+                let again = self.position();
+                self.bytes(&[0x48, 0x89, 0xd6, 0xb9]); // rsi = source, ecx = stride words
+                self.i32(value_size(element)? / 8);
+                self.bytes(&[0xfc, 0xf3, 0x48, 0xa5]); // cld; rep movsq
+                self.bytes(&[0x49, 0xff, 0xc8]); // dec r8
+                let more = self.jump(&[0x0f, 0x85]);
+                self.patch(more, again)?;
+            } else {
+                self.bytes(&[0xb9]); // ecx = len; rax is the scalar snapshot
+                self.i32(i32::try_from(*len).map_err(|_| "repeat length exceeds limit")?);
+                self.bytes(&[0xfc, 0xf3, 0x48, 0xab]); // cld; rep stosq
+            }
+        }
+        self.address(self.aggregate_scratch);
+        Ok(())
+    }
     fn binary(&mut self, op: BinaryOp) -> Result<(), String> {
         match op {
             BinaryOp::Add => {
@@ -366,6 +444,7 @@ impl<'a> Emitter<'a> {
     fn rvalue(&mut self, value: &cfg::Rvalue) -> Result<(), String> {
         match value {
             cfg::Rvalue::Use(operand) => self.operand(operand)?,
+            cfg::Rvalue::Repeat { ty, value } => self.repeat(ty, value)?,
             cfg::Rvalue::EnumVariant {
                 ty,
                 variant,
@@ -400,8 +479,16 @@ impl<'a> Emitter<'a> {
             cfg::Rvalue::Aggregate { ty, fields } => {
                 // Evaluate the whole aggregate into scratch, so destination
                 // projections cannot overwrite a later Copy operand's source.
+                if matches!(ty, ir::Ty::Array { len: 0, .. }) {
+                    self.immediate(0);
+                    self.store_value(self.aggregate_scratch, &ir::Ty::Unit)?;
+                }
                 for (index, operand) in fields.iter().enumerate() {
-                    let (field, field_ty) = field_offset(ty, index)?;
+                    let (field, field_ty) = if matches!(ty, ir::Ty::Array { .. }) {
+                        array_offset(ty, index)?
+                    } else {
+                        field_offset(ty, index)?
+                    };
                     self.operand(operand)?;
                     let offset = self
                         .aggregate_scratch
@@ -418,7 +505,9 @@ impl<'a> Emitter<'a> {
     fn statement(&mut self, statement: &cfg::Statement) -> Result<(), String> {
         match statement {
             // Admitted values have fixed storage and no destructors this slice.
-            cfg::Statement::StorageLive(_) | cfg::Statement::StorageDead(_) => {}
+            cfg::Statement::StorageLive(_)
+            | cfg::Statement::StorageDead(_)
+            | cfg::Statement::Inspect(_) => {}
             cfg::Statement::Assign { destination, value } => {
                 self.rvalue(value)?;
                 let (offset, ty) = self.place(destination)?;
@@ -543,7 +632,9 @@ pub fn emit_cfg_function(function: &cfg::Function) -> Result<Object, String> {
         for statement in &block.statements {
             if let cfg::Statement::Assign { value, .. } = &statement.value {
                 let size = match value {
-                    cfg::Rvalue::Aggregate { ty, .. } => value_size(ty)?,
+                    cfg::Rvalue::Aggregate { ty, .. } | cfg::Rvalue::Repeat { ty, .. } => {
+                        value_size(ty)?
+                    }
                     cfg::Rvalue::EnumVariant { ty, .. } => value_size(&ir::Ty::Enum(ty.clone()))?,
                     _ => 0,
                 };
@@ -963,6 +1054,180 @@ mod tests {
         let output = run(&p);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"enum-aggregate\n");
+    }
+
+    #[test]
+    fn array_literals_assignment_and_repeated_aggregate_transport() {
+        let p = frontend::parse(
+            r#"
+            fn effect(n: i32) -> i32 {
+                if n == 1 { println!("first"); }
+                if n == 2 { println!("second"); }
+                if n == 3 { println!("third"); }
+                n
+            }
+            fn relay(value: [i32; 3]) -> [i32; 3] { value }
+            fn tuples(value: [(i32, bool); 9]) -> [(i32, bool); 9] { value }
+            fn main() {
+                let mut values = relay([effect(1), effect(2), effect(3)]);
+                values[1] = values[0] + values[2];
+                if values[0] != 1 { 1 / 0; }
+                if values[1] != 4 { 1 / 0; }
+                if values[2] != 3 { 1 / 0; }
+                let copies = tuples([(7, true); 9]);
+                if copies[0].0 != 7 { 1 / 0; }
+                if copies[8].0 != 7 { 1 / 0; }
+                if !copies[8].1 { 1 / 0; }
+                println!("array-transport");
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"first\nsecond\nthird\narray-transport\n");
+    }
+
+    #[test]
+    fn array_empty_constructors_zero_full_dummy_word() {
+        let ty = ir::Ty::Array {
+            element: std::sync::Arc::new(ir::Ty::I32),
+            len: 0,
+        };
+        let function = cfg::Function {
+            name: "main".into(),
+            params: vec![],
+            result: ir::Ty::Unit,
+            locals: vec![],
+            blocks: vec![],
+            entry: cfg::BlockId(0),
+            return_local: LocalId(0),
+        };
+        // The initialized dummy is a private ABI invariant, not observable
+        // through source indexing because an empty array has no valid index.
+        let mut emitter = Emitter {
+            object: Object {
+                code: vec![],
+                calls: vec![],
+                strings: vec![],
+            },
+            function: &function,
+            locals: vec![],
+            aggregate_scratch: -8,
+            returns: vec![],
+            traps: vec![],
+            edges: vec![],
+        };
+        emitter.bytes(&[0x55, 0x48, 0x89, 0xe5, 0x48, 0x83, 0xec, 8]);
+        for value in [
+            cfg::Rvalue::Aggregate {
+                ty: ty.clone(),
+                fields: vec![],
+            },
+            cfg::Rvalue::Repeat {
+                ty,
+                value: cfg::Operand::Constant(cfg::Constant::I32(17)),
+            },
+        ] {
+            emitter.bytes(&[0x48, 0xb8]);
+            emitter.bytes(&u64::MAX.to_le_bytes());
+            emitter.bytes(&[0x48, 0x89, 0x85]);
+            emitter.i32(-8);
+            emitter.rvalue(&value).unwrap();
+            emitter.bytes(&[0x48, 0x8b, 0x85]);
+            emitter.i32(-8);
+            emitter.bytes(&[0x48, 0x85, 0xc0]);
+            emitter.trap_if(0x85);
+        }
+        emitter.bytes(&[0x31, 0xc0, 0xc9, 0xc3]);
+        let trap = emitter.position();
+        emitter.bytes(&[
+            0xbf, 101, 0, 0, 0, 0xb8, 60, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
+        ]);
+        for at in std::mem::take(&mut emitter.traps) {
+            emitter.patch(at, trap).unwrap();
+        }
+        let path = executable_bytes(&link(&[("main".into(), emitter.object)]).unwrap());
+        let output = execute(Command::new(&path).stdout(Stdio::piped()));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+    }
+
+    #[test]
+    fn array_empty_and_single_noncopy_repeat_evaluate_once() {
+        let p = frontend::parse(
+            r#"
+            struct Item { value: i32 }
+            fn make() -> Item { println!("once"); Item { value: 17 } }
+            fn empty(value: [Item; 0]) -> [Item; 0] { value }
+            fn single(value: [Item; 1]) -> [Item; 1] { value }
+            fn nested(value: [[i32; 0]; 3]) -> [[i32; 0]; 3] { value }
+            fn main() {
+                let zero = empty([make(); 0]);
+                let one = single([make(); 1]);
+                if one[0].value != 17 { 1 / 0; }
+                let moved = one;
+                if moved[0].value != 17 { 1 / 0; }
+                let dummy = nested([[0; 0]; 3]);
+                let moved_dummy = dummy;
+                println!("empty-array");
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"once\nonce\nempty-array\n");
+        let empty = ir::Ty::Array {
+            element: std::sync::Arc::new(ir::Ty::I32),
+            len: 0,
+        };
+        assert!(indirect(&empty));
+        assert_eq!(value_size(&empty).unwrap(), 8);
+        assert!(array_offset(&empty, 0).is_err());
+        let nested = ir::Ty::Array {
+            element: std::sync::Arc::new(empty),
+            len: 3,
+        };
+        assert_eq!(value_size(&nested).unwrap(), 24);
+        assert_eq!(array_offset(&nested, 2).unwrap().0, 16);
+    }
+
+    #[test]
+    fn array_large_repeat_calls_returns_have_bounded_native_code() {
+        let p = frontend::parse(
+            r#"
+            fn make() -> [i32; 4096] { [23; 4096] }
+            fn relay(value: [i32; 4096]) -> [i32; 4096] { value }
+            fn main() {
+                let value = relay(make());
+                if value[0] != 23 { 1 / 0; }
+                if value[4095] != 23 { 1 / 0; }
+                println!("large-array");
+            }
+            "#,
+        )
+        .unwrap();
+        let signatures = frontend::signature_table(&p).unwrap();
+        let checked = frontend::type_function_with_signatures(&p, 0, &signatures).unwrap();
+        let object = emit_checked_function(&checked).unwrap();
+        assert!(
+            object.code.len() < 512,
+            "repeat code expanded to {} bytes",
+            object.code.len()
+        );
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"large-array\n");
+        let enormous = ir::Ty::Array {
+            element: std::sync::Arc::new(ir::Ty::Array {
+                element: std::sync::Arc::new(ir::Ty::I32),
+                len: 4096,
+            }),
+            len: 4096,
+        };
+        assert!(value_size(&enormous).unwrap_err().contains("frame limit"));
     }
 
     #[test]

@@ -107,6 +107,16 @@ refutable patterns, derives, explicit
 discriminants and empty enums remain open. This does not complete Rust enums,
 match, ownership or the full language.
 
+## Current follow-on: fixed arrays
+
+`ARRAYS.md` records bounded fixed arrays and decimal literal indexing, including
+once-only repeat evaluation even at length zero, contextual empty literals,
+non-Copy indexed move rejection and distinct element selection proofs. Ignoring
+an indexed element still inspects initialized array storage. Every array uses
+an owning indirect value ABI, including empty arrays. Runtime `usize` indices,
+slices, array patterns, general constants and broader integer inference remain
+open, as do the full compatibility completion gates above.
+
 ## Current follow-on: payload enums
 
 `PAYLOAD-ENUMS.md` defines unit/tuple/braced variants, typed downcast projections,
