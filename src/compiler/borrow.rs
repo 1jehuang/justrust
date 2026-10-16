@@ -31,8 +31,36 @@ pub(super) enum Problem {
     Unsupported(String),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum CanonicalRoot {
+    Owned(LocalId),
+    ParameterReferent(LocalId),
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct CanonicalPlace {
+    pub root: CanonicalRoot,
+    pub projection: Vec<Projection>,
+}
+impl CanonicalPlace {
+    pub fn owned(place: &Place) -> Self {
+        Self {
+            root: CanonicalRoot::Owned(place.local),
+            projection: place.projection.clone(),
+        }
+    }
+    /// Diagnostic coordinates only. External roots are never CFG stack places.
+    pub fn diagnostic(&self) -> Place {
+        let local = match self.root {
+            CanonicalRoot::Owned(local) | CanonicalRoot::ParameterReferent(local) => local,
+        };
+        Place {
+            local,
+            projection: self.projection.clone(),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Target {
-    pub place: Place,
+    pub place: CanonicalPlace,
     /// Only this candidate's ancestors, never a union of alternative exemptions.
     pub authority: Vec<usize>,
 }
@@ -281,9 +309,29 @@ fn origin_step(
     }
     Ok(())
 }
-fn overlap(a: &Place, b: &Place, budget: &mut Budget) -> Result<bool, Exhausted> {
+fn origin_terminator(
+    refs: &[Option<usize>],
+    state: &mut Origins,
+    term: &Terminator,
+    loans: usize,
+    budget: &mut Budget,
+) -> Result<(), Exhausted> {
+    if let Terminator::Call { args, .. } = term {
+        budget.spend(add(args.len(), mul(state.len(), loans.div_ceil(64))?)?)?;
+        for arg in args {
+            if let Operand::Move(place) = arg
+                && place.projection.is_empty()
+                && let Some(carrier) = refs[place.local.0]
+            {
+                state[carrier].clear();
+            }
+        }
+    }
+    Ok(())
+}
+fn overlap(a: &CanonicalPlace, b: &CanonicalPlace, budget: &mut Budget) -> Result<bool, Exhausted> {
     budget.spend(a.projection.len().min(b.projection.len()) + 1)?;
-    if a.local != b.local {
+    if a.root != b.root {
         return Ok(false);
     }
     for (a, b) in a.projection.iter().zip(&b.projection) {
@@ -307,7 +355,13 @@ impl Plan {
         budget: &mut Budget,
         max_bytes: usize,
     ) -> Result<Self, Exhausted> {
-        let loans = f.loan_sites.len();
+        let parameter_origins: Vec<_> = f
+            .params
+            .iter()
+            .copied()
+            .filter(|local| matches!(f.locals[local.0].ty, Ty::Ref { .. }))
+            .collect();
+        let loans = add(f.loan_sites.len(), parameter_origins.len())?;
         if loans > MAX_LOANS {
             return Err(Exhausted);
         }
@@ -420,7 +474,12 @@ impl Plan {
         }
         let empty = || vec![Set::new(loans); r];
         let mut entries = vec![None; b];
-        entries[f.entry.0] = Some(empty());
+        let mut entry = empty();
+        for (index, local) in parameter_origins.iter().enumerate() {
+            entry[refs[local.0].expect("reference parameter carrier")]
+                .insert(f.loan_sites.len() + index);
+        }
+        entries[f.entry.0] = Some(entry);
         let mut queue = VecDeque::from([f.entry.0]);
         let mut queued = vec![false; b];
         queued[f.entry.0] = true;
@@ -432,6 +491,13 @@ impl Plan {
             for item in &f.blocks[block].statements {
                 origin_step(f, &refs, &mut out, &item.value, loans, budget)?;
             }
+            origin_terminator(
+                &refs,
+                &mut out,
+                &f.blocks[block].terminator.value,
+                loans,
+                budget,
+            )?;
             for next in successors(&f.blocks[block].terminator.value)
                 .into_iter()
                 .flatten()
@@ -513,6 +579,25 @@ impl Plan {
         }
         let mut targets: Vec<Vec<Target>> = vec![vec![]; loans];
         let mut ready = vec![false; loans];
+        for (index, local) in parameter_origins.iter().enumerate() {
+            let row = f.loan_sites.len() + index;
+            bytes = add(
+                bytes,
+                4 * (size_of::<Target>() + 128 * size_of::<Projection>() + 2 * size_of::<usize>()),
+            )?;
+            memberships = add(memberships, 2)?;
+            if bytes > max_bytes || memberships > MAX_MEMBERSHIPS {
+                return Err(Exhausted);
+            }
+            targets[row].push(Target {
+                place: CanonicalPlace {
+                    root: CanonicalRoot::ParameterReferent(*local),
+                    projection: vec![],
+                },
+                authority: vec![],
+            });
+            ready[row] = true;
+        }
         let mut problems = vec![];
         loop {
             let mut changed = false;
@@ -605,7 +690,7 @@ impl Plan {
                         return Err(Exhausted);
                     }
                     next.push(Target {
-                        place: site.place.clone(),
+                        place: CanonicalPlace::owned(&site.place),
                         authority: vec![],
                     });
                 }
@@ -635,7 +720,17 @@ impl Plan {
             exits,
             parents,
             targets,
-            kinds: f.loan_sites.iter().map(|site| site.kind).collect(),
+            kinds: f
+                .loan_sites
+                .iter()
+                .map(|site| site.kind)
+                .chain(parameter_origins.iter().map(|local| {
+                    let Ty::Ref { kind, .. } = f.locals[local.0].ty else {
+                        unreachable!()
+                    };
+                    kind
+                }))
+                .collect(),
             problems,
             bytes,
         };
@@ -761,7 +856,7 @@ impl Plan {
         budget.spend(place.projection.len() + 1)?;
         if place.projection.first() != Some(&Projection::Deref) {
             return Ok(Ok(vec![Target {
-                place: place.clone(),
+                place: CanonicalPlace::owned(place),
                 authority: vec![],
             }]));
         }

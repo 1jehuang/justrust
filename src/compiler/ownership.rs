@@ -3,7 +3,7 @@
 //! Includes bounded B1 local-reference checking, not general Rust borrowing or
 //! Drop elaboration. Private `Move` operands consume even Copy-typed places so that
 //! move-path analysis can be tested before non-Copy syntax is supported.
-use super::borrow::{self, Access, Phase, Problem, Target};
+use super::borrow::{self, Access, CanonicalPlace, CanonicalRoot, Phase, Problem, Target};
 use super::cfg::{self, BlockId, Operand, Rvalue, Statement, Terminator};
 use super::ir::{ExprId, LocalId, Place, Projection, Ty};
 use std::collections::VecDeque;
@@ -107,7 +107,29 @@ impl Budget {
 fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
     if f.blocks.len() > limits.blocks
         || f.locals.len() > limits.locals
+        || f.params.len() > limits.locals
         || f.loan_sites.len() > super::ir::MAX_LOAN_SITES
+    {
+        return Err(Exhausted);
+    }
+    let mut budget = Budget(limits.operations);
+    budget.spend(f.params.len())?;
+    let formal_origins = f
+        .params
+        .iter()
+        .filter(|local| {
+            f.locals
+                .get(local.0)
+                .is_some_and(|local| matches!(local.ty, Ty::Ref { .. }))
+        })
+        .count();
+    if f.blocks.len() > limits.blocks
+        || f.locals.len() > limits.locals
+        || f.loan_sites
+            .len()
+            .checked_add(formal_origins)
+            .ok_or(Exhausted)?
+            > super::ir::MAX_LOAN_SITES
     {
         return Err(Exhausted);
     }
@@ -163,8 +185,6 @@ fn preflight(f: &cfg::Function, limits: Limits) -> Result<(), Exhausted> {
         }
         preflight_ty(ty, 0, budget)
     }
-    let mut budget = Budget(limits.operations);
-    budget.spend(f.params.len())?;
     for local in &f.locals {
         preflight_ty(&local.ty, 0, &mut budget)?;
     }
@@ -313,6 +333,7 @@ struct PathNode {
 }
 struct Paths {
     roots: Vec<usize>,
+    external: Vec<Option<usize>>,
     nodes: Vec<PathNode>,
 }
 impl Paths {
@@ -363,17 +384,37 @@ impl Paths {
         }
         let mut result = Self {
             roots: Vec::new(),
+            external: vec![None; f.locals.len()],
             nodes: Vec::new(),
         };
         for local in &f.locals {
             let root = add(&mut result, &local.ty, None, limit)?;
             result.roots.push(root);
         }
+        for local in &f.params {
+            if let Ty::Ref { referent, .. } = &f.locals[local.0].ty {
+                let root = add(&mut result, referent, None, limit)?;
+                result.external[local.0] = Some(root);
+            }
+        }
         Ok(result)
     }
     fn resolve(&self, place: &Place) -> usize {
-        let mut node = self.roots[place.local.0];
-        let mut projection = place.projection.iter();
+        self.resolve_projection(self.roots[place.local.0], &place.projection)
+    }
+    fn canonical_root(&self, root: &CanonicalRoot) -> usize {
+        match root {
+            CanonicalRoot::Owned(local) => self.roots[local.0],
+            CanonicalRoot::ParameterReferent(local) => {
+                self.external[local.0].expect("formal referent path")
+            }
+        }
+    }
+    fn resolve_canonical(&self, place: &CanonicalPlace) -> usize {
+        self.resolve_projection(self.canonical_root(&place.root), &place.projection)
+    }
+    fn resolve_projection(&self, mut node: usize, path: &[Projection]) -> usize {
+        let mut projection = path.iter();
         while let Some(step) = projection.next() {
             let index = match step {
                 Projection::Deref => {
@@ -557,7 +598,7 @@ impl Transfer<'_> {
             }
         } else {
             Ok(vec![Target {
-                place: place.clone(),
+                place: CanonicalPlace::owned(place),
                 authority: vec![],
             }])
         }
@@ -573,7 +614,7 @@ impl Transfer<'_> {
                 self.budget,
             )?
         {
-            self.problem(problem, target.place.clone());
+            self.problem(problem, target.place.diagnostic());
         }
         Ok(())
     }
@@ -609,7 +650,7 @@ impl Transfer<'_> {
         self.carrier_read(state, place)?;
         for target in self.targets(place)? {
             self.check_access(&target, access)?;
-            self.read_raw(state, &target.place)?;
+            self.read_canonical(state, &target.place)?;
         }
         Ok(())
     }
@@ -636,22 +677,29 @@ impl Transfer<'_> {
             if deref {
                 // Every alternative must already be initialized. A may-alias
                 // write must never initialize every possible referent.
-                self.read_raw(state, &target.place)?;
-                let node = self.paths.resolve(&target.place);
+                self.read_canonical(state, &target.place)?;
+                let node = self.paths.resolve_canonical(&target.place);
                 self.kill_proofs(state, node)?;
                 self.mark_written(state, node)?;
             } else {
-                self.write_raw(state, &target.place)?;
+                self.write_raw(state, place)?;
             }
         }
         Ok(())
     }
     fn authorize(&mut self, state: &State, place: &Place) -> Result<bool, Exhausted> {
+        self.authorize_canonical(state, &CanonicalPlace::owned(place))
+    }
+    fn authorize_canonical(
+        &mut self,
+        state: &State,
+        place: &CanonicalPlace,
+    ) -> Result<bool, Exhausted> {
         // Cover this traversal and the subsequent resolve traversals for reads,
         // moves and writes. Structural typing was checked for every CFG block.
         self.budget
             .spend(place.projection.len().checked_mul(3).ok_or(Exhausted)? + 1)?;
-        let mut node = self.paths.roots[place.local.0];
+        let mut node = self.paths.canonical_root(&place.root);
         let mut projection = place.projection.iter();
         while let Some(step) = projection.next() {
             let index = match step {
@@ -666,7 +714,10 @@ impl Transfer<'_> {
                     if self.paths.nodes[node].variant_offsets.len() != 1
                         && state.selected[node] != variant.index
                     {
-                        self.diagnostic(ErrorKind::VariantNotDefinitelySelected, place.clone());
+                        self.diagnostic(
+                            ErrorKind::VariantNotDefinitelySelected,
+                            place.diagnostic(),
+                        );
                         return Ok(false);
                     }
                     let Some(Projection::Field(index)) = projection.next() else {
@@ -726,20 +777,27 @@ impl Transfer<'_> {
         state.may_init.range(node, end, value, self.budget)
     }
     fn read_raw(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
+        self.read_canonical(state, &CanonicalPlace::owned(place))
+    }
+    fn read_canonical(
+        &mut self,
+        state: &mut State,
+        place: &CanonicalPlace,
+    ) -> Result<(), Exhausted> {
         self.budget.spend(1)?;
-        if !self.authorize(state, place)? {
+        if !self.authorize_canonical(state, place)? {
             return Ok(());
         }
-        if !state.must_live.get(place.local.0) {
-            self.diagnostic(ErrorKind::StorageNotDefinitelyLive, place.clone());
+        if matches!(place.root, CanonicalRoot::Owned(local) if !state.must_live.get(local.0)) {
+            self.diagnostic(ErrorKind::StorageNotDefinitelyLive, place.diagnostic());
         } else {
-            let node = self.paths.resolve(place);
+            let node = self.paths.resolve_canonical(place);
             if !self.ancestors(state, node)?
                 || !state
                     .must_init
                     .all(node, self.paths.nodes[node].end, self.budget)?
             {
-                self.diagnostic(ErrorKind::ReadNotDefinitelyInitialized, place.clone());
+                self.diagnostic(ErrorKind::ReadNotDefinitelyInitialized, place.diagnostic());
             }
         }
         Ok(())
@@ -803,7 +861,7 @@ impl Transfer<'_> {
                     report.stats.moves += 1;
                 }
                 for target in self.targets(place)? {
-                    self.initialize(state, self.paths.resolve(&target.place), false)?;
+                    self.initialize(state, self.paths.resolve_canonical(&target.place), false)?;
                 }
             }
         }
@@ -855,14 +913,13 @@ impl Transfer<'_> {
         }
         for target in self.targets(array)? {
             self.check_access(&target, Access::Write)?;
-            self.read_raw(state, &target.place)?;
-            let node = self.paths.resolve(&target.place);
-            let root = self.paths.roots[target.place.local.0];
+            self.read_canonical(state, &target.place)?;
+            let node = self.paths.resolve_canonical(&target.place);
             if !deref
-                && !self.f.locals[target.place.local.0].mutable
-                && state.ever_written.get(root)
+                && !self.f.locals[array.local.0].mutable
+                && state.ever_written.get(self.paths.roots[array.local.0])
             {
-                self.diagnostic(ErrorKind::ImmutableReassignment, target.place.clone());
+                self.diagnostic(ErrorKind::ImmutableReassignment, target.place.diagnostic());
             }
             self.kill_proofs(state, node)?;
             self.mark_written(state, node)?;
@@ -903,7 +960,7 @@ impl Transfer<'_> {
                             Access::SharedBorrow
                         },
                     )?;
-                    self.read_raw(state, &target.place)?;
+                    self.read_canonical(state, &target.place)?;
                 }
             }
             // Reading a tag does not copy or move the non-Copy enum, but does
@@ -956,7 +1013,7 @@ impl Transfer<'_> {
                 Statement::StorageLive(local) => {
                     self.check_access(
                         &Target {
-                            place: root_place(*local),
+                            place: CanonicalPlace::owned(&root_place(*local)),
                             authority: vec![],
                         },
                         Access::StorageEnd,
@@ -981,7 +1038,7 @@ impl Transfer<'_> {
                 Statement::StorageDead(local) => {
                     self.check_access(
                         &Target {
-                            place: root_place(*local),
+                            place: CanonicalPlace::owned(&root_place(*local)),
                             authority: vec![],
                         },
                         Access::StorageEnd,
@@ -1020,10 +1077,61 @@ impl Transfer<'_> {
                 }
             }
             Terminator::Call {
-                args, destination, ..
+                args,
+                destination,
+                signature,
+                ..
             } => {
+                // Snapshot effects before consuming reference handles. A bounded
+                // node bitmap deduplicates alias targets instead of retaining
+                // an argument-count product of cloned canonical target vectors.
+                let mut mutations = signature
+                    .params
+                    .iter()
+                    .any(|ty| matches!(ty, Ty::Ref { .. }))
+                    .then(|| Bits::new(self.paths.nodes.len()));
+                if let Some(mutations) = &mutations {
+                    self.budget.spend(mutations.0.len())?;
+                }
+                for (arg, ty) in args.iter().zip(&signature.params) {
+                    if let Ty::Ref { kind, .. } = ty {
+                        let (Operand::Copy(carrier) | Operand::Move(carrier)) = arg else {
+                            unreachable!("validated reference argument")
+                        };
+                        let deref = Place {
+                            local: carrier.local,
+                            projection: vec![Projection::Deref],
+                        };
+                        self.carrier_read(state, &deref)?;
+                        for target in self.targets(&deref)? {
+                            self.check_access(
+                                &target,
+                                if *kind == super::ir::BorrowKind::Mut {
+                                    Access::MutBorrow
+                                } else {
+                                    Access::SharedBorrow
+                                },
+                            )?;
+                            self.read_canonical(state, &target.place)?;
+                            if *kind == super::ir::BorrowKind::Mut {
+                                mutations
+                                    .as_mut()
+                                    .expect("reference call effects")
+                                    .set(self.paths.resolve_canonical(&target.place), true);
+                            }
+                        }
+                    }
+                }
                 for arg in args {
                     self.operand(state, arg)?;
+                }
+                if let Some(mutations) = mutations {
+                    self.budget.spend(self.paths.nodes.len())?;
+                    for node in 0..self.paths.nodes.len() {
+                        if mutations.get(node) {
+                            self.kill_proofs(state, node)?;
+                        }
+                    }
                 }
                 self.phase = Phase::Write;
                 self.write(state, destination)?;
@@ -1102,6 +1210,10 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
             .ok_or(Exhausted)?;
         let bytes = per_state
             .checked_mul(f.blocks.len().checked_add(3).ok_or(Exhausted)?)
+            // One call's deduplicated mutable-effect bitmap can coexist with
+            // the solver and canonical target scratch, never with another call.
+            .and_then(|n| n.checked_add(paths.nodes.len().div_ceil(64).checked_mul(8)?))
+            .and_then(|n| n.checked_add(std::mem::size_of::<Bits>()))
             .ok_or(Exhausted)?;
         if bytes > limits.state_bytes {
             return Err(Exhausted);
@@ -1153,6 +1265,14 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
                 .range(root, paths.nodes[root].end, true, &mut budget)?;
             seed.ever_written
                 .range(root, paths.nodes[root].end, true, &mut budget)?;
+            if let Some(root) = paths.external[local.0] {
+                seed.must_init
+                    .range(root, paths.nodes[root].end, true, &mut budget)?;
+                seed.may_init
+                    .range(root, paths.nodes[root].end, true, &mut budget)?;
+                seed.ever_written
+                    .range(root, paths.nodes[root].end, true, &mut budget)?;
+            }
         }
         let mut entries: Vec<Option<State>> = (0..f.blocks.len()).map(|_| None).collect();
         entries[f.entry.0] = Some(seed);
@@ -1291,6 +1411,63 @@ mod tests {
             super::super::frontend::type_function_with_signatures(&program, 0, &signatures)
                 .unwrap();
         cfg::lower(&checked).unwrap()
+    }
+
+    #[test]
+    fn reference_parameters_without_sites_have_independent_external_paths() {
+        for source in [
+            "fn f(p:&mut i32)->i32{*p=3;*p}",
+            "fn f(p:&i32,q:&i32)->i32{*p+*q}",
+        ] {
+            let f = borrowed_source(source);
+            assert!(f.loan_sites.is_empty());
+            let result = analyze(&f);
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+            let paths = Paths::new(&f, 131072).unwrap();
+            assert!(paths.nodes.len() > f.locals.len());
+            let mut budget = Budget(32 * 1024 * 1024);
+            let plan = borrow::Plan::build(&f, &mut budget, 128 * 1024 * 1024).unwrap();
+            assert!(plan.bytes > 0);
+            let mut budget = Budget(32 * 1024 * 1024);
+            assert!(borrow::Plan::build(&f, &mut budget, plan.bytes - 1).is_err());
+        }
+    }
+
+    #[test]
+    fn reference_parameter_referent_outlives_moved_carrier_storage() {
+        let f =
+            borrowed_source("fn f(p:&mut i32)->i32{let c:&mut i32;{let q=p;c=&mut *q;}*c=3;*c}");
+        let result = analyze(&f);
+        assert!(result.passed(), "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn reference_parameter_bounds_count_formals_and_external_expansion() {
+        let mut f = borrowed_source("fn f(p:&i32,q:&i32)->i32{*p+*q}");
+        let result = analyze_with_limits(
+            &f,
+            Limits {
+                paths: f.locals.len(),
+                ..Limits::default()
+            },
+        );
+        assert!(!result.complete);
+        assert!(!result.passed());
+        let p = f.params[0];
+        f.loan_sites = vec![
+            cfg::LoanSite {
+                kind: super::super::ir::BorrowKind::Shared,
+                place: Place {
+                    local: p,
+                    projection: vec![Projection::Deref]
+                },
+                origin: None
+            };
+            super::super::ir::MAX_LOAN_SITES - 1
+        ];
+        let result = analyze(&f);
+        assert!(!result.complete);
+        assert!(!result.passed());
     }
 
     #[test]
@@ -1592,6 +1769,174 @@ mod tests {
                 terminator: located(Terminator::Return),
             },
         ]);
+    }
+
+    #[test]
+    fn reference_calls_capture_effects_before_move_and_preserve_initialization() {
+        use super::super::ir::BorrowKind;
+        for kind in [BorrowKind::Shared, BorrowKind::Mut] {
+            let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+            let mut f = payload_fixture(&ty);
+            let reference = Ty::Ref {
+                kind,
+                referent: std::sync::Arc::new(Ty::Enum(ty.clone())),
+            };
+            f.locals.push(local(reference.clone()));
+            f.loan_sites.push(cfg::LoanSite {
+                kind,
+                place: place(1),
+                origin: None,
+            });
+            split_payload(&mut f, &ty);
+            f.blocks[1].statements.extend([
+                located(Statement::StorageLive(LocalId(3))),
+                located(Statement::Assign {
+                    destination: place(3),
+                    value: Rvalue::Borrow(cfg::LoanId(0)),
+                }),
+            ]);
+            f.blocks[1].terminator = located(Terminator::Call {
+                name: "callee".into(),
+                signature: super::super::ir::Signature {
+                    params: vec![reference],
+                    result: Ty::Unit,
+                },
+                args: vec![Operand::Move(place(3))],
+                destination: place(0),
+                next: BlockId(3),
+            });
+            f.blocks.push(BasicBlock {
+                statements: vec![
+                    read_payload(payload_field(&ty, 0, 0)),
+                    located(Statement::Inspect(place(1))),
+                ],
+                terminator: located(Terminator::Return),
+            });
+            f.validate().unwrap();
+            let result = analyze(&f);
+            assert!(result.complete);
+            if kind == BorrowKind::Shared {
+                assert!(result.passed(), "{:?}", result.diagnostics);
+                assert_eq!(result.stats.variant_proofs_killed, 0);
+            } else {
+                assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+                assert_eq!(
+                    result.diagnostics[0].kind,
+                    ErrorKind::VariantNotDefinitelySelected
+                );
+                assert_eq!(result.stats.variant_proofs_killed, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn reference_call_union_mutation_kills_every_candidate_proof() {
+        use super::super::ir::BorrowKind;
+        let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        let pair = Ty::Tuple(vec![Ty::Enum(ty.clone()), Ty::Enum(ty.clone())].into());
+        let reference = Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: std::sync::Arc::new(Ty::Enum(ty.clone())),
+        };
+        let mut f = fixture();
+        f.locals.extend([
+            local(pair),
+            local(Ty::I32),
+            local(reference.clone()),
+            local(Ty::Bool),
+        ]);
+        f.params.extend([LocalId(1), LocalId(4)]);
+        f.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(2))),
+            located(Statement::StorageLive(LocalId(3))),
+        ]);
+        let member = |index| Place {
+            local: LocalId(1),
+            projection: vec![Projection::Field(index)],
+        };
+        for index in 0..2 {
+            f.loan_sites.push(cfg::LoanSite {
+                kind: BorrowKind::Mut,
+                place: member(index),
+                origin: None,
+            });
+        }
+        f.blocks[0].terminator = located(Terminator::SwitchVariant {
+            place: member(0),
+            variant: variant(&ty, 0),
+            then_block: BlockId(1),
+            else_block: BlockId(2),
+        });
+        f.blocks.extend([
+            BasicBlock {
+                statements: vec![],
+                terminator: located(Terminator::SwitchVariant {
+                    place: member(1),
+                    variant: variant(&ty, 0),
+                    then_block: BlockId(3),
+                    else_block: BlockId(2),
+                }),
+            },
+            BasicBlock {
+                statements: vec![],
+                terminator: located(Terminator::Return),
+            },
+            BasicBlock {
+                statements: vec![],
+                terminator: located(Terminator::Switch {
+                    condition: Operand::Copy(place(4)),
+                    then_block: BlockId(4),
+                    else_block: BlockId(5),
+                }),
+            },
+        ]);
+        for loan in 0..2 {
+            f.blocks.push(BasicBlock {
+                statements: vec![located(Statement::Assign {
+                    destination: place(3),
+                    value: Rvalue::Borrow(cfg::LoanId(loan)),
+                })],
+                terminator: located(Terminator::Goto(BlockId(6))),
+            });
+        }
+        f.blocks.push(BasicBlock {
+            statements: vec![],
+            terminator: located(Terminator::Call {
+                name: "callee".into(),
+                signature: super::super::ir::Signature {
+                    params: vec![reference],
+                    result: Ty::Unit,
+                },
+                args: vec![Operand::Move(place(3))],
+                destination: place(0),
+                next: BlockId(7),
+            }),
+        });
+        let reads = (0..2)
+            .map(|index| {
+                let mut field = member(index);
+                field
+                    .projection
+                    .extend([Projection::Downcast(variant(&ty, 0)), Projection::Field(0)]);
+                read_payload(field)
+            })
+            .chain([located(Statement::Inspect(place(1)))])
+            .collect();
+        f.blocks.push(BasicBlock {
+            statements: reads,
+            terminator: located(Terminator::Return),
+        });
+        f.validate().unwrap();
+        let result = analyze(&f);
+        assert!(result.complete);
+        assert_eq!(result.diagnostics.len(), 2, "{:?}", result.diagnostics);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .all(|d| d.kind == ErrorKind::VariantNotDefinitelySelected)
+        );
+        assert_eq!(result.stats.variant_proofs_killed, 2);
     }
 
     fn array(element: Ty, len: usize) -> Ty {

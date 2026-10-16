@@ -23,6 +23,7 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Payload enums, typed downcasts, bounded selection proofs and native tagged values.
 - [x] Fixed arrays, repeat effects, literal indexing and private by-value array ABI.
 - [x] Genuine 64-bit usize and ordered, bounds-checked runtime array operations.
+- [x] Nonescaping local references, canonical provenance and last-use loan analysis.
 - [x] Hosted acceptance, stock differential cases and qualified benchmark receipts.
 
 ## Remaining implementation program
@@ -57,6 +58,16 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Active slice
 
+Noescape reference parameters and expected-site reborrows are implemented under
+`REFERENCE-CALLS.md`. All 748 hosted tests, strict all-target lint, formatting and
+independent resource/soundness review pass. The unchanged 30-case stock corpus
+separates 18 successful, eight invalid and four legal-unsupported programs.
+Formal referent roots outlive carrier slots, and mutable calls invalidate all
+candidate referent proofs without inventing initialization. Tracked fourteen-
+corpus native differential verification remains the next delivery gate.
+Reference returns and signature regions remain open under the read-only
+`REFERENCE-RETURNS.md` design checkpoint, not an implemented capability.
+
 Genuine nonescaping local references are implemented under `BORROWING.md`, with
 canonical issuance-time loan origins, explicit reborrows, backward carrier
 liveness and native thin-pointer addressing. The frozen 35-case external oracle
@@ -65,10 +76,10 @@ All 701 hosted tests, strict all-target lint, formatting and final peak-memory
 accounting review pass. Tracked M8a validation passed 572 cases across thirteen
 corpora: 343 accepted parity, 170 invalid rejections, nine declared runtime-101
 cases and 50 legal-unsupported boundaries. Raw receipts and the successful
-96-worker native borrowing example are retained. Reference parameters,
-implicit expected-site reborrows, escaping/reference results, general regions and
-reference-containing aggregates remain open B2/B3 work. This does not close the
-ownership or full-Rust checklist.
+96-worker native borrowing example are retained. That B1 checkpoint left
+reference parameters and implicit expected-site reborrows for the B2 slice above.
+Escaping/reference results, general regions and reference-containing aggregates
+remain open. This does not close the ownership or full-Rust checklist.
 
 Genuine unsigned 64-bit `usize` and runtime array indexing now pass 647 hosted
 tests and strict all-target lint. `USIZE.md` records ordered index/readiness

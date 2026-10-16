@@ -441,6 +441,8 @@ impl Function {
     /// Verify representation invariants once before publication. This does not
     /// redo source type checking, prove initialization/liveness/ownership, check
     /// provenance IDs against an absent source arena, or resolve call targets.
+    /// Reference calls additionally require whole-program noescape and matching
+    /// callee-signature evidence at the trusted emission boundary.
     pub fn validate(&self) -> Result<(), String> {
         let block = |id: BlockId| -> Result<(), String> {
             if id.0 < self.blocks.len() {
@@ -460,6 +462,15 @@ impl Function {
         if self.loan_sites.len() > ir::MAX_LOAN_SITES {
             return Err("CFG loan site limit exceeded".into());
         }
+        let mut origins = self.loan_sites.len();
+        for param in &self.params {
+            if matches!(self.place_ty(&place(*param))?, Ty::Ref { .. }) {
+                origins += 1;
+                if origins > ir::MAX_LOAN_SITES {
+                    return Err("CFG combined reference origin limit exceeded".into());
+                }
+            }
+        }
         let mut loan_uses = vec![0usize; self.loan_sites.len()];
         for site in &self.loan_sites {
             self.place_ty(&site.place)?;
@@ -469,9 +480,7 @@ impl Function {
         }
         let mut params = std::collections::HashSet::new();
         for &param in &self.params {
-            if matches!(self.place_ty(&place(param))?, Ty::Ref { .. }) {
-                return Err("unsupported: reference parameter".into());
-            }
+            self.place_ty(&place(param))?;
             if !params.insert(param) {
                 return Err("duplicate CFG parameter".into());
             }
@@ -522,6 +531,9 @@ impl Function {
                     then_block,
                     else_block,
                 } => {
+                    if place.projection.contains(&Projection::Deref) {
+                        return Err("unsupported: enum variant matching through dereference".into());
+                    }
                     let Ty::Enum(ty) = self.place_ty(place)? else {
                         return Err("CFG variant switch requires enum place".into());
                     };
@@ -554,9 +566,6 @@ impl Function {
                     }
                     for ty in &signature.params {
                         validate_type(ty, 0)?;
-                        if matches!(ty, Ty::Ref { .. }) {
-                            return Err("unsupported: reference call parameter".into());
-                        }
                     }
                     validate_type(&signature.result, 0)?;
                     if matches!(signature.result, Ty::Ref { .. }) {
@@ -636,6 +645,13 @@ impl Lowerer<'_> {
         self.source
             .validate_match(scrutinee, arms, &self.parameters)?;
         let source = self.pattern_source(scrutinee)?;
+        if source.projection.contains(&Projection::Deref)
+            && arms
+                .iter()
+                .any(|arm| matches!(arm.pattern, ir::MatchPattern::EnumVariant { .. }))
+        {
+            return Err("unsupported: enum variant matching through dereference".into());
+        }
         let completes = self.source.exprs[scrutinee.0].completion == ir::Completion::Returns;
         let join = self.block();
         for arm in arms {
@@ -1448,11 +1464,25 @@ impl Lowerer<'_> {
 /// Lower without modifying the checked input. Each value transfer selects Copy
 /// or Move from its projected type. The result still requires ownership analysis.
 pub fn lower(source: &ir::CheckedFunction) -> Result<Function, String> {
+    let mut formal_origins = 0usize;
+    for param in &source.params {
+        let ty = &source
+            .locals
+            .get(param.0)
+            .ok_or("invalid reference parameter local")?
+            .ty;
+        if matches!(ty, Ty::Ref { .. }) {
+            formal_origins += 1;
+            if formal_origins > ir::MAX_LOAN_SITES {
+                return Err("CFG combined reference origin limit exceeded".into());
+            }
+        }
+    }
     let mut loan_sites = Vec::new();
     let mut loans = vec![None; source.exprs.len()];
     for (index, expression) in source.exprs.iter().enumerate() {
         if let ir::ExprKind::Borrow { kind, place } = &expression.kind {
-            if loan_sites.len() >= ir::MAX_LOAN_SITES {
+            if loan_sites.len() >= ir::MAX_LOAN_SITES - formal_origins {
                 return Err("CFG loan site limit exceeded".into());
             }
             loans[index] = Some(LoanId(loan_sites.len()));
@@ -1537,6 +1567,227 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
+    fn dereferenced_enum_variant_matches_fail_closed_without_refinement() {
+        for source in [
+            "enum E{A,B} fn f(p:&E)->i32{match *p{E::A=>1,E::B=>2}} fn main(){}",
+            "enum E{A} fn f(p:&E)->i32{match *p{E::A=>1}} fn main(){}",
+        ] {
+            let program = super::super::frontend::parse(source).unwrap();
+            let signatures = super::super::frontend::signature_table(&program).unwrap();
+            assert!(
+                super::super::frontend::type_function_with_signatures(&program, 0, &signatures)
+                    .and_then(|source| lower(&source))
+                    .unwrap_err()
+                    .contains("unsupported")
+            );
+        }
+        let source = checked("enum E{A,B} fn f(p:&E){match *p{_=>()};} fn main(){}", 0);
+        let mut function = nominal_lowered(&source);
+        let Ty::Ref { referent, .. } = &function.locals[0].ty else {
+            unreachable!()
+        };
+        let Ty::Enum(ty) = referent.as_ref() else {
+            unreachable!()
+        };
+        let mut variant_source = source.clone();
+        for expression in &mut variant_source.exprs {
+            if let ir::ExprKind::Match { arms, .. } = &mut expression.kind {
+                arms.push(ir::MatchArm {
+                    pattern: ir::MatchPattern::EnumVariant {
+                        ty: ty.clone(),
+                        variant: 0,
+                        bindings: vec![],
+                    },
+                    body: arms[0].body,
+                });
+            }
+        }
+        assert!(
+            lower(&variant_source)
+                .unwrap_err()
+                .contains("unsupported: enum variant matching through dereference")
+        );
+        function.blocks[function.entry.0].terminator.value = Terminator::SwitchVariant {
+            place: Place {
+                local: LocalId(0),
+                projection: vec![Projection::Deref],
+            },
+            variant: ir::VariantId {
+                owner: ty.def().id,
+                index: 0,
+            },
+            then_block: function.entry,
+            else_block: function.entry,
+        };
+        assert!(
+            function
+                .validate()
+                .unwrap_err()
+                .contains("unsupported: enum variant matching through dereference")
+        );
+        let analysis = super::super::ownership::analyze(&function);
+        assert!(!analysis.passed());
+    }
+
+    #[test]
+    fn reference_call_signatures_and_argument_snapshots_are_noescape_shaped() {
+        for kind in [ir::BorrowKind::Shared, ir::BorrowKind::Mut] {
+            let reference = Ty::Ref {
+                kind,
+                referent: std::sync::Arc::new(Ty::I32),
+            };
+            let source = with_root(
+                Ty::I32,
+                vec![
+                    expr(
+                        reference.clone(),
+                        ir::ExprKind::Borrow {
+                            kind,
+                            place: place(LocalId(0)),
+                        },
+                    ),
+                    expr(
+                        Ty::Unit,
+                        ir::ExprKind::Call {
+                            name: "callee".into(),
+                            args: vec![ExprId(0)],
+                            signature: ir::Signature {
+                                params: vec![reference.clone()],
+                                result: Ty::Unit,
+                            },
+                        },
+                    ),
+                ],
+                vec![ir::Stmt::Expr(ExprId(1))],
+            );
+            let function = nominal_lowered(&source);
+            let call_block = function
+                .blocks
+                .iter()
+                .position(|block| matches!(block.terminator.value, Terminator::Call { .. }))
+                .unwrap();
+            let Terminator::Call { args, next, .. } = &function.blocks[call_block].terminator.value
+            else {
+                unreachable!()
+            };
+            let carrier = match &args[0] {
+                Operand::Copy(place) if kind == ir::BorrowKind::Shared => place.local,
+                Operand::Move(place) if kind == ir::BorrowKind::Mut => place.local,
+                _ => panic!("reference argument must use a stable owning snapshot"),
+            };
+            assert!(!function.blocks[call_block].statements.iter().any(|statement| matches!(statement.value, Statement::StorageDead(local) if local == carrier)));
+            assert!(function.blocks[next.0].statements.iter().any(|statement| matches!(statement.value, Statement::StorageDead(local) if local == carrier)));
+            for malformed in [
+                Ty::Tuple(std::sync::Arc::from([reference.clone()])),
+                Ty::Array {
+                    element: std::sync::Arc::new(reference.clone()),
+                    len: 0,
+                },
+                Ty::Ref {
+                    kind,
+                    referent: std::sync::Arc::new(reference.clone()),
+                },
+            ] {
+                let mut invalid = function.clone();
+                let Terminator::Call { signature, .. } =
+                    &mut invalid.blocks[call_block].terminator.value
+                else {
+                    unreachable!()
+                };
+                signature.params[0] = malformed;
+                assert!(
+                    invalid
+                        .validate()
+                        .unwrap_err()
+                        .contains("nested or aggregate references")
+                );
+            }
+            let mut invalid = function.clone();
+            let Terminator::Call { signature, .. } =
+                &mut invalid.blocks[call_block].terminator.value
+            else {
+                unreachable!()
+            };
+            signature.result = reference;
+            assert!(
+                invalid
+                    .validate()
+                    .unwrap_err()
+                    .contains("reference call result")
+            );
+            let mut invalid = function.clone();
+            let Terminator::Call { signature, .. } =
+                &mut invalid.blocks[call_block].terminator.value
+            else {
+                unreachable!()
+            };
+            signature.params[0] = Ty::I32;
+            assert!(
+                invalid
+                    .validate()
+                    .unwrap_err()
+                    .contains("operand type mismatch")
+            );
+        }
+    }
+
+    #[test]
+    fn reference_formals_share_the_explicit_loan_origin_cap() {
+        let reference = Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: std::sync::Arc::new(Ty::I32),
+        };
+        let source = with_root(reference.clone(), vec![], vec![]);
+        let mut function = nominal_lowered(&source);
+        for index in 1..ir::MAX_LOAN_SITES {
+            let local = LocalId(function.locals.len());
+            function.locals.push(ir::LocalDecl {
+                name: format!("formal{index}"),
+                ty: reference.clone(),
+                mutable: false,
+            });
+            function.params.push(local);
+        }
+        function.validate().unwrap();
+        let mut mixed = function.clone();
+        mixed.loan_sites.push(LoanSite {
+            kind: ir::BorrowKind::Shared,
+            place: Place {
+                local: LocalId(0),
+                projection: vec![Projection::Deref],
+            },
+            origin: None,
+        });
+        assert!(
+            mixed
+                .validate()
+                .unwrap_err()
+                .contains("combined reference origin limit")
+        );
+        let local = LocalId(function.locals.len());
+        function.locals.push(ir::LocalDecl {
+            name: "overflow".into(),
+            ty: reference,
+            mutable: false,
+        });
+        function.params.push(local);
+        assert!(
+            function
+                .validate()
+                .unwrap_err()
+                .contains("combined reference origin limit")
+        );
+        let mut source = source;
+        source.locals = function.locals;
+        source.params = function.params;
+        assert!(
+            lower(&source)
+                .unwrap_err()
+                .contains("combined reference origin limit")
+        );
+    }
+
+    #[test]
     fn borrowed_place_site_preserves_origin_and_unique_instruction() {
         let reference = Ty::Ref {
             kind: ir::BorrowKind::Mut,
@@ -1595,11 +1846,16 @@ mod tests {
         );
         let mut signature_escape = function.clone();
         signature_escape.params.push(LocalId(1));
+        signature_escape.validate().unwrap();
+        signature_escape.locals[1].ty = Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: std::sync::Arc::new(function.locals[1].ty.clone()),
+        };
         assert!(
             signature_escape
                 .validate()
                 .unwrap_err()
-                .contains("reference parameter")
+                .contains("nested or aggregate references")
         );
         assert!(
             function

@@ -1,6 +1,6 @@
 # Native Rust compiler implementation
 
-Status: executable Rust-subset implementation with local references, genuine usize, runtime indexing, fixed arrays, nominal structs, payload enums and match,
+Status: executable Rust-subset implementation with noescape reference calls, local borrowing, genuine usize, runtime indexing, fixed arrays, nominal structs, payload enums and match,
 2026-10-16.
 The target is the entire Rust language and existing-project compatibility.
 See `RUST-COMPATIBILITY.md` for the implementation roadmap and completion gates.
@@ -49,6 +49,14 @@ before LHS effects and invalidate all contained enum selection proofs. Chained
 dynamic place bases and non-Copy dynamic extraction remain unsupported. Every
 array uses the private indirect aggregate ABI, including zero-length arrays.
 See `ARRAYS.md` and `USIZE.md`.
+Standalone shared/mutable reference parameters support direct calls, recursive
+mutation of original caller storage and expected-site carrier reborrows. Formal
+referents have separate invocation-lived canonical roots. Mutable calls invalidate
+all candidate referent selection proofs without inventing initialization. Every
+body must pass analysis before executable publication. Standalone checked-function
+emission rejects reference calls without whole-program signature/noescape evidence.
+Reference returns and reference-containing aggregates remain unsupported.
+See `BORROWING.md` and `REFERENCE-CALLS.md`.
 Typed declarations `let [mut] name: Type;` use cached flow analysis for first
 initialization and immutable assignment history. Untyped/backward-inferred and
 deferred destructuring declarations remain unsupported. See `DEFERRED.md`.
@@ -76,7 +84,7 @@ glob imports, public re-exports, restricted `pub(...)`, block-local items/import
 standard-library APIs beyond the documented print form, general macros, traits,
 generics, empty enums, explicit discriminants, empty/unit/tuple structs,
 derives, struct update/shorthand,
-reference parameters/results, escaping references, general lifetimes, strings as values, closures, async,
+reference results, escaping references, general lifetimes, strings as values, closures, async,
 FFI, labels/labeled blocks, `for` loops, while expressions in general value
 positions, or other targets.
 This list does not turn unsupported syntax into permission to accept programs

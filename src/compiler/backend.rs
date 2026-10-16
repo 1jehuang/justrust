@@ -782,6 +782,8 @@ impl<'a> Emitter<'a> {
 /// exact CFG and leave it unchanged afterward. No structural or ownership
 /// validation is repeated here. Graph callers satisfy this through fact 109,
 /// while standalone checked-body callers should use `emit_checked_function`.
+/// Reference calls additionally require whole-program noescape and exact callee
+/// signature evidence. Local analysis alone cannot establish that contract.
 /// Every local and lowering temporary has stable invocation-owned frame storage.
 pub fn emit_cfg_function(function: &cfg::Function) -> Result<Object, String> {
     if function.params.len() > MAX_ARGS {
@@ -875,6 +877,15 @@ pub fn emit_cfg_function(function: &cfg::Function) -> Result<Object, String> {
 /// raw emit_cfg_function without lowering or analyzing again.
 pub fn emit_checked_function(function: &ir::CheckedFunction) -> Result<Object, String> {
     let lowered = cfg::lower(function)?;
+    if lowered.blocks.iter().any(|block| {
+        matches!(&block.terminator.value, cfg::Terminator::Call { signature, .. }
+            if signature.params.iter().any(|ty| matches!(ty, ir::Ty::Ref { .. }))
+                || matches!(signature.result, ir::Ty::Ref { .. }))
+    }) {
+        return Err(
+            "reference calls require whole-program noescape and callee-signature evidence".into(),
+        );
+    }
     let analysis = ownership::analyze(&lowered);
     if !analysis.passed() {
         return Err(format!(
@@ -976,17 +987,30 @@ pub fn link(functions: &[(String, Object)]) -> Result<Vec<u8>, String> {
 }
 
 /// Compatibility entry point for AST callers. Build signatures once and lower
-/// each body once, then use the same checked emitter as graph compilation.
+/// each body once. Analyze every body before any raw emission, establishing the
+/// whole-program noescape evidence required for reference calls.
 pub fn emit(program: &Program) -> Result<Vec<u8>, String> {
     let signatures = frontend::signature_table(program)?;
-    let objects = program
+    let functions = program
         .functions
         .iter()
         .enumerate()
         .map(|(index, f)| {
             let checked = frontend::type_function_with_signatures(program, index, &signatures)?;
-            Ok((f.name.clone(), emit_checked_function(&checked)?))
+            let lowered = cfg::lower(&checked)?;
+            let analysis = ownership::analyze(&lowered);
+            if !analysis.passed() {
+                return Err(format!(
+                    "{}: initialization/move analysis (complete={}): {:?}",
+                    lowered.name, analysis.complete, analysis.diagnostics
+                ));
+            }
+            Ok((f.name.clone(), lowered))
         })
+        .collect::<Result<Vec<_>, String>>()?;
+    let objects = functions
+        .iter()
+        .map(|(name, function)| Ok((name.clone(), emit_cfg_function(function)?)))
         .collect::<Result<Vec<_>, String>>()?;
     link(&objects)
 }
@@ -1220,6 +1244,111 @@ mod tests {
         let output = run(&p);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"enum-aggregate\n");
+    }
+
+    #[test]
+    fn reference_calls_require_program_evidence_but_standalone_parameter_body_is_valid() {
+        let p = frontend::parse(
+            r#"
+            fn read(value: &usize) -> usize { *value }
+            fn main() {
+                let value = 18446744073709551615usize;
+                if read(&value) != 18446744073709551615usize { 1 / 0; }
+            }
+        "#,
+        )
+        .unwrap();
+        let env = frontend::signature_table(&p).unwrap();
+        let read = frontend::type_function_with_signatures(&p, 0, &env).unwrap();
+        assert!(emit_checked_function(&read).is_ok());
+        let main = frontend::type_function_with_signatures(&p, 1, &env).unwrap();
+        assert!(
+            emit_checked_function(&main)
+                .unwrap_err()
+                .contains("whole-program noescape")
+        );
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+
+        let invalid_unused =
+            frontend::parse("fn unused(value: &usize) { *value = 3usize; } fn main() {}").unwrap();
+        assert!(emit(&invalid_unused).is_err());
+    }
+
+    #[test]
+    fn reference_calls_nested_recursive_mutation_and_shared_aliases_preserve_caller_storage() {
+        let p = frontend::parse(
+            r#"
+            fn recurse(value: &mut usize, count: i32) -> usize {
+                if count == 0 { *value } else {
+                    *value = *value + 1usize;
+                    recurse(value, count - 1)
+                }
+            }
+            fn forward(value: &mut usize) -> usize { recurse(value, 3) }
+            fn read(value: &usize) -> usize { *value }
+            fn same(a: &usize, b: &usize) -> bool { *a == *b }
+            fn main() {
+                let mut value = 9223372036854775808usize;
+                {
+                    let reference = &mut value;
+                    if forward(reference) != 9223372036854775811usize { 1 / 0; }
+                    if recurse(reference, 2) != 9223372036854775813usize { 1 / 0; }
+                    if read(reference) != 9223372036854775813usize { 1 / 0; }
+                    *reference = 18446744073709551615usize;
+                }
+                if value != 18446744073709551615usize { 1 / 0; }
+                if !same(&value, &value) { 1 / 0; }
+                println!("reference-calls");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"reference-calls\n");
+    }
+
+    #[test]
+    fn reference_calls_aggregate_referents_results_and_mixed_sret_arguments() {
+        let p = frontend::parse(
+            r#"
+            struct Record { before: usize, items: [usize; 9], after: usize }
+            fn change(record: &mut Record, value: usize) -> [usize; 9] {
+                (*record).items[8] = value;
+                (*record).items
+            }
+            fn forward(record: &mut Record) -> [usize; 9] {
+                change(record, 18446744073709551615usize)
+            }
+            fn mixed(a: &mut usize, padding: [usize; 9], b: &mut usize) -> [usize; 9] {
+                *a = padding[0];
+                *b = padding[8];
+                padding
+            }
+            fn read(record: &Record) -> usize { (*record).items[8] }
+            fn main() {
+                let mut record = Record {
+                    before: 17usize, items: [9223372036854775808usize; 9], after: 29usize
+                };
+                let result = forward(&mut record);
+                if result[0] != 9223372036854775808usize { 1 / 0; }
+                if result[8] != 18446744073709551615usize { 1 / 0; }
+                if read(&record) != 18446744073709551615usize { 1 / 0; }
+                if record.before != 17usize { 1 / 0; }
+                if record.after != 29usize { 1 / 0; }
+                let copied = mixed(&mut record.before, result, &mut record.after);
+                if record.before != 9223372036854775808usize { 1 / 0; }
+                if record.after != 18446744073709551615usize { 1 / 0; }
+                if copied[8] != record.items[8] { 1 / 0; }
+                println!("reference-sret");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"reference-sret\n");
     }
 
     #[test]

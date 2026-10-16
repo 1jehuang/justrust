@@ -8348,3 +8348,37 @@ The 523-byte, two-function native borrowing example ran at 96 workers, with
 complete capture and no dropped events/failures, producing the expected marker.
 Observed total was 9,903,700 ns and engine 3,146,186 ns, explicitly
 contended/uncontrolled, not a cold benchmark or speedup claim.
+
+
+## 2026-10-16: noescape reference calls and expected-site reborrows
+
+Implemented standalone shared/mutable reference parameters with canonical external
+referent roots separate from parameter carrier slots. Entry origins are seeded
+even with zero explicit borrow sites. Moving or ending a carrier does not end the
+invocation-lived referent. Expected call/annotated-let/known-assignment sites
+reborrow mutable carriers before any value move; untyped lets remain genuine
+handle moves. Recursive calls mutate original caller storage through thin64 ABI.
+
+Call argument snapshots retain their authority through invocation. Mutable
+actual targets are captured before reference-handle consumption, and returning
+calls invalidate every candidate referent selection proof without changing
+initialization bits. Synthetic tests distinguish shared proof preservation,
+mutable proof killing, union-target invalidation and unchanged whole-value init.
+The combined 4096-site/formal-origin bound, external expanded paths, retained
+state, parameter scans and call bitmap scratch remain explicitly metered.
+
+Whole-program emission types all bodies under one canonical environment and
+analyzes all before raw emission. Standalone checked emission rejects reference
+calls without whole-program noescape/signature evidence. Variant matching through
+Deref is explicitly unsupported and structurally rejected before static proof
+refinement, closing a malformed-CFG panic route found during final inspection.
+
+Final hosted check `20261016-010320267-2362563`, full test
+`20261016-010321116-2362662` (748 passed) and strict all-target clippy
+`20261016-010323264-2363069` passed, with formatting/diff checks clean. Exact
+redacted profiles are retained in
+`data/runs/prototype-bootstrap/2026-10-reference-calls.jsonl`. Independent stock
+classification passed the unchanged 30-case corpus: 18 supported successful
+programs, eight invalid programs and four legal-unsupported boundaries.
+Reference returns, region contracts, aggregate references and full Rust remain
+open. No speedup or cold-build claim follows from these correctness gates.

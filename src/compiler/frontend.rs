@@ -2439,7 +2439,7 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
         let mut deps = Vec::new();
         while let Some(ty) = pending.pop() {
             match ty {
-                Type::Ref{..}=>return Err("references in function signatures and aggregate declarations are unsupported in B1".into()),
+                Type::Ref{..}=>return Err("reference results and reference-containing aggregate/nested types are unsupported".into()),
                 Type::Array(element, len) => {
                     if *len > ir::MAX_ARRAY_LEN {
                         return Err("array length exceeds supported limit".into());
@@ -2492,9 +2492,15 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
                 ));
             }
         }
-        for ty in std::iter::once(&function.result).chain(function.params.iter().map(|(_, ty)| ty))
-        {
-            dependencies(ty, &indices, &all, parent(&function.name))?;
+        dependencies(&function.result, &indices, &all, parent(&function.name))?;
+        for (_, ty) in &function.params {
+            validate_depth(DepthNode::Type(ty))?;
+            let referent = if let Type::Ref { referent, .. } = ty {
+                referent.as_ref()
+            } else {
+                ty
+            };
+            dependencies(referent, &indices, &all, parent(&function.name))?;
         }
     }
     if !program
@@ -2953,19 +2959,6 @@ impl<'a> Checker<'a> {
         self.accessible(&ty)?;
         Ok((ir::Place { local, projection }, ty, writable))
     }
-    fn reference_site(expected: Option<&ir::Ty>, value: &Expr) -> Result<(), String> {
-        if matches!(
-            expected,
-            Some(ir::Ty::Ref {
-                kind: ir::BorrowKind::Mut,
-                ..
-            })
-        ) && !matches!(value, Expr::Borrow { .. })
-        {
-            return Err("implicit mutable-reference expected-site reborrowing/coercion is unsupported; use an explicit borrow/reborrow".into());
-        }
-        Ok(())
-    }
     fn reject_aggregate_ref(ty: &ir::Ty) -> Result<(), String> {
         let mut work = vec![ty];
         while let Some(ty) = work.pop() {
@@ -3388,7 +3381,6 @@ impl<'a> Checker<'a> {
                     } else {
                         Some(checked_ty(ty, self.signatures)?)
                     };
-                    Self::reference_site(annotation.as_ref(), value)?;
                     let value = self.expr_expected(value, annotation.as_ref())?;
                     let f = self.flow(value);
                     let t = if *ty == Type::Infer {
@@ -3418,7 +3410,6 @@ impl<'a> Checker<'a> {
                     }
                     let direct_dynamic = matches!(value, Expr::DynamicIndex { .. });
                     let direct_wildcard = matches!(pattern, Pattern::Wildcard);
-                    Self::reference_site(annotation.as_ref(), value)?;
                     let value = self.expr_expected(value, annotation.as_ref())?;
                     let flow = self.flow(value);
                     if direct_dynamic && !flow.ty.is_copy() && !direct_wildcard {
@@ -3466,7 +3457,6 @@ impl<'a> Checker<'a> {
                     let local = self.lookup(name)?;
                     let declaration = &self.locals[local.0];
                     let t = declaration.ty.clone();
-                    Self::reference_site(Some(&t), value)?;
                     let value = self.expr_expected(value, Some(&t))?;
                     let f = self.flow(value);
                     self.require(&f, &t)?;
@@ -3517,7 +3507,6 @@ impl<'a> Checker<'a> {
                                 .into(),
                         );
                     }
-                    Self::reference_site(Some(&ty), value)?;
                     let value = self.expr_expected(value, Some(&ty))?;
                     let flow = self.flow(value);
                     self.require(&flow, &ty)?;
@@ -3589,6 +3578,32 @@ impl<'a> Checker<'a> {
         self.expr_expected(e, None)
     }
     fn expr_expected(&mut self, e: &Expr, expected: Option<&ir::Ty>) -> Result<ir::ExprId, String> {
+        if let Some(ir::Ty::Ref { kind, referent }) = expected {
+            if let Expr::Var(name) = e {
+                let local = self.lookup(name)?;
+                if let ir::Ty::Ref {
+                    kind: ir::BorrowKind::Mut,
+                    referent: actual,
+                } = &self.locals[local.0].ty
+                    && actual == referent
+                {
+                    // Reborrow the original carrier before any value read can move it.
+                    return self.expr_expected(
+                        &Expr::Borrow {
+                            kind: *kind,
+                            place: Place {
+                                local: name.clone(),
+                                fields: vec![FieldSelector::Deref],
+                            },
+                        },
+                        expected,
+                    );
+                }
+            }
+            if matches!(e, Expr::Loop { .. }) {
+                return Err("reference expected-context propagation through loop results is unsupported; use an explicit borrow/reborrow".into());
+            }
+        }
         let (kind, flow) = match e {
             Expr::Borrow { kind, place } => {
                 let (place, referent, _writable) = self.checked_place(place).map_err(|error|format!("B1 borrow requires an existing local-root static place; borrowed rvalues/non-local targets are unsupported: {error}"))?;
@@ -4404,6 +4419,62 @@ mod typed_tests {
     use super::*;
 
     #[test]
+    fn b2_expected_reference_sites_reborrow_the_carrier_without_a_prior_move() {
+        let p=parse("fn read(r:&i32)->i32{*r}fn bump(r:&mut i32){*r=*r+1;}fn main(){let mut x=1;let mut r=&mut x;bump(r);bump(r);read(r);let t:&mut i32=r;*t=3;let mut y=2;let s=&mut y;r=s;let a:&i32={r};let b:&i32=if true{r}else{r};let c:&i32=match true{_=>r};let moved=r;}").unwrap();
+        let env = signature_table(&p).unwrap();
+        let typed = type_function_with_signatures(&p, 2, &env).unwrap();
+        let carrier = typed.locals.iter().position(|l| l.name == "r").unwrap();
+        let reborrows=typed.exprs.iter().filter(|e|matches!(&e.kind,ir::ExprKind::Borrow{place,..} if place.local==ir::LocalId(carrier)&&place.projection==vec![ir::Projection::Deref])).count();
+        assert!(
+            reborrows >= 7,
+            "missing call/let/assignment/control-context reborrows: {reborrows}"
+        );
+        let moved = typed
+            .body
+            .statements
+            .iter()
+            .find_map(|s| {
+                if let ir::Stmt::Let { local, value } = s
+                    && typed.locals[local.0].name == "moved"
+                {
+                    Some(*value)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert!(
+            matches!(typed.exprs[moved.0].kind,ir::ExprKind::Local(local) if local==ir::LocalId(carrier))
+        );
+        for i in 0..2 {
+            type_function_with_signatures(&p, i, &env).unwrap();
+        }
+    }
+
+    #[test]
+    fn b2_noescape_restrictions_hold_for_unused_declarations_and_explicit_borrows() {
+        for source in [
+            "fn unused(r:&[&i32;0]){}fn main(){}",
+            "fn unused(r:(&i32,)){}fn main(){}",
+            "fn unused(r:&&i32){}fn main(){}",
+            "fn unused()->&i32{loop{}}fn main(){}",
+            "struct S{r:&i32}fn main(){}",
+            "fn read(r:&i32){}fn main(){let mut x=1;read(&mut x);}",
+            "fn main(){let mut x=1;let r=&mut x;let q:&mut i32=loop{break r;};}",
+        ] {
+            assert!(
+                parse(source)
+                    .and_then(|p| {
+                        let env = signature_table(&p)?;
+                        type_function_with_signatures(&p, p.functions.len() - 1, &env).map(|_| ())
+                    })
+                    .is_err(),
+                "accepted {source}"
+            );
+        }
+    }
+
+    #[test]
     fn blocklike_statements_do_not_consume_a_following_deref_as_multiplication() {
         for source in [
             "fn choose(b:bool)->i32{let x=3;let y=7;let r:&i32;if b{r=&x;}else{r=&y;}*r}fn main(){let n=choose(true);}",
@@ -4446,7 +4517,6 @@ mod typed_tests {
             assert!(check(&p).is_err(), "analysis accepted {source}");
         }
         for source in [
-            "fn unused(x:&i32){}fn main(){}",
             "fn unused()->&i32{loop{}}fn main(){}",
             "struct S{x:(&i32,)}fn main(){}",
             "enum E{V([&i32;0])}fn main(){}",
@@ -4454,8 +4524,6 @@ mod typed_tests {
             "fn main(){let x=1;let r=&x;let t=(r,);}",
             "fn main(){let x=1;let r=&x;let nested=&r;}",
             "fn main(){let r=&1;}",
-            "fn main(){let mut x=1;let r=&mut x;let s:&mut i32=r;}",
-            "fn main(){let mut x=1;let mut y=2;let mut r=&mut x;let s=&mut y;r=s;}",
             "fn main(){let x=1;let a=&x;let b=&x;let eq=a==b;}",
             "fn main(){let a=[1];let i=0usize;let p=&a[i];}",
             "fn main(){let a=[1];let p=&a;let i=0usize;let n=(*p)[i];}",

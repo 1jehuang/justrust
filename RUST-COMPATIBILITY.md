@@ -94,9 +94,12 @@ Shared references copy, mutable reference handles move, explicit reborrows retai
 issuance-time parent authority, and carrier last use determines loan activity.
 Native pointers do not substitute for provenance or lifetime verification.
 Standalone reference locals can address initialized owned storage and perform
-Copy reads or authorized replacements. Reference parameters/results, aggregate
+Copy reads or authorized replacements. `REFERENCE-CALLS.md` extends this with
+noescape reference parameters, formal canonical referents and expected-site
+carrier reborrows. Calls preserve argument authority through invocation and kill
+mutable referent selection proofs on return. Reference results, aggregate
 reference fields, temporary lifetime extension and general Rust regions remain
-B2/B3 work. Loans born within an SCC and carried over a backedge receive an
+B3 and later work. Loans born within an SCC and carried over a backedge receive an
 explicit unsupported diagnostic. Current acceptance does not establish full Rust
 borrow-checker compatibility.
 

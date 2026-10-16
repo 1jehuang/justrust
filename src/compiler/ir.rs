@@ -7,6 +7,7 @@
 use super::frontend::{BinaryOp, UnaryOp};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+/// Combined explicit loan sites and formal reference-parameter origins.
 pub const MAX_LOAN_SITES: usize = 4096;
 use std::sync::atomic::{AtomicU64, Ordering};
 
