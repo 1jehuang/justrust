@@ -4,7 +4,7 @@
 //! AST means semantic diagnostics identify functions and names instead of spans.
 //! Explicit semicolons discard expression values, while omitted-semicolon
 //! blocklike statements require unit. While loops do not establish return flow.
-//! Numeric literals are decimal i32 only. Unsupported syntax is rejected.
+//! Numeric literals support primitive integers through 64 bits.
 //! Inline modules, named nonempty braced structs, nonempty unit/tuple/braced enums, ordinary visibility, and
 //! simple module-level imports have separate type/value namespaces. Named
 //! structs and enums are nominal and non-Copy. Match admits scalar literals,
@@ -107,8 +107,7 @@ pub enum Type {
         referent: Box<Type>,
     },
     Array(Box<Type>, usize),
-    I32,
-    Usize,
+    Int(ir::IntTy),
     Bool,
     Unit,
     Tuple(Vec<Type>),
@@ -138,7 +137,10 @@ pub enum Pattern {
     },
     Path(String),
     Bool(bool),
-    Int(i32),
+    Int {
+        literal: IntegerLiteral,
+        negative: bool,
+    },
     Wildcard,
     Binding {
         name: String,
@@ -191,6 +193,126 @@ pub enum Stmt {
         body: Block,
     },
 }
+/// Source literal magnitude, before contextual signedness and range checking.
+#[derive(Clone, Debug)]
+pub struct IntegerLiteral {
+    pub magnitude: u64,
+    pub suffix: Option<ir::IntTy>,
+}
+
+fn integer_type(name: &str) -> Option<ir::IntTy> {
+    use ir::IntTy::*;
+    Some(match name {
+        "i8" => I8,
+        "i16" => I16,
+        "i32" => I32,
+        "i64" => I64,
+        "isize" => Isize,
+        "u8" => U8,
+        "u16" => U16,
+        "u32" => U32,
+        "u64" => U64,
+        "usize" => Usize,
+        _ => return None,
+    })
+}
+
+fn parse_integer_literal(text: &str) -> Result<IntegerLiteral, String> {
+    let (radix, start) = if text.starts_with("0x") {
+        (16, 2)
+    } else if text.starts_with("0o") {
+        (8, 2)
+    } else if text.starts_with("0b") {
+        (2, 2)
+    } else {
+        (10, 0)
+    };
+    let bytes = text.as_bytes();
+    let mut at = start;
+    let mut magnitude = 0u64;
+    let mut digit_seen = false;
+    while let Some(&b) = bytes.get(at) {
+        if b == b'_' {
+            at += 1;
+            continue;
+        }
+        let Some(digit) = (b as char).to_digit(radix) else {
+            break;
+        };
+        magnitude = magnitude
+            .checked_mul(u64::from(radix))
+            .and_then(|n| n.checked_add(u64::from(digit)))
+            .ok_or("integer literal exceeds u64")?;
+        digit_seen = true;
+        at += 1;
+    }
+    if !digit_seen {
+        return Err("integer literal requires a digit".into());
+    }
+    let suffix = if at == text.len() {
+        None
+    } else {
+        Some(integer_type(&text[at..]).ok_or("unsupported or invalid integer literal suffix")?)
+    };
+    Ok(IntegerLiteral { magnitude, suffix })
+}
+
+fn resolve_integer(
+    literal: &IntegerLiteral,
+    negative: bool,
+    expected: Option<&ir::Ty>,
+) -> Result<ir::IntValue, String> {
+    let contextual = match expected {
+        Some(ir::Ty::Int(ty)) => Some(*ty),
+        _ => None,
+    };
+    let ty = literal.suffix.or(contextual).unwrap_or(ir::IntTy::I32);
+    if literal.suffix.is_some() && contextual.is_some_and(|t| t != ty) {
+        return Err("integer literal suffix does not match expected integer type".into());
+    }
+    if negative && !ty.is_signed() {
+        return Err("unsigned integer negation is invalid".into());
+    }
+    let limit = if ty.is_signed() {
+        let sign = 1u64 << (ty.bits() - 1);
+        if negative { sign } else { sign - 1 }
+    } else {
+        ty.mask()
+    };
+    if literal.magnitude > limit {
+        return Err(format!(
+            "integer literal out of range for {}; backward numeric inference is unsupported",
+            ty.name()
+        ));
+    }
+    let bits = if negative {
+        0u64.wrapping_sub(literal.magnitude) & ty.mask()
+    } else {
+        literal.magnitude
+    };
+    let value = ir::IntValue { ty, bits };
+    value.validate()?;
+    Ok(value)
+}
+
+impl Expr {
+    /// Construct a source signed literal for hand-built frontend fixtures.
+    pub fn i32(value: i32) -> Self {
+        let literal = Self::Integer(IntegerLiteral {
+            magnitude: u64::from(value.unsigned_abs()),
+            suffix: Some(ir::IntTy::I32),
+        });
+        if value < 0 {
+            Self::Unary {
+                op: UnaryOp::Neg,
+                value: Box::new(literal),
+            }
+        } else {
+            literal
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Expr {
     Borrow {
@@ -200,8 +322,7 @@ pub enum Expr {
     Deref {
         value: Box<Expr>,
     },
-    Usize(u64),
-    Unsuffixed(u64),
+    Integer(IntegerLiteral),
     DynamicIndex {
         base: Box<Expr>,
         index: Box<Expr>,
@@ -233,7 +354,7 @@ pub enum Expr {
         base: Box<Expr>,
         field: FieldSelector,
     },
-    Int(i32),
+
     Bool(bool),
     Var(String),
     Unary {
@@ -637,10 +758,9 @@ impl Parser {
             let len = self.array_number("array length")?;
             self.expect("]")?;
             Ok(Type::Array(Box::new(element), len))
-        } else if self.eat("i32") {
-            Ok(Type::I32)
-        } else if self.eat("usize") {
-            Ok(Type::Usize)
+        } else if let Some(ty) = integer_type(&self.token().text) {
+            self.at += 1;
+            Ok(Type::Int(ty))
         } else if self.eat("bool") {
             Ok(Type::Bool)
         } else if self.eat("(") {
@@ -695,17 +815,16 @@ impl Parser {
     }
     fn array_number(&mut self, context: &str) -> Result<usize, String> {
         let token = self.token();
-        if token.string || token.text.is_empty() || !token.text.bytes().all(|b| b.is_ascii_digit())
-        {
-            return Err(self.error(&format!("{context} requires a decimal literal; dynamic and const-expression indices/lengths are unsupported")));
+        if token.string {
+            return Err(self.error(&format!("{context} requires an integer literal")));
         }
-        let number = token
-            .text
-            .parse::<usize>()
-            .map_err(|_| self.error(&format!("{context} exceeds usize")))?;
-        if number > ir::MAX_ARRAY_LEN {
+        let literal = parse_integer_literal(&token.text).map_err(|e| self.error(&e))?;
+        let value = resolve_integer(&literal, false, Some(&ir::Ty::Int(ir::IntTy::Usize)))
+            .map_err(|e| self.error(&e))?;
+        if value.bits > ir::MAX_ARRAY_LEN as u64 {
             return Err(self.error("array length/index exceeds supported limit"));
         }
+        let number = value.bits as usize;
         self.at += 1;
         if !self.is("]") {
             return Err(self.error(
@@ -1049,6 +1168,9 @@ impl Parser {
         result
     }
     fn pattern_inner(&mut self) -> Result<Pattern, String> {
+        if self.token().string {
+            return Err(self.error("string literal patterns are unsupported"));
+        }
         if self.is("&") || self.is("&&") {
             return Err(self.error("reference patterns and match ergonomics are unsupported in B1"));
         }
@@ -1060,21 +1182,12 @@ impl Parser {
         }
         if self.is("-") || self.token().text.starts_with(|c: char| c.is_ascii_digit()) {
             let negative = self.eat("-");
-            if self.token().text.ends_with("usize") {
-                return Err(self.error("usize numeric match patterns are unsupported"));
+            if self.token().string {
+                return Err(self.error("expected an integer literal after minus"));
             }
-            let text = if negative {
-                format!("-{}", self.token().text)
-            } else {
-                self.token().text.clone()
-            };
-            let value = text
-                .strip_suffix("i32")
-                .unwrap_or(&text)
-                .parse::<i32>()
-                .map_err(|_| self.error("invalid or out-of-range i32 pattern literal"))?;
+            let literal = parse_integer_literal(&self.token().text).map_err(|e| self.error(&e))?;
             self.at += 1;
-            return Ok(Pattern::Int(value));
+            return Ok(Pattern::Int { literal, negative });
         }
         if self.eat("_") {
             return Ok(Pattern::Wildcard);
@@ -1183,7 +1296,7 @@ impl Parser {
             }
             if self.eat("let") {
                 let pattern = self.pattern()?;
-                if matches!(pattern, Pattern::Bool(_) | Pattern::Int(_)) {
+                if matches!(pattern, Pattern::Bool(_) | Pattern::Int { .. }) {
                     return Err(self.error("refutable literal pattern in let binding"));
                 }
                 // Local inference is performed by each independent function checker.
@@ -1339,14 +1452,9 @@ impl Parser {
                 value: Box::new(self.expr(7)?),
             }
         } else if self.eat("-") {
-            if self.is("2147483648") || self.is("2147483648i32") {
-                self.at += 1;
-                Expr::Int(i32::MIN)
-            } else {
-                Expr::Unary {
-                    op: UnaryOp::Neg,
-                    value: Box::new(self.expr(7)?),
-                }
+            Expr::Unary {
+                op: UnaryOp::Neg,
+                value: Box::new(self.expr(7)?),
             }
         } else if self.eat("!") {
             Expr::Unary {
@@ -1490,30 +1598,9 @@ impl Parser {
         } else if !self.token().string
             && self.token().text.starts_with(|c: char| c.is_ascii_digit())
         {
-            let text = self.token().text.clone();
-            let (digits, suffix) = if let Some(d) = text.strip_suffix("usize") {
-                (d, "usize")
-            } else if let Some(d) = text.strip_suffix("i32") {
-                (d, "i32")
-            } else {
-                (text.as_str(), "")
-            };
-            if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-                return Err(self.error(
-                    "only decimal integer literals with usize or i32 suffix are supported",
-                ));
-            }
-            let n = digits
-                .parse::<u64>()
-                .map_err(|_| self.error("integer literal exceeds u64"))?;
+            let literal = parse_integer_literal(&self.token().text).map_err(|e| self.error(&e))?;
             self.at += 1;
-            match suffix {
-                "usize" => Expr::Usize(n),
-                "i32" => {
-                    Expr::Int(i32::try_from(n).map_err(|_| self.error("out-of-range i32 literal"))?)
-                }
-                _ => Expr::Unsuffixed(n),
-            }
+            Expr::Integer(literal)
         } else {
             let name = self.path()?;
             if self.eat("!") {
@@ -1575,14 +1662,19 @@ impl Parser {
             }
             if self.eat("[") {
                 let literal = self.token().text.clone();
-                let constant = !self.token().string
-                    && !literal.is_empty()
-                    && literal.bytes().all(|b| b.is_ascii_digit())
-                    && self.tokens.get(self.at + 1).is_some_and(|t| t.text == "]");
-                if constant {
-                    let index = literal
-                        .parse::<usize>()
-                        .map_err(|_| self.error("array index exceeds usize"))?;
+                let constant = (!self.token().string
+                    && self.tokens.get(self.at + 1).is_some_and(|t| t.text == "]"))
+                .then(|| parse_integer_literal(&literal).ok())
+                .flatten()
+                .filter(|literal| literal.suffix.is_none());
+                if let Some(literal) = constant {
+                    let value =
+                        resolve_integer(&literal, false, Some(&ir::Ty::Int(ir::IntTy::Usize)))
+                            .map_err(|e| self.error(&e))?;
+                    if value.bits > ir::MAX_ARRAY_LEN as u64 {
+                        return Err(self.error("array index exceeds supported limit"));
+                    }
+                    let index = value.bits as usize;
                     self.at += 1;
                     self.expect("]")?;
                     left = Expr::Index {
@@ -1953,7 +2045,7 @@ impl Resolver<'_> {
                 }
             }
             Pattern::Wildcard => {}
-            Pattern::Bool(_) | Pattern::Int(_) => {}
+            Pattern::Bool(_) | Pattern::Int { .. } => {}
             Pattern::Path(name) => {
                 let item = self
                     .path(name, module, false, false)?
@@ -2953,8 +3045,7 @@ fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result<ir::Ty, St
                 len: *len,
             })
         }
-        Type::Usize => Ok(ir::Ty::Usize),
-        Type::I32 => Ok(ir::Ty::I32),
+        Type::Int(ty) => Ok(ir::Ty::Int(*ty)),
         Type::Bool => Ok(ir::Ty::Bool),
         Type::Unit => Ok(ir::Ty::Unit),
         Type::Never => Ok(ir::Ty::Never),
@@ -3236,7 +3327,7 @@ impl<'a> Checker<'a> {
         Ok(())
     }
     fn require_index(&self, flow: &Flow) -> Result<(), String> {
-        self.require(flow,&ir::Ty::Usize).map_err(|_|"runtime index requires usize, without implicit i32 conversion; backward numeric inference is unsupported".into())
+        self.require(flow,&ir::Ty::Int(ir::IntTy::Usize)).map_err(|_|"runtime index requires usize, without implicit i32 conversion; backward numeric inference is unsupported".into())
     }
     fn scalar_hint(&self, e: &Expr) -> Option<ir::Ty> {
         match e {
@@ -3247,8 +3338,7 @@ impl<'a> Checker<'a> {
                     None
                 }
             }),
-            Expr::Usize(_) => Some(ir::Ty::Usize),
-            Expr::Int(_) => Some(ir::Ty::I32),
+            Expr::Integer(literal) => literal.suffix.map(ir::Ty::Int),
             Expr::Var(name) => self
                 .lookup(name)
                 .ok()
@@ -3259,6 +3349,18 @@ impl<'a> Checker<'a> {
                 .get(name)
                 .map(|s| s.result.clone()),
             Expr::Unary { value, .. } => self.scalar_hint(value),
+            Expr::Binary {
+                op:
+                    BinaryOp::Eq
+                    | BinaryOp::Ne
+                    | BinaryOp::Lt
+                    | BinaryOp::Le
+                    | BinaryOp::Gt
+                    | BinaryOp::Ge
+                    | BinaryOp::And
+                    | BinaryOp::Or,
+                ..
+            } => Some(ir::Ty::Bool),
             Expr::Binary { left, right, .. } => {
                 self.scalar_hint(left).or_else(|| self.scalar_hint(right))
             }
@@ -3373,7 +3475,7 @@ impl<'a> Checker<'a> {
                 if !coerces(ty,&expected) { return Err(format!("enum pattern {name} does not match {ty:?}")); }
                 Ok(expected)
             }
-            Pattern::Bool(_) | Pattern::Int(_) => Err("refutable literal pattern in let binding".into()),
+            Pattern::Bool(_) | Pattern::Int { .. } => Err("refutable literal pattern in let binding".into()),
             Pattern::Wildcard | Pattern::Binding { .. } => Ok(ty.clone()),
             Pattern::Tuple(patterns) => match ty {
                 ir::Ty::Unit if patterns.is_empty() => Ok(ir::Ty::Unit),
@@ -3433,7 +3535,7 @@ impl<'a> Checker<'a> {
                     path.pop();
                 }
             }
-            Pattern::Bool(_) | Pattern::Int(_) => {
+            Pattern::Bool(_) | Pattern::Int { .. } => {
                 return Err("nested refutable literal patterns are unsupported".into());
             }
             Pattern::Binding { name, mutable } => {
@@ -3749,7 +3851,7 @@ impl<'a> Checker<'a> {
                     let index = self.expr_expected_when(
                         index,
                         self.reachable && flow.completes,
-                        Some(&ir::Ty::Usize),
+                        Some(&ir::Ty::Int(ir::IntTy::Usize)),
                     )?;
                     let index_flow = self.flow(index);
                     self.require_index(&index_flow)?;
@@ -3983,7 +4085,7 @@ impl<'a> Checker<'a> {
                 let index = self.expr_expected_when(
                     index,
                     self.reachable && source.completes,
-                    Some(&ir::Ty::Usize),
+                    Some(&ir::Ty::Int(ir::IntTy::Usize)),
                 )?;
                 let index_flow = self.flow(index);
                 self.require_index(&index_flow)?;
@@ -4103,7 +4205,9 @@ impl<'a> Checker<'a> {
                                 Some(ir::Ty::Enum(self.enum_variant(name)?.0))
                             }
                             Pattern::Bool(_) => Some(ir::Ty::Bool),
-                            Pattern::Int(_) => Some(ir::Ty::I32),
+                            Pattern::Int { literal, .. } => {
+                                Some(ir::Ty::Int(literal.suffix.unwrap_or(ir::IntTy::I32)))
+                            }
                             Pattern::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
                             _ => None,
                         };
@@ -4125,7 +4229,7 @@ impl<'a> Checker<'a> {
                     );
                 }
                 let mut catchall = false;
-                let mut covered = std::collections::HashSet::<i64>::new();
+                let mut covered = std::collections::HashSet::<u64>::new();
                 let mut checked = Vec::with_capacity(arms.len());
                 let mut result = ir::Ty::Never;
                 let mut completes = false;
@@ -4143,18 +4247,16 @@ impl<'a> Checker<'a> {
                                     "bool match pattern does not match {domain:?}"
                                 ));
                             }
-                            (ir::MatchPattern::Bool(*value), Some(i64::from(*value)))
+                            (ir::MatchPattern::Bool(*value), Some(u64::from(*value)))
                         }
-                        Pattern::Int(value) => {
-                            if domain == ir::Ty::Usize {
-                                return Err("usize numeric match patterns are unsupported".into());
-                            }
-                            if domain != ir::Ty::I32 {
+                        Pattern::Int { literal, negative } => {
+                            if !matches!(domain, ir::Ty::Int(_)) {
                                 return Err(format!(
                                     "integer match pattern does not match {domain:?}"
                                 ));
                             }
-                            (ir::MatchPattern::Int(*value), Some(i64::from(*value)))
+                            let value = resolve_integer(literal, *negative, Some(&domain))?;
+                            (ir::MatchPattern::Int(value), Some(value.bits))
                         }
                         Pattern::Tuple(fields) if fields.is_empty() => {
                             if domain != ir::Ty::Unit {
@@ -4202,7 +4304,7 @@ impl<'a> Checker<'a> {
                                     variant,
                                     bindings,
                                 },
-                                Some(variant as i64),
+                                Some(variant as u64),
                             )
                         }
                         Pattern::Tuple(_) | Pattern::Struct { .. } => {
@@ -4215,7 +4317,9 @@ impl<'a> Checker<'a> {
                         ir::Ty::Bool => covered.len() == 2,
                         ir::Ty::Unit => covered.len() == 1,
                         ir::Ty::Enum(ty) => covered.len() == ty.def().variants.len(),
-                        ir::Ty::I32 => covered.len() as u64 == (1u64 << 32),
+                        ir::Ty::Int(ty) => {
+                            ty.bits() < 64 && covered.len() as u64 == (1u64 << ty.bits())
+                        }
                         _ => false,
                     };
                     let useful = !catchall
@@ -4244,7 +4348,9 @@ impl<'a> Checker<'a> {
                         ir::Ty::Bool => covered.len() == 2,
                         ir::Ty::Unit => covered.len() == 1,
                         ir::Ty::Enum(ty) => covered.len() == ty.def().variants.len(),
-                        ir::Ty::I32 => covered.len() as u64 == (1u64 << 32),
+                        ir::Ty::Int(ty) => {
+                            ty.bits() < 64 && covered.len() as u64 == (1u64 << ty.bits())
+                        }
                         _ => false,
                     };
                 if !exhaustive {
@@ -4361,16 +4467,10 @@ impl<'a> Checker<'a> {
                     },
                 )
             }
-            Expr::Usize(value) => (ir::ExprKind::Usize(*value), Flow::value(ir::Ty::Usize)),
-            Expr::Unsuffixed(value) => {
-                if matches!(expected, Some(ir::Ty::Usize)) {
-                    (ir::ExprKind::Usize(*value), Flow::value(ir::Ty::Usize))
-                } else {
-                    let value=i32::try_from(*value).map_err(|_|"integer exceeds default i32 range; provide a forward usize context or usize suffix (backward inference unsupported)".to_string())?;
-                    (ir::ExprKind::Int(value), Flow::value(ir::Ty::I32))
-                }
+            Expr::Integer(literal) => {
+                let value = resolve_integer(literal, false, expected)?;
+                (ir::ExprKind::Int(value), Flow::value(ir::Ty::Int(value.ty)))
             }
-            Expr::Int(value) => (ir::ExprKind::Int(*value), Flow::value(ir::Ty::I32)),
             Expr::Bool(value) => (ir::ExprKind::Bool(*value), Flow::value(ir::Ty::Bool)),
             Expr::Var(n) => {
                 let local = self.lookup(n)?;
@@ -4388,15 +4488,33 @@ impl<'a> Checker<'a> {
                 Flow::value(ir::Ty::Unit),
             ),
             Expr::Unary { op, value } => {
+                if matches!(op, UnaryOp::Neg)
+                    && let Expr::Integer(literal) = value.as_ref()
+                {
+                    let value = resolve_integer(literal, true, expected)?;
+                    let id = ir::ExprId(self.exprs.len());
+                    self.exprs.push(ir::TypedExpr {
+                        kind: ir::ExprKind::Int(value),
+                        ty: ir::Ty::Int(value.ty),
+                        completion: ir::Completion::Returns,
+                    });
+                    return Ok(id);
+                }
                 let hint = expected
-                    .filter(|t| matches!(t, ir::Ty::Usize | ir::Ty::I32 | ir::Ty::Bool))
+                    .filter(|t| matches!(t, ir::Ty::Int(_) | ir::Ty::Bool))
                     .cloned()
                     .or_else(|| self.scalar_hint(value));
                 let value = self.expr_expected(value, hint.as_ref())?;
                 let f = self.flow(value);
                 let t = match op {
-                    UnaryOp::Neg => ir::Ty::I32,
-                    UnaryOp::Not if f.ty == ir::Ty::Usize => ir::Ty::Usize,
+                    UnaryOp::Neg => match &f.ty {
+                        ir::Ty::Int(ty) if ty.is_signed() => f.ty.clone(),
+                        ir::Ty::Never => {
+                            return Err("unary negation of never is unsupported".into());
+                        }
+                        _ => return Err("unary negation requires a signed integer".into()),
+                    },
+                    UnaryOp::Not if matches!(f.ty, ir::Ty::Int(_)) => f.ty.clone(),
                     UnaryOp::Not => ir::Ty::Bool,
                 };
                 self.require(&f, &t)?;
@@ -4422,7 +4540,7 @@ impl<'a> Checker<'a> {
                     Some(ir::Ty::Bool)
                 } else {
                     expected
-                        .filter(|t| matches!(t, ir::Ty::I32 | ir::Ty::Usize))
+                        .filter(|t| matches!(t, ir::Ty::Int(_)))
                         .cloned()
                         .or_else(|| self.scalar_hint(left))
                         .or_else(|| self.scalar_hint(right))
@@ -4430,7 +4548,7 @@ impl<'a> Checker<'a> {
                 let left = self.expr_expected(left, hint.as_ref())?;
                 let left_flow = self.flow(left);
                 let right_hint = hint.or_else(|| {
-                    if matches!(left_flow.ty, ir::Ty::Usize | ir::Ty::I32 | ir::Ty::Bool) {
+                    if matches!(left_flow.ty, ir::Ty::Int(_) | ir::Ty::Bool) {
                         Some(left_flow.ty.clone())
                     } else {
                         None
@@ -4451,8 +4569,13 @@ impl<'a> Checker<'a> {
                 {
                     return Err("aggregate operators and comparisons are unsupported".into());
                 }
-                let unsigned = l.ty == ir::Ty::Usize || r.ty == ir::Ty::Usize;
-                let numeric = if unsigned { ir::Ty::Usize } else { ir::Ty::I32 };
+                let numeric = if matches!(l.ty, ir::Ty::Int(_)) {
+                    l.ty.clone()
+                } else if matches!(r.ty, ir::Ty::Int(_)) {
+                    r.ty.clone()
+                } else {
+                    ir::Ty::Int(ir::IntTy::I32)
+                };
                 let (operand, result) = match op {
                     BinaryOp::And | BinaryOp::Or => (ir::Ty::Bool, ir::Ty::Bool),
                     BinaryOp::Eq | BinaryOp::Ne => {
@@ -4702,6 +4825,148 @@ mod typed_tests {
     use super::*;
 
     #[test]
+    fn integer_literal_bounds_contexts_and_grouped_minima_are_exact() {
+        use ir::IntTy::*;
+        for ty in [I8, I16, I32, I64, Isize, U8, U16, U32, U64, Usize] {
+            let max = if ty.is_signed() {
+                (1u64 << (ty.bits() - 1)) - 1
+            } else {
+                ty.mask()
+            };
+            let source = format!(
+                "fn f()->{}{{{max}}}fn main(){{let x:{}={max};let y={max}{};let z=1+y;let n=!y;}}",
+                ty.name(),
+                ty.name(),
+                ty.name()
+            );
+            check(&parse(&source).unwrap()).unwrap();
+            let value = resolve_integer(
+                &IntegerLiteral {
+                    magnitude: max,
+                    suffix: Some(ty),
+                },
+                false,
+                None,
+            )
+            .unwrap();
+            assert_eq!(value, ir::IntValue { ty, bits: max });
+            if max < u64::MAX {
+                assert!(
+                    resolve_integer(
+                        &IntegerLiteral {
+                            magnitude: max + 1,
+                            suffix: Some(ty)
+                        },
+                        false,
+                        None
+                    )
+                    .is_err()
+                );
+            }
+            if ty.is_signed() {
+                let magnitude = 1u64 << (ty.bits() - 1);
+                let source = format!(
+                    "fn f()->{}{{-((({magnitude}{})))}}fn main(){{let x:{}=-(({magnitude}));}}",
+                    ty.name(),
+                    ty.name(),
+                    ty.name()
+                );
+                let program = parse(&source).unwrap();
+                check(&program).unwrap();
+                let env = signature_table(&program).unwrap();
+                let function = type_function_with_signatures(&program, 0, &env).unwrap();
+                assert!(
+                    matches!(function.exprs[function.body.tail.unwrap().0].kind,ir::ExprKind::Int(ir::IntValue{ty:actual,bits}) if actual==ty&&bits==magnitude)
+                );
+                assert!(
+                    check(
+                        &parse(&format!(
+                            "fn main(){{let x=-{{{magnitude}{}}};}}",
+                            ty.name()
+                        ))
+                        .unwrap()
+                    )
+                    .is_err()
+                );
+                assert!(
+                    resolve_integer(
+                        &IntegerLiteral {
+                            magnitude: magnitude + 1,
+                            suffix: Some(ty)
+                        },
+                        true,
+                        None
+                    )
+                    .is_err()
+                );
+            } else {
+                assert!(
+                    resolve_integer(
+                        &IntegerLiteral {
+                            magnitude: 0,
+                            suffix: Some(ty)
+                        },
+                        true,
+                        None
+                    )
+                    .is_err()
+                );
+            }
+        }
+        check(&parse("fn main(){let x:i64=-2147483648;let a:u16=1+2u16;let b=2u16+1;let x:[u8;0x2_usize]=[0b1_u8,0o7_u8];let y=[0xff_u8;0b10];let v=y[0x0];let b=(1i8<2i8)==(3i16<4i16);}").unwrap()).unwrap();
+        for literal in [
+            "0xff_u8",
+            "0o177_i16",
+            "0b_1010__u32",
+            "18_446_744_073_709_551_615u64",
+        ] {
+            let literal = parse_integer_literal(literal).unwrap();
+            resolve_integer(&literal, false, None).unwrap();
+        }
+        for literal in [
+            "0x_",
+            "0b2",
+            "0o8",
+            "18446744073709551616u64",
+            "0x1_0000_0000_0000_0000u64",
+        ] {
+            assert!(
+                parse_integer_literal(literal).is_err(),
+                "accepted {literal}"
+            );
+        }
+        for source in [
+            "fn main(){let x:u8=1i8;}",
+            "fn main(){let x:i64=1isize;}",
+            "fn main(){let a=[1];let i=0u64;let x=a[i];}",
+        ] {
+            assert!(check(&parse(source).unwrap()).is_err(), "accepted {source}");
+        }
+    }
+
+    #[test]
+    fn integer_patterns_preserve_exact_bits_and_bounded_exhaustiveness() {
+        check(&parse("fn f(x:i8)->i32{match x{-128i8=>1,127=>2,_=>3}}fn g(x:u64)->i32{match x{18446744073709551615u64=>1,_=>2}}fn main(){}").unwrap()).unwrap();
+        for ty in ["u8", "i8"] {
+            let range = if ty == "i8" { -128..128 } else { 0..256 };
+            let arms = range.map(|n| format!("{n}=>(),")).collect::<String>();
+            check(&parse(&format!("fn f(x:{ty}){{match x{{{arms}}};}}fn main(){{}}")).unwrap())
+                .unwrap();
+        }
+        for source in [
+            "fn main(){match 1u8{1i8=>(),_=>()};}",
+            "fn main(){match 1u8{256=>(),_=>()};}",
+            "fn main(){match 1i8{-129=>(),_=>()};}",
+            "fn main(){match 1u64{0=>(),1=>()};}",
+        ] {
+            assert!(check(&parse(source).unwrap()).is_err(), "accepted {source}");
+        }
+        assert!(parse("fn main(){match 1i8{\"1\"=>(),_=>()};}").is_err());
+        let p = parse("fn main(){match 1u8{1=>(),0x01u8=>(),_=>()};}").unwrap();
+        check(&p).unwrap();
+    }
+
+    #[test]
     fn e3_mixed_contracts_preserve_formal_kinds_and_real_shared_return_reborrows() {
         let p=parse("fn weaken<'a>(r:&'a mut i32)->&'a i32{r}fn mix<'a>(s:&'a i32,m:&'a mut i32,b:bool)->&'a i32{if b{s}else{m}}fn mut_target<'a>(s:&'a i32,m:&'a mut i32)->&'a mut i32{m}fn no_mut_target<'a>(s:&'a i32)->&'a mut i32{loop{}}fn pin<'a>(m:&'a mut bool,s:&'a i32)->&'a i32{s}fn main(){}").unwrap();
         let env = signature_table(&p).unwrap();
@@ -4853,7 +5118,13 @@ mod typed_tests {
         assert!(
             main.exprs
                 .iter()
-                .filter(|e| matches!(e.kind, ir::ExprKind::Usize(1)))
+                .filter(|e| matches!(
+                    e.kind,
+                    ir::ExprKind::Int(ir::IntValue {
+                        ty: ir::IntTy::Usize,
+                        bits: 1
+                    })
+                ))
                 .count()
                 >= 2
         );
@@ -5353,12 +5624,13 @@ mod typed_tests {
         let p=parse("fn id(x:usize)->usize{x}fn high()->usize{18446744073709551615}fn main(){let u:usize=4294967296;let s=18446744073709551615usize;let b=1<u;let c=u>1;let r:usize=1+2;let q=1+u;let not=!0usize;let x=id(4294967296);let a:[usize;2]=[1,2];let mut b=[1,2];let i:usize=0;b[i]=3;let n=b[i];let min=-2147483648i32;}").unwrap();
         let env = signature_table(&p).unwrap();
         let typed = type_function_with_signatures(&p, 2, &env).unwrap();
-        assert!(
-            typed
-                .exprs
-                .iter()
-                .any(|e| matches!(e.kind, ir::ExprKind::Usize(18446744073709551615)))
-        );
+        assert!(typed.exprs.iter().any(|e| matches!(
+            e.kind,
+            ir::ExprKind::Int(ir::IntValue {
+                ty: ir::IntTy::Usize,
+                bits: 18446744073709551615
+            })
+        )));
         assert!(
             typed
                 .exprs
@@ -5374,7 +5646,7 @@ mod typed_tests {
         );
         assert_eq!(
             type_function_with_signatures(&p, 1, &env).unwrap().result,
-            ir::Ty::Usize
+            ir::Ty::Int(ir::IntTy::Usize)
         );
     }
 
@@ -5384,12 +5656,7 @@ mod typed_tests {
             "fn main(){let x=0usize;match x{0=>(),_=>()};}",
             "fn main(){match 0usize{0usize=>(),_=>()};}",
         ] {
-            assert!(
-                parse(source)
-                    .and_then(|p| check(&p))
-                    .unwrap_err()
-                    .contains("usize numeric match patterns are unsupported")
-            );
+            check(&parse(source).unwrap()).unwrap();
         }
         for source in [
             "fn main(){let a=[1];let i:i32=0;let x=a[i];}",
@@ -5662,16 +5929,22 @@ mod typed_tests {
     fn tuple_grouping_and_singleton_syntax_are_distinct() {
         let program = parse("fn f(x:((i32)),y:(bool,))->((i32,bool),()) { ((x,y.0),()) } fn main(){let a=(1);let b=(1,);}").unwrap();
         let f = &program.functions[0];
-        assert_eq!(f.params[0].1, Type::I32);
+        assert_eq!(f.params[0].1, Type::Int(ir::IntTy::I32));
         assert_eq!(f.params[1].1, Type::Tuple(vec![Type::Bool]));
         assert_eq!(
             f.result,
-            Type::Tuple(vec![Type::Tuple(vec![Type::I32, Type::Bool]), Type::Unit])
+            Type::Tuple(vec![
+                Type::Tuple(vec![Type::Int(ir::IntTy::I32), Type::Bool]),
+                Type::Unit
+            ])
         );
         check(&program).unwrap();
         let f = typed("fn main(){let a=(1);let b=(1,);let z=((),((),));}", 0);
-        assert_eq!(f.locals[0].ty, ir::Ty::I32);
-        assert_eq!(f.locals[1].ty, ir::Ty::Tuple(vec![ir::Ty::I32].into()));
+        assert_eq!(f.locals[0].ty, ir::Ty::Int(ir::IntTy::I32));
+        assert_eq!(
+            f.locals[1].ty,
+            ir::Ty::Tuple(vec![ir::Ty::Int(ir::IntTy::I32)].into())
+        );
         assert_eq!(
             f.locals[2].ty,
             ir::Ty::Tuple(vec![ir::Ty::Unit, ir::Ty::Tuple(vec![ir::Ty::Unit].into())].into())
@@ -5707,24 +5980,24 @@ mod typed_tests {
     fn tuple_aggregate_flows_preserve_each_actual_type_and_projection_completion() {
         let f = typed("fn f()->i32 {({return 3;},0).1} fn main(){}", 0);
         let projected = &f.exprs[f.body.tail.unwrap().0];
-        assert_eq!(projected.ty, ir::Ty::I32);
+        assert_eq!(projected.ty, ir::Ty::Int(ir::IntTy::I32));
         assert_eq!(projected.completion, ir::Completion::Never);
         let ir::ExprKind::Field { base, .. } = projected.kind else {
             panic!("expected projection")
         };
         assert_eq!(
             f.exprs[base.0].ty,
-            ir::Ty::Tuple(vec![ir::Ty::Never, ir::Ty::I32].into())
+            ir::Ty::Tuple(vec![ir::Ty::Never, ir::Ty::Int(ir::IntTy::I32)].into())
         );
         let f = typed("fn main(){let x:(bool,i32)=({return;},0);}", 0);
         assert_eq!(
             f.locals[0].ty,
-            ir::Ty::Tuple(vec![ir::Ty::Bool, ir::Ty::I32].into())
+            ir::Ty::Tuple(vec![ir::Ty::Bool, ir::Ty::Int(ir::IntTy::I32)].into())
         );
         let f = typed("fn main(){let x=({return;false},0);}", 0);
         assert_eq!(
             f.locals[0].ty,
-            ir::Ty::Tuple(vec![ir::Ty::Bool, ir::Ty::I32].into())
+            ir::Ty::Tuple(vec![ir::Ty::Bool, ir::Ty::Int(ir::IntTy::I32)].into())
         );
         for source in [
             "fn main(){let x:(i32,i32)=({return;false},0);}",
@@ -5746,7 +6019,7 @@ mod typed_tests {
             .iter()
             .find(|e| matches!(e.kind, ir::ExprKind::Call { .. }))
             .unwrap();
-        let ty = ir::Ty::Tuple(vec![ir::Ty::I32, ir::Ty::Bool].into());
+        let ty = ir::Ty::Tuple(vec![ir::Ty::Int(ir::IntTy::I32), ir::Ty::Bool].into());
         assert_eq!(call.ty, ty);
         let ir::ExprKind::Call {
             name, signature, ..
@@ -5809,7 +6082,7 @@ mod typed_tests {
         );
         assert_eq!(
             f.locals.iter().map(|l| l.ty.clone()).collect::<Vec<_>>(),
-            vec![ir::Ty::I32, ir::Ty::Bool]
+            vec![ir::Ty::Int(ir::IntTy::I32), ir::Ty::Bool]
         );
         let breaks = f
             .exprs
@@ -5842,14 +6115,17 @@ mod typed_tests {
         );
         let root = &f.exprs[f.body.tail.unwrap().0];
         assert!(matches!(root.kind, ir::ExprKind::Loop { .. }));
-        assert_eq!(root.flow(), Some(ir::Ty::I32));
+        assert_eq!(root.flow(), Some(ir::Ty::Int(ir::IntTy::I32)));
         let f = typed(
             "fn f()->i32 { loop { break { return 3; }; } } fn main(){}",
             0,
         );
         assert_eq!(f.exprs[f.body.tail.unwrap().0].flow(), None);
         let f = typed("fn f()->i32 { loop { continue; break 3; } } fn main(){}", 0);
-        assert_eq!(f.exprs[f.body.tail.unwrap().0].ty, ir::Ty::I32);
+        assert_eq!(
+            f.exprs[f.body.tail.unwrap().0].ty,
+            ir::Ty::Int(ir::IntTy::I32)
+        );
         assert_eq!(f.exprs[f.body.tail.unwrap().0].flow(), None);
         let f = typed("fn f()->i32 { loop { continue; } } fn main(){}", 0);
         assert_eq!(f.exprs[f.body.tail.unwrap().0].flow(), None);
@@ -5862,7 +6138,7 @@ mod typed_tests {
             0,
         );
         let value = &f.exprs[f.body.tail.unwrap().0];
-        assert_eq!(value.ty, ir::Ty::I32);
+        assert_eq!(value.ty, ir::Ty::Int(ir::IntTy::I32));
         assert_eq!(value.completion, ir::Completion::Never);
         let f = typed("fn f()->i32 { !{return 3;} } fn main(){}", 0);
         let value = &f.exprs[f.body.tail.unwrap().0];
@@ -5979,7 +6255,12 @@ mod typed_tests {
         assert_eq!(f.params, vec![ir::LocalId(0)]);
         assert_eq!(
             f.locals.iter().map(|l| l.ty.clone()).collect::<Vec<_>>(),
-            vec![ir::Ty::I32, ir::Ty::I32, ir::Ty::Bool, ir::Ty::I32]
+            vec![
+                ir::Ty::Int(ir::IntTy::I32),
+                ir::Ty::Int(ir::IntTy::I32),
+                ir::Ty::Bool,
+                ir::Ty::Int(ir::IntTy::I32)
+            ]
         );
         assert!(f.locals.iter().all(|l| l.name == "x"));
         let reads = f
@@ -6028,7 +6309,7 @@ mod typed_tests {
             .iter()
             .find(|e| matches!(e.kind, ir::ExprKind::Call { .. }))
             .unwrap();
-        assert_eq!(call.flow(), Some(ir::Ty::I32));
+        assert_eq!(call.flow(), Some(ir::Ty::Int(ir::IntTy::I32)));
         let ir::ExprKind::Call {
             name,
             args,
@@ -6039,9 +6320,9 @@ mod typed_tests {
         };
         assert_eq!(name, "m::f");
         assert_eq!(signature.params, vec![ir::Ty::Bool]);
-        assert_eq!(signature.result, ir::Ty::I32);
+        assert_eq!(signature.result, ir::Ty::Int(ir::IntTy::I32));
         assert_eq!(f.exprs[args[0].0].ty, ir::Ty::Bool);
-        assert_eq!(f.locals[0].ty, ir::Ty::I32);
+        assert_eq!(f.locals[0].ty, ir::Ty::Int(ir::IntTy::I32));
     }
 
     #[test]
@@ -6188,7 +6469,10 @@ mod tests {
         );
         assert_eq!(checked.locals[bindings[0].local.0].name, "flag");
         assert!(checked.locals[bindings[0].local.0].mutable);
-        assert_eq!(checked.locals[bindings[1].local.0].ty, ir::Ty::I32);
+        assert_eq!(
+            checked.locals[bindings[1].local.0].ty,
+            ir::Ty::Int(ir::IntTy::I32)
+        );
     }
 
     #[test]

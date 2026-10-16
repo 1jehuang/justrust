@@ -1,7 +1,7 @@
 //! Acceptance of the public checked-body boundary, without a stock compiler oracle.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
-use ir::{CheckedFunction, Completion, ExprId, ExprKind, LocalId, Stmt, Ty};
+use ir::{CheckedFunction, Completion, ExprId, ExprKind, IntTy, LocalId, Stmt, Ty};
 use justrust_engine::compiler::{backend, frontend, ir};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -176,9 +176,9 @@ fn checked_ir_shadow_initializers_and_nested_scope_reads_have_resolved_ids() {
             assert_eq!(read(&function, right), y);
             for local in [parameter, outer, nested] {
                 assert_eq!(function.locals[local.0].name, "x");
-                assert_eq!(function.locals[local.0].ty, Ty::I32);
+                assert_eq!(function.locals[local.0].ty, Ty::Int(IntTy::I32));
             }
-            assert_eq!(function.result, Ty::I32);
+            assert_eq!(function.result, Ty::Int(IntTy::I32));
         },
     );
 }
@@ -237,7 +237,7 @@ fn checked_ir_inference_is_concrete_and_divergence_is_not_unit_flow() {
                     .body
                     .statements
                     .iter()
-                    .zip([Ty::Bool, Ty::I32, Ty::Unit])
+                    .zip([Ty::Bool, Ty::Int(IntTy::I32), Ty::Unit])
             {
                 let (local, value) = binding(statement);
                 assert_eq!(function.locals[local.0].ty, expected);
@@ -263,7 +263,7 @@ fn checked_ir_inference_is_concrete_and_divergence_is_not_unit_flow() {
                 "pure divergence has actual Never type"
             );
             assert_eq!(divergent[0].flow(), None);
-            assert_eq!(function.result, Ty::I32);
+            assert_eq!(function.result, Ty::Int(IntTy::I32));
         },
     );
 }
@@ -292,7 +292,7 @@ fn checked_ir_calls_retain_canonical_targets_and_validated_signatures() {
             assert_eq!(calls.len(), 1);
             let (expr, name, args, signature) = calls[0];
             assert_eq!(name, "tools::accept");
-            assert_eq!(signature.params, [Ty::Bool, Ty::I32]);
+            assert_eq!(signature.params, [Ty::Bool, Ty::Int(IntTy::I32)]);
             assert_eq!(signature.result, Ty::Bool);
             assert_eq!(expr.ty, Ty::Bool);
             assert_eq!(expr.completion, Completion::Returns);
@@ -430,7 +430,7 @@ fn checked_ir_divergence_discards_pending_temporaries_and_preserves_short_circui
                 assert_eq!(tail.completion, Completion::Never);
                 assert_eq!(
                     tail.ty,
-                    Ty::I32,
+                    Ty::Int(IntTy::I32),
                     "actual operator/call result type survives divergence"
                 );
                 assert_eq!(tail.flow(), None);
@@ -460,7 +460,10 @@ fn checked_ir_unreachable_tail_retains_its_actual_type_not_unit_placeholder() {
         "checked_ir_unreachable_tail_retains_its_actual_type_not_unit_placeholder",
         || {
             for (source, expected) in [
-                ("fn f()->i32 {{return 3; 0}} fn main(){}", Ty::I32),
+                (
+                    "fn f()->i32 {{return 3; 0}} fn main(){}",
+                    Ty::Int(IntTy::I32),
+                ),
                 ("fn f()->bool {{return true; false}} fn main(){}", Ty::Bool),
                 ("fn f()->i32 {{return 3;}} fn main(){}", Ty::Never),
             ] {

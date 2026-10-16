@@ -4,7 +4,7 @@
 //! module selects Copy/Move operands from projected semantic types. Ownership
 //! dataflow is established separately by the analyzer before native emission.
 use super::frontend::{BinaryOp, UnaryOp};
-use super::ir::{self, ExprId, LocalId, LoopId, Place, Projection, Ty};
+use super::ir::{self, ExprId, IntTy, IntValue, LocalId, LoopId, Place, Projection, Ty};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BlockId(pub usize);
@@ -70,9 +70,8 @@ pub enum Statement {
 
 #[derive(Clone, Debug)]
 pub enum Constant {
-    Usize(u64),
     Enum { ty: ir::EnumTy, variant: usize },
-    I32(i32),
+    Int(IntValue),
     Bool(bool),
     Unit,
 }
@@ -243,8 +242,10 @@ impl Function {
 
     pub fn operand_ty(&self, operand: &Operand) -> Result<Ty, String> {
         match operand {
-            Operand::Constant(Constant::I32(_)) => Ok(Ty::I32),
-            Operand::Constant(Constant::Usize(_)) => Ok(Ty::Usize),
+            Operand::Constant(Constant::Int(value)) => {
+                value.validate()?;
+                Ok(Ty::Int(value.ty))
+            }
             Operand::Constant(Constant::Bool(_)) => Ok(Ty::Bool),
             Operand::Constant(Constant::Unit) => Ok(Ty::Unit),
             Operand::Constant(Constant::Enum { ty, variant }) => {
@@ -290,7 +291,7 @@ impl Function {
     }
 
     fn indexed_element_ty(&self, array: &Place, index: &Operand) -> Result<&Ty, String> {
-        self.require_operand(index, &Ty::Usize)?;
+        self.require_operand(index, &Ty::Int(IntTy::Usize))?;
         let array_ty = self.place_ty(array)?;
         validate_type(array_ty, 0)?;
         let Ty::Array { element, .. } = array_ty else {
@@ -356,22 +357,18 @@ impl Function {
                     return Err("CFG discriminant requires enum place".into());
                 };
                 ty.validate()?;
-                Ok(Ty::I32)
+                Ok(Ty::Int(IntTy::I32))
             }
             Rvalue::Use(operand) => self.operand_ty(operand),
             Rvalue::Println(_) => Ok(Ty::Unit),
             Rvalue::Unary { op, value } => {
                 let ty = self.operand_ty(value)?;
-                if matches!(op, UnaryOp::Neg) && ty == Ty::Never {
-                    return Err("CFG negation of never is unsupported".into());
+                match (op, &ty) {
+                    (UnaryOp::Neg, Ty::Int(integer)) if integer.is_signed() => Ok(ty),
+                    (UnaryOp::Not, Ty::Int(_) | Ty::Bool) => Ok(ty),
+                    (UnaryOp::Not, Ty::Never) => Ok(Ty::Never),
+                    _ => Err("CFG unary operator requires compatible integer or bool type".into()),
                 }
-                let want = match op {
-                    UnaryOp::Neg => Ty::I32,
-                    UnaryOp::Not if ty == Ty::Usize => Ty::Usize,
-                    UnaryOp::Not => Ty::Bool,
-                };
-                self.require_operand(value, &want)?;
-                Ok(if ty == Ty::Never { Ty::Never } else { want })
             }
             Rvalue::Binary { op, left, right } => {
                 let left_ty = self.operand_ty(left)?;
@@ -391,21 +388,12 @@ impl Function {
                         | BinaryOp::Gt
                         | BinaryOp::Ge
                 );
-                let operand_ty = if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
-                    if left_ty == Ty::Never {
-                        right_ty
-                    } else {
-                        left_ty
-                    }
-                } else if left_ty == Ty::Usize {
-                    Ty::Usize
-                } else {
-                    Ty::I32
-                };
-                if operand_ty.field_count().is_some()
-                    || matches!(operand_ty, Ty::Enum(_) | Ty::Array { .. } | Ty::Ref { .. })
+                let operand_ty = left_ty;
+                if !matches!(operand_ty, Ty::Int(_))
+                    && !(matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+                        && matches!(operand_ty, Ty::Bool | Ty::Unit))
                 {
-                    return Err("CFG aggregate comparison is unsupported".into());
+                    return Err("CFG binary operator requires compatible integer operands".into());
                 }
                 self.require_operand(left, &operand_ty)?;
                 self.require_operand(right, &operand_ty)?;
@@ -682,7 +670,7 @@ impl Lowerer<'_> {
                     Some((Operand::Copy(source.clone()), Constant::Bool(*value)))
                 }
                 ir::MatchPattern::Int(value) => {
-                    Some((Operand::Copy(source.clone()), Constant::I32(*value)))
+                    Some((Operand::Copy(source.clone()), Constant::Int(*value)))
                 }
                 _ => None,
             };
@@ -866,7 +854,8 @@ impl Lowerer<'_> {
             return Err("dynamic indexing requires array place".into());
         }
         let index = self.expression(index)?;
-        self.result.require_operand(&index, &Ty::Usize)?;
+        self.result
+            .require_operand(&index, &Ty::Int(IntTy::Usize))?;
         Ok((array, index))
     }
 
@@ -1161,11 +1150,6 @@ impl Lowerer<'_> {
                 self.result.operand_ty(&operand)?;
                 self.assign(destination.clone(), Rvalue::Use(operand), origin);
             }
-            ir::ExprKind::Usize(value) => self.assign(
-                destination.clone(),
-                Rvalue::Use(Operand::Constant(Constant::Usize(*value))),
-                origin,
-            ),
             ir::ExprKind::DynamicIndex { base, index } => {
                 if !expression.ty.is_copy() {
                     return Err("unsupported: non-Copy dynamic array element extraction; only direct let _ is supported".into());
@@ -1253,7 +1237,7 @@ impl Lowerer<'_> {
             }
             ir::ExprKind::Int(value) => self.assign(
                 destination.clone(),
-                Rvalue::Use(Operand::Constant(Constant::I32(*value))),
+                Rvalue::Use(Operand::Constant(Constant::Int(*value))),
                 origin,
             ),
             ir::ExprKind::Bool(value) => self.assign(
@@ -1802,10 +1786,10 @@ mod tests {
         for kind in [ir::BorrowKind::Shared, ir::BorrowKind::Mut] {
             let reference = Ty::Ref {
                 kind,
-                referent: std::sync::Arc::new(Ty::I32),
+                referent: std::sync::Arc::new(Ty::Int(IntTy::I32)),
             };
             let source = with_root(
-                Ty::I32,
+                Ty::Int(IntTy::I32),
                 vec![
                     expr(
                         reference.clone(),
@@ -1890,7 +1874,7 @@ mod tests {
             else {
                 unreachable!()
             };
-            signature.params[0] = Ty::I32;
+            signature.params[0] = Ty::Int(IntTy::I32);
             assert!(
                 invalid
                     .validate()
@@ -1904,7 +1888,7 @@ mod tests {
     fn reference_formals_share_the_explicit_loan_origin_cap() {
         let reference = Ty::Ref {
             kind: ir::BorrowKind::Shared,
-            referent: std::sync::Arc::new(Ty::I32),
+            referent: std::sync::Arc::new(Ty::Int(IntTy::I32)),
         };
         let source = with_root(reference.clone(), vec![], vec![]);
         let mut function = nominal_lowered(&source);
@@ -1960,10 +1944,10 @@ mod tests {
     fn borrowed_place_site_preserves_origin_and_unique_instruction() {
         let reference = Ty::Ref {
             kind: ir::BorrowKind::Mut,
-            referent: std::sync::Arc::new(Ty::I32),
+            referent: std::sync::Arc::new(Ty::Int(IntTy::I32)),
         };
         let mut source = with_root(
-            Ty::I32,
+            Ty::Int(IntTy::I32),
             vec![
                 expr(
                     reference.clone(),
@@ -1973,7 +1957,10 @@ mod tests {
                     },
                 ),
                 expr(reference.clone(), ir::ExprKind::Local(LocalId(1))),
-                expr(Ty::I32, ir::ExprKind::Deref { value: ExprId(1) }),
+                expr(
+                    Ty::Int(IntTy::I32),
+                    ir::ExprKind::Deref { value: ExprId(1) },
+                ),
             ],
             vec![
                 ir::Stmt::Let {
@@ -2042,13 +2029,16 @@ mod tests {
                     function.locals[1].ty.clone(),
                     ir::ExprKind::Local(LocalId(0)),
                 ),
-                expr(Ty::I32, ir::ExprKind::Deref { value: ExprId(0) }),
+                expr(
+                    Ty::Int(IntTy::I32),
+                    ir::ExprKind::Deref { value: ExprId(0) },
+                ),
             ],
             vec![
                 ir::Stmt::Declare { local: LocalId(0) },
                 ir::Stmt::LetPattern {
                     value: ExprId(1),
-                    ty: Ty::I32,
+                    ty: Ty::Int(IntTy::I32),
                     bindings: vec![],
                 },
             ],
@@ -2144,11 +2134,124 @@ mod tests {
     }
 
     #[test]
+    fn all_integer_cfg_operators_require_exact_types_and_validate_dead_constants() {
+        for ty in [
+            IntTy::I8,
+            IntTy::I16,
+            IntTy::I32,
+            IntTy::I64,
+            IntTy::Isize,
+            IntTy::U8,
+            IntTy::U16,
+            IntTy::U32,
+            IntTy::U64,
+            IntTy::Usize,
+        ] {
+            let mut function = nominal_lowered(&with_root(Ty::Int(ty), vec![], vec![]));
+            let operand = Operand::Constant(Constant::Int(IntValue {
+                ty,
+                bits: ty.mask(),
+            }));
+            assert_eq!(function.operand_ty(&operand).unwrap(), Ty::Int(ty));
+            assert_eq!(
+                function
+                    .rvalue_ty(&Rvalue::Unary {
+                        op: UnaryOp::Not,
+                        value: operand.clone()
+                    })
+                    .unwrap(),
+                Ty::Int(ty)
+            );
+            assert_eq!(
+                function
+                    .rvalue_ty(&Rvalue::Unary {
+                        op: UnaryOp::Neg,
+                        value: operand.clone()
+                    })
+                    .is_ok(),
+                ty.is_signed()
+            );
+            for op in [
+                BinaryOp::Add,
+                BinaryOp::Sub,
+                BinaryOp::Mul,
+                BinaryOp::Div,
+                BinaryOp::Rem,
+                BinaryOp::Eq,
+                BinaryOp::Ne,
+                BinaryOp::Lt,
+                BinaryOp::Le,
+                BinaryOp::Gt,
+                BinaryOp::Ge,
+            ] {
+                let result = function
+                    .rvalue_ty(&Rvalue::Binary {
+                        op,
+                        left: operand.clone(),
+                        right: operand.clone(),
+                    })
+                    .unwrap();
+                assert_eq!(
+                    result,
+                    if matches!(
+                        op,
+                        BinaryOp::Add
+                            | BinaryOp::Sub
+                            | BinaryOp::Mul
+                            | BinaryOp::Div
+                            | BinaryOp::Rem
+                    ) {
+                        Ty::Int(ty)
+                    } else {
+                        Ty::Bool
+                    }
+                );
+                let other = if ty == IntTy::I8 {
+                    IntTy::U8
+                } else {
+                    IntTy::I8
+                };
+                assert!(
+                    function
+                        .rvalue_ty(&Rvalue::Binary {
+                            op,
+                            left: operand.clone(),
+                            right: Operand::Constant(Constant::Int(IntValue {
+                                ty: other,
+                                bits: 0
+                            }))
+                        })
+                        .is_err()
+                );
+            }
+            if ty.bits() < 64 {
+                function.blocks.push(BasicBlock {
+                    statements: vec![Located {
+                        value: Statement::Assign {
+                            destination: place(LocalId(0)),
+                            value: Rvalue::Use(Operand::Constant(Constant::Int(IntValue {
+                                ty,
+                                bits: 1u64 << ty.bits(),
+                            }))),
+                        },
+                        origin: None,
+                    }],
+                    terminator: Located {
+                        value: Terminator::Unreachable,
+                        origin: None,
+                    },
+                });
+                assert!(function.validate().unwrap_err().contains("noncanonical"));
+            }
+        }
+    }
+
+    #[test]
     fn usize_cfg_operands_and_unsigned_operators_do_not_coerce_i32() {
-        let function = nominal_lowered(&with_root(Ty::Usize, vec![], vec![]));
-        let max = Operand::Constant(Constant::Usize(u64::MAX));
-        let one = Operand::Constant(Constant::Usize(1));
-        assert_eq!(function.operand_ty(&max).unwrap(), Ty::Usize);
+        let function = nominal_lowered(&with_root(Ty::Int(IntTy::Usize), vec![], vec![]));
+        let max = Operand::Constant(Constant::Int(IntValue::usize(u64::MAX)));
+        let one = Operand::Constant(Constant::Int(IntValue::usize(1)));
+        assert_eq!(function.operand_ty(&max).unwrap(), Ty::Int(IntTy::Usize));
         assert_eq!(
             function
                 .rvalue_ty(&Rvalue::Binary {
@@ -2157,7 +2260,7 @@ mod tests {
                     right: one.clone()
                 })
                 .unwrap(),
-            Ty::Usize
+            Ty::Int(IntTy::Usize)
         );
         assert_eq!(
             function
@@ -2176,7 +2279,7 @@ mod tests {
                     value: max.clone()
                 })
                 .unwrap(),
-            Ty::Usize
+            Ty::Int(IntTy::Usize)
         );
         assert!(
             function
@@ -2192,13 +2295,13 @@ mod tests {
                     .rvalue_ty(&Rvalue::Binary {
                         op,
                         left: max.clone(),
-                        right: Operand::Constant(Constant::I32(1))
+                        right: Operand::Constant(Constant::Int(IntValue::i32(1)))
                     })
                     .is_err()
             );
         }
         let root = Ty::Array {
-            element: std::sync::Arc::new(Ty::I32),
+            element: std::sync::Arc::new(Ty::Int(IntTy::I32)),
             len: 1,
         };
         let function = nominal_lowered(&with_root(root, vec![], vec![]));
@@ -2209,13 +2312,13 @@ mod tests {
                     index: max
                 })
                 .unwrap(),
-            Ty::I32
+            Ty::Int(IntTy::I32)
         );
         assert!(
             function
                 .rvalue_ty(&Rvalue::IndexCopy {
                     array: place(LocalId(0)),
-                    index: Operand::Constant(Constant::I32(0))
+                    index: Operand::Constant(Constant::Int(IntValue::i32(0)))
                 })
                 .is_err()
         );
@@ -2224,17 +2327,17 @@ mod tests {
     #[test]
     fn dynamic_index_may_initialize_original_array_before_final_read() {
         let array = Ty::Array {
-            element: std::sync::Arc::new(Ty::I32),
+            element: std::sync::Arc::new(Ty::Int(IntTy::I32)),
             len: 1,
         };
         let mut source = with_root(
             array.clone(),
             vec![
-                expr(Ty::I32, ir::ExprKind::Int(7)),
+                expr(Ty::Int(IntTy::I32), ir::ExprKind::Int(IntValue::i32(7))),
                 expr(array.clone(), ir::ExprKind::Array(vec![ExprId(0)])),
-                expr(Ty::Usize, ir::ExprKind::Usize(0)),
+                expr(Ty::Int(IntTy::Usize), ir::ExprKind::Int(IntValue::usize(0))),
                 expr(
-                    Ty::Usize,
+                    Ty::Int(IntTy::Usize),
                     ir::ExprKind::Block(ir::Block {
                         statements: vec![ir::Stmt::Assign {
                             local: LocalId(0),
@@ -2245,7 +2348,7 @@ mod tests {
                 ),
                 expr(array, ir::ExprKind::Local(LocalId(0))),
                 expr(
-                    Ty::I32,
+                    Ty::Int(IntTy::I32),
                     ir::ExprKind::DynamicIndex {
                         base: ExprId(4),
                         index: ExprId(3),
@@ -2290,7 +2393,7 @@ mod tests {
     #[test]
     fn dynamic_index_static_prefix_read_precedes_current_index_effects() {
         let child = Ty::Array {
-            element: std::sync::Arc::new(Ty::I32),
+            element: std::sync::Arc::new(Ty::Int(IntTy::I32)),
             len: 1,
         };
         let array = Ty::Array {
@@ -2300,12 +2403,12 @@ mod tests {
         let mut source = with_root(
             array.clone(),
             vec![
-                expr(Ty::I32, ir::ExprKind::Int(7)),
+                expr(Ty::Int(IntTy::I32), ir::ExprKind::Int(IntValue::i32(7))),
                 expr(child.clone(), ir::ExprKind::Array(vec![ExprId(0)])),
                 expr(array.clone(), ir::ExprKind::Array(vec![ExprId(1)])),
-                expr(Ty::Usize, ir::ExprKind::Usize(0)),
+                expr(Ty::Int(IntTy::Usize), ir::ExprKind::Int(IntValue::usize(0))),
                 expr(
-                    Ty::Usize,
+                    Ty::Int(IntTy::Usize),
                     ir::ExprKind::Block(ir::Block {
                         statements: vec![ir::Stmt::Assign {
                             local: LocalId(0),
@@ -2323,7 +2426,7 @@ mod tests {
                     },
                 ),
                 expr(
-                    Ty::I32,
+                    Ty::Int(IntTy::I32),
                     ir::ExprKind::DynamicIndex {
                         base: ExprId(6),
                         index: ExprId(4),
@@ -2349,7 +2452,7 @@ mod tests {
 
     #[test]
     fn ignored_noncopy_dynamic_index_has_no_fabricated_element_snapshot() {
-        let item = Ty::Struct(nominal(vec![Ty::I32]));
+        let item = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
         let array = Ty::Array {
             element: std::sync::Arc::new(item.clone()),
             len: 1,
@@ -2358,7 +2461,7 @@ mod tests {
             array.clone(),
             vec![
                 expr(array, ir::ExprKind::Local(LocalId(0))),
-                expr(Ty::Usize, ir::ExprKind::Usize(0)),
+                expr(Ty::Int(IntTy::Usize), ir::ExprKind::Int(IntValue::usize(0))),
                 expr(
                     item.clone(),
                     ir::ExprKind::DynamicIndex {
@@ -2418,7 +2521,7 @@ mod tests {
 
     #[test]
     fn dynamic_index_assignment_owns_rhs_before_index_call() {
-        let item = Ty::Struct(nominal(vec![Ty::I32]));
+        let item = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
         let array = Ty::Array {
             element: std::sync::Arc::new(item.clone()),
             len: 1,
@@ -2428,14 +2531,14 @@ mod tests {
             vec![
                 expr(item.clone(), ir::ExprKind::Local(LocalId(1))),
                 expr(
-                    Ty::Usize,
+                    Ty::Int(IntTy::Usize),
                     ir::ExprKind::Call {
                         name: "index".into(),
                         args: vec![],
                         signature: ir::Signature {
                             ref_contract: Default::default(),
                             params: vec![],
-                            result: Ty::Usize,
+                            result: Ty::Int(IntTy::Usize),
                         },
                     },
                 ),
@@ -2474,7 +2577,7 @@ mod tests {
 
     #[test]
     fn array_wildcard_index_inspects_base_without_moving_element() {
-        let item = Ty::Struct(nominal(vec![Ty::I32]));
+        let item = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
         let root = Ty::Array {
             element: std::sync::Arc::new(item.clone()),
             len: 2,
@@ -2520,7 +2623,7 @@ mod tests {
 
     #[test]
     fn array_index_copy_subfields_do_not_move_noncopy_parent() {
-        let item = Ty::Struct(nominal(vec![Ty::I32]));
+        let item = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
         let root = Ty::Array {
             element: std::sync::Arc::new(item.clone()),
             len: 1,
@@ -2537,14 +2640,14 @@ mod tests {
                     },
                 ),
                 expr(
-                    Ty::I32,
+                    Ty::Int(IntTy::I32),
                     ir::ExprKind::Field {
                         base: ExprId(1),
                         index: 0,
                     },
                 ),
                 expr(
-                    Ty::I32,
+                    Ty::Int(IntTy::I32),
                     ir::ExprKind::Field {
                         base: ExprId(1),
                         index: 0,
@@ -2566,7 +2669,7 @@ mod tests {
                     projection: vec![Projection::ConstantIndex(0), Projection::Field(0)]
                 }))
                 .unwrap(),
-            Ty::I32
+            Ty::Int(IntTy::I32)
         );
         assert!(
             function
@@ -2581,7 +2684,7 @@ mod tests {
     #[test]
     fn zero_and_single_repeats_consume_noncopy_operand_once() {
         for len in [0, 1] {
-            let item = Ty::Struct(nominal(vec![Ty::I32]));
+            let item = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
             let array = Ty::Array {
                 element: std::sync::Arc::new(item.clone()),
                 len,
@@ -2626,7 +2729,7 @@ mod tests {
     #[test]
     fn indexed_assignment_inspects_after_rhs_initializes_array() {
         let root = Ty::Array {
-            element: std::sync::Arc::new(Ty::I32),
+            element: std::sync::Arc::new(Ty::Int(IntTy::I32)),
             len: 1,
         };
         let destination = Place {
@@ -2636,11 +2739,11 @@ mod tests {
         let mut source = with_root(
             root.clone(),
             vec![
-                expr(Ty::I32, ir::ExprKind::Int(1)),
+                expr(Ty::Int(IntTy::I32), ir::ExprKind::Int(IntValue::i32(1))),
                 expr(root, ir::ExprKind::Array(vec![ExprId(0)])),
-                expr(Ty::I32, ir::ExprKind::Int(7)),
+                expr(Ty::Int(IntTy::I32), ir::ExprKind::Int(IntValue::i32(7))),
                 expr(
-                    Ty::I32,
+                    Ty::Int(IntTy::I32),
                     ir::ExprKind::Block(ir::Block {
                         statements: vec![ir::Stmt::Assign {
                             local: LocalId(0),
@@ -2684,7 +2787,7 @@ mod tests {
     #[test]
     fn nested_array_index_inspects_each_exact_base_prefix_once() {
         let child = Ty::Array {
-            element: std::sync::Arc::new(Ty::I32),
+            element: std::sync::Arc::new(Ty::Int(IntTy::I32)),
             len: 1,
         };
         let root = Ty::Array {
@@ -2703,7 +2806,7 @@ mod tests {
                     },
                 ),
                 expr(
-                    Ty::I32,
+                    Ty::Int(IntTy::I32),
                     ir::ExprKind::Index {
                         base: ExprId(1),
                         index: 0,
@@ -2712,7 +2815,7 @@ mod tests {
             ],
             vec![ir::Stmt::LetPattern {
                 value: ExprId(2),
-                ty: Ty::I32,
+                ty: Ty::Int(IntTy::I32),
                 bindings: vec![],
             }],
         );
@@ -2742,20 +2845,20 @@ mod tests {
 
     #[test]
     fn scalar_field_reads_copy_only_the_projection_before_whole_struct_move() {
-        let root = Ty::Struct(nominal(vec![Ty::I32]));
+        let root = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
         let source = with_root(
             root.clone(),
             vec![
                 expr(root, ir::ExprKind::Local(LocalId(0))),
                 expr(
-                    Ty::I32,
+                    Ty::Int(IntTy::I32),
                     ir::ExprKind::Field {
                         base: ExprId(0),
                         index: 0,
                     },
                 ),
                 expr(
-                    Ty::I32,
+                    Ty::Int(IntTy::I32),
                     ir::ExprKind::Field {
                         base: ExprId(0),
                         index: 0,
@@ -2779,7 +2882,7 @@ mod tests {
 
     #[test]
     fn non_copy_field_moves_preserve_siblings_but_not_parent_or_moved_field() {
-        let inner = Ty::Struct(nominal(vec![Ty::I32]));
+        let inner = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
         let root = Ty::Struct(nominal(vec![inner.clone(), inner.clone()]));
         let mut source = with_root(
             root.clone(),
@@ -2817,8 +2920,8 @@ mod tests {
 
     #[test]
     fn arbitrary_expression_base_moves_whole_source_once_before_projection() {
-        let inner = Ty::Struct(nominal(vec![Ty::I32]));
-        let root = Ty::Struct(nominal(vec![inner.clone(), Ty::I32]));
+        let inner = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
+        let root = Ty::Struct(nominal(vec![inner.clone(), Ty::Int(IntTy::I32)]));
         let mut source = with_root(
             root.clone(),
             vec![
@@ -2838,7 +2941,7 @@ mod tests {
                     },
                 ),
                 expr(
-                    Ty::I32,
+                    Ty::Int(IntTy::I32),
                     ir::ExprKind::Field {
                         base: ExprId(0),
                         index: 1,
@@ -2858,23 +2961,23 @@ mod tests {
 
     #[test]
     fn struct_initializer_evaluates_source_order_then_permutates_snapshots() {
-        let ty = nominal(vec![Ty::I32, Ty::I32]);
+        let ty = nominal(vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]);
         let call = |name: &str| {
             expr(
-                Ty::I32,
+                Ty::Int(IntTy::I32),
                 ir::ExprKind::Call {
                     name: name.into(),
                     args: vec![],
                     signature: ir::Signature {
                         ref_contract: Default::default(),
                         params: vec![],
-                        result: Ty::I32,
+                        result: Ty::Int(IntTy::I32),
                     },
                 },
             )
         };
         let source = with_root(
-            Ty::I32,
+            Ty::Int(IntTy::I32),
             vec![
                 call("first"),
                 call("second"),
@@ -2936,12 +3039,12 @@ mod tests {
                     fields: vec![
                         ir::FieldDef {
                             name: "a".into(),
-                            ty: Ty::I32,
+                            ty: Ty::Int(IntTy::I32),
                             public: true,
                         },
                         ir::FieldDef {
                             name: "b".into(),
-                            ty: Ty::I32,
+                            ty: Ty::Int(IntTy::I32),
                             public: true,
                         },
                     ]
@@ -2957,20 +3060,20 @@ mod tests {
         });
         let call = |name: &str| {
             expr(
-                Ty::I32,
+                Ty::Int(IntTy::I32),
                 ir::ExprKind::Call {
                     name: name.into(),
                     args: vec![],
                     signature: ir::Signature {
                         ref_contract: Default::default(),
                         params: vec![],
-                        result: Ty::I32,
+                        result: Ty::Int(IntTy::I32),
                     },
                 },
             )
         };
         let source = with_root(
-            Ty::I32,
+            Ty::Int(IntTy::I32),
             vec![
                 call("first"),
                 call("second"),
@@ -3066,7 +3169,7 @@ mod tests {
 
     #[test]
     fn validator_rejects_non_copy_operands_even_in_disconnected_blocks() {
-        let root = Ty::Struct(nominal(vec![Ty::I32]));
+        let root = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
         let source = with_root(root.clone(), vec![], vec![]);
         let mut function = nominal_lowered(&source);
         let target = LocalId(function.locals.len());
@@ -3382,9 +3485,9 @@ mod tests {
     #[test]
     fn cyclic_pattern_initializer_projection_fails_at_the_depth_bound() {
         let mut source = with_root(
-            Ty::I32,
+            Ty::Int(IntTy::I32),
             vec![expr(
-                Ty::I32,
+                Ty::Int(IntTy::I32),
                 ir::ExprKind::Field {
                     base: ExprId(0),
                     index: 0,
@@ -3394,7 +3497,7 @@ mod tests {
         );
         source.body.statements.push(ir::Stmt::LetPattern {
             value: ExprId(0),
-            ty: Ty::I32,
+            ty: Ty::Int(IntTy::I32),
             bindings: vec![],
         });
         assert!(lower(&source).unwrap_err().contains("depth"));

@@ -21,7 +21,15 @@ an executable and does not require `-o`. Existing outputs and traces are never
 overwritten. Invalid and unsupported programs fail explicitly. Output is not
 published until every required check and code generation operation succeeds.
 
-Initial supported syntax: free functions with `i32`, `usize`, `bool`, unit, nested tuples
+Supported integer primitives are `i8`, `i16`, `i32`, `i64`, `isize`, `u8`,
+`u16`, `u32`, `u64` and `usize`, with exact type identity, typed literal patterns,
+checked arithmetic and normalized private eight-byte scalar transport. Decimal,
+binary, octal and hexadecimal literals accept underscores and exact suffixes.
+Signed minimum literals support direct or parenthesized negation, not arbitrary
+block folding. Casts, shifts, binary bitwise operators, 128-bit integers and floats
+remain unsupported. See `INTEGER-TYPES.md`.
+
+Initial supported syntax: free functions with these integers, `bool`, unit, nested tuples
 and nonempty braced named structs or enums and fixed arrays as parameters/results, aggregate literals and
 numeric/named field projections,
 local bindings and shadowing, typed deferred local initialization,
@@ -31,7 +39,7 @@ integer arithmetic, comparisons, short-circuit Boolean operators, blocks, `if`/`
 `while`, unlabelled `loop` expressions, `break` with supported value types,
 `continue`, `return`, enum/scalar `match`, calls including recursion,
 and `println!("literal")`. Match supports variant/literal, wildcard and whole-value
-binding arms, with exhaustive bool/unit/enum coverage and an i32 catchall. Guards,
+binding arms, with exhaustive bool/unit/enum coverage and bounded integer-domain coverage or a catchall. Guards,
 or/range and nested refutable patterns remain following work. Unit, tuple and
 braced enum variants support source-ordered construction, selected payload
 patterns and single-variant irrefutable let patterns. Tuple-variant rest remains

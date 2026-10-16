@@ -46,6 +46,87 @@ pub const MAX_ENUM_VARIANTS: usize = 4096;
 pub const MAX_MATCH_ARMS: usize = 4096;
 pub const MAX_ARRAY_LEN: usize = 4096;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum IntTy {
+    I8,
+    I16,
+    I32,
+    I64,
+    Isize,
+    U8,
+    U16,
+    U32,
+    U64,
+    Usize,
+}
+
+impl IntTy {
+    pub const fn bits(self) -> u32 {
+        match self {
+            Self::I8 | Self::U8 => 8,
+            Self::I16 | Self::U16 => 16,
+            Self::I32 | Self::U32 => 32,
+            Self::I64 | Self::Isize | Self::U64 | Self::Usize => 64,
+        }
+    }
+
+    pub const fn is_signed(self) -> bool {
+        matches!(
+            self,
+            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::Isize
+        )
+    }
+
+    pub const fn mask(self) -> u64 {
+        u64::MAX >> (64 - self.bits())
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::I8 => "i8",
+            Self::I16 => "i16",
+            Self::I32 => "i32",
+            Self::I64 => "i64",
+            Self::Isize => "isize",
+            Self::U8 => "u8",
+            Self::U16 => "u16",
+            Self::U32 => "u32",
+            Self::U64 => "u64",
+            Self::Usize => "usize",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct IntValue {
+    pub ty: IntTy,
+    pub bits: u64,
+}
+
+impl IntValue {
+    pub fn validate(self) -> Result<(), String> {
+        if self.bits & !self.ty.mask() != 0 {
+            Err("integer constant contains noncanonical high bits".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub const fn i32(value: i32) -> Self {
+        Self {
+            ty: IntTy::I32,
+            bits: value as u32 as u64,
+        }
+    }
+
+    pub const fn usize(value: u64) -> Self {
+        Self {
+            ty: IntTy::Usize,
+            bits: value,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct EnumTy(Arc<EnumDef>);
 
@@ -300,8 +381,7 @@ pub struct LoopId(pub usize);
 /// Tuple structure is immutable and shared cheaply across checked facts.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
-    I32,
-    Usize,
+    Int(IntTy),
     Ref {
         kind: BorrowKind,
         referent: Arc<Ty>,
@@ -342,7 +422,7 @@ impl Ty {
     pub fn is_copy(&self) -> bool {
         match self {
             Self::Ref { kind, .. } => *kind == BorrowKind::Shared,
-            Self::I32 | Self::Usize | Self::Bool | Self::Unit | Self::Never => true,
+            Self::Int(_) | Self::Bool | Self::Unit | Self::Never => true,
             Self::Struct(_) | Self::Enum(_) => false,
             Self::Tuple(_) | Self::Array { .. } => {
                 let mut pending = vec![self];
@@ -859,11 +939,8 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
                     pending.push((a, b, depth + 1));
                 }
             }
-            (Ty::I32, Ty::I32)
-            | (Ty::Usize, Ty::Usize)
-            | (Ty::Bool, Ty::Bool)
-            | (Ty::Unit, Ty::Unit)
-            | (Ty::Never, Ty::Never) => {}
+            (Ty::Int(a), Ty::Int(b)) if a == b => {}
+            (Ty::Bool, Ty::Bool) | (Ty::Unit, Ty::Unit) | (Ty::Never, Ty::Never) => {}
             (Ty::Struct(a), Ty::Struct(b)) if a == b => {}
             (Ty::Enum(a), Ty::Enum(b)) if a == b => {}
             (
@@ -943,7 +1020,7 @@ pub enum MatchPattern {
     Wildcard,
     Binding(LocalId),
     Bool(bool),
-    Int(i32),
+    Int(IntValue),
     Unit,
     EnumVariant {
         ty: EnumTy,
@@ -967,7 +1044,6 @@ pub enum ExprKind {
     Deref {
         value: ExprId,
     },
-    Usize(u64),
     DynamicIndex {
         base: ExprId,
         index: ExprId,
@@ -990,7 +1066,7 @@ pub enum ExprKind {
         scrutinee: ExprId,
         arms: Vec<MatchArm>,
     },
-    Int(i32),
+    Int(IntValue),
     Bool(bool),
     /// Read a resolved local into this expression's independent value snapshot.
     Local(LocalId),
@@ -1083,7 +1159,10 @@ impl CheckedFunction {
                     *ty == Ty::Never || pattern_types_equal(ty, &decl.ty, &mut work)?
                 }
                 MatchPattern::Bool(_) => matches!(ty, Ty::Bool | Ty::Never),
-                MatchPattern::Int(_) => matches!(ty, Ty::I32 | Ty::Never),
+                MatchPattern::Int(value) => {
+                    value.validate()?;
+                    *ty == Ty::Int(value.ty) || *ty == Ty::Never
+                }
                 MatchPattern::Unit => matches!(ty, Ty::Unit | Ty::Never),
                 MatchPattern::EnumVariant {
                     ty: pattern_ty,
@@ -1251,7 +1330,9 @@ impl CheckedFunction {
                 ExprKind::DynamicIndex { base, index } => {
                     expr(*base)?;
                     expr(*index)?;
-                    if self.exprs[index.0].ty != Ty::Usize && self.exprs[index.0].ty != Ty::Never {
+                    if self.exprs[index.0].ty != Ty::Int(IntTy::Usize)
+                        && self.exprs[index.0].ty != Ty::Never
+                    {
                         return Err("dynamic array index requires usize".into());
                     }
                     let Ty::Array { element, len } = &self.exprs[base.0].ty else {
@@ -1370,10 +1451,13 @@ impl CheckedFunction {
                     value: Some(value), ..
                 } => expr(*value)?,
                 ExprKind::Break { value: None, .. } | ExprKind::Continue { .. } => {}
-                ExprKind::Int(_)
-                | ExprKind::Usize(_)
-                | ExprKind::Bool(_)
-                | ExprKind::Println(_) => {}
+                ExprKind::Int(integer) => {
+                    integer.validate()?;
+                    if value.ty != Ty::Int(integer.ty) {
+                        return Err("integer expression type mismatch".into());
+                    }
+                }
+                ExprKind::Bool(_) | ExprKind::Println(_) => {}
             }
         }
         while let Some(block) = blocks.pop() {
@@ -1395,7 +1479,7 @@ impl CheckedFunction {
                         if !matches!(array_ty, Ty::Array { .. }) {
                             return Err("dynamic indexed assignment requires array type".into());
                         }
-                        if self.exprs[index.0].ty != Ty::Usize
+                        if self.exprs[index.0].ty != Ty::Int(IntTy::Usize)
                             && self.exprs[index.0].ty != Ty::Never
                         {
                             return Err("dynamic array index requires usize".into());
@@ -1441,6 +1525,88 @@ impl CheckedFunction {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn integer_descriptors_constants_and_patterns_preserve_exact_identity() {
+        let types = [
+            (IntTy::I8, 8, true, "i8"),
+            (IntTy::I16, 16, true, "i16"),
+            (IntTy::I32, 32, true, "i32"),
+            (IntTy::I64, 64, true, "i64"),
+            (IntTy::Isize, 64, true, "isize"),
+            (IntTy::U8, 8, false, "u8"),
+            (IntTy::U16, 16, false, "u16"),
+            (IntTy::U32, 32, false, "u32"),
+            (IntTy::U64, 64, false, "u64"),
+            (IntTy::Usize, 64, false, "usize"),
+        ];
+        for (ty, bits, signed, name) in types {
+            assert_eq!(ty.bits(), bits);
+            assert_eq!(ty.is_signed(), signed);
+            assert_eq!(ty.name(), name);
+            assert_eq!(ty.mask(), u64::MAX >> (64 - bits));
+            assert!(Ty::Int(ty).is_copy());
+            for raw in [0, ty.mask(), 1u64 << (bits - 1)] {
+                let integer = IntValue { ty, bits: raw };
+                integer.validate().unwrap();
+                let mut function = fixture();
+                function.exprs[0].ty = Ty::Int(ty);
+                function.exprs[0].kind = ExprKind::Int(integer);
+                function.validate().unwrap();
+                let arms = [MatchArm {
+                    pattern: MatchPattern::Int(integer),
+                    body: ExprId(0),
+                }];
+                function
+                    .validate_match(ExprId(0), &arms, &Default::default())
+                    .unwrap();
+                let wrong = if ty == IntTy::I8 {
+                    IntTy::U8
+                } else {
+                    IntTy::I8
+                };
+                assert!(!pattern_types_equal(&Ty::Int(ty), &Ty::Int(wrong), &mut 0).unwrap());
+                function.exprs[0].ty = Ty::Int(wrong);
+                assert!(function.validate().is_err());
+                assert!(
+                    function
+                        .validate_match(ExprId(0), &arms, &Default::default())
+                        .is_err()
+                );
+            }
+            if bits < 64 {
+                let invalid = IntValue {
+                    ty,
+                    bits: 1u64 << bits,
+                };
+                assert!(invalid.validate().is_err());
+                let mut function = fixture();
+                function.exprs.push(TypedExpr {
+                    ty: Ty::Int(ty),
+                    completion: Completion::Returns,
+                    kind: ExprKind::Int(invalid),
+                });
+                assert!(function.validate().unwrap_err().contains("noncanonical"));
+                let arms = [MatchArm {
+                    pattern: MatchPattern::Int(invalid),
+                    body: ExprId(0),
+                }];
+                assert!(
+                    function
+                        .validate_match(ExprId(0), &arms, &Default::default())
+                        .unwrap_err()
+                        .contains("noncanonical")
+                );
+            }
+        }
+        assert_eq!(IntValue::i32(-1).bits, u32::MAX as u64);
+        assert_eq!(IntValue::usize(u64::MAX).bits, u64::MAX);
+        assert!(
+            !pattern_types_equal(&Ty::Int(IntTy::U64), &Ty::Int(IntTy::Usize), &mut 0).unwrap()
+        );
+        assert!(
+            !pattern_types_equal(&Ty::Int(IntTy::I64), &Ty::Int(IntTy::Isize), &mut 0).unwrap()
+        );
+    }
+    #[test]
     fn projected_input_path_resources_bound_occurrences_and_buffers() {
         let reference = |ty| Ty::Ref {
             kind: BorrowKind::Shared,
@@ -1453,9 +1619,9 @@ mod tests {
             outlives: Arc::from([]),
             returns: ReturnContract::SharedInputPaths(Arc::from([])),
         };
-        let output = reference(Ty::I32);
+        let output = reference(Ty::Int(IntTy::I32));
         let array = Ty::Array {
-            element: Arc::new(Ty::I32),
+            element: Arc::new(Ty::Int(IntTy::I32)),
             len: MAX_INPUT_PATHS,
         };
         let candidates = contract
@@ -1466,7 +1632,7 @@ mod tests {
             candidates.last().unwrap().projection.as_ref(),
             &[Projection::ConstantIndex(MAX_INPUT_PATHS - 1)]
         );
-        let too_many = Ty::Tuple(Arc::from([array.clone(), Ty::I32]));
+        let too_many = Ty::Tuple(Arc::from([array.clone(), Ty::Int(IntTy::I32)]));
         assert!(
             contract
                 .eligible_input_paths(&[reference(too_many)], &output)
@@ -1540,7 +1706,7 @@ mod tests {
     #[test]
     fn projected_input_paths_preserve_occurrences_privacy_and_exact_metadata() {
         let snapshot = SnapshotId::allocate().unwrap();
-        let pair = Ty::Tuple(Arc::from([Ty::I32, Ty::I32]));
+        let pair = Ty::Tuple(Arc::from([Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]));
         let enumeration = EnumTy::new(EnumDef {
             id: DefId { snapshot, index: 7 },
             name: "E".into(),
@@ -1551,7 +1717,7 @@ mod tests {
                 shape: VariantShape::Tuple,
                 fields: Arc::from([FieldDef {
                     name: "0".into(),
-                    ty: Ty::I32,
+                    ty: Ty::Int(IntTy::I32),
                     public: false,
                 }]),
             }]),
@@ -1566,7 +1732,7 @@ mod tests {
                     len: 2,
                 },
                 Ty::Array {
-                    element: Arc::new(Ty::I32),
+                    element: Arc::new(Ty::Int(IntTy::I32)),
                     len: 0,
                 },
                 Ty::Enum(enumeration.clone()),
@@ -1576,8 +1742,12 @@ mod tests {
             kind: BorrowKind::Shared,
             referent: Arc::new(ty),
         };
-        let params = vec![Ty::Bool, reference(root.clone()), reference(Ty::I32)];
-        let result = reference(Ty::I32);
+        let params = vec![
+            Ty::Bool,
+            reference(root.clone()),
+            reference(Ty::Int(IntTy::I32)),
+        ];
+        let result = reference(Ty::Int(IntTy::I32));
         let mut contract = RefContract {
             region_count: 1,
             param_regions: Arc::from([None, Some(RegionParamId(0)), Some(RegionParamId(0))]),
@@ -1710,12 +1880,12 @@ mod tests {
             kind,
             referent: Arc::new(ty),
         };
-        let pair = Ty::Tuple(Arc::from([Ty::I32, Ty::Bool]));
+        let pair = Ty::Tuple(Arc::from([Ty::Int(IntTy::I32), Ty::Bool]));
         let params = vec![
             Ty::Bool,
             reference(BorrowKind::Shared, pair.clone()),
             reference(BorrowKind::Mut, pair),
-            reference(BorrowKind::Shared, Ty::I32),
+            reference(BorrowKind::Shared, Ty::Int(IntTy::I32)),
             reference(BorrowKind::Mut, Ty::Bool),
         ];
         let path = |param| InputPath {
@@ -1735,7 +1905,7 @@ mod tests {
             outlives: Arc::from([]),
             returns: ReturnContract::SharedInputPaths(Arc::from([path(1), path(2)])),
         };
-        let shared_result = reference(BorrowKind::Shared, Ty::I32);
+        let shared_result = reference(BorrowKind::Shared, Ty::Int(IntTy::I32));
         assert_eq!(
             contract
                 .eligible_input_paths(&params, &shared_result)
@@ -1754,7 +1924,7 @@ mod tests {
             };
             assert!(forged.validate(&params, &shared_result).is_err());
         }
-        let mutable_result = reference(BorrowKind::Mut, Ty::I32);
+        let mutable_result = reference(BorrowKind::Mut, Ty::Int(IntTy::I32));
         contract.returns = ReturnContract::MutInputPaths(Arc::from([path(2)]));
         assert_eq!(
             contract
@@ -1812,10 +1982,10 @@ mod tests {
             referent: Arc::new(ty),
         };
         let array = Ty::Array {
-            element: Arc::new(Ty::I32),
+            element: Arc::new(Ty::Int(IntTy::I32)),
             len: MAX_INPUT_PATHS,
         };
-        let shared_result = reference(BorrowKind::Shared, Ty::I32);
+        let shared_result = reference(BorrowKind::Shared, Ty::Int(IntTy::I32));
         let mut contract = RefContract {
             region_count: 1,
             param_regions: Arc::from([Some(RegionParamId(0))]),
@@ -1836,7 +2006,7 @@ mod tests {
         contract.validate(&params, &shared_result).unwrap();
         let overflow = [reference(
             BorrowKind::Mut,
-            Ty::Tuple(Arc::from([array.clone(), Ty::I32])),
+            Ty::Tuple(Arc::from([array.clone(), Ty::Int(IntTy::I32)])),
         )];
         assert!(
             contract
@@ -1845,7 +2015,7 @@ mod tests {
                 .contains("candidate limit")
         );
         let shared_params = [reference(BorrowKind::Shared, array)];
-        let mutable_result = reference(BorrowKind::Mut, Ty::I32);
+        let mutable_result = reference(BorrowKind::Mut, Ty::Int(IntTy::I32));
         contract.returns = ReturnContract::MutInputPaths(Arc::from([]));
         contract.validate(&shared_params, &mutable_result).unwrap();
         assert!(
@@ -1865,10 +2035,10 @@ mod tests {
         let params = vec![
             Ty::Bool,
             mutable(Ty::Bool),
-            mutable(Ty::I32),
-            mutable(Ty::I32),
+            mutable(Ty::Int(IntTy::I32)),
+            mutable(Ty::Int(IntTy::I32)),
         ];
-        let result = mutable(Ty::I32);
+        let result = mutable(Ty::Int(IntTy::I32));
         let contract = RefContract {
             region_count: 2,
             param_regions: Arc::from([
@@ -1912,7 +2082,7 @@ mod tests {
         );
         let shared_result = Ty::Ref {
             kind: BorrowKind::Shared,
-            referent: Arc::new(Ty::I32),
+            referent: Arc::new(Ty::Int(IntTy::I32)),
         };
         assert!(
             contract
@@ -1944,8 +2114,13 @@ mod tests {
             kind: BorrowKind::Shared,
             referent: Arc::new(ty),
         };
-        let params = vec![Ty::Bool, shared(Ty::Bool), shared(Ty::I32), shared(Ty::I32)];
-        let result = shared(Ty::I32);
+        let params = vec![
+            Ty::Bool,
+            shared(Ty::Bool),
+            shared(Ty::Int(IntTy::I32)),
+            shared(Ty::Int(IntTy::I32)),
+        ];
+        let result = shared(Ty::Int(IntTy::I32));
         let contract = RefContract {
             region_count: 3,
             param_regions: Arc::from([
@@ -2018,7 +2193,7 @@ mod tests {
                     &params,
                     &Ty::Ref {
                         kind: BorrowKind::Mut,
-                        referent: Arc::new(Ty::I32)
+                        referent: Arc::new(Ty::Int(IntTy::I32))
                     }
                 )
                 .is_err()
@@ -2031,7 +2206,7 @@ mod tests {
         };
         canonical.validate(&params, &Ty::Unit).unwrap();
         let mut nested = params.clone();
-        nested[2] = shared(shared(Ty::I32));
+        nested[2] = shared(shared(Ty::Int(IntTy::I32)));
         assert!(contract.validate(&nested, &result).is_err());
     }
 
@@ -2040,20 +2215,20 @@ mod tests {
         use super::*;
         let shared = Ty::Ref {
             kind: BorrowKind::Shared,
-            referent: Arc::new(Ty::Tuple(Arc::from([Ty::I32]))),
+            referent: Arc::new(Ty::Tuple(Arc::from([Ty::Int(IntTy::I32)]))),
         };
         let mutable = Ty::Ref {
             kind: BorrowKind::Mut,
-            referent: Arc::new(Ty::I32),
+            referent: Arc::new(Ty::Int(IntTy::I32)),
         };
         assert!(shared.is_copy());
         assert!(!mutable.is_copy());
         assert_eq!(
             projected_ty(&shared, &[Projection::Deref, Projection::Field(0)]).unwrap(),
-            &Ty::I32
+            &Ty::Int(IntTy::I32)
         );
         assert!(projected_ty(&shared, &[Projection::Deref, Projection::Deref]).is_err());
-        assert!(projected_ty(&Ty::I32, &[Projection::Deref]).is_err());
+        assert!(projected_ty(&Ty::Int(IntTy::I32), &[Projection::Deref]).is_err());
         assert!(!Ty::Tuple(Arc::from([mutable])).is_copy());
     }
     use super::*;
@@ -2061,7 +2236,7 @@ mod tests {
     #[test]
     fn arrays_are_structural_indexed_and_copy_depends_on_element_even_when_empty() {
         let scalar = Ty::Array {
-            element: Arc::new(Ty::I32),
+            element: Arc::new(Ty::Int(IntTy::I32)),
             len: 2,
         };
         assert!(scalar.is_copy());
@@ -2069,12 +2244,12 @@ mod tests {
         assert_eq!(scalar.field_ty(0), None);
         assert_eq!(
             projected_ty(&scalar, &[Projection::ConstantIndex(1)]).unwrap(),
-            &Ty::I32
+            &Ty::Int(IntTy::I32)
         );
         assert!(projected_ty(&scalar, &[Projection::Field(0)]).is_err());
         assert!(projected_ty(&scalar, &[Projection::ConstantIndex(2)]).is_err());
         let empty = Ty::Array {
-            element: Arc::new(Ty::I32),
+            element: Arc::new(Ty::Int(IntTy::I32)),
             len: 0,
         };
         assert!(projected_ty(&empty, &[Projection::ConstantIndex(0)]).is_err());
@@ -2084,7 +2259,7 @@ mod tests {
                 index: 0,
             },
             "S",
-            vec![Ty::I32],
+            vec![Ty::Int(IntTy::I32)],
         ));
         for len in [0, 1, 2] {
             assert!(
@@ -2100,7 +2275,7 @@ mod tests {
             pattern_types_equal(
                 &scalar,
                 &Ty::Array {
-                    element: Arc::new(Ty::I32),
+                    element: Arc::new(Ty::Int(IntTy::I32)),
                     len: 2
                 },
                 &mut work
@@ -2164,7 +2339,7 @@ mod tests {
                     shape: VariantShape::Tuple,
                     fields: vec![FieldDef {
                         name: "0".into(),
-                        ty: Ty::Tuple(vec![Ty::I32].into()),
+                        ty: Ty::Tuple(vec![Ty::Int(IntTy::I32)].into()),
                         public: true,
                     }]
                     .into(),
@@ -2189,7 +2364,7 @@ mod tests {
                 ]
             )
             .unwrap(),
-            &Ty::I32
+            &Ty::Int(IntTy::I32)
         );
         for projection in [
             vec![Projection::Field(0)],
@@ -2348,12 +2523,12 @@ mod tests {
     #[test]
     fn flattened_pattern_plan_validates_types_and_disjoint_fresh_bindings() {
         let mut function = fixture();
-        let ty = Ty::Tuple(vec![Ty::I32, Ty::Bool].into());
+        let ty = Ty::Tuple(vec![Ty::Int(IntTy::I32), Ty::Bool].into());
         function.locals[0].ty = ty.clone();
         function.exprs[0].ty = ty.clone();
         function.locals.push(LocalDecl {
             name: "first".into(),
-            ty: Ty::I32,
+            ty: Ty::Int(IntTy::I32),
             mutable: false,
         });
         let bindings = vec![
@@ -2405,7 +2580,7 @@ mod tests {
         );
         function.locals.push(LocalDecl {
             name: "overlap".into(),
-            ty: Ty::I32,
+            ty: Ty::Int(IntTy::I32),
             mutable: false,
         });
         invalid[1].local = LocalId(3);
@@ -2450,7 +2625,7 @@ mod tests {
                 .contains("depth")
         );
 
-        let mut root = Ty::I32;
+        let mut root = Ty::Int(IntTy::I32);
         for _ in 0..MAX_PATTERN_PROJECTION_DEPTH {
             root = Ty::Tuple(vec![root].into());
         }
@@ -2460,7 +2635,7 @@ mod tests {
         for index in 0..count {
             function.locals.push(LocalDecl {
                 name: format!("b{index}"),
-                ty: Ty::I32,
+                ty: Ty::Int(IntTy::I32),
                 mutable: false,
             });
             bindings.push(PatternBinding {
@@ -2478,8 +2653,8 @@ mod tests {
 
     #[test]
     fn pattern_type_equality_fails_closed_on_independently_allocated_shared_dags() {
-        let mut a = Ty::I32;
-        let mut b = Ty::I32;
+        let mut a = Ty::Int(IntTy::I32);
+        let mut b = Ty::Int(IntTy::I32);
         for _ in 0..32 {
             a = Ty::Tuple(vec![a.clone(), a].into());
             b = Ty::Tuple(vec![b.clone(), b].into());
@@ -2522,15 +2697,15 @@ mod tests {
     #[test]
     fn nominal_identity_is_not_name_shape_or_declaration_index_alone() {
         let snapshot = SnapshotId::allocate().unwrap();
-        let first = nominal(DefId { snapshot, index: 0 }, "S", vec![Ty::I32]);
-        let same_shape = nominal(DefId { snapshot, index: 1 }, "S", vec![Ty::I32]);
+        let first = nominal(DefId { snapshot, index: 0 }, "S", vec![Ty::Int(IntTy::I32)]);
+        let same_shape = nominal(DefId { snapshot, index: 1 }, "S", vec![Ty::Int(IntTy::I32)]);
         let next_snapshot = nominal(
             DefId {
                 snapshot: SnapshotId::allocate().unwrap(),
                 index: 0,
             },
             "S",
-            vec![Ty::I32],
+            vec![Ty::Int(IntTy::I32)],
         );
         assert_eq!(first, first.clone());
         assert_ne!(first, same_shape);
@@ -2550,20 +2725,23 @@ mod tests {
                 index: 0,
             },
             "S",
-            vec![Ty::I32, Ty::Tuple(vec![Ty::Bool, Ty::Unit].into())],
+            vec![
+                Ty::Int(IntTy::I32),
+                Ty::Tuple(vec![Ty::Bool, Ty::Unit].into()),
+            ],
         );
         assert_eq!(handle.field_index("f1"), Some(1));
         assert_eq!(handle.field_index("missing"), None);
         let ty = Ty::Struct(handle);
         assert_eq!(ty.field_count(), Some(2));
-        assert_eq!(ty.field_ty(0), Some(&Ty::I32));
+        assert_eq!(ty.field_ty(0), Some(&Ty::Int(IntTy::I32)));
         assert_eq!(ty.field_ty(2), None);
         assert!(!ty.is_copy());
         assert!(ty.field_ty(1).unwrap().is_copy());
         assert!(Ty::Tuple(vec![Ty::Bool, Ty::Unit].into()).is_copy());
         assert!(!Ty::Tuple(vec![Ty::Bool, ty].into()).is_copy());
-        assert_eq!(Ty::I32.field_count(), None);
-        assert_eq!(Ty::I32.field_ty(0), None);
+        assert_eq!(Ty::Int(IntTy::I32).field_count(), None);
+        assert_eq!(Ty::Int(IntTy::I32).field_ty(0), None);
     }
 
     #[test]
@@ -2596,7 +2774,7 @@ mod tests {
     #[test]
     fn nominal_debug_bounds_unicode_names_and_does_not_expand_shared_fields() {
         let snapshot = SnapshotId::allocate().unwrap();
-        let mut ty = Ty::I32;
+        let mut ty = Ty::Int(IntTy::I32);
         for index in 0..16 {
             ty = Ty::Struct(nominal(
                 DefId { snapshot, index },
@@ -2612,7 +2790,11 @@ mod tests {
 
     #[test]
     fn tuple_types_are_structural_and_cheaply_cloned() {
-        let fields: Arc<[Ty]> = vec![Ty::I32, Ty::Tuple(vec![Ty::Bool, Ty::Unit].into())].into();
+        let fields: Arc<[Ty]> = vec![
+            Ty::Int(IntTy::I32),
+            Ty::Tuple(vec![Ty::Bool, Ty::Unit].into()),
+        ]
+        .into();
         let ty = Ty::Tuple(fields.clone());
         let expression = TypedExpr {
             ty: ty.clone(),
@@ -2625,9 +2807,15 @@ mod tests {
         assert!(Arc::ptr_eq(&fields, &cloned_fields));
         assert_eq!(
             ty,
-            Ty::Tuple(vec![Ty::I32, Ty::Tuple(vec![Ty::Bool, Ty::Unit].into())].into())
+            Ty::Tuple(
+                vec![
+                    Ty::Int(IntTy::I32),
+                    Ty::Tuple(vec![Ty::Bool, Ty::Unit].into())
+                ]
+                .into()
+            )
         );
-        assert_ne!(ty, Ty::Tuple(vec![Ty::Bool, Ty::I32].into()));
+        assert_ne!(ty, Ty::Tuple(vec![Ty::Bool, Ty::Int(IntTy::I32)].into()));
         assert_ne!(Ty::Unit, Ty::Tuple(vec![Ty::Unit].into()));
     }
 
@@ -2635,12 +2823,12 @@ mod tests {
     fn tuple_field_and_assignment_references_are_checked() {
         let mut value = fixture();
         value.exprs.push(TypedExpr {
-            ty: Ty::Tuple(vec![Ty::I32].into()),
+            ty: Ty::Tuple(vec![Ty::Int(IntTy::I32)].into()),
             completion: Completion::Returns,
             kind: ExprKind::Tuple(vec![ExprId(0)]),
         });
         value.exprs.push(TypedExpr {
-            ty: Ty::I32,
+            ty: Ty::Int(IntTy::I32),
             completion: Completion::Returns,
             kind: ExprKind::Field {
                 base: ExprId(1),
@@ -2673,7 +2861,7 @@ mod tests {
                 .unwrap_err()
                 .contains("invalid expression 99")
         );
-        value.exprs[2].kind = ExprKind::Int(0);
+        value.exprs[2].kind = ExprKind::Int(IntValue::i32(0));
         value.body.statements.push(Stmt::AssignPlace {
             place: Place {
                 local: LocalId(99),
@@ -2693,7 +2881,7 @@ mod tests {
             locals: vec![
                 LocalDecl {
                     name: "x".into(),
-                    ty: Ty::I32,
+                    ty: Ty::Int(IntTy::I32),
                     mutable: false,
                 },
                 LocalDecl {
@@ -2703,7 +2891,7 @@ mod tests {
                 },
             ],
             exprs: vec![TypedExpr {
-                ty: Ty::I32,
+                ty: Ty::Int(IntTy::I32),
                 completion: Completion::Returns,
                 kind: ExprKind::Local(LocalId(0)),
             }],
@@ -2738,14 +2926,14 @@ mod tests {
     fn unreachable_typed_tail_retains_its_semantic_type() {
         let mut value = fixture();
         value.exprs.push(TypedExpr {
-            ty: Ty::I32,
+            ty: Ty::Int(IntTy::I32),
             completion: Completion::Never,
             kind: ExprKind::Block(Block {
                 statements: vec![Stmt::Return(None)],
                 tail: Some(ExprId(0)),
             }),
         });
-        assert_eq!(value.exprs[1].ty, Ty::I32);
+        assert_eq!(value.exprs[1].ty, Ty::Int(IntTy::I32));
         assert_eq!(value.exprs[1].flow(), None);
         assert_ne!(value.exprs[1].ty, Ty::Never);
         value.validate().unwrap();
@@ -2761,7 +2949,7 @@ mod tests {
             },
         });
         value.exprs.push(TypedExpr {
-            ty: Ty::I32,
+            ty: Ty::Int(IntTy::I32),
             completion: Completion::Never,
             kind: ExprKind::Loop {
                 id: LoopId(0),
@@ -2771,7 +2959,7 @@ mod tests {
                 },
             },
         });
-        assert_eq!(value.exprs[3].ty, Ty::I32);
+        assert_eq!(value.exprs[3].ty, Ty::Int(IntTy::I32));
         assert_eq!(value.exprs[3].flow(), None);
         value.validate().unwrap();
     }
@@ -2812,7 +3000,7 @@ mod tests {
                 args: vec![],
                 signature: Signature {
                     ref_contract: Default::default(),
-                    params: vec![Ty::I32],
+                    params: vec![Ty::Int(IntTy::I32)],
                     result: Ty::Unit,
                 },
             },

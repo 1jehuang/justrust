@@ -2,7 +2,9 @@
 //!
 //! Private ABI: arguments are evaluated left-to-right and pushed as eight-byte
 //! stack words. The callee reads them in reverse order above rbp. eax carries
-//! i32/bool results (unit is zero), while rax carries full-width usize results.
+//! bool results (unit is zero), while rax carries normalized 64-bit integers.
+//! Signed integers are sign-extended and unsigned integers zero-extended from
+//! their declared width. References remain a separate thin-pointer class.
 //! All registers are caller-saved. Frames use
 //! stable rbp-relative slots, independent of temporary pushes. At most 4096
 //! parameters/arguments are accepted. This is not a platform interoperability ABI.
@@ -147,6 +149,25 @@ impl<'a> Emitter<'a> {
         self.bytes(&[0xb8]);
         self.i32(value);
     }
+    fn word(&mut self, value: u64) {
+        self.bytes(&[0x48, 0xb8]);
+        self.bytes(&value.to_le_bytes());
+    }
+    fn normalize_integer(&mut self, ty: ir::IntTy) {
+        if ty.bits() < 64 {
+            let shift = (64 - ty.bits()) as u8;
+            self.bytes(&[0x48, 0xc1, 0xe0, shift]);
+            self.bytes(&[0x48, 0xc1, if ty.is_signed() { 0xf8 } else { 0xe8 }, shift]);
+        }
+    }
+    fn check_integer_range(&mut self, ty: ir::IntTy) {
+        if ty.bits() < 64 {
+            self.bytes(&[0x48, 0x89, 0xc2]); // rdx = untruncated result
+            self.normalize_integer(ty);
+            self.bytes(&[0x48, 0x39, 0xd0]);
+            self.trap_if(0x85);
+        }
+    }
     fn jump(&mut self, opcode: &[u8]) -> usize {
         self.bytes(opcode);
         let at = self.position();
@@ -279,6 +300,9 @@ impl<'a> Emitter<'a> {
             self.copy_pointer_value(value_size(ty)?);
             self.address(offset);
         } else {
+            if let ir::Ty::Int(integer) = ty {
+                self.normalize_integer(*integer);
+            }
             self.bytes(&[0x48, 0x89, 0x85]);
             self.i32(offset);
         }
@@ -291,6 +315,9 @@ impl<'a> Emitter<'a> {
             self.copy_pointer_value(value_size(ty)?);
             self.bytes(&[0x48, 0x89, 0xf8]);
         } else {
+            if let ir::Ty::Int(integer) = ty {
+                self.normalize_integer(*integer);
+            }
             self.bytes(&[0x48, 0x89, 0x07]);
         }
         Ok(())
@@ -305,15 +332,15 @@ impl<'a> Emitter<'a> {
     }
     fn operand(&mut self, operand: &cfg::Operand) -> Result<(), String> {
         match operand {
-            cfg::Operand::Constant(cfg::Constant::Usize(value)) => {
-                self.bytes(&[0x48, 0xb8]);
-                self.bytes(&value.to_le_bytes());
+            cfg::Operand::Constant(cfg::Constant::Int(value)) => {
+                value.validate()?;
+                self.word(value.bits);
+                self.normalize_integer(value.ty);
             }
             cfg::Operand::Constant(value) => self.immediate(match value {
-                cfg::Constant::Usize(_) => {
-                    unreachable!("usize constants use full-width immediates")
+                cfg::Constant::Int(_) => {
+                    unreachable!("integer constants use typed full-width immediates")
                 }
-                cfg::Constant::I32(value) => *value,
                 cfg::Constant::Bool(value) => i32::from(*value),
                 cfg::Constant::Unit => 0,
                 cfg::Constant::Enum { ty, variant } => {
@@ -335,10 +362,10 @@ impl<'a> Emitter<'a> {
     fn load_place(&mut self, place: &ir::Place) -> Result<(), String> {
         let ty = self.place_address(place)?;
         if !indirect(ty) {
-            if matches!(ty, ir::Ty::Usize | ir::Ty::Ref { .. }) {
-                self.bytes(&[0x48]);
+            self.bytes(&[0x48, 0x8b, 0x00]);
+            if let ir::Ty::Int(integer) = ty {
+                self.normalize_integer(*integer);
             }
-            self.bytes(&[0x8b, 0x00]);
         }
         Ok(())
     }
@@ -351,7 +378,7 @@ impl<'a> Emitter<'a> {
         let ir::Ty::Array { element, len } = ty else {
             return Err("runtime index requires array storage".into());
         };
-        if self.function.operand_ty(index)? != ir::Ty::Usize {
+        if self.function.operand_ty(index)? != ir::Ty::Int(ir::IntTy::Usize) {
             return Err("runtime index requires genuine usize operand".into());
         }
         self.operand(index)?;
@@ -404,7 +431,7 @@ impl<'a> Emitter<'a> {
             );
         }
         self.immediate(tag);
-        self.store_value(scratch, &ir::Ty::I32)?;
+        self.store_value(scratch, &ir::Ty::Int(ir::IntTy::I32))?;
         let mut offset = scratch
             .checked_add(8)
             .ok_or("enum payload offset too large")?;
@@ -451,27 +478,53 @@ impl<'a> Emitter<'a> {
         self.address(self.aggregate_scratch);
         Ok(())
     }
-    fn binary_usize(&mut self, op: BinaryOp) -> Result<(), String> {
+    fn binary_integer(&mut self, op: BinaryOp, ty: ir::IntTy) -> Result<(), String> {
         match op {
-            BinaryOp::Add => {
-                self.bytes(&[0x48, 0x01, 0xc8]);
-                self.trap_if(0x82); // unsigned carry
-            }
-            BinaryOp::Sub => {
-                self.bytes(&[0x48, 0x29, 0xc8]);
-                self.trap_if(0x82); // unsigned borrow
+            BinaryOp::Add | BinaryOp::Sub => {
+                self.bytes(&[
+                    0x48,
+                    if matches!(op, BinaryOp::Add) {
+                        0x01
+                    } else {
+                        0x29
+                    },
+                    0xc8,
+                ]);
+                self.trap_if(if ty.is_signed() { 0x80 } else { 0x82 });
+                self.check_integer_range(ty);
             }
             BinaryOp::Mul => {
-                self.bytes(&[0x48, 0xf7, 0xe1]); // rdx:rax = rax * rcx
-                self.trap_if(0x82); // nonzero high product sets carry
+                if ty.is_signed() {
+                    self.bytes(&[0x48, 0x0f, 0xaf, 0xc1]);
+                    self.trap_if(0x80);
+                } else {
+                    self.bytes(&[0x48, 0xf7, 0xe1]); // rdx:rax = unsigned product
+                    self.trap_if(0x82);
+                }
+                self.check_integer_range(ty);
             }
             BinaryOp::Div | BinaryOp::Rem => {
                 self.bytes(&[0x48, 0x85, 0xc9]);
                 self.trap_if(0x84);
-                self.bytes(&[0x31, 0xd2, 0x48, 0xf7, 0xf1]);
+                if ty.is_signed() {
+                    // Guard MIN/-1 at the declared width for BOTH operations,
+                    // before hardware division can fault or rem can hide overflow.
+                    let minimum = u64::MAX << (ty.bits() - 1);
+                    self.bytes(&[0x48, 0xba]);
+                    self.bytes(&minimum.to_le_bytes());
+                    self.bytes(&[0x48, 0x39, 0xd0]);
+                    let ordinary = self.jump(&[0x0f, 0x85]);
+                    self.bytes(&[0x48, 0x83, 0xf9, 0xff]);
+                    self.trap_if(0x84);
+                    self.patch(ordinary, self.position())?;
+                    self.bytes(&[0x48, 0x99, 0x48, 0xf7, 0xf9]); // cqo; idiv rcx
+                } else {
+                    self.bytes(&[0x31, 0xd2, 0x48, 0xf7, 0xf1]);
+                }
                 if matches!(op, BinaryOp::Rem) {
                     self.bytes(&[0x48, 0x89, 0xd0]);
                 }
+                self.check_integer_range(ty);
             }
             BinaryOp::Eq
             | BinaryOp::Ne
@@ -482,6 +535,10 @@ impl<'a> Emitter<'a> {
                 let cc = match op {
                     BinaryOp::Eq => 0x94,
                     BinaryOp::Ne => 0x95,
+                    BinaryOp::Lt if ty.is_signed() => 0x9c,
+                    BinaryOp::Le if ty.is_signed() => 0x9e,
+                    BinaryOp::Gt if ty.is_signed() => 0x9f,
+                    BinaryOp::Ge if ty.is_signed() => 0x9d,
                     BinaryOp::Lt => 0x92,
                     BinaryOp::Le => 0x96,
                     BinaryOp::Gt => 0x97,
@@ -490,59 +547,18 @@ impl<'a> Emitter<'a> {
                 self.bytes(&[0x48, 0x39, 0xc8, 0x0f, cc, 0xc0, 0x0f, 0xb6, 0xc0]);
             }
             BinaryOp::And | BinaryOp::Or => {
-                return Err("usize logical operator is unsupported".into());
+                return Err("integer logical operator is unsupported".into());
             }
         }
         Ok(())
     }
-    fn binary(&mut self, op: BinaryOp) -> Result<(), String> {
-        match op {
-            BinaryOp::Add => {
-                self.bytes(&[0x01, 0xc8]);
-                self.trap_if(0x80);
-            }
-            BinaryOp::Sub => {
-                self.bytes(&[0x29, 0xc8]);
-                self.trap_if(0x80);
-            }
-            BinaryOp::Mul => {
-                self.bytes(&[0x0f, 0xaf, 0xc1]);
-                self.trap_if(0x80);
-            }
-            BinaryOp::Div | BinaryOp::Rem => {
-                self.bytes(&[0x85, 0xc9]);
-                self.trap_if(0x84);
-                self.bytes(&[0x3d]);
-                self.i32(i32::MIN);
-                let ordinary = self.jump(&[0x0f, 0x85]);
-                self.bytes(&[0x83, 0xf9, 0xff]);
-                self.trap_if(0x84);
-                self.patch(ordinary, self.position())?;
-                self.bytes(&[0x99, 0xf7, 0xf9]);
-                if matches!(op, BinaryOp::Rem) {
-                    self.bytes(&[0x89, 0xd0]);
-                }
-            }
-            BinaryOp::Eq
-            | BinaryOp::Ne
-            | BinaryOp::Lt
-            | BinaryOp::Le
-            | BinaryOp::Gt
-            | BinaryOp::Ge => {
-                let cc = match op {
-                    BinaryOp::Eq => 0x94,
-                    BinaryOp::Ne => 0x95,
-                    BinaryOp::Lt => 0x9c,
-                    BinaryOp::Le => 0x9e,
-                    BinaryOp::Gt => 0x9f,
-                    _ => 0x9d,
-                };
-                self.bytes(&[0x39, 0xc8, 0x0f, cc, 0xc0, 0x0f, 0xb6, 0xc0]);
-            }
-            // Source short-circuiting is already represented by CFG edges.
-            BinaryOp::And => self.bytes(&[0x21, 0xc8]),
-            BinaryOp::Or => self.bytes(&[0x09, 0xc8]),
-        }
+    fn binary_noninteger(&mut self, op: BinaryOp) -> Result<(), String> {
+        let cc = match op {
+            BinaryOp::Eq => 0x94,
+            BinaryOp::Ne => 0x95,
+            _ => return Err("noninteger binary operator is unsupported".into()),
+        };
+        self.bytes(&[0x48, 0x39, 0xc8, 0x0f, cc, 0xc0, 0x0f, 0xb6, 0xc0]);
         Ok(())
     }
     fn println(&mut self, text: &str) -> Result<(), String> {
@@ -582,10 +598,10 @@ impl<'a> Emitter<'a> {
             cfg::Rvalue::IndexCopy { array, index } => {
                 let element = self.index_address(array, index)?;
                 if !indirect(element) {
-                    if *element == ir::Ty::Usize {
-                        self.bytes(&[0x48]);
+                    self.bytes(&[0x48, 0x8b, 0x00]);
+                    if let ir::Ty::Int(integer) = element {
+                        self.normalize_integer(*integer);
                     }
-                    self.bytes(&[0x8b, 0x00]);
                 }
             }
             cfg::Rvalue::Repeat { ty, value } => self.repeat(ty, value)?,
@@ -604,31 +620,42 @@ impl<'a> Emitter<'a> {
                 self.bytes(&[0x8b, 0x00]);
             }
             cfg::Rvalue::Unary { op, value } => {
-                let usize = self.function.operand_ty(value)? == ir::Ty::Usize;
+                let ty = self.function.operand_ty(value)?;
+                if ty == ir::Ty::Never {
+                    // The operand diverged, so this dead CFG operation has no
+                    // runtime value to load and no concrete integer width.
+                    return Ok(());
+                }
                 self.operand(value)?;
-                match op {
-                    UnaryOp::Neg if usize => return Err("usize negation is unsupported".into()),
-                    UnaryOp::Not if usize => self.bytes(&[0x48, 0xf7, 0xd0]),
-                    UnaryOp::Neg => {
-                        self.bytes(&[0xf7, 0xd8]);
+                match (op, ty) {
+                    (UnaryOp::Neg, ir::Ty::Int(integer)) if integer.is_signed() => {
+                        self.bytes(&[0x48, 0xf7, 0xd8]);
                         self.trap_if(0x80);
+                        self.check_integer_range(integer);
                     }
-                    UnaryOp::Not => self.bytes(&[0x83, 0xf0, 0x01]),
+                    (UnaryOp::Not, ir::Ty::Int(integer)) => {
+                        self.bytes(&[0x48, 0xf7, 0xd0]);
+                        self.normalize_integer(integer);
+                    }
+                    (UnaryOp::Not, ir::Ty::Bool) => self.bytes(&[0x83, 0xf0, 0x01]),
+                    _ => return Err("invalid checked unary operand type".into()),
                 }
             }
             cfg::Rvalue::Binary { op, left, right } => {
-                let usize = self.function.operand_ty(left)? == ir::Ty::Usize;
+                let ty = self.function.operand_ty(left)?;
+                if ty == ir::Ty::Never || self.function.operand_ty(right)? == ir::Ty::Never {
+                    // Operand effects already occurred in earlier CFG steps.
+                    // Divergence leaves no value to load or arithmetic to run.
+                    return Ok(());
+                }
                 self.operand(left)?;
-                if usize {
-                    self.bytes(&[0x49, 0x89, 0xc0]); // r8 = left, full width
-                    self.operand(right)?;
-                    self.bytes(&[0x48, 0x89, 0xc1, 0x4c, 0x89, 0xc0]);
-                    self.binary_usize(*op)?;
+                self.bytes(&[0x49, 0x89, 0xc0]); // r8 = normalized left, full width
+                self.operand(right)?;
+                self.bytes(&[0x48, 0x89, 0xc1, 0x4c, 0x89, 0xc0]);
+                if let ir::Ty::Int(integer) = ty {
+                    self.binary_integer(*op, integer)?;
                 } else {
-                    self.bytes(&[0x41, 0x89, 0xc0]); // r8d = left
-                    self.operand(right)?;
-                    self.bytes(&[0x89, 0xc1, 0x44, 0x89, 0xc0]); // ecx = right, eax = left
-                    self.binary(*op)?;
+                    self.binary_noninteger(*op)?;
                 }
             }
             cfg::Rvalue::Aggregate { ty, fields } => {
@@ -1062,7 +1089,7 @@ mod tests {
         }
     }
     fn crash() -> Expr {
-        binary(BinaryOp::Div, Expr::Int(1), Expr::Int(0))
+        binary(BinaryOp::Div, Expr::i32(1), Expr::i32(0))
     }
     fn assertion(condition: Expr) -> Stmt {
         Stmt::Expr(Expr::If {
@@ -1075,10 +1102,10 @@ mod tests {
         assertion(binary(BinaryOp::Eq, value, Expr::Bool(expected)))
     }
     fn crash_bool() -> Expr {
-        binary(BinaryOp::Eq, crash(), Expr::Int(0))
+        binary(BinaryOp::Eq, crash(), Expr::i32(0))
     }
     fn equals(value: Expr, expected: i32) -> Stmt {
-        assertion(binary(BinaryOp::Eq, value, Expr::Int(expected)))
+        assertion(binary(BinaryOp::Eq, value, Expr::i32(expected)))
     }
     fn program(statements: Vec<Stmt>, mut others: Vec<Function>) -> Program {
         others.push(function(
@@ -1251,6 +1278,135 @@ mod tests {
         let output = run(&p);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"enum-aggregate\n");
+    }
+
+    #[test]
+    fn integer_types_all_width_normalization_arithmetic_comparison_and_not() {
+        for (ty, minimum, maximum) in [
+            ("i8", "-128", "127"),
+            ("i16", "-32768", "32767"),
+            ("i32", "-2147483648", "2147483647"),
+            ("i64", "-9223372036854775808", "9223372036854775807"),
+            ("isize", "-9223372036854775808", "9223372036854775807"),
+            ("u8", "0", "255"),
+            ("u16", "0", "65535"),
+            ("u32", "0", "4294967295"),
+            ("u64", "0", "18446744073709551615"),
+            ("usize", "0", "18446744073709551615"),
+        ] {
+            let signed = if ty.starts_with('i') {
+                format!(
+                    "if -a != -9{ty} {{ return false; }} if a / -b != -4{ty} {{ return false; }} if -a % b != -1{ty} {{ return false; }} if {minimum}{ty} >= 0{ty} {{ return false; }}"
+                )
+            } else {
+                String::new()
+            };
+            let source = format!(
+                r#"
+                fn identity(value: {ty}) -> {ty} {{ value }}
+                fn probe(a: {ty}, b: {ty}) -> bool {{
+                    if a + b != 11{ty} {{ return false; }}
+                    if a - b != 7{ty} {{ return false; }}
+                    if a * b != 18{ty} {{ return false; }}
+                    if a / b != 4{ty} {{ return false; }}
+                    if a % b != 1{ty} {{ return false; }}
+                    if a <= b {{ return false; }}
+                    if b >= a {{ return false; }}
+                    {signed}
+                    true
+                }}
+                fn main() {{
+                    if !probe(9{ty}, 2{ty}) {{ 1 / 0; }}
+                    if identity({minimum}{ty}) != {minimum}{ty} {{ 1 / 0; }}
+                    if identity({maximum}{ty}) != {maximum}{ty} {{ 1 / 0; }}
+                    if !{minimum}{ty} != {maximum}{ty} {{ 1 / 0; }}
+                    if {maximum}{ty} <= 9{ty} {{ 1 / 0; }}
+                }}
+            "#,
+            );
+            let p = frontend::parse(&source).unwrap();
+            let output = run(&p);
+            assert_eq!(output.status.code(), Some(0), "{ty}: {output:?}");
+        }
+    }
+
+    #[test]
+    fn integer_types_runtime_overflow_and_division_trap_at_declared_width() {
+        for (ty, minimum, maximum) in [
+            ("i8", "-128", "127"),
+            ("i16", "-32768", "32767"),
+            ("i32", "-2147483648", "2147483647"),
+            ("i64", "-9223372036854775808", "9223372036854775807"),
+            ("isize", "-9223372036854775808", "9223372036854775807"),
+            ("u8", "0", "255"),
+            ("u16", "0", "65535"),
+            ("u32", "0", "4294967295"),
+            ("u64", "0", "18446744073709551615"),
+            ("usize", "0", "18446744073709551615"),
+        ] {
+            let mut cases = vec![
+                ("a + b", maximum, "1"),
+                ("a - b", minimum, "1"),
+                ("a * b", maximum, "2"),
+                ("a / b", "1", "0"),
+                ("a % b", "1", "0"),
+            ];
+            if ty.starts_with('i') {
+                cases.extend([
+                    ("-a", minimum, "0"),
+                    ("a / b", minimum, "-1"),
+                    ("a % b", minimum, "-1"),
+                ]);
+            }
+            for (expression, a, b) in cases {
+                let source = format!(
+                    "fn operate(a: {ty}, b: {ty}) -> {ty} {{ {expression} }} fn main() {{ operate({a}{ty}, {b}{ty}); }}"
+                );
+                let p = frontend::parse(&source).unwrap();
+                let output = run(&p);
+                assert_eq!(
+                    output.status.code(),
+                    Some(101),
+                    "{ty} {expression}: {output:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn integer_types_mixed_aggregate_reference_index_payload_and_sret_transport() {
+        let p = frontend::parse(
+            r#"
+            struct Record { before: i8, values: [i16; 9], after: u32, wide: i64 }
+            enum Payload { Empty, Value(i8, u64) }
+            fn make() -> Record {
+                Record { before: -128i8, values: [-32768i16; 9], after: 4294967295u32, wide: -9223372036854775808i64 }
+            }
+            fn pass(value: Record, marker: u8) -> Record { value }
+            fn field<'a>(value: &'a mut Record) -> &'a mut i16 { &mut value.values[8] }
+            fn main() {
+                let mut value = pass(make(), 255u8);
+                let returned = field(&mut value);
+                *returned = -123i16;
+                if value.values[8usize] != -123i16 { 1 / 0; }
+                if value.values[0usize] != -32768i16 { 1 / 0; }
+                if value.before != -128i8 { 1 / 0; }
+                if value.after != 4294967295u32 { 1 / 0; }
+                if value.wide != -9223372036854775808i64 { 1 / 0; }
+                let payload = Payload::Value(-128i8, 18446744073709551615u64);
+                let valid = match payload {
+                    Payload::Empty => false,
+                    Payload::Value(small, wide) => small == -128i8 && wide == 18446744073709551615u64
+                };
+                if !valid { 1 / 0; }
+                println!("integer-transport");
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"integer-transport\n");
     }
 
     #[test]
@@ -2025,7 +2181,7 @@ mod tests {
     #[test]
     fn array_empty_constructors_zero_full_dummy_word() {
         let ty = ir::Ty::Array {
-            element: std::sync::Arc::new(ir::Ty::I32),
+            element: std::sync::Arc::new(ir::Ty::Int(ir::IntTy::I32)),
             len: 0,
         };
         let function = cfg::Function {
@@ -2062,7 +2218,7 @@ mod tests {
             },
             cfg::Rvalue::Repeat {
                 ty,
-                value: cfg::Operand::Constant(cfg::Constant::I32(17)),
+                value: cfg::Operand::Constant(cfg::Constant::Int(ir::IntValue::i32(17))),
             },
         ] {
             emitter.bytes(&[0x48, 0xb8]);
@@ -2116,7 +2272,7 @@ mod tests {
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"once\nonce\nempty-array\n");
         let empty = ir::Ty::Array {
-            element: std::sync::Arc::new(ir::Ty::I32),
+            element: std::sync::Arc::new(ir::Ty::Int(ir::IntTy::I32)),
             len: 0,
         };
         assert!(indirect(&empty));
@@ -2158,7 +2314,7 @@ mod tests {
         assert_eq!(output.stdout, b"large-array\n");
         let enormous = ir::Ty::Array {
             element: std::sync::Arc::new(ir::Ty::Array {
-                element: std::sync::Arc::new(ir::Ty::I32),
+                element: std::sync::Arc::new(ir::Ty::Int(ir::IntTy::I32)),
                 len: 4096,
             }),
             len: 4096,
@@ -2193,7 +2349,7 @@ mod tests {
                 shape: ir::VariantShape::Tuple,
                 fields: vec![ir::FieldDef {
                     name: "0".into(),
-                    ty: ir::Ty::I32,
+                    ty: ir::Ty::Int(ir::IntTy::I32),
                     public: true,
                 }]
                 .into(),
@@ -2210,7 +2366,9 @@ mod tests {
                     value: cfg::Rvalue::EnumVariant {
                         ty: ty.clone(),
                         variant: 0,
-                        fields: vec![cfg::Operand::Constant(cfg::Constant::I32(7))],
+                        fields: vec![cfg::Operand::Constant(cfg::Constant::Int(
+                            ir::IntValue::i32(7),
+                        ))],
                     },
                 }));
                 statements.push(located(cfg::Statement::Assign {
@@ -2318,7 +2476,7 @@ mod tests {
     fn payload_enum_constructor_zeroes_inactive_backing_words() {
         let field = |name: &str| ir::FieldDef {
             name: name.into(),
-            ty: ir::Ty::I32,
+            ty: ir::Ty::Int(ir::IntTy::I32),
             public: true,
         };
         let ty = ir::EnumTy::new(ir::EnumDef {
@@ -2380,7 +2538,9 @@ mod tests {
         for (variant, operands, expected) in [
             (
                 1,
-                vec![cfg::Operand::Constant(cfg::Constant::I32(7))],
+                vec![cfg::Operand::Constant(cfg::Constant::Int(
+                    ir::IntValue::i32(7),
+                ))],
                 [1, 7, 0, 0],
             ),
             (0, vec![], [0, 0, 0, 0]),
@@ -2491,17 +2651,17 @@ mod tests {
     #[test]
     fn checked_arithmetic_traps() {
         let cases = vec![
-            binary(BinaryOp::Add, Expr::Int(i32::MAX), Expr::Int(1)),
-            binary(BinaryOp::Sub, Expr::Int(i32::MIN), Expr::Int(1)),
-            binary(BinaryOp::Mul, Expr::Int(i32::MAX), Expr::Int(2)),
+            binary(BinaryOp::Add, Expr::i32(i32::MAX), Expr::i32(1)),
+            binary(BinaryOp::Sub, Expr::i32(i32::MIN), Expr::i32(1)),
+            binary(BinaryOp::Mul, Expr::i32(i32::MAX), Expr::i32(2)),
             Expr::Unary {
                 op: UnaryOp::Neg,
-                value: Box::new(Expr::Int(i32::MIN)),
+                value: Box::new(Expr::i32(i32::MIN)),
             },
             crash(),
-            binary(BinaryOp::Rem, Expr::Int(1), Expr::Int(0)),
-            binary(BinaryOp::Div, Expr::Int(i32::MIN), Expr::Int(-1)),
-            binary(BinaryOp::Rem, Expr::Int(i32::MIN), Expr::Int(-1)),
+            binary(BinaryOp::Rem, Expr::i32(1), Expr::i32(0)),
+            binary(BinaryOp::Div, Expr::i32(i32::MIN), Expr::i32(-1)),
+            binary(BinaryOp::Rem, Expr::i32(i32::MIN), Expr::i32(-1)),
         ];
         for expression in cases {
             let output = run(&program(vec![Stmt::Expr(expression)], vec![]));
@@ -2512,19 +2672,19 @@ mod tests {
     #[test]
     fn arithmetic_comparisons_and_short_circuit() {
         let mut statements = vec![
-            equals(binary(BinaryOp::Add, Expr::Int(7), Expr::Int(-3)), 4),
-            equals(binary(BinaryOp::Sub, Expr::Int(7), Expr::Int(-3)), 10),
-            equals(binary(BinaryOp::Mul, Expr::Int(-7), Expr::Int(3)), -21),
-            equals(binary(BinaryOp::Div, Expr::Int(-7), Expr::Int(3)), -2),
-            equals(binary(BinaryOp::Rem, Expr::Int(-7), Expr::Int(3)), -1),
+            equals(binary(BinaryOp::Add, Expr::i32(7), Expr::i32(-3)), 4),
+            equals(binary(BinaryOp::Sub, Expr::i32(7), Expr::i32(-3)), 10),
+            equals(binary(BinaryOp::Mul, Expr::i32(-7), Expr::i32(3)), -21),
+            equals(binary(BinaryOp::Div, Expr::i32(-7), Expr::i32(3)), -2),
+            equals(binary(BinaryOp::Rem, Expr::i32(-7), Expr::i32(3)), -1),
             equals(
-                binary(BinaryOp::Div, Expr::Int(i32::MIN), Expr::Int(1)),
+                binary(BinaryOp::Div, Expr::i32(i32::MIN), Expr::i32(1)),
                 i32::MIN,
             ),
             equals(
                 Expr::Unary {
                     op: UnaryOp::Neg,
-                    value: Box::new(Expr::Int(7)),
+                    value: Box::new(Expr::i32(7)),
                 },
                 -7,
             ),
@@ -2558,7 +2718,7 @@ mod tests {
             (BinaryOp::Ge, 0),
         ] {
             statements.push(bool_equals(
-                binary(op, Expr::Int(-7), Expr::Int(3)),
+                binary(op, Expr::i32(-7), Expr::i32(3)),
                 expected != 0,
             ));
         }
@@ -2570,13 +2730,13 @@ mod tests {
     fn recursion_many_arguments_returns_and_stable_scopes() {
         let factorial = function(
             "factorial",
-            vec![("n".into(), Type::I32)],
-            Type::I32,
+            vec![("n".into(), Type::Int(ir::IntTy::I32))],
+            Type::Int(ir::IntTy::I32),
             block(
                 vec![],
                 Some(Expr::If {
-                    condition: Box::new(binary(BinaryOp::Le, var("n"), Expr::Int(1))),
-                    then_block: block(vec![Stmt::Return(Some(Expr::Int(1)))], None),
+                    condition: Box::new(binary(BinaryOp::Le, var("n"), Expr::i32(1))),
+                    then_block: block(vec![Stmt::Return(Some(Expr::i32(1)))], None),
                     else_block: block(
                         vec![],
                         Some(binary(
@@ -2584,7 +2744,7 @@ mod tests {
                             var("n"),
                             call(
                                 "factorial",
-                                vec![binary(BinaryOp::Sub, var("n"), Expr::Int(1))],
+                                vec![binary(BinaryOp::Sub, var("n"), Expr::i32(1))],
                             ),
                         )),
                     ),
@@ -2593,34 +2753,36 @@ mod tests {
         );
         let pick = function(
             "pick",
-            (0..12).map(|i| (format!("p{i}"), Type::I32)).collect(),
-            Type::I32,
+            (0..12)
+                .map(|i| (format!("p{i}"), Type::Int(ir::IntTy::I32)))
+                .collect(),
+            Type::Int(ir::IntTy::I32),
             block(vec![], Some(binary(BinaryOp::Sub, var("p0"), var("p11")))),
         );
         let local = |name: &str, n| Stmt::Let {
             name: name.into(),
             mutable: true,
-            ty: Type::I32,
-            value: Expr::Int(n),
+            ty: Type::Int(ir::IntTy::I32),
+            value: Expr::i32(n),
         };
         let statements = vec![
             local("x", 3),
             equals(
                 binary(
                     BinaryOp::Add,
-                    Expr::Int(2),
+                    Expr::i32(2),
                     Expr::Block(block(vec![local("x", 9)], Some(var("x")))),
                 ),
                 11,
             ),
             equals(var("x"), 3),
             Stmt::While {
-                condition: binary(BinaryOp::Lt, var("x"), Expr::Int(6)),
+                condition: binary(BinaryOp::Lt, var("x"), Expr::i32(6)),
                 body: block(
                     vec![
                         Stmt::Assign {
                             name: "x".into(),
-                            value: binary(BinaryOp::Add, var("x"), Expr::Int(1)),
+                            value: binary(BinaryOp::Add, var("x"), Expr::i32(1)),
                         },
                         local("temporary", 100),
                     ],
@@ -2628,8 +2790,8 @@ mod tests {
                 ),
             },
             equals(var("x"), 6),
-            equals(call("factorial", vec![Expr::Int(6)]), 720),
-            equals(call("pick", (0..12).map(Expr::Int).collect()), -11),
+            equals(call("factorial", vec![Expr::i32(6)]), 720),
+            equals(call("pick", (0..12).map(Expr::i32).collect()), -11),
         ];
         let output = run(&program(statements, vec![factorial, pick]));
         assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -2663,23 +2825,23 @@ mod tests {
         let pick = function(
             "pick",
             (0..MAX_ARGS)
-                .map(|i| (format!("p{i}"), Type::I32))
+                .map(|i| (format!("p{i}"), Type::Int(ir::IntTy::I32)))
                 .collect(),
-            Type::I32,
+            Type::Int(ir::IntTy::I32),
             block(vec![], Some(binary(BinaryOp::Sub, var("p0"), var("p4095")))),
         );
         let early = function(
             "early",
             vec![],
-            Type::I32,
+            Type::Int(ir::IntTy::I32),
             block(
                 vec![],
                 Some(binary(
                     BinaryOp::Add,
-                    Expr::Int(99),
+                    Expr::i32(99),
                     Expr::Block(block(
-                        vec![Stmt::Return(Some(Expr::Int(7)))],
-                        Some(Expr::Int(0)),
+                        vec![Stmt::Return(Some(Expr::i32(7)))],
+                        Some(Expr::i32(0)),
                     )),
                 )),
             ),
@@ -2687,11 +2849,11 @@ mod tests {
         let p = program(
             vec![
                 equals(
-                    call("pick", (0..MAX_ARGS as i32).map(Expr::Int).collect()),
+                    call("pick", (0..MAX_ARGS as i32).map(Expr::i32).collect()),
                     -4095,
                 ),
                 equals(
-                    binary(BinaryOp::Add, Expr::Int(1), call("early", vec![])),
+                    binary(BinaryOp::Add, Expr::i32(1), call("early", vec![])),
                     8,
                 ),
             ],
@@ -2699,7 +2861,9 @@ mod tests {
         );
         assert_eq!(run(&p).status.code(), Some(0));
         let mut too_many = pick;
-        too_many.params.push(("extra".into(), Type::I32));
+        too_many
+            .params
+            .push(("extra".into(), Type::Int(ir::IntTy::I32)));
         assert!(
             emit(&program(vec![], vec![too_many]))
                 .unwrap_err()
@@ -2707,7 +2871,7 @@ mod tests {
         );
         assert!(
             emit(&program(
-                vec![Stmt::Expr(call("pick", vec![Expr::Int(0); MAX_ARGS + 1]))],
+                vec![Stmt::Expr(call("pick", vec![Expr::i32(0); MAX_ARGS + 1]))],
                 vec![p.functions[0].clone()]
             ))
             .unwrap_err()
@@ -2725,23 +2889,23 @@ mod tests {
         );
         let identity = function(
             "identity",
-            vec![("n".into(), Type::I32)],
-            Type::I32,
+            vec![("n".into(), Type::Int(ir::IntTy::I32))],
+            Type::Int(ir::IntTy::I32),
             block(vec![], Some(var("n"))),
         );
         let combine = function(
             "combine",
             vec![
-                ("a".into(), Type::I32),
+                ("a".into(), Type::Int(ir::IntTy::I32)),
                 ("u".into(), Type::Unit),
-                ("b".into(), Type::I32),
+                ("b".into(), Type::Int(ir::IntTy::I32)),
             ],
-            Type::I32,
+            Type::Int(ir::IntTy::I32),
             block(
                 vec![],
                 Some(binary(
                     BinaryOp::Add,
-                    binary(BinaryOp::Mul, var("a"), Expr::Int(10)),
+                    binary(BinaryOp::Mul, var("a"), Expr::i32(10)),
                     var("b"),
                 )),
             ),
@@ -2749,15 +2913,15 @@ mod tests {
         let early = function(
             "early",
             vec![],
-            Type::I32,
+            Type::Int(ir::IntTy::I32),
             block(
                 vec![],
                 Some(call(
                     "combine",
                     vec![
-                        Expr::Int(1),
-                        Expr::Block(block(vec![Stmt::Return(Some(Expr::Int(9)))], None)),
-                        Expr::Int(3),
+                        Expr::i32(1),
+                        Expr::Block(block(vec![Stmt::Return(Some(Expr::i32(9)))], None)),
+                        Expr::i32(3),
                     ],
                 )),
             ),
@@ -2767,7 +2931,7 @@ mod tests {
                 "identity",
                 vec![Expr::Block(block(
                     vec![Stmt::Expr(Expr::Println(label.into()))],
-                    Some(Expr::Int(value)),
+                    Some(Expr::i32(value)),
                 ))],
             )
         };
@@ -2780,12 +2944,12 @@ mod tests {
                             "combine",
                             vec![effect("first", 2), call("unit", vec![]), effect("last", 3)],
                         ),
-                        call("identity", vec![Expr::Int(4)]),
+                        call("identity", vec![Expr::i32(4)]),
                     ),
                     27,
                 ),
                 equals(
-                    binary(BinaryOp::Mul, Expr::Int(2), call("early", vec![])),
+                    binary(BinaryOp::Mul, Expr::i32(2), call("early", vec![])),
                     18,
                 ),
             ],
@@ -2831,17 +2995,17 @@ mod tests {
     #[test]
     fn checked_emission_uses_local_ids_not_display_names() {
         let p = program(
-            vec![equals(call("shadow", vec![Expr::Int(17)]), 19)],
+            vec![equals(call("shadow", vec![Expr::i32(17)]), 19)],
             vec![function(
                 "shadow",
-                vec![("x".into(), Type::I32)],
-                Type::I32,
+                vec![("x".into(), Type::Int(ir::IntTy::I32))],
+                Type::Int(ir::IntTy::I32),
                 block(
                     vec![Stmt::Let {
                         name: "x".into(),
                         mutable: false,
-                        ty: Type::I32,
-                        value: binary(BinaryOp::Add, var("x"), Expr::Int(2)),
+                        ty: Type::Int(ir::IntTy::I32),
+                        value: binary(BinaryOp::Add, var("x"), Expr::i32(2)),
                     }],
                     Some(var("x")),
                 ),
@@ -3089,7 +3253,7 @@ mod tests {
         use std::sync::Arc;
         let mixed = ir::Ty::Tuple(Arc::from([
             ir::Ty::Bool,
-            ir::Ty::Tuple(Arc::from([ir::Ty::Unit, ir::Ty::I32])),
+            ir::Ty::Tuple(Arc::from([ir::Ty::Unit, ir::Ty::Int(ir::IntTy::I32)])),
         ]));
         assert_eq!(value_size(&mixed).unwrap(), 24);
         assert_eq!(field_offset(&mixed, 1).unwrap().0, 8);
@@ -3099,7 +3263,9 @@ mod tests {
             -MAX_FRAME_BYTES
         );
         assert!(allocate_value(&mut frame, &ir::Ty::Bool).is_err());
-        let too_large = ir::Ty::Tuple(vec![ir::Ty::I32; MAX_FRAME_BYTES as usize / 8 + 1].into());
+        let too_large = ir::Ty::Tuple(
+            vec![ir::Ty::Int(ir::IntTy::I32); MAX_FRAME_BYTES as usize / 8 + 1].into(),
+        );
         assert!(value_size(&too_large).is_err());
         let checked = ir::CheckedFunction {
             ref_contract: Default::default(),
@@ -3139,12 +3305,13 @@ mod tests {
             }
         }
         fn constant(value: i32) -> cfg::Operand {
-            cfg::Operand::Constant(cfg::Constant::I32(value))
+            cfg::Operand::Constant(cfg::Constant::Int(ir::IntValue::i32(value)))
         }
         fn assign(destination: ir::Place, value: cfg::Rvalue) -> cfg::Located<cfg::Statement> {
             located(cfg::Statement::Assign { destination, value })
         }
-        let pair = ir::Ty::Tuple(vec![ir::Ty::I32, ir::Ty::I32].into());
+        let pair =
+            ir::Ty::Tuple(vec![ir::Ty::Int(ir::IntTy::I32), ir::Ty::Int(ir::IntTy::I32)].into());
         let mut function = cfg::Function {
             ref_contract: Default::default(),
             loan_sites: vec![],

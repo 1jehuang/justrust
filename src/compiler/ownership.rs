@@ -1564,8 +1564,8 @@ fn analyze_with_limits(f: &cfg::Function, limits: Limits) -> Analysis {
 #[cfg(test)]
 mod tests {
     use super::super::ir::{
-        DefId, EnumDef, EnumTy, FieldDef, LocalDecl, SnapshotId, StructDef, StructTy, VariantDef,
-        VariantId, VariantShape,
+        DefId, EnumDef, EnumTy, FieldDef, IntTy, IntValue, LocalDecl, SnapshotId, StructDef,
+        StructTy, VariantDef, VariantId, VariantShape,
     };
     use super::*;
     use cfg::{BasicBlock, Constant, Located};
@@ -1577,6 +1577,98 @@ mod tests {
             super::super::frontend::type_function_with_signatures(&program, 0, &signatures)
                 .unwrap();
         cfg::lower(&checked).unwrap()
+    }
+
+    #[test]
+    fn integer_primitives_remain_copy_scalar_paths_and_reference_reads() {
+        for kind in [
+            IntTy::I8,
+            IntTy::I16,
+            IntTy::I32,
+            IntTy::I64,
+            IntTy::Isize,
+            IntTy::U8,
+            IntTy::U16,
+            IntTy::U32,
+            IntTy::U64,
+            IntTy::Usize,
+        ] {
+            let ty = Ty::Int(kind);
+            assert!(ty.is_copy());
+            assert!(preflight_ty(&ty, 0, &mut Budget(1)).is_ok());
+            let mut f = dynamic_fixture(ty);
+            f.blocks[0].statements.extend([
+                located(Statement::Assign {
+                    destination: place(3),
+                    value: Rvalue::Use(Operand::Constant(Constant::Int(IntValue {
+                        ty: kind,
+                        bits: kind.mask(),
+                    }))),
+                }),
+                dynamic_read(),
+                dynamic_inspect(),
+                located(Statement::Inspect(place(1))),
+            ]);
+            let result = analyze(&f);
+            assert!(result.passed(), "{kind:?}: {:?}", result.diagnostics);
+            assert_eq!(result.stats.move_paths, 6);
+            assert_eq!(result.stats.moves, 0);
+            let source = format!("fn f(p:&{})->{}{{!*p}}", kind.name(), kind.name());
+            let result = analyze(&borrowed_source(&source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+    }
+
+    #[test]
+    fn integer_noncanonical_dead_constants_and_u64_runtime_indices_fail_closed() {
+        for kind in [
+            IntTy::I8,
+            IntTy::I16,
+            IntTy::I32,
+            IntTy::U8,
+            IntTy::U16,
+            IntTy::U32,
+        ] {
+            let mut f = fixture();
+            f.locals.push(local(Ty::Int(kind)));
+            f.blocks.push(BasicBlock {
+                statements: vec![located(Statement::Assign {
+                    destination: place(1),
+                    value: Rvalue::Use(Operand::Constant(Constant::Int(IntValue {
+                        ty: kind,
+                        bits: 1u64 << kind.bits(),
+                    }))),
+                })],
+                terminator: located(Terminator::Unreachable),
+            });
+            let result = analyze(&f);
+            assert!(result.complete);
+            assert!(
+                matches!(result.diagnostics[0].kind, ErrorKind::InvalidCfg(_)),
+                "{kind:?}: {:?}",
+                result.diagnostics
+            );
+        }
+        let mut f = dynamic_fixture(Ty::Int(IntTy::U64));
+        f.blocks.push(BasicBlock {
+            statements: vec![located(Statement::Assign {
+                destination: place(3),
+                value: Rvalue::IndexCopy {
+                    array: place(1),
+                    index: Operand::Constant(Constant::Int(IntValue {
+                        ty: IntTy::U64,
+                        bits: 0,
+                    })),
+                },
+            })],
+            terminator: located(Terminator::Unreachable),
+        });
+        let result = analyze(&f);
+        assert!(result.complete);
+        assert!(matches!(
+            result.diagnostics[0].kind,
+            ErrorKind::InvalidCfg(_)
+        ));
     }
 
     #[test]
@@ -1640,7 +1732,7 @@ mod tests {
         use super::super::ir::{
             BorrowKind, InputPath, RefContract, RegionParamId, ReturnContract, Signature,
         };
-        let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
         let mut f = payload_fixture(&ty);
         let mutable = Ty::Ref {
             kind: BorrowKind::Mut,
@@ -1648,10 +1740,10 @@ mod tests {
         };
         let shared = Ty::Ref {
             kind: BorrowKind::Shared,
-            referent: std::sync::Arc::new(Ty::I32),
+            referent: std::sync::Arc::new(Ty::Int(IntTy::I32)),
         };
         f.locals.extend([
-            local(Ty::I32),
+            local(Ty::Int(IntTy::I32)),
             local(mutable.clone()),
             local(shared.clone()),
             local(shared.clone()),
@@ -2488,7 +2580,7 @@ mod tests {
         let mut f = fixture();
         let ty = Ty::Enum(unit_enum());
         f.locals
-            .extend([local(ty.clone()), local(Ty::I32), local(ty)]);
+            .extend([local(ty.clone()), local(Ty::Int(IntTy::I32)), local(ty)]);
         f.params.push(LocalId(1));
         f.blocks[0].statements.extend([
             located(Statement::StorageLive(LocalId(2))),
@@ -2555,7 +2647,7 @@ mod tests {
     fn payload_fixture(ty: &EnumTy) -> cfg::Function {
         let mut f = fixture();
         f.locals
-            .extend([local(Ty::Enum(ty.clone())), local(Ty::I32)]);
+            .extend([local(Ty::Enum(ty.clone())), local(Ty::Int(IntTy::I32))]);
         f.params.push(LocalId(1));
         f.blocks[0]
             .statements
@@ -2593,7 +2685,7 @@ mod tests {
     fn reference_calls_capture_effects_before_move_and_preserve_initialization() {
         use super::super::ir::BorrowKind;
         for kind in [BorrowKind::Shared, BorrowKind::Mut] {
-            let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+            let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
             let mut f = payload_fixture(&ty);
             let reference = Ty::Ref {
                 kind,
@@ -2651,7 +2743,7 @@ mod tests {
     #[test]
     fn reference_call_union_mutation_kills_every_candidate_proof() {
         use super::super::ir::BorrowKind;
-        let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
         let pair = Ty::Tuple(vec![Ty::Enum(ty.clone()), Ty::Enum(ty.clone())].into());
         let reference = Ty::Ref {
             kind: BorrowKind::Mut,
@@ -2660,7 +2752,7 @@ mod tests {
         let mut f = fixture();
         f.locals.extend([
             local(pair),
-            local(Ty::I32),
+            local(Ty::Int(IntTy::I32)),
             local(reference.clone()),
             local(Ty::Bool),
         ]);
@@ -2777,7 +2869,7 @@ mod tests {
         let mut f = fixture();
         f.locals.extend([
             local(array(element.clone(), 2)),
-            local(Ty::Usize),
+            local(Ty::Int(IntTy::Usize)),
             local(element),
         ]);
         f.params.extend([LocalId(1), LocalId(2)]);
@@ -2807,9 +2899,9 @@ mod tests {
     #[test]
     fn dynamic_copy_reads_and_ignored_noncopy_values_do_not_consume_array() {
         for element in [
-            Ty::I32,
+            Ty::Int(IntTy::I32),
             Ty::Unit,
-            Ty::Tuple(vec![Ty::I32, Ty::Usize].into()),
+            Ty::Tuple(vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::Usize)].into()),
         ] {
             let mut f = dynamic_fixture(element);
             f.blocks[0].statements.extend([
@@ -2822,7 +2914,7 @@ mod tests {
             assert!(result.passed(), "{:?}", result.diagnostics);
             assert_eq!(result.stats.moves, 0);
         }
-        let mut f = dynamic_fixture(nominal(vec![Ty::I32]));
+        let mut f = dynamic_fixture(nominal(vec![Ty::Int(IntTy::I32)]));
         f.blocks[0]
             .statements
             .extend([dynamic_inspect(), located(Statement::Inspect(place(1)))]);
@@ -2836,17 +2928,23 @@ mod tests {
 
     #[test]
     fn dynamic_index_readiness_follows_ordered_initialization_but_not_earlier_static_checks() {
-        let mut f = dynamic_fixture(Ty::I32);
+        let mut f = dynamic_fixture(Ty::Int(IntTy::I32));
         f.params.retain(|local| *local != LocalId(1));
         f.blocks[0].statements.extend([
             located(Statement::StorageLive(LocalId(1))),
             located(Statement::Assign {
                 destination: place(1),
                 value: Rvalue::Aggregate {
-                    ty: array(Ty::I32, 2),
+                    ty: array(Ty::Int(IntTy::I32), 2),
                     fields: vec![
-                        Operand::Constant(Constant::I32(7)),
-                        Operand::Constant(Constant::I32(8)),
+                        Operand::Constant(Constant::Int(IntValue {
+                            ty: IntTy::I32,
+                            bits: 7,
+                        })),
+                        Operand::Constant(Constant::Int(IntValue {
+                            ty: IntTy::I32,
+                            bits: 8,
+                        })),
                     ],
                 },
             }),
@@ -2869,7 +2967,7 @@ mod tests {
     #[test]
     fn dynamic_inspect_rejects_unready_array_or_index_without_consuming_either() {
         for missing in [1, 2] {
-            let mut f = dynamic_fixture(Ty::I32);
+            let mut f = dynamic_fixture(Ty::Int(IntTy::I32));
             f.params.retain(|local| *local != LocalId(missing));
             f.blocks[0].statements.extend([
                 located(Statement::StorageLive(LocalId(missing))),
@@ -2888,7 +2986,7 @@ mod tests {
 
     #[test]
     fn dynamic_operations_consume_index_before_array_read_and_rhs_before_index() {
-        let mut f = dynamic_fixture(Ty::Usize);
+        let mut f = dynamic_fixture(Ty::Int(IntTy::Usize));
         f.blocks[0].statements.push(located(Statement::Assign {
             destination: place(3),
             value: Rvalue::IndexCopy {
@@ -2904,7 +3002,7 @@ mod tests {
             ErrorKind::ReadNotDefinitelyInitialized
         );
 
-        let mut f = dynamic_fixture(Ty::Usize);
+        let mut f = dynamic_fixture(Ty::Int(IntTy::Usize));
         f.blocks[0].statements.push(located(Statement::IndexAssign {
             array: place(1),
             index: Operand::Copy(place(2)),
@@ -2921,7 +3019,7 @@ mod tests {
 
     #[test]
     fn dynamic_noncopy_replacement_consumes_snapshot_but_preserves_array_initialization() {
-        let element = nominal(vec![Ty::I32]);
+        let element = nominal(vec![Ty::Int(IntTy::I32)]);
         let mut f = dynamic_fixture(element.clone());
         f.locals.push(local(element));
         f.params.push(LocalId(4));
@@ -2956,7 +3054,7 @@ mod tests {
             (false, true, Some(ErrorKind::ImmutableReassignment)),
             (true, false, Some(ErrorKind::ReadNotDefinitelyInitialized)),
         ] {
-            let mut f = dynamic_fixture(Ty::I32);
+            let mut f = dynamic_fixture(Ty::Int(IntTy::I32));
             f.locals[1].mutable = mutable;
             if !initialized {
                 f.params.retain(|local| *local != LocalId(1));
@@ -2967,7 +3065,10 @@ mod tests {
             f.blocks[0].statements.push(located(Statement::IndexAssign {
                 array: place(1),
                 index: Operand::Copy(place(2)),
-                value: Operand::Constant(Constant::I32(9)),
+                value: Operand::Constant(Constant::Int(IntValue {
+                    ty: IntTy::I32,
+                    bits: 9,
+                })),
             }));
             let result = analyze(&f);
             if let Some(expected) = expected {
@@ -2981,7 +3082,7 @@ mod tests {
 
     #[test]
     fn dynamic_replacement_never_changes_must_or_may_initialization_bits() {
-        let f = dynamic_fixture(Ty::I32);
+        let f = dynamic_fixture(Ty::Int(IntTy::I32));
         let paths = Paths::new(&f, 100).unwrap();
         let mut state = State::new(f.locals.len(), paths.nodes.len());
         let node = paths.resolve(&place(1));
@@ -3014,17 +3115,17 @@ mod tests {
 
     #[test]
     fn dynamic_replacement_kills_all_contained_proofs_but_preserves_outer_enum() {
-        let element = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        let element = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
         let outer = payload_enum(vec![
-            vec![array(Ty::Enum(element.clone()), 2), Ty::I32],
-            vec![Ty::I32],
+            vec![array(Ty::Enum(element.clone()), 2), Ty::Int(IntTy::I32)],
+            vec![Ty::Int(IntTy::I32)],
         ]);
         let mut f = fixture();
         f.locals.extend([
             local(Ty::Enum(outer.clone())),
-            local(Ty::Usize),
+            local(Ty::Int(IntTy::Usize)),
             local(Ty::Enum(element.clone())),
-            local(Ty::I32),
+            local(Ty::Int(IntTy::I32)),
         ]);
         f.params.extend([LocalId(1), LocalId(2), LocalId(3)]);
         f.blocks[0]
@@ -3092,12 +3193,15 @@ mod tests {
 
     #[test]
     fn usize_constants_are_scalar_leaves_without_index_narrowing() {
-        assert!(Ty::Usize.is_copy());
-        let mut f = dynamic_fixture(Ty::Usize);
+        assert!(Ty::Int(IntTy::Usize).is_copy());
+        let mut f = dynamic_fixture(Ty::Int(IntTy::Usize));
         f.blocks[0].statements.extend([
             located(Statement::Assign {
                 destination: place(2),
-                value: Rvalue::Use(Operand::Constant(Constant::Usize(u64::MAX))),
+                value: Rvalue::Use(Operand::Constant(Constant::Int(IntValue {
+                    ty: IntTy::Usize,
+                    bits: u64::MAX,
+                }))),
             }),
             dynamic_read(),
             dynamic_inspect(),
@@ -3107,16 +3211,19 @@ mod tests {
         // failure remains the runtime operation's responsibility, even at MAX.
         assert!(result.passed(), "{:?}", result.diagnostics);
         assert_eq!(result.stats.move_paths, 6);
-        assert!(preflight_ty(&Ty::Usize, 0, &mut Budget(1)).is_ok());
-        f.locals[1].ty = array(Ty::Usize, 0);
+        assert!(preflight_ty(&Ty::Int(IntTy::Usize), 0, &mut Budget(1)).is_ok());
+        f.locals[1].ty = array(Ty::Int(IntTy::Usize), 0);
         assert!(analyze(&f).passed());
     }
 
     #[test]
     fn malformed_runtime_indices_are_rejected_in_dead_blocks() {
         for operation in 0..3 {
-            let mut f = dynamic_fixture(Ty::I32);
-            let index = Operand::Constant(Constant::I32(0));
+            let mut f = dynamic_fixture(Ty::Int(IntTy::I32));
+            let index = Operand::Constant(Constant::Int(IntValue {
+                ty: IntTy::I32,
+                bits: 0,
+            }));
             let value = match operation {
                 0 => Statement::Assign {
                     destination: place(3),
@@ -3132,7 +3239,10 @@ mod tests {
                 _ => Statement::IndexAssign {
                     array: place(1),
                     index,
-                    value: Operand::Constant(Constant::I32(7)),
+                    value: Operand::Constant(Constant::Int(IntValue {
+                        ty: IntTy::I32,
+                        bits: 7,
+                    })),
                 },
             };
             f.blocks.push(BasicBlock {
@@ -3151,8 +3261,8 @@ mod tests {
 
     #[test]
     fn runtime_index_operations_preflight_array_subtrees_before_validation() {
-        let mut base = dynamic_fixture(Ty::I32);
-        base.locals[1].ty = array(Ty::I32, 64);
+        let mut base = dynamic_fixture(Ty::Int(IntTy::I32));
+        base.locals[1].ty = array(Ty::Int(IntTy::I32), 64);
         let base_cost = (0..=1024)
             .find(|operations| {
                 preflight(
@@ -3166,8 +3276,8 @@ mod tests {
             })
             .expect("small fixture fits bounded preflight");
         for operation in 0..3 {
-            let mut f = dynamic_fixture(Ty::I32);
-            f.locals[1].ty = array(Ty::I32, 64);
+            let mut f = dynamic_fixture(Ty::Int(IntTy::I32));
+            f.locals[1].ty = array(Ty::Int(IntTy::I32), 64);
             let index = Operand::Copy(place(2));
             let value = match operation {
                 0 => Statement::Assign {
@@ -3184,7 +3294,10 @@ mod tests {
                 _ => Statement::IndexAssign {
                     array: place(1),
                     index,
-                    value: Operand::Constant(Constant::I32(7)),
+                    value: Operand::Constant(Constant::Int(IntValue {
+                        ty: IntTy::I32,
+                        bits: 7,
+                    })),
                 },
             };
             f.blocks[0].statements.push(located(value));
@@ -3204,8 +3317,10 @@ mod tests {
     #[test]
     fn array_paths_are_distinct_and_zero_arrays_have_only_a_root() {
         let mut f = fixture();
-        f.locals
-            .extend([local(array(array(Ty::I32, 2), 2)), local(array(Ty::I32, 0))]);
+        f.locals.extend([
+            local(array(array(Ty::Int(IntTy::I32), 2), 2)),
+            local(array(Ty::Int(IntTy::I32), 0)),
+        ]);
         let paths = Paths::new(&f, 9).unwrap();
         assert_eq!(paths.nodes.len(), 9);
         assert!(Paths::new(&f, 8).is_err());
@@ -3224,7 +3339,7 @@ mod tests {
     #[test]
     fn repeat_zero_and_one_consume_noncopy_operand_once() {
         for len in [0, 1] {
-            let element = nominal(vec![Ty::I32]);
+            let element = nominal(vec![Ty::Int(IntTy::I32)]);
             let ty = array(element.clone(), len);
             let mut f = fixture();
             f.locals.extend([local(element), local(ty.clone())]);
@@ -3259,8 +3374,9 @@ mod tests {
     #[test]
     fn repeat_copy_operand_is_evaluated_once_and_noncopy_many_is_rejected() {
         let mut f = fixture();
-        let ty = array(Ty::I32, 4);
-        f.locals.extend([local(Ty::I32), local(ty.clone())]);
+        let ty = array(Ty::Int(IntTy::I32), 4);
+        f.locals
+            .extend([local(Ty::Int(IntTy::I32)), local(ty.clone())]);
         f.params.push(LocalId(1));
         f.blocks[0].statements.extend([
             located(Statement::StorageLive(LocalId(2))),
@@ -3279,7 +3395,7 @@ mod tests {
         assert_eq!(result.stats.operands_read, 3);
         assert_eq!(result.stats.moves, 0);
 
-        let element = nominal(vec![Ty::I32]);
+        let element = nominal(vec![Ty::Int(IntTy::I32)]);
         f.locals[1].ty = element.clone();
         f.locals[2].ty = array(element, 2);
         let Statement::Assign { value, .. } = &mut f.blocks[0].statements[3].value else {
@@ -3298,7 +3414,7 @@ mod tests {
 
     #[test]
     fn zero_length_noncopy_array_whole_move_clears_root_marker() {
-        let ty = array(nominal(vec![Ty::I32]), 0);
+        let ty = array(nominal(vec![Ty::Int(IntTy::I32)]), 0);
         assert!(!ty.is_copy());
         let mut f = fixture();
         f.locals.extend([local(ty.clone()), local(ty)]);
@@ -3324,11 +3440,14 @@ mod tests {
 
     #[test]
     fn indexed_copy_field_reads_preserve_noncopy_array_for_whole_move() {
-        let element = nominal(vec![nominal(vec![Ty::I32]), Ty::I32]);
+        let element = nominal(vec![
+            nominal(vec![Ty::Int(IntTy::I32)]),
+            Ty::Int(IntTy::I32),
+        ]);
         let ty = array(element, 2);
         let mut f = fixture();
         f.locals
-            .extend([local(ty.clone()), local(Ty::I32), local(ty)]);
+            .extend([local(ty.clone()), local(Ty::Int(IntTy::I32)), local(ty)]);
         f.params.push(LocalId(1));
         let mut scalar = indexed(1, 0);
         scalar.projection.push(Projection::Field(1));
@@ -3350,8 +3469,8 @@ mod tests {
 
     #[test]
     fn indexed_noncopy_moves_are_rejected_even_through_projected_subfields() {
-        let inner = nominal(vec![Ty::I32]);
-        let element = nominal(vec![inner.clone(), Ty::I32]);
+        let inner = nominal(vec![Ty::Int(IntTy::I32)]);
+        let element = nominal(vec![inner.clone(), Ty::Int(IntTy::I32)]);
         for nested in [false, true] {
             let mut f = fixture();
             f.locals.extend([
@@ -3386,7 +3505,10 @@ mod tests {
     #[test]
     fn indexed_private_copy_move_remains_a_consuming_transfer() {
         let mut f = fixture();
-        f.locals.extend([local(array(Ty::I32, 2)), local(Ty::I32)]);
+        f.locals.extend([
+            local(array(Ty::Int(IntTy::I32), 2)),
+            local(Ty::Int(IntTy::I32)),
+        ]);
         f.params.push(LocalId(1));
         f.blocks[0].statements.extend([
             located(Statement::StorageLive(LocalId(2))),
@@ -3410,7 +3532,7 @@ mod tests {
 
     #[test]
     fn array_base_inspection_rejects_uninitialized_or_moved_wildcard_bases() {
-        let ty = array(nominal(vec![Ty::I32]), 2);
+        let ty = array(nominal(vec![Ty::Int(IntTy::I32)]), 2);
         for moved in [false, true] {
             let mut f = fixture();
             f.locals.extend([local(ty.clone()), local(ty.clone())]);
@@ -3445,8 +3567,10 @@ mod tests {
     fn projected_array_inspection_does_not_read_unrelated_aggregate_siblings() {
         let mut f = fixture();
         f.locals.extend([
-            local(Ty::Tuple(vec![array(Ty::I32, 2), Ty::I32].into())),
-            local(Ty::I32),
+            local(Ty::Tuple(
+                vec![array(Ty::Int(IntTy::I32), 2), Ty::Int(IntTy::I32)].into(),
+            )),
+            local(Ty::Int(IntTy::I32)),
         ]);
         f.params.push(LocalId(1));
         let field = |index| Place {
@@ -3485,7 +3609,7 @@ mod tests {
             ),
         ] {
             let mut f = fixture();
-            f.locals.push(local(array(Ty::I32, 2)));
+            f.locals.push(local(array(Ty::Int(IntTy::I32), 2)));
             f.locals[1].mutable = mutable;
             if initialized {
                 f.params.push(LocalId(1));
@@ -3499,7 +3623,10 @@ mod tests {
                 value: Rvalue::Use(if initialized {
                     Operand::Copy(indexed(1, 1))
                 } else {
-                    Operand::Constant(Constant::I32(4))
+                    Operand::Constant(Constant::Int(IntValue {
+                        ty: IntTy::I32,
+                        bits: 4,
+                    }))
                 }),
             }));
             let result = analyze(&f);
@@ -3514,10 +3641,12 @@ mod tests {
 
     #[test]
     fn array_element_variant_proofs_are_independent_and_inspection_preserves_them() {
-        let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
         let mut f = fixture();
-        f.locals
-            .extend([local(array(Ty::Enum(ty.clone()), 2)), local(Ty::I32)]);
+        f.locals.extend([
+            local(array(Ty::Enum(ty.clone()), 2)),
+            local(Ty::Int(IntTy::I32)),
+        ]);
         f.params.push(LocalId(1));
         f.blocks[0]
             .statements
@@ -3544,7 +3673,10 @@ mod tests {
                 value: Rvalue::EnumVariant {
                     ty: ty.clone(),
                     variant: 1,
-                    fields: vec![Operand::Constant(Constant::I32(9))],
+                    fields: vec![Operand::Constant(Constant::Int(IntValue {
+                        ty: IntTy::I32,
+                        bits: 9,
+                    }))],
                 },
             }),
             read_payload(field(0)),
@@ -3566,7 +3698,10 @@ mod tests {
                 value: Rvalue::EnumVariant {
                     ty: ty.clone(),
                     variant: 1,
-                    fields: vec![Operand::Constant(Constant::I32(8))],
+                    fields: vec![Operand::Constant(Constant::Int(IntValue {
+                        ty: IntTy::I32,
+                        bits: 8,
+                    }))],
                 },
             }),
             read_payload(field(0)),
@@ -3582,18 +3717,18 @@ mod tests {
 
     #[test]
     fn array_preflight_bounds_expansion_and_checks_zero_element_types() {
-        let ty = array(Ty::I32, super::super::ir::MAX_ARRAY_LEN);
+        let ty = array(Ty::Int(IntTy::I32), super::super::ir::MAX_ARRAY_LEN);
         assert!(preflight_ty(&ty, 0, &mut Budget(8192)).is_err());
         assert!(preflight_ty(&ty, 0, &mut Budget(8193)).is_ok());
         assert!(
             preflight_ty(
-                &array(Ty::I32, super::super::ir::MAX_ARRAY_LEN + 1),
+                &array(Ty::Int(IntTy::I32), super::super::ir::MAX_ARRAY_LEN + 1),
                 0,
                 &mut Budget(1_000_000)
             )
             .is_err()
         );
-        let mut huge = Ty::I32;
+        let mut huge = Ty::Int(IntTy::I32);
         for _ in 0..8 {
             huge = array(huge, 16);
         }
@@ -3603,7 +3738,7 @@ mod tests {
         assert!(!result.complete);
         assert_eq!(result.stats.move_paths, 0);
         assert_eq!(result.diagnostics[0].kind, ErrorKind::ResourceLimit);
-        let mut deep = Ty::I32;
+        let mut deep = Ty::Int(IntTy::I32);
         for _ in 0..130 {
             deep = array(deep, 0);
         }
@@ -3612,7 +3747,7 @@ mod tests {
 
     #[test]
     fn payload_downcast_requires_successful_edge_proof() {
-        let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
         let mut f = payload_fixture(&ty);
         f.blocks[0]
             .statements
@@ -3644,7 +3779,7 @@ mod tests {
 
     #[test]
     fn payload_proof_intersects_for_shared_targets_and_joins() {
-        let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
         for shared_target in [false, true] {
             let mut f = payload_fixture(&ty);
             split_payload(&mut f, &ty);
@@ -3674,7 +3809,7 @@ mod tests {
 
     #[test]
     fn whole_enum_assignment_kills_stale_variant_proof() {
-        let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
         let mut f = payload_fixture(&ty);
         split_payload(&mut f, &ty);
         f.blocks[1].statements.extend([
@@ -3683,7 +3818,10 @@ mod tests {
                 value: Rvalue::EnumVariant {
                     ty: ty.clone(),
                     variant: 1,
-                    fields: vec![Operand::Constant(Constant::I32(9))],
+                    fields: vec![Operand::Constant(Constant::Int(IntValue {
+                        ty: IntTy::I32,
+                        bits: 9,
+                    }))],
                 },
             }),
             read_payload(payload_field(&ty, 0, 0)),
@@ -3701,11 +3839,14 @@ mod tests {
 
     #[test]
     fn payload_destination_requires_proof_even_when_inactive_bits_are_true() {
-        let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
         let mut f = payload_fixture(&ty);
         f.blocks[0].statements.push(located(Statement::Assign {
             destination: payload_field(&ty, 0, 0),
-            value: Rvalue::Use(Operand::Constant(Constant::I32(3))),
+            value: Rvalue::Use(Operand::Constant(Constant::Int(IntValue {
+                ty: IntTy::I32,
+                bits: 3,
+            }))),
         }));
         let result = analyze(&f);
         assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
@@ -3717,7 +3858,7 @@ mod tests {
 
     #[test]
     fn singleton_switch_does_not_read_partially_moved_or_uninitialized_root() {
-        let ty = payload_enum(vec![vec![Ty::I32, Ty::I32]]);
+        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]]);
         let mut f = payload_fixture(&ty);
         f.blocks[0].statements.push(located(Statement::Assign {
             destination: place(2),
@@ -3758,7 +3899,7 @@ mod tests {
 
     #[test]
     fn selected_variant_refinement_never_restores_initialization() {
-        let ty = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
+        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
         let mut f = payload_fixture(&ty);
         f.params.clear();
         f.blocks[0]
@@ -3780,7 +3921,10 @@ mod tests {
 
     #[test]
     fn payload_move_retains_outer_proof_but_full_enum_read_fails() {
-        let ty = payload_enum(vec![vec![Ty::I32, Ty::I32], vec![Ty::I32]]);
+        let ty = payload_enum(vec![
+            vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)],
+            vec![Ty::Int(IntTy::I32)],
+        ]);
         let mut f = payload_fixture(&ty);
         split_payload(&mut f, &ty);
         f.blocks[1].statements.extend([
@@ -3802,8 +3946,11 @@ mod tests {
 
     #[test]
     fn nested_proof_invalidation_is_subtree_scoped() {
-        let inner = payload_enum(vec![vec![Ty::I32], vec![Ty::I32]]);
-        let outer = payload_enum(vec![vec![Ty::Enum(inner), Ty::I32], vec![Ty::I32]]);
+        let inner = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
+        let outer = payload_enum(vec![
+            vec![Ty::Enum(inner), Ty::Int(IntTy::I32)],
+            vec![Ty::Int(IntTy::I32)],
+        ]);
         let f = payload_fixture(&outer);
         let paths = Paths::new(&f, 100).unwrap();
         let outer_node = paths.resolve(&place(1));
@@ -3839,7 +3986,10 @@ mod tests {
 
     #[test]
     fn payload_metadata_and_proof_storage_are_resource_bounded() {
-        let ty = payload_enum(vec![vec![Ty::I32; 10], vec![Ty::I32; 10]]);
+        let ty = payload_enum(vec![
+            vec![Ty::Int(IntTy::I32); 10],
+            vec![Ty::Int(IntTy::I32); 10],
+        ]);
         assert!(preflight_ty(&Ty::Enum(ty.clone()), 0, &mut Budget(40)).is_err());
         let f = payload_fixture(&ty);
         let paths = Paths::new(&f, 23).unwrap();
@@ -4002,7 +4152,7 @@ mod tests {
         let ty = Ty::Enum(unit_enum());
         f.locals.extend([
             local(Ty::Tuple(vec![ty.clone(), ty.clone()].into())),
-            local(Ty::I32),
+            local(Ty::Int(IntTy::I32)),
             local(ty),
         ]);
         f.params.push(LocalId(1));
@@ -4186,8 +4336,8 @@ mod tests {
     fn repeated_wide_type_comparisons_are_bounded_before_validation() {
         let mut f = fixture();
         // Distinct allocations defeat pointer-equality shortcuts in Eq.
-        let first = Ty::Tuple(vec![Ty::I32; 20_000].into());
-        let second = Ty::Tuple(vec![Ty::I32; 20_000].into());
+        let first = Ty::Tuple(vec![Ty::Int(IntTy::I32); 20_000].into());
+        let second = Ty::Tuple(vec![Ty::Int(IntTy::I32); 20_000].into());
         f.locals.extend([local(first), local(second)]);
         f.params.push(LocalId(1));
         f.blocks[0].statements = vec![located(Statement::StorageLive(LocalId(2)))];
@@ -4207,7 +4357,7 @@ mod tests {
 
     #[test]
     fn nested_coercion_preflight_charges_revisited_subtrees() {
-        let mut ty = Ty::I32;
+        let mut ty = Ty::Int(IntTy::I32);
         for _ in 0..64 {
             ty = Ty::Tuple(vec![ty].into());
         }
@@ -4218,7 +4368,10 @@ mod tests {
     #[test]
     fn nominal_fields_get_distinct_nested_move_paths() {
         let inner = nominal(vec![Ty::Unit, Ty::Bool]);
-        let outer = nominal(vec![Ty::I32, Ty::Tuple(vec![inner.clone(), inner].into())]);
+        let outer = nominal(vec![
+            Ty::Int(IntTy::I32),
+            Ty::Tuple(vec![inner.clone(), inner].into()),
+        ]);
         let mut f = fixture();
         f.locals.push(local(outer.clone()));
         let paths = Paths::new(&f, 10).unwrap();
@@ -4238,7 +4391,7 @@ mod tests {
 
     #[test]
     fn shared_nominal_dag_expansion_is_bounded_before_paths() {
-        let mut ty = Ty::I32;
+        let mut ty = Ty::Int(IntTy::I32);
         for _ in 0..20 {
             ty = nominal(vec![ty.clone(), ty]);
         }

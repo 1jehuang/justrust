@@ -1,7 +1,7 @@
 //! Independent synthetic CFG ownership tests. Explicit Move operands exercise
 //! ownership even though every currently source-admitted value is Copy.
 use cfg::{BasicBlock, BlockId, Constant, Located, Operand, Rvalue, Statement, Terminator};
-use ir::{LocalDecl, LocalId, Place, Signature, Ty};
+use ir::{IntTy, IntValue, LocalDecl, LocalId, Place, Signature, Ty};
 use justrust_engine::compiler::ownership::ErrorKind;
 use justrust_engine::compiler::{cfg, ir, ownership};
 
@@ -27,7 +27,10 @@ fn set(local: usize, fields: &[usize], value: Operand) -> Statement {
     }
 }
 fn int(value: i32) -> Operand {
-    Operand::Constant(Constant::I32(value))
+    Operand::Constant(Constant::Int(IntValue {
+        ty: IntTy::I32,
+        bits: value as u32 as u64,
+    }))
 }
 fn copy(local: usize, fields: &[usize]) -> Operand {
     Operand::Copy(p(local, fields))
@@ -114,7 +117,7 @@ fn branch(yes: usize, no: usize) -> Terminator {
 #[test]
 fn uninitialized_read_is_rejected_but_first_assignment_is_allowed() {
     let mut f = function(
-        vec![(Ty::I32, false), (Ty::I32, true)],
+        vec![(Ty::Int(IntTy::I32), false), (Ty::Int(IntTy::I32), true)],
         vec![block(
             vec![live(1), live(2), set(2, &[], copy(1, &[]))],
             Terminator::Return,
@@ -128,7 +131,7 @@ fn uninitialized_read_is_rejected_but_first_assignment_is_allowed() {
 #[test]
 fn whole_move_invalidates_source_not_destination_and_copy_does_not_move() {
     let mut f = function(
-        vec![(Ty::I32, true), (Ty::I32, true)],
+        vec![(Ty::Int(IntTy::I32), true), (Ty::Int(IntTy::I32), true)],
         vec![block(
             vec![
                 live(1),
@@ -149,9 +152,13 @@ fn whole_move_invalidates_source_not_destination_and_copy_does_not_move() {
 
 #[test]
 fn partial_move_preserves_sibling_but_invalidates_ancestor_until_reinitialized() {
-    let pair = tuple(vec![Ty::I32, Ty::I32]);
+    let pair = tuple(vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]);
     let mut f = function(
-        vec![(pair.clone(), true), (Ty::I32, true), (pair, true)],
+        vec![
+            (pair.clone(), true),
+            (Ty::Int(IntTy::I32), true),
+            (pair, true),
+        ],
         vec![block(
             vec![
                 live(2),
@@ -176,7 +183,10 @@ fn partial_move_preserves_sibling_but_invalidates_ancestor_until_reinitialized()
 #[test]
 fn moved_field_itself_cannot_be_read_twice() {
     let mut f = function(
-        vec![(tuple(vec![Ty::I32, Ty::I32]), true), (Ty::I32, true)],
+        vec![
+            (tuple(vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]), true),
+            (Ty::Int(IntTy::I32), true),
+        ],
         vec![block(
             vec![
                 live(2),
@@ -192,7 +202,7 @@ fn moved_field_itself_cannot_be_read_twice() {
 
 #[test]
 fn field_write_requires_shallow_ancestor_initialization() {
-    let pair = tuple(vec![Ty::I32, Ty::I32]);
+    let pair = tuple(vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]);
     let mut f = function(
         vec![(pair, true)],
         vec![block(
@@ -209,9 +219,12 @@ fn field_write_requires_shallow_ancestor_initialization() {
 
 #[test]
 fn nested_move_reinitializes_only_the_written_subtree() {
-    let nested = tuple(vec![tuple(vec![Ty::I32, Ty::I32]), Ty::I32]);
+    let nested = tuple(vec![
+        tuple(vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]),
+        Ty::Int(IntTy::I32),
+    ]);
     let mut f = function(
-        vec![(nested, true), (Ty::I32, true)],
+        vec![(nested, true), (Ty::Int(IntTy::I32), true)],
         vec![block(
             vec![
                 live(2),
@@ -236,7 +249,7 @@ fn nested_move_reinitializes_only_the_written_subtree() {
 #[test]
 fn immutable_binding_cannot_be_reassigned_after_move() {
     let f = function(
-        vec![(Ty::I32, false), (Ty::I32, true)],
+        vec![(Ty::Int(IntTy::I32), false), (Ty::Int(IntTy::I32), true)],
         vec![block(
             vec![
                 live(1),
@@ -254,7 +267,7 @@ fn immutable_binding_cannot_be_reassigned_after_move() {
 #[test]
 fn branch_join_requires_initialization_on_every_predecessor() {
     let mut f = function(
-        vec![(Ty::I32, false), (Ty::I32, true)],
+        vec![(Ty::Int(IntTy::I32), false), (Ty::Int(IntTy::I32), true)],
         vec![
             block(vec![live(1), live(2)], branch(1, 2)),
             block(vec![set(1, &[], int(1))], Terminator::Goto(BlockId(3))),
@@ -270,7 +283,7 @@ fn branch_join_requires_initialization_on_every_predecessor() {
 #[test]
 fn move_on_one_branch_invalidates_join_read() {
     let mut f = function(
-        vec![(Ty::I32, true), (Ty::I32, true)],
+        vec![(Ty::Int(IntTy::I32), true), (Ty::Int(IntTy::I32), true)],
         vec![
             block(vec![live(2)], branch(1, 2)),
             block(
@@ -290,7 +303,7 @@ fn move_on_one_branch_invalidates_join_read() {
 #[test]
 fn loop_backedge_propagates_move_to_later_iterations() {
     let mut f = function(
-        vec![(Ty::I32, true), (Ty::I32, true)],
+        vec![(Ty::Int(IntTy::I32), true), (Ty::Int(IntTy::I32), true)],
         vec![
             block(vec![live(2)], Terminator::Goto(BlockId(1))),
             block(vec![set(2, &[], take(1, &[]))], branch(1, 2)),
@@ -306,7 +319,7 @@ fn loop_backedge_propagates_move_to_later_iterations() {
 #[test]
 fn zero_iteration_loop_cannot_definitely_initialize_exit() {
     let f = function(
-        vec![(Ty::I32, true), (Ty::I32, true)],
+        vec![(Ty::Int(IntTy::I32), true), (Ty::Int(IntTy::I32), true)],
         vec![
             block(vec![live(1), live(2)], Terminator::Goto(BlockId(1))),
             block(vec![], branch(2, 3)),
@@ -320,7 +333,7 @@ fn zero_iteration_loop_cannot_definitely_initialize_exit() {
 #[test]
 fn storage_live_resets_initialization_and_immutable_assignment_history() {
     let mut f = function(
-        vec![(Ty::I32, false), (Ty::I32, true)],
+        vec![(Ty::Int(IntTy::I32), false), (Ty::Int(IntTy::I32), true)],
         vec![block(
             vec![
                 live(1),
@@ -342,7 +355,7 @@ fn storage_live_resets_initialization_and_immutable_assignment_history() {
 #[test]
 fn immutable_loop_local_can_be_initialized_each_dynamic_lifetime() {
     let f = function(
-        vec![(Ty::I32, false)],
+        vec![(Ty::Int(IntTy::I32), false)],
         vec![
             block(vec![], Terminator::Goto(BlockId(1))),
             block(
@@ -362,7 +375,7 @@ fn immutable_loop_local_can_be_initialized_each_dynamic_lifetime() {
 #[test]
 fn duplicate_storage_live_cannot_launder_immutable_assignment_history() {
     let f = function(
-        vec![(Ty::I32, false)],
+        vec![(Ty::Int(IntTy::I32), false)],
         vec![block(
             vec![live(1), set(1, &[], int(1)), live(1), set(1, &[], int(2))],
             Terminator::Return,
@@ -374,7 +387,7 @@ fn duplicate_storage_live_cannot_launder_immutable_assignment_history() {
 #[test]
 fn call_arguments_move_before_destination_is_initialized() {
     let mut f = function(
-        vec![(Ty::I32, true)],
+        vec![(Ty::Int(IntTy::I32), true)],
         vec![
             block(
                 vec![],
@@ -382,8 +395,8 @@ fn call_arguments_move_before_destination_is_initialized() {
                     name: "identity".into(),
                     signature: Signature {
                         ref_contract: Default::default(),
-                        params: vec![Ty::I32],
-                        result: Ty::I32,
+                        params: vec![Ty::Int(IntTy::I32)],
+                        result: Ty::Int(IntTy::I32),
                     },
                     args: vec![take(1, &[])],
                     destination: p(1, &[]),
@@ -401,7 +414,7 @@ fn call_arguments_move_before_destination_is_initialized() {
         signature, args, ..
     } = &mut f.blocks[0].terminator.value
     {
-        signature.params.push(Ty::I32);
+        signature.params.push(Ty::Int(IntTy::I32));
         args.push(copy(1, &[]));
     }
     rejects(&f, ErrorKind::ReadNotDefinitelyInitialized);
@@ -410,7 +423,7 @@ fn call_arguments_move_before_destination_is_initialized() {
 #[test]
 fn call_cannot_move_the_same_argument_twice() {
     let mut f = function(
-        vec![(Ty::I32, true)],
+        vec![(Ty::Int(IntTy::I32), true)],
         vec![
             block(
                 vec![],
@@ -418,8 +431,8 @@ fn call_cannot_move_the_same_argument_twice() {
                     name: "pair".into(),
                     signature: Signature {
                         ref_contract: Default::default(),
-                        params: vec![Ty::I32, Ty::I32],
-                        result: Ty::I32,
+                        params: vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)],
+                        result: Ty::Int(IntTy::I32),
                     },
                     args: vec![take(1, &[]), take(1, &[])],
                     destination: p(1, &[]),
@@ -436,7 +449,7 @@ fn call_cannot_move_the_same_argument_twice() {
 #[test]
 fn unreachable_ownership_errors_are_ignored_but_malformed_cfg_is_rejected() {
     let mut f = function(
-        vec![(Ty::I32, true), (Ty::I32, true)],
+        vec![(Ty::Int(IntTy::I32), true), (Ty::Int(IntTy::I32), true)],
         vec![
             block(vec![], Terminator::Return),
             block(vec![set(2, &[], copy(1, &[]))], Terminator::Unreachable),
@@ -459,7 +472,7 @@ fn unreachable_ownership_errors_are_ignored_but_malformed_cfg_is_rejected() {
 
 #[test]
 fn whole_move_removes_shallow_initialization_for_field_writes() {
-    let pair = tuple(vec![Ty::I32, Ty::I32]);
+    let pair = tuple(vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]);
     let mut f = function(
         vec![(pair.clone(), true), (pair, true)],
         vec![block(
@@ -474,7 +487,7 @@ fn whole_move_removes_shallow_initialization_for_field_writes() {
 #[test]
 fn immutable_history_is_joined_even_when_value_is_moved() {
     let f = function(
-        vec![(Ty::I32, false), (Ty::I32, true)],
+        vec![(Ty::Int(IntTy::I32), false), (Ty::Int(IntTy::I32), true)],
         vec![
             block(vec![live(1), live(2)], branch(1, 2)),
             block(
@@ -490,8 +503,8 @@ fn immutable_history_is_joined_even_when_value_is_moved() {
 
 #[test]
 fn nested_field_write_requires_every_shallow_ancestor() {
-    let pair = tuple(vec![Ty::I32, Ty::I32]);
-    let outer = tuple(vec![pair.clone(), Ty::I32]);
+    let pair = tuple(vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]);
+    let outer = tuple(vec![pair.clone(), Ty::Int(IntTy::I32)]);
     let mut f = function(
         vec![(outer, true), (pair, true)],
         vec![block(
@@ -508,7 +521,7 @@ fn nested_field_write_requires_every_shallow_ancestor() {
 #[test]
 fn diagnostic_preserves_read_location_origin_and_place() {
     let mut f = function(
-        vec![(Ty::I32, true), (Ty::I32, true)],
+        vec![(Ty::Int(IntTy::I32), true), (Ty::Int(IntTy::I32), true)],
         vec![block(
             vec![live(1), live(2), set(2, &[], copy(1, &[]))],
             Terminator::Return,
@@ -571,7 +584,7 @@ fn acyclic_branch_analysis_matches_concrete_path_oracle() {
                 }
                 join.push(set(2, &[], copy(1, &[])));
                 let f = function(
-                    vec![(Ty::I32, false), (Ty::I32, true)],
+                    vec![(Ty::Int(IntTy::I32), false), (Ty::Int(IntTy::I32), true)],
                     vec![
                         block(vec![live(1), live(2)], branch(1, 2)),
                         block(branch_statements(yes), Terminator::Goto(BlockId(3))),
@@ -593,9 +606,9 @@ fn acyclic_branch_analysis_matches_concrete_path_oracle() {
 
 #[test]
 fn aggregate_operands_are_consumed_in_order() {
-    let pair = tuple(vec![Ty::I32, Ty::I32]);
+    let pair = tuple(vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]);
     let mut f = function(
-        vec![(Ty::I32, true), (pair.clone(), true)],
+        vec![(Ty::Int(IntTy::I32), true), (pair.clone(), true)],
         vec![block(
             vec![
                 live(2),
@@ -617,7 +630,7 @@ fn aggregate_operands_are_consumed_in_order() {
 #[test]
 fn immutable_aggregate_field_assignment_is_reassignment() {
     let mut f = function(
-        vec![(tuple(vec![Ty::I32, Ty::I32]), false)],
+        vec![(tuple(vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]), false)],
         vec![block(vec![set(1, &[0], int(1))], Terminator::Return)],
     );
     f.params = vec![LocalId(1)];
@@ -627,7 +640,7 @@ fn immutable_aggregate_field_assignment_is_reassignment() {
 #[test]
 fn entry_backedge_must_not_reinitialize_parameters() {
     let mut f = function(
-        vec![(Ty::I32, true), (Ty::I32, true)],
+        vec![(Ty::Int(IntTy::I32), true), (Ty::Int(IntTy::I32), true)],
         vec![
             block(
                 vec![

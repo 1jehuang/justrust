@@ -6,6 +6,15 @@ subset is a bootstrap milestone, not the intended final language or architecture
 Normal Rust tools may build our implementation and act as external test oracles.
 They must not compile user programs on our native implementation path.
 
+## Integer foundation through 64 bits
+
+`INTEGER-TYPES.md` defines all ten signed/unsigned primitives through 64 bits,
+canonical typed low-bit constants, radix literals, signed minima, typed patterns
+and width-aware checked native operations. The private eight-byte leaf ABI is
+not Rust platform layout or FFI support. Casts, shifts, binary bitwise operators,
+128-bit integers, floats and broader inference remain separate work. The full
+Rust compatibility goal remains open.
+
 ## Builtin reference field slice
 
 `REFERENCE-FIELDS.md` normalizes builtin reference field access to existing real

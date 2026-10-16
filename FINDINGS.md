@@ -8704,3 +8704,35 @@ produced an 8,235-byte ELF with five functions, 22 CFG blocks, 72 locals, 102 mo
 Observed total 16,967,909 ns and engine 3,772,072 ns are contended/uncontrolled, not a
 speedup claim. The exact four historical capability promotions retain original
 source/stdout/value bytes. Full Rust and general reference coercions remain open.
+
+### Integer foundation through 64 bits
+
+All ten signed/unsigned primitives through 64 bits now share IntTy, canonical
+low-bit IntValue constants/patterns and one width-driven native kernel. Exact
+primitive identity, target-64 usize, private eight-byte leaf transport and all
+existing reference/provenance gates remain intact. Literal radix/suffix/context,
+grouped signed minima, typed pattern exhaustiveness, signed/unsigned overflow,
+zero division and declared-width MIN/-1 for both division and remainder are
+checked. Casts, shifts, binary bitwise operators, 128-bit integers and floats
+remain explicit following work, not implied by this foundation.
+
+Frozen 32-case corpus SHA256
+`262ec79b43edfab4a73d22d292dc58afb87f5642903978bf685368081a3b6c75`
+contains 15 positive, nine declared runtime-101, six invalid and two unsupported
+cases. Root independent stock compile/check/runtime verification passes all32.
+For the negative block-minimum fixture, stock codegen emits arithmetic_overflow
+and overflowing_literals, while metadata-only checking emits overflowing_literals
+alone. The independent verifier was corrected to require phase-appropriate
+rejection without changing any source or weakening successful-path requirements.
+Exact32 CLI plus four graph tests pass. The exact historical u32 declaration is
+now compiled/executed unchanged. Native integer example stdout was executed.
+
+Final hosted check `20261016-030450658-3330987`, all-target test
+`20261016-030452941-3331396` (1,021 passed), strict all-target clippy
+`20261016-030455114-3329461`, formatting and diff checks pass. Exact three redacted
+profiles are retained in `data/runs/prototype-bootstrap/2026-10-integer-types.jsonl`.
+Independent actual-code review found and closed comparison-result scalar hints;
+full-suite regression found and closed physical operations on unreachable Never
+values. Quoted numeric patterns reject rather than becoming integer patterns.
+Tracked full native campaign follows the source commit. No speedup or full Rust
+completion claim follows from these correctness gates.

@@ -413,7 +413,6 @@ fn invalid_programs_fail_without_publishing_an_executable() {
         ("unknown value", "fn main() { let x = missing; }"),
         ("unknown function", "fn main() { absent(); }"),
         ("unknown type", "fn main() { let x: Mystery = 1; }"),
-        ("unsupported type", "fn main() { let x: u32 = 1; }"),
         ("immutable assignment", "fn main() { let x = 1; x = 2; }"),
         (
             "immutable parameter",
@@ -463,6 +462,14 @@ fn invalid_programs_fail_without_publishing_an_executable() {
         assert!(!result.status.success(), "{label}: accepted invalid source");
         assert!(!result.stderr.is_empty(), "{label}: missing diagnostic");
         assert!(!output.exists(), "{label}: published invalid executable");
+    }
+}
+
+#[test]
+fn historical_u32_declaration_now_compiles_and_executes() {
+    let source = "fn main() { let x: u32 = 1; }";
+    for workers in [1, 8] {
+        runs(source, "", workers);
     }
 }
 

@@ -1,6 +1,7 @@
 //! Acceptance of explicit CFG edges and direct native CFG emission.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
+use ir::IntTy;
 use justrust_engine::compiler::{backend, cfg, frontend, ir};
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
@@ -238,7 +239,7 @@ fn cfg_recursive_calls_use_signatures_without_checking_other_bodies() {
             assert_eq!(calls.len(), 1);
             let (name, signature, args, next) = calls[0];
             assert_eq!(name, "recurse");
-            assert_eq!(signature.params, [ir::Ty::I32]);
+            assert_eq!(signature.params, [ir::Ty::Int(IntTy::I32)]);
             assert_eq!(signature.result, function.result);
             assert_eq!(args.len(), 1);
             assert!(next.0 < function.blocks.len());

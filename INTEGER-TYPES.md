@@ -92,6 +92,16 @@ immutable source snapshot, so no old compiled object is reusable across this
 compiler revision. Any additional persistent artifact identity must include the
 new typed scalar representation before reuse.
 
+## Frozen acceptance source contract
+
+The approved 32-case corpus has SHA256
+`262ec79b43edfab4a73d22d292dc58afb87f5642903978bf685368081a3b6c75`:
+15 positive cases, nine explicitly declared runtime-status-101 cases, six invalid
+programs and two legal unsupported boundaries (128-bit integers and casts).
+The source artifact was independently stock-classified before test/harness
+creation. This records the source contract, not a native pass claim. Final native
+results and exact hosted run IDs must be retained before marking this delivered.
+
 ## File ownership and acceptance
 
 - frog: ir.rs/cfg.rs, shared descriptors, constants, patterns, validators and
