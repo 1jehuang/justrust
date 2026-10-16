@@ -9414,3 +9414,32 @@ ordinary reference type actuals remain explicit unsupported boundaries.
 Canonical Copy/catalog/Clone, mutable nested carrier stores, destructors,
 core/std and full existing-project acceptance remain later work. No experimental
 package was installed and no default or complete-Rust claim is made.
+
+### Independent tracked31-corpus nested-reference campaign
+
+Pushed implementation bae794c7fe79e87730bcb7e1de624a744e4ec686 was fetched and
+rebuilt in the authenticated metered experiment host. Tracked run
+`compiler-nested-references-20261016-1606` completed with exit0 and lifecycle_ok,
+96 workers, no billing or tenant-isolation bypass. All31 raw corpus receipts
+were fetched and independently parsed, not accepted solely from runner summaries.
+They contain1084 cases:650 accepted parity,35 declared trap101,312 invalid
+rejections,86 explicit legal unsupported boundaries and1 bounded resource
+rejection. Validation checked every case/source hash, process status, timeout
+and truncation state, successful semantic graph completeness, every summary,
+1044 ordinary worker1/8 runtime comparisons,70 trap worker runs and128 generated
+stock/native compile/runtime exit checks.
+
+All receipts identify the same actual independent binary SHA256
+3881fb6ed963dda7c351a45343c265687e122841baa9e4998ef79e548d96ed4c.
+The nested32 names/full sources/expected stdout/hashes exactly match the frozen
+observed corpus. Every negative native BUILD/CHECK worker rejection is semantic,
+not parser failure, panic, unsupported substitute or timeout. Raw receipts are
+retained under `experiments/results/20261016-m8a-nested-references-*`.
+
+The real example actually executes at96 workers, exit0 and exact stdout,
+source SHA256 a6e5051d359d2f01c810955de8bc51fa0da82039797b1987df65f9f451f531ff.
+Its complete37-node/83-edge graph has zero failures and dropped events.
+Observed18,503,797ns total and5,032,414ns engine time are contended functional
+evidence, not a pinned before/after speed claim. The next canonical Copy/Clone
+client still requires explicit authority for reference-valued Self topology;
+this completed common nested-reference foundation does not claim that solved.
