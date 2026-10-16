@@ -8684,3 +8684,23 @@ redacted profiles are retained in
 `data/runs/prototype-bootstrap/2026-10-mixed-reference-returns.jsonl`.
 Tracked twenty-corpus native verification follows the implementation commit.
 Full Rust remains open. Correctness gates do not establish a speedup.
+
+### Independent twenty-corpus mixed-result native evidence
+
+Tracked run `compiler-mixed-reference-returns-20261016-0941` verified pushed
+revision `375ad6601520b1a7a9e3dfc9621ecdefaa19f0f5`. All 752 cases pass:
+455 accepted parity, 225 invalid rejections, nine explicit runtime-101 cases and
+63 legal unsupported boundaries. Independently parsed every case and summary,
+all 128 generated stock/native compile/runtime exits, and 654 accepted workers 1/8
+runtime checks against exact stock stdout/stderr. Successful check/build graph
+observations have complete capture, zero failed facts and zero dropped events.
+Twenty-one raw corpus/example receipts are retained under
+`experiments/results/20261016-m8a-mixed-reference-returns-*`.
+
+The actual high-width original-storage example printed
+`mixed reference returns compiled correctly` at 96 workers. Its 1,034-byte source
+produced an 8,235-byte ELF with five functions, 22 CFG blocks, 72 locals, 102 move paths,
+26 graph nodes and 35 edges. Capture is complete, failures and dropped events zero.
+Observed total 16,967,909 ns and engine 3,772,072 ns are contended/uncontrolled, not a
+speedup claim. The exact four historical capability promotions retain original
+source/stdout/value bytes. Full Rust and general reference coercions remain open.

@@ -2,7 +2,9 @@
 
 Status: implemented. All 975 hosted tests, strict all-target lint and formatting
 pass. Exact stock20/native CLI20 and four graph tests pass, with actual-code
-review clear. Tracked twenty-corpus native verification follows before delivery.
+review clear. All 752 cases in the tracked twenty-corpus native run pass:
+455 accepted, 225 invalid rejections, nine runtime-101 cases and 63 explicit
+unsupported boundaries. Raw receipts and the executed 96-worker example are retained.
 Builtin reference fields are delivered with 942 hosted tests and 732 independently
 verified native cases, implementation a0f8ba730 and evidence bcc845ce9. This next
 slice does not complete Rust references or full Rust.

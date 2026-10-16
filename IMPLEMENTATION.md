@@ -64,8 +64,9 @@ paths, mutable outputs only from mutable inputs, and unrelated inputs retain
 their own kinds and region dependencies. Genuine reborrow/unique-return semantics
 and all existing limits remain unchanged. All 975 hosted tests, strict all-target
 lint, formatting, exact stock20/native20 and four graph tests pass. Four historical
-sources execute unchanged after capability promotion. Tracked twenty-corpus native
-verification follows. Full Rust remains open.
+sources execute unchanged after capability promotion. All 752 tracked twenty-corpus
+native cases pass, with raw receipts and the executed 96-worker example retained.
+Full Rust remains open.
 
 Builtin reference field access is implemented under `REFERENCE-FIELDS.md`.
 Frontend normalization inserts actual Deref for `r.field`/`r.0` across reads,
