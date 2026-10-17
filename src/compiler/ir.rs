@@ -1560,68 +1560,7 @@ impl ResourceBudgetFailure {
     }
 }
 
-/// Logical budget reservations, not allocator instrumentation or process RSS.
-/// Bytes include conservative estimates and retained storage. Telemetry counters
-/// saturate independently of admission arithmetic and never change admission.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ReservationAccounting {
-    pub reservations: usize,
-    pub current_reservations: usize,
-    pub peak_reservations: usize,
-    pub retentions: usize,
-    pub current_bytes: usize,
-    pub peak_bytes: usize,
-    pub cumulative_bytes: usize,
-    pub counters_saturated: bool,
-}
-impl ReservationAccounting {
-    fn add(counter: &mut usize, amount: usize, saturated: &mut bool) {
-        if let Some(next) = counter.checked_add(amount) {
-            *counter = next;
-        } else {
-            *counter = usize::MAX;
-            *saturated = true;
-        }
-    }
-    pub(super) fn record(&mut self, bytes: usize, retained: bool) {
-        if retained {
-            Self::add(&mut self.retentions, 1, &mut self.counters_saturated);
-        } else {
-            Self::add(&mut self.reservations, 1, &mut self.counters_saturated);
-            Self::add(
-                &mut self.current_reservations,
-                1,
-                &mut self.counters_saturated,
-            );
-            self.peak_reservations = self.peak_reservations.max(self.current_reservations);
-        }
-        Self::add(&mut self.current_bytes, bytes, &mut self.counters_saturated);
-        Self::add(
-            &mut self.cumulative_bytes,
-            bytes,
-            &mut self.counters_saturated,
-        );
-        self.peak_bytes = self.peak_bytes.max(self.current_bytes);
-    }
-    fn release(&mut self, bytes: usize) {
-        self.current_reservations = self.current_reservations.saturating_sub(1);
-        self.current_bytes = self.current_bytes.saturating_sub(bytes);
-    }
-    pub fn write_json(&self, out: &mut impl std::fmt::Write) -> std::fmt::Result {
-        write!(
-            out,
-            "{{\"reservations\":{},\"current_reservations\":{},\"peak_reservations\":{},\"retentions\":{},\"current_bytes\":{},\"peak_bytes\":{},\"cumulative_bytes\":{},\"counters_saturated\":{}}}",
-            self.reservations,
-            self.current_reservations,
-            self.peak_reservations,
-            self.retentions,
-            self.current_bytes,
-            self.peak_bytes,
-            self.cumulative_bytes,
-            self.counters_saturated
-        )
-    }
-}
+pub use super::resource_accounting::ReservationAccounting;
 
 /// Shared-plan counters sampled atomically under the existing budget lock.
 /// `bytes` equals `reservations.current_bytes` for an unpoisoned ledger.

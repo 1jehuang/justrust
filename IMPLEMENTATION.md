@@ -59,6 +59,9 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Immutable production parser cursor over the existing lexer, exact type-only
       punctuation views and checked restoration, without macro admission
       (CURSOR-MIGRATION.md).
+- [x] Checked structural token/session/tree/provenance utilities and shared
+      expansion accounting under TOKEN-PRIMITIVES.md, without a native lexer,
+      hygienic resolver or macro-expansion path.
 
 ## Remaining implementation program
 
@@ -843,3 +846,14 @@ The complete hosted suite passes 1766 tests in 93 binaries, with strict lint,
 formatting and independent bounded review. Standalone token/session/tree/budget
 implementation is a subsequent lane. No lexer replacement, hygienic identifier
 resolution or native macro expansion is claimed by the cursor migration.
+
+### Checked structural token utility checkpoint
+
+`TOKEN-PRIMITIVES.md` delivers immutable, owner-qualified transport and flat
+grouping behind an explicit public utility facade. Shared expansion leases reuse
+extracted reservation telemetry without adopting generic planning caps. Public
+source imports enforce the existing file/original-byte ceilings before scans.
+The complete hosted suite passes 1828 tests in 94 binaries, with public utility,
+foreign-handle, resource, original planning and strict-lint gates. Native lexical
+tokens, prepared-source projection, hygienic AST identifiers, matching and graph
+expansion remain open. Structural tests are not language-support acceptance.

@@ -17,8 +17,8 @@ pub use source_map::{FileId, OriginSegment, SourceMap, SourceSpan};
 pub use source_probe::{SourceProbeRecord, SourceProbeRequest, prepare_probe_file};
 const MAX_FILE_DEPTH: usize = 64;
 const MAX_MODULE_DEPTH: usize = 128;
-const MAX_BYTES: usize = 8 * 1024 * 1024;
-const MAX_FILES: usize = 1024;
+pub(super) const MAX_BYTES: usize = 8 * 1024 * 1024;
+pub(super) const MAX_FILES: usize = 1024;
 const MAX_ORIGINS: usize = 1024 * 1024;
 #[derive(Clone, Debug)]
 /// Native x86_64 Linux configuration plus bounded user predicates.

@@ -2,12 +2,20 @@
 pub mod backend;
 mod borrow;
 pub mod cfg;
+mod expansion_budget;
+mod expansion_span;
 pub mod frontend;
+mod hygiene;
 mod instances;
 pub mod ir;
 pub mod ownership;
+mod resource_accounting;
 pub mod source;
 mod source_replay;
+mod token;
+pub mod token_primitives;
+mod token_session;
+mod token_tree;
 pub mod traits;
 
 use crate::{Context, Engine, Error, Key, Provider, Report, TaskFuture};

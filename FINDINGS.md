@@ -10133,3 +10133,32 @@ review found no bounded cursor blocker. Six redacted summaries are retained in
 This is a real parser prerequisite, not a new lexer or macro implementation.
 The slowest wide-integer conformance test still takes about 12.2 seconds in the
 full suite. No before/after speed claim follows from these correctness gates.
+
+## 2026-10-17: checked structural token utilities
+
+Hosted check `20261017-061711723-464224`, full regression
+`20261017-061735037-466211` (1828 tests, 94 binaries), strict lint
+`20261017-061750141-467025` and formatting pass. The public structural facade
+passes 20 external tests in `20261017-061716625-464709`. Session/source-import
+and capacity tests pass 12 in `20261017-061723730-465322`; shared budget tests
+pass 22 in `20261017-061732087-465732`. Extracted accounting passes 2 in
+`20261017-061732530-465765`, while the existing planning telemetry passes 11 in
+`20261017-061733341-465974`. IR's old accounting path and policy remain intact.
+
+Read-only review found two concrete resource boundaries before publication:
+arbitrary source-map import scanned before bounded admission, and an allocator
+capacity top-up failure could leave backing retained under its earlier lease.
+Import now preflights canonical source caps before contents/line tables. Failed
+capacity reconciliation drops unpublished backing then its lease before returning
+the exact latched failure. Both have explicit boundary/cleanup regressions.
+The first strict lint `20261017-061011912-431049` failed on deprecated atomic API
+use and a test initializer; both were repaired without warning suppression.
+Nine redacted summaries are retained in
+`data/runs/xps14/2026-10-17-token-primitives.jsonl`.
+
+These utilities do not replace the production lexer or implement macros. Standard
+shared-control allocation behavior is not claimed as process-wide OOM recovery.
+The final full run is still dominated by the wide-integer oracle at about 12.2
+seconds. Strict lint recorded about 5.1 seconds of compilation for the enlarged
+single engine crate. These are future scheduling/crate-boundary diagnostics, not
+before/after speedup measurements or justification to restructure without gates.
