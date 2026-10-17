@@ -29,7 +29,8 @@ a subsequent external module declaration, ensuring use-group braces do not
 change source-loader module boundaries. No external compiler participates in
 native compilation; stock Rust is only the test oracle.
 
-This milestone does not implement glob resolution, reexports, restricted
+Named public reexports are a following slice documented in REEXPORTS.md.
+The grouped-import milestone itself does not implement glob resolution, restricted
 visibility, anonymous `as _` imports, external-crate namespace/edition behavior or
 all source maps.
 Existing generic, trait, data and expression boundaries continue to apply.

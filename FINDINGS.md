@@ -1,5 +1,32 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Named public reexports preserve namespace-specific visibility
+
+Named and grouped public aliases retain canonical identities without cloning
+callable/type declarations. Independent stock probing found two subtle cases:
+variants of a private enum cannot be publicly reexported, and a same-spelling
+public type/private function import can export only its public namespace.
+The resolver now distinguishes reexport eligibility from access visibility,
+including intermediary aliases and original self/super module declarations.
+Unused declarations are checked before executable publication.
+
+The independent 44-source corpus has 15 stock-valid and 29 stock-invalid cases.
+Fourteen valid sources execute natively, while imported main is explicitly
+valid but unsupported. All cases run native CHECK/BUILD at workers 1 and 8.
+Two graph tests check canonical image equality and unused private aliases.
+A filesystem test exports public functions/types through a private external
+module. Both historical public-use boundary sources are promoted unchanged
+only after exact-source stock/native execution.
+
+Final hosted all-target check `20261017-040631810-4019111`, full test
+`20261017-040632890-4019165` and strict all-target lint
+`20261017-040637221-4019712` pass, with formatting and diff checks.
+The full suite reports 1,630 tests in 82 binaries, test phase 3.71s.
+The slowest grouped oracle test is 3.27s, a sequential correctness oracle
+rather than compiler throughput evidence. These measurements establish no
+speedup or full Rust compatibility. Receipts are retained in
+`data/runs/xps14/2026-10-17-reexports.jsonl`. REEXPORTS.md scopes the milestone.
+
 ## 2026-10-17: Grouped imports preserve canonical identity and namespace checks
 
 Nested use trees now normalize into existing canonical resolver edges, not

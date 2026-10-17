@@ -496,10 +496,6 @@ fn explicit_module_milestone_boundaries_reject_without_output() {
             "restricted function visibility",
             "mod a { pub(super) fn f() {} } fn main() {}",
         ),
-        (
-            "public use",
-            "mod a { pub fn f() {} } pub use a::f; fn main() {}",
-        ),
     ] {
         rejects(label, source);
     }

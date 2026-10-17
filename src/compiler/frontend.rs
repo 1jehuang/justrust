@@ -13,7 +13,7 @@
 //! a single-variant enum. Tuple-variant rest patterns remain unsupported.
 //! Move checking belongs to CFG analysis, not
 //! this semantic checker. External modules, restricted
-//! visibility, reexports, glob imports, and block-local items are not
+//! visibility, glob imports, and block-local items are not
 //! supported. An executable requires a declared root main, not an imported alias.
 use super::ir;
 use super::traits as tr;
@@ -4209,9 +4209,6 @@ impl Parser {
                 self.expect("}")?;
                 continue;
             } else if self.eat("use") {
-                if public {
-                    return Err(self.error("pub use reexports are unsupported"));
-                }
                 let mut imports = Vec::new();
                 let mut work = 0;
                 let mut bytes = 0;
@@ -4238,7 +4235,7 @@ impl Parser {
                     self.insert_item(
                         parsed,
                         &qualify(module, &name),
-                        false,
+                        public,
                         ItemKind::Import(path, type_only),
                     )?;
                 }
@@ -5743,6 +5740,10 @@ pub fn parse(source: &str) -> Result<Program, String> {
 
 #[derive(Clone, Debug)]
 struct ResolvedItem {
+    // Publicly exportable original and final alias binding. Containing module
+    // visibility is deliberately excluded. Variants inherit their enum's export
+    // eligibility, independently of their ordinary in-crate accessibility.
+    reexportable: bool,
     path: String,
     module: bool,
     kind: ResolvedKind,
@@ -5805,6 +5806,7 @@ impl Resolver<'_> {
                     && path.contains("::")
                 {
                     return Ok(Some(ResolvedItem {
+                        reexportable: true,
                         path: canonical.into(),
                         module: true,
                         kind: ResolvedKind::Trait,
@@ -5822,6 +5824,7 @@ impl Resolver<'_> {
                         | "std::ops"
                 ) {
                     return Ok(Some(ResolvedItem {
+                        reexportable: true,
                         path: path.into(),
                         module: true,
                         kind: ResolvedKind::Module,
@@ -5840,32 +5843,42 @@ impl Resolver<'_> {
         for (index, item) in bindings.iter().enumerate() {
             let resolved = match &item.kind {
                 ItemKind::Module if module => Some(ResolvedItem {
+                    reexportable: true,
                     path: path.into(),
                     module: true,
                     kind: ResolvedKind::Module,
                 }),
                 ItemKind::Function if !module => Some(ResolvedItem {
+                    reexportable: true,
                     path: path.into(),
                     module: false,
                     kind: ResolvedKind::Function,
                 }),
                 ItemKind::Trait if module => Some(ResolvedItem {
+                    reexportable: true,
                     path: path.into(),
                     module: true,
                     kind: ResolvedKind::Trait,
                 }),
                 ItemKind::Struct if module => Some(ResolvedItem {
+                    reexportable: true,
                     path: path.into(),
                     module: true,
                     kind: ResolvedKind::Struct,
                 }),
                 ItemKind::Enum if module => Some(ResolvedItem {
+                    reexportable: true,
                     path: path.into(),
                     module: true,
                     kind: ResolvedKind::Enum,
                 }),
                 ItemKind::Variant(shape) if module || *shape != ir::VariantShape::Struct => {
                     Some(ResolvedItem {
+                        reexportable: self.items.get(parent(path)).is_some_and(|items| {
+                            items
+                                .iter()
+                                .any(|item| matches!(item.kind, ItemKind::Enum) && item.public)
+                        }),
                         path: path.into(),
                         module,
                         kind: ResolvedKind::Variant,
@@ -5874,8 +5887,11 @@ impl Resolver<'_> {
                 ItemKind::Import(_, _) => self.import(path, index, module)?,
                 _ => None,
             };
-            if let Some(resolved) = resolved {
-                if !item.public && !descendant {
+            if let Some(mut resolved) = resolved {
+                let public_binding = item.public
+                    && (!matches!(item.kind, ItemKind::Import(_, _)) || resolved.reexportable);
+                resolved.reexportable &= item.public;
+                if !public_binding && !descendant {
                     if visible_only {
                         continue;
                     }
@@ -5947,6 +5963,7 @@ impl Resolver<'_> {
             "crate" => {
                 at = 1;
                 ResolvedItem {
+                    reexportable: true,
                     path: String::new(),
                     module: true,
                     kind: ResolvedKind::Module,
@@ -5955,6 +5972,12 @@ impl Resolver<'_> {
             "self" => {
                 at = 1;
                 ResolvedItem {
+                    reexportable: from.is_empty()
+                        || self.items.get(from).is_some_and(|items| {
+                            items
+                                .iter()
+                                .any(|item| matches!(item.kind, ItemKind::Module) && item.public)
+                        }),
                     path: from.into(),
                     module: true,
                     kind: ResolvedKind::Module,
@@ -5970,6 +5993,12 @@ impl Resolver<'_> {
                     at += 1;
                 }
                 ResolvedItem {
+                    reexportable: module.is_empty()
+                        || self.items.get(module).is_some_and(|items| {
+                            items
+                                .iter()
+                                .any(|item| matches!(item.kind, ItemKind::Module) && item.public)
+                        }),
                     path: module.into(),
                     module: true,
                     kind: ResolvedKind::Module,
@@ -6596,10 +6625,35 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                 if m.is_none() && f.is_none() {
                     return Err(format!("unresolved or cyclic import {path}"));
                 }
+                // A named import can bind both namespaces. Rust permits a
+                // public alias when at least one binding is public, but its
+                // private namespace must not become visible outside the owner.
+                if item.public
+                    && !m.as_ref().is_some_and(|item| item.reexportable)
+                    && !f.as_ref().is_some_and(|item| item.reexportable)
+                {
+                    return Err(format!(
+                        "private item or import cannot be publicly reexported as {path}"
+                    ));
+                }
             }
         }
         resolver.item(&path, parent(&path), true, false)?;
         resolver.item(&path, parent(&path), false, false)?;
+    }
+    if !parsed.program.functions.iter().any(|f| f.name == "main")
+        && let Some(target) = resolver.item("main", "", false, false)?
+        && target.kind == ResolvedKind::Function
+        && parsed.program.functions.iter().any(|f| {
+            f.name == target.path
+                && f.type_params.is_empty()
+                && f.params.is_empty()
+                && f.result == Type::Unit
+        })
+    {
+        return Err(
+            "imported main entry points are unsupported; declare a root main function".into(),
+        );
     }
     let mut program = parsed.program.clone();
     for (path, items) in &parsed.items {
@@ -18640,12 +18694,70 @@ mod tests {
         );
     }
     #[test]
+    fn public_named_reexports_preserve_canonical_identity() {
+        good(
+            "mod hidden{pub fn f()->i32{7}pub struct S{pub x:i32}pub trait T{fn f(self);}} pub use hidden::{f as call,S as Alias,T};fn id(s:Alias)->hidden::S{s}fn main(){let s=id(Alias{x:call()});}",
+        );
+        good(
+            "pub use next as first;pub use hidden::f as next;mod hidden{pub fn f(){}}fn main(){first();next();}",
+        );
+        good(
+            "mod hidden{pub mod api{pub fn f(){}}}pub use hidden::{api::{self as exported,f as call}};fn main(){exported::f();call();}",
+        );
+        good(
+            "pub mod a{pub fn f(){}}fn a(){}pub use a::{self as alias};fn alias(){}fn main(){alias();alias::f();}",
+        );
+        good("mod a{}pub fn f(){}pub use {f as x};use a as x;fn main(){x();}");
+        good("pub mod a{pub use self as alias;}fn main(){}");
+        good("pub use crate::{self as root};fn main(){}");
+        good(
+            "mod a{pub struct Mixed{pub x:i32}fn Mixed(){}pub use self::Mixed as Alias;pub fn run(){Alias();}}fn main(){a::run();let x=a::Alias{x:1};}",
+        );
+        good("mod a{pub enum E{A}}pub use a::E::A;fn main(){let x=A;}");
+    }
+    #[test]
+    fn public_reexports_validate_unused_originals_and_aliases() {
+        for source in [
+            "enum E{A}pub use E::A;fn main(){}",
+            "mod a{pub struct Mixed{pub x:i32}fn Mixed(){}pub use self::Mixed as Alias;}fn main(){a::Alias();}",
+            "fn f(){}pub use f as alias;fn main(){}",
+            "struct S{x:i32}pub use S as Alias;fn main(){}",
+            "enum E{A}pub use E as Alias;fn main(){}",
+            "trait T{fn f(self);}pub use T as Alias;fn main(){}",
+            "mod a{}pub use a as alias;fn main(){}",
+            "pub fn f(){}use f as private;pub use private as alias;fn main(){}",
+            "mod a{pub fn f(){}use self::f as private;pub use self::private as alias;}fn main(){}",
+            "mod a{pub fn f(){}use self::f as private;}pub use a::private as alias;fn main(){}",
+            "pub use later as first;use f as later;pub fn f(){}fn main(){}",
+            "pub use second as first;pub use first as second;fn main(){}",
+            "pub mod a{}pub use a as alias;pub use a as alias;fn main(){}",
+            "pub fn f(){}pub use f::{self as alias};fn main(){}",
+            "mod a{pub use self as alias;}fn main(){}",
+            "mod a{pub mod b{pub use super as alias;}}fn main(){}",
+        ] {
+            bad(source);
+        }
+    }
+    #[test]
+    fn legal_imported_main_is_an_explicit_unsupported_boundary() {
+        for source in [
+            "mod a{pub fn f(){}}pub use a::f as main;",
+            "mod a{pub fn f(){}}use a::f as main;",
+        ] {
+            assert!(
+                parse(source)
+                    .unwrap_err()
+                    .contains("imported main entry points are unsupported")
+            );
+        }
+    }
+    #[test]
     fn unsupported_module_forms_are_rejected_explicitly() {
         for (source, message) in [
             ("mod a; fn main(){}", "external module"),
             ("pub(crate) fn main(){}", "restricted pub"),
             ("use crate::a::*; fn main(){}", "glob imports"),
-            ("pub use crate::a; fn main(){}", "pub use"),
+            ("pub use crate::a::*; fn main(){}", "glob imports"),
             ("mod a{} mod a{} fn main(){}", "duplicate item"),
         ] {
             assert!(parse(source).unwrap_err().contains(message), "{source}");

@@ -112,9 +112,11 @@ cases. An empty discovery queue or a long checklist is not proof of exhaustivene
 
 - [ ] Preserve original file/expansion spans, source maps and stable declaration
       provenance instead of relying on concatenated source positions.
-- [ ] Complete glob imports, reexports, restricted visibility, namespaces,
-      block-local items/imports, cross-crate paths and edition-specific resolution.
-      Bounded grouped use trees are delivered under GROUPED-IMPORTS.md.
+- [ ] Complete glob imports, restricted visibility, namespaces, block-local
+      items/imports, cross-crate paths and edition-specific resolution. Bounded
+      grouped use trees are delivered under GROUPED-IMPORTS.md. Named public
+      reexports are delivered under REEXPORTS.md with stock/native privacy and
+      identity acceptance.
 - [ ] Cover remaining lexical/literal/item forms, attributes, cfg removal,
       recursive module discovery and useful multi-file/expanded diagnostics.
 
@@ -366,6 +368,19 @@ and measured integration throughput after each accepted slice.
 
 ## Active work and evidence limits
 
+The named public reexport checkpoint passes all 1,630 hosted tests in 82
+binaries (`20261017-040632890-4019165`), all-target checking
+(`20261017-040631810-4019111`), strict all-target lint
+(`20261017-040637221-4019712`) and formatting. The 44-source independent
+stock oracle distinguishes 15 valid from 29 invalid sources. Fourteen valid
+sources execute natively and the legal imported-main boundary stays explicitly
+unsupported. All 44 are checked in native CHECK/BUILD at workers 1 and 8.
+Two graph tests check canonical executable identity and unused private
+reexports, and filesystem acceptance covers public aliases from a private
+external module. Both unchanged historical public-use sources are promoted
+after exact-source stock/native execution. REEXPORTS.md defines the bounded
+contract, not full source organization or full Rust support.
+
 The grouped-import checkpoint passes all 1,622 hosted tests in 81 binaries
 (`20261017-035808751-3962286`), all-target checking
 (`20261017-035807953-3962199`), strict all-target lint
@@ -376,8 +391,9 @@ and all-unused rejection. Filesystem tests cover nested external modules around
 use-group braces. The two unchanged historical grouped sources now execute
 natively after separate exact-source stock execution. Normal-stack resource
 tests exercise per-tree and global expansion limits. GROUPED-IMPORTS.md defines
-the bounded contract. Source maps, glob/reexport resolution, restricted
-visibility, anonymous imports, full source organization and full Rust stay open.
+the bounded contract. Named reexports are the following delivered slice above.
+Source maps, glob resolution, restricted visibility, anonymous imports, full
+source organization and full Rust stay open.
 
 The full requested outcome is not reached. The native float and labeled-control
 checkpoint passes all 1,576 hosted tests (`20261017-031332671-3543206`), all-target

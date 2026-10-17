@@ -551,6 +551,41 @@ fn grouped_imports_preserve_external_module_loading_and_aliases() {
 }
 
 #[test]
+fn public_reexports_preserve_external_private_module_identity() {
+    let files = [
+        (
+            "src/input.rs",
+            "mod internal;mod api;use api::{answer,model::Value};fn main(){let x=Value{x:answer()};if x.x==7{println!(\"external exports ok\");}}",
+        ),
+        (
+            "src/internal.rs",
+            "pub fn value()->i32{7}pub mod model{pub struct Value{pub x:i32}}",
+        ),
+        (
+            "src/api.rs",
+            "pub use crate::internal::{value as answer,model};",
+        ),
+    ];
+    let scratch = fixture(&files);
+    let stock = scratch.path("stock");
+    capture(
+        Command::new("rustc")
+            .arg("--edition=2021")
+            .arg(scratch.path("src/input.rs"))
+            .arg("-o")
+            .arg(&stock),
+        &scratch,
+        COMPILE_TIMEOUT,
+    )
+    .success();
+    let result = capture(&mut Command::new(&stock), &scratch, RUN_TIMEOUT);
+    result.success();
+    assert_eq!(result.stdout, b"external exports ok\n");
+    assert!(result.stderr.is_empty());
+    runs(&files, "external exports ok\n");
+}
+
+#[test]
 fn external_missing_module_cannot_be_created_by_trace_publication() {
     for workers in [1, 8] {
         for check in [false, true] {

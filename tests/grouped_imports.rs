@@ -508,12 +508,11 @@ fn grouped_native_after_complete_stock_oracle() {
 }
 
 #[test]
-fn valid_but_unsupported_glob_reexport_and_absolute_extern_stock_only() {
+fn valid_but_unsupported_glob_and_absolute_extern_stock_only() {
     // These are valid Rust, not negative native fixtures. Native rejection of
     // these sources must never be counted as language-conformance success.
     let sources = [
         "mod api{pub fn f()->i32{7}}use crate::api::{*};fn main(){if f()==7{println!(\"imports ok\");}}",
-        "mod api{pub fn f()->i32{7}}mod bridge{pub use crate::api::{f};}fn main(){if bridge::f()==7{println!(\"imports ok\");}}",
         "use ::std::{mem::{size_of}};fn main(){if size_of::<i32>()==4{println!(\"imports ok\");}}",
     ];
     for source in sources {

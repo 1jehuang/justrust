@@ -237,8 +237,10 @@ filesystem root is provided. Filesystem compilation now supports that form throu
 source loading before parsing. `GROUPED-IMPORTS.md` now adds nested grouped
 imports, named aliases, type-only terminal self leaves and validated empty
 prefixes through the same resolver, including explicit global expansion guards.
-Continue to reject glob imports, `pub use`, anonymous `as _` imports, restricted
-`pub(...)`, block-local imports/items and unsupported namespaces.
+`REEXPORTS.md` adds named public reexports with original and alias-binding
+visibility, canonical identity and eager unused-import validation. Continue to
+reject glob imports, anonymous `as _` imports, restricted `pub(...)`, block-local
+imports/items and unsupported namespaces.
 Existing expression/type restrictions remain in COMPILER.md. Source loading is
 bounded and observable but currently expands into one coarse source snapshot;
 original per-file semantic/syntax spans remain a following source-map slice.
