@@ -52,6 +52,12 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
 - [x] Payload enums, typed downcasts, bounded selection proofs and native tagged values.
 - [x] Fixed arrays, repeat effects, literal indexing and private by-value array ABI.
+- [x] Nonempty fixed-array irrefutable let/match patterns with actual prefix/suffix
+      syntax, typed ConstantIndex plans and facts-checked Copy-only selected
+      bindings. ARRAY-PATTERNS.md records stock27/native108 debug/release cells,
+      33 public authority controls and the complete 2,400-test / 120-binary gate.
+      Non-Copy extraction, empty/slice/reference patterns and refutable children
+      remain explicit unsupported boundaries, with existing index fences intact.
 - [x] Genuine 64-bit usize and ordered, bounds-checked runtime array operations.
 - [x] Nonescaping local references, canonical provenance and last-use loan analysis.
 - [x] Noescape reference parameters and genuine expected-site carrier reborrows.

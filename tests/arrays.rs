@@ -1,7 +1,7 @@
 //! Fixed arrays with literal indices, a bounded native acceptance milestone.
 //! All 30 exact fixtures were stock-classified with rustc 1.98.1, edition 2024.
 //! Stock is an external scratch oracle only and is never invoked by these tests.
-//! Dynamic indices, array patterns, slices, len and later-use empty inference are boundaries.
+//! Non-Copy array-pattern bindings, slices, len and later-use empty inference are boundaries.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 use std::fs::{self, OpenOptions};
@@ -409,13 +409,13 @@ fn main() { if run() == 7 { println!("array oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_array_pattern() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "array_pattern",
+fn accepts_fixed_array_pattern() {
+    // Exact stock-valid witness promoted by the bounded Copy-selected array-pattern slice.
+    runs(
         r#"fn run()->i32{let [a,b]=[3,7];a*10+b}
 fn main() { if run() == 37 { println!("array oracle ok"); } }
 "#,
+        "array oracle ok\n",
     );
 }
 

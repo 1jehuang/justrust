@@ -211,7 +211,7 @@ fn empty_structural_tuple_is_not_an_aggregate_pattern_domain() {
 }
 
 #[test]
-fn array_domain_is_not_admitted_by_aggregate_match_variant() {
+fn array_domain_with_no_bindings_is_admitted_by_aggregate_match_variant() {
     let mut function = fixture();
     let invalid = Ty::Array {
         element: Arc::new(Ty::Bool),
@@ -222,7 +222,7 @@ fn array_domain_is_not_admitted_by_aggregate_match_variant() {
     bindings.clear();
     function.locals[0].ty = invalid.clone();
     function.exprs[0].ty = invalid;
-    reject(function);
+    function.validate().unwrap();
 }
 
 #[test]
@@ -344,7 +344,7 @@ fn aggregate_binding_paths_cannot_overlap_parent_and_nested_field() {
 }
 
 #[test]
-fn aggregate_binding_cannot_import_constant_index_projection() {
+fn aggregate_binding_admits_checked_field_then_constant_index_projection() {
     let mut function = fixture();
     let domain = Ty::Tuple(
         vec![
@@ -361,7 +361,7 @@ fn aggregate_binding_cannot_import_constant_index_projection() {
     let (ty, bindings) = pattern(&mut function);
     *ty = domain;
     bindings[0].projection = vec![Projection::Field(0), Projection::ConstantIndex(0)];
-    reject(function);
+    function.validate().unwrap();
 }
 
 #[test]

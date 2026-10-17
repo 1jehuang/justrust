@@ -5179,11 +5179,12 @@ impl CheckedFunction {
                     let aggregate = match domain {
                         Ty::Struct(_) => true,
                         Ty::Tuple(fields) => !fields.is_empty(),
+                        Ty::Array { len, .. } => *len > 0 && *len <= MAX_ARRAY_LEN,
                         _ => false,
                     };
                     if !aggregate {
                         return Err(
-                            "aggregate match requires a nominal struct or nonempty tuple domain"
+                            "aggregate match requires a nominal struct, nonempty tuple or fixed array domain"
                                 .into(),
                         );
                     }
@@ -5194,13 +5195,12 @@ impl CheckedFunction {
                     )?;
                     for binding in aggregate_bindings {
                         if binding.projection.is_empty()
-                            || binding
-                                .projection
-                                .iter()
-                                .any(|step| !matches!(step, Projection::Field(_)))
+                            || binding.projection.iter().any(|step| {
+                                !matches!(step, Projection::Field(_) | Projection::ConstantIndex(_))
+                            })
                         {
                             return Err(
-                                "aggregate match bindings require nonempty plain field projections"
+                                "aggregate match bindings require nonempty typed field or constant-index projections"
                                     .into(),
                             );
                         }

@@ -1,5 +1,36 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: fixed-array patterns with Copy-only selected index plans
+
+Accepted honest Array/ArrayRest source syntax and genuine typed ConstantIndex
+plans for nonempty fixed-array let/match destructuring. Only written children
+are retained; no omitted wildcard/binder nodes or new callable/replay authority.
+Selected bindings crossing an index require validated Copy permission, including
+nested selected Copy fields of non-Copy elements. Bindingless non-Copy patterns
+remain nonconsuming. Ordinary indexed non-Copy move and borrow fences are intact.
+
+Stock27 has 22 valid/five invalid sources. Native13 runtime/five invalid/nine
+stock-valid Unsupported cases yield108 workers1/8 CHECK/BUILD cells and26 real
+ELF executions in each bootstrap debug/release profile. Public authority33 checks
+actual owners, domains, index typing/bounds, overlaps, dead arms and independent
+non-Copy CFG validation. Two retained aggregate-IR witnesses and the exact old
+array source are promoted, without changing their witness metadata/source bytes.
+
+Initial debug/release gates exposed a real Never-scrutinee CFG result-write bug.
+Guarding only destination assignment on existing completion preserves all dead
+arm lowering/validation and fixes the unchanged witness. Subsequent test-fixture
+preemption was repaired with exact canonical signature/facts and the actual CFG
+validation boundary, not wider production permission or relaxed limits.
+
+Final check/debug95/release95/full2400 across120 binaries/strictlint PASS:
+20261017-114711011-1959474, 20261017-114713525-1959812,
+20261017-114717074-1959946, 20261017-114732071-1960927 and
+20261017-114745204-1961921 respectively.
+Sixteen exact failed/passing redacted receipts are committed in
+`data/runs/xps14/2026-10-17-array-patterns.jsonl`. The 12.30s wide-integer oracle
+is an observed diagnostic, not an array speed measurement. Full Rust remains open.
+
+
 ## 2026-10-17: enum positional rest retains genuine variant authority
 
 Accepted tuple-payload positional rest for existing enum matches and

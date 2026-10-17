@@ -1903,6 +1903,69 @@ impl<'a> Checker<'a> {
         }
         Ok(actual)
     }
+    fn array_pattern_unsupported(message: &str) -> String {
+        super::super::source::SourceError {
+            kind: super::super::source::SourceErrorKind::Unsupported,
+            primary: None,
+            message: message.into(),
+            _diagnostic_lease: None,
+            location: None,
+        }
+        .to_string()
+    }
+    fn array_pattern_type<'t>(
+        &self,
+        pattern: &Pattern,
+        ty: &'t ir::Ty,
+    ) -> Result<(&'t ir::Ty, usize), String> {
+        let ir::Ty::Array { element, len } = ty else {
+            return Err(
+                if matches!(
+                    ty,
+                    ir::Ty::Never | ir::Ty::Ref { .. } | ir::Ty::Slice { .. }
+                ) {
+                    Self::array_pattern_unsupported(
+                        "array patterns require a known fixed array domain",
+                    )
+                } else {
+                    "array pattern requires a fixed array".into()
+                },
+            );
+        };
+        if *len == 0 {
+            return Err(Self::array_pattern_unsupported(
+                "zero-length array patterns are unsupported",
+            ));
+        }
+        if *len > ir::MAX_ARRAY_LEN {
+            return Err("array pattern length exceeds limit".into());
+        }
+        self.accessible(ty)?;
+        let count = match pattern {
+            Pattern::Array(fields) => {
+                if fields.is_empty() {
+                    return Err(Self::array_pattern_unsupported(
+                        "empty array patterns are unsupported",
+                    ));
+                }
+                if fields.len() != *len {
+                    return Err("array pattern arity mismatch".into());
+                }
+                fields.len()
+            }
+            Pattern::ArrayRest(fields) => {
+                fields.project(*len)?;
+                fields
+                    .prefix
+                    .len()
+                    .checked_add(fields.suffix.len())
+                    .ok_or("array pattern count overflow")?
+            }
+            _ => return Err("contract: expected array pattern".into()),
+        };
+        self.signatures.plan()?.budget.charge_work(count)?;
+        Ok((element, *len))
+    }
     fn validate_aggregate_pattern(
         &self,
         pattern: &Pattern,
@@ -1921,6 +1984,20 @@ impl<'a> Checker<'a> {
         self.accessible(ty)?;
         let pattern = self.pattern_source(pattern, ty)?;
         match pattern {
+            Pattern::Array(fields) => {
+                let (element, _) = self.array_pattern_type(pattern, ty)?;
+                for field in fields {
+                    self.validate_aggregate_pattern(field, element, depth + 1, work, binders)?;
+                }
+                Ok(())
+            }
+            Pattern::ArrayRest(fields) => {
+                let (element, len) = self.array_pattern_type(pattern, ty)?;
+                for (_, field) in fields.project(len)?.iter() {
+                    self.validate_aggregate_pattern(field, element, depth + 1, work, binders)?;
+                }
+                Ok(())
+            }
             Pattern::Wildcard => Ok(()),
             Pattern::Binding { .. } => {
                 self.infer_storage(depth + 1)?;
@@ -2016,6 +2093,7 @@ impl<'a> Checker<'a> {
     ) -> Result<ir::MatchPattern, String> {
         if !matches!(ty, ir::Ty::Struct(_))
             && !matches!(ty, ir::Ty::Tuple(fields) if !fields.is_empty())
+            && !matches!(ty, ir::Ty::Array { len, .. } if *len > 0)
         {
             return Err("expected aggregate match domain".into());
         }
@@ -2038,10 +2116,12 @@ impl<'a> Checker<'a> {
         let mut bindings = Vec::with_capacity(count);
         for binding in pending {
             if binding.projection.is_empty()
-                || binding
-                    .projection
-                    .iter()
-                    .any(|step| !matches!(step, ir::Projection::Field(_)))
+                || binding.projection.iter().any(|step| {
+                    !matches!(
+                        step,
+                        ir::Projection::Field(_) | ir::Projection::ConstantIndex(_)
+                    )
+                })
             {
                 return Err("contract: aggregate match binding is not a plain field path".into());
             }
@@ -3184,6 +3264,13 @@ impl<'a> Checker<'a> {
                 Ok(expected)
             }
             Pattern::Apply {..} => self.pattern_ty(self.pattern_source(pattern,ty)?,ty),
+            Pattern::Array(_) | Pattern::ArrayRest(_) => {
+                self.array_pattern_type(pattern, ty)?;
+                let mut work = 0;
+                let mut binders = 0;
+                self.validate_aggregate_pattern(pattern, ty, 0, &mut work, &mut binders)?;
+                Ok(ty.clone())
+            }
             Pattern::TupleRest(_) => self.positional_pattern_type(pattern, ty),
             Pattern::Bool(_) | Pattern::Int { .. } => Err("refutable literal pattern in let binding".into()),
             Pattern::Wildcard | Pattern::Binding { .. } => Ok(ty.clone()),
@@ -3236,6 +3323,22 @@ impl<'a> Checker<'a> {
                 );
             }
             Pattern::Wildcard => {}
+            Pattern::Array(fields) => {
+                let (element, _) = self.array_pattern_type(pattern, ty)?;
+                for (index, field) in fields.iter().enumerate() {
+                    path.push(ir::Projection::ConstantIndex(index));
+                    self.pattern_locals(field, element, path, names, pending, work)?;
+                    path.pop();
+                }
+            }
+            Pattern::ArrayRest(fields) => {
+                let (element, len) = self.array_pattern_type(pattern, ty)?;
+                for (index, field) in fields.project(len)?.iter() {
+                    path.push(ir::Projection::ConstantIndex(index));
+                    self.pattern_locals(field, element, path, names, pending, work)?;
+                    path.pop();
+                }
+            }
             Pattern::TupleRest(fields) => {
                 let actual = self.positional_pattern_type(pattern, ty)?;
                 let arity = match &actual {
@@ -3326,6 +3429,15 @@ impl<'a> Checker<'a> {
                 return Err(Self::nested_refutable_literal_unsupported());
             }
             Pattern::Binding { name, mutable } => {
+                if path
+                    .iter()
+                    .any(|step| matches!(step, ir::Projection::ConstantIndex(_)))
+                    && !self.facts().must_copy(ty)?
+                {
+                    return Err(Self::array_pattern_unsupported(
+                        "non-Copy bindings through array patterns are unsupported",
+                    ));
+                }
                 let key = self
                     .names()?
                     .key(*name, LookupClass::Local)
@@ -5387,6 +5499,10 @@ impl<'a> Checker<'a> {
                         Pattern::TupleRest(_) if domain == ir::Ty::Unit => {
                             return Err(Self::empty_tuple_rest_unsupported());
                         }
+                        Pattern::Array(_) | Pattern::ArrayRest(_) => {
+                            self.array_pattern_type(arm_pattern, &domain)?;
+                            (self.aggregate_match_pattern(arm_pattern, &domain)?, None)
+                        }
                         Pattern::Struct { .. } | Pattern::Tuple(_) | Pattern::TupleRest(_) => {
                             (self.aggregate_match_pattern(arm_pattern, &domain)?, None)
                         }
@@ -6501,6 +6617,40 @@ mod checked_identity_tests {
         check(&program).unwrap();
         let program = parse("struct Token;enum Item{Only(Token,Token,Token)}fn take(x:Token){}fn value(){let item=Item::Only(Token,Token,Token);match item{Item::Only(first,..)=>take(first)};match item{Item::Only(first,..)=>take(first)};}fn main(){}").unwrap();
         assert!(check(&program).is_err());
+    }
+
+    #[test]
+    fn array_patterns_use_real_indices_and_nested_copy_fields() {
+        for source in [
+            "fn value()->i32{let [first,..,last]=[1,2,3,4];first+last}fn main(){}",
+            "fn value()->i32{match [[1,2],[3,4]]{[[a,_],[_,z]]=>a+z}}fn main(){}",
+            "struct Token;struct Item{number:i32,token:Token}fn value()->i32{let a=[Item{number:42,token:Token}];let [Item{number,..}]=a;number}fn main(){}",
+            "struct Token;fn take(a:[Token;2]){}fn value(){let a=[Token,Token];let [_,..]=a;take(a);}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            check(&program).unwrap();
+        }
+    }
+
+    #[test]
+    fn array_patterns_preserve_noncopy_and_shape_boundaries() {
+        for source in [
+            "struct Token;fn value(){let [item]=[Token];}fn main(){}",
+            "struct Token;fn value(){match [Token]{[item]=>()};}fn main(){}",
+            "fn value(){let [..]:[i32;0]=[];}fn main(){}",
+            "fn value()->i32{match [1,2]{[1,_]=>42,_=>0}}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            let error = check(&program).unwrap_err();
+            assert!(error.contains("unsupported:"), "{error}");
+        }
+        for source in [
+            "fn value(){let [a,b]=[1];}fn main(){}",
+            "fn value(){let [a,b,..,z]=[1,2];}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            assert!(check(&program).is_err());
+        }
     }
 
     #[test]

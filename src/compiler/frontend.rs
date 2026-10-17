@@ -1121,12 +1121,14 @@ impl SourceInventory {
             Pattern::Apply { pattern, .. } => {
                 self.shadow_pattern(pattern, node, budget, depth + 1)?
             }
-            Pattern::Tuple(fields) => {
+            Pattern::Tuple(fields) | Pattern::Array(fields) => {
                 for (i, p) in fields.iter().enumerate() {
                     self.shadow_pattern(p, &node.child(8, i, budget)?, budget, depth + 1)?;
                 }
             }
-            Pattern::TupleRest(fields) | Pattern::VariantRest { fields, .. } => {
+            Pattern::TupleRest(fields)
+            | Pattern::ArrayRest(fields)
+            | Pattern::VariantRest { fields, .. } => {
                 for (i, pattern) in fields.prefix.iter().chain(&fields.suffix).enumerate() {
                     self.shadow_pattern(pattern, &node.child(8, i, budget)?, budget, depth + 1)?;
                 }
@@ -3941,6 +3943,8 @@ pub enum Pattern {
     },
     Tuple(Vec<Pattern>),
     TupleRest(PositionalRest),
+    Array(Vec<Pattern>),
+    ArrayRest(PositionalRest),
     VariantRest {
         name: AstPath,
         fields: PositionalRest,
@@ -5848,7 +5852,16 @@ impl<'input, 'names> Parser<'input, 'names> {
                             .map_err(native_adapter::transport_error)?;
                     }
                 }
-                Pattern::TupleRest(fields) | Pattern::VariantRest { fields, .. } => {
+                Pattern::Array(fields) => {
+                    for field in fields.iter().rev() {
+                        pending
+                            .push(field)
+                            .map_err(native_adapter::transport_error)?;
+                    }
+                }
+                Pattern::TupleRest(fields)
+                | Pattern::ArrayRest(fields)
+                | Pattern::VariantRest { fields, .. } => {
                     // LIFO insertion retains written prefix-then-suffix order.
                     for field in fields.prefix.iter().chain(&fields.suffix).rev() {
                         pending
@@ -7519,6 +7532,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         if !self.is(")") {
             loop {
+                if self.is("[") {
+                    return Err(self.unsupported("array parameter patterns are unsupported"));
+                }
                 let n = self.binding()?;
                 if self.is("(") || self.is("{") || self.is("::") {
                     return Err(self.unsupported("constructor parameter patterns are unsupported"));
@@ -7624,10 +7640,10 @@ impl<'input, 'names> Parser<'input, 'names> {
             .map_err(native_adapter::name_error)
     }
     /// Called after the sole `..`; its suffix remains explicit and unexpanded.
-    fn positional_rest_suffix(&mut self) -> Result<Vec<Pattern>, ParseError> {
+    fn positional_rest_suffix(&mut self, close: &str) -> Result<Vec<Pattern>, ParseError> {
         let mut suffix = Vec::new();
         if self.eat(",") {
-            while !self.is(")") {
+            while !self.is(close) {
                 if self.is("..") {
                     return Err(self.error("duplicate positional rest pattern"));
                 }
@@ -7646,8 +7662,33 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
             }
         }
-        self.expect(")")?;
+        self.expect(close)?;
         Ok(suffix)
+    }
+    #[inline(never)]
+    fn array_pattern(&mut self) -> Result<Pattern, ParseError> {
+        let mut prefix = Vec::new();
+        while !self.is("]") {
+            if self.eat("..") {
+                let suffix = self.positional_rest_suffix("]")?;
+                return Ok(Pattern::ArrayRest(PositionalRest { prefix, suffix }));
+            }
+            self.names
+                .budget()
+                .charge(super::expansion_budget::Counter::Work, 1)
+                .map_err(|error| native_adapter::transport_error(error.into()))?;
+            let pattern = self.pattern()?;
+            if self.is("@") {
+                return Err(self.unsupported("@ array rest patterns are unsupported"));
+            }
+            self.reserve_rest_patterns(&mut prefix, 1)?;
+            prefix.push(pattern);
+            if !self.eat(",") {
+                break;
+            }
+        }
+        self.expect("]")?;
+        Ok(Pattern::Array(prefix))
     }
     fn pattern_inner(&mut self) -> Result<Pattern, ParseError> {
         if self.token().string {
@@ -7679,6 +7720,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.eat("_") {
             return Ok(Pattern::Wildcard);
         }
+        if self.eat("[") {
+            return self.array_pattern();
+        }
         if self.eat("(") {
             if self.eat(")") {
                 return Ok(Pattern::Tuple(Vec::new()));
@@ -7686,7 +7730,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             if self.eat("..") {
                 return Ok(Pattern::TupleRest(PositionalRest {
                     prefix: Vec::new(),
-                    suffix: self.positional_rest_suffix()?,
+                    suffix: self.positional_rest_suffix(")")?,
                 }));
             }
             let first = self.pattern()?;
@@ -7702,7 +7746,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 if self.eat("..") {
                     return Ok(Pattern::TupleRest(PositionalRest {
                         prefix: fields,
-                        suffix: self.positional_rest_suffix()?,
+                        suffix: self.positional_rest_suffix(")")?,
                     }));
                 }
                 fields.push(self.pattern()?);
@@ -7747,7 +7791,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         .map_err(|error| native_adapter::transport_error(error.into()))?;
                     self.reserve_rest_patterns(&mut prefix, fields.len())?;
                     prefix.extend(fields.into_iter().map(|(_, pattern)| pattern));
-                    let suffix = self.positional_rest_suffix()?;
+                    let suffix = self.positional_rest_suffix(")")?;
                     return Ok(wrap(Pattern::VariantRest {
                         name,
                         fields: PositionalRest { prefix, suffix },
@@ -9134,6 +9178,97 @@ mod inactive_item_syntax_tests {
     }
 
     #[test]
+    fn array_pattern_syntax_retains_only_written_children_and_real_empty_shape() {
+        let parsed = parse_unresolved(
+            "fn main(){let [a,b]=[1,2];let [x,..,z]=[1,2,3];let []=[];let (p,..,q)=(1,2,3);}",
+        )
+        .unwrap();
+        let statements = &parsed.program.functions[0].body.statements;
+        let Stmt::LetPattern {
+            pattern: Pattern::Array(fields),
+            ..
+        } = &statements[0]
+        else {
+            panic!("expected written array pattern");
+        };
+        assert_eq!(fields.len(), 2);
+        let Stmt::LetPattern {
+            pattern: Pattern::ArrayRest(fields),
+            ..
+        } = &statements[1]
+        else {
+            panic!("expected explicit array rest");
+        };
+        assert_eq!(fields.prefix.len(), 1);
+        assert_eq!(fields.suffix.len(), 1);
+        assert_eq!(
+            fields
+                .project(3)
+                .unwrap()
+                .iter()
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>(),
+            [0, 2]
+        );
+        assert!(fields.project(1).is_err());
+        assert!(
+            matches!(&statements[2], Stmt::LetPattern { pattern: Pattern::Array(fields), .. } if fields.is_empty())
+        );
+        assert!(matches!(
+            &statements[3],
+            Stmt::LetPattern {
+                pattern: Pattern::TupleRest(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn array_pattern_duplicate_rest_and_parameter_boundaries_keep_exact_spans() {
+        for source in [
+            "fn main(){let [..,..]=[1,2];}",
+            "fn main(){let [a,..,..]=[1,2];}",
+        ] {
+            let error = parse_syntax_unprepared(source).unwrap_err();
+            assert_eq!(error.kind, super::super::source::SourceErrorKind::Syntax);
+            let at = source.rfind("..").unwrap();
+            assert_eq!(error.bytes, at..at + 2);
+            assert!(
+                error
+                    .message
+                    .starts_with("duplicate positional rest pattern")
+            );
+        }
+        let source = "fn f([a,b]:[i32;2]){}fn main(){}";
+        let error = parse_syntax_unprepared(source).unwrap_err();
+        assert_eq!(
+            error.kind,
+            super::super::source::SourceErrorKind::Unsupported
+        );
+        let at = source.find('[').unwrap();
+        assert_eq!(error.bytes, at..at + 1);
+        assert!(
+            error
+                .message
+                .starts_with("array parameter patterns are unsupported")
+        );
+    }
+
+    #[test]
+    fn array_rest_scope_inventory_contains_only_actual_bindings() {
+        let program =
+            parse("fn main(){macro_rules! v{()=>{42}}let [a,..,z]=[40,7,2];let n=v!();}").unwrap();
+        let function = &program.functions[0];
+        assert!(function.lexical_scope.is_some());
+        let budget = ir::PlanBudget::default();
+        let identity = sr::OriginalBodyId::new(&budget).unwrap();
+        let inventory = SourceInventory::build(&program, function, identity, &budget).unwrap();
+        assert_eq!(inventory.bindings.len(), 3);
+        assert!(inventory.calls.is_empty());
+        assert_ne!(inventory.bindings[0].node, inventory.bindings[1].node);
+    }
+
+    #[test]
     fn item_publication_denies_before_container_allocation_and_releases() {
         use super::super::expansion_budget::{BudgetResource, Storage};
         let (tokens, session) = lex("fn main(){}").unwrap().into_parts();
@@ -9380,12 +9515,14 @@ fn walk_depth_checked(
                             push(DepthNode::Pattern(p))?;
                         }
                     }
-                    Pattern::Tuple(fields) => {
+                    Pattern::Tuple(fields) | Pattern::Array(fields) => {
                         for pattern in fields {
                             push(DepthNode::Pattern(pattern))?;
                         }
                     }
-                    Pattern::TupleRest(fields) | Pattern::VariantRest { fields, .. } => {
+                    Pattern::TupleRest(fields)
+                    | Pattern::ArrayRest(fields)
+                    | Pattern::VariantRest { fields, .. } => {
                         for pattern in fields.prefix.iter().chain(&fields.suffix) {
                             push(DepthNode::Pattern(pattern))?;
                         }

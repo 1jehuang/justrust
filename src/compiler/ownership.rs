@@ -7239,6 +7239,47 @@ mod tests {
     }
 
     #[test]
+    fn array_patterns_copy_selected_leaves_and_bindingless_noncopy_patterns_do_not_move() {
+        for source in [
+            "fn f(p:[i32;3])->[i32;3]{let [first,middle,last]=p;let n=first+middle+last;p}",
+            "fn f(p:[i32;3])->[i32;3]{let n=match p{[first,..,last]=>first+last};p}",
+            "struct Cell{n:i32} fn f(p:[Cell;3])->[Cell;3]{let n=match p{[Cell{n:first},..,Cell{n:last}]=>first+last};p}",
+            "struct Cell{n:i32} fn f(p:[Cell;3])->[Cell;3]{let [..]=p;p}",
+            "struct Cell{n:i32} fn f(p:[Cell;3])->[Cell;3]{match p{[_,_,_]=>()};p}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+    }
+
+    #[test]
+    fn forged_noncopy_array_index_move_is_invalid_even_in_disconnected_block() {
+        let (_module_names, modules) = fixture_modules();
+        let element = nominal(&modules, vec![]);
+        let mut f = fixture();
+        f.locals
+            .extend([local(array(element.clone(), 3)), local(element)]);
+        f.params.push(LocalId(1));
+        f.blocks.push(BasicBlock {
+            statements: vec![located(Statement::Assign {
+                destination: place(2),
+                value: Rvalue::Use(Operand::Move(indexed(1, 2))),
+            })],
+            terminator: located(Terminator::Unreachable),
+        });
+        assert!(
+            f.validate()
+                .unwrap_err()
+                .contains("cannot move non-Copy value out of array index")
+        );
+        let result = analyze(&f);
+        assert!(result.complete);
+        assert!(
+            matches!(&result.diagnostics[0].kind, ErrorKind::InvalidCfg(message) if message.contains("cannot move non-Copy value out of array index"))
+        );
+    }
+
+    #[test]
     fn enum_tuple_rest_selected_moves_preserve_omitted_payload_under_refinement() {
         let (_module_names, modules) = fixture_modules();
         let child = nominal(&modules, vec![]);

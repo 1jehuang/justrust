@@ -2372,7 +2372,9 @@ impl Lowerer<'_> {
                 }
             }
             let value = self.expression(arm.body)?;
-            self.assign(destination.clone(), Rvalue::Use(value), Some(id));
+            if completes {
+                self.assign(destination.clone(), Rvalue::Use(value), Some(id));
+            }
             self.cleanup(self.scopes.len() - 1, Some(id));
             self.scopes.pop();
             self.terminate(Terminator::Goto(join), Some(id))?;
@@ -6737,6 +6739,150 @@ mod tests {
         );
         assert!(super::super::ownership::analyze(&function).passed());
         assert_storage_paths(&function);
+    }
+
+    #[test]
+    fn never_scrutinee_keeps_explicit_domains_and_dead_arm_checks_without_result_assignment() {
+        for array in [false, true] {
+            let domain = if array {
+                Ty::Array {
+                    element: std::sync::Arc::new(Ty::Int(IntTy::I32)),
+                    len: 3,
+                }
+            } else {
+                Ty::Tuple(vec![Ty::Int(IntTy::I32); 3].into())
+            };
+            let projection = if array {
+                Projection::ConstantIndex(0)
+            } else {
+                Projection::Field(0)
+            };
+            let mut source = with_root(
+                domain.clone(),
+                vec![
+                    ir::TypedExpr {
+                        ty: Ty::Never,
+                        completion: ir::Completion::Never,
+                        kind: ir::ExprKind::Block(ir::Block {
+                            statements: vec![ir::Stmt::Return(None)],
+                            tail: None,
+                        }),
+                    },
+                    expr(
+                        Ty::Unit,
+                        ir::ExprKind::Block(ir::Block {
+                            statements: vec![],
+                            tail: None,
+                        }),
+                    ),
+                    ir::TypedExpr {
+                        ty: Ty::Never,
+                        completion: ir::Completion::Never,
+                        kind: ir::ExprKind::Match {
+                            scrutinee: ExprId(0),
+                            arms: vec![ir::MatchArm {
+                                pattern: ir::MatchPattern::Aggregate {
+                                    ty: domain,
+                                    bindings: vec![ir::PatternBinding {
+                                        local: LocalId(1),
+                                        projection: vec![projection],
+                                    }],
+                                },
+                                body: ExprId(1),
+                            }],
+                        },
+                    },
+                ],
+                vec![ir::Stmt::Expr(ExprId(2))],
+            );
+            source.locals.push(ir::LocalDecl {
+                name: "selected".into(),
+                ty: Ty::Int(IntTy::I32),
+                mutable: false,
+            });
+            let function = nominal_lowered(&source);
+            // The unreachable body is still lowered, but neither the binding
+            // nor the Never match result receives a fabricated value.
+            let body_local = LocalId(source.locals.len() + 1);
+            let match_local = LocalId(source.locals.len() + 2);
+            assert!(function.blocks.iter().flat_map(|block| &block.statements).any(|statement| matches!(
+                &statement.value, Statement::Assign { destination, value: Rvalue::Use(Operand::Constant(Constant::Unit)) } if destination.local == body_local
+            )));
+            assert!(!function.blocks.iter().flat_map(|block| &block.statements).any(|statement| matches!(
+                &statement.value, Statement::Assign { destination, .. } if destination.local == match_local || destination.local == LocalId(1)
+            )));
+            assert!(super::super::ownership::analyze(&function).passed());
+            let ir::ExprKind::Match { arms, .. } = &mut source.exprs[2].kind else {
+                unreachable!()
+            };
+            let ir::MatchPattern::Aggregate { bindings, .. } = &mut arms[0].pattern else {
+                unreachable!()
+            };
+            bindings[0].projection[0] = if array {
+                Projection::ConstantIndex(usize::MAX)
+            } else {
+                Projection::Field(usize::MAX)
+            };
+            assert!(source.validate().is_err());
+            assert!(lower(&source).is_err());
+        }
+    }
+
+    #[test]
+    fn array_rest_patterns_copy_only_actual_indices_and_nested_copy_fields() {
+        for matching in [false, true] {
+            for nested in [false, true] {
+                let (element, pattern) = if nested {
+                    ("Cell", "[Cell{n:first},..,Cell{n:last}]")
+                } else {
+                    ("i32", "[first,..,last]")
+                };
+                let body = if matching {
+                    format!("match p{{{pattern}=>first+last}}")
+                } else {
+                    format!("let {pattern}=p;first+last")
+                };
+                let text = format!(
+                    "struct Cell{{n:i32}} fn f(p:[{element};3])->i32{{{body}}} fn main(){{}}"
+                );
+                let function = nominal_lowered(&checked(&text, 0));
+                let root = function.params[0];
+                let reads: Vec<_> = function.blocks.iter().flat_map(|block| &block.statements).filter_map(|statement| match &statement.value {
+                    Statement::Assign { value: Rvalue::Use(operand @ (Operand::Copy(place) | Operand::Move(place))), .. } if place.local == root => Some(operand),
+                    _ => None,
+                }).collect();
+                assert_eq!(reads.len(), 2);
+                for index in [0, 2] {
+                    let mut projection = vec![Projection::ConstantIndex(index)];
+                    if nested {
+                        projection.push(Projection::Field(0));
+                    }
+                    assert_eq!(reads.iter().filter(|operand| matches!(operand, Operand::Copy(place) if place.projection == projection)).count(), 1);
+                }
+                assert!(!function.blocks.iter().any(|block| matches!(
+                    block.terminator.value,
+                    Terminator::SwitchVariant { .. }
+                )));
+                assert!(super::super::ownership::analyze(&function).passed());
+            }
+        }
+    }
+
+    #[test]
+    fn array_rest_temporary_scrutinee_is_evaluated_once() {
+        let function = nominal_lowered(&checked(
+            "fn make()->[i32;3]{[1,2,3]} fn f()->i32{match make(){[first,..,last]=>first+last}} fn main(){}",
+            1,
+        ));
+        assert_eq!(
+            function
+                .blocks
+                .iter()
+                .filter(|block| matches!(block.terminator.value, Terminator::Call { .. }))
+                .count(),
+            1
+        );
+        assert!(super::super::ownership::analyze(&function).passed());
     }
 
     #[test]

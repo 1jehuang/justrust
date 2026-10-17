@@ -1628,8 +1628,14 @@ impl Resolver<'_> {
             Pattern::VariantRest { name, fields } => {
                 self.positional_constructor_pattern(name, fields, module, names)?;
             }
-            Pattern::TupleRest(fields) => {
+            Pattern::TupleRest(fields) | Pattern::ArrayRest(fields) => {
                 for field in fields.prefix.iter_mut().chain(fields.suffix.iter_mut()) {
+                    self.alias_budget.charge_work(1)?;
+                    self.pattern(field, module, names)?;
+                }
+            }
+            Pattern::Array(fields) => {
+                for field in fields {
                     self.alias_budget.charge_work(1)?;
                     self.pattern(field, module, names)?;
                 }
@@ -2644,6 +2650,98 @@ mod tuple_shape_tests {
             resolve(&parsed).unwrap_err(),
             "in function crate::main: unsupported: first-class tuple struct constructors are unsupported"
         );
+    }
+}
+
+#[cfg(test)]
+mod array_pattern_tests {
+    use super::*;
+
+    #[test]
+    fn array_rest_retains_only_written_children_and_binder_scope() {
+        let source = "fn main(){let [x,..,y]=[1,2,3];let z=x+y;}";
+        let program = resolve(&parse_unresolved(source).unwrap()).unwrap();
+        let Stmt::LetPattern {
+            pattern: Pattern::ArrayRest(fields),
+            ..
+        } = &program.functions[0].body.statements[0]
+        else {
+            panic!("array rest lost explicit source syntax");
+        };
+        assert_eq!(fields.prefix.len(), 1);
+        assert_eq!(fields.suffix.len(), 1);
+        assert!(matches!(fields.prefix[0], Pattern::Binding { .. }));
+        assert!(matches!(fields.suffix[0], Pattern::Binding { .. }));
+        assert_eq!(
+            fields
+                .project(3)
+                .unwrap()
+                .iter()
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+        for source in [
+            "fn main(){let [x,y]=[1,2];let z=x+y;}",
+            "fn main(){macro_rules! n{()=>{1};}let [x,..,y]=[n!(),2,3];let z=x+y;}",
+        ] {
+            resolve(&parse_unresolved(source).unwrap())
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+
+    #[test]
+    fn nested_array_constructor_patterns_keep_canonical_use_certificates() {
+        // Resolver-only control. The checker separately owns selected-Copy
+        // admission and must not infer it merely from these nominal children.
+        let source = "mod a{pub struct Pair(pub i32);}use a::Pair as P;fn main(){let [P(x),..,P(y)]=[P(1),P(2),P(3)];let z=x+y;}";
+        let program = resolve(&parse_unresolved(source).unwrap()).unwrap();
+        let Stmt::LetPattern {
+            pattern: Pattern::ArrayRest(fields),
+            ..
+        } = &program.functions[0].body.statements[0]
+        else {
+            panic!("nested array pattern lost source syntax");
+        };
+        for child in fields.prefix.iter().chain(fields.suffix.iter()) {
+            let Pattern::Variant { name, fields, .. } = child else {
+                panic!("nested tuple constructor lost exact source shape");
+            };
+            assert_eq!(fields.len(), 1);
+            assert_eq!(
+                name_scope::path_key(program.names.as_ref(), name, Namespace::Type).unwrap(),
+                name_scope::path_key(
+                    program.names.as_ref(),
+                    &program.structs[0].name,
+                    Namespace::Type
+                )
+                .unwrap()
+            );
+            assert!(
+                !name
+                    .source_occurrences(program.names.as_ref())
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn array_patterns_preserve_real_binding_duplicates_and_constructor_shadow_errors() {
+        for (source, diagnostic) in [
+            (
+                "fn main(){let [x,..,x]=[1,2,3];}",
+                "duplicate pattern binding",
+            ),
+            (
+                "struct Pair(i32);fn main(){let [Pair,..]=[1,2];}",
+                "E0530: bindings cannot shadow tuple struct constructors",
+            ),
+        ] {
+            let error = resolve(&parse_unresolved(source).unwrap()).unwrap_err();
+            assert!(error.contains(diagnostic), "{source}: {error}");
+            assert!(!error.contains("unsupported:"), "{source}: {error}");
+        }
     }
 }
 

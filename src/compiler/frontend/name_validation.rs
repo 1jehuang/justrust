@@ -792,10 +792,14 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Path(name))?;
                     self.positional_patterns(fields)?;
                 }
-                Pattern::TupleRest(fields) => self.positional_patterns(fields)?,
+                Pattern::TupleRest(fields) | Pattern::ArrayRest(fields) => {
+                    self.positional_patterns(fields)?;
+                }
                 Pattern::Path(path) => self.push(Visit::Path(path))?,
                 Pattern::Binding { name, .. } => self.local(*name, true)?,
-                Pattern::Tuple(elements) => self.many(elements, Visit::Pattern)?,
+                Pattern::Tuple(elements) | Pattern::Array(elements) => {
+                    self.many(elements, Visit::Pattern)?;
+                }
                 Pattern::Struct { name, fields, .. } => {
                     self.push(Visit::Path(name))?;
                     self.work(fields.len())?;
@@ -1189,6 +1193,57 @@ mod tests {
                 .starts_with("contract:")
         );
     }
+    #[test]
+    fn unused_array_patterns_check_every_explicit_child_including_rest_suffix() {
+        let mut foreign = builder();
+        let foreign_name = foreign.ident("foreign").unwrap();
+        let _foreign = foreign.finish().unwrap();
+        for rest in [false, true] {
+            let mut valid = program();
+            let pattern = if rest {
+                Pattern::ArrayRest(PositionalRest {
+                    prefix: vec![Pattern::Wildcard],
+                    suffix: vec![Pattern::Wildcard],
+                })
+            } else {
+                Pattern::Array(vec![Pattern::Wildcard, Pattern::Wildcard])
+            };
+            valid.functions[0].body.statements.push(Stmt::LetPattern {
+                pattern,
+                ty: Type::Unit,
+                value: Expr::Bool(true),
+            });
+            validate_program_names(&valid).unwrap();
+            for last in [false, true] {
+                let mut malformed = valid.clone();
+                let Stmt::LetPattern { pattern, .. } =
+                    malformed.functions[0].body.statements.last_mut().unwrap()
+                else {
+                    unreachable!()
+                };
+                let target = match pattern {
+                    Pattern::Array(fields) => &mut fields[usize::from(last)],
+                    Pattern::ArrayRest(fields) => {
+                        if last {
+                            &mut fields.suffix[0]
+                        } else {
+                            &mut fields.prefix[0]
+                        }
+                    }
+                    _ => unreachable!(),
+                };
+                *target = Pattern::Binding {
+                    name: foreign_name,
+                    mutable: false,
+                };
+                assert!(validate_program_names(&malformed).is_err());
+                assert!(
+                    validate_function_names(&malformed, &malformed.functions[0], None).is_err()
+                );
+            }
+        }
+    }
+
     #[test]
     fn positional_rest_checks_both_explicit_lists_and_variant_path() {
         let mut foreign = builder();
