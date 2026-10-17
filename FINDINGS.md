@@ -1,5 +1,31 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Source trait defaults with universal owned-value checks
+
+Provided source methods now have separate source-callable declarations with the
+trait Self binder, exact provider schema validation and the normal all-unused
+universal body/CFG/move/borrow gates. Omitted methods dispatch to the default
+with actual Self, overrides win and generic required-method calls defer until
+closed instance selection. Default-only tuple/float Clone shapes are inventoried.
+The historical default-method source executes unchanged after explicit promotion.
+
+Independent review found that signature-only trait Self permissions were too
+broad for executable by-value positions. Defaults must prove canonical Sized for
+owned Self parameters/results; IR preflight and validation separately require
+that proof for root parameter-valued local/expression snapshots. Borrowed places
+and referents do not acquire an invented Self:Sized assumption. Stock/native
+negative fixtures include unused/overridden invalid defaults, static Self
+parameters/results, conflicting mutable loans and deferred/diverging Self locals.
+
+Final hosted acceptance passes all 1,608 tests in 79 binaries, run
+`20261017-033939643-3821254`; all-target check
+`20261017-033936448-3820907`, strict all-target lint
+`20261017-033944415-3822910` and formatting pass. The test phase reports 2.94s;
+this is a correctness receipt, not a before/after speedup. Compact exported
+receipts are retained separately from the historical large monthly JSONL.
+`TRAIT-DEFAULTS.md` records the bounded contract. Canonical unavailable defaults,
+trait generics, associated types, libraries and full Rust remain open.
+
 ## 2026-10-17: Native floats and target-resolved labeled exits
 
 The clean-room implementation now carries distinct f32/f64 types through checked

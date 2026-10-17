@@ -29,6 +29,16 @@ Float library methods/formatting, general const evaluation, platform FFI,
 128-bit integers and broader inference remain separate work. The full Rust
 compatibility goal remains open.
 
+## Source trait defaults
+
+`TRAIT-DEFAULTS.md` adds independent source-callable identities for provided
+methods, universal checking of unused and overridden bodies, validated owning
+trait obligations and override-aware native default dispatch. Generic defaults
+retain rigid `Self` facts until concrete instance selection. Canonical catalog
+placeholders remain unavailable without an executable provider. Trait generics,
+associated types, broader method inference and complete library traits remain
+open. This does not close the full abstraction category.
+
 ## Builtin reference field slice
 
 `REFERENCE-FIELDS.md` normalizes builtin reference field access to existing real

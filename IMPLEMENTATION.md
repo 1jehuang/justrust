@@ -35,37 +35,331 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Native f32/f64 arithmetic, IEEE comparisons, saturating numeric casts and
       canonical Copy/Clone recipes, with bounded first-order float inference.
 - [x] Lexically resolved labeled loops/while/blocks and target-specific cleanup.
+- [x] Universally checked source trait default bodies, override-aware native
+      dispatch and explicit Sized proof for owned trait Self values.
 
 ## Remaining implementation program
 
-- [ ] Source organization: complete source maps, grouped/glob imports,
-      reexports, restricted visibility, item identities and edition behavior.
-      Bounded external module loading is implemented, not the whole category.
-- [ ] Typed IR and data: all numeric primitives/literals, tuples, arrays, slices,
-      structs/enums, layouts, construction, projections, casts and coercions.
-- [ ] Patterns and control flow: destructuring, exhaustiveness, match, loop,
-      break/continue, labels, diverging expressions and correct expression typing.
-- [ ] Ownership: places, initialization/moves, references, loans, lifetimes,
-      borrow/drop checking and destruction.
-- [ ] Abstraction: generics, inference, traits, impls/methods, associated items,
-      coherence, trait objects and monomorphization.
-- [ ] Closures, capture semantics, iterators, async/await and coroutine lowering.
-- [ ] Compile-time work: const evaluation/generics, statics, attributes/cfg,
-      declarative macro hygiene and procedural macros.
-- [ ] Runtime/platform: ABI/FFI, linking, unsafe operations, allocation, intrinsics,
-      atomics, TLS, unwinding, debug information and additional targets.
-- [ ] Libraries: compile core/alloc/std and external dependencies on the native
-      implementation path without delegating compilation to stock tools.
-- [ ] Existing projects: manifests, dependency resolution, features, build scripts,
-      native libraries, proc-macro integration and test/bench harnesses.
-- [ ] Integrated graph: finer source/semantic operations, cache keys, cross-build
-      reuse, secure multitenant reuse, resource-aware scheduling and observability.
-- [ ] Conformance: pinned positive/negative differential suites, minimized
-      soundness/wrong-code regressions, diagnostic tests and real-project gates.
-- [ ] Performance: representative debug/release/cold/edit workloads, scaling and
-      contention measurements, without equating subset timings with full Rust.
-- [ ] Completion: validate the explicit edition/version/target contract, standard
-      libraries, real projects and self-hosting. Self-hosting alone is not enough.
+The categories below cover the known program, not an exhaustive decomposition of
+Rust. Having every category named is not the same as having every semantic rule,
+integration edge and acceptance case in executable todos. Remaining unknowns need
+discovery through a pinned semantic inventory, library builds, real projects,
+independent review and minimized failures. Add newly discovered work here before
+claiming the affected gate is complete. Full Rust support is **not complete**.
+
+Delivered contracts, including later extensions, take precedence over historical
+first-client exclusions. In particular, bounded associated dispatch, canonical
+Copy/Clone, generic reference carriers, source trait defaults, floats, labels and
+shared byte slices are foundations, not absent categories and not category-wide
+completion. `GENERIC-CARRIERS-ACCEPTANCE.md` distinguishes design freeze from real
+native acceptance. Preserve the checkpoint evidence below without treating its
+historical test counts as the current total.
+
+### Gate rules and dependency map
+
+Each gate needs a scoped contract, named owner, dependency/API agreement, frozen
+positive/invalid/legal-unsupported cases, actual public CHECK/BUILD/run evidence,
+and retained regression receipts. Invalid unused declarations and dead metadata
+must still reject. CHECK must not demand code generation. Failed correctness,
+unsupported input, resource limits and infrastructure faults remain distinct and
+must never publish a successful executable. Internal graph tests supplement,
+not replace, actual source acceptance. Every supported extension needs review of
+its interactions with prior types, ownership, substitution and runtime behavior.
+
+The dependency labels below constrain individual slices, not whole-program phase
+barriers. Independent design, oracle classification and harness work starts now.
+A downstream native client starts as soon as its exact prerequisite slice passes:
+
+- G0 (contract/discovery) and G10 (conformance) run continuously across all gates.
+- G1 (source/names) and G2 (typed data) extend the delivered semantic foundation.
+- G3 (ownership) and G4 (abstraction) co-design shared type/region interfaces on
+  G1/G2. Neither waits for the entire other category to finish.
+- G5 (expansion/const) uses G1/G2 and applicable G3/G4 semantics. Its discovery
+  can add declarations and dependencies before other bodies are available.
+- G6 (runtime/targets) consumes validated G2/G3/G4 facts. ABI design and external
+  harnesses can proceed before those consumers are implemented.
+- G7 (libraries) advances incrementally on G1-G6, beginning with pinned core
+  blockers rather than waiting to attempt the entire standard library.
+- G8 (projects) starts manifest/discovery work now, then integrates G5-G7 for
+  native dependency, build-script and proc-macro execution.
+- G9 (graph/cache/security) is cross-cutting. Persistent/distributed reuse needs
+  explicit identity, validation and isolation gates beyond in-snapshot sharing.
+- G11 (performance/completion) measures each accepted slice, but broad promotion
+  waits for the declared language, library, target and project gates.
+
+### G0. Versioned compatibility contract and discovery
+
+- [ ] Pin the stable language/toolchain oracle revision, Rust Reference/library
+      source revisions, edition matrix, target triples and supported target
+      features. Edition 2024/Linux x86-64 is the initial track, not evidence for
+      Rust 2015/2018/2021, other platforms or all future stable releases.
+- [ ] Build a traceability ledger linking semantic requirements and known
+      unsupported fixtures to a contract, implementation owner, dependencies,
+      acceptance cases and evidence. Audit lexical grammar, attributes, lints,
+      edition differences and cross-feature interactions as well as feature names.
+- [ ] Maintain a discovery queue for unspecified/ambiguous behavior, unsupported
+      library requirements and new failures. Separate stable-contract obligations
+      from unstable features without silently narrowing the full Rust goal.
+
+**Next:** freeze the initial version/edition/target matrix and classify every
+current legal-unsupported boundary against it. **Acceptance:** each matrix cell
+has an explicit supported/unsupported/not-yet-investigated status and linked
+cases. An empty discovery queue or a long checklist is not proof of exhaustiveness.
+
+### G1. Source organization, syntax and edition behavior
+
+- [ ] Preserve original file/expansion spans, source maps and stable declaration
+      provenance instead of relying on concatenated source positions.
+- [ ] Complete grouped/glob imports, reexports, restricted visibility, namespaces,
+      block-local items/imports, cross-crate paths and edition-specific resolution.
+- [ ] Cover remaining lexical/literal/item forms, attributes, cfg removal,
+      recursive module discovery and useful multi-file/expanded diagnostics.
+
+**Next:** freeze a multi-file source-map and import/privacy corpus before changing
+lookup facts. **Acceptance:** forward/cyclic/ambiguous lookup and unused invalid
+imports have pinned outcomes, real file spans survive loading, and edits or
+missing-file changes invalidate only justified consumers without stale lookup.
+
+### G2. Typed values, patterns, inference and control flow
+
+- [ ] Complete i128/u128, char, str/string literals, raw pointers, function
+      items/pointers, type aliases, never coercions and remaining literal forms.
+      Extend float/library behavior without confusing private scalar transport
+      with platform layout or profile-correct arithmetic behavior.
+- [ ] Complete empty/unit/tuple structs, construction/update forms, unions,
+      discriminants, recursive types, alignment/layout and repr attributes.
+- [ ] Generalize slices/DST metadata, array/slice coercions and indexing beyond
+      delivered shared `&[u8]`; retain bounds/evaluation order and size limits.
+- [ ] Complete nested/or/range/ref/@/slice patterns, guards, match ergonomics,
+      exhaustiveness/usefulness, if-let/let-else forms and destructuring assignment.
+- [ ] Extend bidirectional/local inference, coercion sites, partial type holes,
+      omitted method arguments and control-flow joins, preserving rigid universal
+      parameters and diagnostics for unresolved constraints.
+
+**Next:** enumerate remaining type/pattern forms and freeze one end-to-end slice,
+such as general slice metadata or nested patterns, with resource accounting.
+**Acceptance:** source execution and invalid typing agree with the pinned oracle,
+including effect order, overflow profile, empty values, unreachable bodies and
+malformed typed IR. Large scalar arrays need a measured analysis representation
+that removes the recorded 44,417-byte Adler2 resource blocker without weakening
+move/initialization checks. Adapted Adler2 remains distinct from unchanged-crate
+acceptance.
+
+### G3. Ownership, regions, destruction and memory validity
+
+- [ ] Complete reference-containing nominal fields/aggregates and lifetime type
+      parameters, variance, subtyping, implied/outlives bounds, higher-ranked
+      regions, `'static`, placeholder lifetimes and general region inference.
+- [ ] Extend dynamic borrowed places, temporary scopes/lifetime extension,
+      aggregate carrier flows, general reborrows and loop/SCC-carried loans.
+      Preserve the delivered current-cell and per-occurrence provenance rules.
+- [ ] Implement real Drop checking/elaboration, conditional drop flags, partial
+      initialization, assignment replacement and exact destruction order across
+      returns, branches, loops, breaks, panic/unwind and closure/async captures.
+- [ ] Specify unsafe validity, raw-pointer operations, alias/provenance rules,
+      interior mutability and UnsafeCell interactions. Track genuinely unresolved
+      language-model questions rather than inventing permissive defaults.
+
+**Next:** agree a shared drop-obligation/cleanup IR contract and freeze observable
+Drop-order plus rejected-escape fixtures. In parallel classify aggregate-region
+and loop-loan boundaries. **Acceptance:** required drops occur exactly once on
+supported normal or exceptional paths, invalid escapes and live-alias conflicts
+reject even in unused bodies, and CHECK/emission consume the same verified
+ownership facts. Explicitly permitted leaks/forgotten values are not compiler
+cleanup failures.
+
+### G4. Traits, generics, methods and suspended computations
+
+- [ ] Add trait type/lifetime/const parameters, generic methods, where clauses,
+      associated types/constants, projection normalization, GATs, defaults and
+      supertrait obligations beyond the bounded delivered source-default slice.
+- [ ] Complete coherence/orphan rules across crates, auto traits/negative impls
+      where stable, recursive obligation convergence and precise ambiguity.
+      Resource exhaustion must not become NotProven or successful dispatch.
+- [ ] Implement trait-based autoderef, overloaded operators/indexing, coercions,
+      dyn compatibility/vtables, unsizing and `?Sized` with authoritative layout
+      and receiver adjustments rather than name- or pointer-based permissions.
+- [ ] Complete closures and capture modes, callable traits, function values,
+      iterator/for desugaring, async/await/Future state machines and pinning.
+      Include capture lifetimes, suspension-safe moves, cancellation and Drop.
+- [ ] Extend monomorphization/recursive instance planning to the new forms while
+      retaining universal checks, binder-qualified substitution and sealed native
+      instances. Optimization must not bypass unused-body validation.
+
+**Next:** freeze trait-argument/associated-type goal and normalization APIs with
+ownership/type owners, then use a small Iterator-like source client. Closure
+capture design can proceed independently against the agreed place/region API.
+**Acceptance:** generic bodies prove obligations without favorable concrete
+witnesses, ambiguous/overlapping impls reject, and concrete dispatch, closures,
+iteration and suspended-state destruction each have executable oracle cases.
+
+### G5. Expansion, compile-time evaluation and generated work
+
+- [ ] Implement token trees, macro_rules matching/repetition, hygiene and mixed
+      expansion/name resolution, including crate identity, spans and recursion.
+- [ ] Complete attributes/cfg/cfg_attr, derives and function/attribute/derive
+      procedural macros with host/target separation and compatible token/span APIs.
+- [ ] Implement const/static/const-fn evaluation, promoted values, const generics,
+      target-aware arithmetic/layout, allocation/provenance and diagnostic rules.
+      The bounded shift evaluator is not general const evaluation.
+- [ ] Make newly expanded/generated declarations explicit graph discoveries;
+      track observed files/environment and conservatively disable reuse for
+      uncontrolled effects. Enforce execution/resource/isolation policies.
+
+**Next:** freeze token/span/hygiene and target-aware const-value contracts, then
+classify a macro_rules and array-length const corpus independently. **Acceptance:**
+expansion order/hygiene, const failures and generated diagnostics match pinned
+cases, invalid unused expanded items reject, and changed cfg or observed inputs
+cannot reuse stale expansions. Proc-macro acceptance executes a real native
+host macro and compiles its generated target source.
+
+### G6. Runtime, FFI, linking and target expansion
+
+- [ ] Define target data layouts/calling conventions, object/relocation/symbol
+      formats, crate artifacts and linking, repr(C)/transparent/packed/aligned,
+      extern calls/statics, native libraries, variadics and stable ABI boundaries.
+- [ ] Implement allocation/deallocation, startup/termination, panic abort/unwind,
+      cleanup/personality support, TLS, threads, atomics/memory ordering, intrinsics,
+      target features and inline/global assembly for the declared target contract.
+- [ ] Provide debug/source information and runtime failure/exit diagnostics.
+      Expand architectures/OSes only with target-specific executable evidence.
+
+**Next:** freeze the initial Linux x86-64 ABI/layout matrix and bidirectional
+native C harness, including aggregates and callbacks. **Acceptance:** platform
+harnesses link and execute both directions, layout/ABI match the platform,
+unwind/abort and thread/TLS/atomic tests have defined outcomes, and unsupported
+targets reject explicitly. The current private aggregate ABI does not pass this
+gate, nor does successful direct ELF emission alone.
+
+### G7. Native core, alloc and std bring-up
+
+- [ ] Establish pinned library source manifests, language-item/intrinsic inventory,
+      sysroot identity and library feature/target configuration without embedding
+      rustc or pretending catalog recipes compile the libraries.
+- [ ] Compile and exercise no_std/core first, then alloc with an actual allocator,
+      then target std with platform runtime support. Feed every new blocker into
+      G0-G6 with a minimized reproducer and dependency owner.
+- [ ] Cover canonical library trait semantics, collections, strings, formatting,
+      I/O, synchronization, panic handling and library tests in executable clients.
+
+**Next:** attempt an inventoried pinned core discovery/check run and publish the
+first unsupported blockers rather than claiming a successful library build.
+**Acceptance:** each library stage compiles on the native path, links real clients
+and runs the declared tests. No stock-compiled library artifacts may conceal
+missing native compilation. Catalog Copy/Clone support is not core acceptance.
+
+### G8. Existing Cargo projects and source-to-test workflows
+
+- [ ] Parse existing manifests/workspaces, targets/profiles and configuration;
+      implement lockfile-compatible package/version resolution, registries/git/path
+      sources, patches, features/resolver versions and host/target dependency kinds.
+- [ ] Integrate multiple crates, generated inputs, build-script directives,
+      environment/rerun rules, native tools/libraries and proc-macro compilation
+      and execution as graph operations, not a Cargo-wide phase barrier.
+- [ ] Support unit/integration/doc tests, test discovery/filtering and exit status,
+      examples, benches and requested outputs with compatible diagnostics.
+- [ ] Keep explicit stock fallback separate and labeled. Never send private
+      formats to stock tools or count fallback as native compatibility.
+
+**Next:** freeze a tiny unchanged workspace containing path dependencies, features,
+a build script, a proc macro and tests, plus manifest/resolution fixtures that can
+run before native compilation is available. **Acceptance:** lockfile/feature and
+host/target selections are correct, unchanged project commands execute native
+outputs/tests, failures remain visible, and edits to generated/native inputs
+invalidate the necessary graph. Progress from this fixture to pinned independent
+real crates and multi-crate applications, not just adapted source snippets.
+
+### G9. Integrated graph, persistence, security and operations
+
+- [ ] Split measured coarse source/resolve/signature work into independently
+      publishable facts with complete declaration-discovery prerequisites and
+      supported recursive convergence protocols, not hidden phase barriers.
+- [ ] Define stable cross-edit identities and versioned full semantic keys,
+      dynamic/negative-input validation, fine-grained invalidation and exact
+      build/check/test variant reuse verified against clean recomputation.
+- [ ] Add bounded asynchronous persistence, atomic manifests, durable checkpoint
+      contracts, recovery, eviction and corruption/crash/cancellation tests.
+- [ ] Specify authenticated provenance, artifact integrity and authorization for
+      lookup/read/publish. Prevent poisoning and private-derived data/metadata
+      leaks. Implement multitenant service policy only in the cloud repository.
+- [ ] Sandbox build scripts/macros/tools/tests, enforce resources and fairness,
+      and measure local/remote placement, transfer, backpressure and retry costs.
+- [ ] Retain exact structural accounting, incomplete-capture markers, redaction,
+      wait causes and critical-path explanations with measured overhead.
+
+**Next:** freeze an edit/invalidation matrix and cache threat model while compiler
+owners expose finer facts. **Acceptance:** worker/cache/schedule variations agree
+with clean results, untracked inputs prevent unsafe reuse, crashes never publish
+partial success, adversarial cross-tenant/forged-artifact tests fail closed, and
+shared physical work is counted once. In-memory snapshot memoization alone does
+not establish persistent, distributed or authorized cross-tenant reuse.
+
+### G10. Continuous conformance, soundness and diagnostic evidence
+
+- [ ] Maintain versioned positive, invalid, legal-unsupported, wrong-code,
+      resource-limit and infrastructure outcomes with source/oracle identities.
+- [ ] Import or independently implement applicable language/library conformance
+      cases, differential generators and fuzzing with minimization and permanent
+      regression retention. Audit licensing/attribution of external test inputs.
+- [ ] Test cross-feature combinations, not only individual frozen corpora:
+      Drop with generics/unwind, macros with privacy/editions, projections with
+      regions, async with captures and cfg/features with cache invalidation.
+- [ ] Exercise real CLI packaging, artifacts, diagnostics/spans, exit status,
+      time/resource limits and all-unused checks at single/multiple workers.
+
+**Next:** build a machine-readable requirement-to-case index and prioritize
+soundness/wrong-code and library/project blockers over accumulating small corpus
+counts. **Acceptance:** every claimed contract row links to real observed results,
+known valid unsupported programs remain gaps, and discovered failures acquire
+minimized tests before the corresponding completion claim is restored.
+
+### G11. Representative performance and final compatibility audit
+
+- [ ] Measure reproducible debug/release, cold/no-change/edit, build/check/test
+      sequences, selected/full tests and single/concurrent-project workloads.
+      Include CPU/span, memory, cache/transfer, instrumentation and service costs.
+- [ ] Retain comparable before/after session-weighted suite receipts, inspect
+      regressions by command/change, and measure actual server scaling/topology.
+      Synthetic graph wins and subset timings are not full-Rust speed evidence.
+- [ ] Audit every declared version/edition/target row, native core/alloc/std,
+      independent unchanged projects and self-hosting. Publish remaining gaps,
+      unknowns, exclusions and evidence coverage before any full-support claim.
+
+**Next:** define the representative project/workload roster now, mark currently
+blocked cases honestly, and benchmark accepted slices without generalizing them.
+**Acceptance:** correctness gates pass on the native path and the broad benchmark
+comparison is reproducible. Self-hosting is necessary evidence for the intended
+compiler workflow, not sufficient proof of full Rust support or optimality.
+
+### Parallel execution plan: six bounded workstreams
+
+A swarm is sufficient only when these streams have owners, independent next
+artifacts, agreed shared APIs and reviewers, not merely many active agents.
+This is a staffing recommendation, not a claim about currently running workers.
+
+1. **Source, editions and expansion (G0/G1/G5):** own source/span/lookup/token
+   contracts and source corpora. Start the source-map/import and hygiene inventory.
+2. **Ownership and dataflow (G2/G3):** own place/region/drop contracts and cleanup
+   acceptance. Start Drop-order fixtures and the aggregate/SCC region gap map.
+3. **Abstraction and typed lowering (G2/G4):** own trait normalization, inference,
+   instance/capture contracts. Start associated-type and Iterator-like cases.
+4. **Platform and libraries (G6/G7):** own ABI/runtime and pinned core blockers.
+   Start the C ABI matrix and library language-item/intrinsic inventory.
+5. **Projects and secure reuse (G8/G9):** own manifests, host/target orchestration,
+   cache/input/isolation contracts. Start the workspace fixture and invalidation
+   threat matrix, coordinating cloud policy in its separate repository.
+6. **Independent conformance and measurement (G0/G10/G11):** own frozen oracle
+   classification, cross-feature reviews, real-project roster and benchmark
+   receipts. Start the traceability index and minimize the highest-risk gaps.
+
+Use explicit file ownership and coordinator-reviewed shared IR/API changes,
+especially in the common frontend, type world, CFG and ownership analysis. Do
+not let several agents concurrently rewrite those files without an agreed merge
+boundary. Four streams are possible by combining source with project discovery
+and platform with measurement, but retain an independent correctness reviewer.
+The six streams expose useful parallel work now, not six independent full
+compiler implementations. Reassess staffing against ready tasks, blocked APIs
+and measured integration throughput after each accepted slice.
 
 ## Active work and evidence limits
 
@@ -78,9 +372,17 @@ label graph tests additionally check shared facts, malformed IR, contextual
 break values, moves, loans and unused invalid bodies. Normal-stack parser nesting
 acceptance passes after isolating labeled-expression parsing into a small frame
 (`20261017-031112594-3517995`). `FLOATS.md` and `LABELED-CONTROL-FLOW.md` define
-these bounded contracts. Source trait default bodies remain explicitly
-unsupported, including unused or overridden bodies, until universal checking and
-callable registration exist. No category-wide or full Rust completion is claimed.
+these bounded contracts. The subsequent source-default checkpoint passes all
+1,608 hosted tests (`20261017-033939643-3821254`), all-target check
+(`20261017-033936448-3820907`), strict all-target lint
+(`20261017-033944415-3822910`) and formatting. `TRAIT-DEFAULTS.md` defines
+universally checked source default bodies and override-aware dispatch. Independent
+review exposed potentially-unsized owned Self positions. Executable signatures
+and shared IR owned-value gates now require real Sized proof, while borrowed
+places retain their original authority. Invalid unused and overridden defaults,
+including diverging/deferred Self locals, reject against the stock oracle.
+Canonical catalog placeholders remain explicitly unavailable. No category-wide
+or full Rust completion is claimed.
 
 Earlier bounded generic inference passes 1,270
 hosted tests, strict all-target lint, its unchanged 28 exact source cases and four

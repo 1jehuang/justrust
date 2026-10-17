@@ -3357,6 +3357,27 @@ impl<'f> FactsCtx<'f> {
         }
         self.validate_ty_inner(root, Some(budget))
     }
+    /// Owned snapshots need Sized independently of legal place/referent types.
+    /// Aggregate formation already checks nested parameter positions, but a
+    /// root trait Self parameter may be a legal unsized place, never a value.
+    fn validate_value_ty(self, root: &Ty) -> Result<(), String> {
+        self.validate_ty(root)?;
+        if let (Self::Validated(facts), Ty::Param(_)) = (self, root) {
+            facts
+                .require_sized(root)
+                .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
+        }
+        Ok(())
+    }
+    fn validate_value_ty_with_budget(self, root: &Ty, budget: &PlanBudget) -> Result<(), String> {
+        self.validate_ty_with_budget(root, budget)?;
+        if let (Self::Validated(facts), Ty::Param(_)) = (self, root) {
+            facts
+                .require_sized(root)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?;
+        }
+        Ok(())
+    }
     fn validate_ty_inner(self, root: &Ty, budget: Option<&PlanBudget>) -> Result<(), String> {
         fn walk(
             facts: FactsCtx<'_>,
@@ -4931,7 +4952,7 @@ impl CheckedFunction {
             }
             Ok(())
         }
-        facts.validate_ty_with_budget(&self.result, budget)?;
+        facts.validate_value_ty_with_budget(&self.result, budget)?;
         budget.charge_nodes(
             self.locals
                 .len()
@@ -4968,11 +4989,11 @@ impl CheckedFunction {
             }
         }
         for local in &self.locals {
-            facts.validate_ty_with_budget(&local.ty, budget)?;
+            facts.validate_value_ty_with_budget(&local.ty, budget)?;
             storage(budget, local.name.len(), 1)?;
         }
         for expression in &self.exprs {
-            facts.validate_ty_with_budget(&expression.ty, budget)?;
+            facts.validate_value_ty_with_budget(&expression.ty, budget)?;
             match &expression.kind {
                 ExprKind::Borrow { place, .. } => path(&place.projection, budget)?,
                 ExprKind::Struct { ty, fields } => {
@@ -5213,12 +5234,12 @@ impl CheckedFunction {
                 validate_call_evidence_with_policy(self, authority, authority.budget(), policy)?;
             }
         }
-        facts.validate_ty(&self.result)?;
+        facts.validate_value_ty(&self.result)?;
         for local in &self.locals {
-            facts.validate_ty(&local.ty)?;
+            facts.validate_value_ty(&local.ty)?;
         }
         for expression in &self.exprs {
-            facts.validate_ty(&expression.ty)?;
+            facts.validate_value_ty(&expression.ty)?;
         }
         let local = |id: LocalId| {
             if id.0 < self.locals.len() {
@@ -5964,6 +5985,41 @@ mod original_replay_transport_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn trait_default_self_place_is_not_owned_value_authority() {
+        for sized in [false, true] {
+            let source = if sized {
+                "trait V:Sized{fn value(&self)->i32{7}}fn main(){}"
+            } else {
+                "trait V{fn value(&self)->i32{7}}fn main(){}"
+            };
+            let program = super::super::frontend::parse(source).unwrap();
+            let budget = PlanBudget::default();
+            let plan = super::super::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let declaration = (0..plan.callable_count())
+                .map(|index| plan.callable_decl(index).unwrap())
+                .find(|id| plan.declaration(*id).unwrap().kind == DeclKind::AssociatedFunction)
+                .unwrap();
+            let facts = plan.callable_facts(declaration).unwrap();
+            let param = Ty::Param(facts.env().ordered_params().next().unwrap());
+            let authority = FactsCtx::from_validated(&facts);
+            authority.validate_ty(&param).unwrap();
+            assert_eq!(authority.validate_value_ty(&param).is_ok(), sized);
+            assert_eq!(
+                authority
+                    .validate_value_ty_with_budget(&param, &budget)
+                    .is_ok(),
+                sized
+            );
+            authority
+                .validate_value_ty(&Ty::Ref {
+                    kind: BorrowKind::Shared,
+                    referent: Arc::new(param),
+                })
+                .unwrap();
+        }
+    }
+
     #[test]
     fn budget_telemetry_preserves_first_failure_and_external_callsite() {
         let budget = PlanBudget::new(PlanLimits {

@@ -474,6 +474,9 @@ pub(super) fn inventory(
                 ty(t, &mut descriptors, budget, 0)?;
             }
             ty(&i.signature.result, &mut descriptors, budget, 0)?;
+            if let Some(default) = &i.default {
+                function(default, &mut descriptors, budget)?;
+            }
         }
     }
     let mut inventory = tr::RecipeShapeInventory::new();

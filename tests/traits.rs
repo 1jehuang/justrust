@@ -468,12 +468,12 @@ fn main(){run();}
 }
 
 #[test]
-fn rejects_legal_unsupported_default_method_body() {
-    rejects(
-        "legalunsupported: default_method_body",
+fn accepts_historical_default_method_body() {
+    runs(
         r###"struct S{x:i32}trait Value{fn value()->i32{7}}impl Value for S{}fn run()->i32{<S as Value>::value()}
 fn main(){if run()==7{println!("traits oracle ok");}}
 "###,
+        "traits oracle ok\n",
     );
 }
 

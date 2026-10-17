@@ -656,6 +656,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn trait_default_keys_preserve_trait_owner_and_ignore_discovery_order() {
+        fn keys(source: &str) -> Vec<Vec<u8>> {
+            let program = frontend::parse(source).unwrap();
+            let budget = ir::PlanBudget::default();
+            let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let mut keys = Vec::new();
+            for index in 0..context.callable_count() {
+                let declaration = context.callable_decl(index).unwrap();
+                if context.declaration(declaration).unwrap().kind
+                    != ir::DeclKind::AssociatedFunction
+                    || !matches!(
+                        context.callable_provider(declaration).unwrap(),
+                        frontend::CallableProvider::Source { .. }
+                    )
+                {
+                    continue;
+                }
+                keys.push(
+                    identity(
+                        &ir::CallTarget {
+                            declaration,
+                            type_args: Arc::from([ir::Ty::Int(ir::IntTy::I32)]),
+                        },
+                        &context,
+                        &budget,
+                    )
+                    .unwrap()
+                    .canonical
+                    .to_vec(),
+                );
+            }
+            keys.sort();
+            assert_eq!(keys.len(), 2);
+            assert_ne!(keys[0], keys[1]);
+            keys
+        }
+        let first = keys(
+            "trait A:Sized{fn item(self)->i32{1}}trait B:Sized{fn item(self)->i32{2}}fn main(){}",
+        );
+        let reordered = keys(
+            "fn unrelated(){}trait B:Sized{fn item(self)->i32{2}}trait A:Sized{fn item(self)->i32{1}}fn main(){}",
+        );
+        assert_eq!(first, reordered);
+    }
+
+    #[test]
     fn associated_keys_are_alpha_normalized_and_specialized_owners_are_distinct() {
         fn context(source: &str) -> (frontend::PlanCtx, ir::PlanBudget) {
             let program = frontend::parse(source).unwrap();

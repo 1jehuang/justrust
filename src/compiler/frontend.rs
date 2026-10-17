@@ -5586,6 +5586,18 @@ pub fn parse_unresolved(source: &str) -> Result<ParsedProgram, String> {
         validate_depth(DepthNode::Block(&function.body))
             .map_err(|e| format!("1:1: in function {}: {e}", function.name))?;
     }
+    for declaration in &parsed.program.traits {
+        for item in &declaration.items {
+            if let Some(default) = &item.default {
+                validate_depth(DepthNode::Block(&default.body)).map_err(|e| {
+                    format!(
+                        "1:1: in trait default {}::{}: {e}",
+                        declaration.name, default.name
+                    )
+                })?;
+            }
+        }
+    }
     Ok(parsed)
 }
 /// Convenience frontend for callers without separate parse/signatures phases.
@@ -6446,9 +6458,27 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         resolver.type_params.clear();
         resolver.self_nominal = Some("Self".into());
         for item in &mut declaration.items {
+            resolver.bounds(&mut item.signature.bounds, parent(&declaration.name))?;
             resolver.ty(&mut item.signature.result, parent(&declaration.name))?;
             for (_, ty) in &mut item.signature.params {
                 resolver.ty(ty, parent(&declaration.name))?;
+            }
+            if let Some(f) = &mut item.default {
+                resolver.bounds(&mut f.bounds, parent(&declaration.name))?;
+                resolver.ty(&mut f.result, parent(&declaration.name))?;
+                for (_, ty) in &mut f.params {
+                    resolver.ty(ty, parent(&declaration.name))?;
+                }
+                let mut names = f
+                    .params
+                    .iter()
+                    .map(|(n, _)| n.clone())
+                    .collect::<std::collections::HashSet<_>>();
+                if item.receiver != ReceiverKind::None {
+                    names.insert("self".into());
+                }
+                validate_depth(DepthNode::Block(&f.body))?;
+                resolver.block(&mut f.body, parent(&declaration.name), &mut vec![names])?;
             }
         }
         resolver.self_nominal = None;
@@ -6795,6 +6825,7 @@ pub struct DeclRegistry {
 enum CallableSource {
     Free(usize),
     Associated { implementation: usize, item: usize },
+    TraitDefault { trait_index: usize, item: usize },
 }
 impl DeclRegistry {
     pub fn declaration(&self, id: ir::DeclId) -> Result<&DeclInfo, String> {
@@ -6884,13 +6915,6 @@ fn schema_fields_storage(fields: &[FieldDecl], budget: &ir::PlanBudget) -> Resul
 }
 impl PlanCtx {
     pub fn from_program(program: &Program, budget: &ir::PlanBudget) -> Result<Self, String> {
-        if program
-            .traits
-            .iter()
-            .any(|t| t.items.iter().any(|item| item.default.is_some()))
-        {
-            return Err("source trait default method bodies are unsupported".into());
-        }
         preflight_program_clone(program, budget)?;
         Self::from_shared_program(Arc::new(program.clone()), budget)
     }
@@ -6899,13 +6923,6 @@ impl PlanCtx {
         budget: &ir::PlanBudget,
     ) -> Result<Self, String> {
         let program = shared.as_ref();
-        if program
-            .traits
-            .iter()
-            .any(|t| t.items.iter().any(|item| item.default.is_some()))
-        {
-            return Err("source trait default method bodies are unsupported".into());
-        }
         let snapshot = ir::SnapshotId::allocate()?;
         let catalog_builder = tr::CoreCatalogBuilder::new(snapshot, budget)
             .map_err(|e| e.into_legacy_diagnostic(budget))?;
@@ -6989,10 +7006,11 @@ impl PlanCtx {
             .checked_add(program.structs.len())
             .and_then(|n| n.checked_add(program.enums.len()))
             .and_then(|n| {
-                program
-                    .traits
-                    .iter()
-                    .try_fold(n, |n, t| n.checked_add(1 + t.items.len()))
+                program.traits.iter().try_fold(n, |n, t| {
+                    n.checked_add(
+                        1 + t.items.len() + t.items.iter().filter(|i| i.default.is_some()).count(),
+                    )
+                })
             })
             .and_then(|n| {
                 program
@@ -7145,6 +7163,21 @@ impl PlanCtx {
                     ir::DeclKind::TraitItem,
                     item,
                 )?);
+                if method.default.is_some() {
+                    let id = insert(
+                        &qualify(&declaration.name, &method.signature.name),
+                        &[],
+                        ir::DeclKind::AssociatedFunction,
+                        item,
+                    )?;
+                    registry.function_ids.push(id);
+                    registry
+                        .callable_sources
+                        .push(CallableSource::TraitDefault {
+                            trait_index: index,
+                            item,
+                        });
+                }
             }
             registry.trait_items.push(items);
         }
@@ -7219,6 +7252,40 @@ impl PlanCtx {
                 .map(str::to_owned)
                 .collect::<Vec<_>>()
                 .into();
+        }
+        for (index, source) in registry.callable_sources.iter().enumerate() {
+            let CallableSource::TraitDefault { trait_index, item } = *source else {
+                continue;
+            };
+            let owner = registry.trait_ids[trait_index];
+            let trait_env = registry.declarations[owner.index as usize]
+                .param_env
+                .clone();
+            let module = registry.declarations[owner.index as usize]
+                .path
+                .module
+                .clone();
+            let id = registry.function_ids[index];
+            let info = &mut registry.declarations[id.index as usize];
+            info.owner = Some(owner);
+            info.receiver = program.traits[trait_index].items[item].receiver;
+            info.public = program.traits[trait_index].public;
+            info.env = Arc::new(ir::GenericEnv::new(
+                &[trait_env.clone(), info.param_env.clone()],
+                budget,
+            )?);
+            state.contexts.insert(
+                id,
+                CallableContext {
+                    module,
+                    self_ty: Some(ir::Ty::Param(ir::ParamId {
+                        owner: trait_env.binder(),
+                        index: 0,
+                    })),
+                    associated_owner: None,
+                    receiver: info.receiver,
+                },
+            );
         }
         for (implementation, ids) in registry.associated_ids.iter().enumerate() {
             let impl_env = registry.declarations[registry.impl_ids[implementation].index as usize]
@@ -7366,6 +7433,11 @@ impl PlanCtx {
                     implementation,
                     item,
                 } => &program.impls[implementation].items[item].function,
+                CallableSource::TraitDefault { trait_index, item } => program.traits[trait_index]
+                    .items[item]
+                    .default
+                    .as_ref()
+                    .ok_or("missing source default body")?,
             };
             let info = registry.declaration(id)?;
             let mut bindings = generic_bindings(&registry, &info.env, budget)?;
@@ -7472,6 +7544,15 @@ impl PlanCtx {
                             )?;
                         }
                         append_source_bounds(&registry, &bindings, &f.bounds, &mut rows, budget)?;
+                        if let CallableSource::TraitDefault { trait_index, .. } =
+                            registry.callable_sources[index]
+                        {
+                            rows.push(ir::Predicate::Implements(ir::TraitRef {
+                                declaration: registry.trait_ids[trait_index],
+                                self_ty: context.self_ty.clone().ok_or("default without Self")?,
+                                args: Arc::from([]),
+                            }));
+                        }
                         rows.into()
                     },
                 },
@@ -7540,7 +7621,13 @@ impl PlanCtx {
                             params,
                             result,
                         },
-                        predicates: Arc::from([]),
+                        predicates: {
+                            let mut rows = Vec::new();
+                            append_source_bounds(
+                                &registry, &bindings, &h.bounds, &mut rows, budget,
+                            )?;
+                            rows.into()
+                        },
                     },
                 );
             }
@@ -7643,16 +7730,23 @@ impl PlanCtx {
                     .into(),
             });
             for (ii, item) in t.items.iter().enumerate() {
-                if item.default.is_some() {
-                    return Err("source trait default method bodies are unsupported".into());
-                }
                 let declaration = self.registry.trait_items[ti][ii];
+                budget.charge_work(self.registry.callable_sources.len())?;
                 items.push(tr::TraitItemHeader {
                     declaration,
                     trait_decl: id,
                     receiver: receiver_mode(item.receiver),
                     schema: self.raw_schema(declaration)?,
-                    default: None,
+                    default: self.registry.callable_sources.iter().enumerate().find_map(
+                        |(index, source)| match source {
+                            CallableSource::TraitDefault { trait_index, item }
+                                if *trait_index == ti && *item == ii =>
+                            {
+                                Some(self.registry.function_ids[index])
+                            }
+                            _ => None,
+                        },
+                    ),
                 });
             }
         }
@@ -7857,6 +7951,11 @@ impl PlanCtx {
             .ok_or("recipe has no source AST body")?
         {
             CallableSource::Free(i) => program.functions.get(i),
+            CallableSource::TraitDefault { trait_index, item } => program
+                .traits
+                .get(trait_index)
+                .and_then(|t| t.items.get(item))
+                .and_then(|i| i.default.as_ref()),
             CallableSource::Associated {
                 implementation,
                 item,
@@ -15253,6 +15352,58 @@ mod typed_tests {
     }
 
     #[test]
+    fn trait_default_sources_have_separate_identity_and_rigid_self_facts() {
+        let p = parse(
+            "mod m{fn helper()->i32{7}pub trait V{fn value(&self)->i32{helper()}}}fn main(){}",
+        )
+        .unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&p, &budget).unwrap();
+        let trait_decl = plan.registry.trait_ids[0];
+        let item = plan.registry.trait_items[0][0];
+        let default = plan
+            .registry
+            .callable_sources
+            .iter()
+            .position(|s| {
+                matches!(
+                    s,
+                    CallableSource::TraitDefault {
+                        trait_index: 0,
+                        item: 0
+                    }
+                )
+            })
+            .map(|i| plan.registry.function_ids[i])
+            .unwrap();
+        assert_ne!(default, item);
+        assert_eq!(plan.declaration(default).unwrap().owner, Some(trait_decl));
+        assert_eq!(
+            plan.declaration(default).unwrap().path.module.as_ref(),
+            &["m".to_owned(), "V".to_owned()]
+        );
+        assert_eq!(
+            plan.callable_context(default).unwrap().module.as_ref(),
+            &["m".to_owned()]
+        );
+        assert_eq!(plan.callable_env(default).unwrap().total_arity(), 1);
+        let self_ty = plan.callable_context(default).unwrap().self_ty.unwrap();
+        assert!(plan.callable_facts(default).unwrap().predicates().predicates().iter().any(|p| matches!(p, ir::Predicate::Implements(r) if r.declaration == trait_decl && r.self_ty == self_ty)));
+        assert!(matches!(
+            plan.publish_callable_body(default, &budget).unwrap(),
+            PublishedCallableBody::Source(_)
+        ));
+        check(&p).unwrap();
+        for source in [
+            "trait V{fn v(&self)->i32{true}}fn main(){}",
+            "trait V:Sized{fn v(self)->(Self,Self){(self,self)}}fn main(){}",
+            "trait V{fn v(&mut self)->i32{let a=&mut *self;let b=&mut *self;a.v()+b.v()}}fn main(){}",
+            "trait V{fn v(&self)->i32{missing()}}fn main(){}",
+        ] {
+            assert!(parse(source).and_then(|p| check(&p)).is_err(), "{source}");
+        }
+    }
+    #[test]
     fn trait_required_schemas_and_bound_calls_retain_authoritative_identities() {
         let p=parse("struct S{x:i32}trait Value{fn value(self)->i32;}impl Value for S{fn value(mut self)->i32{self.x=self.x+1;self.x}}fn read<T:Value>(x:T)->i32{<T as Value>::value(x)}fn main(){let n=read::<S>(S{x:6});}").unwrap();
         let budget = ir::PlanBudget::default();
@@ -18630,6 +18781,9 @@ fn preflight_program_clone(program: &Program, budget: &ir::PlanBudget) -> Result
             clone_regions(&head.regions, budget)?;
             clone_parameters(&head.params, budget)?;
             walk_depth(DepthNode::Type(&head.result), Some(budget))?;
+            if let Some(default) = &item.default {
+                preflight_function_clone(default, budget)?;
+            }
         }
     }
     clone_vector(&program.trait_imports, budget)?;

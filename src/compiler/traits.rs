@@ -571,11 +571,47 @@ impl ValidatedFacts {
         let maybe_unsized = if let FactsSubject::SchemaItem(item) = self.subject {
             let header = self.world.item_header(item)?;
             Some(self.world.trait_header(header.trait_decl)?.self_param)
+        } else if let FactsSubject::UniversalCallable(declaration) = self.subject {
+            self.world
+                .source_default_item(declaration)?
+                .map(|item| {
+                    self.world
+                        .trait_header(item.trait_decl)
+                        .map(|h| h.self_param)
+                })
+                .transpose()?
         } else {
             None
         };
+        let maybe_unsized = match maybe_unsized {
+            Some(parameter)
+                if self
+                    .world
+                    .predicates_prove_sized(parameter, &self.predicates.predicates)? =>
+            {
+                None
+            }
+            other => other,
+        };
         self.world
             .validate_ty(ty, self.env(), maybe_unsized, true, 0)
+    }
+    /// Require a Sized value in this exact executable body's obligation
+    /// context. Callers must distinguish owned values from legal unsized places
+    /// behind references before invoking this operation.
+    pub fn require_sized(&self, ty: &Ty) -> Result<()> {
+        self.world.check_facts(self, true)?;
+        self.validate_ty(ty)?;
+        self.world.require_in(
+            &Predicate::Implements(TraitRef {
+                declaration: self.world.catalog.id(CatalogItem::Sized),
+                self_ty: ty.clone(),
+                args: Arc::from([]),
+            }),
+            ProofContext::from_facts(self),
+            &mut Vec::new(),
+        )?;
+        Ok(())
     }
     pub fn must_copy(&self, ty: &Ty) -> Result<bool> {
         if self.phase() == FactsPhase::Schema {
@@ -1061,6 +1097,7 @@ impl ValidatedTraitWorld {
             world.require_impl_wf(h, &h.trait_ref.self_ty, context, &mut Vec::new())?;
         }
         world.build_environments()?;
+        world.validate_default_body_signatures()?;
         if world
             .headers
             .impls
@@ -1249,6 +1286,44 @@ impl ValidatedTraitWorld {
             self.append_predicate(&mut canonical, predicate)?;
         }
         Ok(())
+    }
+    /// Inspect canonical contextual bounds without invoking type validation or
+    /// the goal solver. Merely being a trait Self does not establish Sized.
+    fn predicates_prove_sized(&self, parameter: ParamId, predicates: &[Predicate]) -> Result<bool> {
+        for Predicate::Implements(goal) in predicates {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if goal.declaration == self.catalog.id(CatalogItem::Sized)
+                && goal.args.is_empty()
+                && matches!(&goal.self_ty, Ty::Param(p) if *p == parameter)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+    /// Headers precede authoritative environments. Close only declared bounds,
+    /// including transitive owner supertraits, using the bounded charged walker.
+    /// Never recurse through validation/proving or manufacture a Sized premise.
+    fn schema_maybe_unsized(
+        &self,
+        parameter: ParamId,
+        owner: DeclId,
+        predicates: &[Predicate],
+    ) -> Result<Option<ParamId>> {
+        let mut declared = Vec::new();
+        self.append_predicate(
+            &mut declared,
+            &Predicate::Implements(TraitRef {
+                declaration: owner,
+                self_ty: Ty::Param(parameter),
+                args: Arc::from([]),
+            }),
+        )?;
+        for predicate in predicates {
+            self.append_predicate(&mut declared, predicate)?;
+        }
+        self.close_predicates(&mut declared)?;
+        Ok((!self.predicates_prove_sized(parameter, &declared)?).then_some(parameter))
     }
     fn validate_ty(
         &self,
@@ -2001,25 +2076,22 @@ impl ValidatedTraitWorld {
                 ));
             }
             if let Some(default) = item.default
-                && (self.catalog.declaration(item.declaration).is_none()
-                    || self.catalog.declaration(default).is_none())
+                && self.catalog.declaration(item.declaration).is_none()
             {
-                return Err(FactsError::unsupported(
-                    &self.budget,
-                    "unsupported: source trait default body",
-                ));
+                self.validate_source_default(item, default)?;
             }
+            let maybe_unsized = self.schema_maybe_unsized(
+                trait_header.self_param,
+                item.trait_decl,
+                &item.schema.predicates,
+            )?;
             self.validate_schema_signature(
                 item.declaration,
                 &item.schema.signature,
                 &item.schema.env,
-                Some(trait_header.self_param),
+                maybe_unsized,
             )?;
-            self.validate_predicates(
-                &item.schema.predicates,
-                &item.schema.env,
-                Some(trait_header.self_param),
-            )?;
+            self.validate_predicates(&item.schema.predicates, &item.schema.env, maybe_unsized)?;
             if item.receiver == ReceiverMode::Value
                 && !matches!(item.schema.signature.params.first(), Some(Ty::Param(p)) if *p == trait_header.self_param)
             {
@@ -2050,11 +2122,19 @@ impl ValidatedTraitWorld {
                 ));
             }
             self.validate_declaration_schema(callable.declaration, &callable.schema)?;
+            let default_self = match self.source_default_item(callable.declaration)? {
+                Some(item) => self.schema_maybe_unsized(
+                    self.trait_header(item.trait_decl)?.self_param,
+                    item.trait_decl,
+                    &callable.schema.predicates,
+                )?,
+                None => None,
+            };
             self.validate_schema_signature(
                 callable.declaration,
                 &callable.schema.signature,
                 &callable.schema.env,
-                None,
+                default_self,
             )?;
             if let ReceiverMode::Borrowed { kind } = info.receiver
                 && !matches!(callable.schema.signature.params.first(),
@@ -2065,7 +2145,22 @@ impl ValidatedTraitWorld {
                     "borrowed callable receiver disagrees with canonical parameter zero",
                 ));
             }
-            self.validate_predicates(&callable.schema.predicates, &callable.schema.env, None)?;
+            self.validate_predicates(
+                &callable.schema.predicates,
+                &callable.schema.env,
+                default_self,
+            )?;
+            if self.catalog.declaration(callable.declaration).is_none()
+                && info
+                    .owner
+                    .is_some_and(|owner| self.headers.traits.iter().any(|h| h.declaration == owner))
+                && self.source_default_item(callable.declaration)?.is_none()
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "trait-owned callable is not a registered source default provider",
+                ));
+            }
         }
         for (index, a) in self.headers.impls.iter().enumerate() {
             for b in self.headers.impls[..index].iter() {
@@ -2087,6 +2182,140 @@ impl ValidatedTraitWorld {
                         return Err(FactsError::ambiguous(
                             &self.budget,
                             "overlapping trait impl heads (predicate absence cannot establish disjointness)",
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    /// A source default is a distinct executable declaration, not executable
+    /// permission attached to the signature-only trait item.
+    fn source_default_item(&self, declaration: DeclId) -> Result<Option<&TraitItemHeader>> {
+        let mut found = None;
+        for item in self.headers.items.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if item.default == Some(declaration)
+                && self.catalog.declaration(item.declaration).is_none()
+            {
+                if found.is_some() {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "source default provider is shared by multiple trait items",
+                    ));
+                }
+                found = Some(item);
+            }
+        }
+        Ok(found)
+    }
+    fn validate_source_default(&self, item: &TraitItemHeader, default: DeclId) -> Result<()> {
+        let info = self.info(default)?;
+        let callable = self.callable_header(default)?;
+        let owner = self.trait_header(item.trait_decl)?;
+        if self.catalog.declaration(default).is_some()
+            || info.kind != DeclKind::AssociatedFunction
+            || info.owner != Some(item.trait_decl)
+            || info.receiver != item.receiver
+            || !self.same_parameters(&callable.schema.env, &item.schema.env)?
+            || !self.eq_signature(&callable.schema.signature, &item.schema.signature)?
+            || self.source_default_item(default)?.map(|h| h.declaration) != Some(item.declaration)
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "source default provider owner, binders or signature disagree with trait item",
+            ));
+        }
+        // Both schemas may explicitly spell implicit bounds. Compare their
+        // closed obligation sets, adding only the owning trait and Sized rules.
+        let mut required = Vec::new();
+        for predicate in item.schema.predicates.iter() {
+            self.append_predicate(&mut required, predicate)?;
+        }
+        self.implicit_sized(&item.schema.env, &mut required)?;
+        self.append_predicate(
+            &mut required,
+            &Predicate::Implements(TraitRef {
+                declaration: item.trait_decl,
+                self_ty: Ty::Param(owner.self_param),
+                args: Arc::from([]),
+            }),
+        )?;
+        self.close_predicates(&mut required)?;
+        let mut provided = Vec::new();
+        for predicate in callable.schema.predicates.iter() {
+            self.append_predicate(&mut provided, predicate)?;
+        }
+        self.implicit_sized(&callable.schema.env, &mut provided)?;
+        self.append_predicate(
+            &mut provided,
+            &Predicate::Implements(TraitRef {
+                declaration: item.trait_decl,
+                self_ty: Ty::Param(owner.self_param),
+                args: Arc::from([]),
+            }),
+        )?;
+        self.close_predicates(&mut provided)?;
+        for (left, right) in [(&required, &provided), (&provided, &required)] {
+            for predicate in left.iter() {
+                let mut present = false;
+                for candidate in right.iter() {
+                    if self.eq_predicate(predicate, candidate)? {
+                        present = true;
+                        break;
+                    }
+                }
+                if !present {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "source default provider changes trait item obligations",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+    /// A declaration may describe `fn f(self)` for a possibly-unsized Self,
+    /// but an executable default cannot receive or return that Self by value.
+    /// Only declared method bounds or owning-trait supertraits can discharge
+    /// this requirement, never the existence of a default body itself.
+    fn validate_default_body_signatures(&self) -> Result<()> {
+        for item in self.headers.items.iter() {
+            let Some(default) = item.default else {
+                continue;
+            };
+            if self.catalog.declaration(item.declaration).is_some() {
+                continue;
+            }
+            let self_param = self.trait_header(item.trait_decl)?.self_param;
+            for ty in item
+                .schema
+                .signature
+                .params
+                .iter()
+                .chain(std::iter::once(&item.schema.signature.result))
+            {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if matches!(ty, Ty::Param(parameter) if *parameter == self_param) {
+                    let env = self.predicate_env(default)?;
+                    if matches!(
+                        self.prove_in(
+                            &Predicate::Implements(TraitRef {
+                                declaration: self.catalog.id(CatalogItem::Sized),
+                                self_ty: ty.clone(),
+                                args: Arc::from([]),
+                            }),
+                            ProofContext {
+                                predicates: &env,
+                                phase: FactsPhase::Universal,
+                            },
+                            &mut Vec::new(),
+                        )?,
+                        ProofOutcome::NotProven
+                    ) {
+                        return Err(FactsError::unproved(
+                            &self.budget,
+                            "trait default body takes or returns Self by value without a proven Sized bound",
                         ));
                     }
                 }
@@ -3461,6 +3690,16 @@ impl ValidatedTraitWorld {
                 self.append_predicate(&mut requirements, p)?;
             }
             self.implicit_sized(&callable.schema.env, &mut requirements)?;
+            if let Some(item) = self.source_default_item(callable.declaration)? {
+                self.append_predicate(
+                    &mut requirements,
+                    &Predicate::Implements(TraitRef {
+                        declaration: item.trait_decl,
+                        self_ty: Ty::Param(self.trait_header(item.trait_decl)?.self_param),
+                        args: Arc::from([]),
+                    }),
+                )?;
+            }
             let owner = self.info(callable.declaration)?.owner;
             let mut implementation = None;
             for h in self.headers.impls.iter() {
@@ -5533,6 +5772,13 @@ pub(crate) mod test_support {
                     }
                 }
             }
+            for item in headers.items.iter() {
+                charged(budget, budget.charge_work(1))?;
+                if item.default == Some(h.declaration) {
+                    owner = Some(item.trait_decl);
+                    receiver = item.receiver;
+                }
+            }
             schema.register(
                 h.declaration,
                 if owner.is_some() {
@@ -6593,6 +6839,223 @@ mod tests {
             .unwrap();
         assert!(world.validate_actual(&root, universal.env()).is_err());
         assert!(universal.must_copy(&root).unwrap());
+    }
+
+    fn add_source_default(c: &mut Case, omit_override: bool) -> DeclId {
+        let default = test_support::source_decl(c.item.snapshot, 20, &c.budget).unwrap();
+        let sized = test_support::adapter(&c.headers, &c.types, &c.budget)
+            .unwrap()
+            .core_catalog()
+            .id(CatalogItem::Sized);
+        let item = &mut Arc::make_mut(&mut c.headers.items)[0];
+        item.default = Some(default);
+        if item.receiver == ReceiverMode::Value {
+            let mut predicates = item.schema.predicates.to_vec();
+            predicates.push(Predicate::Implements(TraitRef {
+                declaration: sized,
+                self_ty: item.schema.signature.params[0].clone(),
+                args: Arc::from([]),
+            }));
+            item.schema.predicates = predicates.into();
+        }
+        let mut schema = item.schema.clone();
+        let trait_scope = schema.env.scopes()[0].clone();
+        schema.env = env(&[trait_scope, scope(default, 0, &c.budget)], &c.budget);
+        let mut callables = c.headers.callables.to_vec();
+        callables.push(CallableHeader {
+            declaration: default,
+            schema,
+        });
+        c.headers.callables = callables.into();
+        if omit_override {
+            Arc::make_mut(&mut c.headers.impls)[0].items = Arc::from([]);
+        }
+        default
+    }
+
+    #[test]
+    fn source_default_provider_dispatch_substitutes_self_and_override_wins() {
+        for omit_override in [true, false] {
+            let mut c = case();
+            let default = add_source_default(&mut c, omit_override);
+            let world = c.build().unwrap();
+            let facts = world.callable_facts(c.caller).unwrap();
+            let resolved = world
+                .resolve_trait_call(&c.call(c.boxed.clone()), &facts)
+                .unwrap();
+            let Callee::Direct(target) = resolved.callee() else {
+                panic!("expected direct provider")
+            };
+            assert_eq!(
+                target.declaration,
+                if omit_override { default } else { c.body }
+            );
+            let expected = if omit_override { &c.boxed } else { &c.leaf };
+            assert!(
+                world
+                    .eq_types(&target.type_args, std::slice::from_ref(expected), 0)
+                    .unwrap()
+            );
+            world.instance_facts(target).unwrap();
+            let universal = world.callable_facts(default).unwrap();
+            let self_ty = Ty::Param(universal.env().ordered_params().next().unwrap());
+            assert!(matches!(
+                world
+                    .prove_goal(&c.goal(self_ty.clone()), &universal)
+                    .unwrap(),
+                ProofOutcome::Proved(_)
+            ));
+            let deferred = world
+                .resolve_trait_call(&c.call(self_ty), &universal)
+                .unwrap();
+            assert!(matches!(deferred.callee(), Callee::TraitItem(_)));
+            assert!(
+                world
+                    .schema_facts(c.item)
+                    .unwrap()
+                    .must_copy(&c.leaf)
+                    .is_err()
+            );
+            assert!(world.callable_facts(c.item).is_err());
+            // Default entry still needs a real implementation, not the
+            // universal provider's assumed Self:Trait predicate.
+            assert!(
+                world
+                    .instance_facts(&CallTarget {
+                        declaration: default,
+                        type_args: Arc::from([c.leaf.clone()]),
+                    })
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn source_default_borrowed_provider_preserves_contract_and_self_formation() {
+        let mut c = borrowed_case();
+        let default = add_source_default(&mut c, true);
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let resolved = world
+            .resolve_trait_call(&c.call(c.boxed.clone()), &facts)
+            .unwrap();
+        let Callee::Direct(target) = resolved.callee() else {
+            panic!("expected borrowed default")
+        };
+        assert_eq!(target.declaration, default);
+        facts
+            .validate_signature(
+                SignatureSubject::Call(resolved.callee()),
+                resolved.signature(),
+            )
+            .unwrap();
+        assert_eq!(
+            facts.callee_receiver(resolved.callee()).unwrap(),
+            ReceiverMode::Borrowed {
+                kind: BorrowKind::Shared
+            }
+        );
+        let universal = world.callable_facts(default).unwrap();
+        let self_ty = Ty::Param(universal.env().ordered_params().next().unwrap());
+        universal.validate_ty(&reference(self_ty.clone())).unwrap();
+        assert!(
+            universal
+                .validate_ty(&Ty::Array {
+                    element: Arc::new(self_ty),
+                    len: 1
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn source_default_owned_self_requires_declared_sized_even_when_overridden() {
+        for omit_override in [true, false] {
+            let mut c = case();
+            add_source_default(&mut c, omit_override);
+            // Required schemas can describe unsized by-value Self, but the
+            // default's executable body must be checked regardless of use.
+            Arc::make_mut(&mut c.headers.items)[0].schema.predicates = Arc::from([]);
+            Arc::make_mut(&mut c.headers.callables)
+                .last_mut()
+                .unwrap()
+                .schema
+                .predicates = Arc::from([]);
+            assert!(matches!(c.build(), Err(error) if error.kind() == FactsErrorKind::Unproved));
+            let sized = test_support::adapter(&c.headers, &c.types, &c.budget)
+                .unwrap()
+                .core_catalog()
+                .id(CatalogItem::Sized);
+            let self_ty = c.headers.items[0].schema.signature.params[0].clone();
+            Arc::make_mut(&mut c.headers.traits)[1].supertraits = Arc::from([TraitRef {
+                declaration: sized,
+                self_ty,
+                args: Arc::from([]),
+            }]);
+            c.build().unwrap();
+        }
+        let mut c = borrowed_case();
+        let default = add_source_default(&mut c, true);
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(default).unwrap();
+        let self_ty = Ty::Param(facts.env().ordered_params().next().unwrap());
+        assert!(facts.require_sized(&self_ty).is_err());
+        facts.require_sized(&reference(self_ty.clone())).unwrap();
+        assert!(
+            world
+                .schema_facts(c.item)
+                .unwrap()
+                .require_sized(&c.leaf)
+                .is_err()
+        );
+        assert!(matches!(
+            world
+                .prove_goal(
+                    &Predicate::Implements(TraitRef {
+                        declaration: world.catalog.id(CatalogItem::Sized),
+                        self_ty,
+                        args: Arc::from([]),
+                    }),
+                    &facts
+                )
+                .unwrap(),
+            ProofOutcome::NotProven
+        ));
+    }
+
+    #[test]
+    fn source_default_provider_requires_registered_callable() {
+        let mut c = case();
+        add_source_default(&mut c, true);
+        c.headers.callables = c.headers.callables[..c.headers.callables.len() - 1].into();
+        assert!(matches!(c.build(), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
+    }
+
+    #[test]
+    fn source_default_provider_rejects_changed_signature_or_obligations() {
+        let mut c = case();
+        add_source_default(&mut c, true);
+        Arc::make_mut(&mut c.headers.callables)
+            .last_mut()
+            .unwrap()
+            .schema
+            .signature
+            .result = Ty::Bool;
+        assert!(matches!(c.build(), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
+        let mut c = case();
+        add_source_default(&mut c, true);
+        let self_ty = c.headers.items[0].schema.signature.params[0].clone();
+        let marker = c.headers.traits[0].declaration;
+        Arc::make_mut(&mut c.headers.callables)
+            .last_mut()
+            .unwrap()
+            .schema
+            .predicates = Arc::from([Predicate::Implements(TraitRef {
+            declaration: marker,
+            self_ty,
+            args: Arc::from([]),
+        })]);
+        assert!(matches!(c.build(), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
     }
 
     #[test]

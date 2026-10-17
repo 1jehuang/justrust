@@ -1,5 +1,10 @@
 # Trait declarations, obligations and sealed static dispatch
 
+Current extension: `TRAIT-DEFAULTS.md` defines executable source-provided trait
+methods, universal checking of unused defaults and override-aware static dispatch.
+The first-client exclusions below describe the historical checkpoint, not removal
+of later delivered source-default or borrowed-receiver support.
+
 Status: frozen design and independently classified source contract. This
 commit alone is not implementation authorization. All source owners and both
 independent design reviewers reported feasibility CLEAR after complete reads.
