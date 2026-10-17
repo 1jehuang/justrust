@@ -1,9 +1,12 @@
 # Owned semantic-name checkpoint
 
-This checkpoint implements reusable checked name/path storage and the first
+This historical checkpoint implements reusable checked name/path storage and the first
 actual AST integration: loop labels. It does not complete the name-bearing AST,
 root resolver migration, mixed-site hygiene, Unicode semantic identifiers, or
-native macro execution. Those remain explicit work in `IMPLEMENTATION.md`.
+native macro execution. The later actual root-context AST/resolver/checker/replay
+migration is accepted under `MODULE-IDENTITY.md`. Mixed-site hygiene, Unicode
+semantic identifiers and native source macro execution remain explicit work in
+`IMPLEMENTATION.md`.
 
 ## One owner, real occurrences
 

@@ -4,7 +4,7 @@ use super::{frontend, ir, traits};
 use std::sync::Arc;
 
 const SEMANTICS: &[u8] =
-    b"jr-native-generic-carriers-v1/linux-x86_64/checked/carrier-regions-storage-effects";
+    b"jr-native-generic-carriers-v3/linux-x86_64/checked/carrier-regions-storage-effects/structured-declaration-paths/trait-owned-declarations";
 
 pub(super) struct InstanceIdentity {
     pub symbol: String,
@@ -61,8 +61,8 @@ impl Encoder<'_> {
                 return self.catalog_item(item);
             }
         }
-        let path = self.context.semantic_path(declaration)?;
-        self.append(&[match path.kind {
+        let path = self.context.persistent_decl_path(declaration)?;
+        self.append(&[match path.kind() {
             ir::DeclKind::Function => 0,
             ir::DeclKind::Struct => 1,
             ir::DeclKind::Enum => 2,
@@ -72,18 +72,23 @@ impl Encoder<'_> {
             ir::DeclKind::TraitItem => 6,
             ir::DeclKind::TraitImpl => 7,
         }])?;
-        self.count(path.module.len())?;
-        for component in path.module.iter() {
-            self.text(component)?;
-        }
-        self.text(&path.item)?;
-        if let Some(owner) = &path.associated {
-            self.append(b"A")?;
-            let impl_path = self.context.semantic_path(owner.impl_decl)?;
-            self.count(impl_path.module.len())?;
-            for component in impl_path.module.iter() {
-                self.text(component)?;
+        self.module_path(&path)?;
+        match path.item() {
+            frontend::PersistentDeclItem::Name(name) => {
+                self.append(b"N")?;
+                self.text(name)?;
             }
+            frontend::PersistentDeclItem::Impl => self.append(b"I")?,
+            frontend::PersistentDeclItem::Catalog(item) => {
+                self.append(b"C")?;
+                self.catalog_item(item)?;
+            }
+        }
+        let semantic = self.context.semantic_path(declaration)?;
+        if let Some(owner) = &semantic.associated {
+            self.append(b"A")?;
+            let impl_path = self.context.persistent_decl_path(owner.impl_decl)?;
+            self.module_path(&impl_path)?;
             self.declaration(owner.nominal)?;
             let env = self.context.param_env(owner.impl_decl)?;
             self.count(env.arity())?;
@@ -111,9 +116,59 @@ impl Encoder<'_> {
                     kind: ir::BorrowKind::Mut,
                 } => 4,
             }])
+        } else if let Some(owner) = self.context.declaration(declaration)?.owner {
+            // Trait items and provided bodies live in the trait's lexical
+            // module, not a synthetic child module named after the trait.
+            // Their checked owner must therefore be part of persistent identity.
+            let owner_info = self.context.declaration(owner)?;
+            if !matches!(
+                path.kind(),
+                ir::DeclKind::TraitItem | ir::DeclKind::AssociatedFunction
+            ) || owner_info.kind != ir::DeclKind::Trait
+                || owner_info.owner.is_some()
+            {
+                return Err("instance key has invalid trait declaration owner".into());
+            }
+            self.append(b"T")?;
+            self.declaration(owner)
         } else {
             self.append(b"F")
         }
+    }
+
+    /// The checked descriptor borrows normalized atoms from the retained store.
+    /// Arena handles, occurrence indices and display strings never enter the wire.
+    fn module_path(&mut self, path: &frontend::PersistentDeclPath<'_>) -> Result<(), String> {
+        self.append(match path.crate_root() {
+            frontend::PersistentCrate::Source => b"S",
+            frontend::PersistentCrate::Core => b"C",
+        })?;
+        let mut count = 0_usize;
+        for _ in path.modules() {
+            self.budget.charge_work(1)?;
+            count = count
+                .checked_add(1)
+                .ok_or("generic instance module path length limit exceeded")?;
+        }
+        self.count(count)?;
+        for component in path.modules() {
+            match component {
+                frontend::PersistentModule::Source(name) => {
+                    self.append(b"S")?;
+                    self.text(name)?;
+                }
+                frontend::PersistentModule::Catalog(module) => {
+                    self.append(b"C")?;
+                    self.append(&[match module {
+                        super::module_identity::CatalogModule::Root => 0,
+                        super::module_identity::CatalogModule::Marker => 1,
+                        super::module_identity::CatalogModule::Clone => 2,
+                        super::module_identity::CatalogModule::Ops => 3,
+                    }])?;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn catalog_item(&mut self, item: traits::CatalogItem) -> Result<(), String> {
@@ -509,13 +564,7 @@ pub(super) fn build(
                 .try_reserve_exact(1)
                 .map_err(|_| "generic plan reservation allocation limit exceeded")?;
             let mut identity = identity(&target, context, budget)?;
-            let path = context.semantic_path(target.declaration)?;
-            if path.kind == ir::DeclKind::Function
-                && path.associated.is_none()
-                && path.module.is_empty()
-                && path.item == "main"
-                && target.type_args.is_empty()
-            {
+            if context.is_entry_decl(target.declaration)? && target.type_args.is_empty() {
                 identity.symbol.clear();
                 identity.symbol.push_str("main");
             }
@@ -655,6 +704,121 @@ pub(super) fn build(
 mod tests {
     use super::*;
 
+    // Inventory selection only. Production resolution and entry selection use
+    // checked typed APIs, never these persistence atom descriptors.
+    fn named(context: &frontend::PlanCtx, declaration: ir::DeclId, name: &str) -> bool {
+        matches!(
+            context.persistent_decl_path(declaration).unwrap().item(),
+            frontend::PersistentDeclItem::Name(atom) if atom == name
+        )
+    }
+
+    fn source_keys(source: &str) -> Vec<(Vec<u8>, String)> {
+        let program = frontend::parse(source).unwrap();
+        let budget = ir::PlanBudget::default();
+        let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let mut keys = Vec::new();
+        for index in 0..context.callable_count() {
+            let declaration = context.callable_decl(index).unwrap();
+            if !matches!(
+                context.callable_provider(declaration).unwrap(),
+                frontend::CallableProvider::Source { .. }
+            ) {
+                continue;
+            }
+            let key = identity(
+                &ir::CallTarget {
+                    declaration,
+                    type_args: Arc::from([]),
+                },
+                &context,
+                &budget,
+            )
+            .unwrap();
+            assert!(key.canonical.starts_with(SEMANTICS));
+            keys.push((key.canonical.to_vec(), key.symbol));
+        }
+        keys.sort();
+        keys
+    }
+
+    #[test]
+    fn module_keys_ignore_arena_allocation_and_name_occurrence_order() {
+        let first = source_keys(
+            "mod outer{pub mod left{pub fn item()->i32{1}}pub mod right{pub fn item()->i32{2}}}fn main(){}",
+        );
+        let reordered = source_keys(
+            "fn main(){}mod outer{pub mod right{pub fn item()->i32{let unused=2;unused}}pub mod left{pub fn item()->i32{let padding=1;padding}}}",
+        );
+        assert_eq!(first.len(), 3);
+        assert_eq!(first, reordered);
+        assert!(first.windows(2).all(|pair| pair[0].0 != pair[1].0));
+    }
+
+    #[test]
+    fn module_keys_preserve_segment_boundaries_and_item_atoms() {
+        let split_left = source_keys("mod ab{pub mod c{pub fn item()->i32{1}}}fn main(){}");
+        let split_right = source_keys("mod a{pub mod bc{pub fn item()->i32{1}}}fn main(){}");
+        let renamed = source_keys("mod ab{pub mod c{pub fn other()->i32{1}}}fn main(){}");
+        assert_eq!(split_left.len(), 2);
+        assert_eq!(split_right.len(), 2);
+        assert_eq!(renamed.len(), 2);
+        assert_ne!(split_left, split_right);
+        assert_ne!(split_left, renamed);
+    }
+
+    #[test]
+    fn entry_selection_uses_checked_source_root_not_item_spelling_alone() {
+        let program = frontend::parse("mod nested{pub fn main(){}}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let mut entries = 0;
+        let mut nested = 0;
+        for index in 0..context.callable_count() {
+            let declaration = context.callable_decl(index).unwrap();
+            if !matches!(
+                context.callable_provider(declaration).unwrap(),
+                frontend::CallableProvider::Source { .. }
+            ) {
+                continue;
+            }
+            let path = context.persistent_decl_path(declaration).unwrap();
+            assert!(matches!(
+                path.crate_root(),
+                frontend::PersistentCrate::Source
+            ));
+            assert!(matches!(
+                path.item(),
+                frontend::PersistentDeclItem::Name("main")
+            ));
+            if context.is_entry_decl(declaration).unwrap() {
+                assert_eq!(path.modules().count(), 0);
+                entries += 1;
+            } else {
+                assert_eq!(path.modules().count(), 1);
+                nested += 1;
+            }
+        }
+        assert_eq!((entries, nested), (1, 1));
+    }
+
+    #[test]
+    fn persistent_identity_rejects_foreign_declaration_before_encoding() {
+        let source = "fn item()->i32{1}fn main(){}";
+        let first_program = frontend::parse(source).unwrap();
+        let second_program = frontend::parse(source).unwrap();
+        let budget = ir::PlanBudget::default();
+        let first = frontend::PlanCtx::from_program(&first_program, &budget).unwrap();
+        let second = frontend::PlanCtx::from_program(&second_program, &budget).unwrap();
+        let target = ir::CallTarget {
+            declaration: first.callable_decl(0).unwrap(),
+            type_args: Arc::from([]),
+        };
+        assert!(identity(&target, &first, &budget).is_ok());
+        assert!(identity(&target, &second, &budget).is_err());
+        assert!(second.is_entry_decl(target.declaration).is_err());
+    }
+
     #[test]
     fn trait_default_keys_preserve_trait_owner_and_ignore_discovery_order() {
         fn keys(source: &str) -> Vec<Vec<u8>> {
@@ -720,7 +884,7 @@ mod tests {
                         return false;
                     }
                     let path = context.semantic_path(*declaration).unwrap();
-                    path.associated.is_some() && path.item == name
+                    path.associated.is_some() && named(context, *declaration, name)
                 })
                 .collect()
         }
@@ -772,7 +936,7 @@ mod tests {
                     continue;
                 }
                 let path = context.semantic_path(declaration).unwrap();
-                if path.item == "item" && path.associated.is_some() {
+                if named(&context, declaration, "item") && path.associated.is_some() {
                     result.push(
                         identity(
                             &ir::CallTarget {
@@ -816,7 +980,7 @@ mod tests {
                         frontend::CallableProvider::Source { .. }
                     )
                 })
-                .find(|declaration| context.semantic_path(*declaration).unwrap().item == "value")
+                .find(|declaration| named(&context, *declaration, "value"))
                 .unwrap();
             identity(
                 &ir::CallTarget {
@@ -854,7 +1018,7 @@ mod tests {
                     matches!(
                         context.callable_provider(*declaration).unwrap(),
                         frontend::CallableProvider::Source { .. }
-                    ) && context.semantic_path(*declaration).unwrap().item == "identity"
+                    ) && named(&context, *declaration, "identity")
                 })
                 .unwrap();
             (context, budget, declaration)

@@ -56,7 +56,12 @@ fn lowered(source: &str, name: &str) -> Function {
     let index = program
         .functions
         .iter()
-        .position(|function| function.name == name)
+        .position(|function| {
+            let path = &function.name;
+            path.anchor() == crate::compiler::semantic_path::PathAnchor::Crate
+                && path.len() == 1
+                && program.names.spelling(path.segments()[0]).unwrap() == name
+        })
         .expect("function");
     let checked =
         super::super::frontend::type_function_with_signatures(&program, index, &signatures)

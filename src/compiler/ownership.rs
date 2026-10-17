@@ -3065,6 +3065,29 @@ fn analyze_with_context(
 
 #[cfg(test)]
 mod tests {
+
+    // Retain the real checked source-name owner alongside its module arena.
+    fn fixture_modules() -> (
+        std::sync::Arc<super::super::semantic_name::NameStore>,
+        std::sync::Arc<super::super::module_identity::ModuleArena>,
+    ) {
+        use super::super::expansion_budget::ExpansionBudget;
+        use super::super::module_identity::ModuleArenaBuilder;
+        use super::super::semantic_name::NameStoreBuilder;
+        use super::super::token::Edition;
+        use super::super::token_session::{SourceSnapshot, TokenSession};
+        let budget = ExpansionBudget::default();
+        let sources =
+            SourceSnapshot::from_text(std::path::Path::new("module-fixture.rs"), "", &budget)
+                .unwrap();
+        let session = TokenSession::new(sources, budget).unwrap();
+        let names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let modules = ModuleArenaBuilder::for_source(&names)
+            .unwrap()
+            .freeze()
+            .unwrap();
+        (names.freeze().unwrap(), modules)
+    }
     #[test]
     fn budget_telemetry_local_work_rejection_preserves_plan_and_callsite() {
         use super::super::ir::{PlanBudget, ResourceBudgetKind};
@@ -3396,6 +3419,7 @@ mod tests {
     }
 
     fn fixture_world(
+        modules: &std::sync::Arc<super::super::module_identity::ModuleArena>,
         env: Arc<GenericEnv>,
         signature: super::super::ir::Signature,
         budget: &super::super::ir::PlanBudget,
@@ -3410,12 +3434,13 @@ mod tests {
                 predicates: Arc::from([]),
             },
         };
-        let world = super::super::traits::test_support::world(&[header], budget)
+        let world = super::super::traits::test_support::world(modules.clone(), &[header], budget)
             .map_err(|error| error.to_string())?;
         Ok((declaration, world))
     }
 
     fn lower_fixture_template(
+        modules: &std::sync::Arc<super::super::module_identity::ModuleArena>,
         source: Arc<CheckedFunction>,
         env: Arc<GenericEnv>,
         budget: &super::super::ir::PlanBudget,
@@ -3429,7 +3454,7 @@ mod tests {
             result: source.result.clone(),
             ref_contract: source.ref_contract.clone(),
         };
-        let (declaration, world) = fixture_world(env, signature, budget)?;
+        let (declaration, world) = fixture_world(modules, env, signature, budget)?;
         let facts = world
             .callable_facts(declaration)
             .map_err(|error| error.to_string())?;
@@ -3437,6 +3462,7 @@ mod tests {
     }
 
     fn close_fixture(
+        modules: &std::sync::Arc<super::super::module_identity::ModuleArena>,
         function: Arc<cfg::Function>,
         budget: &super::super::ir::PlanBudget,
     ) -> Result<cfg::ClosedCfg, String> {
@@ -3454,7 +3480,7 @@ mod tests {
             result: function.result.clone(),
             ref_contract: function.ref_contract.clone(),
         };
-        let (_, world) = fixture_world(env, signature, budget)?;
+        let (_, world) = fixture_world(modules, env, signature, budget)?;
         let facts = world
             .instance_facts(&CallTarget {
                 declaration,
@@ -3480,7 +3506,12 @@ mod tests {
                     frontend::CallableProvider::Source { .. }
                 )
             })
-            .find(|declaration| plan.callable_body(&program, *declaration).unwrap().name == name)
+            .find(|declaration| {
+                let path = &plan.callable_body(&program, *declaration).unwrap().name;
+                path.anchor() == super::super::semantic_path::PathAnchor::Crate
+                    && path.len() == 1
+                    && program.names.spelling(path.segments()[0]).unwrap() == name
+            })
             .unwrap();
         let checked = frontend::type_callable_with_plan(&program, declaration, &plan, budget)
             .unwrap_or_else(|error| panic!("{name} in {source}: {error}"));
@@ -4022,6 +4053,7 @@ mod tests {
 
     #[test]
     fn trait_named_copy_cannot_grant_permission_and_explicit_moves_still_consume() {
+        let (_module_names, modules) = fixture_modules();
         use super::super::ir::PlanBudget;
         let budget = PlanBudget::default();
         let source = "trait Copy {} fn once<T: Copy>(value:T)->T { value } fn twice<T: Copy>(value:T)->(T,T) { (value,value) } fn main() {}";
@@ -4058,8 +4090,8 @@ mod tests {
                 value: Rvalue::Use(Operand::Move(place(1))),
             }),
         ]);
-        let failure =
-            analyze_closed(close_fixture(Arc::new(explicit), &budget).unwrap()).unwrap_err();
+        let failure = analyze_closed(close_fixture(&modules, Arc::new(explicit), &budget).unwrap())
+            .unwrap_err();
         assert!(
             failure
                 .diagnostics
@@ -4070,6 +4102,7 @@ mod tests {
 
     #[test]
     fn trait_dead_foreign_item_metadata_and_unproved_closed_instances_fail_sealed() {
+        let (_module_names, modules) = fixture_modules();
         use super::super::ir::{CallTarget, Callee, PlanBudget};
         let budget = PlanBudget::default();
         let source = "trait Take { fn take(self)->Self; } fn forward<T: Take>(value:T)->T { value.take() } fn main() {}";
@@ -4128,7 +4161,7 @@ mod tests {
             failure.kind(),
             super::super::traits::FactsErrorKind::Unproved
         );
-        let closed = close_fixture(Arc::new(fixture()), &budget).unwrap();
+        let closed = close_fixture(&modules, Arc::new(fixture()), &budget).unwrap();
         let exact_cfg = closed.function().clone();
         let closed_facts = closed.facts().clone();
         assert!(cfg::close(template.function().clone(), closed_facts.clone(), &budget).is_err());
@@ -4244,6 +4277,7 @@ mod tests {
 
     #[test]
     fn multi_binder_template_proof_binds_full_environment_source_cfg_and_analysis() {
+        let (_module_names, modules) = fixture_modules();
         use super::super::ir::{Block, Completion, ExprKind, PlanBudget, TypedExpr};
         let (env, parameters) = symbolic_pair();
         let ty = Ty::Tuple(Vec::from(parameters).into());
@@ -4266,17 +4300,18 @@ mod tests {
             },
         });
         let budget = PlanBudget::default();
-        let template = lower_fixture_template(source.clone(), env.clone(), &budget).unwrap();
+        let template =
+            lower_fixture_template(&modules, source.clone(), env.clone(), &budget).unwrap();
         let exact_cfg = template.function().clone();
         let proof = verify_template(template).unwrap();
         assert!(Arc::ptr_eq(proof.env(), &env));
         assert!(Arc::ptr_eq(proof.source(), &source));
         assert!(Arc::ptr_eq(proof.function(), &exact_cfg));
         assert!(proof.analysis().passed());
-        assert!(close_fixture(exact_cfg, &budget).is_err());
+        assert!(close_fixture(&modules, exact_cfg, &budget).is_err());
         for scope in env.scopes() {
             let partial = Arc::new(GenericEnv::new(std::slice::from_ref(scope), &budget).unwrap());
-            assert!(lower_fixture_template(source.clone(), partial, &budget).is_err());
+            assert!(lower_fixture_template(&modules, source.clone(), partial, &budget).is_err());
         }
         let program = super::super::frontend::parse("fn main() {}").unwrap();
         let mut cx = super::super::frontend::PlanCtx::from_program(&program, &budget).unwrap();
@@ -4329,7 +4364,7 @@ mod tests {
         let (_, foreign) = symbolic_parameter();
         let mut forged = source.as_ref().clone();
         forged.locals.push(local(array(foreign, 0)));
-        assert!(lower_fixture_template(Arc::new(forged), env, &budget).is_err());
+        assert!(lower_fixture_template(&modules, Arc::new(forged), env, &budget).is_err());
     }
 
     #[test]
@@ -4420,6 +4455,7 @@ mod tests {
 
     #[test]
     fn generic_capabilities_bind_exact_source_and_cfg_and_refuse_failed_or_open_native_input() {
+        let (_module_names, modules) = fixture_modules();
         use super::super::ir::{Block, Completion, ExprKind, PlanBudget, TypedExpr};
         let (env, parameter) = symbolic_parameter();
         let source = Arc::new(CheckedFunction {
@@ -4441,13 +4477,14 @@ mod tests {
             },
         });
         let budget = PlanBudget::default();
-        let structural = lower_fixture_template(source.clone(), env.clone(), &budget).unwrap();
+        let structural =
+            lower_fixture_template(&modules, source.clone(), env.clone(), &budget).unwrap();
         let exact_cfg = structural.function().clone();
         let verified = verify_template(structural).unwrap();
         assert!(Arc::ptr_eq(verified.source(), &source));
         assert!(Arc::ptr_eq(verified.function(), &exact_cfg));
         assert!(verified.analysis().passed());
-        assert!(close_fixture(exact_cfg, &budget).is_err());
+        assert!(close_fixture(&modules, exact_cfg, &budget).is_err());
         let mut duplicated = source.as_ref().clone();
         duplicated.result = Ty::Tuple(vec![parameter.clone(), parameter.clone()].into());
         duplicated.exprs.push(TypedExpr {
@@ -4457,11 +4494,12 @@ mod tests {
         });
         duplicated.body.tail = Some(ExprId(1));
         let structural =
-            lower_fixture_template(Arc::new(duplicated), env.clone(), &budget).unwrap();
+            lower_fixture_template(&modules, Arc::new(duplicated), env.clone(), &budget).unwrap();
         assert!(verify_template(structural).is_err());
         let exact_closed = Arc::new(fixture());
         let concrete =
-            analyze_closed(close_fixture(exact_closed.clone(), &budget).unwrap()).unwrap();
+            analyze_closed(close_fixture(&modules, exact_closed.clone(), &budget).unwrap())
+                .unwrap();
         assert!(Arc::ptr_eq(concrete.function(), &exact_closed));
         assert!(concrete.analysis().passed());
         let mut invalid = fixture();
@@ -4470,9 +4508,11 @@ mod tests {
             located(Statement::StorageLive(LocalId(1))),
             located(Statement::Inspect(place(1))),
         ]);
-        assert!(analyze_closed(close_fixture(Arc::new(invalid), &budget).unwrap()).is_err());
+        assert!(
+            analyze_closed(close_fixture(&modules, Arc::new(invalid), &budget).unwrap()).is_err()
+        );
         let (foreign_env, _) = symbolic_parameter();
-        assert!(lower_fixture_template(source, foreign_env, &budget).is_err());
+        assert!(lower_fixture_template(&modules, source, foreign_env, &budget).is_err());
         let mut hidden = fixture();
         hidden.locals.push(local(array(
             Ty::Ref {
@@ -4487,7 +4527,7 @@ mod tests {
         );
         // Application identity alone cannot hide an open or foreign-binder
         // type argument inside a constant in a disconnected aggregate.
-        let closed_enum = unit_enum();
+        let closed_enum = unit_enum(&modules);
         let (_, foreign_parameter) = symbolic_parameter();
         let mut forged_definition = closed_enum.def().clone();
         forged_definition.type_args = Arc::from([foreign_parameter]);
@@ -4508,7 +4548,7 @@ mod tests {
             })],
             terminator: located(Terminator::Unreachable),
         });
-        assert!(close_fixture(Arc::new(forged.clone()), &budget).is_err());
+        assert!(close_fixture(&modules, Arc::new(forged.clone()), &budget).is_err());
         assert!(
             !analyze_with_facts(&forged, Limits::default(), FactsCtx::Universal(&env), None)
                 .passed()
@@ -4990,11 +5030,12 @@ mod tests {
 
     #[test]
     fn integer_cast_nonnumeric_and_noncanonical_dead_operands_cannot_create_origins() {
+        let (_module_names, modules) = fixture_modules();
         use super::super::ir::BorrowKind;
         for source in [
             Ty::Bool,
             Ty::Unit,
-            nominal(vec![Ty::Int(IntTy::I32)]),
+            nominal(&modules, vec![Ty::Int(IntTy::I32)]),
             Ty::Ref {
                 kind: BorrowKind::Mut,
                 referent: std::sync::Arc::new(Ty::Int(IntTy::I32)),
@@ -5198,10 +5239,14 @@ mod tests {
 
     #[test]
     fn mixed_mutable_noncandidate_call_kills_proofs_without_initializing() {
+        let (_module_names, modules) = fixture_modules();
         use super::super::ir::{
             BorrowKind, InputPath, RefContract, RegionParamId, ReturnContract, Signature,
         };
-        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
+        let ty = payload_enum(
+            &modules,
+            vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]],
+        );
         let mut f = payload_fixture(&ty);
         let mutable = Ty::Ref {
             kind: BorrowKind::Mut,
@@ -6016,7 +6061,10 @@ mod tests {
             type_args: Arc::from([]),
         })
     }
-    fn nominal(fields: Vec<Ty>) -> Ty {
+    fn nominal(
+        modules: &std::sync::Arc<super::super::module_identity::ModuleArena>,
+        fields: Vec<Ty>,
+    ) -> Ty {
         let snapshot = SnapshotId::allocate().unwrap();
         Ty::Struct(StructTy::new(StructDef {
             id: NominalAppId { snapshot, index: 0 },
@@ -6024,15 +6072,17 @@ mod tests {
                 .unwrap(),
             type_args: Arc::from([]),
             name: "Paths".into(),
-            module: String::new(),
-            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+            module: modules.source_root().unwrap(),
+            visibility: crate::compiler::ir::Visibility::Restricted(modules.source_root().unwrap()),
             fields: fields
                 .into_iter()
                 .enumerate()
                 .map(|(index, ty)| FieldDef {
                     name: format!("f{index}"),
                     ty,
-                    visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+                    visibility: crate::compiler::ir::Visibility::Restricted(
+                        modules.source_root().unwrap(),
+                    ),
                 })
                 .collect::<Vec<_>>()
                 .into(),
@@ -6064,7 +6114,7 @@ mod tests {
         }
     }
 
-    fn unit_enum() -> EnumTy {
+    fn unit_enum(modules: &std::sync::Arc<super::super::module_identity::ModuleArena>) -> EnumTy {
         let snapshot = SnapshotId::allocate().unwrap();
         EnumTy::new(EnumDef {
             id: NominalAppId { snapshot, index: 0 },
@@ -6072,8 +6122,8 @@ mod tests {
                 .unwrap(),
             type_args: Arc::from([]),
             name: "Tag".into(),
-            module: String::new(),
-            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+            module: modules.source_root().unwrap(),
+            visibility: crate::compiler::ir::Visibility::Restricted(modules.source_root().unwrap()),
             variants: ["A", "B"]
                 .into_iter()
                 .map(|name| VariantDef {
@@ -6086,9 +6136,11 @@ mod tests {
         })
     }
 
-    fn enum_fixture() -> cfg::Function {
+    fn enum_fixture(
+        modules: &std::sync::Arc<super::super::module_identity::ModuleArena>,
+    ) -> cfg::Function {
         let mut f = fixture();
-        let ty = Ty::Enum(unit_enum());
+        let ty = Ty::Enum(unit_enum(modules));
         f.locals
             .extend([local(ty.clone()), local(Ty::Int(IntTy::I32)), local(ty)]);
         f.params.push(LocalId(1));
@@ -6106,7 +6158,10 @@ mod tests {
         })
     }
 
-    fn payload_enum(variants: Vec<Vec<Ty>>) -> EnumTy {
+    fn payload_enum(
+        modules: &std::sync::Arc<super::super::module_identity::ModuleArena>,
+        variants: Vec<Vec<Ty>>,
+    ) -> EnumTy {
         let snapshot = SnapshotId::allocate().unwrap();
         EnumTy::new(EnumDef {
             id: NominalAppId { snapshot, index: 0 },
@@ -6114,8 +6169,8 @@ mod tests {
                 .unwrap(),
             type_args: Arc::from([]),
             name: "Payload".into(),
-            module: String::new(),
-            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+            module: modules.source_root().unwrap(),
+            visibility: crate::compiler::ir::Visibility::Restricted(modules.source_root().unwrap()),
             variants: variants
                 .into_iter()
                 .enumerate()
@@ -6128,7 +6183,9 @@ mod tests {
                         .map(|(index, ty)| FieldDef {
                             name: index.to_string(),
                             ty,
-                            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+                            visibility: crate::compiler::ir::Visibility::Restricted(
+                                modules.source_root().unwrap(),
+                            ),
                         })
                         .collect::<Vec<_>>()
                         .into(),
@@ -6194,9 +6251,13 @@ mod tests {
 
     #[test]
     fn reference_calls_capture_effects_before_move_and_preserve_initialization() {
+        let (_module_names, modules) = fixture_modules();
         use super::super::ir::BorrowKind;
         for kind in [BorrowKind::Shared, BorrowKind::Mut] {
-            let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
+            let ty = payload_enum(
+                &modules,
+                vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]],
+            );
             let mut f = payload_fixture(&ty);
             let reference = Ty::Ref {
                 kind,
@@ -6255,8 +6316,12 @@ mod tests {
 
     #[test]
     fn reference_call_union_mutation_kills_every_candidate_proof() {
+        let (_module_names, modules) = fixture_modules();
         use super::super::ir::BorrowKind;
-        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
+        let ty = payload_enum(
+            &modules,
+            vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]],
+        );
         let pair = Ty::Tuple(vec![Ty::Enum(ty.clone()), Ty::Enum(ty.clone())].into());
         let reference = Ty::Ref {
             kind: BorrowKind::Mut,
@@ -6647,6 +6712,7 @@ mod tests {
 
     #[test]
     fn dynamic_copy_reads_and_ignored_noncopy_values_do_not_consume_array() {
+        let (_module_names, modules) = fixture_modules();
         for element in [
             Ty::Int(IntTy::I32),
             Ty::Unit,
@@ -6663,7 +6729,7 @@ mod tests {
             assert!(result.passed(), "{:?}", result.diagnostics);
             assert_eq!(result.stats.moves, 0);
         }
-        let mut f = dynamic_fixture(nominal(vec![Ty::Int(IntTy::I32)]));
+        let mut f = dynamic_fixture(nominal(&modules, vec![Ty::Int(IntTy::I32)]));
         f.blocks[0]
             .statements
             .extend([dynamic_inspect(), located(Statement::Inspect(place(1)))]);
@@ -6768,7 +6834,8 @@ mod tests {
 
     #[test]
     fn dynamic_noncopy_replacement_consumes_snapshot_but_preserves_array_initialization() {
-        let element = nominal(vec![Ty::Int(IntTy::I32)]);
+        let (_module_names, modules) = fixture_modules();
+        let element = nominal(&modules, vec![Ty::Int(IntTy::I32)]);
         let mut f = dynamic_fixture(element.clone());
         f.locals.push(local(element));
         f.params.push(LocalId(4));
@@ -6865,11 +6932,18 @@ mod tests {
 
     #[test]
     fn dynamic_replacement_kills_all_contained_proofs_but_preserves_outer_enum() {
-        let element = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
-        let outer = payload_enum(vec![
-            vec![array(Ty::Enum(element.clone()), 2), Ty::Int(IntTy::I32)],
-            vec![Ty::Int(IntTy::I32)],
-        ]);
+        let (_module_names, modules) = fixture_modules();
+        let element = payload_enum(
+            &modules,
+            vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]],
+        );
+        let outer = payload_enum(
+            &modules,
+            vec![
+                vec![array(Ty::Enum(element.clone()), 2), Ty::Int(IntTy::I32)],
+                vec![Ty::Int(IntTy::I32)],
+            ],
+        );
         let mut f = fixture();
         f.locals.extend([
             local(Ty::Enum(outer.clone())),
@@ -7088,8 +7162,9 @@ mod tests {
 
     #[test]
     fn repeat_zero_and_one_consume_noncopy_operand_once() {
+        let (_module_names, modules) = fixture_modules();
         for len in [0, 1] {
-            let element = nominal(vec![Ty::Int(IntTy::I32)]);
+            let element = nominal(&modules, vec![Ty::Int(IntTy::I32)]);
             let ty = array(element.clone(), len);
             let mut f = fixture();
             f.locals.extend([local(element), local(ty.clone())]);
@@ -7123,6 +7198,7 @@ mod tests {
 
     #[test]
     fn repeat_copy_operand_is_evaluated_once_and_noncopy_many_is_rejected() {
+        let (_module_names, modules) = fixture_modules();
         let mut f = fixture();
         let ty = array(Ty::Int(IntTy::I32), 4);
         f.locals
@@ -7145,7 +7221,7 @@ mod tests {
         assert_eq!(result.stats.operands_read, 3);
         assert_eq!(result.stats.moves, 0);
 
-        let element = nominal(vec![Ty::Int(IntTy::I32)]);
+        let element = nominal(&modules, vec![Ty::Int(IntTy::I32)]);
         f.locals[1].ty = element.clone();
         f.locals[2].ty = array(element, 2);
         let Statement::Assign { value, .. } = &mut f.blocks[0].statements[3].value else {
@@ -7164,7 +7240,8 @@ mod tests {
 
     #[test]
     fn zero_length_noncopy_array_whole_move_clears_root_marker() {
-        let ty = array(nominal(vec![Ty::Int(IntTy::I32)]), 0);
+        let (_module_names, modules) = fixture_modules();
+        let ty = array(nominal(&modules, vec![Ty::Int(IntTy::I32)]), 0);
         assert!(!ty.is_copy());
         let mut f = fixture();
         f.locals.extend([local(ty.clone()), local(ty)]);
@@ -7190,10 +7267,14 @@ mod tests {
 
     #[test]
     fn indexed_copy_field_reads_preserve_noncopy_array_for_whole_move() {
-        let element = nominal(vec![
-            nominal(vec![Ty::Int(IntTy::I32)]),
-            Ty::Int(IntTy::I32),
-        ]);
+        let (_module_names, modules) = fixture_modules();
+        let element = nominal(
+            &modules,
+            vec![
+                nominal(&modules, vec![Ty::Int(IntTy::I32)]),
+                Ty::Int(IntTy::I32),
+            ],
+        );
         let ty = array(element, 2);
         let mut f = fixture();
         f.locals
@@ -7219,8 +7300,9 @@ mod tests {
 
     #[test]
     fn indexed_noncopy_moves_are_rejected_even_through_projected_subfields() {
-        let inner = nominal(vec![Ty::Int(IntTy::I32)]);
-        let element = nominal(vec![inner.clone(), Ty::Int(IntTy::I32)]);
+        let (_module_names, modules) = fixture_modules();
+        let inner = nominal(&modules, vec![Ty::Int(IntTy::I32)]);
+        let element = nominal(&modules, vec![inner.clone(), Ty::Int(IntTy::I32)]);
         for nested in [false, true] {
             let mut f = fixture();
             f.locals.extend([
@@ -7282,7 +7364,8 @@ mod tests {
 
     #[test]
     fn array_base_inspection_rejects_uninitialized_or_moved_wildcard_bases() {
-        let ty = array(nominal(vec![Ty::Int(IntTy::I32)]), 2);
+        let (_module_names, modules) = fixture_modules();
+        let ty = array(nominal(&modules, vec![Ty::Int(IntTy::I32)]), 2);
         for moved in [false, true] {
             let mut f = fixture();
             f.locals.extend([local(ty.clone()), local(ty.clone())]);
@@ -7391,7 +7474,11 @@ mod tests {
 
     #[test]
     fn array_element_variant_proofs_are_independent_and_inspection_preserves_them() {
-        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
+        let (_module_names, modules) = fixture_modules();
+        let ty = payload_enum(
+            &modules,
+            vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]],
+        );
         let mut f = fixture();
         f.locals.extend([
             local(array(Ty::Enum(ty.clone()), 2)),
@@ -7498,7 +7585,11 @@ mod tests {
 
     #[test]
     fn payload_downcast_requires_successful_edge_proof() {
-        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
+        let (_module_names, modules) = fixture_modules();
+        let ty = payload_enum(
+            &modules,
+            vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]],
+        );
         let mut f = payload_fixture(&ty);
         f.blocks[0]
             .statements
@@ -7530,7 +7621,11 @@ mod tests {
 
     #[test]
     fn payload_proof_intersects_for_shared_targets_and_joins() {
-        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
+        let (_module_names, modules) = fixture_modules();
+        let ty = payload_enum(
+            &modules,
+            vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]],
+        );
         for shared_target in [false, true] {
             let mut f = payload_fixture(&ty);
             split_payload(&mut f, &ty);
@@ -7560,7 +7655,11 @@ mod tests {
 
     #[test]
     fn whole_enum_assignment_kills_stale_variant_proof() {
-        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
+        let (_module_names, modules) = fixture_modules();
+        let ty = payload_enum(
+            &modules,
+            vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]],
+        );
         let mut f = payload_fixture(&ty);
         split_payload(&mut f, &ty);
         f.blocks[1].statements.extend([
@@ -7590,7 +7689,11 @@ mod tests {
 
     #[test]
     fn payload_destination_requires_proof_even_when_inactive_bits_are_true() {
-        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
+        let (_module_names, modules) = fixture_modules();
+        let ty = payload_enum(
+            &modules,
+            vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]],
+        );
         let mut f = payload_fixture(&ty);
         f.blocks[0].statements.push(located(Statement::Assign {
             destination: payload_field(&ty, 0, 0),
@@ -7609,7 +7712,11 @@ mod tests {
 
     #[test]
     fn singleton_switch_does_not_read_partially_moved_or_uninitialized_root() {
-        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]]);
+        let (_module_names, modules) = fixture_modules();
+        let ty = payload_enum(
+            &modules,
+            vec![vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]],
+        );
         let mut f = payload_fixture(&ty);
         f.blocks[0].statements.push(located(Statement::Assign {
             destination: place(2),
@@ -7650,7 +7757,11 @@ mod tests {
 
     #[test]
     fn selected_variant_refinement_never_restores_initialization() {
-        let ty = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
+        let (_module_names, modules) = fixture_modules();
+        let ty = payload_enum(
+            &modules,
+            vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]],
+        );
         let mut f = payload_fixture(&ty);
         f.params.clear();
         f.blocks[0]
@@ -7672,10 +7783,14 @@ mod tests {
 
     #[test]
     fn payload_move_retains_outer_proof_but_full_enum_read_fails() {
-        let ty = payload_enum(vec![
-            vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)],
-            vec![Ty::Int(IntTy::I32)],
-        ]);
+        let (_module_names, modules) = fixture_modules();
+        let ty = payload_enum(
+            &modules,
+            vec![
+                vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)],
+                vec![Ty::Int(IntTy::I32)],
+            ],
+        );
         let mut f = payload_fixture(&ty);
         split_payload(&mut f, &ty);
         f.blocks[1].statements.extend([
@@ -7697,11 +7812,18 @@ mod tests {
 
     #[test]
     fn nested_proof_invalidation_is_subtree_scoped() {
-        let inner = payload_enum(vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]]);
-        let outer = payload_enum(vec![
-            vec![Ty::Enum(inner), Ty::Int(IntTy::I32)],
-            vec![Ty::Int(IntTy::I32)],
-        ]);
+        let (_module_names, modules) = fixture_modules();
+        let inner = payload_enum(
+            &modules,
+            vec![vec![Ty::Int(IntTy::I32)], vec![Ty::Int(IntTy::I32)]],
+        );
+        let outer = payload_enum(
+            &modules,
+            vec![
+                vec![Ty::Enum(inner), Ty::Int(IntTy::I32)],
+                vec![Ty::Int(IntTy::I32)],
+            ],
+        );
         let f = payload_fixture(&outer);
         let paths = Paths::new(&f, 100).unwrap();
         let outer_node = paths.resolve(&place(1));
@@ -7738,10 +7860,11 @@ mod tests {
 
     #[test]
     fn payload_metadata_and_proof_storage_are_resource_bounded() {
-        let ty = payload_enum(vec![
-            vec![Ty::Int(IntTy::I32); 10],
-            vec![Ty::Int(IntTy::I32); 10],
-        ]);
+        let (_module_names, modules) = fixture_modules();
+        let ty = payload_enum(
+            &modules,
+            vec![vec![Ty::Int(IntTy::I32); 10], vec![Ty::Int(IntTy::I32); 10]],
+        );
         assert!(preflight_ty(&Ty::Enum(ty.clone()), 0, &mut Budget::new(40)).is_err());
         let f = payload_fixture(&ty);
         let paths = Paths::new(&f, 23).unwrap();
@@ -7764,7 +7887,8 @@ mod tests {
 
     #[test]
     fn enum_discriminant_reads_do_not_consume_noncopy_root() {
-        let mut f = enum_fixture();
+        let (_module_names, modules) = fixture_modules();
+        let mut f = enum_fixture(&modules);
         f.blocks[0].statements.extend([
             discriminant(),
             discriminant(),
@@ -7781,6 +7905,7 @@ mod tests {
 
     #[test]
     fn enum_discriminant_requires_live_initialized_root() {
+        let (_module_names, modules) = fixture_modules();
         for (setup, expected) in [
             (
                 Statement::Assign {
@@ -7794,7 +7919,7 @@ mod tests {
                 ErrorKind::StorageNotDefinitelyLive,
             ),
         ] {
-            let mut f = enum_fixture();
+            let mut f = enum_fixture(&modules);
             f.blocks[0].statements.push(located(setup));
             f.blocks[0].statements.push(discriminant());
             let result = analyze(&f);
@@ -7804,7 +7929,7 @@ mod tests {
             assert_eq!(result.diagnostics[0].place, Some(place(1)));
         }
 
-        let mut f = enum_fixture();
+        let mut f = enum_fixture(&modules);
         f.params.clear();
         f.blocks[0]
             .statements
@@ -7821,7 +7946,8 @@ mod tests {
 
     #[test]
     fn unreachable_discriminant_does_not_read_moved_enum() {
-        let mut f = enum_fixture();
+        let (_module_names, modules) = fixture_modules();
+        let mut f = enum_fixture(&modules);
         f.blocks[0].statements.push(located(Statement::Assign {
             destination: place(3),
             value: Rvalue::Use(Operand::Move(place(1))),
@@ -7835,17 +7961,19 @@ mod tests {
 
     #[test]
     fn enum_metadata_is_budgeted_without_adding_child_paths() {
-        let ty = Ty::Enum(unit_enum());
+        let (_module_names, modules) = fixture_modules();
+        let ty = Ty::Enum(unit_enum(&modules));
         assert!(preflight_ty(&ty, 0, &mut Budget::new(2)).is_err());
         assert!(preflight_ty(&ty, 0, &mut Budget::new(3)).is_ok());
-        let f = enum_fixture();
+        let f = enum_fixture(&modules);
         let paths = Paths::new(&f, 4).unwrap();
         assert!(paths.nodes[paths.roots[1]].children.is_empty());
     }
 
     #[test]
     fn constant_switch_false_edge_still_checks_moved_enum_reads() {
-        let mut f = enum_fixture();
+        let (_module_names, modules) = fixture_modules();
+        let mut f = enum_fixture(&modules);
         f.blocks[0].statements.push(located(Statement::Assign {
             destination: place(3),
             value: Rvalue::Use(Operand::Move(place(1))),
@@ -7878,7 +8006,8 @@ mod tests {
 
     #[test]
     fn enum_constant_initializes_root_for_discriminant() {
-        let mut f = enum_fixture();
+        let (_module_names, modules) = fixture_modules();
+        let mut f = enum_fixture(&modules);
         f.params.clear();
         let Ty::Enum(ty) = &f.locals[1].ty else {
             unreachable!()
@@ -7900,8 +8029,9 @@ mod tests {
 
     #[test]
     fn projected_enum_discriminant_checks_its_own_initialization() {
+        let (_module_names, modules) = fixture_modules();
         let mut f = fixture();
-        let ty = Ty::Enum(unit_enum());
+        let ty = Ty::Enum(unit_enum(&modules));
         f.locals.extend([
             local(Ty::Tuple(vec![ty.clone(), ty.clone()].into())),
             local(Ty::Int(IntTy::I32)),
@@ -8119,11 +8249,15 @@ mod tests {
 
     #[test]
     fn nominal_fields_get_distinct_nested_move_paths() {
-        let inner = nominal(vec![Ty::Unit, Ty::Bool]);
-        let outer = nominal(vec![
-            Ty::Int(IntTy::I32),
-            Ty::Tuple(vec![inner.clone(), inner].into()),
-        ]);
+        let (_module_names, modules) = fixture_modules();
+        let inner = nominal(&modules, vec![Ty::Unit, Ty::Bool]);
+        let outer = nominal(
+            &modules,
+            vec![
+                Ty::Int(IntTy::I32),
+                Ty::Tuple(vec![inner.clone(), inner].into()),
+            ],
+        );
         let mut f = fixture();
         f.locals.push(local(outer.clone()));
         let paths = Paths::new(&f, 10).unwrap();
@@ -8143,9 +8277,10 @@ mod tests {
 
     #[test]
     fn shared_nominal_dag_expansion_is_bounded_before_paths() {
+        let (_module_names, modules) = fixture_modules();
         let mut ty = Ty::Int(IntTy::I32);
         for _ in 0..20 {
-            ty = nominal(vec![ty.clone(), ty]);
+            ty = nominal(&modules, vec![ty.clone(), ty]);
         }
         let mut f = fixture();
         f.locals.push(local(ty));

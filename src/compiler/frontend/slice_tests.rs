@@ -21,10 +21,13 @@ fn main() {
 
 fn program(source: &str) -> Program {
     let mut program = parse(source).unwrap();
-    if !program.functions.iter().any(|f| f.name == "main") {
-        program
-            .functions
-            .extend(parse("fn main(){}").unwrap().functions);
+    if !program.functions.iter().any(|f| {
+        f.name.check(program.names.as_ref()).unwrap();
+        f.name.anchor() == PathAnchor::Crate
+            && f.name.len() == 1
+            && program.names.spelling(f.name.segments()[0]).unwrap() == "main"
+    }) {
+        program = parse(&format!("{source}\nfn main(){{}}")).unwrap();
     }
     program
 }
@@ -87,7 +90,7 @@ fn parses_slice_and_array_types() {
     let p = parse("fn f(a: &[u8], b: [u8; 3], c: &&[u8]) {}").unwrap();
     let f = &p.functions[0];
     assert!(matches!(&f.params[0].1, Type::Ref { referent, .. }
-        if matches!(referent.as_ref(), Type::Slice(e) if **e == Type::Int(ir::IntTy::U8))));
+        if matches!(referent.as_ref(), Type::Slice(e) if matches!(e.as_ref(), Type::Int(ir::IntTy::U8)))));
     assert!(matches!(&f.params[1].1, Type::Array(_, 3)));
     assert!(parse("fn f(a: &[u8;]) {}").is_err());
 }
@@ -446,7 +449,7 @@ fn array_to_slice_wrapper_preserves_call_identity() {
         unreachable!()
     };
     assert!(
-        matches!(&checked.exprs[reference.0].kind, ir::ExprKind::Call { name, .. } if name == "mk")
+        matches!(&checked.exprs[reference.0].kind, ir::ExprKind::Call { name, .. } if name == "crate::mk")
     );
     let original = f.original().source_for_test();
     // The original mk occurrence maps to the inner Call, not the wrapper.

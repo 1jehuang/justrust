@@ -1,5 +1,31 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Accepted root-context typed source identity migration
+
+The actual root-context AST, resolver, checker and retained source replay now use
+checked name/path keys and explicit module identities. Source programs and their
+catalog retain the same name/module owners; public and unused metadata undergo
+charged universal validation. Printed names remain diagnostics, not lookup keys.
+The integrated public suite passed 1,248 tests/96 binaries in hosted run
+`20261017-082305399-1037109`, followed by all-target compilation in
+`20261017-082438201-1044072`. Final frozen acceptance passed 2,020 tests across
+100 binaries without retry output in `20261017-083329969-1083515`, warning-free
+all-target check `20261017-083329203-1083407`, strict all-target clippy
+`20261017-083343328-1084433`, formatting and diff checks. MODULE-IDENTITY.md
+records the bounded contract, unchanged resource witnesses and fixture changes.
+
+Two real regressions were caught rather than reclassified as fixture updates.
+Run `20261017-081908819-1019222` accepted a private module reexport because the
+resolver fabricated public visibility for a non-root `self` anchor. Anchors now
+obtain visibility from their checked module declaration. The unchanged reexport
+corpus subsequently passes. Unit run `20261017-082444532-1044071` exposed equal
+persistent keys for default methods owned by different traits. The serializer
+now includes the checked structural trait owner and versions its wire domain as
+v3. The existing inequality, source-order and alpha-renaming controls pass in
+`20261017-082840220-1062030`; that run still fails a separate raw-name fixture and
+is not final acceptance. The later frozen gates above close this bounded
+migration only. No speed, new macro admission or full Rust claim follows.
+
 ## 2026-10-17: Owned labels and pure macro rules, not general hygiene admission
 
 SEMANTIC-NAMES.md records the checked compact name store, shared structured paths,

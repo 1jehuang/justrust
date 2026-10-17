@@ -115,7 +115,12 @@ fn checked_function(
     let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
     let declaration = (0..plan.callable_count())
         .map(|index| plan.callable_decl(index).unwrap())
-        .find(|declaration| plan.callable_body(&program, *declaration).unwrap().name == name)
+        .find(|declaration| {
+            let function = plan.callable_body(&program, *declaration).unwrap();
+            function.name.anchor() == frontend::PathAnchor::Crate
+                && function.name.len() == 1
+                && program.names.spelling(function.name.segments()[0]).unwrap() == name
+        })
         .unwrap();
     let checked = frontend::type_callable_with_plan(&program, declaration, &plan, &budget).unwrap();
     let facts = plan
@@ -252,7 +257,9 @@ fn cfg_recursive_calls_use_signatures_without_checking_other_bodies() {
                 .collect::<Vec<_>>();
             assert_eq!(calls.len(), 1);
             let (name, signature, args, next) = calls[0];
-            assert_eq!(name, "recurse");
+            // Diagnostic paths are canonical now. Recursion must still name
+            // this exact lowered function, not a separately printed alias.
+            assert_eq!(name, &function.name);
             assert_eq!(signature.params, [ir::Ty::Int(IntTy::I32)]);
             assert_eq!(signature.result, function.result);
             assert_eq!(args.len(), 1);

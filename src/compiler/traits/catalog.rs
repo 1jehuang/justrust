@@ -2,8 +2,10 @@
 //! an entry in this catalog. Logical rules and executable recipes are separate.
 use super::*;
 use crate::compiler::ir::{BinderId, BorrowKind, IntTy};
+use crate::compiler::module_identity::CatalogModule;
+use crate::compiler::semantic_name::BuiltinAtom;
 
-pub const CATALOG_VERSION: u32 = 4;
+pub const CATALOG_VERSION: u32 = 5;
 
 const BASE_COUNT: u32 = 8;
 
@@ -65,6 +67,26 @@ pub enum CatalogItem {
     Recipe(RecipeDescriptor),
 }
 impl CatalogItem {
+    pub fn module(self) -> CatalogModule {
+        match self {
+            Self::Sized | Self::Copy => CatalogModule::Marker,
+            Self::Clone
+            | Self::CloneItem
+            | Self::CloneFromItem
+            | Self::CloneFromDefault
+            | Self::Recipe(_) => CatalogModule::Clone,
+            Self::Drop | Self::DropItem => CatalogModule::Ops,
+        }
+    }
+    pub fn binding_atom(self) -> Option<BuiltinAtom> {
+        match self {
+            Self::Sized => Some(BuiltinAtom::Sized),
+            Self::Clone => Some(BuiltinAtom::Clone),
+            Self::Copy => Some(BuiltinAtom::Copy),
+            Self::Drop => Some(BuiltinAtom::Drop),
+            _ => None,
+        }
+    }
     fn base_index(self) -> Option<u32> {
         Some(match self {
             Self::Sized => 0,
@@ -126,12 +148,14 @@ impl RecipeShapeInventory {
 
 pub struct CoreCatalogBuilder {
     snapshot: SnapshotId,
+    modules: Arc<ModuleArena>,
     budget: PlanBudget,
     declarations: Vec<CatalogDecl>,
     headers: HeaderSet,
 }
 pub struct CoreCatalog {
     snapshot: SnapshotId,
+    modules: Arc<ModuleArena>,
     budget: PlanBudget,
     source_end: u32,
     declarations: Vec<CatalogDecl>,
@@ -255,8 +279,13 @@ fn schema(
     })
 }
 impl CoreCatalogBuilder {
-    pub fn new(snapshot: SnapshotId, budget: &PlanBudget) -> Result<Self> {
+    pub fn new(
+        snapshot: SnapshotId,
+        modules: Arc<ModuleArena>,
+        budget: &PlanBudget,
+    ) -> Result<Self> {
         retain::<Self>(budget, 1)?;
+        checked_module(budget, modules.check(modules.core_root()))?;
         let mut declarations = Vec::new();
         let mut traits = Vec::new();
         let mut items = Vec::new();
@@ -325,11 +354,12 @@ impl CoreCatalogBuilder {
                 own_env: own,
                 env: env.clone(),
                 owner,
-                module: Arc::from([]),
+                module: modules.catalog_module(item.module()),
                 visibility: crate::compiler::ir::Visibility::Public,
                 receiver,
                 region_contract_mode: RegionContractMode::Positioned,
             };
+            checked_module(budget, info.visibility.validate_for(&modules, info.module))?;
             let mut raw = None;
             if is_trait {
                 let self_param = env.ordered_params().next().ok_or_else(|| {
@@ -465,6 +495,7 @@ impl CoreCatalogBuilder {
         }
         Ok(Self {
             snapshot,
+            modules,
             budget: budget.clone(),
             declarations,
             headers: HeaderSet {
@@ -478,6 +509,9 @@ impl CoreCatalogBuilder {
     pub fn base_declarations(&self) -> &[CatalogDecl] {
         &self.declarations
     }
+    pub fn modules(&self) -> &Arc<ModuleArena> {
+        &self.modules
+    }
     pub fn source_start(&self) -> u32 {
         BASE_COUNT
     }
@@ -487,6 +521,7 @@ impl CoreCatalogBuilder {
         mut inventory: RecipeShapeInventory,
         budget: &PlanBudget,
     ) -> Result<Arc<CoreCatalog>> {
+        checked_module(budget, self.modules.check(self.modules.core_root()))?;
         if !self.budget.same_authority(budget) || source_end < self.source_start() {
             return Err(FactsError::invalid(
                 budget,
@@ -550,13 +585,17 @@ impl CoreCatalogBuilder {
                 own_env: own,
                 env: s.env.clone(),
                 owner: None,
-                module: Arc::from([]),
+                module: self.modules.catalog_module(CatalogModule::Clone),
                 visibility: crate::compiler::ir::Visibility::Public,
                 receiver: ReceiverMode::Borrowed {
                     kind: BorrowKind::Shared,
                 },
                 region_contract_mode: RegionContractMode::Positioned,
             };
+            checked_module(
+                budget,
+                info.visibility.validate_for(&self.modules, info.module),
+            )?;
             push(
                 budget,
                 &mut callables,
@@ -587,6 +626,7 @@ impl CoreCatalogBuilder {
         retain::<CoreCatalog>(budget, 1)?;
         Ok(Arc::new(CoreCatalog {
             snapshot: self.snapshot,
+            modules: self.modules,
             budget: self.budget,
             source_end,
             declarations: self.declarations,
@@ -667,6 +707,9 @@ fn recipe_schema(
     schema(env, params, value, predicates, budget)
 }
 impl CoreCatalog {
+    pub fn modules(&self) -> &Arc<ModuleArena> {
+        &self.modules
+    }
     pub fn snapshot(&self) -> SnapshotId {
         self.snapshot
     }
@@ -775,6 +818,65 @@ pub(super) fn fixture_source_decl(
 #[cfg(test)]
 mod wide_tests {
     use super::*;
+
+    #[test]
+    fn catalog_retains_same_checked_module_arena_and_typed_paths() {
+        let budget = PlanBudget::default();
+        let modules = crate::compiler::module_identity::ModuleArenaBuilder::for_catalog(
+            crate::compiler::expansion_budget::ExpansionBudget::default(),
+        )
+        .unwrap()
+        .freeze()
+        .unwrap();
+        let snapshot = SnapshotId::allocate().unwrap();
+        let builder = CoreCatalogBuilder::new(snapshot, modules.clone(), &budget).unwrap();
+        assert!(Arc::ptr_eq(builder.modules(), &modules));
+        for declaration in builder.base_declarations() {
+            let DeclOrigin::CoreCatalog { version, item } = declaration.origin else {
+                panic!("expected catalog origin")
+            };
+            assert_eq!(version, CATALOG_VERSION);
+            assert_eq!(
+                declaration.info.module,
+                modules.catalog_module(item.module())
+            );
+            declaration
+                .info
+                .visibility
+                .validate_for(&modules, declaration.info.module)
+                .unwrap();
+        }
+        let source_end = builder.source_start();
+        let catalog = builder
+            .finish(source_end, RecipeShapeInventory::new(), &budget)
+            .unwrap();
+        assert!(Arc::ptr_eq(catalog.modules(), &modules));
+        assert_eq!(CatalogItem::Sized.binding_atom(), Some(BuiltinAtom::Sized));
+        assert_eq!(CatalogItem::CloneItem.binding_atom(), None);
+        assert!(matches!(
+            catalog.modules().source_root(),
+            Err(ModuleError::SourceUnavailable)
+        ));
+    }
+
+    #[test]
+    fn catalog_preserves_poisoned_expansion_authority_as_resource() {
+        let expansion = crate::compiler::expansion_budget::ExpansionBudget::default();
+        let modules =
+            crate::compiler::module_identity::ModuleArenaBuilder::for_catalog(expansion.clone())
+                .unwrap()
+                .freeze()
+                .unwrap();
+        assert!(
+            expansion
+                .charge(crate::compiler::expansion_budget::Counter::Work, u64::MAX)
+                .is_err()
+        );
+        let budget = PlanBudget::default();
+        assert!(
+            matches!(CoreCatalogBuilder::new(SnapshotId::allocate().unwrap(), modules, &budget), Err(error) if error.is_resource())
+        );
+    }
 
     #[test]
     fn wide_clone_catalog_schema_preserves_signedness_and_scalar_result() {

@@ -33,6 +33,44 @@ pub enum Namespace {
     Macro,
 }
 
+/// Closed static catalog atoms. This is descriptor binding, not a source
+/// occurrence factory or a generic spelling-based resolver fallback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BuiltinAtom {
+    Core,
+    Std,
+    Marker,
+    CloneModule,
+    Ops,
+    Sized,
+    Copy,
+    Clone,
+    Drop,
+    EntryMain,
+    CloneMethod,
+    CloneFromMethod,
+    DropMethod,
+}
+impl BuiltinAtom {
+    fn spelling(self) -> &'static str {
+        match self {
+            Self::Core => "core",
+            Self::Std => "std",
+            Self::Marker => "marker",
+            Self::CloneModule => "clone",
+            Self::Ops => "ops",
+            Self::Sized => "Sized",
+            Self::Copy => "Copy",
+            Self::Clone => "Clone",
+            Self::Drop => "Drop",
+            Self::EntryMain => "main",
+            Self::CloneMethod => "clone",
+            Self::CloneFromMethod => "clone_from",
+            Self::DropMethod => "drop",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LookupClass {
     Local,
@@ -139,6 +177,39 @@ impl fmt::Debug for NameStore {
 }
 
 impl NameStoreBuilder {
+    /// Closed catalog member identity, never a source occurrence or provenance.
+    pub fn catalog_member_key(&mut self, atom: BuiltinAtom) -> Result<NameKey, NameError> {
+        if !matches!(
+            atom,
+            BuiltinAtom::CloneMethod | BuiltinAtom::CloneFromMethod | BuiltinAtom::DropMethod
+        ) {
+            return Err(
+                TokenError::InvalidInput("expected a closed catalog member descriptor").into(),
+            );
+        }
+        let symbol = self.store.session.intern_symbol(atom.spelling())?;
+        Ok(NameKey {
+            atom: NameAtomId(symbol),
+            context: self.session().root_context(),
+            class: LookupClass::Member,
+        })
+    }
+    /// Bind a closed catalog descriptor before freeze. No source occurrence,
+    /// synthetic span, or AST name is created. The caller must still select a
+    /// checked module/scope and bind this key to its canonical declaration.
+    pub fn catalog_key(
+        &mut self,
+        atom: BuiltinAtom,
+        namespace: Namespace,
+    ) -> Result<NameKey, NameError> {
+        let symbol = self.store.session.intern_symbol(atom.spelling())?;
+        Ok(NameKey {
+            atom: NameAtomId(symbol),
+            context: self.session().root_context(),
+            class: LookupClass::Item(namespace),
+        })
+    }
+
     pub fn new(session: TokenSession, unit_edition: Edition) -> Result<Self, NameError> {
         let budget = session.budget().clone();
         budget.check()?;
@@ -358,6 +429,45 @@ mod tests {
             }),
         };
         (session, token, eof)
+    }
+
+    #[test]
+    fn catalog_descriptor_keys_are_owned_names_not_source_occurrences() {
+        let (session, _, origin) = fixture(ExpansionBudget::default());
+        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let count = builder.store.records.len();
+        let catalog = builder
+            .catalog_key(BuiltinAtom::Copy, Namespace::Type)
+            .unwrap();
+        assert_eq!(builder.store.records.len(), count);
+        let source = builder.intern_root("Copy", origin).unwrap();
+        assert_eq!(
+            catalog,
+            builder
+                .key(source, LookupClass::Item(Namespace::Type))
+                .unwrap()
+        );
+        assert_ne!(
+            catalog,
+            builder
+                .catalog_key(BuiltinAtom::Copy, Namespace::Value)
+                .unwrap()
+        );
+        let (foreign, _, _) = fixture(ExpansionBudget::default());
+        let mut foreign = NameStoreBuilder::new(foreign, Edition::E2024).unwrap();
+        assert_ne!(
+            catalog,
+            foreign
+                .catalog_key(BuiltinAtom::Copy, Namespace::Type)
+                .unwrap()
+        );
+        let frozen = builder.freeze().unwrap();
+        assert_eq!(
+            catalog,
+            frozen
+                .key(source, LookupClass::Item(Namespace::Type))
+                .unwrap()
+        );
     }
 
     #[test]

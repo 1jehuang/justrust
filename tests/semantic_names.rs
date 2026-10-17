@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use justrust_engine::compiler::semantic_name::{
-    LookupClass, NameError, NameStoreBuilder, Namespace, UnsupportedName,
+    BuiltinAtom, LookupClass, NameError, NameStoreBuilder, Namespace, UnsupportedName,
 };
 use justrust_engine::compiler::semantic_path::{AstPath, PathAnchor};
 use justrust_engine::compiler::source::PreparedLexInput;
@@ -62,6 +62,51 @@ fn occurrence_origins_do_not_replace_semantic_keys_or_namespace() {
     assert_eq!(store.key(second, LookupClass::Local).unwrap(), local);
     assert_eq!(store.spelling(first).unwrap(), "item");
     assert_eq!(store.data(first).unwrap().edition, Edition::E2024);
+}
+
+#[test]
+fn closed_catalog_keys_bind_without_fabricating_ast_occurrences() {
+    let (mut builder, tokens) = scanned("Copy Copy", Edition::E2024, &ExpansionBudget::default());
+    let catalog = builder
+        .catalog_key(BuiltinAtom::Copy, Namespace::Type)
+        .unwrap();
+    let source = builder.from_token(tokens[0], Edition::E2024).unwrap();
+    let repeated = builder.from_token(tokens[1], Edition::E2024).unwrap();
+    assert_eq!(
+        catalog,
+        builder
+            .key(source, LookupClass::Item(Namespace::Type))
+            .unwrap()
+    );
+    assert_eq!(
+        catalog,
+        builder
+            .key(repeated, LookupClass::Item(Namespace::Type))
+            .unwrap()
+    );
+    assert_ne!(
+        catalog,
+        builder
+            .catalog_key(BuiltinAtom::Copy, Namespace::Value)
+            .unwrap()
+    );
+    assert_ne!(catalog, builder.key(source, LookupClass::Local).unwrap());
+    let (mut foreign, _) = scanned("Copy", Edition::E2024, &ExpansionBudget::default());
+    assert_ne!(
+        catalog,
+        foreign
+            .catalog_key(BuiltinAtom::Copy, Namespace::Type)
+            .unwrap()
+    );
+    let names = builder.freeze().unwrap();
+    assert_eq!(names.spelling(source).unwrap(), "Copy");
+    assert_ne!(names.span(source).unwrap(), names.span(repeated).unwrap());
+    assert_eq!(
+        names
+            .key(source, LookupClass::Item(Namespace::Type))
+            .unwrap(),
+        catalog
+    );
 }
 
 #[test]

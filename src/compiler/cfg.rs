@@ -3678,6 +3678,29 @@ mod original_replay_transport_tests {
 
 #[cfg(test)]
 mod tests {
+
+    // Retain the real checked source-name owner alongside its module arena.
+    fn fixture_modules() -> (
+        std::sync::Arc<super::super::semantic_name::NameStore>,
+        std::sync::Arc<super::super::module_identity::ModuleArena>,
+    ) {
+        use super::super::expansion_budget::ExpansionBudget;
+        use super::super::module_identity::ModuleArenaBuilder;
+        use super::super::semantic_name::NameStoreBuilder;
+        use super::super::token::Edition;
+        use super::super::token_session::{SourceSnapshot, TokenSession};
+        let budget = ExpansionBudget::default();
+        let sources =
+            SourceSnapshot::from_text(std::path::Path::new("module-fixture.rs"), "", &budget)
+                .unwrap();
+        let session = TokenSession::new(sources, budget).unwrap();
+        let names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let modules = ModuleArenaBuilder::for_source(&names)
+            .unwrap()
+            .freeze()
+            .unwrap();
+        (names.freeze().unwrap(), modules)
+    }
     #[test]
     fn generic_carrier_generated_body_and_lowering_proofs_reject_metadata_replay() {
         use crate::compiler::{frontend, ownership};
@@ -3834,6 +3857,7 @@ mod tests {
     }
 
     fn template_facts(
+        modules: &std::sync::Arc<super::super::module_identity::ModuleArena>,
         source: &ir::CheckedFunction,
         env: std::sync::Arc<ir::GenericEnv>,
         extra: &[super::super::traits::CallableHeader],
@@ -3857,7 +3881,7 @@ mod tests {
                 predicates: std::sync::Arc::from([]),
             },
         });
-        super::super::traits::test_support::world(&headers, budget)
+        super::super::traits::test_support::world(modules.clone(), &headers, budget)
             .unwrap()
             .callable_facts(declaration)
             .unwrap()
@@ -3899,6 +3923,7 @@ mod tests {
     }
     #[test]
     fn associated_template_proof_covers_impl_and_method_parameters_before_closed_emission() {
+        let (_module_names, modules) = fixture_modules();
         let budget = ir::PlanBudget::default();
         let scopes = [test_decl(), test_decl()].map(|declaration| {
             std::sync::Arc::new(ir::ParamEnv::new(ir::BinderId { declaration }, 1).unwrap())
@@ -3933,7 +3958,7 @@ mod tests {
             },
         };
         assert!(lower(&source).is_err());
-        let authority = template_facts(&source, env.clone(), &[], &budget);
+        let authority = template_facts(&modules, &source, env.clone(), &[], &budget);
         let template = lower_template(
             std::sync::Arc::new(source.clone()),
             authority.clone(),
@@ -3972,7 +3997,7 @@ mod tests {
         duplicate.exprs[1] = expr(types[0].clone(), ir::ExprKind::Local(LocalId(0)));
         duplicate.result = Ty::Tuple(vec![types[0].clone(), types[0].clone()].into());
         duplicate.exprs[2].ty = duplicate.result.clone();
-        let duplicate_facts = template_facts(&duplicate, env, &[], &budget);
+        let duplicate_facts = template_facts(&modules, &duplicate, env, &[], &budget);
         assert!(
             super::super::ownership::verify_template(
                 lower_template(std::sync::Arc::new(duplicate), duplicate_facts, &budget).unwrap()
@@ -3983,6 +4008,7 @@ mod tests {
 
     #[test]
     fn generic_templates_prove_moves_before_relowering_concrete_copy_instances() {
+        let (_module_names, modules) = fixture_modules();
         let budget = ir::PlanBudget::default();
         let scope = std::sync::Arc::new(
             ir::ParamEnv::new(
@@ -4017,7 +4043,7 @@ mod tests {
             },
         };
         assert!(lower(&source).is_err());
-        let authority = template_facts(&source, env.clone(), &[], &budget);
+        let authority = template_facts(&modules, &source, env.clone(), &[], &budget);
         let template = lower_template(
             std::sync::Arc::new(source.clone()),
             authority.clone(),
@@ -4063,7 +4089,7 @@ mod tests {
             ir::ExprKind::Tuple(vec![ExprId(0), ExprId(1)]),
         ));
         duplicate.body.tail = Some(ExprId(2));
-        let duplicate_facts = template_facts(&duplicate, env, &[], &budget);
+        let duplicate_facts = template_facts(&modules, &duplicate, env, &[], &budget);
         let invalid =
             lower_template(std::sync::Arc::new(duplicate), duplicate_facts, &budget).unwrap();
         assert!(super::super::ownership::verify_template(invalid).is_err());
@@ -4078,8 +4104,10 @@ mod tests {
                 source_decl: declaration,
                 type_args: arguments,
                 name: "UnitEnum".into(),
-                module: String::new(),
-                visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+                module: modules.source_root().unwrap(),
+                visibility: crate::compiler::ir::Visibility::Restricted(
+                    modules.source_root().unwrap(),
+                ),
                 variants: vec![ir::VariantDef {
                     name: "A".into(),
                     shape: ir::VariantShape::Unit,
@@ -4164,7 +4192,12 @@ mod tests {
         let mut plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
         let declaration = (0..plan.callable_count())
             .map(|i| plan.callable_decl(i).unwrap())
-            .find(|decl| plan.callable_body(&program, *decl).unwrap().name == "extract")
+            .find(|decl| {
+                let path = &plan.callable_body(&program, *decl).unwrap().name;
+                path.anchor() == super::super::semantic_path::PathAnchor::Crate
+                    && path.len() == 1
+                    && program.names.spelling(path.segments()[0]).unwrap() == "extract"
+            })
             .unwrap();
         let source =
             frontend::type_callable_with_plan(&program, declaration, &plan, &budget).unwrap();
@@ -4883,7 +4916,10 @@ mod tests {
         );
     }
 
-    fn nominal(fields: Vec<Ty>) -> ir::StructTy {
+    fn nominal(
+        modules: &std::sync::Arc<super::super::module_identity::ModuleArena>,
+        fields: Vec<Ty>,
+    ) -> ir::StructTy {
         ir::StructTy::new(ir::StructDef {
             source_decl: test_decl(),
             type_args: std::sync::Arc::from([]),
@@ -4892,15 +4928,17 @@ mod tests {
                 index: 0,
             },
             name: "S".into(),
-            module: String::new(),
-            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+            module: modules.source_root().unwrap(),
+            visibility: crate::compiler::ir::Visibility::Restricted(modules.source_root().unwrap()),
             fields: fields
                 .into_iter()
                 .enumerate()
                 .map(|(index, ty)| ir::FieldDef {
                     name: format!("f{index}"),
                     ty,
-                    visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+                    visibility: crate::compiler::ir::Visibility::Restricted(
+                        modules.source_root().unwrap(),
+                    ),
                 })
                 .collect::<Vec<_>>()
                 .into(),
@@ -5756,6 +5794,7 @@ mod tests {
 
     #[test]
     fn casts_validate_all_integer_pairs_dead_operands_and_evaluate_source_once() {
+        let (_module_names, modules) = fixture_modules();
         let types = [
             IntTy::I8,
             IntTy::I16,
@@ -5969,6 +6008,7 @@ mod tests {
             ref_contract: chain.ref_contract.clone(),
         };
         let facts = super::super::traits::test_support::facts_for_signature(
+            modules.clone(),
             &signature,
             &chain
                 .locals
@@ -6302,7 +6342,8 @@ mod tests {
 
     #[test]
     fn ignored_noncopy_dynamic_index_has_no_fabricated_element_snapshot() {
-        let item = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
+        let (_module_names, modules) = fixture_modules();
+        let item = Ty::Struct(nominal(&modules, vec![Ty::Int(IntTy::I32)]));
         let array = Ty::Array {
             element: std::sync::Arc::new(item.clone()),
             len: 1,
@@ -6371,7 +6412,8 @@ mod tests {
 
     #[test]
     fn dynamic_index_assignment_owns_rhs_before_index_call() {
-        let item = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
+        let (_module_names, modules) = fixture_modules();
+        let item = Ty::Struct(nominal(&modules, vec![Ty::Int(IntTy::I32)]));
         let array = Ty::Array {
             element: std::sync::Arc::new(item.clone()),
             len: 1,
@@ -6428,7 +6470,8 @@ mod tests {
 
     #[test]
     fn array_wildcard_index_inspects_base_without_moving_element() {
-        let item = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
+        let (_module_names, modules) = fixture_modules();
+        let item = Ty::Struct(nominal(&modules, vec![Ty::Int(IntTy::I32)]));
         let root = Ty::Array {
             element: std::sync::Arc::new(item.clone()),
             len: 2,
@@ -6474,7 +6517,8 @@ mod tests {
 
     #[test]
     fn array_index_copy_subfields_do_not_move_noncopy_parent() {
-        let item = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
+        let (_module_names, modules) = fixture_modules();
+        let item = Ty::Struct(nominal(&modules, vec![Ty::Int(IntTy::I32)]));
         let root = Ty::Array {
             element: std::sync::Arc::new(item.clone()),
             len: 1,
@@ -6534,8 +6578,9 @@ mod tests {
 
     #[test]
     fn zero_and_single_repeats_consume_noncopy_operand_once() {
+        let (_module_names, modules) = fixture_modules();
         for len in [0, 1] {
-            let item = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
+            let item = Ty::Struct(nominal(&modules, vec![Ty::Int(IntTy::I32)]));
             let array = Ty::Array {
                 element: std::sync::Arc::new(item.clone()),
                 len,
@@ -6696,7 +6741,8 @@ mod tests {
 
     #[test]
     fn scalar_field_reads_copy_only_the_projection_before_whole_struct_move() {
-        let root = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
+        let (_module_names, modules) = fixture_modules();
+        let root = Ty::Struct(nominal(&modules, vec![Ty::Int(IntTy::I32)]));
         let source = with_root(
             root.clone(),
             vec![
@@ -6733,8 +6779,9 @@ mod tests {
 
     #[test]
     fn non_copy_field_moves_preserve_siblings_but_not_parent_or_moved_field() {
-        let inner = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
-        let root = Ty::Struct(nominal(vec![inner.clone(), inner.clone()]));
+        let (_module_names, modules) = fixture_modules();
+        let inner = Ty::Struct(nominal(&modules, vec![Ty::Int(IntTy::I32)]));
+        let root = Ty::Struct(nominal(&modules, vec![inner.clone(), inner.clone()]));
         let mut source = with_root(
             root.clone(),
             vec![
@@ -6771,8 +6818,9 @@ mod tests {
 
     #[test]
     fn arbitrary_expression_base_moves_whole_source_once_before_projection() {
-        let inner = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
-        let root = Ty::Struct(nominal(vec![inner.clone(), Ty::Int(IntTy::I32)]));
+        let (_module_names, modules) = fixture_modules();
+        let inner = Ty::Struct(nominal(&modules, vec![Ty::Int(IntTy::I32)]));
+        let root = Ty::Struct(nominal(&modules, vec![inner.clone(), Ty::Int(IntTy::I32)]));
         let mut source = with_root(
             root.clone(),
             vec![
@@ -6812,7 +6860,8 @@ mod tests {
 
     #[test]
     fn struct_initializer_evaluates_source_order_then_permutates_snapshots() {
-        let ty = nominal(vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]);
+        let (_module_names, modules) = fixture_modules();
+        let ty = nominal(&modules, vec![Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]);
         let call = |name: &str| {
             expr(
                 Ty::Int(IntTy::I32),
@@ -6876,6 +6925,7 @@ mod tests {
 
     #[test]
     fn payload_constructor_evaluates_source_order_then_permutates_snapshots() {
+        let (_module_names, modules) = fixture_modules();
         let ty = ir::EnumTy::new(ir::EnumDef {
             source_decl: test_decl(),
             type_args: std::sync::Arc::from([]),
@@ -6884,8 +6934,8 @@ mod tests {
                 index: 0,
             },
             name: "E".into(),
-            module: String::new(),
-            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+            module: modules.source_root().unwrap(),
+            visibility: crate::compiler::ir::Visibility::Restricted(modules.source_root().unwrap()),
             variants: vec![
                 ir::VariantDef {
                     name: "A".into(),
@@ -7024,7 +7074,8 @@ mod tests {
 
     #[test]
     fn validator_rejects_non_copy_operands_even_in_disconnected_blocks() {
-        let root = Ty::Struct(nominal(vec![Ty::Int(IntTy::I32)]));
+        let (_module_names, modules) = fixture_modules();
+        let root = Ty::Struct(nominal(&modules, vec![Ty::Int(IntTy::I32)]));
         let source = with_root(root.clone(), vec![], vec![]);
         let mut function = nominal_lowered(&source);
         let target = LocalId(function.locals.len());
@@ -7287,7 +7338,7 @@ mod tests {
         let source = "struct S{x:i32} struct O{child:S} fn make()->O{O{child:S{x:1}}} fn main(){let _=make().child;}";
         let function = nominal_lowered(&checked(source, 1));
         assert!(super::super::ownership::analyze(&function).passed());
-        assert_eq!(function.blocks.iter().filter(|block| matches!(&block.terminator.value, Terminator::Call {name, ..} if name == "make")).count(), 1);
+        assert_eq!(function.blocks.iter().filter(|block| matches!(&block.terminator.value, Terminator::Call {name, ..} if name == "crate::make")).count(), 1);
         assert!(
             !function
                 .blocks

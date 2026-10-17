@@ -250,27 +250,28 @@ iteration and suspended-state destruction each have executable oracle cases.
 
 **Next, following the published native lexer:**
 
-- [ ] Migrate the actual root-context AST, resolver and retained source replay to
+- [x] Migrate the actual root-context AST, resolver and retained source replay to
       checked, store-owned semantic identifiers and structured paths. Preserve
       the existing source corpus and resource fences. A name side table beside
       authoritative string lookup does not close this gate. SEMANTIC-NAMES.md
       records the delivered owned stores/paths, actual loop-label integration,
-      retained-plan owner checks and explicit fixture builders. Remaining AST
-      fields and maps still require the full vertical migration.
-- [ ] Replace IR restricted-visibility and nominal/module prefix String authority
+      retained-plan owner checks and explicit fixture builders. The complete
+      root-context vertical migration is accepted under MODULE-IDENTITY.md;
+      mixed-site/expanded semantic names remain a separate open gate.
+- [x] Replace IR restricted-visibility and nominal/module prefix String authority
       with checked module identities retained by the source program/catalog.
       Source modules predate fresh declaration snapshots, so a DeclId or a
       rendered path is not a substitute for a checked module owner.
-  - [ ] Complete the extracted root resolver using checked path/name keys,
+  - [x] Complete the extracted root resolver using checked path/name keys,
         canonical module identities and typed catalog trait bindings. Preserve
         namespace separation, alias cycles, lexical shadowing and reexport privacy.
-  - [ ] Universally validate every name/path/type/binder and module restriction,
+  - [x] Universally validate every name/path/type/binder and module restriction,
         including unused bodies and public metadata, with charged iterative
         traversal before declaration or body authority is published.
-  - [ ] Retain the same immutable name/module owners through Program, catalog,
+  - [x] Retain the same immutable name/module owners through Program, catalog,
         planning and replay. Reject foreign owners even for empty programs,
         public declarations and same-spelling unused metadata.
-  - [ ] Serialize persistent instance identities from checked structural crate,
+  - [x] Serialize persistent instance identities from checked structural crate,
         module and item descriptors, never snapshot-local numeric handles or
         diagnostic paths. Preserve source-order and alpha-renaming invariance.
 - [x] Add checked owning token slices, logical macro cursors and opaque literal

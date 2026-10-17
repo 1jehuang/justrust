@@ -1894,7 +1894,17 @@ mod tests {
         super::emit_checked_function(function, source_fixture_facts(signatures, index)?)
     }
 
+    fn fixture_modules() -> std::sync::Arc<super::super::module_identity::ModuleArena> {
+        super::super::module_identity::ModuleArenaBuilder::for_catalog(
+            super::super::token_primitives::ExpansionBudget::default(),
+        )
+        .unwrap()
+        .freeze()
+        .unwrap()
+    }
+
     fn raw_fixture_facts(
+        modules: std::sync::Arc<super::super::module_identity::ModuleArena>,
         function: &cfg::Function,
     ) -> Result<std::sync::Arc<super::super::traits::ValidatedFacts>, String> {
         if function
@@ -1925,6 +1935,7 @@ mod tests {
             .map(|local| local.ty.clone())
             .collect::<Vec<_>>();
         super::super::traits::test_support::facts_for_signature(
+            modules,
             &signature,
             &types,
             &ir::PlanBudget::default(),
@@ -1932,8 +1943,11 @@ mod tests {
         .map_err(|error| error.to_string())
     }
 
-    fn emit_test_cfg(function: &cfg::Function) -> Result<Object, String> {
-        let concrete = seal_concrete_cfg(function.clone(), raw_fixture_facts(function)?)?;
+    fn emit_test_cfg(
+        modules: std::sync::Arc<super::super::module_identity::ModuleArena>,
+        function: &cfg::Function,
+    ) -> Result<Object, String> {
+        let concrete = seal_concrete_cfg(function.clone(), raw_fixture_facts(modules, function)?)?;
         emit_cfg_function(&concrete, &|_| {
             Err("test CFG calls require a sealed instance plan".into())
         })
@@ -1957,15 +1971,30 @@ mod tests {
             tail: tail.map(Box::new),
         }
     }
-    fn function(name: &str, params: Vec<(String, Type)>, result: Type, body: Block) -> Function {
+    fn function(
+        name: &str,
+        params: Vec<(String, Type)>,
+        result: Type,
+        body: Block,
+        builder: &mut frontend::ProgramBuilder,
+    ) -> Function {
         Function {
             constness: crate::compiler::frontend::Constness::Runtime,
             visibility: ir::Visibility::Public,
-            name: name.into(),
+            module: builder.module_root().unwrap(),
+            name: builder.path(&format!("crate::{name}")).unwrap(),
             regions: Default::default(),
             type_params: vec![],
             bounds: vec![],
-            params,
+            params: params
+                .into_iter()
+                .map(|(name, ty)| {
+                    (
+                        frontend::BindingName::Named(builder.ident(&name).unwrap()),
+                        ty,
+                    )
+                })
+                .collect(),
             result,
             body,
         }
@@ -1977,12 +2006,14 @@ mod tests {
             right: Box::new(right),
         }
     }
-    fn var(name: &str) -> Expr {
-        Expr::Var(name.into())
+    fn var(name: &str, builder: &mut frontend::ProgramBuilder) -> Expr {
+        Expr::Var(builder.path(name).unwrap())
     }
-    fn call(name: &str, args: Vec<Expr>) -> Expr {
+    fn call(name: &str, args: Vec<Expr>, builder: &mut frontend::ProgramBuilder) -> Expr {
         Expr::Call {
-            name: name.into(),
+            // These fixtures construct the resolved AST directly. Local names
+            // remain relative, but their root function callees are canonical.
+            name: builder.path(&format!("crate::{name}")).unwrap(),
             args,
         }
     }
@@ -2005,22 +2036,48 @@ mod tests {
     fn equals(value: Expr, expected: i32) -> Stmt {
         assertion(binary(BinaryOp::Eq, value, Expr::i32(expected)))
     }
-    fn program(statements: Vec<Stmt>, mut others: Vec<Function>) -> Program {
+    fn fixture_builder() -> frontend::ProgramBuilder {
+        let budget = crate::compiler::token_primitives::ExpansionBudget::default();
+        frontend::ProgramBuilder::new(std::path::Path::new("<backend-fixture>"), "", &budget)
+            .unwrap()
+    }
+
+    fn owned_program(
+        statements: Vec<Stmt>,
+        mut others: Vec<Function>,
+        mut builder: frontend::ProgramBuilder,
+    ) -> Program {
         others.push(function(
             "main",
             vec![],
             Type::Unit,
             block(statements, None),
+            &mut builder,
         ));
-        let budget = crate::compiler::token_primitives::ExpansionBudget::default();
-        let mut builder = crate::compiler::frontend::ProgramBuilder::new(
-            std::path::Path::new("<backend-fixture>"),
-            "",
-            &budget,
-        )
-        .unwrap();
         builder.functions = others;
         builder.finish().unwrap()
+    }
+
+    fn program(statements: Vec<Stmt>, others: Vec<Function>) -> Program {
+        assert!(
+            others.is_empty(),
+            "named fixtures require their original builder"
+        );
+        owned_program(statements, others, fixture_builder())
+    }
+
+    // Test-only selection of an already checked root declaration. Production
+    // resolver and callable authority use canonical scoped semantic keys.
+    fn authored_function(program: &Program, name: &str) -> usize {
+        program
+            .functions
+            .iter()
+            .position(|function| {
+                function.name.anchor() == frontend::PathAnchor::Crate
+                    && function.name.len() == 1
+                    && program.names.spelling(function.name.segments()[0]).unwrap() == name
+            })
+            .unwrap()
     }
     fn executable(program: &Program) -> std::path::PathBuf {
         executable_bytes(&emit(program).unwrap())
@@ -2965,11 +3022,7 @@ mod tests {
         )
         .unwrap();
         let env = frontend::signature_table(&program).unwrap();
-        let index = program
-            .functions
-            .iter()
-            .position(|function| function.name == "main")
-            .unwrap();
+        let index = authored_function(&program, "main");
         let checked = frontend::type_function_with_signatures(&program, index, &env).unwrap();
         assert!(
             emit_checked_fixture(&checked, &env, index)
@@ -4418,6 +4471,7 @@ mod tests {
 
     #[test]
     fn singleton_variant_switch_never_loads_uninitialized_or_moved_tag() {
+        let modules = fixture_modules();
         fn located<T>(value: T) -> cfg::Located<T> {
             cfg::Located {
                 value,
@@ -4441,8 +4495,8 @@ mod tests {
             .unwrap(),
             type_args: [].into(),
             name: "Singleton".into(),
-            module: String::new(),
-            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+            module: modules.core_root(),
+            visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
             variants: vec![ir::VariantDef {
                 name: "Only".into(),
                 shape: ir::VariantShape::Tuple,
@@ -4534,8 +4588,11 @@ mod tests {
                 "moved={moved}: {:?}",
                 analysis.diagnostics
             );
-            let concrete =
-                seal_concrete_cfg(function.clone(), raw_fixture_facts(&function).unwrap()).unwrap();
+            let concrete = seal_concrete_cfg(
+                function.clone(),
+                raw_fixture_facts(std::sync::Arc::clone(&modules), &function).unwrap(),
+            )
+            .unwrap();
             let mut branch = Emitter {
                 object: Object {
                     code: vec![],
@@ -4556,7 +4613,7 @@ mod tests {
                 .unwrap();
             assert_eq!(branch.object.code, [0xe9, 0, 0, 0, 0]);
             assert_eq!(branch.edges, [(1, cfg::BlockId(1))]);
-            let object = emit_test_cfg(&function).unwrap();
+            let object = emit_test_cfg(std::sync::Arc::clone(&modules), &function).unwrap();
             // The root follows the eight-byte unit return slot in the frame.
             // Aggregate moves address it but must never load its tag into eax.
             let root_offset = -(8 + value_size(&ir::Ty::Enum(ty.clone())).unwrap());
@@ -4580,6 +4637,7 @@ mod tests {
 
     #[test]
     fn payload_enum_constructor_zeroes_inactive_backing_words() {
+        let modules = fixture_modules();
         let field = |name: &str| ir::FieldDef {
             name: name.into(),
             ty: ir::Ty::Int(ir::IntTy::I32),
@@ -4591,8 +4649,8 @@ mod tests {
             source_decl: ir::DeclId { snapshot, index: 0 },
             type_args: [].into(),
             name: "Backing".into(),
-            module: String::new(),
-            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+            module: modules.core_root(),
+            visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
             variants: vec![
                 ir::VariantDef {
                     name: "Empty".into(),
@@ -4826,6 +4884,7 @@ mod tests {
 
     #[test]
     fn recursion_many_arguments_returns_and_stable_scopes() {
+        let mut builder = fixture_builder();
         let factorial = function(
             "factorial",
             vec![("n".into(), Type::Int(ir::IntTy::I32))],
@@ -4833,21 +4892,23 @@ mod tests {
             block(
                 vec![],
                 Some(Expr::If {
-                    condition: Box::new(binary(BinaryOp::Le, var("n"), Expr::i32(1))),
+                    condition: Box::new(binary(BinaryOp::Le, var("n", &mut builder), Expr::i32(1))),
                     then_block: block(vec![Stmt::Return(Some(Expr::i32(1)))], None),
                     else_block: block(
                         vec![],
                         Some(binary(
                             BinaryOp::Mul,
-                            var("n"),
+                            var("n", &mut builder),
                             call(
                                 "factorial",
-                                vec![binary(BinaryOp::Sub, var("n"), Expr::i32(1))],
+                                vec![binary(BinaryOp::Sub, var("n", &mut builder), Expr::i32(1))],
+                                &mut builder,
                             ),
                         )),
                     ),
                 }),
             ),
+            &mut builder,
         );
         let pick = function(
             "pick",
@@ -4855,44 +4916,58 @@ mod tests {
                 .map(|i| (format!("p{i}"), Type::Int(ir::IntTy::I32)))
                 .collect(),
             Type::Int(ir::IntTy::I32),
-            block(vec![], Some(binary(BinaryOp::Sub, var("p0"), var("p11")))),
+            block(
+                vec![],
+                Some(binary(
+                    BinaryOp::Sub,
+                    var("p0", &mut builder),
+                    var("p11", &mut builder),
+                )),
+            ),
+            &mut builder,
         );
-        let local = |name: &str, n| Stmt::Let {
-            name: name.into(),
+        let local = |name: &str, n, builder: &mut frontend::ProgramBuilder| Stmt::Let {
+            name: frontend::BindingName::Named(builder.ident(name).unwrap()),
             mutable: true,
             ty: Type::Int(ir::IntTy::I32),
             value: Expr::i32(n),
         };
         let statements = vec![
-            local("x", 3),
+            local("x", 3, &mut builder),
             equals(
                 binary(
                     BinaryOp::Add,
                     Expr::i32(2),
-                    Expr::Block(block(vec![local("x", 9)], Some(var("x")))),
+                    Expr::Block(block(
+                        vec![local("x", 9, &mut builder)],
+                        Some(var("x", &mut builder)),
+                    )),
                 ),
                 11,
             ),
-            equals(var("x"), 3),
+            equals(var("x", &mut builder), 3),
             Stmt::While {
                 label: None,
-                condition: binary(BinaryOp::Lt, var("x"), Expr::i32(6)),
+                condition: binary(BinaryOp::Lt, var("x", &mut builder), Expr::i32(6)),
                 body: block(
                     vec![
                         Stmt::Assign {
-                            name: "x".into(),
-                            value: binary(BinaryOp::Add, var("x"), Expr::i32(1)),
+                            name: frontend::LocalName::Named(builder.ident("x").unwrap()),
+                            value: binary(BinaryOp::Add, var("x", &mut builder), Expr::i32(1)),
                         },
-                        local("temporary", 100),
+                        local("temporary", 100, &mut builder),
                     ],
                     None,
                 ),
             },
-            equals(var("x"), 6),
-            equals(call("factorial", vec![Expr::i32(6)]), 720),
-            equals(call("pick", (0..12).map(Expr::i32).collect()), -11),
+            equals(var("x", &mut builder), 6),
+            equals(call("factorial", vec![Expr::i32(6)], &mut builder), 720),
+            equals(
+                call("pick", (0..12).map(Expr::i32).collect(), &mut builder),
+                -11,
+            ),
         ];
-        let output = run(&program(statements, vec![factorial, pick]));
+        let output = run(&owned_program(statements, vec![factorial, pick], builder));
         assert_eq!(output.status.code(), Some(0), "{output:?}");
     }
 
@@ -4921,13 +4996,22 @@ mod tests {
 
     #[test]
     fn argument_bound_and_early_return_with_temporaries() {
+        let mut builder = fixture_builder();
         let pick = function(
             "pick",
             (0..MAX_ARGS)
                 .map(|i| (format!("p{i}"), Type::Int(ir::IntTy::I32)))
                 .collect(),
             Type::Int(ir::IntTy::I32),
-            block(vec![], Some(binary(BinaryOp::Sub, var("p0"), var("p4095")))),
+            block(
+                vec![],
+                Some(binary(
+                    BinaryOp::Sub,
+                    var("p0", &mut builder),
+                    var("p4095", &mut builder),
+                )),
+            ),
+            &mut builder,
         );
         let early = function(
             "early",
@@ -4944,50 +5028,61 @@ mod tests {
                     )),
                 )),
             ),
+            &mut builder,
         );
-        let p = program(
+        let extra = frontend::BindingName::Named(builder.ident("extra").unwrap());
+        let too_many_arguments = call("pick", vec![Expr::i32(0); MAX_ARGS + 1], &mut builder);
+        let p = owned_program(
             vec![
                 equals(
-                    call("pick", (0..MAX_ARGS as i32).map(Expr::i32).collect()),
+                    call(
+                        "pick",
+                        (0..MAX_ARGS as i32).map(Expr::i32).collect(),
+                        &mut builder,
+                    ),
                     -4095,
                 ),
                 equals(
-                    binary(BinaryOp::Add, Expr::i32(1), call("early", vec![])),
+                    binary(
+                        BinaryOp::Add,
+                        Expr::i32(1),
+                        call("early", vec![], &mut builder),
+                    ),
                     8,
                 ),
             ],
-            vec![pick.clone(), early],
+            vec![pick, early],
+            builder,
         );
         assert_eq!(run(&p).status.code(), Some(0));
-        let mut too_many = pick;
-        too_many
+        let mut too_many = p.clone();
+        too_many.functions[0]
             .params
-            .push(("extra".into(), Type::Int(ir::IntTy::I32)));
-        let error = emit(&program(vec![], vec![too_many])).unwrap_err();
+            .push((extra, Type::Int(ir::IntTy::I32)));
+        let error = emit(&too_many).unwrap_err();
         assert!(error.contains("4096"), "{error}");
-        assert!(
-            emit(&program(
-                vec![Stmt::Expr(call("pick", vec![Expr::i32(0); MAX_ARGS + 1]))],
-                vec![p.functions[0].clone()]
-            ))
-            .unwrap_err()
-            .contains("4096")
-        );
+        let mut too_many = p.clone();
+        too_many.functions.last_mut().unwrap().body =
+            block(vec![Stmt::Expr(too_many_arguments)], None);
+        assert!(emit(&too_many).unwrap_err().contains("4096"));
     }
 
     #[test]
     fn unit_arguments_nested_calls_and_left_to_right_effects() {
+        let mut builder = fixture_builder();
         let unit = function(
             "unit",
             vec![],
             Type::Unit,
             block(vec![Stmt::Expr(Expr::Println("unit".into()))], None),
+            &mut builder,
         );
         let identity = function(
             "identity",
             vec![("n".into(), Type::Int(ir::IntTy::I32))],
             Type::Int(ir::IntTy::I32),
-            block(vec![], Some(var("n"))),
+            block(vec![], Some(var("n", &mut builder))),
+            &mut builder,
         );
         let combine = function(
             "combine",
@@ -5001,10 +5096,11 @@ mod tests {
                 vec![],
                 Some(binary(
                     BinaryOp::Add,
-                    binary(BinaryOp::Mul, var("a"), Expr::i32(10)),
-                    var("b"),
+                    binary(BinaryOp::Mul, var("a", &mut builder), Expr::i32(10)),
+                    var("b", &mut builder),
                 )),
             ),
+            &mut builder,
         );
         let early = function(
             "early",
@@ -5019,37 +5115,50 @@ mod tests {
                         Expr::Block(block(vec![Stmt::Return(Some(Expr::i32(9)))], None)),
                         Expr::i32(3),
                     ],
+                    &mut builder,
                 )),
             ),
+            &mut builder,
         );
-        let effect = |label: &str, value| {
+        let effect = |label: &str, value, builder: &mut frontend::ProgramBuilder| {
             call(
                 "identity",
                 vec![Expr::Block(block(
                     vec![Stmt::Expr(Expr::Println(label.into()))],
                     Some(Expr::i32(value)),
                 ))],
+                builder,
             )
         };
-        let p = program(
+        let p = owned_program(
             vec![
                 equals(
                     binary(
                         BinaryOp::Add,
                         call(
                             "combine",
-                            vec![effect("first", 2), call("unit", vec![]), effect("last", 3)],
+                            vec![
+                                effect("first", 2, &mut builder),
+                                call("unit", vec![], &mut builder),
+                                effect("last", 3, &mut builder),
+                            ],
+                            &mut builder,
                         ),
-                        call("identity", vec![Expr::i32(4)]),
+                        call("identity", vec![Expr::i32(4)], &mut builder),
                     ),
                     27,
                 ),
                 equals(
-                    binary(BinaryOp::Mul, Expr::i32(2), call("early", vec![])),
+                    binary(
+                        BinaryOp::Mul,
+                        Expr::i32(2),
+                        call("early", vec![], &mut builder),
+                    ),
                     18,
                 ),
             ],
             vec![unit, identity, combine, early],
+            builder,
         );
         let output = run(&p);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -5085,27 +5194,35 @@ mod tests {
         let checked = frontend::type_function_with_signatures(&p, 0, &signatures).unwrap();
         let object = emit_checked_fixture(&checked, &signatures, 0).unwrap();
         assert!(link(&[("main".into(), object.clone()), ("main".into(), object)]).is_err());
-        assert!(emit(&program(vec![Stmt::Expr(call("missing", vec![]))], vec![])).is_err());
+        let mut builder = fixture_builder();
+        let missing = call("missing", vec![], &mut builder);
+        assert!(emit(&owned_program(vec![Stmt::Expr(missing)], vec![], builder)).is_err());
     }
 
     #[test]
     fn checked_emission_uses_local_ids_not_display_names() {
-        let p = program(
-            vec![equals(call("shadow", vec![Expr::i32(17)]), 19)],
+        let mut builder = fixture_builder();
+        let p = owned_program(
+            vec![equals(
+                call("shadow", vec![Expr::i32(17)], &mut builder),
+                19,
+            )],
             vec![function(
                 "shadow",
                 vec![("x".into(), Type::Int(ir::IntTy::I32))],
                 Type::Int(ir::IntTy::I32),
                 block(
                     vec![Stmt::Let {
-                        name: "x".into(),
+                        name: frontend::BindingName::Named(builder.ident("x").unwrap()),
                         mutable: false,
                         ty: Type::Int(ir::IntTy::I32),
-                        value: binary(BinaryOp::Add, var("x"), Expr::i32(2)),
+                        value: binary(BinaryOp::Add, var("x", &mut builder), Expr::i32(2)),
                     }],
-                    Some(var("x")),
+                    Some(var("x", &mut builder)),
                 ),
+                &mut builder,
             )],
+            builder,
         );
         assert_eq!(run(&p).status.code(), Some(0));
         let signatures = frontend::signature_table(&p).unwrap();
@@ -5332,7 +5449,7 @@ mod tests {
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"returns\n");
         let signatures = frontend::signature_table(&p).unwrap();
-        let index = p.functions.iter().position(|f| f.name == "make").unwrap();
+        let index = authored_function(&p, "make");
         let checked = frontend::type_function_with_signatures(&p, index, &signatures).unwrap();
         let object = emit_checked_fixture(&checked, &signatures, index).unwrap();
         assert!(
@@ -5382,6 +5499,7 @@ mod tests {
             },
         };
         let facts = super::super::traits::test_support::facts_for_signature(
+            fixture_modules(),
             &ir::Signature {
                 ref_contract: checked.ref_contract.clone(),
                 params: vec![],
@@ -5402,6 +5520,7 @@ mod tests {
 
     #[test]
     fn cfg_entry_edges_and_aggregate_assignment_snapshot_reads() {
+        let modules = fixture_modules();
         fn located<T>(value: T) -> cfg::Located<T> {
             cfg::Located {
                 value,
@@ -5524,7 +5643,7 @@ mod tests {
             ],
         };
         assert!(ownership::analyze(&function).passed());
-        let object = emit_test_cfg(&function).unwrap();
+        let object = emit_test_cfg(std::sync::Arc::clone(&modules), &function).unwrap();
         let bytes = link(&[("main".into(), object.clone())]).unwrap();
         let path = executable_bytes(&bytes);
         let output = execute(Command::new(&path).stdout(Stdio::piped()));
@@ -5540,7 +5659,7 @@ mod tests {
             }
         }
         assert!(ownership::analyze(&function).passed());
-        assert_eq!(emit_test_cfg(&function).unwrap().code, object.code);
+        assert_eq!(emit_test_cfg(modules, &function).unwrap().code, object.code);
     }
 
     #[test]
@@ -5582,7 +5701,7 @@ mod tests {
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"nominal\n");
         let env = frontend::signature_table(&p).unwrap();
-        let index = p.functions.iter().position(|f| f.name == "one").unwrap();
+        let index = authored_function(&p, "one");
         let checked = frontend::type_function_with_signatures(&p, index, &env).unwrap();
         assert_eq!(checked.result.field_count(), Some(1));
         assert_eq!(value_size(&checked.result).unwrap(), 8);
@@ -5641,7 +5760,7 @@ mod tests {
         )
         .unwrap();
         let env = frontend::signature_table(&p).unwrap();
-        let index = p.functions.iter().position(|f| f.name == "main").unwrap();
+        let index = authored_function(&p, "main");
         let checked = frontend::type_function_with_signatures(&p, index, &env).unwrap();
         let error = emit_checked_fixture(&checked, &env, index).unwrap_err();
         assert!(error.contains("initialization/move analysis"), "{error}");
@@ -5728,7 +5847,7 @@ mod tests {
         ] {
             let p = frontend::parse(source).unwrap();
             let env = frontend::signature_table(&p).unwrap();
-            let index = p.functions.iter().position(|f| f.name == "main").unwrap();
+            let index = authored_function(&p, "main");
             let checked = frontend::type_function_with_signatures(&p, index, &env).unwrap();
             let error = emit_checked_fixture(&checked, &env, index).unwrap_err();
             assert!(error.contains("initialization/move analysis"), "{error}");

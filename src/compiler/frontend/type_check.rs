@@ -1,0 +1,5726 @@
+//! Source checking, local inference and checked body construction.
+use super::*;
+
+pub(super) fn application_namespace(value: &Expr) -> Result<Namespace, String> {
+    match value {
+        Expr::Call { .. } => Ok(Namespace::Value),
+        Expr::Struct { .. } | Expr::EnumVariant { .. } => Ok(Namespace::Type),
+        _ => Err("unsupported generic application expression".into()),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum LocalKey {
+    Named(NameKey),
+    Receiver,
+}
+
+pub(super) trait LocalInput {
+    fn checked_key(&self, names: &NameStore) -> Result<Option<LocalKey>, String>;
+    fn diagnostic(&self, names: &NameStore) -> Result<String, String>;
+}
+impl<T: LocalInput + ?Sized> LocalInput for &T {
+    fn checked_key(&self, names: &NameStore) -> Result<Option<LocalKey>, String> {
+        (**self).checked_key(names)
+    }
+    fn diagnostic(&self, names: &NameStore) -> Result<String, String> {
+        (**self).diagnostic(names)
+    }
+}
+impl LocalInput for AstIdent {
+    fn checked_key(&self, names: &NameStore) -> Result<Option<LocalKey>, String> {
+        Ok(Some(LocalKey::Named(
+            names
+                .key(*self, LookupClass::Local)
+                .map_err(native_adapter::name_diagnostic)?,
+        )))
+    }
+    fn diagnostic(&self, names: &NameStore) -> Result<String, String> {
+        Ok(names
+            .spelling(*self)
+            .map_err(native_adapter::name_diagnostic)?
+            .to_owned())
+    }
+}
+impl LocalInput for BindingName {
+    fn checked_key(&self, names: &NameStore) -> Result<Option<LocalKey>, String> {
+        match self {
+            Self::Named(name) => name.checked_key(names),
+            Self::Wildcard => Ok(None),
+        }
+    }
+    fn diagnostic(&self, names: &NameStore) -> Result<String, String> {
+        match self {
+            Self::Named(name) => name.diagnostic(names),
+            Self::Wildcard => Ok("_".into()),
+        }
+    }
+}
+impl LocalInput for LocalName {
+    fn checked_key(&self, names: &NameStore) -> Result<Option<LocalKey>, String> {
+        match self {
+            Self::Named(name) => name.checked_key(names),
+            Self::Receiver => Ok(Some(LocalKey::Receiver)),
+        }
+    }
+    fn diagnostic(&self, names: &NameStore) -> Result<String, String> {
+        match self {
+            Self::Named(name) => name.diagnostic(names),
+            Self::Receiver => Ok("self".into()),
+        }
+    }
+}
+impl LocalInput for AstPath {
+    fn checked_key(&self, names: &NameStore) -> Result<Option<LocalKey>, String> {
+        self.check(names).map_err(native_adapter::name_diagnostic)?;
+        match (self.anchor(), self.segments()) {
+            (PathAnchor::SelfModule, []) => Ok(Some(LocalKey::Receiver)),
+            (PathAnchor::Relative, [name]) => name.checked_key(names),
+            _ => Err("expected a local-root path".into()),
+        }
+    }
+    fn diagnostic(&self, names: &NameStore) -> Result<String, String> {
+        Ok(self
+            .display(names)
+            .map_err(native_adapter::name_diagnostic)?
+            .to_string())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TypeEnv {
+    pub structs: HashMap<PathKey, ir::StructTy>,
+    pub enums: HashMap<PathKey, ir::EnumTy>,
+    pub functions: HashMap<PathKey, ir::Signature>,
+    pub(super) plan: Option<PlanCtx>,
+    pub(super) params: HashMap<GenericBindingKey, ir::Ty>,
+    pub(super) param_env: Option<Arc<ir::GenericEnv>>,
+    pub(super) self_ty: Option<ir::Ty>,
+    pub(super) facts: Option<Arc<tr::ValidatedFacts>>,
+}
+impl TypeEnv {
+    pub fn plan(&self) -> Result<&PlanCtx, String> {
+        self.plan
+            .as_ref()
+            .ok_or_else(|| "missing authoritative plan".into())
+    }
+}
+pub type Signatures = TypeEnv;
+pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
+    let budget = ir::PlanBudget::default();
+    PlanCtx::from_program(program, &budget)?.environment(None)
+}
+pub(super) struct LoopFrame {
+    pub(super) id: ir::LoopId,
+    pub(super) label: Option<NameKey>,
+    pub(super) is_block: bool,
+    pub(super) accepts_value: bool,
+    pub(super) checking_condition: bool,
+    pub(super) break_ty: Option<ir::Ty>,
+    pub(super) expected: Option<ir::Ty>,
+    pub(super) can_exit: bool,
+}
+pub(super) struct PatternLocal {
+    pub(super) name: AstIdent,
+    pub(super) ty: ir::Ty,
+    pub(super) mutable: bool,
+    pub(super) projection: Vec<ir::Projection>,
+}
+pub(super) type ResolvedVariantPattern<'p> = (ir::EnumTy, usize, Vec<(usize, &'p Pattern)>);
+
+pub(super) const COUNT_EVAL_WORK: usize = 1_000_000;
+#[derive(Clone, Copy, Debug)]
+pub(super) enum CountValue {
+    Known(ir::IntValue),
+    Dynamic,
+    Unsupported,
+}
+#[derive(Clone, Copy)]
+pub(super) enum CountMemo {
+    Unseen,
+    Visiting,
+    Done(CountValue),
+}
+pub(super) struct CountEvaluator<'a> {
+    pub(super) exprs: &'a [ir::TypedExpr],
+    pub(super) memo: Vec<CountMemo>,
+    pub(super) heights: Vec<usize>,
+    pub(super) work: usize,
+}
+impl<'a> CountEvaluator<'a> {
+    pub(super) fn new(exprs: &'a [ir::TypedExpr]) -> Result<Self, String> {
+        let bytes = exprs
+            .len()
+            .checked_mul(std::mem::size_of::<CountMemo>() + std::mem::size_of::<usize>())
+            .ok_or("shift count memo allocation overflow")?;
+        if exprs.len() > COUNT_EVAL_WORK || bytes > 64 * 1024 * 1024 {
+            return Err("shift count memo resource limit exceeded".into());
+        }
+        Ok(Self {
+            exprs,
+            memo: vec![CountMemo::Unseen; exprs.len()],
+            heights: vec![0; exprs.len()],
+            work: 0,
+        })
+    }
+    pub(super) fn charge(&mut self) -> Result<(), String> {
+        self.work += 1;
+        if self.work > COUNT_EVAL_WORK {
+            return Err("shift count evaluation work limit exceeded".into());
+        }
+        Ok(())
+    }
+    pub(super) fn value(&self, id: ir::ExprId) -> Result<CountValue, String> {
+        match self.memo.get(id.0) {
+            Some(CountMemo::Done(value)) => Ok(*value),
+            _ => Err("invalid shift count evaluation dependency".into()),
+        }
+    }
+    pub(super) fn evaluate(&mut self, root: ir::ExprId) -> Result<CountValue, String> {
+        let mut pending = vec![(root, false, 0usize)];
+        while let Some((id, ready, depth)) = pending.pop() {
+            self.charge()?;
+            if depth > 128 {
+                return Err("shift count evaluation depth limit exceeded".into());
+            }
+            let expr = self
+                .exprs
+                .get(id.0)
+                .ok_or("invalid shift count expression ID")?;
+            if !ready {
+                match self.memo[id.0] {
+                    CountMemo::Done(_) => {
+                        if depth + self.heights[id.0] > 128 {
+                            return Err("shift count evaluation depth limit exceeded".into());
+                        }
+                        continue;
+                    }
+                    CountMemo::Visiting => return Err("cycle in shift count expression".into()),
+                    CountMemo::Unseen => {}
+                }
+                // A typed integer that cannot return has no constant value.
+                if expr.completion == ir::Completion::Never {
+                    self.memo[id.0] = CountMemo::Done(CountValue::Dynamic);
+                    continue;
+                }
+                let children = match &expr.kind {
+                    ir::ExprKind::Int(value) => {
+                        value.validate()?;
+                        if expr.ty != ir::Ty::Int(value.ty) {
+                            return Err("shift count constant type mismatch".into());
+                        }
+                        self.memo[id.0] = CountMemo::Done(CountValue::Known(*value));
+                        continue;
+                    }
+                    ir::ExprKind::Local(_)
+                    | ir::ExprKind::Call { .. }
+                    | ir::ExprKind::Index { .. }
+                    | ir::ExprKind::DynamicIndex { .. }
+                    | ir::ExprKind::Deref { .. }
+                    | ir::ExprKind::Field { .. } => {
+                        self.memo[id.0] = CountMemo::Done(CountValue::Dynamic);
+                        continue;
+                    }
+                    ir::ExprKind::Unary { value, .. } | ir::ExprKind::IntCast { value, .. } => {
+                        [Some(*value), None]
+                    }
+                    ir::ExprKind::Binary { left, right, .. } => [Some(*left), Some(*right)],
+                    ir::ExprKind::Block(block) if block.statements.is_empty() => [block.tail, None],
+                    ir::ExprKind::Block(_) => {
+                        self.memo[id.0] = CountMemo::Done(CountValue::Dynamic);
+                        continue;
+                    }
+                    _ => {
+                        self.memo[id.0] = CountMemo::Done(CountValue::Unsupported);
+                        continue;
+                    }
+                };
+                self.memo[id.0] = CountMemo::Visiting;
+                pending.push((id, true, depth));
+                for child in children.into_iter().flatten().rev() {
+                    pending.push((child, false, depth + 1));
+                }
+                continue;
+            }
+            let result = match &expr.kind {
+                ir::ExprKind::Block(block) => block
+                    .tail
+                    .map(|id| self.value(id))
+                    .transpose()?
+                    .unwrap_or(CountValue::Unsupported),
+                ir::ExprKind::IntCast { value, to } => match self.value(*value)? {
+                    CountValue::Known(value) => CountValue::Known(ir::IntValue {
+                        ty: *to,
+                        bits: count_cast(value, *to),
+                    }),
+                    other => other,
+                },
+                ir::ExprKind::Unary { op, value } => match self.value(*value)? {
+                    CountValue::Known(value) => {
+                        let bits = match op {
+                            UnaryOp::Not => !value.bits & value.ty.mask(),
+                            UnaryOp::Neg => {
+                                if !value.ty.is_signed() {
+                                    return Err("unsigned negation in shift count".into());
+                                }
+                                count_checked_signed(
+                                    count_integer(value)
+                                        .checked_neg()
+                                        .ok_or("arithmetic overflow in static shift count")?,
+                                    value.ty,
+                                )?
+                            }
+                        };
+                        CountValue::Known(ir::IntValue { ty: value.ty, bits })
+                    }
+                    other => other,
+                },
+                ir::ExprKind::Binary { op, left, right } => {
+                    let lhs = self.value(*left)?;
+                    let rhs = self.value(*right)?;
+                    if matches!(op, BinaryOp::Shl | BinaryOp::Shr)
+                        && let CountValue::Known(value) = rhs
+                    {
+                        let ir::Ty::Int(ty) = self.exprs[left.0].ty else {
+                            return Err("noninteger nested shift".into());
+                        };
+                        count_shift_amount(value, ty)?;
+                    }
+                    match (lhs, rhs) {
+                        (CountValue::Known(lhs), CountValue::Known(rhs)) => {
+                            count_binary(*op, lhs, rhs)?
+                        }
+                        (CountValue::Unsupported, _) | (_, CountValue::Unsupported) => {
+                            CountValue::Unsupported
+                        }
+                        _ => CountValue::Dynamic,
+                    }
+                }
+                _ => return Err("invalid shift count evaluation state".into()),
+            };
+            if let CountValue::Known(value) = result
+                && expr.ty != ir::Ty::Int(value.ty)
+            {
+                return Err("shift count result type mismatch".into());
+            }
+            let height = match &expr.kind {
+                ir::ExprKind::Block(block) => {
+                    block.tail.map(|id| self.heights[id.0] + 1).unwrap_or(0)
+                }
+                ir::ExprKind::IntCast { value, .. } | ir::ExprKind::Unary { value, .. } => {
+                    self.heights[value.0] + 1
+                }
+                ir::ExprKind::Binary { left, right, .. } => {
+                    self.heights[left.0].max(self.heights[right.0]) + 1
+                }
+                _ => 0,
+            };
+            if depth + height > 128 {
+                return Err("shift count evaluation depth limit exceeded".into());
+            }
+            self.heights[id.0] = height;
+            self.memo[id.0] = CountMemo::Done(result);
+        }
+        self.value(root)
+    }
+}
+pub(super) fn count_integer(value: ir::IntValue) -> i128 {
+    // Sign extension by shifts avoids constructing 2^128 or negating MIN.
+    let shift = 128 - value.ty.bits();
+    ((value.bits << shift) as i128) >> shift
+}
+pub(super) fn count_cast(value: ir::IntValue, to: ir::IntTy) -> u128 {
+    let extended = if value.ty.is_signed() {
+        count_integer(value) as u128
+    } else {
+        value.bits
+    };
+    extended & to.mask()
+}
+pub(super) fn count_checked_signed(value: i128, ty: ir::IntTy) -> Result<u128, String> {
+    if ty.bits() < 128 {
+        let limit = 1i128 << (ty.bits() - 1);
+        if value < -limit || value >= limit {
+            return Err("arithmetic overflow in static shift count".into());
+        }
+    }
+    Ok(value as u128 & ty.mask())
+}
+pub(super) fn count_shift_amount(value: ir::IntValue, lhs: ir::IntTy) -> Result<u32, String> {
+    value.validate()?;
+    if (value.ty.is_signed() && count_integer(value) < 0) || value.bits >= u128::from(lhs.bits()) {
+        let amount = if value.ty.is_signed() {
+            count_integer(value).to_string()
+        } else {
+            value.bits.to_string()
+        };
+        return Err(format!(
+            "shift count {amount} overflows {}-bit integer",
+            lhs.bits()
+        ));
+    }
+    Ok(value.bits as u32)
+}
+pub(super) fn count_binary(
+    op: BinaryOp,
+    lhs: ir::IntValue,
+    rhs: ir::IntValue,
+) -> Result<CountValue, String> {
+    lhs.validate()?;
+    rhs.validate()?;
+    let ty = lhs.ty;
+    let bits = if matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
+        let amount = count_shift_amount(rhs, ty)?;
+        match op {
+            BinaryOp::Shl => (lhs.bits << amount) & ty.mask(),
+            _ if ty.is_signed() => (count_integer(lhs) >> amount) as u128 & ty.mask(),
+            _ => lhs.bits >> amount,
+        }
+    } else {
+        if lhs.ty != rhs.ty {
+            return Err("static shift count integer type mismatch".into());
+        }
+        match op {
+            BinaryOp::BitAnd => lhs.bits & rhs.bits,
+            BinaryOp::BitOr => lhs.bits | rhs.bits,
+            BinaryOp::BitXor => lhs.bits ^ rhs.bits,
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
+                if ty.is_signed() {
+                    let a = count_integer(lhs);
+                    let b = count_integer(rhs);
+                    if matches!(op, BinaryOp::Div | BinaryOp::Rem)
+                        && (b == 0
+                            || (a
+                                == count_integer(ir::IntValue {
+                                    ty,
+                                    bits: 1u128 << (ty.bits() - 1),
+                                })
+                                && b == -1))
+                    {
+                        return Err("invalid division in static shift count".into());
+                    }
+                    let value = match op {
+                        BinaryOp::Add => a.checked_add(b),
+                        BinaryOp::Sub => a.checked_sub(b),
+                        BinaryOp::Mul => a.checked_mul(b),
+                        BinaryOp::Div => a.checked_div(b),
+                        _ => a.checked_rem(b),
+                    }
+                    .ok_or("arithmetic overflow in static shift count")?;
+                    count_checked_signed(value, ty)?
+                } else {
+                    let a = lhs.bits;
+                    let b = rhs.bits;
+                    match op {
+                        BinaryOp::Add => a.checked_add(b),
+                        BinaryOp::Sub => a.checked_sub(b),
+                        BinaryOp::Mul => a.checked_mul(b),
+                        BinaryOp::Div => a.checked_div(b),
+                        _ => a.checked_rem(b),
+                    }
+                    .filter(|v| *v <= ty.mask())
+                    .ok_or("invalid arithmetic in static shift count")?
+                }
+            }
+            _ => return Ok(CountValue::Unsupported),
+        }
+    };
+    Ok(CountValue::Known(ir::IntValue { ty, bits }))
+}
+pub(super) fn validate_shift_counts(
+    exprs: &[ir::TypedExpr],
+    queries: &[(ir::IntTy, ir::ExprId)],
+) -> Result<(), String> {
+    if queries.is_empty()
+        && !exprs.iter().any(|e| {
+            matches!(
+                e.kind,
+                ir::ExprKind::Binary {
+                    op: BinaryOp::Shl | BinaryOp::Shr,
+                    ..
+                }
+            )
+        })
+    {
+        return Ok(());
+    }
+    let mut evaluator = CountEvaluator::new(exprs)?;
+    if queries.len() > COUNT_EVAL_WORK {
+        return Err("compound shift query work limit exceeded".into());
+    }
+    for &(ty, value) in queries {
+        evaluator.charge()?;
+        match evaluator.evaluate(value)? {
+            CountValue::Known(value) => {
+                count_shift_amount(value, ty)?;
+            }
+            CountValue::Dynamic => {}
+            CountValue::Unsupported => {
+                return Err("unsupported static-shaped compound shift count expression".into());
+            }
+        }
+    }
+    for expr in exprs {
+        evaluator.charge()?;
+        if let ir::ExprKind::Binary {
+            op: BinaryOp::Shl | BinaryOp::Shr,
+            left,
+            right,
+        } = expr.kind
+        {
+            let ir::Ty::Int(lhs) = exprs.get(left.0).ok_or("invalid shift lhs")?.ty else {
+                return Err("noninteger shift lhs".into());
+            };
+            match evaluator.evaluate(right)? {
+                CountValue::Known(value) => {
+                    count_shift_amount(value, lhs)?;
+                }
+                CountValue::Dynamic => {}
+                CountValue::Unsupported => {
+                    return Err("unsupported static-shaped shift count expression".into());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+// The legacy adapter shares all constraints with source replay, but keeps its admission fence.
+use super::super::source_replay::{CallInferenceState, InferKind, InferTerm};
+pub(super) enum InferField<'a> {
+    Named(&'a AstIdent),
+    Tuple(usize),
+}
+pub(super) struct Inference<'c, 's> {
+    pub(super) checker: &'c Checker<'s>,
+    pub(super) core: CallInferenceState,
+}
+impl<'c, 's> Inference<'c, 's> {
+    pub(super) fn new(checker: &'c Checker<'s>, env: Arc<ir::ParamEnv>) -> Result<Self, String> {
+        let budget = &checker
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("inference requires planning context")?
+            .budget;
+        let core = CallInferenceState::new(Some(env), budget)
+            .map_err(|e| e.into_legacy_diagnostic(budget))?;
+        Ok(Self { checker, core })
+    }
+    pub(super) fn empty(checker: &'c Checker<'s>) -> Result<Self, String> {
+        let budget = &checker
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("inference requires planning context")?
+            .budget;
+        let core =
+            CallInferenceState::new(None, budget).map_err(|e| e.into_legacy_diagnostic(budget))?;
+        Ok(Self { checker, core })
+    }
+    pub(super) fn schema(&self, ty: &ir::Ty, depth: usize) -> Result<InferTerm, String> {
+        self.core.schema(ty, depth).map_err(|e| {
+            e.into_legacy_diagnostic(&self.checker.signatures.plan.as_ref().unwrap().budget)
+        })
+    }
+    pub(super) fn merge(
+        &self,
+        a: &InferTerm,
+        b: &InferTerm,
+        depth: usize,
+    ) -> Result<InferTerm, String> {
+        self.core.merge(a, b, depth).map_err(|e| {
+            e.into_legacy_diagnostic(&self.checker.signatures.plan.as_ref().unwrap().budget)
+        })
+    }
+    pub(super) fn constrain(
+        &mut self,
+        a: &InferTerm,
+        b: &InferTerm,
+        depth: usize,
+    ) -> Result<(), String> {
+        self.core.constrain(a, b, depth).map_err(|e| {
+            e.into_legacy_diagnostic(&self.checker.signatures.plan.as_ref().unwrap().budget)
+        })
+    }
+    pub(super) fn materialize(
+        &self,
+        declaration: ir::DeclId,
+        actuals: &[ir::Ty],
+    ) -> Result<ir::Ty, FactsError> {
+        let plan = self.checker.signatures.plan.as_ref().unwrap();
+        plan.intern_nominal(declaration, actuals, self.checker.facts(), &plan.budget)
+            .map_err(|e| source_error(&plan.budget, &e))
+    }
+    pub(super) fn resolve(
+        &self,
+        term: &InferTerm,
+        fallback: bool,
+        depth: usize,
+    ) -> Result<Option<ir::Ty>, String> {
+        let budget = &self.checker.signatures.plan.as_ref().unwrap().budget;
+        self.core
+            .resolve(term, fallback, depth, &mut |decl, args| {
+                self.materialize(decl, args)
+            })
+            .map_err(|e| e.into_legacy_diagnostic(budget))
+    }
+    pub(super) fn finish(&self, fallback: bool) -> Result<Option<Vec<ir::Ty>>, String> {
+        let plan = self.checker.signatures.plan.as_ref().unwrap();
+        let Some(args) = self
+            .core
+            .finish(fallback, &mut |decl, args| self.materialize(decl, args))
+            .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?
+        else {
+            return Ok(None);
+        };
+        for ty in &args {
+            if let Some(cap) = self.checker.canonical
+                && contains_source_ref(ty, &plan.budget, 0).map_err(|e| cap.render(e))?
+            {
+                return Err(cap.render(FactsError::unsupported(
+                    &plan.budget,
+                    "new inferred reference is outside direct shared Var replay",
+                )));
+            }
+            if matches!(ty, ir::Ty::Ref { .. }) {
+                return Err("unsupported generic inference: newly inferred structural reference actual; use explicit type arguments".into());
+            }
+            validate_argument(ty, self.checker.facts(), &plan.budget, 0)?;
+        }
+        Ok(Some(args))
+    }
+}
+impl Checker<'_> {
+    pub(super) fn inference_core(&self) -> Result<CallInferenceState, String> {
+        let budget = &self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("inference requires planning context")?
+            .budget;
+        CallInferenceState::new(None, budget).map_err(|e| e.into_legacy_diagnostic(budget))
+    }
+    pub(super) fn infer_work(&self, depth: usize) -> Result<(), String> {
+        self.inference_core()?
+            .work(depth)
+            .map_err(|e| e.into_legacy_diagnostic(&self.signatures.plan.as_ref().unwrap().budget))
+    }
+    pub(super) fn infer_storage(&self, count: usize) -> Result<(), String> {
+        self.inference_core()?
+            .storage(count)
+            .map_err(|e| e.into_legacy_diagnostic(&self.signatures.plan.as_ref().unwrap().budget))
+    }
+    pub(super) fn infer_node(&self, kind: InferKind) -> Result<InferTerm, String> {
+        self.inference_core()?
+            .node(kind)
+            .map_err(|e| e.into_legacy_diagnostic(&self.signatures.plan.as_ref().unwrap().budget))
+    }
+    pub(super) fn infer_type_term(
+        &self,
+        ty: &ir::Ty,
+        schema: Option<ir::BinderId>,
+        depth: usize,
+    ) -> Result<InferTerm, String> {
+        self.inference_core()?
+            .type_term(ty, schema, depth)
+            .map_err(|e| e.into_legacy_diagnostic(&self.signatures.plan.as_ref().unwrap().budget))
+    }
+    pub(super) fn inference_evidence(
+        &self,
+        expr: &Expr,
+        depth: usize,
+    ) -> Result<InferTerm, String> {
+        self.infer_work(depth)?;
+        // Local IDs grow monotonically, including shadowing. Scope depth distinguishes pops.
+        let key = (
+            expr as *const Expr as usize,
+            self.locals.len(),
+            self.scopes.len(),
+        );
+        if let Some(term) = self.inference_evidence_cache.borrow().get(&key) {
+            return Ok(term.clone());
+        }
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("inference requires planning context")?;
+        let term = match expr {
+            Expr::Integer(literal) => self.infer_node(match literal.suffix {
+                Some(t) => InferKind::Rigid(ir::Ty::Int(t)),
+                None => InferKind::Integer,
+            })?,
+            Expr::Float(literal) => self.infer_node(match literal.suffix {
+                Some(t) => InferKind::Rigid(ir::Ty::Float(t)),
+                None => InferKind::Float,
+            })?,
+            Expr::Bool(_) => self.infer_node(InferKind::Rigid(ir::Ty::Bool))?,
+            Expr::Var(name) => match self.lookup_optional(name)? {
+                Some(local) => self.infer_type_term(&self.locals[local.0].ty, None, depth + 1)?,
+                None => self.infer_node(InferKind::Unknown(false))?,
+            },
+            Expr::Borrow { kind, place } => {
+                plan.budget.charge_work(place.fields.len() + 1)?;
+                self.infer_storage(place.fields.len() + 1)?;
+                let (_, referent, _) = self.checked_place(place)?;
+                self.validate_borrow_referent(*kind, &referent)?;
+                let inner = self.infer_type_term(&referent, None, depth + 1)?;
+                self.infer_node(InferKind::Ref(*kind, inner))?
+            }
+            Expr::Deref { value } => {
+                let carrier = self.inference_evidence(value, depth + 1)?;
+                match carrier.as_ref() {
+                    InferKind::Ref(_, inner) => inner.clone(),
+                    _ => self.infer_node(InferKind::Unknown(false))?,
+                }
+            }
+            Expr::Tuple(fields) => {
+                self.infer_storage(fields.len())?;
+                self.infer_node(InferKind::Tuple(
+                    fields
+                        .iter()
+                        .map(|f| self.inference_evidence(f, depth + 1))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                ))?
+            }
+            Expr::Array(fields) => {
+                let mut elements = None;
+                let dummy = Inference::empty(self)?;
+                for f in fields {
+                    let term = self.inference_evidence(f, depth + 1)?;
+                    elements = Some(if let Some(old) = elements {
+                        dummy.merge(&old, &term, depth + 1)?
+                    } else {
+                        term
+                    });
+                }
+                self.infer_node(InferKind::Array(
+                    elements.unwrap_or(self.infer_node(InferKind::Unknown(false))?),
+                    fields.len(),
+                ))?
+            }
+            Expr::Repeat { value, len } => self.infer_node(InferKind::Array(
+                self.inference_evidence(value, depth + 1)?,
+                *len,
+            ))?,
+            Expr::Unary { value, .. }
+                if matches!(value.as_ref(), Expr::Integer(_) | Expr::Float(_)) =>
+            {
+                self.inference_evidence(value, depth + 1)?
+            }
+            Expr::Block(block) if block.statements.is_empty() && block.tail.is_none() => {
+                self.infer_node(InferKind::Rigid(ir::Ty::Unit))?
+            }
+            Expr::Cast { target, .. } => {
+                self.infer_type_term(&checked_local_ty(target, self.signatures)?, None, depth + 1)?
+            }
+            Expr::Call { name, .. } => {
+                let declaration = *plan
+                    .registry
+                    .functions
+                    .get(&self.path_key(name, Namespace::Value)?)
+                    .ok_or("unresolved function declaration in inference")?;
+                let schema = plan.function_schema(declaration)?;
+                if !schema.env.is_generic() {
+                    self.infer_type_term(&schema.signature.result, None, depth + 1)?
+                } else {
+                    self.infer_node(InferKind::Unknown(false))?
+                }
+            }
+            Expr::Struct { name, .. } if self.self_path(name)? => self.infer_type_term(
+                self.signatures
+                    .self_ty
+                    .as_ref()
+                    .ok_or("Self outside impl")?,
+                None,
+                depth + 1,
+            )?,
+            Expr::TraitCall { .. } | Expr::AssociatedCall { .. } | Expr::MethodCall { .. } => {
+                if let Some(ty) = self.scalar_hint(expr)? {
+                    self.infer_type_term(&ty, None, depth + 1)?
+                } else {
+                    self.infer_node(InferKind::Unknown(false))?
+                }
+            }
+            Expr::Struct { name, .. } | Expr::EnumVariant { name, .. } => {
+                let owner = if matches!(expr, Expr::EnumVariant { .. }) {
+                    name.parent(&*plan.program.names)
+                        .map_err(native_adapter::name_diagnostic)?
+                } else {
+                    name.clone()
+                };
+                let decl = *plan
+                    .registry
+                    .nominals
+                    .get(&self.path_key(&owner, Namespace::Type)?)
+                    .ok_or("unresolved nominal declaration in inference")?;
+                let (env, ty) = plan.nominal_schema(decl, &plan.budget)?;
+                if env.arity() == 0 {
+                    self.infer_type_term(&ty, None, depth + 1)?
+                } else {
+                    self.infer_node(InferKind::Unknown(false))?
+                }
+            }
+            Expr::Apply { path, value } => {
+                let (_, args) = plan.application(
+                    path,
+                    application_namespace(value)?,
+                    &self.signatures.params,
+                    self.facts(),
+                    &plan.budget,
+                )?;
+                let ty = match value.as_ref() {
+                    Expr::Call { name, .. } => {
+                        let declaration = *plan
+                            .registry
+                            .functions
+                            .get(&self.path_key(name, Namespace::Value)?)
+                            .ok_or("unresolved function declaration in inference")?;
+                        plan.instantiate_signature(
+                            &ir::CallTarget {
+                                declaration,
+                                type_args: args.into(),
+                            },
+                            self.facts(),
+                            &plan.budget,
+                        )?
+                        .result
+                    }
+                    Expr::Struct { name, .. } => {
+                        let decl = *plan
+                            .registry
+                            .nominals
+                            .get(&self.path_key(name, Namespace::Type)?)
+                            .ok_or("unresolved nominal declaration in inference")?;
+                        plan.intern_nominal(decl, &args, self.facts(), &plan.budget)?
+                    }
+                    Expr::EnumVariant { name, .. } => {
+                        let (owner, _) = self.split_variant(name)?;
+                        let decl = *plan
+                            .registry
+                            .nominals
+                            .get(&self.path_key(&owner, Namespace::Type)?)
+                            .ok_or("unresolved enum declaration in inference")?;
+                        plan.intern_nominal(decl, &args, self.facts(), &plan.budget)?
+                    }
+                    _ => return Err("unsupported explicit generic evidence form".into()),
+                };
+                self.infer_type_term(&ty, None, depth + 1)?
+            }
+            Expr::Field { base, field } => {
+                let base = self.inference_evidence(base, depth + 1)?;
+                let dummy = Inference::empty(self)?;
+                if let Some(ty) = dummy.resolve(&base, false, depth + 1)? {
+                    let receiver = if let ir::Ty::Ref { referent, .. } = &ty {
+                        referent.as_ref()
+                    } else {
+                        &ty
+                    };
+                    let (_, ty) = self.field_type(receiver, field)?;
+                    self.infer_type_term(&ty, None, depth + 1)?
+                } else {
+                    self.infer_node(InferKind::Unknown(false))?
+                }
+            }
+            Expr::Index { base, index } => {
+                match self.inference_evidence(base, depth + 1)?.as_ref() {
+                    InferKind::Array(element, len) if index < len => element.clone(),
+                    InferKind::Array(_, _) => return Err("array index out of bounds".into()),
+                    _ => self.infer_node(InferKind::Unknown(false))?,
+                }
+            }
+            _ => self.infer_node(InferKind::Unknown(false))?,
+        };
+        self.infer_storage(1)?;
+        self.inference_evidence_cache
+            .borrow_mut()
+            .insert(key, term.clone());
+        Ok(term)
+    }
+    pub(super) fn infer_call_args(
+        &self,
+        declaration: ir::DeclId,
+        args: &[Expr],
+        expected: Option<&ir::Ty>,
+        fallback: bool,
+    ) -> Result<Option<Vec<ir::Ty>>, String> {
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("inference requires planning context")?;
+        if let Some(cap) = self.canonical
+            && let Some(actual) = cap.shared_actual(declaration, args, expected, self)?
+        {
+            self.infer_storage(1)?;
+            let mut actuals = Vec::new();
+            actuals.try_reserve_exact(1).map_err(|_| {
+                cap.render(FactsError::resource(
+                    &plan.budget,
+                    "shared actual allocation",
+                ))
+            })?;
+            actuals.push(actual);
+            return Ok(Some(actuals));
+        }
+        let schema = plan.function_schema(declaration)?;
+        if schema.signature.params.len() != args.len() {
+            return Err("generic function argument count mismatch".into());
+        }
+        let mut solver = Inference::new(self, schema.env.scopes()[0].clone())?;
+        if let Some(expected) = expected {
+            let formal = solver.schema(&schema.signature.result, 0)?;
+            let evidence = self.infer_type_term(expected, None, 0)?;
+            solver.constrain(&formal, &evidence, 0)?;
+        }
+        for (formal, expr) in schema.signature.params.iter().zip(args) {
+            let formal = solver.schema(formal, 0)?;
+            let evidence = self.inference_evidence(expr, 0)?;
+            solver.constrain(&formal, &evidence, 0)?;
+        }
+        solver.finish(fallback)
+    }
+    pub(super) fn infer_constructor(
+        &self,
+        name: &AstPath,
+        variant: Option<AstIdent>,
+        fields: &[(InferField<'_>, &Expr)],
+        expected: Option<&ir::Ty>,
+        fallback: bool,
+    ) -> Result<Option<ir::Ty>, String> {
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("inference requires planning context")?;
+        let declaration = *plan
+            .registry
+            .nominals
+            .get(&self.path_key(name, Namespace::Type)?)
+            .ok_or("unknown nominal declaration")?;
+        let (env, schema) = plan.nominal_schema(declaration, &plan.budget)?;
+        let mut solver = Inference::new(self, env)?;
+        if let Some(expected) = expected {
+            let formal = solver.schema(&schema, 0)?;
+            let evidence = self.infer_type_term(expected, None, 0)?;
+            solver.constrain(&formal, &evidence, 0)?;
+        }
+        let variant_index = variant
+            .map(|name| self.variant_index(declaration, name))
+            .transpose()?;
+        let definitions = match (&schema, variant_index) {
+            (ir::Ty::Struct(ty), None) => &ty.def().fields,
+            (ir::Ty::Enum(ty), Some(index)) => {
+                &ty.def()
+                    .variants
+                    .get(index)
+                    .ok_or("unknown enum variant")?
+                    .fields
+            }
+            _ => return Err("constructor declaration kind mismatch".into()),
+        };
+        for (selector, expr) in fields {
+            let index = match selector {
+                InferField::Tuple(index) => *index,
+                InferField::Named(name) => self.member_index(declaration, variant_index, **name)?,
+            };
+            let field = definitions.get(index).ok_or("unknown constructor field")?;
+            let formal = solver.schema(&field.ty, 0)?;
+            let evidence = self.inference_evidence(expr, 0)?;
+            solver.constrain(&formal, &evidence, 0)?;
+        }
+        let Some(args) = solver.finish(fallback)? else {
+            return Ok(None);
+        };
+        Ok(Some(plan.intern_nominal(
+            declaration,
+            &args,
+            self.facts(),
+            &plan.budget,
+        )?))
+    }
+}
+pub(super) fn genuine_call(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { .. }
+        | Expr::AssociatedCall { .. }
+        | Expr::TraitCall { .. }
+        | Expr::MethodCall { .. } => true,
+        Expr::Apply { value, .. } => genuine_call(value),
+        _ => false,
+    }
+}
+pub(super) fn static_source_place(mut expr: &Expr) -> Result<Place, String> {
+    let mut fields = Vec::new();
+    loop {
+        if fields.len() >= 128 {
+            return Err("receiver place nesting limit128".into());
+        }
+        match expr {
+            Expr::Var(local) => {
+                fields.reverse();
+                return Ok(Place {
+                    local: match (local.anchor(), local.segments()) {
+                        (PathAnchor::SelfModule, []) => LocalName::Receiver,
+                        (PathAnchor::Relative, [name]) => LocalName::Named(*name),
+                        _ => return Err("receiver requires a local-root path".into()),
+                    },
+                    fields,
+                });
+            }
+            Expr::Field { base, field } => {
+                fields.push(field.clone());
+                expr = base;
+            }
+            Expr::Index { base, index } => {
+                fields.push(FieldSelector::ConstantIndex(*index));
+                expr = base;
+            }
+            Expr::Deref { value } => {
+                fields.push(FieldSelector::Deref);
+                expr = value;
+            }
+            _ => {
+                return Err(
+                    "owned rvalue or dynamic borrowed receiver places are unsupported".into(),
+                );
+            }
+        }
+    }
+}
+pub(super) struct PendingReferenceDecl {
+    pub(super) name: AstIdent,
+    pub(super) mutable: bool,
+    pub(super) scope: usize,
+    pub(super) position: usize,
+    pub(super) local: Option<ir::LocalId>,
+}
+pub(super) type CheckedApplication = (PathKey, Vec<ir::Ty>, Arc<[ir::TypeActualRegion]>);
+
+pub(super) struct Checker<'a> {
+    pub(super) signatures: &'a Signatures,
+    pub(super) canonical: Option<&'a CanonicalSourceCapability>,
+    pub(super) scopes: Vec<HashMap<LocalKey, ir::LocalId>>,
+    pub(super) pending_references: Vec<PendingReferenceDecl>,
+    pub(super) locals: Vec<ir::LocalDecl>,
+    pub(super) exprs: Vec<ir::TypedExpr>,
+    pub(super) call_evidence: Vec<ir::CallEvidence>,
+    pub(super) declaration: Option<ir::DeclId>,
+    pub(super) loops: Vec<LoopFrame>,
+    pub(super) next_loop: usize,
+    pub(super) reachable: bool,
+    pub(super) result: ir::Ty,
+    pub(super) module: ModuleId,
+    pub(super) count_queries: Vec<(ir::IntTy, ir::ExprId)>,
+    pub(super) field_indices:
+        std::cell::RefCell<HashMap<ir::NominalAppId, HashMap<NameKey, usize>>>,
+    pub(super) applications: std::cell::RefCell<Vec<CheckedApplication>>,
+    pub(super) inference_evidence_cache:
+        std::cell::RefCell<HashMap<(usize, usize, usize), InferTerm>>,
+}
+#[derive(Clone, Copy)]
+pub(super) enum Expectation<'a> {
+    None,
+    HasType(&'a ir::Ty),
+    CastableToInt(ir::IntTy),
+}
+impl<'a> Expectation<'a> {
+    pub(super) fn hard(self) -> Option<&'a ir::Ty> {
+        match self {
+            Self::HasType(ty) => Some(ty),
+            _ => None,
+        }
+    }
+    pub(super) fn literal(
+        self,
+        literal: &IntegerLiteral,
+        negative: bool,
+    ) -> Result<ir::IntValue, String> {
+        let cast_hint = match self {
+            Self::CastableToInt(to) if literal.suffix.is_none() => Some(ir::Ty::Int(to)),
+            _ => None,
+        };
+        resolve_integer(literal, negative, self.hard().or(cast_hint.as_ref())).map_err(|error| {
+            if cast_hint.is_some() && error.starts_with("integer literal out of range") {
+                // A cast is a soft hint, not a source type obligation. The
+                // default source integer could legally be wider than its cast.
+                format!("{error}; backward numeric inference is unsupported")
+            } else {
+                error
+            }
+        })
+    }
+}
+impl<'a> From<Option<&'a ir::Ty>> for Expectation<'a> {
+    fn from(ty: Option<&'a ir::Ty>) -> Self {
+        ty.map_or(Self::None, Self::HasType)
+    }
+}
+
+// Semantic type and possible normal completion are independent. In particular,
+// an unreachable explicit block tail retains its type, unlike a pure never value.
+#[derive(Clone)]
+pub(super) struct Flow {
+    pub(super) ty: ir::Ty,
+    pub(super) completes: bool,
+}
+impl Flow {
+    pub(super) fn value(ty: ir::Ty) -> Self {
+        Self {
+            ty,
+            completes: true,
+        }
+    }
+    pub(super) fn never() -> Self {
+        Self {
+            ty: ir::Ty::Never,
+            completes: false,
+        }
+    }
+}
+pub(super) fn source_region_mode(
+    regions: &RegionDecls,
+    params: &[(BindingName, Type)],
+    result: &Type,
+    free: bool,
+    budget: &ir::PlanBudget,
+) -> Result<tr::RegionContractMode, String> {
+    budget.charge_work(params.len() + 1)?;
+    let legacy = free
+        && regions.params.is_empty()
+        && regions.outlives.is_empty()
+        && regions.receiver.is_none()
+        && !matches!(result, Type::Ref { .. })
+        && params.iter().all(|(_, ty)| match ty {
+            Type::Ref {
+                region, referent, ..
+            } => region.is_none() && !matches!(referent.as_ref(), Type::Ref { .. }),
+            _ => true,
+        });
+    Ok(if legacy {
+        tr::RegionContractMode::LegacyUnnamedFreeNoReturn
+    } else {
+        tr::RegionContractMode::Positioned
+    })
+}
+// Original names are retained by the source registry. Normalization can prune
+// unused declarations, but a pruned named lifetime remains a rigid source name.
+pub(super) fn original_source_regions(
+    context: (&NameStore, &ir::PlanBudget),
+    declaration: ir::DeclId,
+    regions: &RegionDecls,
+    params: &[(BindingName, Type)],
+    result: &Type,
+    contract: &ir::RefContract,
+    receiver: ReceiverKind,
+) -> Result<Arc<ir::SourceRegionEnv>, String> {
+    let (names_owner, budget) = context;
+    if regions.params.len() > ir::MAX_REGION_PARAMS {
+        return Err("declared lifetime resource limit exceeded".into());
+    }
+    budget.charge_work(regions.params.len() + regions.outlives.len() + params.len() + 1)?;
+    budget.retain_bytes(
+        regions
+            .params
+            .len()
+            .checked_mul(256)
+            .and_then(|n| {
+                regions
+                    .outlives
+                    .len()
+                    .checked_mul(64)
+                    .and_then(|m| n.checked_add(m))
+            })
+            .and_then(|n| n.checked_add(512))
+            .ok_or("source lifetime allocation overflow")?,
+    )?;
+    let mut names = HashMap::new();
+    for (index, name) in regions.params.iter().enumerate() {
+        budget.charge_work(1)?;
+        if names
+            .insert(
+                names_owner
+                    .key(*name, LookupClass::LifetimeParameter)
+                    .map_err(native_adapter::name_diagnostic)?,
+                index,
+            )
+            .is_some()
+        {
+            return Err("duplicate source lifetime".into());
+        }
+    }
+    let lookup = |name: &RegionName| -> Result<ir::SourceRegionId, String> {
+        budget.charge_work(1)?;
+        let RegionName::Named(name) = name else {
+            return Err("unsupported: builtin source lifetime".into());
+        };
+        let key = names_owner
+            .key(*name, LookupClass::LifetimeParameter)
+            .map_err(native_adapter::name_diagnostic)?;
+        Ok(ir::SourceRegionId {
+            declaration,
+            index: *names.get(&key).ok_or("undeclared source lifetime")? as u16,
+        })
+    };
+    let mut normalized = vec![None; regions.params.len()];
+    let mut bind = |name: Option<&RegionName>, region: ir::RegionParamId| -> Result<(), String> {
+        if let Some(name) = name {
+            let source = lookup(name)?;
+            let slot = &mut normalized[source.index as usize];
+            if slot.is_some_and(|old| old != region) {
+                return Err("source lifetime normalization disagrees with canonical schema".into());
+            }
+            *slot = Some(region);
+        }
+        Ok(())
+    };
+    // A receiver is present even when its lifetime is elided. The source params
+    // exclude it; canonical input positions retain its actual parameter index.
+    let offset = usize::from(receiver != ReceiverKind::None);
+    if matches!(receiver, ReceiverKind::Borrowed { .. }) {
+        bind(
+            regions.receiver.as_ref(),
+            contract
+                .input_regions
+                .first()
+                .ok_or("borrowed receiver missing canonical region")?
+                .region,
+        )?;
+    }
+    for (index, (_, source)) in params.iter().enumerate() {
+        let mut ty = source;
+        let mut depth = 0u8;
+        while let Type::Ref {
+            region, referent, ..
+        } = ty
+        {
+            budget.charge_work(1)?;
+            // Canonical row lookup is bounded and explicitly charged.
+            let mut found = None;
+            for row in contract.input_regions.iter() {
+                budget.charge_work(1)?;
+                if row.input.param == index + offset && row.input.position.depth == depth {
+                    found = Some(row.region);
+                    break;
+                }
+            }
+            if let Some(canonical) = found {
+                bind(region.as_ref(), canonical)?;
+            } else if region.is_some() {
+                return Err("named source input missing canonical region".into());
+            }
+            depth = depth
+                .checked_add(1)
+                .ok_or("source lifetime nesting overflow")?;
+            ty = referent;
+        }
+    }
+    let mut ty = result;
+    let mut depth = 0usize;
+    while let Type::Ref {
+        region, referent, ..
+    } = ty
+    {
+        budget.charge_work(1)?;
+        let canonical = contract
+            .results
+            .get(depth)
+            .ok_or("source result missing canonical region")?;
+        bind(region.as_ref(), canonical.region)?;
+        depth += 1;
+        ty = referent;
+    }
+    let mut outlives = Vec::with_capacity(regions.outlives.len());
+    for (longer, shorter) in &regions.outlives {
+        outlives.push((lookup(longer)?, lookup(shorter)?));
+    }
+    Ok(Arc::new(ir::SourceRegionEnv {
+        declaration,
+        region_count: regions.params.len() as u16,
+        outlives: outlives.into(),
+        normalized: normalized.into(),
+    }))
+}
+pub(super) fn canonical_ref_contract(
+    context: (&NameStore, &ir::PlanBudget),
+    regions: &RegionDecls,
+    source_params: &[(BindingName, Type)],
+    source_result: &Type,
+    source: (ReceiverKind, tr::RegionContractMode),
+    params: &[ir::Ty],
+    result: &ir::Ty,
+) -> Result<Arc<ir::RefContract>, String> {
+    let (names_owner, budget) = context;
+    let (receiver, mode) = source;
+    if regions.params.len() > 64 || regions.outlives.len() > 4096 {
+        return Err("declared lifetime resource limit exceeded".into());
+    }
+    budget.charge_work(regions.params.len() + regions.outlives.len() + source_params.len() + 1)?;
+    let bytes = regions
+        .params
+        .len()
+        .checked_mul(256)
+        .and_then(|n| {
+            source_params
+                .len()
+                .checked_mul(256)
+                .and_then(|m| n.checked_add(m))
+        })
+        .and_then(|n| {
+            regions
+                .outlives
+                .len()
+                .checked_mul(32)
+                .and_then(|m| n.checked_add(m))
+        })
+        .and_then(|n| n.checked_add(4096))
+        .ok_or("region allocation overflow")?;
+    let _scratch = budget.reserve_bytes(bytes)?;
+    let mut ids = HashMap::new();
+    for (i, name) in regions.params.iter().enumerate() {
+        budget.charge_work(1)?;
+        if ids
+            .insert(
+                names_owner
+                    .key(*name, LookupClass::LifetimeParameter)
+                    .map_err(native_adapter::name_diagnostic)?,
+                ir::RegionParamId(i as u16),
+            )
+            .is_some()
+        {
+            return Err("duplicate lifetime parameter".to_owned());
+        }
+    }
+    let lookup = |name: &RegionName| {
+        budget.charge_work(1)?;
+        let RegionName::Named(name) = name else {
+            return Err("unsupported: builtin lifetime in reference contract".into());
+        };
+        let key = names_owner
+            .key(*name, LookupClass::LifetimeParameter)
+            .map_err(native_adapter::name_diagnostic)?;
+        ids.get(&key)
+            .copied()
+            .ok_or_else(|| "undeclared lifetime".to_owned())
+    };
+    let mut edges = Vec::with_capacity(regions.outlives.len() + 128);
+    for (long, short) in &regions.outlives {
+        edges.push((lookup(long)?, lookup(short)?));
+    }
+    if mode == tr::RegionContractMode::LegacyUnnamedFreeNoReturn {
+        return ir::normalize_ref_contract(&ir::RefContract::default(), budget);
+    }
+    let mut count = ids.len();
+    let mut fresh = |name: Option<&RegionName>| -> Result<ir::RegionParamId, String> {
+        if let Some(name) = name {
+            return lookup(name);
+        }
+        if count >= ir::MAX_REGION_PARAMS {
+            return Err("combined lifetime regions exceed supported limit64".into());
+        }
+        let id = ir::RegionParamId(count as u16);
+        count += 1;
+        Ok(id)
+    };
+    let injected = params
+        .len()
+        .checked_sub(source_params.len())
+        .ok_or("source parameter arity mismatch")?;
+    if injected > 1 || (injected == 0 && receiver != ReceiverKind::None) {
+        return Err("invalid injected receiver arity".into());
+    }
+    let mut inputs = Vec::with_capacity(params.len().saturating_mul(2));
+    let receiver_region = if matches!(receiver, ReceiverKind::Borrowed { .. }) {
+        let region = fresh(regions.receiver.as_ref())?;
+        inputs.push(ir::InputRegion {
+            input: ir::InputReference {
+                param: 0,
+                position: ir::ReferencePosition { depth: 0 },
+            },
+            region,
+        });
+        Some(region)
+    } else {
+        None
+    };
+    for (index, (_, source_ty)) in source_params.iter().enumerate() {
+        let mut ty = source_ty;
+        let mut previous = None;
+        let mut depth = 0;
+        while let Type::Ref {
+            region, referent, ..
+        } = ty
+        {
+            if depth >= 128 {
+                return Err("reference depth exceeds supported limit128".into());
+            }
+            let region = fresh(region.as_ref())?;
+            if let Some(outer) = previous {
+                edges.push((region, outer));
+            }
+            inputs.push(ir::InputRegion {
+                input: ir::InputReference {
+                    param: index + injected,
+                    position: ir::ReferencePosition { depth },
+                },
+                region,
+            });
+            previous = Some(region);
+            depth += 1;
+            ty = referent;
+        }
+    }
+    let mut results = Vec::with_capacity(2);
+    let mut ty = source_result;
+    let mut previous = None;
+    while let Type::Ref {
+        region, referent, ..
+    } = ty
+    {
+        if results.len() >= 128 {
+            return Err("reference depth exceeds supported limit128".into());
+        }
+        let region = if let Some(name) = region {
+            lookup(name)?
+        } else if let Some(region) = receiver_region {
+            region
+        } else {
+            if inputs.len() != 1 {
+                return Err("missing lifetime specifier: elided reference output requires exactly one input reference lifetime position".into());
+            }
+            inputs[0].region
+        };
+        if let Some(outer) = previous {
+            edges.push((region, outer));
+        }
+        results.push(ir::ResultReference {
+            position: ir::ReferencePosition {
+                depth: results.len() as u8,
+            },
+            region,
+            returns: ir::ReturnContract::NoReference,
+        });
+        previous = Some(region);
+        ty = referent;
+    }
+    budget.retain_bytes(
+        inputs
+            .len()
+            .checked_mul(64)
+            .and_then(|n| edges.len().checked_mul(32).and_then(|m| n.checked_add(m)))
+            .and_then(|n| n.checked_add(512))
+            .ok_or("region allocation overflow")?,
+    )?;
+    let raw = ir::RefContract {
+        region_count: count as u16,
+        input_regions: inputs.into(),
+        results: results.into(),
+        outlives: edges.into(),
+    };
+    let normalized = ir::normalize_ref_contract(&raw, budget)?;
+    let results = ir::derive_return_contracts(params, result, &normalized, budget)?;
+    budget.retain_bytes(std::mem::size_of::<ir::RefContract>() + 64)?;
+    Ok(Arc::new(ir::RefContract {
+        results,
+        ..(*normalized).clone()
+    }))
+}
+
+/// Values may carry a slice only as exactly shared `&[u8]`.
+pub(super) fn admit_slice_value(ty: &ir::Ty) -> Result<(), String> {
+    if ty.contains_slice() && !ty.shared_byte_slice() {
+        return Err(if matches!(ty, ir::Ty::Slice { .. }) {
+            BARE_SLICE_UNSUPPORTED.into()
+        } else {
+            "unsupported: slices nested in aggregate or reference types".into()
+        });
+    }
+    Ok(())
+}
+pub(super) fn reject_slice_result(result: &ir::Ty) -> Result<(), String> {
+    if result.contains_slice() {
+        return Err("unsupported: slice return types".into());
+    }
+    Ok(())
+}
+pub(super) const BARE_SLICE_UNSUPPORTED: &str = "unsupported: bare by-value slice type [T]; only shared &[u8] parameters and locals are admitted";
+
+/// Phase-1 slice admission: exactly a shared reference to `[u8]`.
+pub(super) fn admit_shared_byte_slice(kind: ir::BorrowKind, slice: &Type) -> Result<(), String> {
+    let Type::Slice(element) = slice else {
+        return Err("internal: slice admission on non-slice type".into());
+    };
+    if kind != ir::BorrowKind::Shared {
+        return Err("unsupported: mutable slice references (&mut [T])".into());
+    }
+    match element.as_ref() {
+        Type::Int(ir::IntTy::U8) => Ok(()),
+        Type::Param(_) => Err("unsupported: generic slice element types (&[T])".into()),
+        _ => Err("unsupported: non-u8 slice element types; only &[u8] is admitted".into()),
+    }
+}
+
+pub(super) fn source_reference_layers(ty: &Type) -> Result<usize, String> {
+    let mut inner = ty;
+    let mut layers = 0;
+    while let Type::Ref { referent, .. } = inner {
+        layers += 1;
+        if layers > 128 {
+            return Err("reference type nesting exceeds supported limit128".into());
+        }
+        inner = referent;
+    }
+    Ok(layers)
+}
+pub(super) fn checked_local_ty(ty: &Type, env: &TypeEnv) -> Result<ir::Ty, String> {
+    let mut inner = ty;
+    let mut named = false;
+    for _ in 0..source_reference_layers(ty)? {
+        if let Type::Ref {
+            region, referent, ..
+        } = inner
+        {
+            named |= region.is_some();
+            inner = referent;
+        }
+    }
+    if named {
+        return Err("named lifetime annotations on locals are unsupported; use an elided local reference annotation".into());
+    }
+    checked_ty(ty, env)
+}
+pub(super) fn checked_ty(ty: &Type, env: &TypeEnv) -> Result<ir::Ty, String> {
+    checked_ty_at(ty, env, true)
+}
+pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result<ir::Ty, String> {
+    if let Some(plan) = &env.plan {
+        if !allow_ref && matches!(ty, Type::Ref { .. }) {
+            return Err("nested or aggregate references are unsupported".into());
+        }
+        let caller = env
+            .param_env
+            .as_deref()
+            .map_or(ir::FactsCtx::Concrete, ir::FactsCtx::Universal);
+        return plan.source_ty(ty, &env.params, caller, &plan.budget);
+    }
+    match ty {
+        Type::SelfType => env
+            .self_ty
+            .clone()
+            .ok_or_else(|| "Self outside impl".into()),
+        Type::Apply(_) | Type::Param(_) => {
+            Err("generic types require authoritative declaration environment".into())
+        }
+        Type::Slice(_) => Err(BARE_SLICE_UNSUPPORTED.into()),
+        Type::Ref { referent, .. } if matches!(referent.as_ref(), Type::Slice(_)) => {
+            Err("unsupported: shared byte slices require the planning frontend".into())
+        }
+        Type::Ref { kind, referent, .. } => {
+            if !allow_ref || matches!(referent.as_ref(), Type::Never | Type::Infer) {
+                return Err("nested or aggregate reference types are unsupported in B1".into());
+            }
+            Ok(ir::Ty::Ref {
+                kind: *kind,
+                referent: std::sync::Arc::new(checked_ty_at(
+                    referent,
+                    env,
+                    source_reference_layers(ty)? > 1,
+                )?),
+            })
+        }
+        Type::Array(element, len) => {
+            if *len > ir::MAX_ARRAY_LEN {
+                return Err("array length exceeds supported limit".into());
+            }
+            Ok(ir::Ty::Array {
+                element: std::sync::Arc::new(checked_ty_at(element, env, false)?),
+                len: *len,
+            })
+        }
+        Type::Int(ty) => Ok(ir::Ty::Int(*ty)),
+        Type::Float(ty) => Ok(ir::Ty::Float(*ty)),
+        Type::Bool => Ok(ir::Ty::Bool),
+        Type::Unit => Ok(ir::Ty::Unit),
+        Type::Never => Ok(ir::Ty::Never),
+        Type::Tuple(fields) if !fields.is_empty() => fields
+            .iter()
+            .map(|ty| checked_ty_at(ty, env, false))
+            .collect::<Result<Vec<_>, _>>()
+            .map(|fields| ir::Ty::Tuple(fields.into())),
+        Type::Tuple(_) => Err("empty tuple types must use ()".into()),
+        Type::Named(name) => {
+            let key = name_scope::path_key(&*env.plan()?.program.names, name, Namespace::Type)?;
+            env.structs
+                .get(&key)
+                .cloned()
+                .map(ir::Ty::Struct)
+                .or_else(|| env.enums.get(&key).cloned().map(ir::Ty::Enum))
+                .ok_or_else(|| "unknown nominal type".into())
+        }
+        Type::Infer => Err("signature types cannot be inferred".into()),
+    }
+}
+pub(super) fn inhabited(ty: &ir::Ty) -> bool {
+    let mut work = vec![ty];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(ty) = work.pop() {
+        match ty {
+            ir::Ty::Array { element, len } => {
+                if *len > 0 {
+                    work.push(element);
+                }
+            }
+            ir::Ty::Never => return false,
+            ir::Ty::Tuple(fields) => work.extend(fields.iter()),
+            ir::Ty::Struct(ty) if seen.insert(ty.def().id) => {
+                work.extend(ty.def().fields.iter().map(|field| &field.ty))
+            }
+            _ => {}
+        }
+    }
+    true
+}
+pub(super) fn coerces(got: &ir::Ty, want: &ir::Ty) -> bool {
+    if *got == ir::Ty::Never || got == want {
+        return true;
+    }
+    match (got, want) {
+        (
+            ir::Ty::Array {
+                element: a,
+                len: na,
+            },
+            ir::Ty::Array {
+                element: b,
+                len: nb,
+            },
+        ) if na == nb => coerces(a, b),
+        (ir::Ty::Tuple(a), ir::Ty::Tuple(b)) if a.len() == b.len() => {
+            a.iter().zip(b.iter()).all(|(a, b)| coerces(a, b))
+        }
+        _ => false,
+    }
+}
+impl<'a> Checker<'a> {
+    pub(super) fn names(&self) -> Result<&NameStore, String> {
+        let names = &self.signatures.plan()?.program.names;
+        names.budget().check().map_err(|error| {
+            super::super::source::SourceError::from_token(
+                super::super::token_session::TokenError::Budget(error),
+            )
+            .to_string()
+        })?;
+        Ok(names)
+    }
+    pub(super) fn path_key(&self, path: &AstPath, namespace: Namespace) -> Result<PathKey, String> {
+        name_scope::path_key(self.names()?, path, namespace)
+    }
+    fn nominal_decl(&self, path: &AstPath) -> Result<ir::DeclId, String> {
+        self.signatures
+            .plan()?
+            .registry
+            .nominals
+            .get(&self.path_key(path, Namespace::Type)?)
+            .copied()
+            .ok_or_else(|| "unknown nominal declaration".into())
+    }
+    fn nominal_source(&self, declaration: ir::DeclId) -> Result<Arc<NominalSchema>, String> {
+        let plan = self.signatures.plan()?;
+        plan.budget.charge_work(1)?;
+        plan.state
+            .lock()
+            .map_err(|_| "generic plan context poisoned")?
+            .schemas
+            .get(&declaration)
+            .cloned()
+            .ok_or_else(|| "missing nominal source schema".into())
+    }
+    fn source_fields(
+        &self,
+        declaration: ir::DeclId,
+        variant: Option<usize>,
+    ) -> Result<Vec<FieldName>, String> {
+        let source = self.nominal_source(declaration)?;
+        let fields = match (source.as_ref(), variant) {
+            (NominalSchema::Struct(source), None) => &source.fields,
+            (NominalSchema::Enum(source), Some(index)) => {
+                &source
+                    .variants
+                    .get(index)
+                    .ok_or("unknown enum variant")?
+                    .fields
+            }
+            _ => return Err("nominal source kind mismatch".into()),
+        };
+        self.infer_storage(fields.len())?;
+        let mut out = Vec::with_capacity(fields.len());
+        for field in fields {
+            self.infer_work(0)?;
+            if let FieldName::Named(name) = field.name {
+                self.names()?
+                    .check(name)
+                    .map_err(native_adapter::name_diagnostic)?;
+            }
+            out.push(field.name);
+        }
+        Ok(out)
+    }
+    fn member_index(
+        &self,
+        declaration: ir::DeclId,
+        variant: Option<usize>,
+        name: AstIdent,
+    ) -> Result<usize, String> {
+        let key = self
+            .names()?
+            .key(name, LookupClass::Member)
+            .map_err(native_adapter::name_diagnostic)?;
+        for (index, field) in self
+            .source_fields(declaration, variant)?
+            .into_iter()
+            .enumerate()
+        {
+            self.infer_work(0)?;
+            if let FieldName::Named(field) = field
+                && self
+                    .names()?
+                    .key(field, LookupClass::Member)
+                    .map_err(native_adapter::name_diagnostic)?
+                    == key
+            {
+                return Ok(index);
+            }
+        }
+        Err("unknown nominal field".into())
+    }
+    fn variant_index(&self, declaration: ir::DeclId, name: AstIdent) -> Result<usize, String> {
+        let key = self
+            .names()?
+            .key(name, LookupClass::Member)
+            .map_err(native_adapter::name_diagnostic)?;
+        let source = self.nominal_source(declaration)?;
+        let NominalSchema::Enum(source) = source.as_ref() else {
+            return Err("expected enum source".into());
+        };
+        for (index, variant) in source.variants.iter().enumerate() {
+            self.infer_work(0)?;
+            if self
+                .names()?
+                .key(variant.name, LookupClass::Member)
+                .map_err(native_adapter::name_diagnostic)?
+                == key
+            {
+                return Ok(index);
+            }
+        }
+        Err("unknown enum variant".into())
+    }
+    fn split_variant(&self, path: &AstPath) -> Result<(AstPath, AstIdent), String> {
+        path.check(self.names()?)
+            .map_err(native_adapter::name_diagnostic)?;
+        let member = *path.segments().last().ok_or("missing enum variant")?;
+        let owner = path
+            .parent(self.names()?)
+            .map_err(native_adapter::name_diagnostic)?;
+        Ok((owner, member))
+    }
+    fn self_path(&self, path: &AstPath) -> Result<bool, String> {
+        path.check(self.names()?)
+            .map_err(native_adapter::name_diagnostic)?;
+        Ok(path.anchor() == PathAnchor::SelfType && path.is_empty())
+    }
+    fn visible(&self, visibility: &ir::Visibility) -> Result<bool, String> {
+        visibility
+            .accessible_from(&self.signatures.plan()?.program.modules, self.module)
+            .map_err(module_diagnostic)
+    }
+    pub(super) fn new(signatures: &'a Signatures, result: ir::Ty, module: ModuleId) -> Self {
+        Self {
+            signatures,
+            scopes: vec![HashMap::new()],
+            pending_references: Vec::new(),
+            locals: Vec::new(),
+            exprs: Vec::new(),
+            call_evidence: Vec::new(),
+            declaration: None,
+            loops: Vec::new(),
+            next_loop: 0,
+            reachable: true,
+            result,
+            module,
+            count_queries: Vec::new(),
+            field_indices: std::cell::RefCell::new(HashMap::new()),
+            applications: std::cell::RefCell::new(Vec::new()),
+            inference_evidence_cache: std::cell::RefCell::new(HashMap::new()),
+            canonical: None,
+        }
+    }
+    pub(super) fn charge_node(&self, bytes: usize) -> Result<(), String> {
+        if let Some(plan) = &self.signatures.plan {
+            plan.budget.charge_nodes(1)?;
+            plan.budget.charge_work(1)?;
+            plan.state
+                .lock()
+                .map_err(|_| "generic plan context poisoned")?
+                .retain(&plan.budget, bytes)?;
+        }
+        Ok(())
+    }
+    pub(super) fn facts(&self) -> ir::FactsCtx<'_> {
+        if let Some(facts) = &self.signatures.facts {
+            return ir::FactsCtx::Validated(facts);
+        }
+        self.signatures
+            .param_env
+            .as_deref()
+            .map_or(ir::FactsCtx::Concrete, ir::FactsCtx::Universal)
+    }
+    pub(super) fn push_application(
+        &self,
+        path: &GenericPath,
+        namespace: Namespace,
+    ) -> Result<(), String> {
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("generic application requires declaration registry")?;
+        let app = plan.application(
+            path,
+            namespace,
+            &self.signatures.params,
+            self.facts(),
+            &plan.budget,
+        )?;
+        let (_, source_args) = path.application()?;
+        let regions = self.type_actual_regions(source_args, 0)?;
+        self.infer_storage(1)?;
+        self.applications.borrow_mut().push((app.0, app.1, regions));
+        Ok(())
+    }
+    pub(super) fn source_region(&self, name: &RegionName) -> Result<ir::ActualRegion, String> {
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("source region requires registry")?;
+        let declaration = self
+            .declaration
+            .ok_or("source region requires original callable")?;
+        let source = plan.callable_body(&plan.program, declaration)?;
+        let RegionName::Named(name) = name else {
+            return Err("unsupported: builtin lifetime actual".into());
+        };
+        let key = self
+            .names()?
+            .key(*name, LookupClass::LifetimeParameter)
+            .map_err(native_adapter::name_diagnostic)?;
+        for (index, declared) in source.regions.params.iter().enumerate() {
+            plan.budget.charge_work(1)?;
+            if self
+                .names()?
+                .key(*declared, LookupClass::LifetimeParameter)
+                .map_err(native_adapter::name_diagnostic)?
+                == key
+            {
+                return Ok(ir::ActualRegion::Named(ir::SourceRegionId {
+                    declaration,
+                    index: index as u16,
+                }));
+            }
+        }
+        Err("undeclared lifetime in explicit type argument".into())
+    }
+    pub(super) fn type_actual_regions(
+        &self,
+        args: &[Type],
+        offset: usize,
+    ) -> Result<Arc<[ir::TypeActualRegion]>, String> {
+        let mut rows = Vec::new();
+        for (argument, arg) in args.iter().enumerate() {
+            self.infer_work(0)?;
+            let mut ty = arg;
+            let mut depth = 0u8;
+            while let Type::Ref {
+                region, referent, ..
+            } = ty
+            {
+                self.infer_work(depth as usize)?;
+                self.charge_node(4 * std::mem::size_of::<ir::TypeActualRegion>() + 64)?;
+                rows.push(ir::TypeActualRegion {
+                    argument: argument
+                        .checked_add(offset)
+                        .ok_or("type argument index overflow")?,
+                    location: ir::CarrierLocation {
+                        path: ir::CarrierPath(Arc::from([])),
+                        channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth }),
+                    },
+                    source: region
+                        .as_ref()
+                        .map_or(Ok(ir::ActualRegion::Elided), |name| {
+                            self.source_region(name)
+                        })?,
+                });
+                depth = depth
+                    .checked_add(1)
+                    .ok_or("type argument reference nesting overflow")?;
+                ty = referent;
+            }
+        }
+        Ok(rows.into())
+    }
+    pub(super) fn checked_type_actual(&self, source: &Type) -> Result<ir::Ty, String> {
+        let ty = checked_ty(source, self.signatures)?;
+        if ty.contains_slice() {
+            return Err("unsupported: slice generic arguments".into());
+        }
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("type actual requires registry")?;
+        ir::validate_root_reference_actual(&ty, &plan.budget)?;
+        // Validate source lifetime names now, before erasure and argument checking.
+        self.type_actual_regions(std::slice::from_ref(source), 0)?;
+        Ok(ty)
+    }
+    pub(super) fn nominal(&self, name: &AstPath, hint: Option<&ir::Ty>) -> Result<ir::Ty, String> {
+        let key = self.path_key(name, Namespace::Type)?;
+        if self.self_path(name)? {
+            return self
+                .signatures
+                .self_ty
+                .clone()
+                .ok_or_else(|| "Self outside impl".into());
+        }
+        if let Some(ty) = hint {
+            let matches = match ty {
+                ir::Ty::Struct(t) => t.def().source_decl == self.nominal_decl(name)?,
+                ir::Ty::Enum(t) => t.def().source_decl == self.nominal_decl(name)?,
+                _ => false,
+            };
+            if matches {
+                return Ok(ty.clone());
+            }
+        }
+        if let Some(plan) = &self.signatures.plan {
+            let decl = *plan
+                .registry
+                .nominals
+                .get(&self.path_key(name, Namespace::Type)?)
+                .ok_or("unknown nominal type")?;
+            let args = if self
+                .applications
+                .borrow()
+                .last()
+                .is_some_and(|(owner, _, _)| owner == &key)
+            {
+                self.applications.borrow_mut().pop().unwrap().1
+            } else {
+                Vec::new()
+            };
+            return plan.intern_nominal(decl, &args, self.facts(), &plan.budget);
+        }
+        self.signatures
+            .structs
+            .get(&key)
+            .cloned()
+            .map(ir::Ty::Struct)
+            .or_else(|| self.signatures.enums.get(&key).cloned().map(ir::Ty::Enum))
+            .ok_or_else(|| "unknown nominal type".into())
+    }
+    pub(super) fn pattern_source<'p>(
+        &self,
+        pattern: &'p Pattern,
+        expected: &ir::Ty,
+    ) -> Result<&'p Pattern, String> {
+        if let Pattern::Apply { path, pattern } = pattern {
+            self.push_application(path, Namespace::Type)?;
+            let result = (|| {
+                let (name, _) = path.application()?;
+                let _ = name;
+                let plan = self.signatures.plan.as_ref().ok_or("missing plan")?;
+                let (owner, args) = plan.application(
+                    path,
+                    Namespace::Type,
+                    &self.signatures.params,
+                    self.facts(),
+                    &plan.budget,
+                )?;
+                self.names()?
+                    .budget()
+                    .charge(
+                        super::super::expansion_budget::Counter::Work,
+                        path.segments.len().saturating_add(1) as u64,
+                    )
+                    .map_err(|error| {
+                        super::super::source::SourceError::from_token(
+                            super::super::token_session::TokenError::Budget(error),
+                        )
+                        .to_string()
+                    })?;
+                let decl = *plan
+                    .registry
+                    .nominals
+                    .get(&owner)
+                    .ok_or("generic pattern is not nominal")?;
+                let actual = plan.intern_nominal(decl, &args, self.facts(), &plan.budget)?;
+                if !coerces(expected, &actual) {
+                    return Err("generic pattern application does not match scrutinee".into());
+                }
+                self.pattern_source(pattern, expected)
+            })();
+            self.applications.borrow_mut().pop();
+            result
+        } else {
+            Ok(pattern)
+        }
+    }
+    pub(super) fn enter_loop(&mut self, accepts_value: bool) -> ir::LoopId {
+        let id = ir::LoopId(self.next_loop);
+        self.next_loop += 1;
+        self.loops.push(LoopFrame {
+            id,
+            label: None,
+            is_block: false,
+            accepts_value,
+            checking_condition: !accepts_value,
+            break_ty: None,
+            expected: None,
+            can_exit: false,
+        });
+        id
+    }
+    pub(super) fn label_key(&self, label: Option<AstIdent>) -> Result<Option<NameKey>, String> {
+        let names = &self.signatures.plan()?.program.names;
+        label
+            .map(|label| {
+                names
+                    .key(label, LookupClass::Label)
+                    .map_err(native_adapter::name_diagnostic)
+            })
+            .transpose()
+    }
+    pub(super) fn loop_target(
+        &self,
+        operation: &str,
+        label: Option<AstIdent>,
+    ) -> Result<usize, String> {
+        let key = self.label_key(label)?;
+        let index = if let Some(label) = label {
+            let text = self
+                .signatures
+                .plan()?
+                .program
+                .names
+                .spelling(label)
+                .map_err(native_adapter::name_diagnostic)?;
+            self.loops
+                .iter()
+                .rposition(|f| f.label == key)
+                .ok_or_else(|| format!("undeclared label '{text}"))?
+        } else {
+            self.loops
+                .len()
+                .checked_sub(1)
+                .ok_or_else(|| format!("{operation} outside a loop"))?
+        };
+        let frame = &self.loops[index];
+        if frame.is_block && (label.is_none() || operation == "continue") {
+            return Err(format!(
+                "{operation} cannot target a labeled block without a matching break label"
+            ));
+        }
+        if self.loops[index..].iter().any(|f| f.checking_condition) {
+            return Err(format!(
+                "{operation} in a while condition is unsupported (E0590)"
+            ));
+        }
+        Ok(index)
+    }
+    pub(super) fn local(
+        &mut self,
+        name: impl LocalInput,
+        ty: ir::Ty,
+        mutable: bool,
+    ) -> Result<ir::LocalId, String> {
+        let names = &self.signatures.plan()?.program.names;
+        let key = name.checked_key(names)?;
+        let text = name.diagnostic(names)?;
+        let local = self.temporary(&text, ty, mutable)?;
+        if let Some(key) = key {
+            self.scopes.last_mut().unwrap().insert(key, local);
+        }
+        Ok(local)
+    }
+    pub(super) fn temporary(
+        &mut self,
+        text: &str,
+        ty: ir::Ty,
+        mutable: bool,
+    ) -> Result<ir::LocalId, String> {
+        admit_slice_value(&ty)?;
+        let local = ir::LocalId(self.locals.len());
+        self.charge_node(std::mem::size_of::<ir::LocalDecl>() + text.len())?;
+        self.locals.push(ir::LocalDecl {
+            name: text.to_owned(),
+            ty,
+            mutable,
+        });
+        Ok(local)
+    }
+    pub(super) fn bind(
+        &mut self,
+        name: impl LocalInput,
+        ty: ir::Ty,
+    ) -> Result<ir::LocalId, String> {
+        let names = &self.signatures.plan()?.program.names;
+        if let Some(key) = name.checked_key(names)?
+            && self.scopes.last().unwrap().contains_key(&key)
+        {
+            return Err(format!("duplicate parameter {}", name.diagnostic(names)?));
+        }
+        self.local(name, ty, false)
+    }
+    pub(super) fn charge_pending_lookup(&self) -> Result<(), String> {
+        if let Some(plan) = &self.signatures.plan {
+            let work = self
+                .pending_references
+                .len()
+                .checked_add(1)
+                .and_then(|n| n.checked_mul(self.scopes.len()))
+                .ok_or("pending reference lookup work overflow")?;
+            plan.budget.charge_work(work)?;
+        }
+        Ok(())
+    }
+    pub(super) fn pending_reference(&self, n: impl LocalInput) -> Result<Option<usize>, String> {
+        let key = n
+            .checked_key(&self.signatures.plan()?.program.names)?
+            .ok_or("wildcard is not a local reference")?;
+        self.charge_pending_lookup()?;
+        for scope in (0..self.scopes.len()).rev() {
+            if self.scopes[scope].contains_key(&key) {
+                return Ok(None);
+            }
+            for (index, pending) in self.pending_references.iter().enumerate().rev() {
+                if pending.scope == scope
+                    && pending.local.is_none()
+                    && pending
+                        .name
+                        .checked_key(&self.signatures.plan()?.program.names)?
+                        == Some(key)
+                {
+                    return Ok(Some(index));
+                }
+            }
+        }
+        Ok(None)
+    }
+    pub(super) fn lookup_optional(
+        &self,
+        n: impl LocalInput,
+    ) -> Result<Option<ir::LocalId>, String> {
+        let names = &self.signatures.plan()?.program.names;
+        let key = n
+            .checked_key(names)?
+            .ok_or("wildcard is not a local reference")?;
+        self.charge_pending_lookup()?;
+        for scope in (0..self.scopes.len()).rev() {
+            if let Some(local) = self.scopes[scope].get(&key) {
+                return Ok(Some(*local));
+            }
+            for pending in &self.pending_references {
+                if pending.scope == scope
+                    && pending.local.is_none()
+                    && pending.name.checked_key(names)? == Some(key)
+                {
+                    return Err(format!(
+                        "deferred local {} requires an independently typed reference assignment before use",
+                        n.diagnostic(names)?
+                    ));
+                }
+            }
+        }
+        Ok(None)
+    }
+    pub(super) fn lookup(&self, n: impl LocalInput) -> Result<ir::LocalId, String> {
+        self.lookup_optional(&n)?.ok_or_else(|| {
+            match self.names().and_then(|names| n.diagnostic(names)) {
+                Ok(text) => format!("unresolved local {text}"),
+                Err(error) => error,
+            }
+        })
+    }
+    pub(super) fn flow(&self, id: ir::ExprId) -> Flow {
+        let e = &self.exprs[id.0];
+        Flow {
+            ty: e.ty.clone(),
+            completes: e.completion == ir::Completion::Returns,
+        }
+    }
+    pub(super) fn require(&self, got: &Flow, want: &ir::Ty) -> Result<(), String> {
+        if matches!((&got.ty,want),(ir::Ty::Ref{kind:ir::BorrowKind::Mut,referent:a},ir::Ty::Ref{kind:ir::BorrowKind::Shared,referent:b}) if a==b)
+        {
+            return Err("implicit mutable-to-shared reference coercion/reborrowing is unsupported; use an explicit &*r reborrow".into());
+        }
+        if !coerces(&got.ty, want) {
+            Err(format!("expected {want:?}, got {:?}", got.ty))
+        } else {
+            Ok(())
+        }
+    }
+    pub(super) fn join(&self, a: &ir::Ty, b: &ir::Ty, context: &str) -> Result<ir::Ty, String> {
+        if *a == ir::Ty::Never {
+            return Ok(b.clone());
+        }
+        if *b == ir::Ty::Never || a == b {
+            return Ok(a.clone());
+        }
+        if let (
+            ir::Ty::Array {
+                element: a,
+                len: na,
+            },
+            ir::Ty::Array {
+                element: b,
+                len: nb,
+            },
+        ) = (a, b)
+            && na == nb
+        {
+            return Ok(ir::Ty::Array {
+                element: std::sync::Arc::new(self.join(a, b, context)?),
+                len: *na,
+            });
+        }
+        if let (ir::Ty::Tuple(a), ir::Ty::Tuple(b)) = (a, b)
+            && a.len() == b.len()
+        {
+            return a
+                .iter()
+                .zip(b.iter())
+                .map(|(a, b)| self.join(a, b, context))
+                .collect::<Result<Vec<_>, _>>()
+                .map(|fields| ir::Ty::Tuple(fields.into()));
+        }
+        Err(format!("{context} differ: {a:?} and {b:?}"))
+    }
+    pub(super) fn accessible(&self, ty: &ir::Ty) -> Result<(), String> {
+        fn visit(checker: &Checker<'_>, ty: &ir::Ty, depth: usize) -> Result<(), String> {
+            if depth > 128 {
+                return Err("type visibility nesting exceeds limit128".into());
+            }
+            if let Some(plan) = &checker.signatures.plan {
+                plan.budget.charge_work(1)?;
+            }
+            match ty {
+                ir::Ty::Ref { referent, .. } => visit(checker, referent, depth + 1)?,
+                ir::Ty::Array { element, .. } => visit(checker, element, depth + 1)?,
+                ir::Ty::Tuple(fields) => {
+                    for field in fields.iter() {
+                        visit(checker, field, depth + 1)?;
+                    }
+                }
+                ir::Ty::Enum(ty) if !checker.visible(&ty.def().visibility)? => {
+                    return Err(format!(
+                        "private type {} is inaccessible from the current module",
+                        ty.def().name
+                    ));
+                }
+                ir::Ty::Struct(ty) if !checker.visible(&ty.def().visibility)? => {
+                    return Err(format!(
+                        "private type {} is inaccessible from the current module",
+                        ty.def().name
+                    ));
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+        visit(self, ty, 0)
+    }
+    pub(super) fn checked_place(&self, place: &Place) -> Result<(ir::Place, ir::Ty, bool), String> {
+        if place.fields.len() > 128 {
+            return Err("place projection nesting exceeds limit128".into());
+        }
+        let local = self.lookup(place.local)?;
+        let declaration = &self.locals[local.0];
+        let mut ty = declaration.ty.clone();
+        let mut writable = declaration.mutable;
+        let mut derefs = 0;
+        let mut projection = Vec::with_capacity(place.fields.len());
+        for selector in &place.fields {
+            match selector {
+                FieldSelector::Deref => {
+                    derefs += 1;
+                    if derefs > 128 {
+                        return Err("reference dereference depth exceeds limit128".into());
+                    }
+                    let ir::Ty::Ref { kind, referent } = &ty else {
+                        return Err("dereference requires a reference".into());
+                    };
+                    writable = *kind == ir::BorrowKind::Mut;
+                    ty = referent.as_ref().clone();
+                    projection.push(ir::Projection::Deref);
+                }
+                FieldSelector::ConstantIndex(index) => {
+                    ty = self.index_type(&ty, *index)?;
+                    projection.push(ir::Projection::ConstantIndex(*index));
+                }
+                _ => {
+                    if let ir::Ty::Ref { kind, referent } = &ty {
+                        if derefs >= 128 {
+                            return Err(
+                                "multiple dereferences in one field place are unsupported".into()
+                            );
+                        }
+                        if place.fields.len() >= 128 {
+                            return Err(
+                                "normalized place projection nesting exceeds limit128".into()
+                            );
+                        }
+                        derefs += 1;
+                        writable = *kind == ir::BorrowKind::Mut;
+                        ty = referent.as_ref().clone();
+                        projection.push(ir::Projection::Deref);
+                    }
+                    let (index, field) = self.field_type(&ty, selector)?;
+                    ty = field;
+                    projection.push(ir::Projection::Field(index));
+                }
+            }
+        }
+        self.accessible(&ty)?;
+        Ok((ir::Place { local, projection }, ty, writable))
+    }
+    pub(super) fn validate_value_carriers(&self, ty: &ir::Ty) -> Result<(), String> {
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("carrier validation requires registry")?;
+        // Shape alone grants no lifetime, target, Copy or executable-body proof.
+        ir::carrier_locations(ty, &plan.budget).map(|_| ())
+    }
+    pub(super) fn require_index(&self, flow: &Flow) -> Result<(), String> {
+        self.require(flow,&ir::Ty::Int(ir::IntTy::Usize)).map_err(|_|"runtime index requires usize, without implicit i32 conversion; backward numeric inference is unsupported".into())
+    }
+    pub(super) fn scalar_hint(&self, e: &Expr) -> Result<Option<ir::Ty>, String> {
+        Ok(match e {
+            Expr::TraitCall {
+                owner,
+                trait_path,
+                name,
+                ..
+            } => {
+                let plan = self
+                    .signatures
+                    .plan
+                    .as_ref()
+                    .ok_or("missing trait registry")?;
+                let owner = checked_local_ty(owner, self.signatures)?;
+                let tid = plan.resolve_trait_path(trait_path)?;
+                Some(
+                    plan.select_trait(&owner, tid, name, &[], self.facts(), false, &plan.budget)?
+                        .ok_or("trait obligation not proven")?
+                        .1
+                        .result,
+                )
+            }
+            Expr::Apply { .. } => {
+                let evidence = self.inference_evidence(e, 0)?;
+                Inference::empty(self)?.resolve(&evidence, false, 0)?
+            }
+            Expr::AssociatedCall {
+                owner,
+                name,
+                type_args,
+                ..
+            } => {
+                let plan = self
+                    .signatures
+                    .plan
+                    .as_ref()
+                    .ok_or("missing associated registry")?;
+                self.infer_storage(type_args.len())?;
+                let args = type_args
+                    .iter()
+                    .map(|t| self.checked_type_actual(t))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let owner = checked_local_ty(owner, self.signatures)?;
+                Some(
+                    plan.select_associated(
+                        &owner,
+                        name,
+                        &args,
+                        self.facts(),
+                        &self.module,
+                        false,
+                        &plan.budget,
+                    )?
+                    .1
+                    .result,
+                )
+            }
+            Expr::MethodCall { receiver, .. }
+                if slice_len_candidate(e, self.names()?)?
+                    && self
+                        .scalar_hint(receiver)?
+                        .is_some_and(|ty| ty.shared_byte_slice()) =>
+            {
+                Some(ir::Ty::Int(ir::IntTy::Usize))
+            }
+            Expr::MethodCall {
+                receiver,
+                name,
+                type_args,
+                ..
+            } => {
+                if let Some(owner) = self.scalar_hint(receiver)? {
+                    let plan = self
+                        .signatures
+                        .plan
+                        .as_ref()
+                        .ok_or("missing associated registry")?;
+                    self.infer_storage(type_args.len())?;
+                    let args = type_args
+                        .iter()
+                        .map(|t| self.checked_type_actual(t))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Some(
+                        plan.select_method(
+                            &owner,
+                            name,
+                            &args,
+                            self.facts(),
+                            &self.module,
+                            &plan.budget,
+                        )?
+                        .signature
+                        .result,
+                    )
+                } else {
+                    None
+                }
+            }
+            Expr::Struct { .. } | Expr::EnumVariant { .. } => {
+                let evidence = self.inference_evidence(e, 0)?;
+                Inference::empty(self)?.resolve(&evidence, false, 0)?
+            }
+            Expr::Cast { target, .. } => Some(checked_local_ty(target, self.signatures)?),
+            Expr::Deref { value } => match self.scalar_hint(value)? {
+                Some(ir::Ty::Ref { referent, .. }) => Some(referent.as_ref().clone()),
+                _ => None,
+            },
+            Expr::Integer(literal) => literal.suffix.map(ir::Ty::Int),
+            Expr::Float(literal) => literal.suffix.map(ir::Ty::Float),
+            Expr::Bool(_) => Some(ir::Ty::Bool),
+            Expr::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
+            Expr::Var(name) => self
+                .lookup_optional(name)?
+                .map(|id| self.locals[id.0].ty.clone()),
+            Expr::Call { name, args } => {
+                let key = self.path_key(name, Namespace::Value)?;
+                let plan = self
+                    .signatures
+                    .plan
+                    .as_ref()
+                    .ok_or("call hint requires declaration registry")?;
+                let declaration = *plan
+                    .registry
+                    .functions
+                    .get(&key)
+                    .ok_or("unresolved function in hint")?;
+                if plan.param_env(declaration)?.arity() == 0 {
+                    Some(
+                        self.signatures
+                            .functions
+                            .get(&self.path_key(name, Namespace::Value)?)
+                            .ok_or("missing function signature")?
+                            .result
+                            .clone(),
+                    )
+                } else if let Some(type_args) =
+                    self.infer_call_args(declaration, args, None, false)?
+                {
+                    Some(
+                        plan.instantiate_signature(
+                            &ir::CallTarget {
+                                declaration,
+                                type_args: type_args.into(),
+                            },
+                            self.facts(),
+                            &plan.budget,
+                        )?
+                        .result,
+                    )
+                } else {
+                    None
+                }
+            }
+            Expr::Unary { value, .. } => self.scalar_hint(value)?,
+            Expr::Binary {
+                op:
+                    BinaryOp::Eq
+                    | BinaryOp::Ne
+                    | BinaryOp::Lt
+                    | BinaryOp::Le
+                    | BinaryOp::Gt
+                    | BinaryOp::Ge
+                    | BinaryOp::And
+                    | BinaryOp::Or,
+                ..
+            } => Some(ir::Ty::Bool),
+            Expr::Binary {
+                op: BinaryOp::Shl | BinaryOp::Shr,
+                left,
+                ..
+            } => self.scalar_hint(left)?,
+            Expr::Binary { left, right, .. } => match self.scalar_hint(left)? {
+                Some(ty) => Some(ty),
+                None => self.scalar_hint(right)?,
+            },
+            Expr::Field { base, field } => {
+                if let Some(ty) = self.scalar_hint(base)? {
+                    let receiver = if let ir::Ty::Ref { referent, .. } = &ty {
+                        referent.as_ref()
+                    } else {
+                        &ty
+                    };
+                    Some(self.field_type(receiver, field)?.1)
+                } else {
+                    None
+                }
+            }
+            Expr::Index { base, .. } | Expr::DynamicIndex { base, .. } => {
+                match self.scalar_hint(base)? {
+                    Some(ir::Ty::Array { element, .. }) => Some(element.as_ref().clone()),
+                    Some(ty) if ty.shared_byte_slice() => Some(ir::Ty::Int(ir::IntTy::U8)),
+                    _ => None,
+                }
+            }
+            Expr::Block(block) if block.statements.is_empty() => match &block.tail {
+                Some(tail) => self.scalar_hint(tail)?,
+                None => Some(ir::Ty::Unit),
+            },
+            _ => None,
+        })
+    }
+
+    pub(super) fn deref_source(&self, mut id: ir::ExprId) -> bool {
+        loop {
+            match &self.exprs[id.0].kind {
+                ir::ExprKind::Deref { .. } => return true,
+                ir::ExprKind::Index { base, .. }
+                | ir::ExprKind::Field { base, .. }
+                | ir::ExprKind::DynamicIndex { base, .. } => id = *base,
+                _ => return false,
+            }
+        }
+    }
+    pub(super) fn dynamic_place(e: &Expr) -> bool {
+        match e {
+            Expr::DynamicIndex { .. } => true,
+            Expr::Index { base, .. } | Expr::Field { base, .. } => Self::dynamic_place(base),
+            _ => false,
+        }
+    }
+    pub(super) fn index_type(&self, ty: &ir::Ty, index: usize) -> Result<ir::Ty, String> {
+        if matches!(ty, ir::Ty::Ref { .. }) {
+            return Err("implicit reference autodereference is unsupported in B1; use an explicit (*r) place".into());
+        }
+        let ir::Ty::Array { element, len } = ty else {
+            return Err("indexing requires an array".into());
+        };
+        if index >= *len {
+            return Err(format!(
+                "array index {index} out of bounds for length {len}"
+            ));
+        }
+        self.accessible(element)?;
+        Ok(element.as_ref().clone())
+    }
+    pub(super) fn field_type(
+        &self,
+        ty: &ir::Ty,
+        field: &FieldSelector,
+    ) -> Result<(usize, ir::Ty), String> {
+        if matches!(ty, ir::Ty::Ref { .. }) {
+            return Err("implicit reference autodereference is unsupported in B1; use an explicit (*r) place".into());
+        }
+        let (index, projected) = match (ty, field) {
+            (ir::Ty::Tuple(fields), FieldSelector::Tuple(index)) => fields
+                .get(*index)
+                .cloned()
+                .map(|ty| (*index, ty))
+                .ok_or_else(|| {
+                    format!(
+                        "tuple field {index} is out of bounds for {} fields",
+                        fields.len()
+                    )
+                }),
+            (ir::Ty::Struct(ty), FieldSelector::Named(name)) => {
+                let key = self
+                    .names()?
+                    .key(*name, LookupClass::Member)
+                    .map_err(native_adapter::name_diagnostic)?;
+                if !self.field_indices.borrow().contains_key(&ty.def().id) {
+                    let fields = self.source_fields(ty.def().source_decl, None)?;
+                    self.charge_node(
+                        fields
+                            .len()
+                            .checked_mul(std::mem::size_of::<(NameKey, usize)>() * 2)
+                            .ok_or("field index allocation overflow")?,
+                    )?;
+                    let mut indices = HashMap::new();
+                    indices
+                        .try_reserve(fields.len())
+                        .map_err(|_| "field index allocation resource limit")?;
+                    for (index, field) in fields.into_iter().enumerate() {
+                        self.infer_work(0)?;
+                        if let FieldName::Named(name) = field {
+                            let key = self
+                                .names()?
+                                .key(name, LookupClass::Member)
+                                .map_err(native_adapter::name_diagnostic)?;
+                            if indices.insert(key, index).is_some() {
+                                return Err("duplicate source field schema".into());
+                            }
+                        }
+                    }
+                    self.field_indices.borrow_mut().insert(ty.def().id, indices);
+                }
+                let index = *self
+                    .field_indices
+                    .borrow()
+                    .get(&ty.def().id)
+                    .and_then(|fields| fields.get(&key))
+                    .ok_or("unknown nominal field")?;
+                let field = &ty.def().fields[index];
+                if !self.visible(&field.visibility)? {
+                    return Err(format!("private field {name:?} in {}", ty.def().name));
+                }
+                Ok((index, field.ty.clone()))
+            }
+            _ => Err(format!("invalid field projection {field:?} on {ty:?}")),
+        }?;
+        self.accessible(&projected)?;
+        Ok((index, projected))
+    }
+    /// Recover only concrete pattern shape, without a general inference engine.
+    pub(super) fn pattern_ty(&self, pattern: &Pattern, ty: &ir::Ty) -> Result<ir::Ty, String> {
+        if matches!(ty, ir::Ty::Ref { .. })
+            && !matches!(pattern, Pattern::Wildcard | Pattern::Binding { .. })
+        {
+            return Err(
+                "reference patterns and implicit match ergonomics are unsupported in B1".into(),
+            );
+        }
+        match pattern {
+            Pattern::Path(name) | Pattern::Variant { name,.. } => {
+                let expected = if let ir::Ty::Enum(enumeration) = ty {
+                    let (owner, _) = self.split_variant(name)?;
+                    let actual = self.nominal(&owner, Some(ty))?;
+                    if actual != ir::Ty::Enum(enumeration.clone()) { return Err("enum pattern owner mismatch".into()); }
+                    actual
+                } else { ir::Ty::Enum(self.enum_variant(name)?.0) };
+                if !coerces(ty,&expected) { return Err(format!("enum pattern {name:?} does not match {ty:?}")); }
+                Ok(expected)
+            }
+            Pattern::Apply {..} => self.pattern_ty(self.pattern_source(pattern,ty)?,ty),
+            Pattern::Bool(_) | Pattern::Int { .. } => Err("refutable literal pattern in let binding".into()),
+            Pattern::Wildcard | Pattern::Binding { .. } => Ok(ty.clone()),
+            Pattern::Tuple(patterns) => match ty {
+                ir::Ty::Unit if patterns.is_empty() => Ok(ir::Ty::Unit),
+                ir::Ty::Never if patterns.is_empty() => Ok(ir::Ty::Unit),
+                ir::Ty::Never => patterns.iter().map(|pattern| {
+                    if matches!(pattern, Pattern::Binding { .. } | Pattern::Wildcard) {
+                        Err("unannotated never tuple pattern inference is unsupported; add a whole-pattern type annotation".into())
+                    } else { self.pattern_ty(pattern, &ir::Ty::Never) }
+                }).collect::<Result<Vec<_>, String>>().map(|fields| ir::Ty::Tuple(fields.into())),
+                ir::Ty::Tuple(fields) if fields.len() == patterns.len() => patterns.iter().zip(fields.iter()).map(|(pattern, ty)| self.pattern_ty(pattern, ty)).collect::<Result<Vec<_>, _>>().map(|fields| ir::Ty::Tuple(fields.into())),
+                _ => Err(format!("tuple pattern with {} fields does not match {ty:?}", patterns.len())),
+            },
+            Pattern::Struct { name, .. } => {
+                let expected = self.nominal(name,Some(ty))?;
+                self.accessible(&expected)?;
+                if !coerces(ty, &expected) { return Err(format!("struct pattern {name:?} does not match {ty:?}")); }
+                Ok(expected)
+            }
+        }
+    }
+    pub(super) fn pattern_locals(
+        &self,
+        pattern: &Pattern,
+        ty: &ir::Ty,
+        path: &mut Vec<ir::Projection>,
+        names: &mut std::collections::HashSet<NameKey>,
+        pending: &mut Vec<PatternLocal>,
+        work: &mut usize,
+    ) -> Result<(), String> {
+        if path.len() > ir::MAX_PATTERN_PROJECTION_DEPTH {
+            return Err("pattern projection depth exceeds limit".into());
+        }
+        match pattern {
+            Pattern::Apply { .. } => {
+                return self.pattern_locals(
+                    self.pattern_source(pattern, ty)?,
+                    ty,
+                    path,
+                    names,
+                    pending,
+                    work,
+                );
+            }
+            Pattern::Wildcard => {}
+            Pattern::Path(_) | Pattern::Variant { .. } => {
+                let (enumeration, variant, fields) = self.variant_pattern(pattern, ty)?;
+                if enumeration.def().variants.len() != 1 {
+                    return Err(
+                        "refutable enum patterns in irrefutable positions are unsupported".into(),
+                    );
+                }
+                for (index, pattern) in fields {
+                    path.push(ir::Projection::Downcast(ir::VariantId {
+                        owner: enumeration.def().id,
+                        index: variant,
+                    }));
+                    path.push(ir::Projection::Field(index));
+                    self.pattern_locals(
+                        pattern,
+                        &enumeration.def().variants[variant].fields[index].ty,
+                        path,
+                        names,
+                        pending,
+                        work,
+                    )?;
+                    path.pop();
+                    path.pop();
+                }
+            }
+            Pattern::Bool(_) | Pattern::Int { .. } => {
+                return Err("nested refutable literal patterns are unsupported".into());
+            }
+            Pattern::Binding { name, mutable } => {
+                let key = self
+                    .names()?
+                    .key(*name, LookupClass::Local)
+                    .map_err(native_adapter::name_diagnostic)?;
+                if !names.insert(key) {
+                    return Err(format!("duplicate pattern binding {name:?}"));
+                }
+                self.accessible(ty)?;
+                if pending.len() >= ir::MAX_PATTERN_BINDINGS {
+                    return Err("pattern binding count exceeds limit".into());
+                }
+                *work = work
+                    .checked_add(1 + path.len())
+                    .ok_or("pattern projection work overflow")?;
+                if *work > ir::MAX_PATTERN_PROJECTION_WORK {
+                    return Err("pattern projection work exceeds limit".into());
+                }
+                pending.push(PatternLocal {
+                    name: *name,
+                    ty: ty.clone(),
+                    mutable: *mutable,
+                    projection: path.clone(),
+                });
+            }
+            Pattern::Tuple(patterns) => {
+                if patterns.is_empty() && *ty == ir::Ty::Unit {
+                    return Ok(());
+                }
+                let ir::Ty::Tuple(fields) = ty else {
+                    return Err(format!("tuple pattern does not match {ty:?}"));
+                };
+                if fields.len() != patterns.len() {
+                    return Err("tuple pattern arity mismatch".into());
+                }
+                for (index, (pattern, ty)) in patterns.iter().zip(fields.iter()).enumerate() {
+                    path.push(ir::Projection::Field(index));
+                    self.pattern_locals(pattern, ty, path, names, pending, work)?;
+                    path.pop();
+                }
+            }
+            Pattern::Struct { name, fields, rest } => {
+                let expected = self.pattern_ty(pattern, ty)?;
+                if &expected != ty {
+                    return Err(
+                        "nested never struct pattern requires a concrete annotated shape".into(),
+                    );
+                }
+                let ir::Ty::Struct(structure) = ty else {
+                    return Err(format!("expected struct pattern {name:?}"));
+                };
+                let mut selected = std::collections::HashSet::new();
+                for (field, pattern) in fields {
+                    let (index, field_ty) = self.field_type(ty, &FieldSelector::Named(*field))?;
+                    if !selected.insert(index) {
+                        return Err(format!("duplicate struct pattern field {field:?}"));
+                    }
+                    path.push(ir::Projection::Field(index));
+                    self.pattern_locals(pattern, &field_ty, path, names, pending, work)?;
+                    path.pop();
+                }
+                if !rest && selected.len() != structure.def().fields.len() {
+                    return Err(format!(
+                        "missing fields in struct pattern {name:?}; use .. to omit fields"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+    pub(super) fn expr_expected_when(
+        &mut self,
+        e: &Expr,
+        reachable: bool,
+        expected: Option<&ir::Ty>,
+    ) -> Result<ir::ExprId, String> {
+        let previous = self.reachable;
+        self.reachable = reachable;
+        let result = self.expr_expected(e, expected);
+        self.reachable = previous;
+        result
+    }
+    pub(super) fn constructor_type(
+        &self,
+        name: &AstPath,
+        variant: Option<AstIdent>,
+        fields: &[(InferField<'_>, &Expr)],
+        expected: Option<&ir::Ty>,
+    ) -> Result<ir::Ty, String> {
+        let key = self.path_key(name, Namespace::Type)?;
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("constructor requires planning context")?;
+        if self.self_path(name)? {
+            return self.nominal(name, None);
+        }
+        let decl = *plan
+            .registry
+            .nominals
+            .get(&self.path_key(name, Namespace::Type)?)
+            .ok_or("unknown nominal declaration")?;
+        if plan.param_env(decl)?.arity() == 0
+            || self
+                .applications
+                .borrow()
+                .last()
+                .is_some_and(|(owner, _, _)| owner == &key)
+        {
+            return self.nominal(name, None);
+        }
+        self.infer_constructor(name,variant,fields,expected,true)?.ok_or_else(||"unsupported generic inference: insufficient evidence; explicit type arguments required".into())
+    }
+    pub(super) fn enum_variant(&self, name: &AstPath) -> Result<(ir::EnumTy, usize), String> {
+        let (owner, variant) = self.split_variant(name)?;
+        let ir::Ty::Enum(ty) = self.nominal(&owner, None)? else {
+            return Err("unknown enum".into());
+        };
+        self.accessible(&ir::Ty::Enum(ty.clone()))?;
+        let index = self.variant_index(ty.def().source_decl, variant)?;
+        Ok((ty, index))
+    }
+    pub(super) fn variant_pattern<'p>(
+        &self,
+        pattern: &'p Pattern,
+        expected: &ir::Ty,
+    ) -> Result<ResolvedVariantPattern<'p>, String> {
+        let (name, shape, fields, rest) = match pattern {
+            Pattern::Path(name) => (name, ir::VariantShape::Unit, &[][..], false),
+            Pattern::Variant {
+                name,
+                shape,
+                fields,
+                rest,
+            } => (name, *shape, fields.as_slice(), *rest),
+            _ => return Err("expected enum variant pattern".into()),
+        };
+        let (ty, variant) = if let ir::Ty::Enum(ty) = expected {
+            let (owner, variant) = self.split_variant(name)?;
+            if self.nominal(&owner, Some(expected))? != ir::Ty::Enum(ty.clone()) {
+                return Err("variant pattern owner mismatch".into());
+            }
+            let index = self.variant_index(ty.def().source_decl, variant)?;
+            (ty.clone(), index)
+        } else {
+            self.enum_variant(name)?
+        };
+        if *expected != ir::Ty::Enum(ty.clone()) {
+            return Err(format!(
+                "variant pattern {name:?} does not match {expected:?}"
+            ));
+        }
+        let definition = &ty.def().variants[variant];
+        if shape != definition.shape
+            && !(definition.shape == ir::VariantShape::Unit
+                && shape == ir::VariantShape::Struct
+                && fields.is_empty())
+        {
+            return Err(format!(
+                "variant pattern {name:?} has wrong constructor shape"
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut selected = Vec::new();
+        for (selector, pattern) in fields {
+            let index = match selector {
+                FieldSelector::Tuple(i) if definition.shape == ir::VariantShape::Tuple => *i,
+                FieldSelector::Named(n) => {
+                    self.member_index(ty.def().source_decl, Some(variant), *n)?
+                }
+                _ => return Err("invalid variant field selector".into()),
+            };
+            let field = definition
+                .fields
+                .get(index)
+                .ok_or("variant pattern arity mismatch")?;
+            if !seen.insert(index) {
+                return Err("duplicate variant pattern field".into());
+            }
+            self.accessible(&field.ty)?;
+            selected.push((index, pattern));
+        }
+        if !rest && seen.len() != definition.fields.len() {
+            return Err("missing variant pattern fields".into());
+        }
+        Ok((ty, variant, selected))
+    }
+    pub(super) fn compound_value(
+        &mut self,
+        op: BinaryOp,
+        ty: &ir::Ty,
+        value: &Expr,
+    ) -> Result<(ir::ExprId, Flow), String> {
+        let shift = matches!(op, BinaryOp::Shl | BinaryOp::Shr);
+        let bitwise = matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor);
+        if !matches!(
+            op,
+            BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::Rem
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr
+        ) {
+            return Err("invalid compound assignment operator".into());
+        }
+        if !matches!(ty, ir::Ty::Int(_))
+            && !(matches!(ty, ir::Ty::Float(_)) && !shift && !bitwise)
+            && !(bitwise && *ty == ir::Ty::Bool)
+        {
+            return Err(
+                "compound assignment requires primitive integer or bitwise Bool destination".into(),
+            );
+        }
+        let value = self.expr_expected(value, if shift { None } else { Some(ty) })?;
+        let flow = self.flow(value);
+        if shift {
+            if flow.ty == ir::Ty::Never {
+                return Err("compound shift on semantic Never is unsupported".into());
+            }
+            if !matches!(flow.ty, ir::Ty::Int(_)) {
+                return Err("compound shift count must be an integer".into());
+            }
+            let ir::Ty::Int(ty) = ty else {
+                return Err("compound shift destination must be integer".into());
+            };
+            if self.count_queries.len() >= COUNT_EVAL_WORK {
+                return Err("compound shift query work limit exceeded".into());
+            }
+            self.count_queries.push((*ty, value));
+        } else {
+            if flow.ty == ir::Ty::Never {
+                return Err("compound operator on semantic Never is unsupported".into());
+            }
+            self.require(&flow, ty)?;
+        }
+        Ok((value, flow))
+    }
+    pub(super) fn deref_assignment(
+        &mut self,
+        carrier: &Expr,
+        value: &Expr,
+        statements: &mut Vec<ir::Stmt>,
+    ) -> Result<(ir::Stmt, bool), String> {
+        let carrier_ty = self
+            .scalar_hint(carrier)?
+            .ok_or("unresolved reference call assignment carrier")?;
+        let ir::Ty::Ref { referent, .. } = &carrier_ty else {
+            return Err("call assignment carrier must return a reference".into());
+        };
+        let referent = referent.as_ref().clone();
+        let rhs = self.expr_expected(value, Some(&referent))?;
+        let rhs_flow = self.flow(rhs);
+        self.require(&rhs_flow, &referent)?;
+        let saved = self.temporary(
+            &format!("$rhs{}", self.locals.len()),
+            referent.clone(),
+            false,
+        )?;
+        self.charge_node(std::mem::size_of::<ir::Stmt>() * 3)?;
+        statements.push(ir::Stmt::Let {
+            local: saved,
+            value: rhs,
+        });
+        let pointer =
+            self.expr_expected_when(carrier, self.reachable && rhs_flow.completes, None)?;
+        let pf = self.flow(pointer);
+        self.require(&pf, &carrier_ty)?;
+        let handle =
+            self.temporary(&format!("$carrier{}", self.locals.len()), carrier_ty, false)?;
+        statements.push(ir::Stmt::Let {
+            local: handle,
+            value: pointer,
+        });
+        let loaded = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: referent,
+            completion: ir::Completion::Returns,
+            kind: ir::ExprKind::Local(saved),
+        });
+        Ok((
+            ir::Stmt::AssignPlace {
+                place: ir::Place {
+                    local: handle,
+                    projection: vec![ir::Projection::Deref],
+                },
+                value: loaded,
+            },
+            rhs_flow.completes && pf.completes,
+        ))
+    }
+    pub(super) fn block_when(
+        &mut self,
+        b: &Block,
+        reachable: bool,
+    ) -> Result<(ir::Block, Flow), String> {
+        self.block_expected_when(b, reachable, None)
+    }
+    pub(super) fn block_expected_when(
+        &mut self,
+        b: &Block,
+        reachable: bool,
+        expected: Option<&ir::Ty>,
+    ) -> Result<(ir::Block, Flow), String> {
+        let previous = self.reachable;
+        self.reachable = reachable;
+        let result = self.block_expected(b, expected);
+        self.reachable = previous;
+        result
+    }
+    pub(super) fn block(&mut self, b: &Block) -> Result<(ir::Block, Flow), String> {
+        self.block_expected(b, None)
+    }
+    pub(super) fn block_expected(
+        &mut self,
+        b: &Block,
+        expected: Option<&ir::Ty>,
+    ) -> Result<(ir::Block, Flow), String> {
+        self.block_with_expectation(b, expected.into())
+    }
+    pub(super) fn block_with_expectation(
+        &mut self,
+        b: &Block,
+        expectation: Expectation<'_>,
+    ) -> Result<(ir::Block, Flow), String> {
+        let entered_reachable = self.reachable;
+        let pending_start = self.pending_references.len();
+        self.scopes.push(HashMap::new());
+        let mut live = true;
+        let mut statements = Vec::with_capacity(b.statements.len());
+        for s in &b.statements {
+            self.reachable = entered_reachable && live;
+            let (statement, completes) = match s {
+                Stmt::Declare { name, ty, mutable } => {
+                    if matches!(ty, Type::Infer) {
+                        let BindingName::Named(name) = name else {
+                            return Err("untyped wildcard declarations are unsupported".into());
+                        };
+                        let key = name
+                            .checked_key(self.names()?)?
+                            .ok_or("missing local key")?;
+                        self.charge_node(std::mem::size_of::<PendingReferenceDecl>() * 4)?;
+                        self.scopes.last_mut().unwrap().remove(&key);
+                        self.pending_references.push(PendingReferenceDecl {
+                            name: *name,
+                            mutable: *mutable,
+                            scope: self.scopes.len() - 1,
+                            position: statements.len(),
+                            local: None,
+                        });
+                        continue;
+                    }
+                    if matches!(ty, Type::Never) {
+                        return Err(
+                            "deferred declarations require a concrete supported source type".into(),
+                        );
+                    }
+                    let ty = checked_local_ty(ty, self.signatures)?;
+                    self.accessible(&ty)?;
+                    let local = self.local(name, ty, *mutable)?;
+                    if let Some(cap) = self.canonical {
+                        cap.record_binding(s, local)?;
+                    }
+                    (ir::Stmt::Declare { local }, true)
+                }
+                Stmt::Let {
+                    name,
+                    mutable,
+                    ty,
+                    value,
+                } => {
+                    let annotation = if matches!(ty, Type::Infer) {
+                        None
+                    } else {
+                        Some(checked_local_ty(ty, self.signatures)?)
+                    };
+                    let value = self.expr_expected(value, annotation.as_ref())?;
+                    let f = self.flow(value);
+                    let t = if matches!(ty, Type::Infer) {
+                        f.ty.clone()
+                    } else {
+                        let ty = checked_local_ty(ty, self.signatures)?;
+                        self.accessible(&ty)?;
+                        self.require(&f, &ty)?;
+                        ty
+                    };
+                    let local = self.local(name, t, *mutable)?;
+                    if let Some(cap) = self.canonical {
+                        cap.record_binding(s, local)?;
+                    }
+                    (ir::Stmt::Let { local, value }, f.completes)
+                }
+                Stmt::LetPattern { pattern, ty, value } => {
+                    // Resolve/check every initializer against the complete old scope.
+                    let annotation = if matches!(ty, Type::Infer) {
+                        None
+                    } else {
+                        Some(checked_local_ty(ty, self.signatures)?)
+                    };
+                    let direct_dynamic = matches!(value, Expr::DynamicIndex { .. });
+                    let direct_wildcard = matches!(pattern, Pattern::Wildcard);
+                    let value = self.expr_expected(value, annotation.as_ref())?;
+                    if self.deref_source(value)
+                        && matches!(pattern, Pattern::Path(_) | Pattern::Variant { .. })
+                    {
+                        return Err(
+                            "enum downcasts after a dereference are unsupported in B1".into()
+                        );
+                    }
+                    let flow = self.flow(value);
+                    if direct_dynamic && !self.facts().must_copy(&flow.ty)? && !direct_wildcard {
+                        return Err("non-Copy runtime indexed pattern extraction is unsupported; only direct let _ inspection is admitted".into());
+                    }
+                    let seed = if matches!(ty, Type::Infer) {
+                        flow.ty.clone()
+                    } else {
+                        let ty = checked_local_ty(ty, self.signatures)?;
+                        self.accessible(&ty)?;
+                        self.require(&flow, &ty)?;
+                        ty
+                    };
+                    let ty = self.pattern_ty(pattern, &seed)?;
+                    self.require(&flow, &ty)?;
+                    self.accessible(&ty)?;
+                    let mut pending = Vec::new();
+                    self.pattern_locals(
+                        pattern,
+                        &ty,
+                        &mut Vec::new(),
+                        &mut std::collections::HashSet::new(),
+                        &mut pending,
+                        &mut 0usize,
+                    )?;
+                    // No partially installed binder set can affect another binder.
+                    let mut bindings = Vec::with_capacity(pending.len());
+                    for binding in pending {
+                        let local = self.local(binding.name, binding.ty, binding.mutable)?;
+                        bindings.push(ir::PatternBinding {
+                            local,
+                            projection: binding.projection,
+                        });
+                    }
+                    (
+                        ir::Stmt::LetPattern {
+                            value,
+                            ty,
+                            bindings,
+                        },
+                        flow.completes,
+                    )
+                }
+                Stmt::AssignDeref { carrier, value } => {
+                    self.deref_assignment(carrier, value, &mut statements)?
+                }
+                Stmt::Assign { name, value } => {
+                    if let Some(pending) = self.pending_reference(name)? {
+                        // Only the already known dereference result supplies a scalar
+                        // type here. Later uses never contribute inference evidence.
+                        let scalar = if matches!(value, Expr::Deref { .. }) {
+                            self.scalar_hint(value)?.filter(|ty| {
+                                matches!(
+                                    ty,
+                                    ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool | ir::Ty::Unit
+                                )
+                            })
+                        } else {
+                            None
+                        };
+                        let value = self.expr(value)?;
+                        let flow = self.flow(value);
+                        if !matches!(flow.ty, ir::Ty::Ref { .. })
+                            && scalar.as_ref() != Some(&flow.ty)
+                        {
+                            return Err("untyped deferred declarations require an independently known reference or scalar dereference type; general backward inference is unsupported".into());
+                        }
+                        let local = ir::LocalId(self.locals.len());
+                        let key = name
+                            .checked_key(self.names()?)?
+                            .ok_or("missing assignment local key")?;
+                        let text = name.diagnostic(self.names()?)?;
+                        self.charge_node(
+                            std::mem::size_of::<ir::LocalDecl>() + text.len() * 2 + 128,
+                        )?;
+                        let declaration = &mut self.pending_references[pending];
+                        declaration.local = Some(local);
+                        self.locals.push(ir::LocalDecl {
+                            name: text,
+                            ty: flow.ty,
+                            mutable: declaration.mutable,
+                        });
+                        self.scopes[declaration.scope].insert(key, local);
+                        statements.push(ir::Stmt::Assign { local, value });
+                        live &= flow.completes;
+                        continue;
+                    }
+                    let local = self.lookup(name)?;
+                    let declaration = &self.locals[local.0];
+                    let t = declaration.ty.clone();
+                    let value = self.expr_expected(value, Some(&t))?;
+                    let f = self.flow(value);
+                    self.require(&f, &t)?;
+                    (ir::Stmt::Assign { local, value }, f.completes)
+                }
+                Stmt::AssignIndex {
+                    array,
+                    index,
+                    value,
+                } => {
+                    let (array, ty, writable) = self.checked_place(array)?;
+                    if array.projection.contains(&ir::Projection::Deref) {
+                        return Err("runtime indexed access through references is unsupported in B1; snapshot a Copy referent first".into());
+                    }
+                    if !writable {
+                        return Err("runtime index assignment requires a mutable place".into());
+                    }
+                    let ir::Ty::Array { element, .. } = &ty else {
+                        return Err("runtime index assignment requires an array".into());
+                    };
+                    let value = self.expr_expected(value, Some(element))?;
+                    let flow = self.flow(value);
+                    self.require(&flow, element)?;
+                    let index = self.expr_expected_when(
+                        index,
+                        self.reachable && flow.completes,
+                        Some(&ir::Ty::Int(ir::IntTy::Usize)),
+                    )?;
+                    let index_flow = self.flow(index);
+                    self.require_index(&index_flow)?;
+                    (
+                        ir::Stmt::AssignIndex {
+                            array,
+                            index,
+                            value,
+                        },
+                        flow.completes && index_flow.completes,
+                    )
+                }
+                Stmt::AssignOp { place, op, value } => {
+                    let (place, ty, _) = self.checked_place(place)?;
+                    let (value, flow) = self.compound_value(*op, &ty, value)?;
+                    (
+                        ir::Stmt::AssignOp {
+                            place,
+                            op: *op,
+                            value,
+                        },
+                        flow.completes,
+                    )
+                }
+                Stmt::AssignIndexOp {
+                    array,
+                    index,
+                    op,
+                    value,
+                } => {
+                    let (mut array, mut ty, mut writable) = self.checked_place(array)?;
+                    if let ir::Ty::Ref { kind, referent } = &ty {
+                        if array.projection.len() >= 128 {
+                            return Err(
+                                "normalized place projection nesting exceeds limit128".into()
+                            );
+                        }
+                        writable = *kind == ir::BorrowKind::Mut;
+                        ty = referent.as_ref().clone();
+                        array.projection.push(ir::Projection::Deref);
+                    }
+                    if !writable {
+                        return Err("compound index assignment requires a mutable place; shared references cannot write".into());
+                    }
+                    let ir::Ty::Array { element, .. } = ty else {
+                        return Err("compound index assignment requires an array".into());
+                    };
+                    // Retain the place rather than reading/copying the referent.
+                    // Lowering snapshots RHS, then index, then resolves this
+                    // current carrier and performs the checked read/write.
+                    let (value, flow) = self.compound_value(*op, &element, value)?;
+                    let index = self.expr_expected_when(
+                        index,
+                        self.reachable && flow.completes,
+                        Some(&ir::Ty::Int(ir::IntTy::Usize)),
+                    )?;
+                    let index_flow = self.flow(index);
+                    self.require_index(&index_flow)?;
+                    (
+                        ir::Stmt::AssignIndexOp {
+                            array,
+                            index,
+                            op: *op,
+                            value,
+                        },
+                        flow.completes && index_flow.completes,
+                    )
+                }
+                Stmt::AssignPlace { place, value } => {
+                    let (place, ty, writable) = self.checked_place(place)?;
+                    if !place.projection.is_empty()
+                        && !writable
+                        && !place.projection.contains(&ir::Projection::Deref)
+                    {
+                        return Err(
+                            "assignment requires a mutable place; shared references cannot write"
+                                .into(),
+                        );
+                    }
+                    let value = self.expr_expected(value, Some(&ty))?;
+                    let flow = self.flow(value);
+                    self.require(&flow, &ty)?;
+                    (ir::Stmt::AssignPlace { place, value }, flow.completes)
+                }
+                Stmt::Expr(e) | Stmt::ImplicitExpr(e) => {
+                    let value = self.expr(e)?;
+                    let f = self.flow(value);
+                    if matches!(s, Stmt::ImplicitExpr(_)) {
+                        self.require(&f, &ir::Ty::Unit)?;
+                    }
+                    (ir::Stmt::Expr(value), f.completes)
+                }
+                Stmt::Return(e) => {
+                    let result_ty = self.result.clone();
+                    let value = e
+                        .as_ref()
+                        .map(|e| self.expr_expected(e, Some(&result_ty)))
+                        .transpose()?;
+                    let f = value.map_or(Flow::value(ir::Ty::Unit), |e| self.flow(e));
+                    self.require(&f, &self.result)?;
+                    (ir::Stmt::Return(value), false)
+                }
+                Stmt::While {
+                    label,
+                    condition,
+                    body,
+                } => {
+                    // Never skip a condition's target barrier to an outer loop.
+                    let id = self.enter_loop(false);
+                    let key = self.label_key(*label)?;
+                    self.loops.last_mut().unwrap().label = key;
+                    let condition = self.expr(condition)?;
+                    let f = self.flow(condition);
+                    self.require(&f, &ir::Ty::Bool)?;
+                    self.loops.last_mut().unwrap().checking_condition = false;
+                    let (body, bf) = self.block(body)?;
+                    self.require(&bf, &ir::Ty::Unit)?;
+                    self.loops.pop();
+                    (
+                        ir::Stmt::While {
+                            id,
+                            condition,
+                            body,
+                        },
+                        f.completes,
+                    )
+                }
+            };
+            if let Some(cap) = self.canonical {
+                cap.record_emission(s, statements.len())?;
+            }
+            statements.push(statement);
+            live &= completes;
+        }
+        self.reachable = entered_reachable && live;
+        let tail = b
+            .tail
+            .as_ref()
+            .map(|e| self.expr_with_expectation(e, expectation))
+            .transpose()?;
+        self.reachable = entered_reachable;
+        let mut flow = tail.map_or_else(
+            || {
+                if live {
+                    Flow::value(ir::Ty::Unit)
+                } else {
+                    Flow::never()
+                }
+            },
+            |e| self.flow(e),
+        );
+        flow.completes &= live;
+        let count = self.pending_references.len() - pending_start;
+        if let Some(plan) = &self.signatures.plan {
+            plan.budget.charge_work(
+                count
+                    .checked_mul(statements.len().saturating_add(count))
+                    .ok_or("pending declaration insertion work overflow")?,
+            )?;
+        }
+        self.charge_node(count.saturating_mul(std::mem::size_of::<ir::Stmt>() * 4))?;
+        for (offset, pending) in self.pending_references.drain(pending_start..).enumerate() {
+            let local = pending
+                .local
+                .ok_or("untyped deferred reference declaration remains underconstrained")?;
+            let position = pending
+                .position
+                .checked_add(offset)
+                .ok_or("pending declaration position overflow")?;
+            if let Some(cap) = self.canonical {
+                cap.shift_root_emissions(b, position)?;
+            }
+            statements.insert(position, ir::Stmt::Declare { local });
+        }
+        self.scopes.pop();
+        Ok((ir::Block { statements, tail }, flow))
+    }
+    pub(super) fn expr(&mut self, e: &Expr) -> Result<ir::ExprId, String> {
+        self.expr_expected(e, None)
+    }
+    pub(super) fn expr_expected(
+        &mut self,
+        e: &Expr,
+        expected: Option<&ir::Ty>,
+    ) -> Result<ir::ExprId, String> {
+        self.expr_with_expectation(e, expected.into())
+    }
+    pub(super) fn expr_with_expectation(
+        &mut self,
+        e: &Expr,
+        expectation: Expectation<'_>,
+    ) -> Result<ir::ExprId, String> {
+        if let Some(id) = self.builtin_slice_len(e)? {
+            if let Some(cap) = self.canonical {
+                cap.record_builtin_len(e, id, &self.exprs)?;
+            }
+            return Ok(id);
+        }
+        let result = self.expr_with_expectation_inner(e, expectation)?;
+        let result = self.record_original_call(e, result)?;
+        match expectation.hard() {
+            Some(expected)
+                if expected.shared_byte_slice()
+                    && self.exprs[result.0].ty.shared_byte_array_len().is_some() =>
+            {
+                self.coerce_shared_byte_array_to_slice(result, expected)
+            }
+            _ => Ok(result),
+        }
+    }
+    /// Expected-site unsizing of exactly shared `&[u8; N]` to shared `&[u8]`.
+    /// The operand keeps its own identity (including any recorded original call);
+    /// the wrapper is recorded separately with its exact operand for replay.
+    pub(super) fn coerce_shared_byte_array_to_slice(
+        &mut self,
+        value: ir::ExprId,
+        expected: &ir::Ty,
+    ) -> Result<ir::ExprId, String> {
+        if !expected.shared_byte_slice() {
+            return Err("array-to-slice coercion target must be &[u8]".into());
+        }
+        let source = &self.exprs[value.0];
+        if source.ty.shared_byte_array_len().is_none() {
+            return Err("array-to-slice coercion requires a shared &[u8; N] operand".into());
+        }
+        let completion = source.completion;
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: ir::Ty::shared_byte_slice_ty(),
+            completion,
+            kind: ir::ExprKind::ArrayToSlice { reference: value },
+        });
+        if let Some(cap) = self.canonical {
+            cap.record_unsize(id, value)?;
+        }
+        Ok(id)
+    }
+    /// Builtin `.len()` only on an exactly typed shared `&[u8]` receiver with
+    /// zero arguments; every other `len` goes through ordinary method resolution.
+    pub(super) fn builtin_slice_len(&mut self, e: &Expr) -> Result<Option<ir::ExprId>, String> {
+        let Expr::MethodCall { receiver, .. } = e else {
+            return Ok(None);
+        };
+        if !slice_len_candidate(e, self.names()?)?
+            || !self
+                .scalar_hint(receiver)?
+                .is_some_and(|ty| ty.shared_byte_slice())
+        {
+            return Ok(None);
+        }
+        let slice = self.expr(receiver)?;
+        let flow = self.flow(slice);
+        if !flow.ty.shared_byte_slice() {
+            return Err("builtin slice length receiver changed type".into());
+        }
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: ir::Ty::Int(ir::IntTy::Usize),
+            completion: if flow.completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            },
+            kind: ir::ExprKind::SliceLen { slice },
+        });
+        Ok(Some(id))
+    }
+    pub(super) fn slice_index(
+        &mut self,
+        slice: ir::ExprId,
+        index: &Expr,
+    ) -> Result<ir::ExprId, String> {
+        let source = self.flow(slice);
+        let index = self.expr_expected_when(
+            index,
+            self.reachable && source.completes,
+            Some(&ir::Ty::Int(ir::IntTy::Usize)),
+        )?;
+        self.slice_index_checked(slice, index)
+    }
+    pub(super) fn slice_index_checked(
+        &mut self,
+        slice: ir::ExprId,
+        index: ir::ExprId,
+    ) -> Result<ir::ExprId, String> {
+        let source = self.flow(slice);
+        let index_flow = self.flow(index);
+        self.require_index(&index_flow)?;
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: ir::Ty::Int(ir::IntTy::U8),
+            completion: if source.completes && index_flow.completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            },
+            kind: ir::ExprKind::SliceIndex { slice, index },
+        });
+        Ok(id)
+    }
+    pub(super) fn record_original_call(
+        &mut self,
+        e: &Expr,
+        result: ir::ExprId,
+    ) -> Result<ir::ExprId, String> {
+        if matches!(
+            e,
+            Expr::Call { .. }
+                | Expr::MethodCall { .. }
+                | Expr::AssociatedCall { .. }
+                | Expr::TraitCall { .. }
+        ) && let Some(cap) = self.canonical
+        {
+            // Primitive rvalue receivers use the existing single-evaluation block
+            // wrapper. The original method occurrence binds its tail call, not
+            // the wrapper expression, while the wrapper remains in the IR.
+            let call = match (e, &self.exprs[result.0].kind) {
+                (Expr::MethodCall { .. }, ir::ExprKind::Block(block)) => block
+                    .tail
+                    .ok_or("canonical method wrapper lost its tail call")?,
+                _ => result,
+            };
+            cap.record_call(e, call, &self.exprs[call.0].kind)?;
+        }
+        Ok(result)
+    }
+    pub(super) fn expr_with_expectation_inner(
+        &mut self,
+        e: &Expr,
+        expectation: Expectation<'_>,
+    ) -> Result<ir::ExprId, String> {
+        if let Expr::Apply { path, value } = e {
+            let previous = self.applications.borrow().len();
+            self.push_application(path, application_namespace(value)?)?;
+            let result = self.expr_with_expectation(value, expectation);
+            self.applications.borrow_mut().truncate(previous);
+            return result;
+        }
+        if let Expr::Cast { value, target } = e {
+            return self.cast_expression(value, target);
+        }
+        if matches!(
+            e,
+            Expr::TraitCall { .. } | Expr::MethodCall { .. } | Expr::AssociatedCall { .. }
+        ) {
+            return self.associated_expression(e);
+        }
+        self.expr_without_cast(e, expectation)
+    }
+    pub(super) fn validate_borrow_referent(
+        &self,
+        _kind: ir::BorrowKind,
+        referent: &ir::Ty,
+    ) -> Result<(), String> {
+        if referent.contains_slice() {
+            return Err("unsupported: borrowing or reborrowing slice places".into());
+        }
+        self.validate_value_carriers(referent)
+    }
+    pub(super) fn borrow_expression(
+        &mut self,
+        kind: ir::BorrowKind,
+        place: ir::Place,
+    ) -> Result<ir::ExprId, String> {
+        let referent = ir::projected_ty(&self.locals[place.local.0].ty, &place.projection)?.clone();
+        self.validate_borrow_referent(kind, &referent)?;
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: ir::Ty::Ref {
+                kind,
+                referent: Arc::new(referent),
+            },
+            completion: ir::Completion::Returns,
+            kind: ir::ExprKind::Borrow {
+                kind,
+                place,
+                timing: ir::BorrowTiming::Immediate,
+            },
+        });
+        Ok(id)
+    }
+    pub(super) fn call_argument(
+        &mut self,
+        source: &Expr,
+        expected: &ir::Ty,
+        reachable: bool,
+    ) -> Result<(ir::ExprId, Option<ir::ImplicitBorrowKind>), String> {
+        if let (
+            Expr::Var(name),
+            ir::Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent,
+            },
+        ) = (source, expected)
+        {
+            let local = self.lookup(name)?;
+            if let ir::Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent: actual,
+            } = &self.locals[local.0].ty
+            {
+                let budget = &self
+                    .signatures
+                    .plan
+                    .as_ref()
+                    .ok_or("call requires plan")?
+                    .budget;
+                if metered_type_equal(actual, referent, budget, 0)? {
+                    let carrier = self.expr(source)?;
+                    let id = self.borrow_expression(
+                        ir::BorrowKind::Mut,
+                        ir::Place {
+                            local,
+                            projection: vec![ir::Projection::Deref],
+                        },
+                    )?;
+                    return Ok((
+                        id,
+                        Some(ir::ImplicitBorrowKind::MutableArgumentReborrow { carrier }),
+                    ));
+                }
+            }
+        }
+        self.expr_expected_when(source, reachable, Some(expected))
+            .map(|id| (id, None))
+    }
+    pub(super) fn finish_checked_call(
+        &mut self,
+        target: ir::Callee,
+        name: impl LocalInput,
+        signature: ir::Signature,
+        source_args: &[Expr],
+        type_actual_regions: Arc<[ir::TypeActualRegion]>,
+        receiver: Option<(ir::ExprId, Option<ir::ImplicitBorrowKind>)>,
+    ) -> Result<ir::ExprId, String> {
+        let name = name.diagnostic(self.names()?)?;
+        let plan = self
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("call evidence requires registry")?;
+        // Resolve under the original caller facts before recording ordinary
+        // actuals. Trait Self is not an ordinary source type argument, but a
+        // selected recipe may have genuine ordinary arguments of its own.
+        let (target, signature) = if let ir::Callee::TraitItem(call) = &target {
+            let facts = self
+                .facts()
+                .validated()
+                .ok_or("trait call evidence requires validated facts")?;
+            facts
+                .validate_signature(ir::SignatureSubject::Call(&target), &signature)
+                .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
+            let resolved = facts
+                .service()
+                .resolve_trait_call(call, facts)
+                .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
+            let signature = resolved.signature();
+            plan.budget.charge_work(
+                signature
+                    .params
+                    .len()
+                    .checked_add(resolved.callee().type_arguments().len())
+                    .and_then(|work| work.checked_add(1))
+                    .ok_or("resolved call evidence metadata work overflow")?,
+            )?;
+            self.charge_node(
+                signature
+                    .params
+                    .len()
+                    .checked_mul(std::mem::size_of::<ir::Ty>())
+                    .and_then(|bytes| bytes.checked_add(std::mem::size_of::<ir::Signature>()))
+                    .and_then(|bytes| bytes.checked_add(std::mem::size_of::<ir::Callee>()))
+                    .ok_or("resolved call evidence metadata allocation overflow")?,
+            )?;
+            facts
+                .validate_signature(ir::SignatureSubject::Call(resolved.callee()), signature)
+                .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
+            (resolved.callee().clone(), signature.clone())
+        } else {
+            (target, signature)
+        };
+        let actuals = match &target {
+            ir::Callee::Direct(target) => target.type_args.as_ref(),
+            ir::Callee::TraitItem(call) => call.method_args.as_ref(),
+        };
+        if actuals.iter().any(ir::Ty::contains_slice) {
+            return Err("unsupported: slice generic arguments".into());
+        }
+        plan.budget.charge_work(type_actual_regions.len())?;
+        self.charge_node(
+            type_actual_regions
+                .len()
+                .checked_mul(4 * std::mem::size_of::<ir::TypeActualRegion>() + 64)
+                .ok_or("call region evidence allocation overflow")?,
+        )?;
+        let mut region_rows = type_actual_regions.to_vec();
+        for (argument, ty) in actuals.iter().enumerate() {
+            for location in ir::carrier_locations(ty, &plan.budget)?.iter() {
+                if !matches!(location.channel, ir::CarrierChannel::Fixed(_)) {
+                    continue;
+                }
+                plan.budget.charge_work(region_rows.len())?;
+                if !region_rows
+                    .iter()
+                    .any(|row| row.argument == argument && row.location == *location)
+                {
+                    self.charge_node(4 * std::mem::size_of::<ir::TypeActualRegion>() + 64)?;
+                    region_rows.push(ir::TypeActualRegion {
+                        argument,
+                        location: location.clone(),
+                        source: ir::ActualRegion::Elided,
+                    });
+                }
+            }
+        }
+        let type_actual_regions = region_rows.into();
+        let offset = usize::from(receiver.is_some());
+        if signature.params.len() != source_args.len() + offset {
+            return Err(format!("wrong arity for {name:?}"));
+        }
+        self.infer_storage(
+            source_args
+                .len()
+                .checked_mul(4)
+                .and_then(|n| n.checked_add(8))
+                .ok_or("call allocation overflow")?,
+        )?;
+        let mut arguments = Vec::with_capacity(signature.params.len());
+        let mut pending = Vec::with_capacity(signature.params.len());
+        self.charge_node(
+            signature
+                .params
+                .len()
+                .checked_mul(4 * std::mem::size_of::<ir::CallArgumentTrace>() + 64)
+                .ok_or("call trace allocation overflow")?,
+        )?;
+        // This signature is the original source-stage signature. Inference may
+        // not introduce new structural reference actuals, so a later argument
+        // cannot retroactively make an opaque parameter a firm Ref expectation.
+        let identity = match self.canonical {
+            Some(cap) => cap.identity_arguments(source_args)?,
+            None => false,
+        };
+        if identity && (receiver.is_some() || source_args.len() != 1) {
+            return Err("shared replay identity argument shape changed".into());
+        }
+        let expectations = signature
+            .params
+            .iter()
+            .map(|ty| match ty {
+                ir::Ty::Ref { kind, .. } if !identity => {
+                    ir::CallExpectation::FirmReference { kind: *kind }
+                }
+                _ => ir::CallExpectation::NoFirmReference,
+            })
+            .collect::<Vec<_>>();
+        let mut completes = true;
+        if let Some((id, reason)) = receiver {
+            self.require(&self.flow(id), &signature.params[0])?;
+            completes = self.flow(id).completes;
+            arguments.push(id);
+            if let Some(reason) = reason {
+                pending.push((id, 0, reason));
+            }
+        }
+        for (i, (source, ty)) in source_args
+            .iter()
+            .zip(&signature.params[offset..])
+            .enumerate()
+        {
+            let (id, reason) = if identity {
+                (self.expr(source)?, None)
+            } else {
+                self.call_argument(source, ty, self.reachable && completes)?
+            };
+            let flow = self.flow(id);
+            self.require(&flow, ty)?;
+            completes &= flow.completes;
+            arguments.push(id);
+            if let Some(reason) = reason {
+                pending.push((id, i + offset, reason));
+            }
+        }
+        for ty in signature
+            .params
+            .iter()
+            .chain(std::iter::once(&signature.result))
+        {
+            self.accessible(ty)?;
+        }
+        let id = ir::ExprId(self.exprs.len());
+        for (borrow, argument, reason) in pending {
+            let ir::ExprKind::Borrow { timing, .. } = &mut self.exprs[borrow.0].kind else {
+                return Err("invalid implicit borrow argument".into());
+            };
+            *timing = ir::BorrowTiming::TwoPhase {
+                activation: id,
+                argument,
+                reason,
+            };
+        }
+        let traces = arguments
+            .iter()
+            .enumerate()
+            .map(|(argument, value)| ir::CallArgumentTrace {
+                argument,
+                value: *value,
+                expectation: expectations[argument],
+            })
+            .collect::<Vec<_>>();
+        self.charge_node(4 * std::mem::size_of::<ir::CallEvidence>() + 64)?;
+        self.call_evidence.push(ir::CallEvidence {
+            call: id,
+            arguments: traces.into(),
+            type_actual_regions,
+        });
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>() + name.len())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: signature.result.clone(),
+            completion: if completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            },
+            kind: ir::ExprKind::Call {
+                target,
+                name: name.to_owned(),
+                args: arguments,
+                signature,
+            },
+        });
+        Ok(id)
+    }
+    pub(super) fn method_expression(
+        &mut self,
+        receiver: &Expr,
+        name: &AstIdent,
+        type_args: &[Type],
+        args: &[Expr],
+    ) -> Result<ir::ExprId, String> {
+        let plan = self
+            .signatures
+            .plan
+            .clone()
+            .ok_or("method call requires registry")?;
+        let ty = self
+            .scalar_hint(receiver)?
+            .ok_or("unsupported unresolved receiver type")?;
+        self.infer_storage(type_args.len())?;
+        let actuals = type_args
+            .iter()
+            .map(|t| self.checked_type_actual(t))
+            .collect::<Result<Vec<_>, _>>()?;
+        let selected = plan.select_method(
+            &ty,
+            name,
+            &actuals,
+            self.facts(),
+            &self.module,
+            &plan.budget,
+        )?;
+        let region_offset = match &selected.target {
+            ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
+            ir::Callee::TraitItem(_) => 0,
+        };
+        // Only primitive value temporaries have the approved lexical autoref extension.
+        if selected.depth == 0
+            && matches!(selected.adjustment, ReceiverAdjustment::SharedAutoref)
+            && matches!(
+                ty,
+                ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool | ir::Ty::Unit
+            )
+            && static_source_place(receiver).is_err()
+        {
+            let value = self.expr(receiver)?;
+            self.charge_node(std::mem::size_of::<ir::LocalDecl>() + 64)?;
+            let local = ir::LocalId(self.locals.len());
+            self.locals.push(ir::LocalDecl {
+                name: "$primitive_receiver".into(),
+                ty,
+                mutable: false,
+            });
+            let borrowed = self.borrow_expression(
+                ir::BorrowKind::Shared,
+                ir::Place {
+                    local,
+                    projection: Vec::new(),
+                },
+            )?;
+            let call = self.finish_checked_call(
+                selected.target,
+                name,
+                selected.signature,
+                args,
+                self.type_actual_regions(type_args, region_offset)?,
+                Some((borrowed, None)),
+            )?;
+            let result = self.exprs[call.0].ty.clone();
+            let completion = self.exprs[call.0].completion;
+            self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 128)?;
+            let id = ir::ExprId(self.exprs.len());
+            self.exprs.push(ir::TypedExpr {
+                ty: result,
+                completion,
+                kind: ir::ExprKind::Block(ir::Block {
+                    statements: vec![ir::Stmt::Let { local, value }],
+                    tail: Some(call),
+                }),
+            });
+            return Ok(id);
+        }
+        let adjusted = match selected.mode {
+            ReceiverKind::None => return Err("method has no receiver".into()),
+            ReceiverKind::Value { .. } => {
+                let mut id = self.expr(receiver)?;
+                for _ in 0..selected.depth {
+                    let ir::Ty::Ref { referent, .. } = &self.exprs[id.0].ty else {
+                        return Err("invalid receiver dereference".into());
+                    };
+                    let ty = referent.as_ref().clone();
+                    let completion = self.exprs[id.0].completion;
+                    self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                    let next = ir::ExprId(self.exprs.len());
+                    self.exprs.push(ir::TypedExpr {
+                        kind: ir::ExprKind::Deref { value: id },
+                        ty,
+                        completion,
+                    });
+                    id = next;
+                }
+                (id, None)
+            }
+            ReceiverKind::Borrowed { kind } => {
+                if matches!(selected.adjustment, ReceiverAdjustment::Identity)
+                    && (kind == ir::BorrowKind::Shared
+                        || (selected.depth == 0 && genuine_call(receiver)))
+                {
+                    let mut id = self.expr(receiver)?;
+                    for _ in 0..selected.depth {
+                        let ir::Ty::Ref { referent, .. } = &self.exprs[id.0].ty else {
+                            return Err("invalid receiver dereference".into());
+                        };
+                        let ty = referent.as_ref().clone();
+                        let completion = self.exprs[id.0].completion;
+                        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                        let next = ir::ExprId(self.exprs.len());
+                        self.exprs.push(ir::TypedExpr {
+                            kind: ir::ExprKind::Deref { value: id },
+                            ty,
+                            completion,
+                        });
+                        id = next;
+                    }
+                    (id, None)
+                } else {
+                    if genuine_call(receiver) {
+                        return Err(
+                            "unsupported: autoref of a reference-return call temporary".into()
+                        );
+                    }
+                    let source = static_source_place(receiver)?;
+                    let (mut place, _, _) = self.checked_place(&source)?;
+                    let derefs = selected.depth
+                        + usize::from(matches!(selected.adjustment, ReceiverAdjustment::Identity));
+                    self.charge_node(derefs * std::mem::size_of::<ir::Projection>() + 64)?;
+                    place
+                        .projection
+                        .extend(std::iter::repeat_n(ir::Projection::Deref, derefs));
+                    let id = self.borrow_expression(kind, place)?;
+                    (
+                        id,
+                        if kind == ir::BorrowKind::Mut {
+                            Some(ir::ImplicitBorrowKind::MutableReceiver)
+                        } else {
+                            None
+                        },
+                    )
+                }
+            }
+        };
+        self.finish_checked_call(
+            selected.target,
+            name,
+            selected.signature,
+            args,
+            self.type_actual_regions(type_args, region_offset)?,
+            Some(adjusted),
+        )
+    }
+    pub(super) fn associated_expression(
+        &mut self,
+        expression: &Expr,
+    ) -> Result<ir::ExprId, String> {
+        if let Expr::MethodCall {
+            receiver,
+            name,
+            type_args,
+            args,
+        } = expression
+        {
+            return self.method_expression(receiver, name, type_args, args);
+        }
+        let plan = self
+            .signatures
+            .plan
+            .clone()
+            .ok_or("associated call requires registry")?;
+        let empty = Vec::new();
+        let (owner, name, type_args, args, receiver) = match expression {
+            Expr::MethodCall {
+                receiver,
+                name,
+                type_args,
+                args,
+            } => {
+                let ty = self
+                    .scalar_hint(receiver)?
+                    .ok_or("unsupported unresolved receiver type; use a typed local")?;
+                let owner = match ty {
+                    ir::Ty::Ref { referent, .. } => referent.as_ref().clone(),
+                    ty => ty,
+                };
+                (owner, name, type_args, args, Some(receiver.as_ref()))
+            }
+            Expr::AssociatedCall {
+                owner,
+                name,
+                type_args,
+                args,
+            } => (
+                checked_local_ty(owner, self.signatures)?,
+                name,
+                type_args,
+                args,
+                None,
+            ),
+            Expr::TraitCall {
+                owner, name, args, ..
+            } => (
+                checked_local_ty(owner, self.signatures)?,
+                name,
+                &empty,
+                args,
+                None,
+            ),
+            _ => return Err("not an associated call".into()),
+        };
+        self.infer_storage(type_args.len() + args.len() + 1)?;
+        let actuals = type_args
+            .iter()
+            .map(|t| self.checked_type_actual(t))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (target, signature, mode) = if let Expr::TraitCall { trait_path, .. } = expression {
+            let tid = plan.resolve_trait_path(trait_path)?;
+            plan.select_trait(
+                &owner,
+                tid,
+                name,
+                &actuals,
+                self.facts(),
+                false,
+                &plan.budget,
+            )?
+            .ok_or("trait obligation not proven")?
+        } else {
+            plan.select_associated(
+                &owner,
+                name,
+                &actuals,
+                self.facts(),
+                &self.module,
+                receiver.is_some(),
+                &plan.budget,
+            )?
+        };
+        let adjusted = if let Some(receiver) = receiver {
+            match mode {
+                ReceiverKind::None => return Err("associated function has no receiver".into()),
+                ReceiverKind::Value { .. } => Some((self.expr(receiver)?, None)),
+                ReceiverKind::Borrowed { kind } => {
+                    if genuine_call(receiver) {
+                        let id = self.expr(receiver)?;
+                        Some((id, None))
+                    } else {
+                        let source = static_source_place(receiver)?;
+                        let (mut place, ty, _) = self.checked_place(&source)?;
+                        if matches!(ty, ir::Ty::Ref { .. }) {
+                            if place.projection.contains(&ir::Projection::Deref) {
+                                return Err(
+                                    "multiple receiver autodereferences are unsupported".into()
+                                );
+                            }
+                            place.projection.push(ir::Projection::Deref);
+                        }
+                        let id = self.borrow_expression(kind, place)?;
+                        Some((
+                            id,
+                            if kind == ir::BorrowKind::Mut {
+                                Some(ir::ImplicitBorrowKind::MutableReceiver)
+                            } else {
+                                None
+                            },
+                        ))
+                    }
+                }
+            }
+        } else {
+            None
+        };
+        let region_offset = match &target {
+            ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
+            ir::Callee::TraitItem(_) => 0,
+        };
+        self.finish_checked_call(
+            target,
+            name,
+            signature,
+            args,
+            self.type_actual_regions(type_args, region_offset)?,
+            adjusted,
+        )
+    }
+    pub(super) fn cast_expression(
+        &mut self,
+        value: &Expr,
+        target: &Type,
+    ) -> Result<ir::ExprId, String> {
+        let target = checked_local_ty(target, self.signatures)?;
+        let numeric = ir::NumTy::of(&target).ok_or("unsupported cast target")?;
+        let value = match numeric {
+            ir::NumTy::Int(to) => {
+                self.expr_with_expectation(value, Expectation::CastableToInt(to))?
+            }
+            ir::NumTy::Float(_) => self.expr(value)?,
+        };
+        let source = self.flow(value);
+        let from = ir::NumTy::of(&source.ty).ok_or("unsupported cast source")?;
+        let kind = match (from, numeric) {
+            (ir::NumTy::Int(_), ir::NumTy::Int(to)) => ir::ExprKind::IntCast { value, to },
+            _ => ir::ExprKind::FloatCast { value, to: numeric },
+        };
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            kind,
+            ty: target,
+            completion: if source.completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            },
+        });
+        Ok(id)
+    }
+    pub(super) fn expr_without_cast(
+        &mut self,
+        e: &Expr,
+        expectation: Expectation<'_>,
+    ) -> Result<ir::ExprId, String> {
+        // A castable hint is not a hard result constraint or reference coercion site.
+        let expected = expectation.hard();
+        if let Some(ir::Ty::Ref { kind, referent }) = expected {
+            if let Expr::Var(name) = e {
+                let local = self.lookup(name)?;
+                if let ir::Ty::Ref {
+                    kind: ir::BorrowKind::Mut,
+                    referent: actual,
+                } = &self.locals[local.0].ty
+                    && actual == referent
+                {
+                    // Reborrow the original carrier before any value read can move it.
+                    return self.expr_expected(
+                        &Expr::Borrow {
+                            kind: *kind,
+                            place: Place {
+                                local: static_source_place(e)?.local,
+                                fields: vec![FieldSelector::Deref],
+                            },
+                        },
+                        expected,
+                    );
+                }
+            }
+            if matches!(e, Expr::Loop { .. }) {
+                return Err("reference expected-context propagation through loop results is unsupported; use an explicit borrow/reborrow".into());
+            }
+        }
+        let (kind, flow) = match e {
+            Expr::Cast { .. } => return Err("cast bypassed expression dispatcher".into()),
+            Expr::Borrow { kind, place } => {
+                let (place, referent, _writable) = self.checked_place(place).map_err(|error|format!("B1 borrow requires an existing local-root static place; borrowed rvalues/non-local targets are unsupported: {error}"))?;
+                self.validate_borrow_referent(*kind, &referent)?;
+                (
+                    ir::ExprKind::Borrow {
+                        kind: *kind,
+                        place,
+                        timing: ir::BorrowTiming::Immediate,
+                    },
+                    Flow::value(ir::Ty::Ref {
+                        kind: *kind,
+                        referent: std::sync::Arc::new(referent),
+                    }),
+                )
+            }
+            Expr::Deref { value } => {
+                let mut root = value.as_ref();
+                let mut depth = 1;
+                while let Expr::Deref { value } = root {
+                    if depth >= 128 {
+                        return Err("reference dereference depth exceeds limit128".into());
+                    }
+                    if let Some(plan) = &self.signatures.plan {
+                        plan.budget.charge_work(1)?;
+                    }
+                    depth += 1;
+                    root = value;
+                }
+                if !matches!(root, Expr::Var(_)) && !genuine_call(root) {
+                    // Static component carriers use the same checked projection
+                    // authority as field receivers, without an invented temporary.
+                    let source = static_source_place(e)?;
+                    self.checked_place(&source)?;
+                }
+                let value = self.expr(value)?;
+                let flow = self.flow(value);
+                let ir::Ty::Ref { referent, .. } = &flow.ty else {
+                    return Err("dereference requires a reference".into());
+                };
+                let ty = referent.as_ref().clone();
+                self.accessible(&ty)?;
+                (
+                    ir::ExprKind::Deref { value },
+                    Flow {
+                        ty,
+                        completes: flow.completes,
+                    },
+                )
+            }
+            Expr::Array(elements) => {
+                if elements.len() > ir::MAX_ARRAY_LEN {
+                    return Err("array literal exceeds supported length".into());
+                }
+                let hint = match expected {
+                    Some(ir::Ty::Array { element, .. }) => Some(element.as_ref()),
+                    _ => None,
+                };
+                if elements.is_empty() && hint.is_none() {
+                    return Err("empty array literal inference is unsupported; provide a concrete expected array type".into());
+                }
+                let mut element = hint.cloned().unwrap_or(ir::Ty::Never);
+                let mut values = Vec::new();
+                let mut completes = true;
+                for expression in elements {
+                    let value =
+                        self.expr_expected_when(expression, self.reachable && completes, hint)?;
+                    let flow = self.flow(value);
+                    completes &= flow.completes;
+                    if let Some(expected) = hint {
+                        self.require(&flow, expected)?;
+                    } else {
+                        element = self.join(&element, &flow.ty, "array elements")?;
+                    }
+                    values.push(value);
+                }
+                (
+                    ir::ExprKind::Array(values),
+                    Flow {
+                        ty: ir::Ty::Array {
+                            element: std::sync::Arc::new(element),
+                            len: elements.len(),
+                        },
+                        completes,
+                    },
+                )
+            }
+            Expr::Repeat { value, len } => {
+                if *len > ir::MAX_ARRAY_LEN {
+                    return Err("array repeat exceeds supported length".into());
+                }
+                let hint = match expected {
+                    Some(ir::Ty::Array { element, .. }) => Some(element.as_ref()),
+                    _ => None,
+                };
+                let value = self.expr_expected(value, hint)?;
+                let flow = self.flow(value);
+                if let Some(expected) = hint {
+                    self.require(&flow, expected)?;
+                }
+                let element = hint.cloned().unwrap_or(flow.ty);
+                if *len > 1 && !self.facts().must_copy(&element)? {
+                    return Err("array repeat of more than one element requires Copy".into());
+                }
+                (
+                    ir::ExprKind::Repeat { value, len: *len },
+                    Flow {
+                        ty: ir::Ty::Array {
+                            element: std::sync::Arc::new(element),
+                            len: *len,
+                        },
+                        completes: flow.completes,
+                    },
+                )
+            }
+            Expr::DynamicIndex { base, index } => {
+                if Self::dynamic_place(base) {
+                    return Err("nested/chained runtime indexed place bases are unsupported; snapshot the row first".into());
+                }
+                let base = self.expr(base)?;
+                if self.flow(base).ty.shared_byte_slice() {
+                    return self.slice_index(base, index);
+                }
+                if self.deref_source(base) {
+                    return Err("runtime indexed access through references is unsupported in B1; snapshot a Copy referent first".into());
+                }
+                let source = self.flow(base);
+                let ir::Ty::Array { element, .. } = &source.ty else {
+                    return Err("runtime indexing requires an array".into());
+                };
+                let ty = element.as_ref().clone();
+                self.accessible(&ty)?;
+                let index = self.expr_expected_when(
+                    index,
+                    self.reachable && source.completes,
+                    Some(&ir::Ty::Int(ir::IntTy::Usize)),
+                )?;
+                let index_flow = self.flow(index);
+                self.require_index(&index_flow)?;
+                (
+                    ir::ExprKind::DynamicIndex { base, index },
+                    Flow {
+                        ty,
+                        completes: source.completes && index_flow.completes,
+                    },
+                )
+            }
+            Expr::Index { base, index } => {
+                if Self::dynamic_place(base) {
+                    return Err("nested/chained runtime indexed place bases are unsupported; snapshot the row first".into());
+                }
+                let base = self.expr(base)?;
+                let flow = self.flow(base);
+                if flow.ty.shared_byte_slice() {
+                    // Constant slice indexes use the same runtime-checked read.
+                    let constant = ir::ExprId(self.exprs.len());
+                    self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                    self.exprs.push(ir::TypedExpr {
+                        ty: ir::Ty::Int(ir::IntTy::Usize),
+                        completion: ir::Completion::Returns,
+                        kind: ir::ExprKind::Int(ir::IntValue::usize(*index as u64)),
+                    });
+                    return self.slice_index_checked(base, constant);
+                }
+                let ty = self.index_type(&flow.ty, *index)?;
+                (
+                    ir::ExprKind::Index {
+                        base,
+                        index: *index,
+                    },
+                    Flow {
+                        ty,
+                        completes: flow.completes,
+                    },
+                )
+            }
+            Expr::EnumVariant {
+                name,
+                shape,
+                fields,
+            } => {
+                let (owner, variant_name) = self.split_variant(name)?;
+                self.infer_storage(fields.len())?;
+                if fields.iter().any(|(selector, _)| {
+                    matches!(
+                        selector,
+                        FieldSelector::Deref | FieldSelector::ConstantIndex(_)
+                    )
+                }) {
+                    return Err("unsupported constructor inference selector".into());
+                }
+                let evidence_fields = fields
+                    .iter()
+                    .map(|(selector, value)| {
+                        (
+                            match selector {
+                                FieldSelector::Named(name) => InferField::Named(name),
+                                FieldSelector::Tuple(index) => InferField::Tuple(*index),
+                                FieldSelector::Deref | FieldSelector::ConstantIndex(_) => {
+                                    unreachable!("constructor fields are named or tuple selectors")
+                                }
+                            },
+                            value,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let ir::Ty::Enum(ty) =
+                    self.constructor_type(&owner, Some(variant_name), &evidence_fields, expected)?
+                else {
+                    return Err("expected enum constructor".into());
+                };
+                let variant = self.variant_index(ty.def().source_decl, variant_name)?;
+                self.accessible(&ir::Ty::Enum(ty.clone()))?;
+                let definition = &ty.def().variants[variant];
+                if *shape != definition.shape
+                    && !(definition.shape == ir::VariantShape::Unit
+                        && *shape == ir::VariantShape::Struct
+                        && fields.is_empty())
+                {
+                    if *shape == ir::VariantShape::Unit
+                        && definition.shape == ir::VariantShape::Tuple
+                    {
+                        return Err("first-class tuple variant constructors are unsupported".into());
+                    }
+                    return Err(format!("variant constructor {name:?} has wrong shape"));
+                }
+                let mut seen = std::collections::HashSet::new();
+                let mut values = Vec::new();
+                let mut completes = true;
+                for (selector, value) in fields {
+                    let index = match selector {
+                        FieldSelector::Tuple(i) if definition.shape == ir::VariantShape::Tuple => {
+                            *i
+                        }
+                        FieldSelector::Named(n) => {
+                            self.member_index(ty.def().source_decl, Some(variant), *n)?
+                        }
+                        _ => return Err("invalid variant constructor selector".into()),
+                    };
+                    let field = definition
+                        .fields
+                        .get(index)
+                        .ok_or("variant constructor arity mismatch")?;
+                    if !seen.insert(index) {
+                        return Err("duplicate variant constructor field".into());
+                    }
+                    self.accessible(&field.ty)?;
+                    let value = self.expr_expected_when(
+                        value,
+                        self.reachable && completes,
+                        Some(&field.ty),
+                    )?;
+                    let flow = self.flow(value);
+                    self.require(&flow, &field.ty)?;
+                    completes &= flow.completes;
+                    values.push((index, value));
+                }
+                if seen.len() != definition.fields.len() {
+                    return Err("missing variant constructor fields".into());
+                }
+                (
+                    ir::ExprKind::EnumVariant {
+                        ty: ty.clone(),
+                        variant,
+                        fields: values,
+                    },
+                    Flow {
+                        ty: ir::Ty::Enum(ty),
+                        completes,
+                    },
+                )
+            }
+            Expr::Match { scrutinee, arms } => {
+                if arms.len() > 4096 {
+                    return Err("match arm count exceeds limit 4096".into());
+                }
+                let scrutinee = self.expr(scrutinee)?;
+                if self.deref_source(scrutinee)
+                    && arms.iter().any(|arm| {
+                        matches!(arm.pattern, Pattern::Path(_) | Pattern::Variant { .. })
+                    })
+                {
+                    return Err("enum downcasts after a dereference are unsupported in B1".into());
+                }
+                let source = self.flow(scrutinee);
+                let mut domain = source.ty.clone();
+                // A divergent operand can coerce to the concrete type named by
+                // a pattern without inventing a general inference variable.
+                if domain == ir::Ty::Never {
+                    for arm in arms {
+                        let hint = match &arm.pattern {
+                            Pattern::Path(name) | Pattern::Variant { name, .. } => {
+                                Some(ir::Ty::Enum(self.enum_variant(name)?.0))
+                            }
+                            Pattern::Bool(_) => Some(ir::Ty::Bool),
+                            Pattern::Int { literal, .. } => {
+                                Some(ir::Ty::Int(literal.suffix.unwrap_or(ir::IntTy::I32)))
+                            }
+                            Pattern::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
+                            _ => None,
+                        };
+                        if let Some(hint) = hint {
+                            domain = hint;
+                            break;
+                        }
+                    }
+                }
+                self.accessible(&domain)?;
+                if matches!(domain, ir::Ty::Ref { .. })
+                    && arms.iter().any(|arm| {
+                        !matches!(arm.pattern, Pattern::Wildcard | Pattern::Binding { .. })
+                    })
+                {
+                    return Err(
+                        "reference patterns and implicit match ergonomics are unsupported in B1"
+                            .into(),
+                    );
+                }
+                let mut catchall = false;
+                let mut covered = std::collections::HashSet::<u128>::new();
+                let mut checked = Vec::with_capacity(arms.len());
+                let mut result = ir::Ty::Never;
+                let mut completes = false;
+                for arm in arms {
+                    self.scopes.push(HashMap::new());
+                    let arm_pattern = self.pattern_source(&arm.pattern, &domain)?;
+                    let (pattern, key) = match arm_pattern {
+                        Pattern::Wildcard => (ir::MatchPattern::Wildcard, None),
+                        Pattern::Binding { name, mutable } => {
+                            let local = self.local(name, domain.clone(), *mutable)?;
+                            (ir::MatchPattern::Binding(local), None)
+                        }
+                        Pattern::Bool(value) => {
+                            if domain != ir::Ty::Bool {
+                                return Err(format!(
+                                    "bool match pattern does not match {domain:?}"
+                                ));
+                            }
+                            (ir::MatchPattern::Bool(*value), Some(u128::from(*value)))
+                        }
+                        Pattern::Int { literal, negative } => {
+                            if !matches!(domain, ir::Ty::Int(_)) {
+                                return Err(format!(
+                                    "integer match pattern does not match {domain:?}"
+                                ));
+                            }
+                            let value = resolve_integer(literal, *negative, Some(&domain))?;
+                            (ir::MatchPattern::Int(value), Some(value.bits))
+                        }
+                        Pattern::Tuple(fields) if fields.is_empty() => {
+                            if domain != ir::Ty::Unit {
+                                return Err(format!(
+                                    "unit match pattern does not match {domain:?}"
+                                ));
+                            }
+                            (ir::MatchPattern::Unit, Some(0))
+                        }
+                        Pattern::Path(_) | Pattern::Variant { .. } => {
+                            let (ty, variant, fields) =
+                                self.variant_pattern(arm_pattern, &domain)?;
+                            let mut names = std::collections::HashSet::new();
+                            let mut pending = Vec::new();
+                            let mut work = 0;
+                            let mut bindings = Vec::new();
+                            for (index, pattern) in fields {
+                                let mut path = vec![
+                                    ir::Projection::Downcast(ir::VariantId {
+                                        owner: ty.def().id,
+                                        index: variant,
+                                    }),
+                                    ir::Projection::Field(index),
+                                ];
+                                self.pattern_locals(
+                                    pattern,
+                                    &ty.def().variants[variant].fields[index].ty,
+                                    &mut path,
+                                    &mut names,
+                                    &mut pending,
+                                    &mut work,
+                                )?;
+                            }
+                            for binding in pending {
+                                let local =
+                                    self.local(binding.name, binding.ty, binding.mutable)?;
+                                bindings.push(ir::PatternBinding {
+                                    local,
+                                    projection: binding.projection,
+                                });
+                            }
+                            (
+                                ir::MatchPattern::EnumVariant {
+                                    ty,
+                                    variant,
+                                    bindings,
+                                },
+                                Some(variant as u128),
+                            )
+                        }
+                        Pattern::Apply { .. } => {
+                            return Err("pattern application normalization invariant".into());
+                        }
+                        Pattern::Tuple(_) | Pattern::Struct { .. } => {
+                            return Err(
+                                "aggregate destructuring match patterns are unsupported".into()
+                            );
+                        }
+                    };
+                    let fully_covered = match &domain {
+                        ir::Ty::Bool => covered.len() == 2,
+                        ir::Ty::Unit => covered.len() == 1,
+                        ir::Ty::Enum(ty) => covered.len() == ty.def().variants.len(),
+                        ir::Ty::Int(ty) => {
+                            ty.bits() < 64 && covered.len() as u64 == (1u64 << ty.bits())
+                        }
+                        _ => false,
+                    };
+                    let useful = !catchall
+                        && !fully_covered
+                        && key.is_none_or(|key| !covered.contains(&key));
+                    let body = self.expr_expected_when(
+                        &arm.body,
+                        self.reachable && source.completes && useful,
+                        expected,
+                    )?;
+                    self.scopes.pop();
+                    let arm_flow = self.flow(body);
+                    // Even unreachable arms impose their source type obligation.
+                    result = self.join(&result, &arm_flow.ty, "match arms")?;
+                    completes |= useful && arm_flow.completes;
+                    if let Some(key) = key {
+                        covered.insert(key);
+                    } else {
+                        catchall = true;
+                    }
+                    checked.push(ir::MatchArm { pattern, body });
+                }
+                let exhaustive = catchall
+                    || match &domain {
+                        ir::Ty::Never => true,
+                        ir::Ty::Bool => covered.len() == 2,
+                        ir::Ty::Unit => covered.len() == 1,
+                        ir::Ty::Enum(ty) => covered.len() == ty.def().variants.len(),
+                        ir::Ty::Int(ty) => {
+                            ty.bits() < 64 && covered.len() as u64 == (1u64 << ty.bits())
+                        }
+                        _ => false,
+                    };
+                if !exhaustive {
+                    return Err(format!("non-exhaustive match on {domain:?}"));
+                }
+                (
+                    ir::ExprKind::Match {
+                        scrutinee,
+                        arms: checked,
+                    },
+                    Flow {
+                        ty: result,
+                        completes: source.completes && completes,
+                    },
+                )
+            }
+            Expr::Tuple(fields) => {
+                if fields.is_empty() {
+                    return Err("empty tuples must use ()".into());
+                }
+                let mut values = Vec::with_capacity(fields.len());
+                let mut types = Vec::with_capacity(fields.len());
+                let mut completes = true;
+                for (index, field) in fields.iter().enumerate() {
+                    let hint = match expected {
+                        Some(ir::Ty::Tuple(types)) => types.get(index),
+                        _ => None,
+                    };
+                    let value =
+                        self.expr_expected_when(field, self.reachable && completes, hint)?;
+                    let flow = self.flow(value);
+                    completes &= flow.completes;
+                    types.push(flow.ty);
+                    values.push(value);
+                }
+                (
+                    ir::ExprKind::Tuple(values),
+                    Flow {
+                        ty: ir::Ty::Tuple(types.into()),
+                        completes,
+                    },
+                )
+            }
+            Expr::TraitCall { .. }
+            | Expr::Apply { .. }
+            | Expr::MethodCall { .. }
+            | Expr::AssociatedCall { .. } => {
+                return Err("application dispatcher invariant".into());
+            }
+            Expr::Struct { name, fields } => {
+                self.infer_storage(fields.len())?;
+                let evidence_fields = fields
+                    .iter()
+                    .map(|(name, value)| (InferField::Named(name), value))
+                    .collect::<Vec<_>>();
+                let ir::Ty::Struct(ty) =
+                    self.constructor_type(name, None, &evidence_fields, expected)?
+                else {
+                    return Err("expected struct constructor".into());
+                };
+                if !self.visible(&ty.def().visibility)? {
+                    return Err(format!("private struct {name:?}"));
+                }
+                let mut seen = std::collections::HashSet::new();
+                let mut values = Vec::with_capacity(fields.len());
+                let mut completes = true;
+                for (name, value) in fields {
+                    let (index, expected) =
+                        self.field_type(&ir::Ty::Struct(ty.clone()), &FieldSelector::Named(*name))?;
+                    if !seen.insert(index) {
+                        return Err(format!("duplicate field {name:?}"));
+                    }
+                    let value = self.expr_expected_when(
+                        value,
+                        self.reachable && completes,
+                        Some(&expected),
+                    )?;
+                    let flow = self.flow(value);
+                    self.require(&flow, &expected)?;
+                    completes &= flow.completes;
+                    values.push((index, value));
+                }
+                if seen.len() != ty.def().fields.len() {
+                    return Err(format!("missing fields in struct {}", ty.def().name));
+                }
+                (
+                    ir::ExprKind::Struct {
+                        ty: ty.clone(),
+                        fields: values,
+                    },
+                    Flow {
+                        ty: ir::Ty::Struct(ty),
+                        completes,
+                    },
+                )
+            }
+            Expr::Field { base, field } => {
+                let receiver = base.as_ref();
+                let mut base = self.expr(base)?;
+                let mut flow = self.flow(base);
+                if let ir::Ty::Ref { referent, .. } = &flow.ty {
+                    if !matches!(receiver, Expr::Var(_)) && !genuine_call(receiver) {
+                        // A projected carrier has the same authority as any other
+                        // static place. Validate its dereference without creating a
+                        // local or borrow, then read the already evaluated base once.
+                        let mut source = static_source_place(receiver)?;
+                        source.fields.push(FieldSelector::Deref);
+                        self.checked_place(&source)?;
+                    }
+                    let ty = referent.as_ref().clone();
+                    self.accessible(&ty)?;
+                    let deref = ir::ExprId(self.exprs.len());
+                    self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                    self.exprs.push(ir::TypedExpr {
+                        ty: ty.clone(),
+                        completion: self.exprs[base.0].completion,
+                        kind: ir::ExprKind::Deref { value: base },
+                    });
+                    base = deref;
+                    flow.ty = ty;
+                }
+                let (index, ty) = self.field_type(&flow.ty, field)?;
+                (
+                    ir::ExprKind::Field { base, index },
+                    Flow {
+                        ty,
+                        completes: flow.completes,
+                    },
+                )
+            }
+            Expr::Integer(literal) => {
+                let value = expectation.literal(literal, false)?;
+                (ir::ExprKind::Int(value), Flow::value(ir::Ty::Int(value.ty)))
+            }
+            Expr::Float(literal) => {
+                let ty = match (literal.suffix, expected) {
+                    (Some(ty), _) => ty,
+                    (None, Some(ir::Ty::Float(ty))) => *ty,
+                    _ => ir::FloatTy::F64,
+                };
+                let value = literal.value(ty, false)?;
+                (ir::ExprKind::Float(value), Flow::value(ir::Ty::Float(ty)))
+            }
+            Expr::Bool(value) => (ir::ExprKind::Bool(*value), Flow::value(ir::Ty::Bool)),
+            Expr::Var(n) => {
+                let local = self.lookup(n)?;
+                let ty = self.locals[local.0].ty.clone();
+                (
+                    ir::ExprKind::Local(local),
+                    Flow {
+                        completes: inhabited(&ty),
+                        ty,
+                    },
+                )
+            }
+            Expr::Println(text) => (
+                ir::ExprKind::Println(text.clone()),
+                Flow::value(ir::Ty::Unit),
+            ),
+            Expr::Unary { op, value } => {
+                if matches!(op, UnaryOp::Neg)
+                    && let Expr::Integer(literal) = value.as_ref()
+                {
+                    let value = expectation.literal(literal, true)?;
+                    let id = ir::ExprId(self.exprs.len());
+                    self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                    self.exprs.push(ir::TypedExpr {
+                        kind: ir::ExprKind::Int(value),
+                        ty: ir::Ty::Int(value.ty),
+                        completion: ir::Completion::Returns,
+                    });
+                    return Ok(id);
+                }
+                let mut hint = expected
+                    .filter(|t| matches!(t, ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool))
+                    .cloned();
+                if hint.is_none() {
+                    hint = self.scalar_hint(value)?;
+                }
+                let value = if matches!(expectation, Expectation::CastableToInt(_)) {
+                    self.expr_with_expectation(value, expectation)?
+                } else {
+                    self.expr_expected(value, hint.as_ref())?
+                };
+                let f = self.flow(value);
+                let t = match op {
+                    UnaryOp::Neg => match &f.ty {
+                        ir::Ty::Int(ty) if ty.is_signed() => f.ty.clone(),
+                        ir::Ty::Float(_) => f.ty.clone(),
+                        ir::Ty::Never => {
+                            return Err("unary negation of never is unsupported".into());
+                        }
+                        _ => return Err("unary negation requires a signed integer".into()),
+                    },
+                    UnaryOp::Not if matches!(f.ty, ir::Ty::Int(_)) => f.ty.clone(),
+                    UnaryOp::Not => ir::Ty::Bool,
+                };
+                self.require(&f, &t)?;
+                if matches!(op, UnaryOp::Neg) && f.ty == ir::Ty::Never {
+                    return Err("unary negation of never is unsupported".into());
+                }
+                let ty = if f.ty == ir::Ty::Never {
+                    ir::Ty::Never
+                } else {
+                    t
+                };
+                (
+                    ir::ExprKind::Unary { op: *op, value },
+                    Flow {
+                        ty,
+                        completes: f.completes,
+                    },
+                )
+            }
+            Expr::Binary { op, left, right } => {
+                let logical = matches!(op, BinaryOp::And | BinaryOp::Or);
+                let shifting = matches!(op, BinaryOp::Shl | BinaryOp::Shr);
+                let hint = if logical {
+                    Some(ir::Ty::Bool)
+                } else {
+                    let mut hint = expected
+                        .filter(|t| matches!(t, ir::Ty::Int(_) | ir::Ty::Float(_)))
+                        .cloned();
+                    if hint.is_none() {
+                        hint = self.scalar_hint(left)?;
+                    }
+                    if hint.is_none() && !shifting {
+                        hint = self.scalar_hint(right)?;
+                    }
+                    hint
+                };
+                let left = self.expr_expected(left, hint.as_ref())?;
+                let left_flow = self.flow(left);
+                let right_hint = if shifting {
+                    None
+                } else {
+                    hint.or_else(|| {
+                        if matches!(
+                            left_flow.ty,
+                            ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool
+                        ) {
+                            Some(left_flow.ty.clone())
+                        } else {
+                            None
+                        }
+                    })
+                };
+                let right = self.expr_expected_when(
+                    right,
+                    self.reachable && left_flow.completes,
+                    right_hint.as_ref(),
+                )?;
+                let l = self.flow(left);
+                let r = self.flow(right);
+                if matches!(l.ty, ir::Ty::Ref { .. }) || matches!(r.ty, ir::Ty::Ref { .. }) {
+                    return Err("reference comparisons and arithmetic are unsupported in B1".into());
+                }
+                if matches!(l.ty, ir::Ty::Tuple(_) | ir::Ty::Struct(_))
+                    || matches!(r.ty, ir::Ty::Tuple(_) | ir::Ty::Struct(_))
+                {
+                    return Err("aggregate operators and comparisons are unsupported".into());
+                }
+                let numeric = if matches!(l.ty, ir::Ty::Int(_) | ir::Ty::Float(_)) {
+                    l.ty.clone()
+                } else if matches!(r.ty, ir::Ty::Int(_) | ir::Ty::Float(_)) {
+                    r.ty.clone()
+                } else {
+                    ir::Ty::Int(ir::IntTy::I32)
+                };
+                let (operand, result) = match op {
+                    BinaryOp::And | BinaryOp::Or => (ir::Ty::Bool, ir::Ty::Bool),
+                    BinaryOp::Shl | BinaryOp::Shr => {
+                        if l.ty == ir::Ty::Never || r.ty == ir::Ty::Never {
+                            return Err("shift operator on semantic Never is unsupported".into());
+                        }
+                        if !matches!(l.ty, ir::Ty::Int(_)) || !matches!(r.ty, ir::Ty::Int(_)) {
+                            return Err("shift operands must both be integers".into());
+                        }
+                        (l.ty.clone(), l.ty.clone())
+                    }
+                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
+                        let operand = self.join(&l.ty, &r.ty, "bitwise operands")?;
+                        if !matches!(operand, ir::Ty::Int(_) | ir::Ty::Bool) {
+                            return Err(
+                                "bitwise operands require identical integer types or Bool".into()
+                            );
+                        }
+                        (operand.clone(), operand)
+                    }
+                    BinaryOp::Eq | BinaryOp::Ne => {
+                        (self.join(&l.ty, &r.ty, "equality operands")?, ir::Ty::Bool)
+                    }
+                    BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
+                        (numeric.clone(), ir::Ty::Bool)
+                    }
+                    _ => (numeric.clone(), numeric),
+                };
+                self.require(&l, &operand)?;
+                if !shifting {
+                    self.require(&r, &operand)?;
+                }
+                // Trait-based scalar operators do not gain a never coercion
+                // merely because evaluating an operand cannot complete.
+                if !logical && (l.ty == ir::Ty::Never || r.ty == ir::Ty::Never) {
+                    return Err("binary operator on never is unsupported".into());
+                }
+                let completes = l.completes && (logical || r.completes);
+                (
+                    ir::ExprKind::Binary {
+                        op: *op,
+                        left,
+                        right,
+                    },
+                    Flow {
+                        ty: result,
+                        completes,
+                    },
+                )
+            }
+            Expr::Call { name, args } => {
+                let key = self.path_key(name, Namespace::Value)?;
+                let plan = self
+                    .signatures
+                    .plan
+                    .as_ref()
+                    .ok_or("call requires authoritative declaration registry")?;
+                let declaration = *plan
+                    .registry
+                    .functions
+                    .get(&self.path_key(name, Namespace::Value)?)
+                    .ok_or_else(|| format!("unresolved function {name:?}"))?;
+                let (type_args, actual_regions) = if self
+                    .applications
+                    .borrow()
+                    .last()
+                    .is_some_and(|(owner, _, _)| owner == &key)
+                {
+                    let (_, args, regions) = self.applications.borrow_mut().pop().unwrap();
+                    (args, regions)
+                } else if plan.param_env(declaration)?.arity() > 0 {
+                    (self.infer_call_args(declaration,args,expected,true)?.ok_or("unsupported generic inference: insufficient evidence; explicit type arguments required")?, Arc::from([]))
+                } else {
+                    (Vec::new(), Arc::from([]))
+                };
+                let target = ir::CallTarget {
+                    declaration,
+                    type_args: type_args.into(),
+                };
+                let signature =
+                    if plan.param_env(declaration)?.arity() == 0 && target.type_args.is_empty() {
+                        self.signatures
+                            .functions
+                            .get(&self.path_key(name, Namespace::Value)?)
+                            .cloned()
+                            .ok_or("missing function signature")?
+                    } else {
+                        plan.instantiate_signature(&target, self.facts(), &plan.budget)?
+                    };
+                let facts = self
+                    .signatures
+                    .facts
+                    .as_deref()
+                    .ok_or("direct call requires validated facts")?;
+                let proof = facts
+                    .service()
+                    .discharge_direct(&target, facts)
+                    .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
+                if !facts
+                    .world()
+                    .signatures_equal(proof.signature(), &signature)
+                    .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?
+                {
+                    return Err("canonical direct signature mismatch".into());
+                }
+                if self.signatures.param_env.is_some() {
+                    for ty in signature
+                        .params
+                        .iter()
+                        .chain(std::iter::once(&signature.result))
+                    {
+                        validate_root_carrier(ty, self.facts(), &plan.budget)?;
+                    }
+                }
+                for ty in signature
+                    .params
+                    .iter()
+                    .chain(std::iter::once(&signature.result))
+                {
+                    self.accessible(ty)?;
+                }
+                if signature.params.len() != args.len() {
+                    return Err(format!(
+                        "wrong arity for {name:?}: expected {}, got {}",
+                        signature.params.len(),
+                        args.len()
+                    ));
+                }
+                return self.finish_checked_call(
+                    target.into(),
+                    name,
+                    signature,
+                    args,
+                    actual_regions,
+                    None,
+                );
+            }
+            Expr::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                let condition = self.expr(condition)?;
+                let c = self.flow(condition);
+                self.require(&c, &ir::Ty::Bool)?;
+                let reachable = self.reachable && c.completes;
+                let (then_block, t) = self.block_expected_when(then_block, reachable, expected)?;
+                let (else_block, e) = self.block_expected_when(else_block, reachable, expected)?;
+                let ty = self.join(&t.ty, &e.ty, "if branches")?;
+                let completes = c.completes && (t.completes || e.completes);
+                (
+                    ir::ExprKind::If {
+                        condition,
+                        then_block,
+                        else_block,
+                    },
+                    Flow { ty, completes },
+                )
+            }
+            Expr::Loop { label, body } => {
+                let id = self.enter_loop(true);
+                let key = self.label_key(*label)?;
+                self.loops.last_mut().unwrap().label = key;
+                self.loops.last_mut().unwrap().expected = expected.cloned();
+                // A loop has its own intrinsic completion facts even when the
+                // enclosing expression is unreachable. Only its own body paths
+                // determine whether one of its breaks can complete.
+                let (body, body_flow) = self.block_when(body, true)?;
+                self.require(&body_flow, &ir::Ty::Unit)?;
+                let frame = self.loops.pop().unwrap();
+                let flow = Flow {
+                    ty: frame.break_ty.unwrap_or(ir::Ty::Never),
+                    completes: frame.can_exit,
+                };
+                (ir::ExprKind::Loop { id, body }, flow)
+            }
+            Expr::Break { label, value } => {
+                let index = self.loop_target("break", *label)?;
+                let target = self.loops[index].id;
+                let expected = self.loops[index].expected.clone();
+                let value = value
+                    .as_ref()
+                    .map(|e| self.expr_expected(e, expected.as_ref()))
+                    .transpose()?;
+                let flow = value.map_or(Flow::value(ir::Ty::Unit), |e| self.flow(e));
+                let frame = &self.loops[index];
+                let previous_break_ty = frame.break_ty.clone();
+                if !frame.accepts_value && value.is_some() {
+                    return Err("break with a value is only allowed in loop, not while".into());
+                }
+                // Check every lexical break and the operand before contributing.
+                // A typed but unreachable tail is not the never type.
+                if self.reachable && flow.completes {
+                    self.loops[index].can_exit = true;
+                }
+                if flow.ty != ir::Ty::Never {
+                    let previous = previous_break_ty.unwrap_or(ir::Ty::Never);
+                    let ty = self.join(&previous, &flow.ty, "break values")?;
+                    self.loops[index].break_ty = Some(ty);
+                }
+                (ir::ExprKind::Break { target, value }, Flow::never())
+            }
+            Expr::Continue { label } => {
+                let index = self.loop_target("continue", *label)?;
+                let target = self.loops[index].id;
+                (ir::ExprKind::Continue { target }, Flow::never())
+            }
+            Expr::LabeledBlock { label, body } => {
+                let id = self.enter_loop(true);
+                let key = self.label_key(Some(*label))?;
+                let frame = self.loops.last_mut().unwrap();
+                frame.label = key;
+                frame.is_block = true;
+                frame.expected = expected.cloned();
+                let (body, body_flow) = self.block_expected_when(body, true, expected)?;
+                let frame = self.loops.pop().unwrap();
+                let ty = self.join(
+                    &body_flow.ty,
+                    &frame.break_ty.unwrap_or(ir::Ty::Never),
+                    "labeled block breaks",
+                )?;
+                (
+                    ir::ExprKind::LabeledBlock { id, body },
+                    Flow {
+                        ty,
+                        completes: body_flow.completes || frame.can_exit,
+                    },
+                )
+            }
+            Expr::Block(b) => {
+                let (block, flow) = self.block_with_expectation(b, expectation)?;
+                (ir::ExprKind::Block(block), flow)
+            }
+        };
+        self.accessible(&flow.ty)?;
+        admit_slice_value(&flow.ty)?;
+        if matches!(flow.ty, ir::Ty::Array { .. } | ir::Ty::Tuple(_)) {
+            self.validate_value_carriers(&flow.ty)?;
+        }
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: flow.ty,
+            completion: if flow.completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            },
+            kind,
+        });
+        Ok(id)
+    }
+}
+/// Validate all declarations and publish one shared nominal type environment.
+pub fn signature_table(program: &Program) -> Result<Signatures, String> {
+    type_env(program)
+}
+pub fn check_signatures(program: &Program) -> Result<(), String> {
+    signature_table(program).map(|_| ())
+}
+pub fn check_function(program: &Program, index: usize) -> Result<(), String> {
+    let signatures = signature_table(program)?;
+    let plan = signatures
+        .plan
+        .as_ref()
+        .ok_or("source function check requires planning context")?;
+    if !matches!(
+        plan.callable_provider(plan.callable_decl(index)?)?,
+        CallableProvider::Source { .. }
+    ) {
+        return Err("invalid source function index".into());
+    }
+    check_function_with_signatures(program, index, &signatures)
+}
+/// `signatures` must be the validated table for this same immutable program.
+/// Direct semantic checking includes CFG initialization/move analysis once.
+/// Graph callers use the pure type_function_with_env operation instead.
+pub fn check_function_with_signatures(
+    program: &Program,
+    index: usize,
+    signatures: &Signatures,
+) -> Result<(), String> {
+    let typed = type_function_with_signatures(program, index, signatures)?;
+    if let Some(plan) = &signatures.plan
+        && (plan.callable_env(plan.callable_decl(index)?)?.is_generic()
+            || matches!(
+                plan.callable_provider(plan.callable_decl(index)?)?,
+                CallableProvider::Recipe { .. }
+            ))
+    {
+        let plan = signatures
+            .plan
+            .as_ref()
+            .ok_or("generic checking requires planning context")?;
+        let facts = plan.callable_facts(plan.callable_decl(index)?)?;
+        let template = super::super::cfg::lower_template(Arc::new(typed), facts, &plan.budget)?;
+        return super::super::ownership::verify_template(template)
+            .map(|_| ())
+            .map_err(|analysis| {
+                super::super::analysis_diagnostic(
+                    &plan.budget,
+                    "universal callable",
+                    index,
+                    &analysis,
+                )
+            });
+    }
+    let plan = signatures
+        .plan
+        .as_ref()
+        .ok_or("semantic checking requires authoritative world")?;
+    let target = ir::CallTarget {
+        declaration: plan.callable_decl(index)?,
+        type_args: Arc::from([]),
+    };
+    let facts = plan.instance_facts(&target)?;
+    let mut cx = plan.clone();
+    let typed = ir::close_checked_calls(&typed, &facts, &mut cx, &plan.budget)
+        .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
+    let lowered = super::super::cfg::lower_with_facts(&typed, &facts, &plan.budget)?;
+    let closed = super::super::cfg::close(Arc::new(lowered), facts, &plan.budget)?;
+    let analysis = match super::super::ownership::analyze_closed(closed) {
+        Ok(_) => return Ok(()),
+        Err(analysis) => analysis,
+    };
+    if !analysis.passed() {
+        return Err(super::super::analysis_diagnostic(
+            &plan.budget,
+            &typed.name,
+            index,
+            &analysis,
+        ));
+    }
+    Ok(())
+}
+/// Check and lower one body using the validated signatures for this program.
+/// The returned arena owns all resolved locals, expression types and call facts.
+pub fn type_function_with_signatures(
+    program: &Program,
+    index: usize,
+    signatures: &Signatures,
+) -> Result<ir::CheckedFunction, String> {
+    type_function_with_env(program, index, signatures)
+}
+pub fn type_callable_with_plan(
+    program: &Program,
+    declaration: ir::DeclId,
+    plan: &PlanCtx,
+    budget: &ir::PlanBudget,
+) -> Result<ir::CheckedFunction, String> {
+    type_callable_source(program, declaration, plan, budget, None)
+}
+
+struct SignatureSource<'a> {
+    regions: &'a RegionDecls,
+    type_params: &'a [AstIdent],
+    bounds: &'a [TypeBound],
+    params: &'a [(BindingName, Type)],
+    result: &'a Type,
+    constness: Constness,
+}
+impl<'a> From<&'a Function> for SignatureSource<'a> {
+    fn from(function: &'a Function) -> Self {
+        Self {
+            regions: &function.regions,
+            type_params: &function.type_params,
+            bounds: &function.bounds,
+            params: &function.params,
+            result: &function.result,
+            constness: function.constness,
+        }
+    }
+}
+impl<'a> From<&'a FunctionHead> for SignatureSource<'a> {
+    fn from(function: &'a FunctionHead) -> Self {
+        Self {
+            regions: &function.regions,
+            type_params: &function.type_params,
+            bounds: &function.bounds,
+            params: &function.params,
+            result: &function.result,
+            constness: function.constness,
+        }
+    }
+}
+fn signature_source_equal(
+    plan: &PlanCtx,
+    left: SignatureSource<'_>,
+    right: SignatureSource<'_>,
+) -> Result<bool, String> {
+    let names = &*plan.program.names;
+    let work = left
+        .type_params
+        .len()
+        .checked_add(left.params.len())
+        .and_then(|n| n.checked_add(left.bounds.len()))
+        .and_then(|n| n.checked_add(left.regions.params.len()))
+        .and_then(|n| n.checked_add(left.regions.outlives.len()))
+        .and_then(|n| n.checked_add(1))
+        .ok_or("signature comparison work overflow")?;
+    plan.budget.charge_work(work)?;
+    let mut equal = left.constness == right.constness
+        && left.type_params.len() == right.type_params.len()
+        && left.params.len() == right.params.len()
+        && left.bounds.len() == right.bounds.len()
+        && left.regions.params.len() == right.regions.params.len()
+        && left.regions.outlives.len() == right.regions.outlives.len();
+    for (a, b) in left.type_params.iter().zip(right.type_params) {
+        equal &= name_scope::ident_eq(names, *a, *b, LookupClass::TypeParameter)?;
+    }
+    for ((a, at), (b, bt)) in left.params.iter().zip(right.params) {
+        equal &= a.checked_key(names)? == b.checked_key(names)?;
+        equal &= at.semantic_eq(bt, names)?;
+    }
+    equal &= left.result.semantic_eq(right.result, names)?;
+    for (a, b) in left.regions.params.iter().zip(&right.regions.params) {
+        equal &= name_scope::ident_eq(names, *a, *b, LookupClass::LifetimeParameter)?;
+    }
+    equal &= match (left.regions.receiver, right.regions.receiver) {
+        (Some(a), Some(b)) => name_scope::region_eq(names, a, b)?,
+        (None, None) => true,
+        _ => false,
+    };
+    for ((al, as_), (bl, bs)) in left.regions.outlives.iter().zip(&right.regions.outlives) {
+        equal &= name_scope::region_eq(names, *al, *bl)?;
+        equal &= name_scope::region_eq(names, *as_, *bs)?;
+    }
+    for (a, b) in left.bounds.iter().zip(right.bounds) {
+        plan.budget.charge_work(a.traits.len().saturating_add(1))?;
+        equal &= name_scope::ident_eq(names, a.parameter, b.parameter, LookupClass::TypeParameter)?;
+        equal &= a.traits.len() == b.traits.len();
+        for (a, b) in a.traits.iter().zip(&b.traits) {
+            equal &= plan.resolve_trait_path(a)? == plan.resolve_trait_path(b)?;
+        }
+    }
+    Ok(equal)
+}
+
+pub(super) fn type_callable_source(
+    program: &Program,
+    declaration: ir::DeclId,
+    plan: &PlanCtx,
+    budget: &ir::PlanBudget,
+    canonical: Option<&CanonicalSourceCapability>,
+) -> Result<ir::CheckedFunction, String> {
+    plan.check_budget(budget)?;
+    budget.charge_work(1)?;
+    if !Arc::ptr_eq(&program.names, &plan.program.names)
+        || !Arc::ptr_eq(&program.modules, &plan.program.modules)
+    {
+        return Err(super::super::source::SourceError::from_token(
+            super::super::token_session::TokenError::ForeignHandle,
+        )
+        .to_string());
+    }
+    if matches!(
+        plan.callable_provider(declaration)?,
+        CallableProvider::Recipe { .. }
+    ) {
+        let env = plan.callable_env(declaration)?;
+        budget.retain_bytes(env.total_arity() * std::mem::size_of::<ir::Ty>() + 128)?;
+        let target = ir::CallTarget {
+            declaration,
+            type_args: env.ordered_params().map(ir::Ty::Param).collect(),
+        };
+        let facts = plan.callable_facts(declaration)?;
+        return plan.checked_body(&target, &facts, budget);
+    }
+    let f = plan.callable_body(program, declaration)?;
+    let containing_module =
+        match plan.registry.callable_sources[plan.callable_index(declaration)?] {
+            CallableSource::Free(_) => None,
+            CallableSource::Associated { .. } | CallableSource::TraitDefault { .. } => {
+                Some(plan.callable_context(declaration)?.module)
+            }
+        };
+    name_validation::validate_function_names(program, f, containing_module)?;
+    let original = plan.callable_body(&plan.program, declaration)?;
+    let same_name = name_scope::path_key(&*program.names, &f.name, Namespace::Value)?
+        == name_scope::path_key(&*program.names, &original.name, Namespace::Value)?;
+    if !same_name
+        || f.module != original.module
+        || f.visibility != original.visibility
+        || !signature_source_equal(plan, f.into(), original.into())?
+    {
+        return Err(
+            "source callable signature differs from its immutable planning declaration".into(),
+        );
+    }
+    if let CallableSource::TraitDefault { trait_index, item } =
+        plan.registry.callable_sources[plan.callable_index(declaration)?]
+    {
+        let supplied = &program.traits[trait_index].items[item].signature;
+        let original = &plan.program.traits[trait_index].items[item].signature;
+        name_validation::validate_function_head_names(program, supplied)?;
+        if !name_scope::ident_eq(
+            &*program.names,
+            supplied.name,
+            original.name,
+            LookupClass::Member,
+        )? || !signature_source_equal(plan, supplied.into(), original.into())?
+            || supplied.constness != f.constness
+        {
+            return Err(
+                "source trait signature constness differs from its immutable planning declaration"
+                    .into(),
+            );
+        }
+    }
+    validate_const_forwarding(&program.names, f, budget)?;
+    let mut signatures = plan.environment(Some(declaration))?;
+    if let Some(cap) = canonical {
+        signatures.facts = Some(cap.facts.clone());
+    }
+    let signature = plan.function_schema(declaration)?.signature;
+    let context = plan.callable_context(declaration)?;
+    walk_depth_checked(DepthNode::Block(&f.body), None, Some(&program.names))?;
+    let module = context.module;
+    let mut c = Checker::new(&signatures, signature.result.clone(), module);
+    c.declaration = Some(declaration);
+    c.canonical = canonical;
+    let mut params = Vec::new();
+    let offset = if context.receiver != ReceiverKind::None {
+        let local = c.bind(LocalName::Receiver, signature.params[0].clone())?;
+        c.locals[local.0].mutable =
+            matches!(context.receiver, ReceiverKind::Value { mutable: true });
+        params.push(local);
+        1
+    } else {
+        0
+    };
+    if signature.params.len() != f.params.len() + offset {
+        return Err("callable parameter count mismatch".into());
+    }
+    for (parameter, ((name, _), ty)) in f.params.iter().zip(&signature.params[offset..]).enumerate()
+    {
+        let local = c.bind(name, ty.clone())?;
+        if let Some(cap) = canonical {
+            sr::work(budget, 1).map_err(|e| cap.render(e))?;
+            let index = parameter;
+            if !cap
+                .inventory
+                .bindings
+                .get(index)
+                .is_some_and(|site| site.parameter == Some(parameter))
+            {
+                return Err(cap.render(FactsError::invalid(
+                    budget,
+                    "source parameter prefix occurrence changed",
+                )));
+            }
+            sr::push(&mut cap.bindings.borrow_mut(), (index, local), budget)
+                .map_err(|e| cap.render(e))?;
+        }
+        params.push(local);
+    }
+    let (body, flow) = c
+        .block_expected(&f.body, Some(&signature.result))
+        .map_err(|e| format!("in callable {:?}: {e}", f.name))?;
+    c.require(&flow, &c.result)?;
+    validate_shift_counts(&c.exprs, &c.count_queries)?;
+    let checked = ir::CheckedFunction {
+        name: f
+            .name
+            .display(&*program.names)
+            .map_err(native_adapter::name_diagnostic)?
+            .to_string(),
+        ref_contract: signature.ref_contract.clone(),
+        params,
+        result: c.result,
+        locals: c.locals,
+        exprs: c.exprs,
+        call_evidence: c.call_evidence.into(),
+        body_substitution: None,
+        body,
+    };
+    if canonical.is_some() {
+        return Ok(checked);
+    }
+    let facts = plan.callable_facts(declaration)?;
+    ir::validate_call_evidence(&checked, &facts, budget)?;
+    let mut cx = plan.clone();
+    ir::canonicalize_checked_calls(&checked, &facts, &mut cx, budget)
+        .map_err(|e| e.into_legacy_diagnostic(budget))
+}
+pub fn type_function_with_plan(
+    program: &Program,
+    index: usize,
+    plan: &PlanCtx,
+    budget: &ir::PlanBudget,
+) -> Result<ir::CheckedFunction, String> {
+    plan.check_budget(budget)?;
+    budget.charge_work(1)?;
+    let decl = plan.function_decl(index)?;
+    type_callable_with_plan(program, decl, plan, budget)
+}
+/// Check one body with the same nominal environment used for all signatures.
+pub fn type_function_with_env(
+    program: &Program,
+    index: usize,
+    signatures: &TypeEnv,
+) -> Result<ir::CheckedFunction, String> {
+    if let Some(plan) = &signatures.plan {
+        return type_callable_with_plan(program, plan.callable_decl(index)?, plan, &plan.budget);
+    }
+    let f = program
+        .functions
+        .get(index)
+        .ok_or_else(|| format!("invalid function index {index}"))?;
+    if f.constness == Constness::Const {
+        return Err(
+            "unsupported: const fn checking requires its authoritative planning context".into(),
+        );
+    }
+    if !f.type_params.is_empty() && signatures.param_env.is_none() {
+        let plan = signatures
+            .plan
+            .as_ref()
+            .ok_or("generic body requires authoritative planning context")?;
+        return type_function_with_plan(program, index, plan, &plan.budget);
+    }
+    validate_depth(DepthNode::Block(&f.body))?;
+    let signature = signatures
+        .functions
+        .get(&name_scope::path_key(
+            &*program.names,
+            &f.name,
+            Namespace::Value,
+        )?)
+        .ok_or_else(|| format!("missing signature for {:?}", f.name))?;
+    if signature.params.len() != f.params.len() {
+        return Err(format!(
+            "signature parameter count mismatch for {:?}",
+            f.name
+        ));
+    }
+    let mut c = Checker::new(signatures, signature.result.clone(), f.module);
+    let mut params = Vec::with_capacity(f.params.len());
+    for ((n, _), t) in f.params.iter().zip(&signature.params) {
+        params.push(
+            c.bind(n, t.clone())
+                .map_err(|e| format!("in function {:?}: {e}", f.name))?,
+        );
+    }
+    let (body, flow) = c
+        .block_expected(&f.body, Some(&signature.result))
+        .map_err(|e| format!("in function {:?}: {e}", f.name))?;
+    c.require(&flow, &c.result)
+        .map_err(|e| format!("in function {:?}: {e}", f.name))?;
+    validate_shift_counts(&c.exprs, &c.count_queries)
+        .map_err(|e| format!("in function {:?}: {e}", f.name))?;
+    Ok(ir::CheckedFunction {
+        name: f
+            .name
+            .display(&*program.names)
+            .map_err(native_adapter::name_diagnostic)?
+            .to_string(),
+        ref_contract: signature.ref_contract.clone(),
+        params,
+        result: c.result,
+        locals: c.locals,
+        exprs: c.exprs,
+        call_evidence: c.call_evidence.into(),
+        body_substitution: None,
+        body,
+    })
+}
+pub fn check(program: &Program) -> Result<(), String> {
+    let signatures = signature_table(program)?;
+    let count = signatures
+        .plan
+        .as_ref()
+        .map_or(program.functions.len(), PlanCtx::callable_count);
+    for i in 0..count {
+        check_function_with_signatures(program, i, &signatures)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod checked_identity_tests {
+    use super::*;
+
+    fn builder(name: &str) -> ProgramBuilder {
+        ProgramBuilder::new(
+            std::path::Path::new(name),
+            "",
+            &super::super::super::expansion_budget::ExpansionBudget::default(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn generic_application_namespace_follows_expression_kind() {
+        let mut builder = builder("application-namespace.rs");
+        let name = builder.path("item").unwrap();
+        let _program = builder.finish().unwrap();
+        assert_eq!(
+            application_namespace(&Expr::Call {
+                name: name.clone(),
+                args: Vec::new(),
+            })
+            .unwrap(),
+            Namespace::Value
+        );
+        assert_eq!(
+            application_namespace(&Expr::Struct {
+                name,
+                fields: Vec::new(),
+            })
+            .unwrap(),
+            Namespace::Type
+        );
+        assert!(application_namespace(&Expr::Bool(false)).is_err());
+    }
+
+    #[test]
+    fn checked_local_keys_join_distinct_occurrences_without_registering_wildcards() {
+        let mut builder = builder("checked-locals.rs");
+        let ordinary = builder.ident("value").unwrap();
+        let repeated = builder.ident("value").unwrap();
+        let path = builder.path("value").unwrap();
+        assert!(builder.ident("r#value").is_err());
+        let receiver = LocalName::Receiver;
+        let program = builder.finish().unwrap();
+        let names = &*program.names;
+        assert_eq!(
+            ordinary.checked_key(names).unwrap(),
+            repeated.checked_key(names).unwrap()
+        );
+        assert_eq!(
+            ordinary.checked_key(names).unwrap(),
+            path.checked_key(names).unwrap()
+        );
+        assert_eq!(
+            receiver.checked_key(names).unwrap(),
+            Some(LocalKey::Receiver)
+        );
+        assert_eq!(BindingName::Wildcard.checked_key(names).unwrap(), None);
+        assert_ne!(
+            ordinary.checked_key(names).unwrap(),
+            Some(LocalKey::Receiver)
+        );
+        assert_ne!(
+            names.key(ordinary, LookupClass::Local).unwrap(),
+            names.key(ordinary, LookupClass::Member).unwrap()
+        );
+    }
+
+    #[test]
+    fn foreign_local_occurrences_are_contract_errors_not_absent_locals() {
+        let mut first = builder("checked-first.rs");
+        let local = first.ident("value").unwrap();
+        let program = first.finish().unwrap();
+        let other = builder("checked-second.rs").finish().unwrap();
+        assert!(local.checked_key(&other.names).is_err());
+        assert!(local.checked_key(&program.names).is_ok());
+    }
+
+    #[test]
+    fn active_callable_rejects_same_owner_signature_drift() {
+        let original = parse("fn value(x:i32)->i32{x}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&original, &budget).unwrap();
+        let mut supplied = original.clone();
+        supplied.functions[0].result = Type::Bool;
+        let error = type_function_with_plan(&supplied, 0, &plan, &budget).unwrap_err();
+        assert!(error.contains("immutable planning declaration"), "{error}");
+    }
+
+    #[test]
+    fn checking_one_active_callable_does_not_rescan_unrelated_mutated_bodies() {
+        let original = parse("fn value()->i32{1}fn unused()->i32{2}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&original, &budget).unwrap();
+        let mut supplied = original.clone();
+        let mut foreign = builder("foreign-unrelated.rs");
+        let name = foreign.path("foreign_value").unwrap();
+        let _owner = foreign.finish().unwrap();
+        supplied.functions[1].body.tail = Some(Box::new(Expr::Var(name)));
+        assert!(type_function_with_plan(&supplied, 0, &plan, &budget).is_ok());
+        assert!(type_function_with_plan(&supplied, 1, &plan, &budget).is_err());
+    }
+}

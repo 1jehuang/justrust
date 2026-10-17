@@ -7,6 +7,7 @@ use super::ir::{
     Predicate, ReceiverMode, Signature, SignatureSubject, SnapshotId, TraitCall, TraitCx, TraitRef,
     Ty,
 };
+use super::module_identity::{ModuleArena, ModuleError, ModuleId};
 use std::sync::{Arc, Mutex};
 
 mod catalog;
@@ -181,6 +182,64 @@ type Result<T> = std::result::Result<T, FactsError>;
 fn charged<T>(b: &PlanBudget, result: std::result::Result<T, String>) -> Result<T> {
     result.map_err(|e| FactsError::from_message(b, &e))
 }
+fn checked_module<T>(
+    budget: &PlanBudget,
+    result: std::result::Result<T, ModuleError>,
+) -> Result<T> {
+    result.map_err(|error| match error {
+        ModuleError::Token(super::token_session::TokenError::Budget(_))
+        | ModuleError::Name(super::semantic_name::NameError::Token(
+            super::token_session::TokenError::Budget(_),
+        )) => FactsError::resource(budget, "module authority resource boundary"),
+        ModuleError::SourceUnavailable => FactsError::unsupported(
+            budget,
+            "source module root unavailable in catalog-only authority",
+        ),
+        _ => FactsError::invalid(budget, "invalid or foreign module/visibility authority"),
+    })
+}
+fn validate_nominal_modules(ty: &Ty, modules: &ModuleArena, budget: &PlanBudget) -> Result<()> {
+    charged(budget, budget.charge_work(1))?;
+    match ty {
+        Ty::Struct(nominal) => {
+            let definition = nominal.def();
+            checked_module(
+                budget,
+                definition
+                    .visibility
+                    .validate_for(modules, definition.module),
+            )?;
+            for field in definition.fields.iter() {
+                charged(budget, budget.charge_work(1))?;
+                checked_module(
+                    budget,
+                    field.visibility.validate_for(modules, definition.module),
+                )?;
+            }
+        }
+        Ty::Enum(nominal) => {
+            let definition = nominal.def();
+            checked_module(
+                budget,
+                definition
+                    .visibility
+                    .validate_for(modules, definition.module),
+            )?;
+            for variant in definition.variants.iter() {
+                charged(budget, budget.charge_work(1))?;
+                for field in variant.fields.iter() {
+                    charged(budget, budget.charge_work(1))?;
+                    checked_module(
+                        budget,
+                        field.visibility.validate_for(modules, definition.module),
+                    )?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
 fn retain<T>(b: &PlanBudget, count: usize) -> Result<()> {
     let bytes = count
         .checked_mul(std::mem::size_of::<T>())
@@ -273,7 +332,7 @@ pub struct SchemaDecl {
     pub own_env: Arc<ParamEnv>,
     pub env: Arc<GenericEnv>,
     pub owner: Option<DeclId>,
-    pub module: Arc<[String]>,
+    pub module: ModuleId,
     pub visibility: super::ir::Visibility,
     pub receiver: ReceiverMode,
     pub region_contract_mode: RegionContractMode,
@@ -1132,12 +1191,18 @@ impl ValidatedTraitWorld {
             ));
         }
         let info = self.schema.declaration_info(id)?;
+        checked_module(
+            &self.budget,
+            info.visibility
+                .validate_for(self.catalog.modules(), info.module),
+        )?;
         if let Some(canonical) = self.catalog.declaration(id) {
             let c = &canonical.info;
             if info.kind != c.kind
                 || info.owner != c.owner
                 || info.receiver != c.receiver
                 || info.visibility != c.visibility
+                || info.module != c.module
                 || info.region_contract_mode != c.region_contract_mode
                 || !self.same_env(&info.env, &c.env)?
                 || info.own_env.binder() != c.own_env.binder()
@@ -1482,6 +1547,7 @@ impl ValidatedTraitWorld {
                         "foreign nominal identity",
                     ));
                 }
+                validate_nominal_modules(ty, self.catalog.modules(), &self.budget)?;
                 self.schema.validate_nominal(ty, env, &self.budget)?;
                 for t in t.def().type_args.iter() {
                     child(
@@ -1506,6 +1572,7 @@ impl ValidatedTraitWorld {
                         "foreign nominal identity",
                     ));
                 }
+                validate_nominal_modules(ty, self.catalog.modules(), &self.budget)?;
                 self.schema.validate_nominal(ty, env, &self.budget)?;
                 for t in t.def().type_args.iter() {
                     child(
@@ -2410,11 +2477,8 @@ impl ValidatedTraitWorld {
             let private_visibility = match &target_info.visibility {
                 super::ir::Visibility::Public => false,
                 super::ir::Visibility::Restricted(scope) => {
-                    (scope.is_empty() && owner_info.module.is_empty())
-                        || (!scope.is_empty()
-                            && scope
-                                .split("::")
-                                .eq(owner_info.module.iter().map(String::as_str)))
+                    checked_module(&self.budget, self.catalog.modules().check(*scope))?;
+                    *scope == owner_info.module
                 }
             };
             if item.trait_decl != h.trait_ref.declaration
@@ -5570,6 +5634,7 @@ pub(crate) mod test_support {
 
     pub(super) struct FixtureSchema {
         registry: SnapshotId,
+        modules: Arc<ModuleArena>,
         budget: PlanBudget,
         declarations: Vec<SchemaDecl>,
         schemas: Vec<(DeclId, GenericSchema)>,
@@ -5618,8 +5683,11 @@ pub(crate) mod test_support {
                     own_env,
                     env,
                     owner,
-                    module: Arc::from([]),
-                    visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+                    module: fixture_root(&self.modules, &self.budget)?,
+                    visibility: crate::compiler::ir::Visibility::Restricted(fixture_root(
+                        &self.modules,
+                        &self.budget,
+                    )?),
                     receiver,
                     region_contract_mode: RegionContractMode::Positioned,
                 },
@@ -5629,6 +5697,7 @@ pub(crate) mod test_support {
             charged(&self.budget, self.budget.check_depth(depth))?;
             charged(&self.budget, self.budget.charge_work(1))?;
             if let Some(id) = nominal_id(ty) {
+                validate_nominal_modules(ty, &self.modules, &self.budget)?;
                 if id.snapshot != self.registry {
                     return Err(FactsError::invalid(
                         &self.budget,
@@ -5654,6 +5723,7 @@ pub(crate) mod test_support {
             }
             match ty {
                 Ty::Array { element, .. }
+                | Ty::Slice { element }
                 | Ty::Ref {
                     referent: element, ..
                 } => self.gather(element, depth + 1)?,
@@ -5707,6 +5777,7 @@ pub(crate) mod test_support {
             }
         }
         if let Ty::Array { element, .. }
+        | Ty::Slice { element }
         | Ty::Ref {
             referent: element, ..
         } = ty
@@ -5715,7 +5786,18 @@ pub(crate) mod test_support {
         }
         Ok(None)
     }
+    fn fixture_root(modules: &ModuleArena, budget: &PlanBudget) -> Result<ModuleId> {
+        match modules.source_root() {
+            Ok(root) => Ok(root),
+            Err(ModuleError::SourceUnavailable) => {
+                checked_module(budget, modules.check(modules.core_root()))?;
+                Ok(modules.core_root())
+            }
+            Err(error) => checked_module(budget, Err(error)),
+        }
+    }
     pub(super) fn adapter(
+        modules: Arc<ModuleArena>,
         headers: &HeaderSet,
         types: &[Ty],
         budget: &PlanBudget,
@@ -5732,6 +5814,7 @@ pub(crate) mod test_support {
         };
         let mut schema = FixtureSchema {
             registry,
+            modules: modules.clone(),
             budget: budget.clone(),
             declarations: Vec::new(),
             schemas: Vec::new(),
@@ -5853,7 +5936,7 @@ pub(crate) mod test_support {
             push(budget, &mut schema.schemas, (h.0, h.1.clone()))?;
         }
         retain::<FixtureSchema>(budget, 1)?;
-        let builder = CoreCatalogBuilder::new(registry, budget)?;
+        let builder = CoreCatalogBuilder::new(registry, modules, budget)?;
         let mut end = builder.source_start();
         for decl in schema
             .declarations
@@ -6009,6 +6092,7 @@ pub(crate) mod test_support {
                     "fixture validated with a foreign ledger",
                 ));
             }
+            validate_nominal_modules(ty, &self.modules, budget)?;
             for registered in &self.nominals {
                 charged(budget, budget.charge_work(1))?;
                 if same_nominal_object(registered, ty) {
@@ -6070,6 +6154,7 @@ pub(crate) mod test_support {
         }
     }
     pub fn world(
+        modules: Arc<ModuleArena>,
         callables: &[CallableHeader],
         budget: &PlanBudget,
     ) -> Result<Arc<ValidatedTraitWorld>> {
@@ -6081,10 +6166,11 @@ pub(crate) mod test_support {
             callables: callables.into(),
             ..HeaderSet::default()
         };
-        let raw = adapter(&headers, &[], budget)?;
+        let raw = adapter(modules, &headers, &[], budget)?;
         ValidatedTraitWorld::build(headers, raw, budget)
     }
     pub fn facts_for_signature(
+        modules: Arc<ModuleArena>,
         signature: &Signature,
         types: &[Ty],
         budget: &PlanBudget,
@@ -6109,6 +6195,7 @@ pub(crate) mod test_support {
         let empty_headers = HeaderSet::default();
         let mut raw = FixtureSchema {
             registry,
+            modules: modules.clone(),
             budget: budget.clone(),
             declarations: Vec::new(),
             schemas: Vec::new(),
@@ -6161,7 +6248,7 @@ pub(crate) mod test_support {
             callables: Arc::from([callable]),
             ..empty_headers
         };
-        let raw = adapter(&headers, types, budget)?;
+        let raw = adapter(modules, &headers, types, budget)?;
         let world = ValidatedTraitWorld::build(headers, raw, budget)?;
         let facts = world.instance_facts(&CallTarget {
             declaration,
@@ -6182,6 +6269,7 @@ mod tests {
     };
 
     struct Case {
+        modules: Arc<ModuleArena>,
         budget: PlanBudget,
         headers: HeaderSet,
         types: Vec<Ty>,
@@ -6207,7 +6295,21 @@ mod tests {
             result,
         }
     }
-    fn nominal(registry: SnapshotId, index: usize, declaration: DeclId, args: Vec<Ty>) -> Ty {
+    fn fixture_modules() -> Arc<ModuleArena> {
+        super::super::module_identity::ModuleArenaBuilder::for_catalog(
+            super::super::expansion_budget::ExpansionBudget::default(),
+        )
+        .unwrap()
+        .freeze()
+        .unwrap()
+    }
+    fn nominal(
+        module: ModuleId,
+        registry: SnapshotId,
+        index: usize,
+        declaration: DeclId,
+        args: Vec<Ty>,
+    ) -> Ty {
         Ty::Struct(StructTy::new(StructDef {
             id: NominalAppId {
                 snapshot: registry,
@@ -6216,12 +6318,13 @@ mod tests {
             source_decl: declaration,
             type_args: args.into(),
             name: "fixture".into(),
-            module: String::new(),
-            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+            module,
+            visibility: crate::compiler::ir::Visibility::Restricted(module),
             fields: Arc::<[FieldDef]>::from([]),
         }))
     }
     fn case() -> Case {
+        let modules = fixture_modules();
         let budget = PlanBudget::default();
         let registry = SnapshotId::allocate().unwrap();
         let id = |index| test_support::source_decl(registry, index, &budget).unwrap();
@@ -6238,9 +6341,15 @@ mod tests {
             owner: implementation_scope.binder(),
             index: 0,
         });
-        let leaf = nominal(registry, 2, id(6), Vec::new());
-        let pattern = nominal(registry, 0, id(4), vec![parameter.clone()]);
-        let boxed = nominal(registry, 1, id(4), vec![leaf.clone()]);
+        let leaf = nominal(modules.core_root(), registry, 2, id(6), Vec::new());
+        let pattern = nominal(
+            modules.core_root(),
+            registry,
+            0,
+            id(4),
+            vec![parameter.clone()],
+        );
+        let boxed = nominal(modules.core_root(), registry, 1, id(4), vec![leaf.clone()]);
         let body_scope = scope(id(9), 0, &budget);
         let body_env = env(&[implementation_scope, body_scope], &budget);
         let caller_scope = scope(id(10), 1, &budget);
@@ -6342,6 +6451,7 @@ mod tests {
             ]),
         };
         Case {
+            modules,
             budget: budget.clone(),
             headers,
             types: vec![pattern, boxed.clone(), leaf.clone()],
@@ -6354,9 +6464,61 @@ mod tests {
             boxed,
         }
     }
+
+    #[test]
+    fn nominal_public_and_field_schema_rejects_foreign_or_sibling_module_authority() {
+        let c = case();
+        let Ty::Struct(original) = &c.leaf else {
+            panic!("expected nominal fixture")
+        };
+        let foreign = fixture_modules();
+        let mut definition = original.def().clone();
+        definition.module = foreign.core_root();
+        definition.visibility = ir::Visibility::Public;
+        let forged = Ty::Struct(StructTy::new(definition));
+        assert!(
+            matches!(validate_nominal_modules(&forged, &c.modules, &c.budget), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
+        assert!(
+            matches!(test_support::facts_for_signature(c.modules.clone(), &sig(Vec::new(), Ty::Unit), &[forged], &c.budget), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
+
+        let mut definition = original.def().clone();
+        definition.module = c
+            .modules
+            .catalog_module(super::super::module_identity::CatalogModule::Clone);
+        definition.visibility = ir::Visibility::Public;
+        definition.fields = Arc::from([FieldDef {
+            name: "field".into(),
+            ty: Ty::Unit,
+            visibility: ir::Visibility::Restricted(
+                c.modules
+                    .catalog_module(super::super::module_identity::CatalogModule::Ops),
+            ),
+        }]);
+        let forged = Ty::Struct(StructTy::new(definition));
+        assert!(
+            matches!(test_support::facts_for_signature(c.modules.clone(), &sig(Vec::new(), Ty::Unit), &[forged], &c.budget), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
+
+        let mut definition = original.def().clone();
+        definition.visibility = ir::Visibility::Public;
+        definition.fields = Arc::from([FieldDef {
+            name: "field".into(),
+            ty: Ty::Unit,
+            visibility: ir::Visibility::Public,
+        }]);
+        let valid = Ty::Struct(StructTy::new(definition));
+        validate_nominal_modules(&valid, &c.modules, &c.budget).unwrap();
+    }
     impl Case {
         fn build(&self) -> Result<Arc<ValidatedTraitWorld>> {
-            let adapter = test_support::adapter(&self.headers, &self.types, &self.budget)?;
+            let adapter = test_support::adapter(
+                self.modules.clone(),
+                &self.headers,
+                &self.types,
+                &self.budget,
+            )?;
             ValidatedTraitWorld::build(self.headers.clone(), adapter, &self.budget)
         }
         fn goal(&self, self_ty: Ty) -> Predicate {
@@ -6504,7 +6666,8 @@ mod tests {
         let budget = PlanBudget::default();
         let header = nested_header(&budget);
         let declaration = header.declaration;
-        let world = test_support::world(std::slice::from_ref(&header), &budget).unwrap();
+        let world =
+            test_support::world(fixture_modules(), std::slice::from_ref(&header), &budget).unwrap();
         let universal = world.callable_facts(declaration).unwrap();
         universal
             .validate_signature(SignatureSubject::Body, &header.schema.signature)
@@ -6596,14 +6759,15 @@ mod tests {
                 predicates: Arc::from([]),
             },
         };
-        assert!(test_support::world(&[raw], &budget).is_err());
+        assert!(test_support::world(fixture_modules(), &[raw], &budget).is_err());
     }
 
     #[test]
     fn nested_reference_world_per_position_refinement_and_type_use_context() {
         let budget = PlanBudget::default();
         let header = nested_header(&budget);
-        let world = test_support::world(std::slice::from_ref(&header), &budget).unwrap();
+        let world =
+            test_support::world(fixture_modules(), std::slice::from_ref(&header), &budget).unwrap();
         let facts = world.callable_facts(header.declaration).unwrap();
         let required = &header.schema.signature.ref_contract;
         let mut provided = (**required).clone();
@@ -6765,6 +6929,7 @@ mod tests {
             &budget,
         );
         let world = test_support::world(
+            fixture_modules(),
             &[CallableHeader {
                 declaration,
                 schema: GenericSchema {
@@ -6854,7 +7019,7 @@ mod tests {
 
     fn add_source_default(c: &mut Case, omit_override: bool) -> DeclId {
         let default = test_support::source_decl(c.item.snapshot, 20, &c.budget).unwrap();
-        let sized = test_support::adapter(&c.headers, &c.types, &c.budget)
+        let sized = test_support::adapter(c.modules.clone(), &c.headers, &c.types, &c.budget)
             .unwrap()
             .core_catalog()
             .id(CatalogItem::Sized);
@@ -6993,7 +7158,7 @@ mod tests {
                 .schema
                 .predicates = Arc::from([]);
             assert!(matches!(c.build(), Err(error) if error.kind() == FactsErrorKind::Unproved));
-            let sized = test_support::adapter(&c.headers, &c.types, &c.budget)
+            let sized = test_support::adapter(c.modules.clone(), &c.headers, &c.types, &c.budget)
                 .unwrap()
                 .core_catalog()
                 .id(CatalogItem::Sized);
@@ -7279,7 +7444,8 @@ mod tests {
             }
         }
         let c = case();
-        let raw = test_support::adapter(&c.headers, &c.types, &c.budget).unwrap();
+        let raw =
+            test_support::adapter(c.modules.clone(), &c.headers, &c.types, &c.budget).unwrap();
         let erased = Arc::new(ErasedScope {
             raw,
             declaration: c.body,
@@ -7345,7 +7511,7 @@ mod tests {
             ..ir::PlanLimits::default()
         });
         assert!(
-            test_support::world(&c.headers.callables, &tiny)
+            test_support::world(c.modules.clone(), &c.headers.callables, &tiny)
                 .unwrap_err()
                 .is_resource()
         );
@@ -7393,7 +7559,7 @@ mod tests {
             self_ty: c.caller_parameter.clone(),
             args: Arc::from([]),
         })]);
-        let bounded = test_support::world(&[callable], &c.budget).unwrap();
+        let bounded = test_support::world(c.modules.clone(), &[callable], &c.budget).unwrap();
         let bounded_facts = bounded.callable_facts(c.caller).unwrap();
         assert!(bounded_facts.must_copy(&c.caller_parameter).unwrap());
         for item in [CatalogItem::Clone, CatalogItem::Sized] {
@@ -7522,7 +7688,8 @@ mod tests {
     fn original_callable_view_retains_rigid_header_and_exact_subject() {
         let budget = PlanBudget::default();
         let header = carrier_header(&budget, 1, |p| sig(vec![p[0].clone()], p[0].clone()));
-        let world = test_support::world(std::slice::from_ref(&header), &budget).unwrap();
+        let world =
+            test_support::world(fixture_modules(), std::slice::from_ref(&header), &budget).unwrap();
         let universal = world.callable_facts(header.declaration).unwrap();
         let target = CallTarget {
             declaration: header.declaration,
@@ -7609,7 +7776,8 @@ mod tests {
     fn original_callable_view_uses_existing_ledger_on_every_lookup() {
         let budget = PlanBudget::default();
         let header = carrier_header(&budget, 1, |p| sig(vec![p[0].clone()], p[0].clone()));
-        let world = test_support::world(std::slice::from_ref(&header), &budget).unwrap();
+        let world =
+            test_support::world(fixture_modules(), std::slice::from_ref(&header), &budget).unwrap();
         let facts = world.callable_facts(header.declaration).unwrap();
         let first = facts
             .original_callable_schema(OriginalCallableSubject::Direct(header.declaration))
@@ -7636,7 +7804,8 @@ mod tests {
         let header = carrier_header(&budget, 2, |p| {
             sig(vec![p[0].clone(), p[1].clone()], p[0].clone())
         });
-        let world = test_support::world(std::slice::from_ref(&header), &budget).unwrap();
+        let world =
+            test_support::world(fixture_modules(), std::slice::from_ref(&header), &budget).unwrap();
         let universal = world.callable_facts(header.declaration).unwrap();
         let rigid = universal.carrier_contract(SignatureSubject::Body).unwrap();
         assert_eq!(rigid.contract().inputs.len(), 2);
@@ -7657,7 +7826,8 @@ mod tests {
         assert_eq!(realized.contract().results[0].sources[0].param, 0);
         assert_eq!(realized.ref_contract().results.len(), 1);
         assert!(realized.validate_for(&universal).is_err());
-        let other = test_support::world(std::slice::from_ref(&header), &budget).unwrap();
+        let other =
+            test_support::world(fixture_modules(), std::slice::from_ref(&header), &budget).unwrap();
         assert!(
             realized
                 .validate_for(&other.instance_facts(&target).unwrap())
@@ -7687,7 +7857,8 @@ mod tests {
                 &budget,
             )
         });
-        let world = test_support::world(std::slice::from_ref(&header), &budget).unwrap();
+        let world =
+            test_support::world(fixture_modules(), std::slice::from_ref(&header), &budget).unwrap();
         let universal = world.callable_facts(header.declaration).unwrap();
         let rigid = universal.carrier_contract(SignatureSubject::Body).unwrap();
         assert_eq!(rigid.contract().writes.len(), 1);
@@ -7761,8 +7932,12 @@ mod tests {
         let original_header = carrier_header(&budget, 0, |_| {
             reference_signature(vec![mutable(shared_barrier.clone())], Ty::Unit, &budget)
         });
-        let original_world =
-            test_support::world(std::slice::from_ref(&original_header), &budget).unwrap();
+        let original_world = test_support::world(
+            fixture_modules(),
+            std::slice::from_ref(&original_header),
+            &budget,
+        )
+        .unwrap();
         let original = original_world
             .callable_facts(original_header.declaration)
             .unwrap()
@@ -7885,7 +8060,7 @@ mod tests {
             impls: Arc::from([]),
             callables: Arc::from([header.clone()]),
         };
-        let raw = test_support::adapter(&headers, &[], &budget).unwrap();
+        let raw = test_support::adapter(fixture_modules(), &headers, &[], &budget).unwrap();
         let world = ValidatedTraitWorld::build(
             headers.clone(),
             Arc::new(Regions {

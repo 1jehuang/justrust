@@ -15,6 +15,7 @@ mod macro_fragments;
 mod macro_matcher;
 pub mod macro_rules;
 mod macro_transcribe;
+pub mod module_identity;
 pub mod ownership;
 mod resource_accounting;
 pub mod semantic_name;

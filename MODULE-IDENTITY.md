@@ -2,11 +2,12 @@
 
 ## Status
 
-This is the implementation contract for the in-progress owned-name migration.
-The arena, typed IR interfaces and catalog adapters are saved, but the complete
-frontend migration and coordinated acceptance gates have not passed yet. This
-document does not claim new Rust syntax support, general hygiene, source macro
-expansion, cross-crate compatibility or full Rust support.
+The actual root-context AST, resolver, checker and retained source replay now
+use owned semantic identifiers, structured paths and checked module identities.
+The integrated migration passed the complete hosted acceptance gates below.
+This does not claim new Rust syntax support, general hygiene, source macro
+expansion, cross-crate compatibility or full Rust support. Raw, Unicode and
+non-root/expanded semantic identifier admission remains explicitly unsupported.
 
 ## Ownership and roots
 
@@ -72,5 +73,38 @@ monotonic work.
 Acceptance requires the independent public module corpus, stock-first semantic
 resolution corpus, foreign and unused AST mutation controls, catalog/schema and
 replay owner checks, unchanged source fixtures and resource witnesses, and a
-clean full hosted test/check/strict-lint/format run. These gates remain open until
-concrete receipts are recorded with the integrated implementation.
+clean full hosted test/check/strict-lint/format run.
+
+### Acceptance receipts
+
+The integrated production implementation passed all 1,248 public integration
+tests across 96 binaries in hosted run `20261017-082305399-1037109`. This includes
+the 13 public module tests, nine semantic-resolution tests, stock-first resolution
+witnesses and native CHECK/BUILD at one and eight workers. The final frozen
+implementation passed 2,020 tests across 100 binaries with zero failed, ignored
+or filtered tests and no retry output in `20261017-083329969-1083515`.
+Warning-free all-target check `20261017-083329203-1083407`, strict all-target
+clippy `20261017-083343328-1084433`, `cargo fmt --check` and `git diff --check`
+passed in the same coordinated gate. Original 65,537-use, 4,096-parameter and
+ordinary-stack depth witnesses retain their source and resource limits.
+
+The retained history in `data/runs/xps14/2026-10-17-module-identity.jsonl` includes
+failed intermediate compiles and actual compatibility failures. In particular,
+run `20261017-081908819-1019222` exposed an invalid public reexport of a private
+`self` module. The resolver now obtains non-root module-anchor visibility from
+its checked declaration instead of synthesizing public visibility. Subsequent
+public integration acceptance includes the unchanged reexport corpus.
+
+Unit run `20261017-082444532-1044071` also caught a real persistent-key collision
+between default methods belonging to different source traits. Structural instance
+serialization now includes the checked terminal trait owner; its wire domain is
+v3, rejecting reuse of old aliased keys. Existing trait-owner inequality,
+source-order and impl alpha-renaming controls pass unchanged. Snapshot-local
+numeric handles and printable paths are not persistent identity.
+
+Fixture construction now uses one explicit `ProgramBuilder` and canonical
+declaration paths. Historical diagnostic expectations gained the explicit
+`crate::` anchor. The obsolete test expecting per-clone visibility String heap
+was replaced with an exact shared-module-Arc/last-owner accounting test, because
+visibility now stores an inline checked `ModuleId`. No dead String, increased
+cap or weakened source fixture was retained to imitate the former representation.

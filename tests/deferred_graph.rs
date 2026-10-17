@@ -88,7 +88,12 @@ fn initialized_immutable_unused_body_is_typed_but_never_emitted() {
     let index = program
         .functions
         .iter()
-        .position(|f| f.name == "unused")
+        .position(|f| {
+            f.name.check(program.names.as_ref()).unwrap();
+            f.name.anchor() == frontend::PathAnchor::Crate
+                && f.name.len() == 1
+                && program.names.spelling(f.name.segments()[0]).unwrap() == "unused"
+        })
         .unwrap();
     let budget = compiler::ir::PlanBudget::default();
     let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();

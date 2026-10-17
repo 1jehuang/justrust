@@ -2936,12 +2936,12 @@ impl Hash for EnumTy {
     }
 }
 
-/// Source visibility normalized to a canonical module subtree. The empty
-/// restricted scope denotes the current crate, not unrestricted external use.
+/// Source visibility normalized to a checked canonical module subtree.
+/// A crate-root restriction does not grant access from another root.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Visibility {
     Public,
-    Restricted(String),
+    Restricted(super::module_identity::ModuleId),
 }
 
 impl Visibility {
@@ -2949,28 +2949,57 @@ impl Visibility {
         matches!(self, Self::Public)
     }
 
-    pub fn accessible_from(&self, module: &str) -> bool {
+    pub fn accessible_from(
+        &self,
+        modules: &super::module_identity::ModuleArena,
+        module: super::module_identity::ModuleId,
+    ) -> Result<bool, super::module_identity::ModuleError> {
+        modules.check(module)?;
         match self {
-            Self::Public => true,
-            Self::Restricted(scope) => Self::within(scope, module),
+            Self::Public => Ok(true),
+            Self::Restricted(scope) => modules.is_descendant(module, *scope),
         }
     }
 
     /// Whether the alias's entire audience is permitted by this original.
-    pub fn allows_reexport(&self, alias: &Self) -> bool {
+    pub fn allows_reexport(
+        &self,
+        modules: &super::module_identity::ModuleArena,
+        alias: &Self,
+    ) -> Result<bool, super::module_identity::ModuleError> {
+        modules
+            .budget()
+            .check()
+            .map_err(super::module_identity::ModuleError::from)?;
+        if let Self::Restricted(scope) = self {
+            modules.check(*scope)?;
+        }
+        if let Self::Restricted(scope) = alias {
+            modules.check(*scope)?;
+        }
         match (self, alias) {
-            (Self::Public, _) => true,
-            (Self::Restricted(_), Self::Public) => false,
-            (Self::Restricted(scope), Self::Restricted(alias)) => Self::within(scope, alias),
+            (Self::Public, _) => Ok(true),
+            (Self::Restricted(_), Self::Public) => Ok(false),
+            (Self::Restricted(scope), Self::Restricted(alias)) => {
+                modules.is_descendant(*alias, *scope)
+            }
         }
     }
 
-    fn within(scope: &str, module: &str) -> bool {
-        scope.is_empty()
-            || module == scope
-            || module
-                .strip_prefix(scope)
-                .is_some_and(|rest| rest.starts_with("::"))
+    /// Schema admission must check the definition even when it is public.
+    /// A restricted audience is a lexical ancestor, never an alias namespace.
+    pub fn validate_for(
+        &self,
+        modules: &super::module_identity::ModuleArena,
+        definition: super::module_identity::ModuleId,
+    ) -> Result<(), super::module_identity::ModuleError> {
+        modules.check(definition)?;
+        if let Self::Restricted(scope) = self
+            && !modules.is_descendant(definition, *scope)?
+        {
+            return Err(super::module_identity::ModuleError::InvalidRestriction);
+        }
+        Ok(())
     }
 }
 
@@ -2980,7 +3009,7 @@ pub struct EnumDef {
     pub source_decl: DeclId,
     pub type_args: Arc<[Ty]>,
     pub name: String,
-    pub module: String,
+    pub module: super::module_identity::ModuleId,
     pub visibility: Visibility,
     pub variants: Arc<[VariantDef]>,
 }
@@ -3148,7 +3177,7 @@ pub struct StructDef {
     /// Canonical module-qualified name, used for diagnostics, not identity.
     pub name: String,
     /// Defining module, used for owner/descendant field visibility checks.
-    pub module: String,
+    pub module: super::module_identity::ModuleId,
     pub visibility: Visibility,
     /// Declaration order. No layout offsets or implicit Copy permission.
     pub fields: Arc<[FieldDef]>,
@@ -5986,36 +6015,120 @@ mod original_replay_transport_tests {
 
 #[cfg(test)]
 mod tests {
+    fn fixture_modules() -> std::sync::Arc<super::super::module_identity::ModuleArena> {
+        super::super::module_identity::ModuleArenaBuilder::for_catalog(
+            super::super::expansion_budget::ExpansionBudget::default(),
+        )
+        .unwrap()
+        .freeze()
+        .unwrap()
+    }
     #[test]
     fn visibility_scopes_use_module_boundaries_and_cannot_widen() {
+        use crate::compiler::expansion_budget::ExpansionBudget;
+        use crate::compiler::module_identity::{ModuleArenaBuilder, ModuleError};
+        use crate::compiler::semantic_name::NameStoreBuilder;
+        use crate::compiler::token::Edition;
+        use crate::compiler::token_session::{SourceSnapshot, TokenSession};
+        let budget = ExpansionBudget::default();
+        let source =
+            SourceSnapshot::from_text(std::path::Path::new("visibility.rs"), "", &budget).unwrap();
+        let origin = source.span(source.file(0).unwrap(), 0, 0).unwrap();
+        let mut session = TokenSession::new(source, budget).unwrap();
+        let origin = session.original_span(origin).unwrap();
+        let mut names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let mut builder = ModuleArenaBuilder::for_source(&names).unwrap();
+        let root = builder.source_root().unwrap();
+        let mut child = |parent, text| {
+            let ident = names.intern_root(text, origin).unwrap();
+            builder.intern_child(&names, parent, ident).unwrap()
+        };
+        let a_id = child(root, "a");
+        let ab_id = child(a_id, "b");
+        let child_id = child(ab_id, "child");
+        let ac_id = child(a_id, "c");
+        let aa_id = child(root, "ab");
+        let underscore_id = child(root, "a_b");
+        let other_id = child(root, "other");
+        let bc_id = child(a_id, "bc");
+        let modules = builder.freeze().unwrap();
         let public = super::Visibility::Public;
-        let krate = super::Visibility::Restricted(String::new());
-        let a = super::Visibility::Restricted("a".into());
-        let ab = super::Visibility::Restricted("a::b".into());
-        let sibling = super::Visibility::Restricted("a::c".into());
-        for module in ["", "a", "a::b", "a::b::child", "ab", "other"] {
-            assert!(public.accessible_from(module));
-            assert!(krate.accessible_from(module));
+        let krate = super::Visibility::Restricted(root);
+        let a = super::Visibility::Restricted(a_id);
+        let ab = super::Visibility::Restricted(ab_id);
+        let sibling = super::Visibility::Restricted(ac_id);
+        for module in [root, a_id, ab_id, child_id, aa_id, other_id] {
+            assert!(public.accessible_from(&modules, module).unwrap());
+            assert!(krate.accessible_from(&modules, module).unwrap());
         }
-        for module in ["a", "a::b", "a::b::child", "a::c"] {
-            assert!(a.accessible_from(module));
+        for module in [a_id, ab_id, child_id, ac_id] {
+            assert!(a.accessible_from(&modules, module).unwrap());
         }
-        for module in ["", "ab", "a_b", "other", "a::bc"] {
-            assert!(!ab.accessible_from(module));
+        for module in [root, aa_id, underscore_id, other_id, bc_id] {
+            assert!(!ab.accessible_from(&modules, module).unwrap());
         }
-        assert!(ab.accessible_from("a::b"));
-        assert!(ab.accessible_from("a::b::child"));
-        assert!(public.allows_reexport(&krate));
-        assert!(public.allows_reexport(&ab));
-        assert!(krate.allows_reexport(&ab));
-        assert!(a.allows_reexport(&ab));
-        assert!(ab.allows_reexport(&ab));
-        assert!(!ab.allows_reexport(&a));
-        assert!(!ab.allows_reexport(&sibling));
-        assert!(!krate.allows_reexport(&public));
-        assert!(!a.allows_reexport(&public));
+        assert!(ab.accessible_from(&modules, ab_id).unwrap());
+        assert!(ab.accessible_from(&modules, child_id).unwrap());
+        assert!(public.allows_reexport(&modules, &krate).unwrap());
+        assert!(public.allows_reexport(&modules, &ab).unwrap());
+        assert!(krate.allows_reexport(&modules, &ab).unwrap());
+        assert!(a.allows_reexport(&modules, &ab).unwrap());
+        assert!(ab.allows_reexport(&modules, &ab).unwrap());
+        assert!(!ab.allows_reexport(&modules, &a).unwrap());
+        assert!(!ab.allows_reexport(&modules, &sibling).unwrap());
+        assert!(!krate.allows_reexport(&modules, &public).unwrap());
+        assert!(!a.allows_reexport(&modules, &public).unwrap());
+        assert!(
+            !krate
+                .accessible_from(&modules, modules.core_root())
+                .unwrap()
+        );
+        assert!(a.validate_for(&modules, child_id).is_ok());
+        assert!(matches!(
+            ab.validate_for(&modules, a_id),
+            Err(ModuleError::InvalidRestriction)
+        ));
+        let foreign = fixture_modules();
+        assert!(matches!(
+            public.accessible_from(&modules, foreign.core_root()),
+            Err(ModuleError::ForeignOwner)
+        ));
+        assert!(matches!(
+            public.validate_for(&modules, foreign.core_root()),
+            Err(ModuleError::ForeignOwner)
+        ));
+        assert!(matches!(
+            public.allows_reexport(
+                &modules,
+                &super::Visibility::Restricted(foreign.core_root())
+            ),
+            Err(ModuleError::ForeignOwner)
+        ));
         assert!(public.is_public());
         assert!(!krate.is_public());
+    }
+
+    #[test]
+    fn public_reexport_checks_poisoned_module_authority() {
+        use crate::compiler::expansion_budget::{Counter, ExpansionLimits};
+        let modules = fixture_modules();
+        let first = modules
+            .budget()
+            .charge(
+                Counter::Work,
+                ExpansionLimits::default().counters[Counter::Work as usize],
+            )
+            .unwrap_err();
+        let error = super::Visibility::Public
+            .allows_reexport(&modules, &super::Visibility::Public)
+            .unwrap_err();
+        let super::super::module_identity::ModuleError::Token(
+            super::super::token_session::TokenError::Budget(error),
+        ) = error
+        else {
+            panic!("lost budget failure kind")
+        };
+        assert_eq!(first, error);
     }
 
     #[test]
@@ -7873,6 +7986,7 @@ mod tests {
 
     #[test]
     fn projected_input_paths_preserve_occurrences_privacy_and_exact_metadata() {
+        let modules = fixture_modules();
         let snapshot = SnapshotId::allocate().unwrap();
         let pair = Ty::Tuple(Arc::from([Ty::Int(IntTy::I32), Ty::Int(IntTy::I32)]));
         let enumeration = EnumTy::new(EnumDef {
@@ -7880,19 +7994,20 @@ mod tests {
             type_args: Arc::from([]),
             id: NominalAppId { snapshot, index: 7 },
             name: "E".into(),
-            module: String::new(),
-            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+            module: modules.core_root(),
+            visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
             variants: Arc::from([VariantDef {
                 name: "V".into(),
                 shape: VariantShape::Tuple,
                 fields: Arc::from([FieldDef {
                     name: "0".into(),
                     ty: Ty::Int(IntTy::I32),
-                    visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+                    visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
                 }]),
             }]),
         });
         let root = Ty::Struct(nominal(
+            &modules,
             NominalAppId { snapshot, index: 0 },
             "Private",
             vec![
@@ -8019,6 +8134,7 @@ mod tests {
             unreachable!()
         };
         let other = Ty::Struct(nominal(
+            &modules,
             NominalAppId { snapshot, index: 1 },
             "Private",
             root_type
@@ -8459,6 +8575,7 @@ mod tests {
 
     #[test]
     fn arrays_are_structural_indexed_and_copy_depends_on_element_even_when_empty() {
+        let modules = fixture_modules();
         let scalar = Ty::Array {
             element: Arc::new(Ty::Int(IntTy::I32)),
             len: 2,
@@ -8478,6 +8595,7 @@ mod tests {
         };
         assert!(projected_ty(&empty, &[Projection::ConstantIndex(0)]).is_err());
         let noncopy = Ty::Struct(nominal(
+            &modules,
             NominalAppId {
                 snapshot: SnapshotId::allocate().unwrap(),
                 index: 0,
@@ -8548,6 +8666,7 @@ mod tests {
 
     #[test]
     fn payload_projection_requires_owner_bound_downcast_field_pair() {
+        let modules = fixture_modules();
         let id = NominalAppId {
             snapshot: SnapshotId::allocate().unwrap(),
             index: 0,
@@ -8557,8 +8676,8 @@ mod tests {
             type_args: Arc::from([]),
             id,
             name: "E".into(),
-            module: String::new(),
-            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+            module: modules.core_root(),
+            visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
             variants: vec![
                 VariantDef {
                     name: "A".into(),
@@ -8618,8 +8737,8 @@ mod tests {
             type_args: Arc::from([]),
             id,
             name: "Empty".into(),
-            module: String::new(),
-            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+            module: modules.core_root(),
+            visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
             variants: vec![VariantDef {
                 name: "A".into(),
                 shape: VariantShape::Struct,
@@ -8655,6 +8774,7 @@ mod tests {
 
     #[test]
     fn enum_identity_copy_debug_and_variant_bounds() {
+        let modules = fixture_modules();
         let id = NominalAppId {
             snapshot: SnapshotId::allocate().unwrap(),
             index: 0,
@@ -8664,8 +8784,8 @@ mod tests {
             type_args: Arc::from([]),
             id,
             name: "é".repeat(1000),
-            module: String::new(),
-            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+            module: modules.core_root(),
+            visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
             variants: vec![unit_variant("A")].into(),
         });
         let same_id = EnumTy::new(EnumDef {
@@ -8673,7 +8793,7 @@ mod tests {
             type_args: Arc::from([]),
             id,
             name: "Other".into(),
-            module: String::new(),
+            module: modules.core_root(),
             visibility: crate::compiler::ir::Visibility::Public,
             variants: vec![unit_variant("B")].into(),
         });
@@ -8704,8 +8824,8 @@ mod tests {
                 type_args: Arc::from([]),
                 id,
                 name: "Invalid".into(),
-                module: String::new(),
-                visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+                module: modules.core_root(),
+                visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
                 variants: vec![unit_variant(""); count].into(),
             });
             assert!(invalid.validate().is_err());
@@ -8909,21 +9029,26 @@ mod tests {
         );
     }
 
-    fn nominal(id: NominalAppId, name: &str, fields: Vec<Ty>) -> StructTy {
+    fn nominal(
+        modules: &super::super::module_identity::ModuleArena,
+        id: NominalAppId,
+        name: &str,
+        fields: Vec<Ty>,
+    ) -> StructTy {
         StructTy::new(StructDef {
             source_decl: test_decl(),
             type_args: Arc::from([]),
             id,
             name: name.into(),
-            module: String::new(),
-            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+            module: modules.core_root(),
+            visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
             fields: fields
                 .into_iter()
                 .enumerate()
                 .map(|(index, ty)| FieldDef {
                     name: format!("f{index}"),
                     ty,
-                    visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
+                    visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
                 })
                 .collect::<Vec<_>>()
                 .into(),
@@ -8932,18 +9057,22 @@ mod tests {
 
     #[test]
     fn nominal_identity_is_not_name_shape_or_declaration_index_alone() {
+        let modules = fixture_modules();
         let snapshot = SnapshotId::allocate().unwrap();
         let first = nominal(
+            &modules,
             NominalAppId { snapshot, index: 0 },
             "S",
             vec![Ty::Int(IntTy::I32)],
         );
         let same_shape = nominal(
+            &modules,
             NominalAppId { snapshot, index: 1 },
             "S",
             vec![Ty::Int(IntTy::I32)],
         );
         let next_snapshot = nominal(
+            &modules,
             NominalAppId {
                 snapshot: SnapshotId::allocate().unwrap(),
                 index: 0,
@@ -8963,7 +9092,9 @@ mod tests {
 
     #[test]
     fn aggregate_helpers_preserve_nominal_non_copy_and_projected_copy() {
+        let modules = fixture_modules();
         let handle = nominal(
+            &modules,
             NominalAppId {
                 snapshot: SnapshotId::allocate().unwrap(),
                 index: 0,
@@ -9017,10 +9148,12 @@ mod tests {
 
     #[test]
     fn nominal_debug_bounds_unicode_names_and_does_not_expand_shared_fields() {
+        let modules = fixture_modules();
         let snapshot = SnapshotId::allocate().unwrap();
         let mut ty = Ty::Int(IntTy::I32);
         for index in 0..16 {
             ty = Ty::Struct(nominal(
+                &modules,
                 NominalAppId { snapshot, index },
                 &"é".repeat(1000),
                 vec![ty.clone(), ty],

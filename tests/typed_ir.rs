@@ -107,13 +107,23 @@ fn bounded(name: &str, run: impl FnOnce()) {
         .env(CHILD, name);
     capture(&mut child, &scratch, 30);
 }
+fn root_function_named(
+    program: &frontend::Program,
+    function: &frontend::Function,
+    name: &str,
+) -> bool {
+    function.name.check(program.names.as_ref()).unwrap();
+    function.name.anchor() == frontend::PathAnchor::Crate
+        && function.name.len() == 1
+        && program.names.spelling(function.name.segments()[0]).unwrap() == name
+}
 fn typed(source: &str, name: &str) -> CheckedFunction {
     let program = frontend::parse(source).unwrap();
     let signatures = frontend::signature_table(&program).unwrap();
     let index = program
         .functions
         .iter()
-        .position(|f| f.name == name)
+        .position(|f| root_function_named(&program, f, name))
         .unwrap();
     let function = frontend::type_function_with_signatures(&program, index, &signatures).unwrap();
     function
@@ -292,7 +302,7 @@ fn checked_ir_calls_retain_canonical_targets_and_validated_signatures() {
                 .collect::<Vec<_>>();
             assert_eq!(calls.len(), 1);
             let (expr, name, args, signature) = calls[0];
-            assert_eq!(name, "tools::accept");
+            assert_eq!(name, "crate::tools::accept");
             assert_eq!(signature.params, [Ty::Bool, Ty::Int(IntTy::I32)]);
             assert_eq!(signature.result, Ty::Bool);
             assert_eq!(expr.ty, Ty::Bool);
@@ -321,7 +331,7 @@ fn checked_ir_rejects_invalid_unused_bodies_without_publishing_typed_results() {
                 let unused = program
                     .functions
                     .iter()
-                    .position(|f| f.name == "unused")
+                    .position(|f| root_function_named(&program, f, "unused"))
                     .unwrap();
                 let error = frontend::type_function_with_signatures(&program, unused, &signatures)
                     .expect_err("invalid unused body published typed IR");
@@ -329,7 +339,7 @@ fn checked_ir_rejects_invalid_unused_bodies_without_publishing_typed_results() {
                 let main = program
                     .functions
                     .iter()
-                    .position(|f| f.name == "main")
+                    .position(|f| root_function_named(&program, f, "main"))
                     .unwrap();
                 frontend::type_function_with_signatures(&program, main, &signatures)
                     .unwrap()
@@ -504,7 +514,7 @@ fn checked_ir_unreachable_tail_retains_its_actual_type_not_unit_placeholder() {
                 let index = program
                     .functions
                     .iter()
-                    .position(|f| f.name == "f")
+                    .position(|f| root_function_named(&program, f, "f"))
                     .unwrap();
                 assert!(
                     frontend::type_function_with_signatures(&program, index, &signatures).is_err(),

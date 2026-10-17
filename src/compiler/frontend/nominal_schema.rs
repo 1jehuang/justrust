@@ -1,0 +1,597 @@
+use super::*;
+use std::fmt::Write as _;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum SchemaFieldKey {
+    Named(NameKey),
+    Tuple(usize),
+}
+
+fn schema_field_key(names: &NameStore, name: FieldName) -> Result<SchemaFieldKey, String> {
+    Ok(match name {
+        FieldName::Named(name) => SchemaFieldKey::Named(
+            names
+                .key(name, LookupClass::Member)
+                .map_err(native_adapter::name_diagnostic)?,
+        ),
+        FieldName::Tuple(index) => SchemaFieldKey::Tuple(index),
+    })
+}
+
+impl PlanState {
+    pub(super) fn retain(&mut self, budget: &ir::PlanBudget, bytes: usize) -> Result<(), String> {
+        let reservation = budget.reserve_bytes(
+            bytes
+                .checked_add(4 * std::mem::size_of::<ir::PlanReservation>() + 64)
+                .ok_or("planning reservation allocation overflow")?,
+        )?;
+        self.reservations
+            .try_reserve(1)
+            .map_err(|_| "planning reservation allocation failed")?;
+        self.reservations.push(reservation);
+        Ok(())
+    }
+
+    // These copies are diagnostic IR payload only. Source lookup always uses
+    // the checked source schema and its structural keys, never this String.
+    fn schema_text(&mut self, text: &str, budget: &ir::PlanBudget) -> Result<String, String> {
+        budget.charge_work(text.len())?;
+        self.retain(budget, text.len())?;
+        let mut result = String::new();
+        result
+            .try_reserve_exact(text.len())
+            .map_err(|_| "schema diagnostic allocation failed")?;
+        if result.capacity() > text.len() {
+            self.retain(budget, result.capacity() - text.len())?;
+        }
+        result.push_str(text);
+        Ok(result)
+    }
+
+    fn schema_field_text(
+        &mut self,
+        names: &NameStore,
+        name: FieldName,
+        budget: &ir::PlanBudget,
+    ) -> Result<String, String> {
+        match name {
+            FieldName::Named(name) => self.schema_text(
+                names
+                    .spelling(name)
+                    .map_err(native_adapter::name_diagnostic)?,
+                budget,
+            ),
+            FieldName::Tuple(index) => {
+                let digits = index.checked_ilog10().map_or(1, |log| log as usize + 1);
+                budget.charge_work(digits)?;
+                self.retain(budget, digits)?;
+                let mut text = String::new();
+                text.try_reserve_exact(digits)
+                    .map_err(|_| "tuple field diagnostic allocation failed")?;
+                if text.capacity() > digits {
+                    self.retain(budget, text.capacity() - digits)?;
+                }
+                write!(&mut text, "{index}")
+                    .map_err(|_| "tuple field diagnostic formatting failed")?;
+                Ok(text)
+            }
+        }
+    }
+
+    fn schema_identity(
+        &self,
+        registry: &DeclRegistry,
+        decl: ir::DeclId,
+        path: &AstPath,
+        module: ModuleId,
+        visibility: &ir::Visibility,
+    ) -> Result<(), String> {
+        registry
+            .modules
+            .check_names(registry.names.as_ref())
+            .map_err(module_diagnostic)?;
+        visibility
+            .validate_for(&registry.modules, module)
+            .map_err(module_diagnostic)?;
+        if registry.declaration(decl)?.path.module != module
+            || registry.nominals.get(&name_scope::path_key(
+                registry.names.as_ref(),
+                path,
+                Namespace::Type,
+            )?) != Some(&decl)
+        {
+            return Err("nominal schema belongs to a different source declaration".into());
+        }
+        Ok(())
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn source_ty(
+        &mut self,
+        registry: &DeclRegistry,
+        ty: &Type,
+        bindings: &HashMap<GenericBindingKey, ir::Ty>,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+        depth: usize,
+        allow_ref: bool,
+    ) -> Result<ir::Ty, String> {
+        self.source_ty_with_transport(
+            registry, ty, bindings, caller, budget, depth, allow_ref, None,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn source_ty_with_transport(
+        &mut self,
+        registry: &DeclRegistry,
+        ty: &Type,
+        bindings: &HashMap<GenericBindingKey, ir::Ty>,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+        depth: usize,
+        allow_ref: bool,
+        transport: Option<&ir::NominalSubstitutionRequest<'_>>,
+    ) -> Result<ir::Ty, String> {
+        budget.check_depth(depth)?;
+        budget.charge_work(1)?;
+        budget.charge_nodes(1)?;
+        Ok(match ty {
+            Type::Param(p) => bindings
+                .get(&registry.parameter_key(*p)?)
+                .cloned()
+                .ok_or_else(|| "unknown generic parameter".to_owned())?,
+            Type::Apply(path) => {
+                let (at, segment) = path
+                    .segments
+                    .iter()
+                    .enumerate()
+                    .find(|(_, s)| !s.args.is_empty())
+                    .ok_or("missing type arguments")?;
+                if at + 1 != path.segments.len() {
+                    return Err("generic associated types are unsupported".into());
+                }
+                let name = name_scope::path_key(
+                    registry.names.as_ref(),
+                    &path.path(registry.names.as_ref())?,
+                    Namespace::Type,
+                )?;
+                let decl = *registry
+                    .nominals
+                    .get(&name)
+                    .ok_or_else(|| "unknown nominal type".to_owned())?;
+                let args = segment
+                    .args
+                    .iter()
+                    .map(|arg| {
+                        self.source_ty_with_transport(
+                            registry,
+                            arg,
+                            bindings,
+                            caller,
+                            budget,
+                            depth + 1,
+                            false,
+                            transport,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.intern_with_transport(
+                    registry,
+                    decl,
+                    &args,
+                    caller,
+                    budget,
+                    depth + 1,
+                    transport,
+                )?
+            }
+            Type::SelfType => bindings
+                .get(&GenericBindingKey::SelfType)
+                .cloned()
+                .ok_or("Self is not in an impl scope")?,
+            Type::Named(name) => {
+                let decl = *registry
+                    .nominals
+                    .get(&name_scope::path_key(
+                        registry.names.as_ref(),
+                        name,
+                        Namespace::Type,
+                    )?)
+                    .ok_or_else(|| "unknown nominal type".to_owned())?;
+                self.intern_with_transport(
+                    registry,
+                    decl,
+                    &[],
+                    caller,
+                    budget,
+                    depth + 1,
+                    transport,
+                )?
+            }
+            Type::Ref {
+                kind,
+                referent: slice,
+                ..
+            } if matches!(slice.as_ref(), Type::Slice(_)) => {
+                if !allow_ref {
+                    return Err(
+                        "unsupported: slice references in generic, nested or aggregate types"
+                            .into(),
+                    );
+                }
+                admit_shared_byte_slice(*kind, slice)?;
+                if matches!(caller, ir::FactsCtx::Universal(_)) {
+                    return Err("unsupported: shared byte slices in generic callables".into());
+                }
+                ir::Ty::shared_byte_slice_ty()
+            }
+            Type::Ref { kind, referent, .. } => {
+                if !allow_ref {
+                    return Err("references in generic or aggregate types are unsupported".into());
+                }
+                let layers = source_reference_layers(ty)?;
+                let inner = self.source_ty_with_transport(
+                    registry,
+                    referent,
+                    bindings,
+                    caller,
+                    budget,
+                    depth + 1,
+                    layers > 1,
+                    transport,
+                )?;
+                ir::Ty::Ref {
+                    kind: *kind,
+                    referent: Arc::new(inner),
+                }
+            }
+            Type::Slice(_) => {
+                return Err(BARE_SLICE_UNSUPPORTED.into());
+            }
+            Type::Array(element, len) => {
+                if *len > ir::MAX_ARRAY_LEN {
+                    return Err("array length exceeds supported limit".into());
+                }
+                ir::Ty::Array {
+                    element: Arc::new(self.source_ty_with_transport(
+                        registry,
+                        element,
+                        bindings,
+                        caller,
+                        budget,
+                        depth + 1,
+                        false,
+                        transport,
+                    )?),
+                    len: *len,
+                }
+            }
+            Type::Tuple(fields) => {
+                if fields.is_empty() {
+                    return Err("empty tuple types must use ()".into());
+                }
+                ir::Ty::Tuple(
+                    fields
+                        .iter()
+                        .map(|t| {
+                            self.source_ty_with_transport(
+                                registry,
+                                t,
+                                bindings,
+                                caller,
+                                budget,
+                                depth + 1,
+                                false,
+                                transport,
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                )
+            }
+            Type::Int(i) => ir::Ty::Int(*i),
+            Type::Float(f) => ir::Ty::Float(*f),
+            Type::Bool => ir::Ty::Bool,
+            Type::Unit => ir::Ty::Unit,
+            Type::Never => ir::Ty::Never,
+            Type::Infer => {
+                return Err(
+                    "signature types cannot be inferred; generic argument inference is unsupported"
+                        .into(),
+                );
+            }
+        })
+    }
+    pub(super) fn intern(
+        &mut self,
+        registry: &DeclRegistry,
+        decl: ir::DeclId,
+        args: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+        depth: usize,
+    ) -> Result<ir::Ty, String> {
+        self.intern_with_transport(registry, decl, args, caller, budget, depth, None)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn intern_with_transport(
+        &mut self,
+        registry: &DeclRegistry,
+        decl: ir::DeclId,
+        args: &[ir::Ty],
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+        depth: usize,
+        transport: Option<&ir::NominalSubstitutionRequest<'_>>,
+    ) -> Result<ir::Ty, String> {
+        budget.check_depth(depth)?;
+        budget.charge_work(args.len().checked_add(1).ok_or("nominal work overflow")?)?;
+        let info = registry.declaration(decl)?;
+        let bindings = param_bindings(registry, info, args)?;
+        for arg in args {
+            if transport.is_some() {
+                // Only IR's unforgeable structural request can reach this path.
+                // The produced application is not an executable body proof.
+                let structural = match caller {
+                    ir::FactsCtx::Validated(facts) => ir::FactsCtx::Universal(facts.env()),
+                    facts => facts,
+                };
+                structural.validate_ty_with_budget(arg, budget)?;
+                ir::carrier_locations(arg, budget)?;
+            } else {
+                validate_argument(arg, caller, budget, depth + 1)?;
+            }
+        }
+        let key_bytes = args
+            .len()
+            .checked_mul(std::mem::size_of::<ir::Ty>())
+            .ok_or("generic key allocation overflow")?;
+        let _key_scratch = budget.reserve_bytes(key_bytes)?;
+        let mut key_args = Vec::new();
+        key_args
+            .try_reserve_exact(args.len())
+            .map_err(|_| "generic key allocation failed")?;
+        key_args.extend_from_slice(args);
+        let application_key = (decl, key_args);
+        if let Some(ty) = self.nominals.applications.get(&application_key) {
+            return Ok(ty.clone());
+        }
+        if self.nominals.active.contains(&decl) {
+            return Err(format!("by-value nominal cycle involving {}", info.name));
+        }
+        budget.charge_application()?;
+        self.retain(
+            budget,
+            512usize
+                .checked_add(std::mem::size_of_val(args))
+                .ok_or("nominal allocation overflow")?,
+        )?;
+        let active_len = self.nominals.active.len();
+        self.nominals
+            .active
+            .try_reserve(1)
+            .map_err(|_| "nominal active allocation failed")?;
+        self.nominals.active.push(decl);
+        let result = (|| -> Result<ir::Ty, String> {
+            let schema = self
+                .schemas
+                .get(&decl)
+                .cloned()
+                .ok_or("declaration is not a nominal schema")?;
+            let make_fields = |state: &mut Self,
+                               fields: &[FieldDecl],
+                               module: ModuleId|
+             -> Result<Arc<[ir::FieldDef]>, String> {
+                if fields.len() > 4096 {
+                    return Err("nominal field resource limit exceeded".into());
+                }
+                state.retain(
+                    budget,
+                    fields
+                        .len()
+                        .checked_mul(4 * std::mem::size_of::<ir::FieldDef>() + 128)
+                        .ok_or("nominal field allocation overflow")?,
+                )?;
+                let mut names = std::collections::HashSet::new();
+                let mut result = Vec::new();
+                names
+                    .try_reserve(fields.len())
+                    .map_err(|_| "nominal field key allocation failed")?;
+                result
+                    .try_reserve_exact(fields.len())
+                    .map_err(|_| "nominal field allocation failed")?;
+                for field in fields {
+                    budget.charge_work(1)?;
+                    clone_visibility(&field.visibility, budget)?;
+                    field
+                        .visibility
+                        .validate_for(&registry.modules, module)
+                        .map_err(module_diagnostic)?;
+                    let key = schema_field_key(registry.names.as_ref(), field.name)?;
+                    if !names.insert(key) {
+                        return Err("duplicate field".into());
+                    }
+                    let name =
+                        state.schema_field_text(registry.names.as_ref(), field.name, budget)?;
+                    let ty = state.source_ty_with_transport(
+                        registry,
+                        &field.ty,
+                        &bindings,
+                        caller,
+                        budget,
+                        depth + 1,
+                        false,
+                        transport,
+                    )?;
+                    result.push(ir::FieldDef {
+                        name,
+                        ty,
+                        visibility: field.visibility.clone(),
+                    });
+                }
+                Ok(result.into())
+            };
+            // Descendant applications are completed first, so every published Arc is acyclic.
+            self.retain(
+                budget,
+                info.name
+                    .len()
+                    .checked_mul(2)
+                    .ok_or("nominal name allocation overflow")?,
+            )?;
+            let ty = match schema.as_ref() {
+                NominalSchema::Struct(d) => {
+                    self.schema_identity(registry, decl, &d.name, d.module, &d.visibility)?;
+                    clone_visibility(&d.visibility, budget)?;
+                    if d.fields.is_empty() {
+                        return Err("empty structs are unsupported".into());
+                    }
+                    let fields = make_fields(self, &d.fields, d.module)?;
+                    let display = d
+                        .name
+                        .display(registry.names.as_ref())
+                        .map_err(native_adapter::name_diagnostic)?;
+                    let name = self.schema_text(display.as_str(), budget)?;
+                    let id = ir::NominalAppId {
+                        snapshot: decl.snapshot,
+                        index: self.nominals.ordered.len(),
+                    };
+                    ir::Ty::Struct(ir::StructTy::new(ir::StructDef {
+                        id,
+                        source_decl: decl,
+                        type_args: args.to_vec().into(),
+                        name,
+                        module: d.module,
+                        visibility: d.visibility.clone(),
+                        fields,
+                    }))
+                }
+                NominalSchema::Enum(d) => {
+                    self.schema_identity(registry, decl, &d.name, d.module, &d.visibility)?;
+                    clone_visibility(&d.visibility, budget)?;
+                    if d.variants.is_empty() || d.variants.len() > 4096 {
+                        return Err("enum variant count exceeds supported limits".into());
+                    }
+                    self.retain(
+                        budget,
+                        d.variants
+                            .len()
+                            .checked_mul(std::mem::size_of::<ir::VariantDef>() * 4 + 128)
+                            .ok_or("enum allocation overflow")?,
+                    )?;
+                    let mut names = std::collections::HashSet::new();
+                    let mut variants = Vec::new();
+                    names
+                        .try_reserve(d.variants.len())
+                        .map_err(|_| "enum variant key allocation failed")?;
+                    variants
+                        .try_reserve_exact(d.variants.len())
+                        .map_err(|_| "enum variant allocation failed")?;
+                    for v in &d.variants {
+                        budget.charge_work(1)?;
+                        let key = registry
+                            .names
+                            .key(v.name, LookupClass::Member)
+                            .map_err(native_adapter::name_diagnostic)?;
+                        if !names.insert(key) {
+                            return Err("duplicate enum variant".into());
+                        }
+                        if v.shape == ir::VariantShape::Unit && !v.fields.is_empty() {
+                            return Err("unit variant cannot have fields".into());
+                        }
+                        if v.shape == ir::VariantShape::Tuple
+                            && v.fields.iter().enumerate().any(
+                                |(i, f)| !matches!(f.name, FieldName::Tuple(index) if index == i),
+                            )
+                        {
+                            return Err("tuple variant fields require positional names".into());
+                        }
+                        variants.push(ir::VariantDef {
+                            name: self.schema_text(
+                                registry
+                                    .names
+                                    .spelling(v.name)
+                                    .map_err(native_adapter::name_diagnostic)?,
+                                budget,
+                            )?,
+                            shape: v.shape,
+                            fields: make_fields(self, &v.fields, d.module)?,
+                        });
+                    }
+                    let display = d
+                        .name
+                        .display(registry.names.as_ref())
+                        .map_err(native_adapter::name_diagnostic)?;
+                    let name = self.schema_text(display.as_str(), budget)?;
+                    let id = ir::NominalAppId {
+                        snapshot: decl.snapshot,
+                        index: self.nominals.ordered.len(),
+                    };
+                    ir::Ty::Enum(ir::EnumTy::new(ir::EnumDef {
+                        id,
+                        source_decl: decl,
+                        type_args: args.to_vec().into(),
+                        name,
+                        module: d.module,
+                        visibility: d.visibility.clone(),
+                        variants: variants.into(),
+                    }))
+                }
+            };
+            if transport.is_some() {
+                ir::carrier_locations(&ty, budget)?;
+            } else {
+                validate_argument(&ty, caller, budget, 0)?;
+            }
+            self.nominals
+                .ordered
+                .try_reserve(1)
+                .map_err(|_| "nominal ordering allocation failed")?;
+            self.nominals
+                .applications
+                .try_reserve(1)
+                .map_err(|_| "nominal application allocation failed")?;
+            self.nominals.active.pop();
+            self.nominals.ordered.push(ty.clone());
+            self.nominals
+                .applications
+                .insert(application_key, ty.clone());
+            Ok(ty)
+        })();
+        self.nominals.active.truncate(active_len);
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn field_keys_use_checked_member_identity_not_occurrence_spans() {
+        let program = parse("struct A{x:i32}struct B{x:i32}fn main(){}").unwrap();
+        let first = program.structs[0].fields[0].name;
+        let second = program.structs[1].fields[0].name;
+        assert_eq!(
+            schema_field_key(program.names.as_ref(), first).unwrap(),
+            schema_field_key(program.names.as_ref(), second).unwrap()
+        );
+    }
+
+    #[test]
+    fn field_keys_reject_foreign_source_occurrences() {
+        let first = parse("struct A{x:i32}fn main(){}").unwrap();
+        let second = parse("struct A{x:i32}fn main(){}").unwrap();
+        assert!(schema_field_key(first.names.as_ref(), second.structs[0].fields[0].name).is_err());
+    }
+
+    #[test]
+    fn tuple_field_positions_are_not_identifier_spelling() {
+        let program = parse("struct A{x:i32}fn main(){}").unwrap();
+        let named =
+            schema_field_key(program.names.as_ref(), program.structs[0].fields[0].name).unwrap();
+        let zero = schema_field_key(program.names.as_ref(), FieldName::Tuple(0)).unwrap();
+        let one = schema_field_key(program.names.as_ref(), FieldName::Tuple(1)).unwrap();
+        assert_ne!(zero, one);
+        assert_ne!(zero, named);
+    }
+}
