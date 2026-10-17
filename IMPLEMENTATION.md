@@ -37,6 +37,8 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Lexically resolved labeled loops/while/blocks and target-specific cleanup.
 - [x] Universally checked source trait default bodies, override-aware native
       dispatch and explicit Sized proof for owned trait Self values.
+- [x] Nested grouped imports, named aliases, type-only self leaves and validated
+      empty prefixes, with global logical expansion bounds.
 
 ## Remaining implementation program
 
@@ -110,8 +112,9 @@ cases. An empty discovery queue or a long checklist is not proof of exhaustivene
 
 - [ ] Preserve original file/expansion spans, source maps and stable declaration
       provenance instead of relying on concatenated source positions.
-- [ ] Complete grouped/glob imports, reexports, restricted visibility, namespaces,
+- [ ] Complete glob imports, reexports, restricted visibility, namespaces,
       block-local items/imports, cross-crate paths and edition-specific resolution.
+      Bounded grouped use trees are delivered under GROUPED-IMPORTS.md.
 - [ ] Cover remaining lexical/literal/item forms, attributes, cfg removal,
       recursive module discovery and useful multi-file/expanded diagnostics.
 
@@ -362,6 +365,19 @@ compiler implementations. Reassess staffing against ready tasks, blocked APIs
 and measured integration throughput after each accepted slice.
 
 ## Active work and evidence limits
+
+The grouped-import checkpoint passes all 1,622 hosted tests in 81 binaries
+(`20261017-035808751-3962286`), all-target checking
+(`20261017-035807953-3962199`), strict all-target lint
+(`20261017-035813817-3962848`) and formatting. Independent stock/native fixtures
+cover type-only self aliases, empty groups, trait scopes, namespaces, privacy,
+unused imports and cycles. Two graph tests check canonical native image equality
+and all-unused rejection. Filesystem tests cover nested external modules around
+use-group braces. The two unchanged historical grouped sources now execute
+natively after separate exact-source stock execution. Normal-stack resource
+tests exercise per-tree and global expansion limits. GROUPED-IMPORTS.md defines
+the bounded contract. Source maps, glob/reexport resolution, restricted
+visibility, anonymous imports, full source organization and full Rust stay open.
 
 The full requested outcome is not reached. The native float and labeled-control
 checkpoint passes all 1,576 hosted tests (`20261017-031332671-3543206`), all-target

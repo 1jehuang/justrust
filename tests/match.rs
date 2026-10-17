@@ -542,13 +542,12 @@ fn main() { if run() == 3 { println!("match oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_grouped_import() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "grouped_import",
+fn accepts_historical_grouped_import() {
+    runs(
         r#"enum E { A, B, C } use E::{A,B,C}; fn run()->i32{match B{A=>1,B=>2,C=>3}}
 fn main() { if run() == 2 { println!("match oracle ok"); } }
 "#,
+        "match oracle ok\n",
     );
 }
 

@@ -521,6 +521,36 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
 }
 
 #[test]
+fn grouped_imports_preserve_external_module_loading_and_aliases() {
+    let files = [
+        (
+            "src/input.rs",
+            "mod outer;use crate::outer::{self as module,a::{self as nested,value as pick},token};mod after;fn main(){if pick()+module::token()+nested::value()+token()+after::value()==21{println!(\"external groups ok\");}}",
+        ),
+        ("src/outer.rs", "pub mod a;pub fn token()->i32{2}"),
+        ("src/outer/a.rs", "pub fn value()->i32{7}"),
+        ("src/after.rs", "pub fn value()->i32{3}"),
+    ];
+    let scratch = fixture(&files);
+    let stock = scratch.path("stock");
+    capture(
+        Command::new("rustc")
+            .arg("--edition=2021")
+            .arg(scratch.path("src/input.rs"))
+            .arg("-o")
+            .arg(&stock),
+        &scratch,
+        COMPILE_TIMEOUT,
+    )
+    .success();
+    let result = capture(&mut Command::new(&stock), &scratch, RUN_TIMEOUT);
+    result.success();
+    assert_eq!(result.stdout, b"external groups ok\n");
+    assert!(result.stderr.is_empty());
+    runs(&files, "external groups ok\n");
+}
+
+#[test]
 fn external_missing_module_cannot_be_created_by_trace_publication() {
     for workers in [1, 8] {
         for check in [false, true] {

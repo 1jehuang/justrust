@@ -234,8 +234,11 @@ local value shadowing, and retain a root-only entry function identity.
 
 For direct string-input library calls, reject external `mod name;` because no
 filesystem root is provided. Filesystem compilation now supports that form through
-source loading before parsing. Continue to reject grouped/glob imports, `pub use`,
-restricted `pub(...)`, block-local imports/items and unsupported namespaces.
+source loading before parsing. `GROUPED-IMPORTS.md` now adds nested grouped
+imports, named aliases, type-only terminal self leaves and validated empty
+prefixes through the same resolver, including explicit global expansion guards.
+Continue to reject glob imports, `pub use`, anonymous `as _` imports, restricted
+`pub(...)`, block-local imports/items and unsupported namespaces.
 Existing expression/type restrictions remain in COMPILER.md. Source loading is
 bounded and observable but currently expands into one coarse source snapshot;
 original per-file semantic/syntax spans remain a following source-map slice.

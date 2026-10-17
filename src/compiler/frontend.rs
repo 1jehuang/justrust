@@ -6,14 +6,14 @@
 //! blocklike statements require unit. While loops do not establish return flow.
 //! Numeric literals support primitive integers through 64 bits.
 //! Inline modules, named nonempty braced structs, nonempty unit/tuple/braced enums, ordinary visibility, and
-//! simple module-level imports have separate type/value namespaces. Named
+//! module-level named/grouped imports have separate type/value namespaces. Named
 //! structs and enums are nominal and non-Copy. Match admits scalar literals,
 //! top-level variants with irrefutable payload patterns and whole-value
 //! bindings/wildcards with finite exhaustiveness. Nested enum patterns require
 //! a single-variant enum. Tuple-variant rest patterns remain unsupported.
 //! Move checking belongs to CFG analysis, not
 //! this semantic checker. External modules, restricted
-//! visibility, reexports, grouped/glob imports, and block-local items are not
+//! visibility, reexports, glob imports, and block-local items are not
 //! supported. An executable requires a declared root main, not an imported alias.
 use super::ir;
 use super::traits as tr;
@@ -2768,6 +2768,7 @@ pub struct Program {
 pub struct ParsedProgram {
     pub program: Program,
     items: HashMap<String, Vec<Item>>,
+    empty_use_prefixes: Vec<(String, String)>,
 }
 #[derive(Clone, Debug)]
 struct Item {
@@ -2782,7 +2783,7 @@ enum ItemKind {
     Enum,
     Trait,
     Variant(ir::VariantShape),
-    Import(String),
+    Import(String, bool), // target path, type-namespace-only (`prefix::{self}`)
 }
 
 fn qualify(module: &str, name: &str) -> String {
@@ -3760,6 +3761,8 @@ struct Parser {
     nesting: usize,
     allow_struct: bool,
     type_params: Vec<String>,
+    use_expansions: usize,
+    use_expansion_bytes: usize,
 }
 impl Parser {
     fn token(&self) -> &Token {
@@ -4053,6 +4056,116 @@ impl Parser {
         }
         Ok(parts.join("::"))
     }
+    /// Flatten syntax only. Canonical identities, privacy, cycles and namespace
+    /// collisions are still decided by the ordinary import resolver.
+    fn use_tree(
+        &mut self,
+        prefix: &[String],
+        depth: usize,
+        work: &mut usize,
+        bytes: &mut usize,
+        imports: &mut Vec<(Option<String>, String, bool)>,
+    ) -> Result<(), String> {
+        if depth >= 128 {
+            return Err(self.error("use tree nesting exceeds limit 128"));
+        }
+        *work += 1;
+        if *work > 4096 {
+            return Err(self.error("use tree work exceeds limit 4096"));
+        }
+        if self.is("::") {
+            return Err(self.error("absolute extern crate use paths are unsupported"));
+        }
+        if self.is("*") {
+            return Err(self.error("glob imports are unsupported"));
+        }
+        let prefix_bytes: usize = prefix.iter().map(|s| s.len() + 2).sum();
+        *bytes += prefix_bytes;
+        if *bytes > 1024 * 1024 {
+            return Err(self.error("use tree allocation exceeds limit 1048576"));
+        }
+        let mut path = prefix.to_vec();
+        let mut grouped_self = false;
+        let mut group_allowed = self.is("{");
+        if !self.is("{") {
+            loop {
+                *work += 1;
+                if *work > 4096 {
+                    return Err(self.error("use tree work exceeds limit 4096"));
+                }
+                let keyword = self.is("self") || self.is("super") || self.is("crate");
+                let segment = if keyword {
+                    let segment = self.token().text.clone();
+                    self.at += 1;
+                    segment
+                } else {
+                    self.ident()?
+                };
+                *bytes += segment.len() + 2;
+                if *bytes > 1024 * 1024 {
+                    return Err(self.error("use tree allocation exceeds limit 1048576"));
+                }
+                // A terminal self within a group names the prefix itself,
+                // rather than an item literally named `self` inside it.
+                if segment == "self" && depth > 0 && !path.is_empty() && !self.is("::") {
+                    grouped_self = true;
+                } else {
+                    if keyword
+                        && !path.is_empty()
+                        && !(segment == "super" && path.iter().all(|s| s == "super"))
+                    {
+                        return Err(self.error("module keyword must begin a use path"));
+                    }
+                    path.push(segment);
+                }
+                if !self.eat("::") {
+                    break;
+                }
+                if self.is("*") {
+                    return Err(self.error("glob imports are unsupported"));
+                }
+                if self.is("{") {
+                    group_allowed = true;
+                    break;
+                }
+            }
+        }
+        if self.is("{") && !group_allowed {
+            return Err(self.error("expected :: before use group"));
+        }
+        if self.eat("{") {
+            if self.is("}") && !path.is_empty() {
+                imports.push((None, path.join("::"), false));
+            }
+            while !self.eat("}") {
+                self.use_tree(&path, depth + 1, work, bytes, imports)?;
+                if !self.eat(",") {
+                    self.expect("}")?;
+                    break;
+                }
+            }
+            return Ok(());
+        }
+        let name = if self.eat("as") {
+            if self.is("_") {
+                return Err(self.error("anonymous underscore imports are unsupported"));
+            }
+            self.ident()?
+        } else {
+            let name = path.last().ok_or_else(|| self.error("empty use path"))?;
+            if matches!(name.as_str(), "crate" | "self" | "super") {
+                return Err(self.error("module keyword imports require an explicit alias"));
+            }
+            name.clone()
+        };
+        let target = path.join("::");
+        *bytes += target.len() + name.len();
+        if *bytes > 1024 * 1024 {
+            return Err(self.error("use tree allocation exceeds limit 1048576"));
+        }
+        imports.push((Some(name), target, grouped_self));
+        Ok(())
+    }
     fn array_number(&mut self, context: &str) -> Result<usize, String> {
         let token = self.token();
         if token.string {
@@ -4099,18 +4212,37 @@ impl Parser {
                 if public {
                     return Err(self.error("pub use reexports are unsupported"));
                 }
-                let path = self.path()?;
-                let name = if self.eat("as") {
-                    self.ident()?
-                } else {
-                    let name = path.rsplit("::").next().unwrap();
-                    if matches!(name, "crate" | "self" | "super") {
-                        return Err(self.error("module keyword imports require an explicit alias"));
-                    }
-                    name.to_owned()
-                };
+                let mut imports = Vec::new();
+                let mut work = 0;
+                let mut bytes = 0;
+                self.use_tree(&[], 0, &mut work, &mut bytes, &mut imports)?;
                 self.expect(";")?;
-                (name, ItemKind::Import(path))
+                for (name, path, type_only) in imports {
+                    // Bound logical retained expansion across the entire source,
+                    // not just each tree. This is not an allocator-byte charge.
+                    self.use_expansions += 1;
+                    self.use_expansion_bytes +=
+                        path.len() + module.len() + name.as_ref().map_or(0, String::len) + 2;
+                    if self.use_expansions > 65536 {
+                        return Err(self.error("source use expansion count exceeds limit 65536"));
+                    }
+                    if self.use_expansion_bytes > 16 * 1024 * 1024 {
+                        return Err(
+                            self.error("source use logical expansion exceeds limit 16777216")
+                        );
+                    }
+                    let Some(name) = name else {
+                        parsed.empty_use_prefixes.push((module.into(), path));
+                        continue;
+                    };
+                    self.insert_item(
+                        parsed,
+                        &qualify(module, &name),
+                        false,
+                        ItemKind::Import(path, type_only),
+                    )?;
+                }
+                continue;
             } else if self.eat("trait") {
                 let name = self.ident()?;
                 if self.is("<") {
@@ -5566,6 +5698,8 @@ pub fn parse_unresolved(source: &str) -> Result<ParsedProgram, String> {
         nesting: 0,
         allow_struct: true,
         type_params: Vec::new(),
+        use_expansions: 0,
+        use_expansion_bytes: 0,
     };
     let mut parsed = ParsedProgram {
         program: Program {
@@ -5577,6 +5711,7 @@ pub fn parse_unresolved(source: &str) -> Result<ParsedProgram, String> {
             trait_imports: Vec::new(),
         },
         items: HashMap::new(),
+        empty_use_prefixes: Vec::new(),
     };
     parser.items("", &mut parsed)?;
     if !parser.is("") {
@@ -5736,7 +5871,7 @@ impl Resolver<'_> {
                         kind: ResolvedKind::Variant,
                     })
                 }
-                ItemKind::Import(_) => self.import(path, index, module)?,
+                ItemKind::Import(_, _) => self.import(path, index, module)?,
                 _ => None,
             };
             if let Some(resolved) = resolved {
@@ -5777,10 +5912,24 @@ impl Resolver<'_> {
             // cycle without a concrete item remains unresolved and is rejected.
             return Ok(None);
         }
-        let ItemKind::Import(target) = &self.items[path][index].kind else {
+        let ItemKind::Import(target, type_only) = &self.items[path][index].kind else {
             unreachable!()
         };
-        let resolved = self.path(&target.clone(), parent(path), module, true)?;
+        let resolved = if *type_only && !module {
+            None
+        } else {
+            self.path(&target.clone(), parent(path), module, true)?
+        };
+        if *type_only
+            && resolved.as_ref().is_some_and(|item| {
+                !matches!(
+                    item.kind,
+                    ResolvedKind::Module | ResolvedKind::Enum | ResolvedKind::Trait
+                )
+            })
+        {
+            return Err(format!("{target} is not a module in grouped self import"));
+        }
         self.active.remove(&key);
         self.imports.insert(key, resolved.clone());
         Ok(resolved)
@@ -6422,12 +6571,26 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         active: std::collections::HashSet::new(),
         type_params: Vec::new(),
     };
+    for (module, path) in &parsed.empty_use_prefixes {
+        let target = resolver
+            .path(path, module, true, false)?
+            .ok_or_else(|| format!("unresolved empty use group prefix {path}"))?;
+        if !matches!(
+            target.kind,
+            ResolvedKind::Module | ResolvedKind::Enum | ResolvedKind::Trait
+        ) {
+            return Err(format!(
+                "{} is not a module in empty use group",
+                target.path
+            ));
+        }
+    }
     // Validate unused imports too, deterministically, including cycles/privacy.
     let mut paths: Vec<_> = parsed.items.keys().cloned().collect();
     paths.sort();
     for path in paths {
         for (index, item) in parsed.items[&path].iter().enumerate() {
-            if matches!(item.kind, ItemKind::Import(_)) {
+            if matches!(item.kind, ItemKind::Import(_, _)) {
                 let m = resolver.import(&path, index, true)?;
                 let f = resolver.import(&path, index, false)?;
                 if m.is_none() && f.is_none() {
@@ -6441,7 +6604,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     let mut program = parsed.program.clone();
     for (path, items) in &parsed.items {
         for (index, item) in items.iter().enumerate() {
-            if matches!(item.kind, ItemKind::Import(_))
+            if matches!(item.kind, ItemKind::Import(_, _))
                 && let Some(target) = resolver.import(path, index, true)?
                 && target.kind == ResolvedKind::Trait
             {
@@ -18384,12 +18547,104 @@ mod tests {
         bad("fn f(){} use f as x; fn x(){} fn main(){}");
     }
     #[test]
+    fn grouped_use_trees_preserve_paths_and_identity() {
+        good(
+            "mod api{pub struct S{pub x:i32} pub mod inner{pub fn f()->i32{3}}} use crate::{api::{self as a,S as T,inner::{f as call,},},}; fn id(s:T)->a::S{s} fn main(){let s=id(T{x:call()});let n=s.x;}",
+        );
+        good(
+            "mod a{fn f(){} mod b{use super::{f as call};use crate::{a as root};pub fn run(){call();root::f();}}pub fn run(){b::run();}}fn main(){a::run();}",
+        );
+        good(
+            "mod a{pub fn f(){}} use {a::{self as first,self as second,f},};fn main(){f();first::f();second::f();}",
+        );
+        good("enum E{A,B}use E::{A as First,B,};fn main(){let n=match First{First=>1,B=>2};}");
+        good("mod a{} use {};use a::{};fn main(){}");
+        good("mod a{pub mod b{}}use a::{b::self as x};fn main(){}");
+        good("trait T{fn f(self);}use T::{};use T::{self as Alias};fn main(){}");
+        good(
+            "fn f(){}use {self as root};use crate::{self as other};fn main(){root::f();other::f();}",
+        );
+        good(
+            "use {next as renamed};use crate::{a as next};use renamed::{f as call};mod a{pub fn f(){}}fn main(){call();}",
+        );
+        good(
+            "mod a{fn f(){}mod b{mod c{use super::super::{f as call};pub fn run(){call();}}pub fn run(){self::c::run();}}pub fn run(){b::run();}}fn main(){a::run();}",
+        );
+    }
+    #[test]
+    fn grouped_self_is_type_namespace_only() {
+        good(
+            "mod a{pub fn f(){}}fn a(){}use a::{self as alias};fn alias(){}fn main(){alias();alias::f();}",
+        );
+        bad("fn f(){}use f::{self as alias};fn main(){}");
+        bad("mod a{}fn a(){}use a::{self as alias};fn main(){alias();}");
+        bad("struct S{x:i32}use S::{self as T};fn id(s:T)->S{s}fn main(){let s=id(T{x:1});}");
+    }
+    #[test]
+    fn grouped_imports_reject_collisions_privacy_and_cycles() {
+        for source in [
+            "mod a{pub fn f(){}}use a::{f,f};fn main(){}",
+            "mod a{pub fn f(){}pub fn g(){}}use a::{f as x,g as x};fn main(){}",
+            "mod a{fn f(){}}use a::{f};fn main(){}",
+            "mod a{pub mod b{pub fn f(){}}}mod c{use crate::a::{b as alias};}fn main(){c::alias::f();}",
+            "use {a as b,b as a};fn main(){}",
+            "use missing::{};fn main(){}",
+            "mod a{mod hidden{}}use a::hidden::{};fn main(){}",
+        ] {
+            bad(source);
+        }
+        good("mod a{}fn f(){}use {a as x,f as x};fn main(){x();}");
+    }
+    #[test]
+    fn grouped_use_syntax_and_resource_fences() {
+        for source in ["use a::{*};fn main(){}", "use a::{f,*};fn main(){}"] {
+            assert!(parse(source).unwrap_err().contains("glob imports"));
+        }
+        for source in [
+            "use a::{,};fn main(){}",
+            "use a::{f,,};fn main(){}",
+            "use a::{f g};fn main(){}",
+            "use a::{f} as x;fn main(){}",
+            "use a{f};fn main(){}",
+        ] {
+            assert!(parse_unresolved(source).is_err(), "accepted {source}");
+        }
+        let nested = format!("use {}f{};fn main(){{}}", "{".repeat(129), "}".repeat(129));
+        assert!(parse_unresolved(&nested).unwrap_err().contains("nesting"));
+        let wide = format!("use {{{}}};fn main(){{}}", "f,".repeat(4097));
+        assert!(parse_unresolved(&wide).unwrap_err().contains("work"));
+        let long = "a".repeat(1024 * 1024 + 1);
+        assert!(
+            parse_unresolved(&format!("use {long};fn main(){{}}"))
+                .unwrap_err()
+                .contains("allocation")
+        );
+    }
+    #[test]
+    fn grouped_use_whole_source_expansion_is_bounded() {
+        let many = format!("{}fn main(){{}}", "use a::{};".repeat(65537));
+        assert!(
+            parse_unresolved(&many)
+                .unwrap_err()
+                .contains("count exceeds")
+        );
+        let prefix = "a".repeat(40000);
+        let expanded = format!(
+            "mod {prefix}{{{}}}fn main(){{}}",
+            "use crate::{};".repeat(420)
+        );
+        assert!(
+            parse_unresolved(&expanded)
+                .unwrap_err()
+                .contains("logical expansion")
+        );
+    }
+    #[test]
     fn unsupported_module_forms_are_rejected_explicitly() {
         for (source, message) in [
             ("mod a; fn main(){}", "external module"),
             ("pub(crate) fn main(){}", "restricted pub"),
-            ("use crate::a::*; fn main(){}", "glob and grouped"),
-            ("use crate::a::{f}; fn main(){}", "glob and grouped"),
+            ("use crate::a::*; fn main(){}", "glob imports"),
             ("pub use crate::a; fn main(){}", "pub use"),
             ("mod a{} mod a{} fn main(){}", "duplicate item"),
         ] {

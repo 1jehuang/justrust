@@ -1,5 +1,32 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Grouped imports preserve canonical identity and namespace checks
+
+Nested use trees now normalize into existing canonical resolver edges, not
+textual source replacements. Terminal self imports retain type-only authority,
+including trait/module/enum aliases, and empty prefixes are validated rather
+than discarded. Unused aliases still undergo privacy, duplicate-namespace and
+cycle checks. Independent stock probes corrected trait self/empty cases and
+root self alias classification before release. Logical expansion guards cover
+both each tree and the cumulative program, so repeated shared prefixes cannot
+silently multiply retained paths without a bound.
+
+Final hosted gates pass all 1,622 tests in 81 binaries, run
+`20261017-035808751-3962286`; all-target check
+`20261017-035807953-3962199`, strict all-target lint
+`20261017-035813817-3962848`, formatting and diff checks pass. Two graph tests
+verify canonical native image equality against direct paths and retained
+all-unused failure checks. The external-filesystem oracle covers nested imports
+and a following module after group braces. Two historical sources are promoted
+with exact bytes preserved and separate stock execution.
+
+The test phase reports 4.40s and the sequential complete-oracle native corpus
+is its slowest test at 3.87s. These are correctness observations, not speedup
+measurements. The corpus intentionally establishes all stock outcomes before
+native assertions. Anonymous imports, globs, reexports, restricted visibility,
+source maps, broad project acceptance and full Rust remain open. See
+GROUPED-IMPORTS.md and the dependency-ordered IMPLEMENTATION.md gates.
+
 ## 2026-10-17: Source trait defaults with universal owned-value checks
 
 Provided source methods now have separate source-callable declarations with the

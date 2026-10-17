@@ -471,6 +471,14 @@ fn main() { if same() == 11 { println!("unaliased function"); } }
 }
 
 #[test]
+fn historical_grouped_import_fixture_is_accepted() {
+    runs(
+        "mod a { pub fn f() {} pub fn g() {} } use a::{f, g}; fn main() {}",
+        "",
+    );
+}
+
+#[test]
 fn explicit_module_milestone_boundaries_reject_without_output() {
     // These are intentional feature boundaries, not claims that stock Rust rejects them.
     for (label, source) in [
@@ -479,10 +487,6 @@ fn explicit_module_milestone_boundaries_reject_without_output() {
             "mod a { pub fn entry() {} } use a::entry as main;",
         ),
         ("external module", "mod external; fn main() {}"),
-        (
-            "grouped import",
-            "mod a { pub fn f() {} pub fn g() {} } use a::{f, g}; fn main() {}",
-        ),
         (
             "glob import",
             "mod a { pub fn f() {} } use a::*; fn main() {}",
