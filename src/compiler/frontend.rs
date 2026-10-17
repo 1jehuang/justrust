@@ -8698,18 +8698,24 @@ mod inactive_item_syntax_tests {
     }
 
     #[test]
-    fn unit_struct_syntax_is_real_but_semantics_are_deferred_after_resolution() {
+    fn unit_struct_syntax_retains_nominal_shape_and_alias_constructor_rejection() {
         let parsed = parse_unresolved("struct S;fn main(){}").unwrap();
         assert_eq!(parsed.program.structs[0].shape, StructShape::Unit);
         assert!(parsed.program.structs[0].fields.is_empty());
         let program = resolve(&parsed).unwrap();
         let budget = ir::PlanBudget::default();
-        let error = PlanCtx::from_program(&program, &budget).unwrap_err();
-        assert!(
-            error.starts_with("unsupported: unit struct semantics"),
-            "{error}"
-        );
-        assert_eq!(budget.usage_snapshot().applications, 0);
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let key = name_scope::path_key(
+            program.names.as_ref(),
+            &program.structs[0].name,
+            Namespace::Type,
+        )
+        .unwrap();
+        let declaration = plan.registry.nominals[&key];
+        let (_, ty) = plan.nominal_schema(declaration, &budget).unwrap();
+        assert!(matches!(ty, ir::Ty::Struct(_)), "{ty:?}");
+        assert_eq!(nominal_parts(&ty).unwrap().0, declaration);
+        assert_eq!(budget.usage_snapshot().applications, 1);
         assert_eq!(budget.usage_snapshot().obligations, 0);
         let error = parse("struct S;type A=S;fn main(){let x=A;}").unwrap_err();
         assert!(!error.contains("unsupported"), "{error}");
@@ -8722,6 +8728,56 @@ mod inactive_item_syntax_tests {
                 .unwrap_err()
                 .contains("empty structs are unsupported")
         );
+    }
+
+    #[test]
+    fn unit_struct_values_patterns_and_calls_keep_exact_nominal_types() {
+        for source in [
+            "struct U;fn make()->U{U}fn pass(x:U)->U{x}fn main(){let U=pass(make());println!(\"ok\");}",
+            "struct U;fn main(){match U{U=>println!(\"ok\")}}",
+            "struct U;type A=U;fn main(){let U{}=A{};println!(\"ok\");}",
+            "mod m{pub struct U;}use m::U as V;fn main(){let m::U=V;println!(\"ok\");}",
+            "struct U;fn main(){macro_rules! value{()=>{42};}let crate::U=U;let n=value!();println!(\"ok\");}",
+        ] {
+            let program = parse(source).unwrap_or_else(|error| panic!("{source}: {error}"));
+            check(&program).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+
+    #[test]
+    fn unit_structs_do_not_become_copy_or_interchangeable_empty_values() {
+        for source in [
+            "struct U;fn take(x:U){}fn main(){let u=U;take(u);take(u);}",
+            "struct U;struct V;fn take(x:U){}fn main(){take(V);}",
+        ] {
+            let program = parse(source).unwrap();
+            assert!(check(&program).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn unit_struct_bare_scoped_patterns_reject_before_ghost_binding_publication() {
+        for source in [
+            "struct U;fn main(){macro_rules! value{()=>{42};}let a=U;let U=a;println!(\"ok\");}",
+            "struct U;fn main(){macro_rules! value{()=>{42};}match U{U=>println!(\"ok\")}}",
+        ] {
+            let error = parse(source).unwrap_err();
+            assert!(error.contains("unsupported"), "{source}: {error}");
+            assert!(!error.contains("contract violation"), "{source}: {error}");
+        }
+    }
+
+    #[test]
+    fn generic_unit_declarations_remain_prepublication_unsupported() {
+        let program = parse("struct U<T>;fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let error = PlanCtx::from_program(&program, &budget).unwrap_err();
+        assert!(
+            error.contains("unsupported: generic unit structs"),
+            "{error}"
+        );
+        assert_eq!(budget.usage_snapshot().applications, 0);
+        assert_eq!(budget.usage_snapshot().obligations, 0);
     }
 
     #[test]
@@ -9473,15 +9529,13 @@ impl PlanCtx {
     ) -> Result<Self, String> {
         let program = shared.as_ref();
         program.validate_name_handles()?;
-        // Unit syntax is retained so resolution can diagnose invalid alias
-        // constructors. No unit-layout or constructor semantics are published.
+        // Source unit constructors retain nominal identity. Generic unit
+        // declarations remain outside the initial source-shape admission.
         budget.charge_work(program.structs.len())?;
-        if program
-            .structs
-            .iter()
-            .any(|declaration| declaration.shape == StructShape::Unit)
-        {
-            return Err("unsupported: unit struct semantics are unsupported".into());
+        if program.structs.iter().any(|declaration| {
+            declaration.shape == StructShape::Unit && !declaration.type_params.is_empty()
+        }) {
+            return Err("unsupported: generic unit structs are unsupported".into());
         }
         // Signature construction sees all source declarations, not just demanded
         // instances. Unsupported unused const bodies cannot escape publication.

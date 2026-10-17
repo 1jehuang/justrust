@@ -183,6 +183,15 @@ fn value_size(ty: &ir::Ty) -> Result<i32, String> {
     if ty.contains_slice() {
         return Err(SLICE_UNSUPPORTED.into());
     }
+    if let ir::Ty::Struct(structure) = ty
+        && structure.def().fields.is_empty()
+    {
+        // A source zero-sized nominal keeps its nominal type and move rules.
+        // The PRIVATE ABI deliberately gives it an initialized dummy word,
+        // just like an empty array, so snapshots and references always address
+        // owned frame storage. This is not a Rust/FFI size or layout claim.
+        return Ok(8);
+    }
     if let ir::Ty::Array { element, len } = ty {
         if *len > ir::MAX_ARRAY_LEN {
             return Err("array length exceeds private backend limit".into());
@@ -1289,7 +1298,9 @@ impl<'a> Emitter<'a> {
             cfg::Rvalue::Aggregate { ty, fields } => {
                 // Evaluate the whole aggregate into scratch, so destination
                 // projections cannot overwrite a later Copy operand's source.
-                if matches!(ty, ir::Ty::Array { len: 0, .. }) {
+                if matches!(ty, ir::Ty::Array { len: 0, .. })
+                    || matches!(ty, ir::Ty::Struct(structure) if structure.def().fields.is_empty())
+                {
                     self.immediate(0);
                     self.store_value(self.aggregate_scratch, &ir::Ty::Unit)?;
                 }
@@ -5661,6 +5672,86 @@ mod tests {
         }
         assert!(ownership::analyze(&function).passed());
         assert_eq!(emit_test_cfg(modules, &function).unwrap().code, object.code);
+    }
+
+    #[test]
+    fn empty_nominal_private_carrier_has_owned_initialized_word_and_stable_abi() {
+        let program =
+            frontend::parse("struct Marker;fn make()->Marker{Marker}fn main(){}").unwrap();
+        let signatures = frontend::signature_table(&program).unwrap();
+        let index = authored_function(&program, "make");
+        let checked =
+            frontend::type_function_with_signatures(&program, index, &signatures).unwrap();
+        let ty = checked.result.clone();
+        assert!(matches!(ty, ir::Ty::Struct(_)));
+        assert_ne!(ty, ir::Ty::Unit);
+        assert!(!ty.is_copy());
+        assert_eq!(ty.field_count(), Some(0));
+        assert_eq!(value_size(&ty), Ok(8));
+        assert_eq!(indirect(&ty), Ok(true));
+        assert_eq!(result_indirect(&ty), Ok(true));
+        assert_eq!(argument_words(&ty), Ok(1));
+        let words =
+            parameter_words(&[ty.clone(), ir::Ty::Int(ir::IntTy::I32), ty.clone()]).unwrap();
+        assert_eq!(words, vec![1, 1, 1]);
+        assert_eq!(argument_slot_offsets(&words, true), Ok(vec![40, 32, 24]));
+        assert_eq!(call_cleanup_bytes(&words, true), Ok(32));
+        let mut frame = 8;
+        assert_eq!(allocate_value(&mut frame, &ty), Ok(-16));
+        assert_eq!(allocate_value(&mut frame, &ty), Ok(-24));
+        let tuple = ir::Ty::Tuple(vec![ty.clone(), ir::Ty::Int(ir::IntTy::I32), ty.clone()].into());
+        assert_eq!(value_size(&tuple), Ok(24));
+        assert_eq!(field_offset(&tuple, 1).unwrap().0, 8);
+        assert_eq!(field_offset(&tuple, 2).unwrap().0, 16);
+        let array = ir::Ty::Array {
+            element: std::sync::Arc::new(ty),
+            len: 3,
+        };
+        assert_eq!(value_size(&array), Ok(24));
+        assert_eq!(array_offset(&array, 2).unwrap().0, 16);
+        let object = emit_checked_fixture(&checked, &signatures, index).unwrap();
+        assert!(
+            object
+                .code
+                .windows(5)
+                .any(|bytes| bytes == [0xb8, 0, 0, 0, 0]),
+            "empty construction must explicitly initialize its private dummy word"
+        );
+    }
+
+    #[test]
+    fn unit_nominal_private_transport_preserves_nested_values_and_argument_effects() {
+        let program = frontend::parse(
+            r#"
+            struct Marker;
+            struct Packet { first: Marker, number: i32, last: Marker }
+            fn make(n:i32)->Marker {
+                if n==1 { println!("first"); } else { println!("last"); }
+                Marker
+            }
+            fn number()->i32 { println!("number"); 42 }
+            fn relay(a:Marker,n:i32,b:Marker)->Marker {
+                if n!=42 { 1/0; }
+                a
+            }
+            fn pass(value:Packet)->Packet { value }
+            fn main() {
+                let marker=relay(make(1),number(),make(2));
+                let packet=pass(Packet{first:marker,number:42,last:Marker});
+                if packet.number!=42 { 1/0; }
+                let tuple=(packet.first,7,packet.last);
+                if tuple.1!=7 { 1/0; }
+                let values=[tuple.0,tuple.2];
+                let Marker=values[0];
+                let Marker=values[1];
+                println!("unit");
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&program);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"first\nnumber\nlast\nunit\n");
     }
 
     #[test]

@@ -442,8 +442,21 @@ impl PlanState {
                 NominalSchema::Struct(d) => {
                     self.schema_identity(registry, decl, &d.name, d.module, &d.visibility)?;
                     clone_visibility(&d.visibility, budget)?;
-                    if d.fields.is_empty() {
-                        return Err("empty structs are unsupported".into());
+                    match d.shape {
+                        StructShape::Record if d.fields.is_empty() => {
+                            return Err("unsupported: empty record structs are unsupported".into());
+                        }
+                        StructShape::Unit => {
+                            if !d.fields.is_empty() {
+                                return Err("unit struct source schema has fields".into());
+                            }
+                            if !d.type_params.is_empty() || !args.is_empty() {
+                                return Err(
+                                    "unsupported: generic unit structs are unsupported".into()
+                                );
+                            }
+                        }
+                        StructShape::Record => {}
                     }
                     let fields = make_fields(self, &d.fields, d.module)?;
                     let display = d

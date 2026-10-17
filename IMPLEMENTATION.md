@@ -17,10 +17,12 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Explicit cached CFG facts shared by check and native emission, with provenance.
 - [x] Cached storage/initialization/move-path dataflow shared by check and emission.
 - [x] Nonempty nominal structs, field privacy and source-level whole/partial moves.
-- [ ] Admit nongeneric unit-struct constructors/patterns and native nominal
+- [x] Admit nongeneric unit-struct constructors/patterns and native nominal
       transport with an explicit initialized private carrier. UNIT-STRUCTS.md
-      defines the in-progress stock/native/debug/release gates and scoped bare
-      pattern boundary. Full zero-sized public layout/FFI remains separate.
+      records 26 stock sources / 104 native cells in debug and release bootstrap
+      profiles, five schema authority controls and the complete 2,179-test /
+      108-binary hosted gate. Scoped bare constructor patterns and full zero-sized
+      public layout/FFI remain separate open work.
 - [x] Irrefutable tuple/struct let patterns with selective moves and wildcards.
 - [x] Fieldless nominal enums and scalar/enum match with exhaustive coverage.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.

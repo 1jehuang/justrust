@@ -92,12 +92,14 @@ Publication must use the exact retained Program, declaration, facts/world/budget
 and occurrence inventory. A checked mutable AST copy is not canonical publication
 authority. No new provider enum name by itself can repair a missing capability.
 
-The parser retains real unit-struct syntax as an explicit Unit shape so that
-earlier alias-constructor validation is not bypassed by an Unsupported fence.
-Unit shapes still have no native value/constructor/ABI admission: planning rejects
-them after universal name validation and resolution. Empty record syntax remains
-its existing Unsupported boundary. This is deferred syntax, not unit-struct
-semantic support.
+At this historical checkpoint the parser retained real unit-struct syntax as an
+explicit Unit shape so that earlier alias-constructor validation was not bypassed
+by an Unsupported fence. Unit shapes had no native value/constructor/ABI admission:
+planning rejected them after universal name validation and resolution. Empty
+record syntax retained its existing Unsupported boundary. That was deferred
+syntax, not unit-struct semantic support.
+UNIT-STRUCTS.md records the later bounded native unit-struct implementation;
+its layout and scoped-pattern exclusions remain explicit.
 
 ## Executed acceptance gates
 

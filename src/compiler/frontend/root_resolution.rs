@@ -1182,6 +1182,77 @@ impl Resolver<'_> {
             })
         }))
     }
+    fn unsupported(message: &str) -> String {
+        super::super::source::SourceError {
+            kind: super::super::source::SourceErrorKind::Unsupported,
+            primary: None,
+            message: message.into(),
+            _diagnostic_lease: None,
+            location: None,
+        }
+        .to_string()
+    }
+    fn is_unit_struct(&self, item: &ResolvedItem) -> Result<bool, String> {
+        if item.kind != ResolvedKind::Struct {
+            return Ok(false);
+        }
+        let key = self.key(item.source()?)?;
+        for declaration in &self.program.structs {
+            self.alias_budget.charge_work(1)?;
+            if self.key(&declaration.name)? == key {
+                if declaration.shape != StructShape::Unit {
+                    return Ok(false);
+                }
+                if !declaration.fields.is_empty() {
+                    return Err("unit struct source schema has fields".into());
+                }
+                if !declaration.type_params.is_empty() {
+                    return Err(Self::unsupported("generic unit structs are unsupported"));
+                }
+                return Ok(true);
+            }
+        }
+        Err("resolved struct has no checked source schema".into())
+    }
+    fn zero_constructor(
+        &mut self,
+        path: &AstPath,
+        module: ModuleId,
+    ) -> Result<Option<ResolvedItem>, String> {
+        if let Some(item) = self.path(path, module, false, false)?
+            && item.kind == ResolvedKind::Variant
+        {
+            return Ok(Some(item));
+        }
+        if let Some(item) = self.path(path, module, true, false)?
+            && self.is_unit_struct(&item)?
+        {
+            return Ok(Some(item));
+        }
+        Ok(None)
+    }
+    fn constructor_pattern(
+        &self,
+        item: &ResolvedItem,
+        source: &AstPath,
+        bare_binding: bool,
+    ) -> Result<Pattern, String> {
+        let name = self.resolved_use(item.source()?, source)?;
+        if self.is_unit_struct(item)? {
+            if bare_binding && self.lexical_function.is_some() {
+                return Err(Self::unsupported(
+                    "bare unit constructor patterns in lexical-scope functions require deferred binder classification",
+                ));
+            }
+            Ok(Pattern::Struct {
+                name,
+                fields: Vec::new(),
+                rest: false,
+            })
+        } else {
+            Ok(Pattern::Path(name))
+        }
+    }
     fn local_insert(
         &self,
         scope: &mut std::collections::HashSet<LocalKey>,
@@ -1374,25 +1445,20 @@ impl Resolver<'_> {
             Pattern::Path(name) if name.anchor() == PathAnchor::SelfType && self.self_allowed => {}
             Pattern::Path(name) => {
                 let item = self
-                    .path(name, module, false, false)?
-                    .ok_or("unresolved variant pattern")?;
-                if item.kind != ResolvedKind::Variant {
-                    return Err("resolved declaration is not an enum variant pattern".into());
-                }
-                *name = self.resolved_use(item.source()?, name)?;
+                    .zero_constructor(name, module)?
+                    .ok_or("unresolved zero-field constructor pattern")?;
+                *pattern = self.constructor_pattern(&item, name, false)?;
             }
             Pattern::Binding { name, mutable } => {
                 let path = self.single_path(*name)?;
-                if let Some(item) = self.path(&path, module, false, false)?
-                    && item.kind == ResolvedKind::Variant
-                {
+                if let Some(item) = self.zero_constructor(&path, module)? {
                     if *mutable {
                         return Err(format!(
                             "binding {} cannot shadow an enum variant",
                             self.ident_display(*name)?
                         ));
                     }
-                    *pattern = Pattern::Path(self.resolved_use(item.source()?, &path)?);
+                    *pattern = self.constructor_pattern(&item, &path, true)?;
                     return Ok(());
                 }
                 if !self.local_insert(names, *name)? {
@@ -1433,7 +1499,7 @@ impl Resolver<'_> {
         }
         Ok(())
     }
-    fn binding_variant(
+    fn binding_constructor(
         &mut self,
         name: BindingName,
         module: ModuleId,
@@ -1442,9 +1508,7 @@ impl Resolver<'_> {
             return Ok(None);
         };
         let path = self.single_path(name)?;
-        let mut resolved = self
-            .path(&path, module, false, false)?
-            .filter(|item| item.kind == ResolvedKind::Variant);
+        let mut resolved = self.zero_constructor(&path, module)?;
         if let Some(item) = &mut resolved {
             item.path = ResolvedPath::Source(self.resolved_use(item.source()?, &path)?);
         }
@@ -1468,14 +1532,14 @@ impl Resolver<'_> {
                 ty,
                 value,
             } = stmt
-                && let Some(item) = self.binding_variant(*name, module)?
+                && let Some(item) = self.binding_constructor(*name, module)?
             {
                 if *mutable {
                     return Err("binding cannot shadow an enum variant".into());
                 }
                 walk_depth(DepthNode::Type(ty), Some(&self.alias_budget))?;
                 *stmt = Stmt::LetPattern {
-                    pattern: Pattern::Path(item.source()?.clone()),
+                    pattern: self.constructor_pattern(&item, item.source()?, true)?,
                     ty: ty.clone(),
                     value: value.clone(),
                 };
@@ -1483,7 +1547,7 @@ impl Resolver<'_> {
             match stmt {
                 Stmt::Declare { name, ty, .. } => {
                     self.ty(ty, module)?;
-                    if self.binding_variant(*name, module)?.is_some() {
+                    if self.binding_constructor(*name, module)?.is_some() {
                         return Err(
                             "enum variant patterns in deferred declarations are unsupported".into(),
                         );
@@ -1752,23 +1816,11 @@ impl Resolver<'_> {
                         // later declaration-wide unsupported-unit fence.
                         return Err("type alias is not a value constructor".into());
                     }
-                    if item.kind == ResolvedKind::Struct {
-                        let key = self.key(item.source()?)?;
-                        for declaration in &self.program.structs {
-                            self.alias_budget.charge_work(1)?;
-                            if self.key(&declaration.name)? == key
-                                && declaration.shape == StructShape::Unit
-                            {
-                                return Err(super::super::source::SourceError {
-                                    kind: super::super::source::SourceErrorKind::Unsupported,
-                                    primary: None,
-                                    message: "unit struct values are unsupported".into(),
-                                    _diagnostic_lease: None,
-                                    location: None,
-                                }
-                                .to_string());
-                            }
-                        }
+                    if self.is_unit_struct(&item)? {
+                        *expr = Expr::Struct {
+                            name: self.resolved_use(item.source()?, name)?,
+                            fields: Vec::new(),
+                        };
                     }
                 }
             }
@@ -2215,7 +2267,10 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         resolver.ty(&mut function.result, function.module)?;
         for (name, ty) in &mut function.params {
             resolver.ty(ty, function.module)?;
-            if resolver.binding_variant(*name, function.module)?.is_some() {
+            if resolver
+                .binding_constructor(*name, function.module)?
+                .is_some()
+            {
                 return Err("enum variant patterns in function parameters are unsupported".into());
             }
         }
@@ -2271,12 +2326,25 @@ mod unit_shape_tests {
     use super::*;
 
     #[test]
-    fn direct_unit_value_is_explicitly_unsupported_at_resolution() {
+    fn direct_unit_value_normalizes_to_exact_nominal_struct_expression() {
         let parsed = parse_unresolved("struct S;fn main(){let x=S;}").unwrap();
-        let error = resolve(&parsed).unwrap_err();
+        let program = resolve(&parsed).unwrap();
+        let Stmt::Let {
+            value: Expr::Struct { name, fields },
+            ..
+        } = &program.functions[0].body.statements[0]
+        else {
+            panic!("unit constructor did not retain nominal struct expression");
+        };
+        assert!(fields.is_empty());
         assert_eq!(
-            error,
-            "in function crate::main: unsupported: unit struct values are unsupported"
+            name_scope::path_key(program.names.as_ref(), name, Namespace::Type).unwrap(),
+            name_scope::path_key(
+                program.names.as_ref(),
+                &program.structs[0].name,
+                Namespace::Type
+            )
+            .unwrap()
         );
     }
 
@@ -2291,10 +2359,48 @@ mod unit_shape_tests {
     }
 
     #[test]
-    fn unused_unit_declaration_survives_resolution_for_later_typed_fence() {
+    fn unused_unit_declaration_preserves_real_shape() {
         let parsed = parse_unresolved("struct S;fn main(){}").unwrap();
         let program = resolve(&parsed).unwrap();
         assert_eq!(program.structs[0].shape, StructShape::Unit);
+    }
+
+    #[test]
+    fn imported_values_braced_aliases_and_bindingless_unit_patterns_resolve() {
+        for source in [
+            "mod a{pub struct S;}use a::S as U;fn main(){let x=U;}",
+            "struct S;type A=S;fn main(){let x=S{};let y=A{};}",
+            "struct S;fn main(){let S=S;match S{S=>{}}}",
+            "mod a{pub struct S;}fn main(){let a::S=a::S;match a::S{a::S=>{}}}",
+            "struct S;fn main(){macro_rules! n{()=>{1};}let x=n!();let crate::S=S;match S{crate::S=>{}}}",
+            "struct S;fn main(){macro_rules! n{()=>{1};}let x=n!();let S{}=S;}",
+        ] {
+            let parsed = parse_unresolved(source).unwrap();
+            resolve(&parsed).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+
+    #[test]
+    fn scoped_bare_unit_pattern_reclassification_is_unsupported_before_ghost_use() {
+        for source in [
+            "struct S;fn main(){macro_rules! n{()=>{1};}let x=n!();let S=S;}",
+            "struct S;fn main(){macro_rules! n{()=>{1};}let x=n!();match S{S=>{}}}",
+        ] {
+            let parsed = parse_unresolved(source).unwrap();
+            let error = resolve(&parsed).unwrap_err();
+            assert_eq!(
+                error,
+                "in function crate::main: unsupported: bare unit constructor patterns in lexical-scope functions require deferred binder classification",
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn unit_tuple_call_is_not_callable() {
+        let parsed = parse_unresolved("struct S;fn main(){let x=S();}").unwrap();
+        let error = resolve(&parsed).unwrap_err();
+        assert_eq!(error, "in function crate::main: unresolved function");
     }
 }
 

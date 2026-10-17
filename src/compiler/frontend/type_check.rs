@@ -1678,6 +1678,43 @@ impl<'a> Checker<'a> {
             .cloned()
             .ok_or_else(|| "missing nominal source schema".into())
     }
+    fn checked_struct_shape(&self, ty: &ir::StructTy) -> Result<StructShape, String> {
+        let schema = self.nominal_source(ty.def().source_decl)?;
+        let NominalSchema::Struct(source) = schema.as_ref() else {
+            return Err("contract: struct has a non-struct source schema".into());
+        };
+        match source.shape {
+            StructShape::Unit => {
+                if !source.type_params.is_empty() || !ty.def().type_args.is_empty() {
+                    return Err("unsupported: generic unit structs".into());
+                }
+                if !source.fields.is_empty() || !ty.def().fields.is_empty() {
+                    return Err("contract: unit struct source schema has fields".into());
+                }
+                Ok(StructShape::Unit)
+            }
+            StructShape::Record if source.fields.is_empty() => {
+                Err("unsupported: empty record structs".into())
+            }
+            StructShape::Record => Ok(StructShape::Record),
+        }
+    }
+    fn unit_pattern(&self, pattern: &Pattern, ty: &ir::Ty) -> Result<ir::Ty, String> {
+        let Pattern::Struct { fields, rest, .. } = pattern else {
+            return Err("contract: expected normalized unit pattern".into());
+        };
+        let expected = self.pattern_ty(pattern, ty)?;
+        let ir::Ty::Struct(structure) = &expected else {
+            return Err("expected unit struct pattern".into());
+        };
+        if self.checked_struct_shape(structure)? != StructShape::Unit {
+            return Err("aggregate destructuring match patterns are unsupported".into());
+        }
+        if !fields.is_empty() || *rest {
+            return Err("unsupported: unit struct pattern fields or rest".into());
+        }
+        Ok(expected)
+    }
     fn source_fields(
         &self,
         declaration: ir::DeclId,
@@ -2792,8 +2829,12 @@ impl<'a> Checker<'a> {
                 ir::Ty::Tuple(fields) if fields.len() == patterns.len() => patterns.iter().zip(fields.iter()).map(|(pattern, ty)| self.pattern_ty(pattern, ty)).collect::<Result<Vec<_>, _>>().map(|fields| ir::Ty::Tuple(fields.into())),
                 _ => Err(format!("tuple pattern with {} fields does not match {ty:?}", patterns.len())),
             },
-            Pattern::Struct { name, .. } => {
+            Pattern::Struct { name, fields, rest } => {
                 let expected = self.nominal(name,Some(ty))?;
+                let ir::Ty::Struct(structure) = &expected else { return Err("expected struct pattern".into()); };
+                if self.checked_struct_shape(structure)? == StructShape::Unit && (!fields.is_empty() || *rest) {
+                    return Err("unsupported: unit struct pattern fields or rest".into());
+                }
                 self.accessible(&expected)?;
                 if !coerces(ty, &expected) { return Err(format!("struct pattern {name:?} does not match {ty:?}")); }
                 Ok(expected)
@@ -4677,6 +4718,9 @@ impl<'a> Checker<'a> {
                                 Some(ir::Ty::Int(literal.suffix.unwrap_or(ir::IntTy::I32)))
                             }
                             Pattern::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
+                            Pattern::Struct { .. } => {
+                                Some(self.unit_pattern(&arm.pattern, &ir::Ty::Never)?)
+                            }
                             _ => None,
                         };
                         if let Some(hint) = hint {
@@ -4779,7 +4823,11 @@ impl<'a> Checker<'a> {
                         Pattern::Apply { .. } => {
                             return Err("pattern application normalization invariant".into());
                         }
-                        Pattern::Tuple(_) | Pattern::Struct { .. } => {
+                        Pattern::Struct { .. } => {
+                            self.unit_pattern(arm_pattern, &domain)?;
+                            (ir::MatchPattern::Wildcard, None)
+                        }
+                        Pattern::Tuple(_) => {
                             return Err(
                                 "aggregate destructuring match patterns are unsupported".into()
                             );
@@ -4883,6 +4931,7 @@ impl<'a> Checker<'a> {
                 else {
                     return Err("expected struct constructor".into());
                 };
+                self.checked_struct_shape(&ty)?;
                 if !self.visible(&ty.def().visibility)? {
                     return Err(format!("private struct {name:?}"));
                 }
@@ -5782,6 +5831,26 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod checked_identity_tests {
     use super::*;
+
+    #[test]
+    fn unit_struct_patterns_preserve_nominal_domains() {
+        let program =
+            parse("struct U; fn value()->i32{let U=U;let U{}=U{};match U{U=>7}}fn main(){}")
+                .unwrap();
+        check(&program).unwrap();
+
+        let program = parse("struct U;struct V;fn value()->i32{match U{V=>7}}fn main(){}").unwrap();
+        assert!(check(&program).is_err());
+    }
+
+    #[test]
+    fn unit_struct_transfer_remains_noncopy() {
+        let program = parse(
+            "struct U;fn consume(x:U){}fn value(){let x=U;consume(x);consume(x);}fn main(){}",
+        )
+        .unwrap();
+        assert!(check(&program).is_err());
+    }
 
     fn builder(name: &str) -> ProgramBuilder {
         ProgramBuilder::new(

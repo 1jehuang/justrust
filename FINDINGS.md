@@ -1,5 +1,44 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Native nominal unit structs with an explicit private carrier
+
+Nongeneric unit structs now retain nominal identity through constructors,
+ordinary unit patterns, moves, calls/returns, existing aggregate composition and
+reference transport. Source shape and exact declaration metadata authorize
+construction and patterns, not an empty IR field list. Checked bindingless unit
+patterns do not consume the scrutinee; actual whole-value transfers remain
+non-Copy moves. Ambiguous bare constructor patterns in macro-scoped functions,
+generic unit declarations and general constructor parameter patterns remain open.
+
+Every zero-field Struct uses an initialized eight-byte private carrier, preserving
+the existing aggregate snapshot-pointer/sret ABI and valid owned frame addresses.
+Nested strides and copies use the same size. This is not Rust public zero-sized
+layout, size_of or FFI compatibility. Direct backend controls inspect carrier
+size, allocation, offsets, cleanup and initialization; runtime controls preserve
+argument effects and nested nominal values. CFG/ownership controls retain the
+root move bit even when a nominal has no field children.
+
+The stock-first corpus has 26 sources and 104 workers-1/8 native CHECK/BUILD cells.
+Debug `20261017-103640031-1639251` and release bootstrap
+`20261017-103645840-1639250` each pass eight public tests, including five malformed
+schema controls. These are bootstrap profiles, not nonexistent native optimization
+flags. Release private tests pass nineteen in `20261017-103553693-1635941`.
+
+Intermediate failures exposed a stale resolver method reference, new fixture API
+accesses, a stale pre-admission application-count assertion and stock/phase
+assertion mistakes. The exact 26 source bytes, classifications and 104 cells were
+preserved: E0423 pins the type-alias rejection independently of version-specific
+wording, and the bare scoped pattern parses before its genuine resolver Unsupported
+boundary. Final hosted check `20261017-103752636-1644345`, full regression
+`20261017-103755217-1644600` (2,179 tests / 108 binaries, no failed/ignored/filtered),
+strict lint `20261017-103809005-1645706`, fmt and diff checks pass. Fourteen exact
+redacted records are retained in `data/runs/xps14/2026-10-17-unit-structs.jsonl`.
+
+UNIT-STRUCTS.md states the bounded contract. The broad Rust program remains open.
+Release test-engine compilation took 17.6s in its private-control run, and the
+full suite still has an approximately 12.2s wide-integer critical path. These
+measurements diagnose agent wait, not before/after compiler speedup claims.
+
 ## 2026-10-17: Checked module item macros and retained generated functions
 
 Original module definitions and later unqualified item calls now emit exactly one

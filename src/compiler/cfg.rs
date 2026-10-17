@@ -866,11 +866,9 @@ fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
                 }
             }
             Ty::Struct(ty) if nominals.insert((false, ty.def().id)) => {
-                if ty.def().fields.is_empty() {
-                    return Err(
-                        "empty CFG aggregates are unsupported; empty tuples must be Unit".into(),
-                    );
-                }
+                // A zero-field nominal remains an owned, non-Copy nominal.
+                // Source shape admission belongs to the checked source schema,
+                // not the field count of this runtime carrier.
                 pending.extend(ty.def().fields.iter().map(|field| (&field.ty, depth + 1)));
             }
             Ty::Tuple(fields) if tuples.insert(fields.as_ptr()) => {
@@ -6856,6 +6854,75 @@ mod tests {
         assert!(super::super::ownership::analyze(&function).passed());
         source.body.statements.push(ir::Stmt::Expr(ExprId(3)));
         assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
+    }
+
+    #[test]
+    fn empty_nominal_aggregate_keeps_identity_and_has_no_projectable_fields() {
+        let (_module_names, modules) = fixture_modules();
+        let nominal = nominal(&modules, vec![]);
+        let ty = Ty::Struct(nominal.clone());
+        assert!(!ty.is_copy());
+        validate_type(&ty, 0).unwrap();
+        assert!(validate_type(&Ty::Tuple(Vec::new().into()), 0).is_err());
+        let source = with_root(
+            ty.clone(),
+            vec![expr(
+                ty.clone(),
+                ir::ExprKind::Struct {
+                    ty: nominal,
+                    fields: vec![],
+                },
+            )],
+            vec![ir::Stmt::Expr(ExprId(0))],
+        );
+        let function = nominal_lowered(&source);
+        assert!(
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .any(|statement| matches!(&statement.value, Statement::Assign {
+                value: Rvalue::Aggregate { ty: aggregate, fields }, ..
+            } if aggregate == &ty && fields.is_empty()))
+        );
+        assert!(
+            function
+                .place_ty(&Place {
+                    local: LocalId(0),
+                    projection: vec![Projection::Field(0)],
+                })
+                .is_err()
+        );
+        assert!(super::super::ownership::analyze(&function).passed());
+    }
+
+    #[test]
+    fn bindingless_empty_nominal_patterns_do_not_consume_the_place() {
+        let (_module_names, modules) = fixture_modules();
+        let ty = Ty::Struct(nominal(&modules, vec![]));
+        let source = with_root(
+            ty.clone(),
+            vec![expr(ty.clone(), ir::ExprKind::Local(LocalId(0)))],
+            vec![
+                ir::Stmt::LetPattern {
+                    value: ExprId(0),
+                    ty: ty.clone(),
+                    bindings: vec![],
+                },
+                ir::Stmt::LetPattern {
+                    value: ExprId(0),
+                    ty,
+                    bindings: vec![],
+                },
+                ir::Stmt::Expr(ExprId(0)),
+            ],
+        );
+        let function = nominal_lowered(&source);
+        assert_eq!(root_reads(&function).len(), 1);
+        assert!(
+            matches!(root_reads(&function)[0], Operand::Move(place) if place.projection.is_empty())
+        );
+        assert!(super::super::ownership::analyze(&function).passed());
     }
 
     #[test]

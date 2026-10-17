@@ -7239,6 +7239,59 @@ mod tests {
     }
 
     #[test]
+    fn zero_field_nominal_has_one_owned_path_and_whole_move_clears_it() {
+        let (_module_names, modules) = fixture_modules();
+        let ty = nominal(&modules, vec![]);
+        assert!(!ty.is_copy());
+        let mut f = fixture();
+        f.locals.extend([local(ty.clone()), local(ty)]);
+        f.params.push(LocalId(1));
+        let paths = Paths::new(&f, 3).unwrap();
+        assert_eq!(paths.nodes.len(), 3);
+        assert!(Paths::new(&f, 2).is_err());
+        let root = paths.roots[1];
+        assert!(paths.nodes[root].children.is_empty());
+        assert_eq!(paths.nodes[root].end, root + 1);
+        f.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(2))),
+            located(Statement::Inspect(place(1))),
+            located(Statement::Assign {
+                destination: place(2),
+                value: Rvalue::Use(Operand::Move(place(1))),
+            }),
+            located(Statement::Inspect(place(2))),
+        ]);
+        assert!(analyze(&f).passed());
+        f.blocks[0]
+            .statements
+            .push(located(Statement::Inspect(place(1))));
+        let result = analyze(&f);
+        assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+        assert_eq!(result.diagnostics[0].place, Some(place(1)));
+        assert_eq!(
+            result.diagnostics[0].kind,
+            ErrorKind::ReadNotDefinitelyInitialized
+        );
+    }
+
+    #[test]
+    fn zero_field_aggregate_initializes_real_nominal_storage() {
+        let (_module_names, modules) = fixture_modules();
+        let ty = nominal(&modules, vec![]);
+        let mut f = fixture();
+        f.locals.push(local(ty.clone()));
+        f.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(1))),
+            located(Statement::Assign {
+                destination: place(1),
+                value: Rvalue::Aggregate { ty, fields: vec![] },
+            }),
+            located(Statement::Inspect(place(1))),
+        ]);
+        assert!(analyze(&f).passed());
+    }
+
+    #[test]
     fn zero_length_noncopy_array_whole_move_clears_root_marker() {
         let (_module_names, modules) = fixture_modules();
         let ty = array(nominal(&modules, vec![Ty::Int(IntTy::I32)]), 0);
