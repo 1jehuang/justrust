@@ -18,6 +18,11 @@ use super::token_session::{
     BudgetVec, SessionId, SpanId, SyntaxContextId, TokenError, TokenSession, allocate_identity,
 };
 
+mod item_scope;
+pub(crate) use item_scope::{
+    ExpansionTokenAdmission, ItemExpansionAdmission, ModuleAccess, ModuleFrontierId, OccurrenceRole,
+};
+
 macro_rules! handle {
     ($name:ident) => {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -35,6 +40,7 @@ handle!(BindingId);
 pub enum ScopeError {
     Token(TokenError),
     Name(NameError),
+    Module(super::module_identity::ModuleError),
     ForeignOwner,
     InvalidHandle,
     ForeignNames,
@@ -54,6 +60,11 @@ impl From<NameError> for ScopeError {
         Self::Name(value)
     }
 }
+impl From<super::module_identity::ModuleError> for ScopeError {
+    fn from(value: super::module_identity::ModuleError) -> Self {
+        Self::Module(value)
+    }
+}
 impl From<BudgetFailure> for ScopeError {
     fn from(value: BudgetFailure) -> Self {
         Self::Token(TokenError::Budget(value))
@@ -64,6 +75,7 @@ impl fmt::Display for ScopeError {
         match self {
             Self::Token(error) => write!(f, "lexical scope: {error}"),
             Self::Name(error) => write!(f, "lexical scope: {error}"),
+            Self::Module(error) => write!(f, "lexical scope: {error}"),
             other => write!(f, "lexical scope: {other:?}"),
         }
     }
@@ -76,14 +88,21 @@ impl ScopeError {
             Self::Token(error) | Self::Name(NameError::Token(error)) => {
                 SourceError::from_token(error)
             }
+            Self::Module(super::module_identity::ModuleError::Token(error))
+            | Self::Module(super::module_identity::ModuleError::Name(NameError::Token(error))) => {
+                SourceError::from_token(error)
+            }
             error => {
                 let kind = match &error {
-                    Self::UnsupportedProjection | Self::Name(NameError::Unsupported(_)) => {
-                        SourceErrorKind::Unsupported
-                    }
-                    Self::Name(NameError::ExpectedIdentifier | NameError::InvalidIdentifier) => {
-                        SourceErrorKind::Syntax
-                    }
+                    Self::UnsupportedProjection
+                    | Self::Name(NameError::Unsupported(_))
+                    | Self::Module(super::module_identity::ModuleError::Name(
+                        NameError::Unsupported(_),
+                    )) => SourceErrorKind::Unsupported,
+                    Self::Name(NameError::ExpectedIdentifier | NameError::InvalidIdentifier)
+                    | Self::Module(super::module_identity::ModuleError::Name(
+                        NameError::ExpectedIdentifier | NameError::InvalidIdentifier,
+                    )) => SourceErrorKind::Syntax,
                     _ => SourceErrorKind::Contract,
                 };
                 SourceError {
@@ -259,6 +278,7 @@ pub struct ScopeArena {
     bindings: BudgetVec<BindingRecord>,
     associations: BudgetVec<Association>,
     anchors: BudgetVec<ExpansionAdmission>,
+    items: item_scope::ItemScopeState,
     association_index: Index,
     anchor_index: Index,
     hasher: RandomState,
@@ -297,6 +317,7 @@ impl ScopeArenaBuilder {
                 bindings: BudgetVec::new(&budget, Storage::Retained)?,
                 associations: BudgetVec::new(&budget, Storage::Retained)?,
                 anchors: BudgetVec::new(&budget, Storage::Retained)?,
+                items: item_scope::ItemScopeState::new(&budget)?,
                 association_index: Index::new(&budget, 0)?,
                 anchor_index: Index::new(&budget, 0)?,
                 hasher: RandomState::new(),
@@ -523,6 +544,7 @@ impl ScopeArenaBuilder {
     }
     pub fn freeze(self) -> Result<Arc<ScopeArena>, ScopeError> {
         self.arena.budget.check()?;
+        self.arena.check_item_completion()?;
         Ok(Arc::new(self.arena))
     }
     pub fn check_names(&self, names: &impl NameAccess) -> Result<(), ScopeError> {
@@ -919,9 +941,12 @@ impl ScopeArena {
                 if !matches!(names.session().context(parent)?, ContextData::Root) {
                     return Err(ScopeError::UnsupportedProjection);
                 }
-                let anchor = self
-                    .anchor(expansion)?
-                    .ok_or(ScopeError::UnregisteredExpansion)?;
+                let Some(anchor) = self.anchor(expansion)? else {
+                    if self.item_anchor(expansion)?.is_some() {
+                        return self.check_item_context(names, expansion, function);
+                    }
+                    return Err(ScopeError::UnregisteredExpansion);
+                };
                 if anchor.owner != self.owner || anchor.function != function {
                     return Err(ScopeError::FunctionMismatch);
                 }
@@ -942,6 +967,13 @@ impl ScopeArena {
         // not a scope factory: only its already registered driver anchor may
         // establish this occurrence's existing function association.
         if let Some(expansion) = names.session().span(names.span(ident)?)?.expansion {
+            if self.item_anchor(expansion)?.is_some() {
+                return self.check_item_body_occurrence(
+                    names,
+                    ident,
+                    function.ok_or(ScopeError::FunctionMismatch)?,
+                );
+            }
             let anchor = self
                 .anchor(expansion)?
                 .ok_or(ScopeError::UnregisteredExpansion)?;
@@ -999,6 +1031,11 @@ impl ScopeArena {
             ContextData::Mark {
                 parent, expansion, ..
             } => {
+                if self.item_anchor(expansion)?.is_some() {
+                    // A module definition has no enclosing local environment.
+                    // Exact generated/captured binders were searched above.
+                    return Ok(None);
+                }
                 let anchor = self
                     .anchor(expansion)?
                     .ok_or(ScopeError::UnregisteredExpansion)?;
@@ -1033,6 +1070,17 @@ impl ScopeArena {
                     if self.exact_lookup(at, key)?.is_some() {
                         return Ok(ProjectedName { key, frontier: at });
                     }
+                }
+                if self.item_anchor(expansion)?.is_some() {
+                    return match class {
+                        LookupClass::Local | LookupClass::Item(_) | LookupClass::Member => {
+                            Ok(ProjectedName {
+                                key: names.key(ident, class)?,
+                                frontier: at,
+                            })
+                        }
+                        _ => Err(ScopeError::UnsupportedProjection),
+                    };
                 }
                 let anchor = self
                     .anchor(expansion)?

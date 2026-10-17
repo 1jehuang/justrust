@@ -278,6 +278,7 @@ mod tests {
 
     fn apply(name: AstIdent, arguments: Vec<Type>) -> Type {
         Type::Apply(GenericPath {
+            resolved_use: None,
             anchor: PathAnchor::Relative,
             segments: vec![PathSegment {
                 name,
@@ -339,6 +340,7 @@ mod tests {
             (
                 apply(own[0], vec![]),
                 Type::Apply(GenericPath {
+                    resolved_use: None,
                     anchor: PathAnchor::Relative,
                     segments: vec![
                         PathSegment {

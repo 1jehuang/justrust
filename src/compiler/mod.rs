@@ -22,6 +22,7 @@ pub mod semantic_name;
 pub mod semantic_path;
 pub mod semantic_scope;
 pub mod source;
+mod source_item_macro;
 mod source_macro;
 mod source_replay;
 mod token;

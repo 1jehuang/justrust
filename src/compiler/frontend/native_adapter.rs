@@ -4,6 +4,7 @@ use super::{ParseError, ParserTokenKind, Token, TokenPart};
 use crate::compiler::expansion_budget::Storage;
 use crate::compiler::expansion_span::{SpanId, SyntheticReason};
 use crate::compiler::lexer::{LexError, LexedEvent, LexedTokens, decode_normal_string};
+use crate::compiler::semantic_scope::ExpansionTokenAdmission;
 use crate::compiler::source::PreparedLexInput;
 use crate::compiler::source::{SourceError, SourceErrorKind};
 use crate::compiler::token::{InputToken, Spacing, TokenKind};
@@ -39,8 +40,21 @@ enum AdmittedNames {
         names: BudgetVec<AdmittedExpandedName>,
         literals: BudgetVec<AdmittedOpaqueLiteral>,
         macro_slice: Option<crate::compiler::macro_cursor::TokenSlice>,
-        admission: crate::compiler::semantic_scope::ExpansionAdmission,
+        admission: ExpansionProof,
     },
+}
+// The item/expression union is deliberately not inline in every buffer enum.
+// Its one immutable owner is fallibly allocated and fully capacity-accounted.
+struct ExpansionProof {
+    values: BudgetVec<ExpansionTokenAdmission>,
+}
+impl ExpansionProof {
+    fn checked(&self) -> Result<&ExpansionTokenAdmission, ParseError> {
+        let [proof] = self.values.as_slice() else {
+            return Err(transport_error(TokenError::InvalidHandle));
+        };
+        Ok(proof)
+    }
 }
 struct AdmittedExpandedName {
     token: crate::compiler::token::Token,
@@ -88,8 +102,11 @@ impl NativeTokenBuffer {
         else {
             return Err(transport_error(TokenError::InvalidHandle));
         };
-        admission.validate_session(session).map_err(scope_error)?;
-        super::expanded_adapter::validate_slice(session, &slice, admission)?;
+        admission
+            .checked()?
+            .validate_session(session)
+            .map_err(scope_error)?;
+        super::expanded_adapter::validate_slice(session, &slice, admission.checked()?)?;
         if macro_slice.is_some() {
             return Err(transport_error(TokenError::InvalidHandle));
         }
@@ -104,15 +121,24 @@ impl NativeTokenBuffer {
         session: &TokenSession,
         admission: &crate::compiler::semantic_scope::ExpansionAdmission,
     ) -> Result<Self, ParseError> {
+        Self::expanded_in(session, &ExpansionTokenAdmission::Expression(*admission))
+    }
+
+    pub(super) fn expanded_in(
+        session: &TokenSession,
+        admission: &ExpansionTokenAdmission,
+    ) -> Result<Self, ParseError> {
         admission.validate_session(session).map_err(scope_error)?;
         let budget = session.budget();
+        let mut proof = BudgetVec::new(budget, Storage::Retained).map_err(transport_error)?;
+        proof.push(*admission).map_err(transport_error)?;
         Ok(Self {
             tokens: BudgetVec::new(budget, Storage::Retained).map_err(transport_error)?,
             names: AdmittedNames::Expanded {
                 names: BudgetVec::new(budget, Storage::Retained).map_err(transport_error)?,
                 literals: BudgetVec::new(budget, Storage::Retained).map_err(transport_error)?,
                 macro_slice: None,
-                admission: *admission,
+                admission: ExpansionProof { values: proof },
             },
             _text_leases: BudgetVec::new(budget, Storage::Retained).map_err(transport_error)?,
             macro_source: None,
@@ -134,6 +160,7 @@ impl NativeTokenBuffer {
             return Err(transport_error(TokenError::InvalidHandle));
         };
         admission
+            .checked()?
             .validate_token(session, token)
             .map_err(scope_error)?;
         if !matches!(token.kind, TokenKind::Opaque(_)) || part.span != token.span {
@@ -208,7 +235,7 @@ impl NativeTokenBuffer {
         {
             return Err(transport_error(TokenError::ForeignHandle));
         }
-        super::expanded_adapter::literal_buffer(names, record.token, admission)
+        super::expanded_adapter::literal_buffer(names, record.token, admission.checked()?)
     }
 
     pub(super) fn push_expanded(
@@ -226,6 +253,7 @@ impl NativeTokenBuffer {
         let AdmittedNames::Expanded { admission, .. } = &self.names else {
             return Err(transport_error(TokenError::InvalidHandle));
         };
+        let admission = admission.checked()?;
         admission.validate_session(session).map_err(scope_error)?;
         let whole = parts
             .first()
@@ -394,9 +422,15 @@ impl NativeTokenBuffer {
         {
             return Err(transport_error(TokenError::ForeignHandle));
         }
-        names
-            .admit_expanded_token(record.token, record.edition, admission)
-            .map_err(name_error)
+        match admission.checked()? {
+            ExpansionTokenAdmission::Expression(proof) => {
+                names.admit_expanded_token(record.token, record.edition, proof)
+            }
+            ExpansionTokenAdmission::Item(proof) => {
+                names.admit_item_token(record.token, record.edition, proof)
+            }
+        }
+        .map_err(name_error)
     }
 }
 
@@ -447,6 +481,23 @@ impl NativeParserInput {
         session: TokenSession,
         projection: &PreparedLexInput<'_>,
     ) -> Result<Self, ParseError> {
+        Self::new_with_purpose(lexed, session, projection, false)
+    }
+
+    pub(super) fn new_inactive(
+        lexed: LexedTokens,
+        session: TokenSession,
+        projection: &PreparedLexInput<'_>,
+    ) -> Result<Self, ParseError> {
+        Self::new_with_purpose(lexed, session, projection, true)
+    }
+
+    fn new_with_purpose(
+        lexed: LexedTokens,
+        session: TokenSession,
+        projection: &PreparedLexInput<'_>,
+        inactive: bool,
+    ) -> Result<Self, ParseError> {
         lexed
             .validate_input(&session, projection)
             .map_err(lex_error)?;
@@ -476,7 +527,7 @@ impl NativeParserInput {
                 lexed.events().len() as u64,
             )
             .map_err(|error| transport_error(error.into()))?;
-        let mut macro_bearing = false;
+        let mut macro_bearing = inactive;
         for pair in lexed.events().windows(2) {
             if let [
                 LexedEvent {
@@ -540,6 +591,49 @@ impl NativeParserInput {
         while at < events.len() {
             let event = &events[at];
             input.check_event(event)?;
+            if inactive {
+                let deferred = match event.token {
+                    InputToken::Leaf(crate::compiler::token::Token {
+                        kind: TokenKind::Ident(ident),
+                        ..
+                    }) => {
+                        ident.raw
+                            || !input
+                                .session
+                                .symbol(ident.symbol)
+                                .map_err(transport_error)?
+                                .is_ascii()
+                    }
+                    InputToken::Leaf(crate::compiler::token::Token {
+                        kind: TokenKind::Literal { kind, .. },
+                        ..
+                    }) => {
+                        !matches!(
+                            kind,
+                            crate::compiler::token::LiteralKind::Integer
+                                | crate::compiler::token::LiteralKind::Float
+                                | crate::compiler::token::LiteralKind::String
+                        ) || event
+                            .literal
+                            .as_ref()
+                            .is_some_and(|info| info.has_continuation)
+                    }
+                    _ => false,
+                };
+                if deferred {
+                    input.push_range(
+                        projection,
+                        event.prepared.clone(),
+                        event.line,
+                        event.column,
+                        ParserTokenKind::DeferredUnsupported,
+                        None,
+                        &[native_part(event)?],
+                    )?;
+                    at += 1;
+                    continue;
+                }
+            }
             match event.token {
                 InputToken::Open { .. } | InputToken::Close { .. } => {
                     input.push_range(
@@ -683,6 +777,19 @@ impl NativeParserInput {
                             .session
                             .symbol(ident.symbol)
                             .map_err(transport_error)?;
+                        if inactive && (ident.raw || !name.is_ascii()) {
+                            input.push_range(
+                                projection,
+                                event.prepared.start..next.prepared.end,
+                                event.line,
+                                event.column,
+                                ParserTokenKind::DeferredUnsupported,
+                                None,
+                                &[native_part(event)?, native_part(next)?],
+                            )?;
+                            at += 2;
+                            continue;
+                        }
                         if ident.raw
                             || !name.is_ascii()
                             || ident.context != input.session.root_context()
@@ -1365,6 +1472,110 @@ mod tests {
     use crate::compiler::expansion_budget::ExpansionBudget;
     use crate::compiler::source::{OriginSegment, SourceOptions, SourceSpan, prepare_text};
     use std::path::Path;
+
+    fn inactive_input(text: &str) -> Result<NativeParserInput, ParseError> {
+        let budget = ExpansionBudget::default();
+        let projection = PreparedLexInput::identity(Path::new("inactive.rs"), text, &budget)
+            .map_err(source_error)?;
+        let mut session =
+            TokenSession::new(projection.snapshot().clone(), budget).map_err(transport_error)?;
+        let lexed = crate::compiler::lexer::lex_prepared(
+            &projection,
+            crate::compiler::token::Edition::E2024,
+            &mut session,
+        )
+        .map_err(lex_error)?;
+        NativeParserInput::new_inactive(lexed, session, &projection)
+    }
+
+    #[test]
+    fn inactive_input_retains_undefined_macro_tokens_without_semantic_literal_or_name_admission() {
+        let text =
+            "unknown!(r#raw, 水, 'x', b'x', b\"bytes\", r\"raw\", c\"C\", @, $, \"a\\\nb\");";
+        assert_eq!(
+            super::super::lex(text).unwrap_err().kind,
+            SourceErrorKind::Unsupported
+        );
+        let input = inactive_input(text).unwrap();
+        assert!(input.macro_source.is_some());
+        let (buffer, session) = input.into_parts();
+        assert!(buffer.current_macro_slice().is_none());
+        let stream = buffer.macro_source().unwrap();
+        let roots = stream.roots(&session).unwrap();
+        assert!(!stream.children(&session, &roots).unwrap().is_empty());
+        let mut count = 0;
+        let mut cursor = super::super::TokenCursor::new(&buffer);
+        while !cursor.current().matches("") {
+            let view = cursor.current();
+            if view.is_deferred_unsupported() {
+                count += 1;
+                assert!(!view.matches(view.text));
+                assert!(!view.is_ident());
+                assert!(!view.string);
+                assert!(view.name.is_none());
+            }
+            cursor.bump();
+        }
+        assert!(count >= 8);
+    }
+
+    #[test]
+    fn inactive_transport_still_checks_complete_lexical_input_and_doc_audit() {
+        assert_eq!(
+            inactive_input("unknown!(\"bad\\q\");").unwrap_err().kind,
+            SourceErrorKind::Syntax
+        );
+        assert_eq!(
+            inactive_input("unknown!(\"unterminated);")
+                .unwrap_err()
+                .kind,
+            SourceErrorKind::Syntax
+        );
+        assert_eq!(
+            inactive_input("/// doc\nunknown!();").unwrap_err().kind,
+            SourceErrorKind::Unsupported
+        );
+    }
+
+    #[test]
+    fn inactive_character_is_not_a_lifetime_and_keeps_checked_original_error_span() {
+        let text = "fn unused() { let value = 'x'; }";
+        let start = text.find("'x'").unwrap();
+        let input = inactive_input(text).unwrap();
+        let (buffer, session) = input.into_parts();
+        let mut cursor = super::super::TokenCursor::new(&buffer);
+        while !cursor.current().is_deferred_unsupported() {
+            assert!(!cursor.current().matches(""));
+            cursor.bump();
+        }
+        let character = cursor.current();
+        assert_eq!(character.text, "'x'");
+        assert!(!character.is_lifetime());
+        assert!(character.name.is_none());
+        assert_eq!(character.bytes, start..start + 3);
+        let checked = original(&session, character.span).unwrap();
+        assert_eq!(checked.lo as usize, start);
+        assert_eq!(checked.hi as usize, start + 3);
+        let error = super::super::validate_inactive_syntax(text).unwrap_err();
+        assert_eq!(error.kind, SourceErrorKind::Unsupported);
+        assert_eq!(error.bytes, start..start + 3);
+        assert_eq!(error.primary.unwrap(), checked);
+        let lifetime = super::super::lex("'label").unwrap();
+        assert!(
+            super::super::TokenCursor::new(&lifetime)
+                .current()
+                .is_lifetime()
+        );
+    }
+
+    #[test]
+    fn empty_expansion_proof_storage_cannot_issue_buffer_authority() {
+        let budget = ExpansionBudget::default();
+        let proof = ExpansionProof {
+            values: BudgetVec::new(&budget, Storage::Retained).unwrap(),
+        };
+        assert_eq!(proof.checked().unwrap_err().kind, SourceErrorKind::Contract);
+    }
 
     #[test]
     fn discarded_string_suffix_is_transport_only_and_consumption_still_fails() {

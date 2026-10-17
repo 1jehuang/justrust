@@ -832,6 +832,7 @@ fn copy_source_path(
     Ok(GenericPath {
         anchor: path.anchor,
         segments,
+        resolved_use: path.resolved_use.clone(),
     })
 }
 fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Type, FactsError> {
@@ -1317,6 +1318,12 @@ impl SourceInventory {
         sr::depth(budget, depth)?;
         sr::work(budget, 1)?;
         match expr {
+            Expr::UnexpandedMacro(_) => {
+                return Err(source_error(
+                    budget,
+                    "unexpanded macro syntax cannot enter active source inventory",
+                ));
+            }
             Expr::Apply { path, value } => {
                 return self.expr(
                     value,
@@ -3771,11 +3778,17 @@ pub struct RegionDecls {
 }
 #[derive(Clone, Debug)]
 pub struct StructDecl {
+    pub shape: StructShape,
     pub module: ModuleId,
     pub type_params: Vec<AstIdent>,
     pub name: AstPath,
     pub visibility: ir::Visibility,
     pub fields: Vec<FieldDecl>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StructShape {
+    Record,
+    Unit,
 }
 #[derive(Clone, Debug)]
 pub struct EnumDecl {
@@ -3809,6 +3822,8 @@ pub enum FieldSelector {
 pub struct GenericPath {
     pub anchor: PathAnchor,
     pub segments: Vec<PathSegment>,
+    /// Certified canonical target, including its checked original-use provenance.
+    pub(crate) resolved_use: Option<AstPath>,
 }
 #[derive(Clone, Debug)]
 pub struct PathSegment {
@@ -3831,7 +3846,14 @@ impl GenericPath {
         for segment in &self.segments {
             segments.push(segment.name)?;
         }
-        AstPath::new(names, self.anchor, segments.as_slice())
+        let target = AstPath::new(names, self.anchor, segments.as_slice())?;
+        match &self.resolved_use {
+            Some(certificate) => {
+                certificate.check_target(names, &target)?;
+                Ok(certificate.clone())
+            }
+            None => Ok(target),
+        }
     }
     fn application(&self) -> Result<(AstIdent, &[Type]), String> {
         let mut applications = self.segments.iter().filter(|s| !s.args.is_empty());
@@ -4200,8 +4222,24 @@ impl Expr {
     }
 }
 
+/// A syntax-only invocation retained by the inactive-source validator. There is
+/// deliberately no public constructor or conversion to an expanded expression.
+pub struct UnexpandedMacroSyntax {
+    _path: AstPath,
+    _args: super::macro_cursor::TokenSlice,
+    span: super::expansion_span::SpanId,
+    _lease: super::expansion_budget::ByteLease,
+}
+impl std::fmt::Debug for UnexpandedMacroSyntax {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UnexpandedMacroSyntax")
+            .field("span", &self.span)
+            .finish_non_exhaustive()
+    }
+}
 #[derive(Clone, Debug)]
 pub enum Expr {
+    UnexpandedMacro(Arc<UnexpandedMacroSyntax>),
     TraitCall {
         owner: Type,
         trait_path: TraitPath,
@@ -4888,10 +4926,17 @@ impl<T> ParserState<'_, T> {
 struct ParserLexicalState {
     scopes: Option<super::semantic_scope::ScopeArenaBuilder>,
     function: Option<FunctionMacroState>,
+    item_macros: Option<super::source_item_macro::SourceItemMacroDriver>,
+    inactive_items: Option<super::token_session::BudgetVec<Arc<UnexpandedMacroSyntax>>>,
 }
 struct FunctionMacroState {
     frontier: super::semantic_scope::FrontierId,
-    driver: super::source_macro::LocalMacroDriver,
+    driver: Option<super::source_macro::LocalMacroDriver>,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ParserPurpose {
+    Active,
+    InactiveSyntax,
 }
 fn scope_parse_error(error: super::semantic_scope::ScopeError) -> ParseError {
     let error = error.source_error();
@@ -4913,6 +4958,9 @@ struct Parser<'input, 'names> {
     lexical: ParserState<'names, ParserLexicalState>,
     expansion: Option<super::semantic_scope::ExpansionAdmission>,
     expansion_depth: u32,
+    purpose: ParserPurpose,
+    item_expansion: Option<super::semantic_scope::ItemExpansionAdmission>,
+    module_frontier: Option<super::semantic_scope::ModuleFrontierId>,
     module: ModuleId,
     alias_target: bool,
     pending_bounds: Vec<TypeBound>,
@@ -4924,6 +4972,307 @@ struct Parser<'input, 'names> {
     use_expansion_bytes: usize,
 }
 impl<'input, 'names> Parser<'input, 'names> {
+    fn inactive_invocation(
+        &mut self,
+        path: AstPath,
+        span: super::expansion_span::SpanId,
+    ) -> Result<Arc<UnexpandedMacroSyntax>, ParseError> {
+        if self.purpose != ParserPurpose::InactiveSyntax {
+            return Err(self.unsupported("unexpanded macro syntax cannot enter active parsing"));
+        }
+        path.check(self.names).map_err(native_adapter::name_error)?;
+        let args = self.macro_group()?;
+        let bytes = std::mem::size_of::<UnexpandedMacroSyntax>() + 2 * std::mem::size_of::<usize>();
+        self.names
+            .budget()
+            .charge(super::expansion_budget::Counter::Work, 1)
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        let lease = self
+            .names
+            .budget()
+            .reserve(super::expansion_budget::Storage::Retained, bytes as u64)
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        Ok(Arc::new(UnexpandedMacroSyntax {
+            _path: path,
+            _args: args,
+            span,
+            _lease: lease,
+        }))
+    }
+    fn module_macro_definition(&mut self) -> Result<(), ParseError> {
+        if self.item_expansion.is_some() || self.expansion.is_some() {
+            return Err(self.unsupported("generated macro definitions are unsupported"));
+        }
+        let (name, body, site) = self.take_macro_definition()?;
+        if self.purpose == ParserPurpose::InactiveSyntax {
+            self.names
+                .compile_local_rules(body, site)
+                .map_err(|error| self.driver_error(error.into()))?;
+            return Ok(());
+        }
+        let point = self.module_frontier.ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+        })?;
+        let driver = self.lexical.item_macros.as_mut().ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+        })?;
+        let result = driver.define(name, body, site, point, self.names);
+        result.map_err(|error| self.driver_error(error))
+    }
+    fn item_macro_invocation(
+        &mut self,
+        module: ModuleId,
+        module_path: &AstPath,
+        parsed: &mut ParsedDeclarations,
+    ) -> Result<(), ParseError> {
+        let span = self.token().span;
+        let name = self.ident()?;
+        self.expect("!")?;
+        if self.purpose == ParserPurpose::InactiveSyntax {
+            let path = AstPath::new(self.names, PathAnchor::Relative, &[name])
+                .map_err(native_adapter::name_error)?;
+            let braced = self.is("{");
+            let syntax = self.inactive_invocation(path, span)?;
+            if braced {
+                self.eat(";");
+            } else {
+                self.expect(";")?;
+            }
+            self.lexical
+                .inactive_items
+                .as_mut()
+                .ok_or_else(|| {
+                    native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+                })?
+                .push(syntax)
+                .map_err(native_adapter::transport_error)?;
+            return Ok(());
+        }
+        if self.item_expansion.is_some() {
+            return Err(self.unsupported("nested item macro products are unsupported"));
+        }
+        if self.module_frontier.is_none() || self.lexical.item_macros.is_none() {
+            return Err(native_adapter::expanded_error(
+                self.names.session(),
+                span,
+                super::source::SourceErrorKind::Syntax,
+                "unknown module macro at this lexical point",
+            ));
+        }
+        let braced = self.is("{");
+        let args = self.macro_group()?;
+        if braced {
+            self.eat(";");
+        } else {
+            self.expect(";")?;
+        }
+        let call = self.module_frontier.ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+        })?;
+        let scopes = self.lexical.scopes.as_ref().ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+        })?;
+        let driver = self
+            .lexical
+            .item_macros
+            .as_ref()
+            .ok_or_else(|| self.error("unknown module macro"))?;
+        let selected = driver
+            .select(name, call, scopes, self.names)
+            .map_err(|error| self.driver_error(error))?;
+        let expanded = driver
+            .expand(
+                selected,
+                args,
+                super::macro_rules::CallSite { span, parent: None },
+                self.names,
+            )
+            .map_err(|error| self.driver_error(error))?;
+        let expansion = expanded
+            .expansion(self.names.session())
+            .map_err(|error| self.driver_error(error.into()))?;
+        let tokens = expanded
+            .tokens(self.names.session())
+            .map_err(|error| self.driver_error(error.into()))?;
+        let scopes = self.lexical.scopes.as_mut().ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+        })?;
+        let proof = scopes
+            .anchor_item_expansion(
+                self.names,
+                &*self.modules,
+                expansion,
+                selected.definition(),
+                selected.call(),
+            )
+            .map_err(scope_parse_error)?;
+        let eof = self
+            .names
+            .item_expansion_eof(&proof)
+            .map_err(scope_parse_error)?;
+        let buffer = expanded_adapter::lower_item(
+            tokens,
+            self.names,
+            &*self.modules,
+            self.names.edition(),
+            eof,
+            &proof,
+        )?;
+        let mut child = Parser {
+            input: &buffer,
+            names: &mut *self.names,
+            modules: ParserState::Borrowed(&mut *self.modules),
+            lexical: ParserState::Borrowed(&mut *self.lexical),
+            expansion: None,
+            expansion_depth: 0,
+            purpose: ParserPurpose::Active,
+            item_expansion: Some(proof),
+            module_frontier: self.module_frontier,
+            module,
+            alias_target: false,
+            pending_bounds: Vec::new(),
+            cursor: TokenCursor::new(&buffer),
+            nesting: self.nesting,
+            allow_struct: true,
+            type_params: Vec::new(),
+            use_expansions: self.use_expansions,
+            use_expansion_bytes: self.use_expansion_bytes,
+        };
+        let mut product = ParsedDeclarations {
+            program: ProgramDeclarations::default(),
+            items: HashMap::new(),
+            empty_use_prefixes: Vec::new(),
+        };
+        child.reserve_item_publication(&mut product)?;
+        let (visibility, explicit_visibility) = child.visibility(module)?;
+        if !child.is("fn") {
+            return Err(child.unsupported("item macro output must be exactly one nongeneric free function; generated attributes and other items are unsupported"));
+        }
+        child.nonmodule_item(
+            module,
+            module_path,
+            &mut product,
+            visibility,
+            explicit_visibility,
+        )?;
+        if !child.is("") || product.program.functions.len() != 1 {
+            return Err(
+                child.unsupported("item macro output must be exactly one complete free function")
+            );
+        }
+        drop(child);
+        let generated = &product.program.functions[0];
+        let declaration = *generated.name.segments().last().ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+        })?;
+        let function = generated.lexical_scope.ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+        })?;
+        self.lexical
+            .scopes
+            .as_mut()
+            .ok_or_else(|| {
+                native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+            })?
+            .seal_item_product(self.names, &*self.modules, &proof, function, declaration)
+            .map_err(scope_parse_error)?;
+        self.reserve_item_publication(parsed)?;
+        for (key, item) in product.items {
+            if parsed.items.contains_key(&key) {
+                return Err(self.error("duplicate item name"));
+            }
+            parsed.items.insert(key, item);
+        }
+        parsed.program.functions.extend(product.program.functions);
+        Ok(())
+    }
+    fn reserve_item_publication(
+        &mut self,
+        parsed: &mut ParsedDeclarations,
+    ) -> Result<(), ParseError> {
+        use super::expansion_budget::Counter;
+        use super::token_session::TokenError;
+        let overflow = || native_adapter::transport_error(TokenError::IdExhausted);
+        if parsed.program.functions.len() == parsed.program.functions.capacity() {
+            let planned = parsed
+                .program
+                .functions
+                .len()
+                .checked_add(1)
+                .and_then(|n| n.checked_mul(std::mem::size_of::<Function>()))
+                .ok_or_else(overflow)?;
+            self.names
+                .retain_parser_storage(planned)
+                .map_err(native_adapter::name_error)?;
+            parsed.program.functions.try_reserve_exact(1).map_err(|_| {
+                native_adapter::transport_error(self.names.budget().poison_allocation().into())
+            })?;
+            let actual = parsed
+                .program
+                .functions
+                .capacity()
+                .checked_mul(std::mem::size_of::<Function>())
+                .ok_or_else(overflow)?;
+            self.names
+                .retain_parser_storage(actual.saturating_sub(planned))
+                .map_err(native_adapter::name_error)?;
+        }
+        // Hashing traverses the immutable path segments. Precharge all old
+        // keys before any possible collision walk or growth-driven rehash.
+        self.names
+            .budget()
+            .charge(Counter::Work, parsed.items.len() as u64)
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        for items in parsed.items.values() {
+            let item = items
+                .first()
+                .ok_or_else(|| native_adapter::transport_error(TokenError::InvalidHandle))?;
+            let work = item
+                .path
+                .len()
+                .checked_add(1)
+                .and_then(|n| n.checked_mul(3))
+                .ok_or_else(overflow)?;
+            self.names
+                .budget()
+                .charge(Counter::Work, work as u64)
+                .map_err(|error| native_adapter::transport_error(error.into()))?;
+        }
+        if parsed.items.len() == parsed.items.capacity() {
+            let entries = parsed.items.len().checked_add(1).ok_or_else(overflow)?;
+            let buckets = entries
+                .checked_mul(8)
+                .and_then(|n| n.checked_add(6))
+                .map(|n| n / 7)
+                .and_then(|n| n.max(4).checked_next_power_of_two())
+                .ok_or_else(overflow)?;
+            let entry_bytes = std::mem::size_of::<(PathKey, Vec<Item>)>()
+                .checked_add(1)
+                .ok_or_else(overflow)?;
+            let planned = buckets
+                .checked_mul(entry_bytes)
+                .and_then(|n| n.checked_add(16))
+                .ok_or_else(overflow)?;
+            self.names
+                .retain_parser_storage(planned)
+                .map_err(native_adapter::name_error)?;
+            parsed.items.try_reserve(1).map_err(|_| {
+                native_adapter::transport_error(self.names.budget().poison_allocation().into())
+            })?;
+            let actual = parsed
+                .items
+                .capacity()
+                .max(4)
+                .checked_next_power_of_two()
+                .and_then(|n| n.checked_mul(entry_bytes))
+                .and_then(|n| n.checked_add(16))
+                .ok_or_else(overflow)?;
+            self.names
+                .retain_parser_storage(actual.saturating_sub(planned))
+                .map_err(native_adapter::name_error)?;
+        }
+        Ok(())
+    }
     fn driver_error(&self, error: super::source_macro::DriverError) -> ParseError {
         use super::macro_rules::MacroError;
         use super::source_macro::DriverError;
@@ -4980,21 +5329,37 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Err(self.error("expected macro delimiter"));
         }
         let open = self.token().span;
-        let function = self
-            .lexical
-            .function
-            .as_ref()
-            .ok_or_else(|| self.unsupported("function-local macro context required"))?;
-        let body = if let Some(source) = self.input.current_macro_slice() {
-            function.driver.group_body_in(source, open, self.names)
-        } else if self.expansion.is_some() {
-            return Err(native_adapter::transport_error(
-                super::token_session::TokenError::InvalidHandle,
-            ));
-        } else {
-            function.driver.group_body(open, self.names)
-        }
-        .map_err(|error| self.driver_error(error))?;
+        let body =
+            if self.purpose == ParserPurpose::InactiveSyntax || self.lexical.function.is_none() {
+                let source = self
+                    .input
+                    .macro_source()
+                    .cloned()
+                    .ok_or_else(|| self.error("macro source inventory is unavailable"))?;
+                let source = super::macro_cursor::TokenSlice::roots(self.names.session(), source)
+                    .map_err(native_adapter::transport_error)?;
+                super::source_item_macro::group_body(&source, open, self.names)
+                    .map_err(native_adapter::transport_error)?
+            } else {
+                let function = self
+                    .lexical
+                    .function
+                    .as_ref()
+                    .ok_or_else(|| self.unsupported("function-local macro context required"))?;
+                let driver = function.driver.as_ref().ok_or_else(|| {
+                    self.unsupported("user macros in generated functions are unsupported")
+                })?;
+                if let Some(source) = self.input.current_macro_slice() {
+                    driver.group_body_in(source, open, self.names)
+                } else if self.expansion.is_some() {
+                    return Err(native_adapter::transport_error(
+                        super::token_session::TokenError::InvalidHandle,
+                    ));
+                } else {
+                    driver.group_body(open, self.names)
+                }
+                .map_err(|error| self.driver_error(error))?
+            };
         let mut stack = super::token_session::BudgetVec::new(
             self.names.budget(),
             super::expansion_budget::Storage::Temporary,
@@ -5029,9 +5394,35 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(body)
     }
     fn local_macro_definition(&mut self) -> Result<(), ParseError> {
-        if self.expansion.is_some() {
+        if self.expansion.is_some() || self.item_expansion.is_some() {
             return Err(self.unsupported("nested or generated macro definitions are unsupported"));
         }
+        let (name, body, site) = self.take_macro_definition()?;
+        if self.purpose == ParserPurpose::InactiveSyntax {
+            self.names
+                .compile_local_rules(body, site)
+                .map_err(|error| self.driver_error(error.into()))?;
+            return Ok(());
+        }
+        let function = self.lexical.function.as_mut().ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+        })?;
+        let driver = function.driver.as_mut().ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+        })?;
+        let result = driver.define(name, body, site, function.frontier, self.names);
+        result.map_err(|error| self.driver_error(error))
+    }
+    fn take_macro_definition(
+        &mut self,
+    ) -> Result<
+        (
+            AstIdent,
+            super::macro_cursor::TokenSlice,
+            super::macro_rules::DefinitionSite,
+        ),
+        ParseError,
+    > {
         self.expect("macro_rules")?;
         self.expect("!")?;
         let span = self.token().span;
@@ -5069,17 +5460,34 @@ impl<'input, 'names> Parser<'input, 'names> {
             edition: self.names.edition(),
             defining_crate,
         };
-        let function = self.lexical.function.as_mut().ok_or_else(|| {
-            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
-        })?;
-        let result = function
-            .driver
-            .define(name, body, site, function.frontier, self.names);
-        result.map_err(|error| self.driver_error(error))
+        Ok((name, body, site))
     }
     fn local_macro_expression(&mut self) -> Result<Expr, ParseError> {
+        if self.purpose == ParserPurpose::InactiveSyntax {
+            let span = self.token().span;
+            let path = self.path()?;
+            self.expect("!")?;
+            return Ok(Expr::UnexpandedMacro(self.inactive_invocation(path, span)?));
+        }
+        if self.item_expansion.is_some() {
+            return Err(self.unsupported(
+                "user macro expressions in item-generated functions are unsupported",
+            ));
+        }
         let (buffer, admission, depth) = self.prepare_local_macro()?;
         self.isolated_expression_at(&buffer, Some(admission), depth)
+    }
+    fn known_module_macro(&self, name: AstIdent) -> Result<bool, ParseError> {
+        let (Some(driver), Some(call), Some(scopes)) = (
+            &self.lexical.item_macros,
+            self.module_frontier,
+            &self.lexical.scopes,
+        ) else {
+            return Ok(false);
+        };
+        driver
+            .known(name, call, scopes, self.names)
+            .map_err(|error| self.driver_error(error))
     }
     // Selection/lowering scratch is gone before recursively parsing the child.
     #[inline(never)]
@@ -5093,10 +5501,16 @@ impl<'input, 'names> Parser<'input, 'names> {
         ),
         ParseError,
     > {
+        let span = self.token().span;
         if self.lexical.function.is_none() {
+            let name = self.ident()?;
+            if self.known_module_macro(name)? {
+                return Err(
+                    self.unsupported("module macros in expression position are unsupported")
+                );
+            }
             return Err(self.error("unknown function-local macro"));
         }
-        let span = self.token().span;
         let parent = if let Some(proof) = &self.expansion {
             proof
                 .validate_span(self.names.session(), span)
@@ -5124,12 +5538,27 @@ impl<'input, 'names> Parser<'input, 'names> {
         let scopes = self.lexical.scopes.as_ref().ok_or_else(|| {
             native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
         })?;
-        let selected = function
-            .driver
-            .select(name, call, scopes, self.names)
-            .map_err(|error| self.driver_error(error))?;
-        let expanded = function
-            .driver
+        let driver = function.driver.as_ref().ok_or_else(|| {
+            self.unsupported("user macros in generated functions are unsupported")
+        })?;
+        let selected = match driver.select(name, call, scopes, self.names) {
+            Ok(selected) => selected,
+            Err(error) => {
+                if matches!(
+                    &error,
+                    super::source_macro::DriverError::Macro(
+                        super::macro_rules::MacroError::Syntax { .. }
+                    )
+                ) && self.known_module_macro(name)?
+                {
+                    return Err(
+                        self.unsupported("module macros in expression position are unsupported")
+                    );
+                }
+                return Err(self.driver_error(error));
+            }
+        };
+        let expanded = driver
             .expand(
                 selected,
                 args,
@@ -5187,6 +5616,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             lexical: ParserState::Borrowed(&mut *self.lexical),
             expansion,
             expansion_depth,
+            purpose: self.purpose,
+            item_expansion: self.item_expansion,
+            module_frontier: self.module_frontier,
             module: self.module,
             alias_target: false,
             pending_bounds: Vec::new(),
@@ -5383,6 +5815,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         &mut self,
         params: &[(BindingName, Type)],
     ) -> Result<(Block, Option<super::semantic_scope::ScopeId>), ParseError> {
+        if self.purpose == ParserPurpose::InactiveSyntax {
+            return Ok((self.block()?, None));
+        }
         let Some(source) = self.input.macro_source().cloned() else {
             return Ok((self.block()?, None));
         };
@@ -5444,10 +5879,10 @@ impl<'input, 'names> Parser<'input, 'names> {
         let owner = scopes.function(frontier).map_err(scope_parse_error)?;
         let driver = super::source_macro::LocalMacroDriver::new(source, owner, self.names)
             .map_err(|error| self.driver_error(error))?;
-        let previous = self
-            .lexical
-            .function
-            .replace(FunctionMacroState { frontier, driver });
+        let previous = self.lexical.function.replace(FunctionMacroState {
+            frontier,
+            driver: Some(driver),
+        });
         for (name, _) in params {
             if let BindingName::Named(name) = name {
                 self.bind_lexical(*name)?;
@@ -5461,10 +5896,27 @@ impl<'input, 'names> Parser<'input, 'names> {
         tokens: &'input NativeTokenBuffer,
         names: &'names mut NameStoreBuilder,
     ) -> Result<Self, ParseError> {
+        Self::with_purpose(tokens, names, ParserPurpose::Active)
+    }
+    fn with_purpose(
+        tokens: &'input NativeTokenBuffer,
+        names: &'names mut NameStoreBuilder,
+        purpose: ParserPurpose,
+    ) -> Result<Self, ParseError> {
         let modules = ModuleArenaBuilder::for_source(names).map_err(module_parse_error)?;
         let module = modules.source_root().map_err(module_parse_error)?;
         let modules = ParserState::owned(modules, names.budget())?;
-        let lexical = ParserState::owned(ParserLexicalState::default(), names.budget())?;
+        let mut state = ParserLexicalState::default();
+        if purpose == ParserPurpose::InactiveSyntax {
+            state.inactive_items = Some(
+                super::token_session::BudgetVec::new(
+                    names.budget(),
+                    super::expansion_budget::Storage::Retained,
+                )
+                .map_err(native_adapter::transport_error)?,
+            );
+        }
+        let lexical = ParserState::owned(state, names.budget())?;
         Ok(Self {
             input: tokens,
             names,
@@ -5472,6 +5924,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             lexical,
             expansion: None,
             expansion_depth: 0,
+            purpose,
+            item_expansion: None,
+            module_frontier: None,
             module,
             alias_target: false,
             pending_bounds: Vec::new(),
@@ -5556,7 +6011,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             Err(self.error(&format!("expected {s:?}")))
         }
     }
-    fn ident(&mut self) -> Result<AstIdent, ParseError> {
+    #[inline(never)]
+    fn is_identifier(&self) -> bool {
         let t = self.token();
         let reserved = [
             "fn", "let", "mut", "if", "else", "while", "return", "true", "false", "pub", "const",
@@ -5566,14 +6022,17 @@ impl<'input, 'names> Parser<'input, 'names> {
             "do", "final", "macro", "override", "priv", "typeof", "unsized", "virtual", "yield",
             "try", "gen",
         ];
-        if t.is_ident()
+        t.is_ident()
             && t.text != "_"
             && t.text
                 .chars()
                 .next()
                 .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
             && !reserved.contains(&t.text)
-        {
+    }
+    fn ident(&mut self) -> Result<AstIdent, ParseError> {
+        let t = self.token();
+        if self.is_identifier() {
             let name = self.input.mint_name(&t, self.names)?;
             self.cursor.bump();
             Ok(name)
@@ -5645,7 +6104,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             );
         }
         if self.eat("&") {
-            let region = if self.token().text.starts_with('\'') {
+            let region = if self.token().is_lifetime() {
                 Some(self.lifetime()?)
             } else {
                 None
@@ -5752,7 +6211,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             _ => 1,
         };
         if anchor != PathAnchor::Relative && !self.eat("::") {
-            return Ok(GenericPath { anchor, segments });
+            return Ok(GenericPath {
+                anchor,
+                segments,
+                resolved_use: None,
+            });
         }
         loop {
             if count >= 128 {
@@ -5780,7 +6243,11 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
             }
         }
-        Ok(GenericPath { anchor, segments })
+        Ok(GenericPath {
+            anchor,
+            segments,
+            resolved_use: None,
+        })
     }
     fn type_parameters(&mut self) -> Result<Vec<AstIdent>, ParseError> {
         self.pending_bounds.clear();
@@ -5796,7 +6263,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             if self.is("const") {
                 return Err(self.unsupported("const generic parameters are unsupported"));
             }
-            if !self.token().string && self.token().text.starts_with('\'') {
+            if self.token().is_lifetime() {
                 self.lifetime()?;
                 return Err(self.error(
                     "lifetime parameters on nominal and impl declarations are unsupported",
@@ -6128,9 +6595,64 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         self.nesting += 1;
         let previous_module = self.module;
+        let previous_frontier = self.module_frontier;
         self.module = module;
+        if self.purpose == ParserPurpose::Active && self.input.macro_source().is_some() {
+            if self.lexical.scopes.is_none() {
+                self.lexical.scopes = Some(
+                    super::semantic_scope::ScopeArenaBuilder::for_names(self.names)
+                        .map_err(scope_parse_error)?,
+                );
+            }
+            if self.lexical.item_macros.is_none() {
+                let source = self.input.macro_source().cloned().ok_or_else(|| {
+                    native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+                })?;
+                self.lexical.item_macros = Some(
+                    super::source_item_macro::SourceItemMacroDriver::new(source, self.names)
+                        .map_err(|error| self.driver_error(error))?,
+                );
+            }
+            let scopes = self.lexical.scopes.as_mut().ok_or_else(|| {
+                native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+            })?;
+            self.module_frontier = Some(
+                scopes
+                    .module_root(self.names, &*self.modules, module, previous_frontier)
+                    .map_err(scope_parse_error)?,
+            );
+        }
         while !self.is("") && !self.is("}") {
+            if let Some(before) = self.module_frontier {
+                let scopes = self.lexical.scopes.as_mut().ok_or_else(|| {
+                    native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+                })?;
+                self.module_frontier = Some(
+                    scopes
+                        .module_step(self.names, &*self.modules, before)
+                        .map_err(scope_parse_error)?,
+                );
+            }
             let (visibility, explicit_visibility) = self.visibility(module)?;
+            if self.is("macro_rules") && self.cursor.peek(1).is_some_and(|token| token.matches("!"))
+            {
+                if explicit_visibility {
+                    return Err(
+                        self.unsupported("visibility-qualified macro definitions are unsupported")
+                    );
+                }
+                self.module_macro_definition()?;
+                continue;
+            }
+            if self.token().is_ident()
+                && self.cursor.peek(1).is_some_and(|token| token.matches("!"))
+            {
+                if explicit_visibility {
+                    return Err(self.error("macro invocations cannot have visibility"));
+                }
+                self.item_macro_invocation(module, module_path, parsed)?;
+                continue;
+            }
             if self.eat("mod") {
                 let name = self.ident()?;
                 let full = module_path
@@ -6155,6 +6677,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.nonmodule_item(module, module_path, parsed, visibility, explicit_visibility)?;
         }
         self.module = previous_module;
+        self.module_frontier = previous_frontier;
         self.nesting -= 1;
         Ok(())
     }
@@ -6408,26 +6931,32 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return Err(self.unsupported("bounds on nominal declarations are unsupported"));
             }
             self.type_params = type_params.clone();
-            self.expect("{")?;
             let mut fields = Vec::new();
-            while !self.is("}") {
-                let (visibility, _) = self.visibility(module)?;
-                let name = self.ident()?;
-                self.expect(":")?;
-                fields.push(FieldDecl {
-                    name: FieldName::Named(name),
-                    ty: self.ty()?,
-                    visibility,
-                });
-                if !self.eat(",") {
-                    break;
+            let shape = if self.eat(";") {
+                StructShape::Unit
+            } else {
+                self.expect("{")?;
+                while !self.is("}") {
+                    let (visibility, _) = self.visibility(module)?;
+                    let name = self.ident()?;
+                    self.expect(":")?;
+                    fields.push(FieldDecl {
+                        name: FieldName::Named(name),
+                        ty: self.ty()?,
+                        visibility,
+                    });
+                    if !self.eat(",") {
+                        break;
+                    }
                 }
-            }
-            self.expect("}")?;
-            if fields.is_empty() {
-                return Err(self.unsupported("empty structs are unsupported"));
-            }
+                self.expect("}")?;
+                if fields.is_empty() {
+                    return Err(self.unsupported("empty structs are unsupported"));
+                }
+                StructShape::Record
+            };
             parsed.program.structs.push(StructDecl {
+                shape,
                 module,
                 type_params,
                 name: module_path
@@ -6455,7 +6984,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             };
             if self.eat("where") {
                 loop {
-                    if !self.token().string && self.token().text.starts_with('\'') {
+                    if self.token().is_lifetime() {
                         return Err(
                             self.unsupported("lifetime where predicates on impls are unsupported")
                         );
@@ -6546,7 +7075,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(())
     }
     fn insert_item(
-        &self,
+        &mut self,
         parsed: &mut ParsedDeclarations,
         module: ModuleId,
         path: &AstPath,
@@ -6563,6 +7092,30 @@ impl<'input, 'names> Parser<'input, 'names> {
             .map_err(|error| native_adapter::transport_error(error.into()))?;
         let key = path.key(Namespace::Type);
         let bindings = parsed.items.entry(key).or_default();
+        if self.item_expansion.is_some() && bindings.len() == bindings.capacity() {
+            let planned = bindings
+                .len()
+                .checked_add(1)
+                .and_then(|n| n.checked_mul(std::mem::size_of::<Item>()))
+                .ok_or_else(|| {
+                    native_adapter::transport_error(super::token_session::TokenError::IdExhausted)
+                })?;
+            self.names
+                .retain_parser_storage(planned)
+                .map_err(native_adapter::name_error)?;
+            bindings.try_reserve_exact(1).map_err(|_| {
+                native_adapter::transport_error(self.names.budget().poison_allocation().into())
+            })?;
+            let actual = bindings
+                .capacity()
+                .checked_mul(std::mem::size_of::<Item>())
+                .ok_or_else(|| {
+                    native_adapter::transport_error(super::token_session::TokenError::IdExhausted)
+                })?;
+            self.names
+                .retain_parser_storage(actual.saturating_sub(planned))
+                .map_err(native_adapter::name_error)?;
+        }
         if bindings.iter().any(|item| {
             if matches!(kind, ItemKind::Enum)
                 && matches!(
@@ -6672,7 +7225,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             if self.is("?") {
                 return Err(self.unsupported("relaxed ?Sized bounds are unsupported"));
             }
-            if !self.token().string && self.token().text.starts_with('\'') {
+            if self.token().is_lifetime() {
                 return Err(self.unsupported("type outlives bounds are unsupported"));
             }
             if traits.len() >= 256 {
@@ -6698,7 +7251,40 @@ impl<'input, 'names> Parser<'input, 'names> {
         associated: bool,
     ) -> Result<(Function, ReceiverKind), ParseError> {
         let (head, receiver) = self.function_head(inherited, associated)?;
-        let (body, lexical_scope) = self.function_body(&head.params)?;
+        let (body, lexical_scope) = if let Some(proof) = self.item_expansion {
+            if associated
+                || !inherited.is_empty()
+                || !head.type_params.is_empty()
+                || !head.regions.params.is_empty()
+            {
+                return Err(
+                    self.unsupported("item macro products must be nongeneric free functions")
+                );
+            }
+            let scopes = self.lexical.scopes.as_mut().ok_or_else(|| {
+                native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+            })?;
+            let frontier = scopes
+                .generated_function_root(self.names, &*self.modules, &proof, head.name)
+                .map_err(scope_parse_error)?;
+            let owner = scopes.function(frontier).map_err(scope_parse_error)?;
+            let previous = self.lexical.function.replace(FunctionMacroState {
+                frontier,
+                driver: None,
+            });
+            let result = (|| {
+                for (name, _) in &head.params {
+                    if let BindingName::Named(name) = name {
+                        self.bind_lexical(*name)?;
+                    }
+                }
+                self.block()
+            })();
+            self.lexical.function = previous;
+            (result?, Some(owner))
+        } else {
+            self.function_body(&head.params)?
+        };
         Ok((
             Function {
                 lexical_scope,
@@ -6737,7 +7323,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
                 return Err(self.unsupported("const generic parameters are unsupported"));
             }
-            if self.token().text.starts_with('\'') {
+            if self.token().is_lifetime() {
                 if seen_type {
                     return Err(self.error("lifetime parameters must precede type parameters"));
                 }
@@ -6816,7 +7402,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         let mut params = Vec::new();
         let mut receiver = ReceiverKind::None;
         if associated && self.eat("&") {
-            regions.receiver = if self.token().text.starts_with('\'') {
+            regions.receiver = if self.token().is_lifetime() {
                 Some(self.lifetime()?)
             } else {
                 None
@@ -6860,7 +7446,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         };
         if self.eat("where") {
             loop {
-                if !self.token().string && self.token().text.starts_with('\'') {
+                if self.token().is_lifetime() {
                     let long = self.lifetime()?;
                     if !self.is(":") {
                         return Err(self.error("only lifetime outlives where bounds are supported"));
@@ -7128,7 +7714,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
                 statements.push(Stmt::Return(value));
             } else if self.is("while")
-                || (self.token().text.starts_with('\'')
+                || (self.token().is_lifetime()
                     && self.cursor.peek(1).is_some_and(|t| t.text == ":")
                     && self.cursor.peek(2).is_some_and(|t| t.text == "while"))
             {
@@ -7411,7 +7997,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.expr_inner_mode(min, false)
     }
     fn expr_inner_mode(&mut self, min: u8, statement: bool) -> Result<Expr, ParseError> {
-        if !self.token().string && self.token().text.starts_with('\'') {
+        if self.token().is_lifetime() {
             return self.labeled_expression(min, statement);
         }
         let statement_blocklike =
@@ -7476,6 +8062,25 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.token().is_opaque_literal() {
             return self.opaque_literal_expression();
         }
+        if self.is_identifier()
+            && !self.is("println")
+            && self.cursor.peek(1).is_some_and(|token| token.matches("!"))
+        {
+            return self.local_macro_expression();
+        }
+        // These recursive forms must not retain the unrelated aggregate,
+        // borrow, break-value and trait-call temporaries from the ordinary
+        // prefix frame for every admitted syntax nesting level.
+        if self.eat("(") {
+            return self.group_prefix();
+        }
+        if self.is("{") {
+            return Ok(Expr::Block(self.block()?));
+        }
+        self.ordinary_expr_prefix(statement)
+    }
+    #[inline(never)]
+    fn ordinary_expr_prefix(&mut self, statement: bool) -> Result<Expr, ParseError> {
         if self.is("const") {
             return Err(
                 self.unsupported("const expressions and constant evaluation are unsupported")
@@ -7516,7 +8121,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 body: self.block()?,
             }
         } else if self.eat("break") {
-            let label = if self.token().text.starts_with('\'') {
+            let label = if self.token().is_lifetime() {
                 let label = self.input.mint_name(&self.token(), self.names)?;
                 self.cursor.bump();
                 Some(label)
@@ -7530,7 +8135,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             };
             Expr::Break { label, value }
         } else if self.eat("continue") {
-            let label = if self.token().text.starts_with('\'') {
+            let label = if self.token().is_lifetime() {
                 let label = self.input.mint_name(&self.token(), self.names)?;
                 self.cursor.bump();
                 Some(label)
@@ -7542,12 +8147,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             return self.match_prefix();
         } else if self.eat("if") {
             return self.if_prefix(statement);
-        } else if self.is("{") {
-            Expr::Block(self.block()?)
         } else if self.eat("[") {
             return self.array_prefix();
-        } else if self.eat("(") {
-            return self.group_prefix();
         } else if !self.token().string
             && self.token().text.starts_with(|c: char| c.is_ascii_digit())
         {
@@ -7906,15 +8507,51 @@ fn module_diagnostic(error: super::module_identity::ModuleError) -> String {
     let error = module_parse_error(error);
     let mut diagnostic = super::source::SourceError::syntax(error.primary, error.message);
     diagnostic.kind = error.kind;
+    diagnostic._diagnostic_lease = error._diagnostic_lease;
     diagnostic.to_string()
+}
+struct ParsedSyntaxUnit {
+    parsed: ParsedDeclarations,
+    names: Arc<NameStore>,
+    modules: Arc<super::module_identity::ModuleArena>,
+    symbols: Arc<ProgramSymbols>,
+    scopes: Option<Arc<super::semantic_scope::ScopeArena>>,
+    _inactive_items: Option<super::token_session::BudgetVec<Arc<UnexpandedMacroSyntax>>>,
+}
+/// No conversion to Program or ParsedProgram is exposed for this certificate.
+pub(super) struct InactiveSyntaxCertificate {
+    _unit: ParsedSyntaxUnit,
+}
+impl std::fmt::Debug for InactiveSyntaxCertificate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InactiveSyntaxCertificate")
+            .finish_non_exhaustive()
+    }
 }
 /// Parse syntax only, retaining imports and visibility for the signatures phase.
 fn parse_syntax_tokens(tokens: NativeParserInput) -> Result<ParsedProgram, ParseError> {
+    let unit = parse_syntax_unit(tokens, ParserPurpose::Active)?;
+    Ok(ParsedProgram {
+        program: unit
+            .parsed
+            .program
+            .publish(unit.names, unit.modules, unit.symbols, unit.scopes),
+        items: unit.parsed.items,
+        empty_use_prefixes: unit.parsed.empty_use_prefixes,
+    })
+}
+fn parse_syntax_unit(
+    tokens: NativeParserInput,
+    purpose: ParserPurpose,
+) -> Result<ParsedSyntaxUnit, ParseError> {
     let (tokens, session) = tokens.into_parts();
     let mut names = NameStoreBuilder::new(session, super::token::Edition::E2024)
         .map_err(native_adapter::name_error)?;
     let symbols = ProgramSymbols::new(&mut names).map_err(native_adapter::name_error)?;
-    let mut parser = Parser::new(&tokens, &mut names)?;
+    let mut parser = match purpose {
+        ParserPurpose::Active => Parser::new(&tokens, &mut names)?,
+        ParserPurpose::InactiveSyntax => Parser::with_purpose(&tokens, &mut names, purpose)?,
+    };
     let mut parsed = ParsedDeclarations {
         program: ProgramDeclarations::default(),
         items: HashMap::new(),
@@ -7982,16 +8619,187 @@ fn parse_syntax_tokens(tokens: NativeParserInput) -> Result<ParsedProgram, Parse
         .freeze()
         .map_err(module_parse_error)?;
     let names = names.freeze().map_err(native_adapter::name_error)?;
-    Ok(ParsedProgram {
-        program: parsed.program.publish(names, modules, symbols, scopes),
-        items: parsed.items,
-        empty_use_prefixes: parsed.empty_use_prefixes,
+    Ok(ParsedSyntaxUnit {
+        parsed,
+        names,
+        modules,
+        symbols,
+        scopes,
+        _inactive_items: lexical.inactive_items,
     })
 }
 /// Syntax-only preparation seam. Does not process attributes, resolve names, or
 /// access files. The source preparation owner supplies attribute-masked text.
 pub(super) fn parse_syntax_unprepared(source: &str) -> Result<ParsedProgram, ParseError> {
     parse_syntax_tokens(lex(source)?)
+}
+pub(super) fn validate_inactive_syntax(
+    source: &str,
+) -> Result<InactiveSyntaxCertificate, ParseError> {
+    let budget = super::expansion_budget::ExpansionBudget::default();
+    let projection = super::source::PreparedLexInput::identity(
+        std::path::Path::new("<inactive>"),
+        source,
+        &budget,
+    )
+    .map_err(native_adapter::source_error)?;
+    let mut session =
+        super::token_session::TokenSession::new(projection.snapshot().clone(), budget)
+            .map_err(native_adapter::transport_error)?;
+    let lexed = super::lexer::lex_prepared(&projection, super::token::Edition::E2024, &mut session)
+        .map_err(native_adapter::lex_error)?;
+    let input = NativeParserInput::new_inactive(lexed, session, &projection)?;
+    Ok(InactiveSyntaxCertificate {
+        _unit: parse_syntax_unit(input, ParserPurpose::InactiveSyntax)?,
+    })
+}
+
+#[cfg(test)]
+mod inactive_item_syntax_tests {
+    use super::*;
+
+    #[test]
+    fn keyword_prefix_negation_is_not_an_identifier_macro_invocation() {
+        for source in [
+            "fn main(){if !false{println!(\"ok\");}}",
+            "fn main(){let x:bool=match !false{true=>true,false=>false};if x{println!(\"ok\");}}",
+            "fn main(){let x:bool=loop{break !false;};if x{println!(\"ok\");}}",
+            "fn main(){macro_rules! yes{()=>{true}}if !yes!(){println!(\"bad\");}}",
+        ] {
+            let program = parse(source).unwrap();
+            check(&program).unwrap();
+        }
+    }
+
+    #[test]
+    fn active_unknown_item_macro_is_syntax_at_invocation_without_inventory() {
+        for source in [
+            "undefined!();fn main(){}",
+            "#[cfg(any())] macro_rules! undefined {()=>{fn skipped(){}}} undefined!();fn main(){}",
+        ] {
+            let prepared = super::super::source::prepare_text(
+                "unknown.rs",
+                source,
+                &super::super::source::SourceOptions::default(),
+            )
+            .unwrap();
+            let error = parse_prepared(&prepared).unwrap_err();
+            assert_eq!(
+                error.kind,
+                super::super::source::SourceErrorKind::Syntax,
+                "{error}"
+            );
+            assert!(error.message.contains("unknown module macro"), "{error}");
+            assert_eq!(
+                error.primary.unwrap().lo as usize,
+                source.rfind("undefined!").unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn unit_struct_syntax_is_real_but_semantics_are_deferred_after_resolution() {
+        let parsed = parse_unresolved("struct S;fn main(){}").unwrap();
+        assert_eq!(parsed.program.structs[0].shape, StructShape::Unit);
+        assert!(parsed.program.structs[0].fields.is_empty());
+        let program = resolve(&parsed).unwrap();
+        let budget = ir::PlanBudget::default();
+        let error = PlanCtx::from_program(&program, &budget).unwrap_err();
+        assert!(
+            error.starts_with("unsupported: unit struct semantics"),
+            "{error}"
+        );
+        assert_eq!(budget.usage_snapshot().applications, 0);
+        assert_eq!(budget.usage_snapshot().obligations, 0);
+        let error = parse("struct S;type A=S;fn main(){let x=A;}").unwrap_err();
+        assert!(!error.contains("unsupported"), "{error}");
+        assert!(
+            error.contains("type alias is not a value constructor"),
+            "{error}"
+        );
+        assert!(
+            parse_unresolved("struct S{}fn main(){}")
+                .unwrap_err()
+                .contains("empty structs are unsupported")
+        );
+    }
+
+    #[test]
+    fn item_publication_denies_before_container_allocation_and_releases() {
+        use super::super::expansion_budget::{BudgetResource, Storage};
+        let (tokens, session) = lex("fn main(){}").unwrap().into_parts();
+        let mut names =
+            NameStoreBuilder::new(session, super::super::token::Edition::E2024).unwrap();
+        let budget = names.budget().clone();
+        let mut parser = Parser::new(&tokens, &mut names).unwrap();
+        let mut parsed = ParsedDeclarations {
+            program: ProgramDeclarations::default(),
+            items: HashMap::new(),
+            empty_use_prefixes: Vec::new(),
+        };
+        let snapshot = budget.snapshot();
+        let remaining = budget.limits().bytes - snapshot.retained_bytes - snapshot.temporary_bytes;
+        let blocker = budget.reserve(Storage::Temporary, remaining).unwrap();
+        assert_eq!(
+            parser
+                .reserve_item_publication(&mut parsed)
+                .unwrap_err()
+                .kind,
+            super::super::source::SourceErrorKind::Limit
+        );
+        assert_eq!(parsed.program.functions.capacity(), 0);
+        assert_eq!(parsed.items.capacity(), 0);
+        assert_eq!(
+            budget.snapshot().failure.unwrap().resource,
+            BudgetResource::Bytes
+        );
+        drop(blocker);
+        drop(parser);
+        drop(names);
+        drop(tokens);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        assert_eq!(budget.snapshot().temporary_bytes, 0);
+    }
+
+    #[test]
+    fn inactive_unknown_macro_retains_nonplannable_syntax_without_expansion() {
+        let certificate =
+            validate_inactive_syntax("undefined!(); fn unused(){ undefined!(); } fn main(){}")
+                .unwrap();
+        let items = certificate._unit._inactive_items.as_ref().unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(certificate._unit.scopes.is_none());
+        assert!(matches!(
+            certificate._unit.parsed.program.functions[0]
+                .body
+                .statements[0],
+            Stmt::Expr(Expr::UnexpandedMacro(_))
+        ));
+        let unit = certificate._unit;
+        let program =
+            unit.parsed
+                .program
+                .publish(unit.names, unit.modules, unit.symbols, unit.scopes);
+        assert!(
+            PlanCtx::from_program(&program, &ir::PlanBudget::default())
+                .unwrap_err()
+                .contains("unexpanded macro")
+        );
+    }
+
+    #[test]
+    fn inactive_macro_syntax_does_not_hide_invalid_statements_or_delimiters() {
+        for source in [
+            "fn unused(){let =;}",
+            "undefined!([);",
+            "macro_rules! bad { ($x:ident) => }",
+        ] {
+            assert_eq!(
+                validate_inactive_syntax(source).unwrap_err().kind,
+                super::super::source::SourceErrorKind::Syntax
+            );
+        }
+    }
 }
 
 /// Parse mapped preparation output without reprocessing attributes or configuration.
@@ -8665,6 +9473,16 @@ impl PlanCtx {
     ) -> Result<Self, String> {
         let program = shared.as_ref();
         program.validate_name_handles()?;
+        // Unit syntax is retained so resolution can diagnose invalid alias
+        // constructors. No unit-layout or constructor semantics are published.
+        budget.charge_work(program.structs.len())?;
+        if program
+            .structs
+            .iter()
+            .any(|declaration| declaration.shape == StructShape::Unit)
+        {
+            return Err("unsupported: unit struct semantics are unsupported".into());
+        }
         // Signature construction sees all source declarations, not just demanded
         // instances. Unsupported unused const bodies cannot escape publication.
         for function in &program.functions {
@@ -10054,7 +10872,7 @@ impl PlanCtx {
         }
         let full = path.path(self.program.names.as_ref())?;
         let base = full
-            .slice(self.program.names.as_ref(), 0..at + 1, full.anchor())
+            .semantic_slice(self.program.names.as_ref(), 0..at + 1, full.anchor())
             .map_err(native_adapter::name_diagnostic)?;
         let name = name_scope::path_key(self.program.names.as_ref(), &base, namespace)?;
         let args = segment
@@ -11456,6 +12274,7 @@ mod registry_resource_tests {
         let name = builder.ident("Item").unwrap();
         let ty = Type::Apply(GenericPath {
             anchor: PathAnchor::Relative,
+            resolved_use: None,
             segments: (0..128)
                 .map(|_| PathSegment {
                     name,

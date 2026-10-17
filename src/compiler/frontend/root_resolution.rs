@@ -161,13 +161,31 @@ impl Resolver<'_> {
         AstPath::new(self.names(), PathAnchor::Crate, &segments)
             .map_err(native_adapter::name_diagnostic)
     }
-    fn append(&self, path: &AstPath, ident: AstIdent) -> Result<AstPath, String> {
-        path.push(self.names(), ident)
+    fn semantic_append(&self, path: &AstPath, ident: AstIdent) -> Result<AstPath, String> {
+        // This is a canonical namespace-lookup intermediate, not a new source
+        // occurrence. Never mutate or extend an original-use certificate.
+        path.check(self.names())
+            .map_err(native_adapter::name_diagnostic)?;
+        let canonical = AstPath::new(self.names(), path.anchor(), path.segments())
+            .map_err(native_adapter::name_diagnostic)?;
+        canonical
+            .push(self.names(), ident)
             .map_err(native_adapter::name_diagnostic)
     }
     fn single_path(&self, ident: AstIdent) -> Result<AstPath, String> {
         AstPath::new(self.names(), PathAnchor::Relative, &[ident])
             .map_err(native_adapter::name_diagnostic)
+    }
+    fn resolved_use(&self, target: &AstPath, source: &AstPath) -> Result<AstPath, String> {
+        target
+            .with_resolved_use(self.names(), source)
+            .map_err(native_adapter::name_diagnostic)
+    }
+    fn certify_generic(&self, target: &mut GenericPath, source: &AstPath) -> Result<(), String> {
+        target.resolved_use = None;
+        let canonical = target.path(self.names())?;
+        target.resolved_use = Some(self.resolved_use(&canonical, source)?);
+        Ok(())
     }
     fn alias_source_path(&self, path: &AstPath) -> Result<GenericPath, String> {
         path.check(self.names())
@@ -186,6 +204,7 @@ impl Resolver<'_> {
         Ok(GenericPath {
             anchor: path.anchor(),
             segments,
+            resolved_use: Some(path.clone()),
         })
     }
     fn alias_decl(&self, name: &AstPath) -> Result<(&TypeAliasDecl, ModuleId), String> {
@@ -396,7 +415,12 @@ impl Resolver<'_> {
         }
         Ok(())
     }
-    fn expand_alias(&mut self, name: &AstPath, args: &[Type]) -> Result<Type, String> {
+    fn expand_alias(
+        &mut self,
+        name: &AstPath,
+        args: &[Type],
+        source: &AstPath,
+    ) -> Result<Type, String> {
         let params = &self.alias_decl(name)?.0.params;
         if params.len() != args.len() {
             return Err(format!(
@@ -409,9 +433,40 @@ impl Resolver<'_> {
         clone_vector(params, &self.alias_budget)?;
         let params = params.clone();
         let mut target = self.alias_template(name)?;
+        // The source program is universally admitted before resolution. Thus
+        // even aliases erased to primitives had their original use checked.
+        // Surviving template paths retain that use, not the alias declaration's
+        // occurrences. Annotate before substitution so caller arguments keep
+        // their own independent provenance when they replace parameters.
+        self.alias_use(&mut target, source, 0)?;
         self.substitute(&mut target, &params, args, 0)?;
         validate_depth(DepthNode::Type(&target))?;
         Ok(target)
+    }
+    fn alias_use(&self, ty: &mut Type, source: &AstPath, depth: usize) -> Result<(), String> {
+        self.alias_budget.check_depth(depth)?;
+        self.alias_budget.charge_work(1)?;
+        match ty {
+            Type::Named(path) => *path = self.resolved_use(path, source)?,
+            Type::Apply(path) => {
+                self.certify_generic(path, source)?;
+                for segment in &mut path.segments {
+                    for arg in &mut segment.args {
+                        self.alias_use(arg, source, depth + 1)?;
+                    }
+                }
+            }
+            Type::Tuple(fields) => {
+                for field in fields {
+                    self.alias_use(field, source, depth + 1)?;
+                }
+            }
+            Type::Ref { referent, .. } | Type::Array(referent, _) | Type::Slice(referent) => {
+                self.alias_use(referent, source, depth + 1)?
+            }
+            _ => {}
+        }
+        Ok(())
     }
     fn substitute(
         &self,
@@ -466,6 +521,7 @@ impl Resolver<'_> {
             let prefix = GenericPath {
                 anchor: path.anchor,
                 segments: path.segments[..end].to_vec(),
+                resolved_use: None,
             }
             .path(self.names())?;
             let Some(item) = self.path(&prefix, module, true, false)? else {
@@ -490,7 +546,7 @@ impl Resolver<'_> {
             for arg in &mut args {
                 self.ty(arg, module)?;
             }
-            let target = self.expand_alias(item.source()?, &args)?;
+            let target = self.expand_alias(item.source()?, &args, &path.path(self.names())?)?;
             let mut expanded = match target {
                 Type::Named(name) => self.alias_source_path(&name)?,
                 Type::Apply(path) => path,
@@ -502,6 +558,7 @@ impl Resolver<'_> {
                 .try_reserve(path.segments.len() - end)
                 .map_err(|_| "alias constructor path allocation failed")?;
             expanded.segments.extend_from_slice(&path.segments[end..]);
+            self.certify_generic(&mut expanded, &path.path(self.names())?)?;
             return Ok(Some(expanded));
         }
         Ok(None)
@@ -576,7 +633,10 @@ impl Resolver<'_> {
             if item.kind != ResolvedKind::Trait {
                 return Err(format!("{} is not a trait", self.display(source)?));
             }
-            *path = item.trait_path()?;
+            *path = match item.trait_path()? {
+                TraitPath::Source(target) => TraitPath::Source(self.resolved_use(&target, source)?),
+                builtin => builtin,
+            };
         } else if let Some(ident) = source.single()
             && let Some(id) = self.builtin_trait(ident)?
         {
@@ -643,7 +703,7 @@ impl Resolver<'_> {
                 if matches!(item.kind, ItemKind::Variant(_)) {
                     let owner = item
                         .path
-                        .parent(self.names())
+                        .semantic_parent(self.names())
                         .map_err(native_adapter::name_diagnostic)?;
                     resolved.visibility = self
                         .path_items(&owner)?
@@ -795,7 +855,7 @@ impl Resolver<'_> {
                     let Some(current) = result else {
                         return Ok(None);
                     };
-                    let full = self.append(current.source()?, *ident)?;
+                    let full = self.semantic_append(current.source()?, *ident)?;
                     result = self.item(
                         &full,
                         from,
@@ -843,7 +903,7 @@ impl Resolver<'_> {
                 return Ok(None);
             };
             at = 1;
-            let full = self.append(&self.module_path(from)?, *ident)?;
+            let full = self.semantic_append(&self.module_path(from)?, *ident)?;
             let type_namespace = if parts.len() == 1 { namespace } else { true };
             if let Some(item) =
                 self.item(&full, from, type_namespace, importing && parts.len() == 1)?
@@ -883,7 +943,7 @@ impl Resolver<'_> {
                     self.catalog_child(*module, *ident, type_namespace)?
                 }
                 ResolvedPath::Source(source) => {
-                    let full = self.append(source, *ident)?;
+                    let full = self.semantic_append(source, *ident)?;
                     self.item(
                         &full,
                         from,
@@ -918,10 +978,15 @@ impl Resolver<'_> {
             .iter()
             .position(|segment| !segment.args.is_empty())
             .ok_or("missing explicit type arguments")?;
+        let original_use = path
+            .path(self.names())?
+            .original_use(self.names())
+            .map_err(native_adapter::name_diagnostic)?;
         clone_vector(&path.segments[..=at], &self.alias_budget)?;
         let prefix = GenericPath {
             anchor: path.anchor,
             segments: path.segments[..=at].to_vec(),
+            resolved_use: None,
         }
         .path(self.names())?;
         let item = match self.path(&prefix, module, true, false)? {
@@ -949,6 +1014,7 @@ impl Resolver<'_> {
             .try_reserve(suffix.len())
             .map_err(|_| "generic suffix allocation failed")?;
         canonical.segments.extend(suffix);
+        self.certify_generic(&mut canonical, &original_use)?;
         *path = canonical;
         Ok(())
     }
@@ -966,7 +1032,9 @@ impl Resolver<'_> {
         let mut prefix = GenericPath {
             anchor: path.anchor,
             segments: path.segments[..path.segments.len() - 1].to_vec(),
+            resolved_use: None,
         };
+        self.certify_generic(&mut prefix, &path.path(self.names())?)?;
         let item = path.segments.last().ok_or("missing associated item")?;
         let owner_path = prefix.path(self.names())?;
         let mut owner = if let Some(ident) = owner_path.single()
@@ -978,7 +1046,7 @@ impl Resolver<'_> {
                 return Err("Self outside impl".into());
             }
             if let Some(nominal) = &self.self_nominal {
-                let candidate = self.append(nominal, item.name)?;
+                let candidate = self.semantic_append(nominal, item.name)?;
                 if self.path_items(&candidate)?.is_some_and(|items| {
                     items
                         .iter()
@@ -996,7 +1064,7 @@ impl Resolver<'_> {
                 return Ok(None);
             }
             if resolved.kind == ResolvedKind::Enum {
-                let candidate = self.append(resolved.source()?, item.name)?;
+                let candidate = self.semantic_append(resolved.source()?, item.name)?;
                 if self
                     .item(&candidate, module, false, false)?
                     .is_some_and(|item| item.kind == ResolvedKind::Variant)
@@ -1012,7 +1080,7 @@ impl Resolver<'_> {
                 self.generic_path(&mut prefix, module)?;
                 Type::Apply(prefix)
             } else {
-                Type::Named(resolved.source()?.clone())
+                Type::Named(self.resolved_use(resolved.source()?, &owner_path)?)
             }
         };
         self.ty(&mut owner, module)?;
@@ -1044,7 +1112,7 @@ impl Resolver<'_> {
                         .iter()
                         .any(|item| matches!(item.kind, ItemKind::TypeAlias(_)))
                 }) {
-                    *ty = self.expand_alias(&name, args)?;
+                    *ty = self.expand_alias(&name, args, &name)?;
                 } else if let Some(expected) = self.nominal_arity.get(&key) {
                     if *expected != args.len() {
                         return Err(format!(
@@ -1072,7 +1140,7 @@ impl Resolver<'_> {
                     .path(name, module, true, false)?
                     .ok_or_else(|| "unresolved type".to_owned())?;
                 if item.kind == ResolvedKind::TypeAlias {
-                    *ty = self.expand_alias(item.source()?, &[])?;
+                    *ty = self.expand_alias(item.source()?, &[], name)?;
                     return Ok(());
                 }
                 if !matches!(item.kind, ResolvedKind::Struct | ResolvedKind::Enum) {
@@ -1081,7 +1149,7 @@ impl Resolver<'_> {
                         self.display(name)?
                     ));
                 }
-                *name = item.source()?.clone();
+                *name = self.resolved_use(item.source()?, name)?;
                 if self
                     .nominal_arity
                     .get(&self.key(name)?)
@@ -1297,7 +1365,7 @@ impl Resolver<'_> {
                 if item.kind != ResolvedKind::Variant {
                     return Err("resolved declaration is not a variant".into());
                 }
-                *name = item.source()?.clone();
+                *name = self.resolved_use(item.source()?, name)?;
                 for (_, pattern) in fields {
                     self.pattern(pattern, module, names)?;
                 }
@@ -1311,7 +1379,7 @@ impl Resolver<'_> {
                 if item.kind != ResolvedKind::Variant {
                     return Err("resolved declaration is not an enum variant pattern".into());
                 }
-                *name = item.source()?.clone();
+                *name = self.resolved_use(item.source()?, name)?;
             }
             Pattern::Binding { name, mutable } => {
                 let path = self.single_path(*name)?;
@@ -1324,7 +1392,7 @@ impl Resolver<'_> {
                             self.ident_display(*name)?
                         ));
                     }
-                    *pattern = Pattern::Path(item.source()?.clone());
+                    *pattern = Pattern::Path(self.resolved_use(item.source()?, &path)?);
                     return Ok(());
                 }
                 if !self.local_insert(names, *name)? {
@@ -1348,7 +1416,7 @@ impl Resolver<'_> {
                 }
                 if item.kind == ResolvedKind::Variant {
                     *pattern = Pattern::Variant {
-                        name: item.source()?.clone(),
+                        name: self.resolved_use(item.source()?, name)?,
                         shape: ir::VariantShape::Struct,
                         fields: std::mem::take(fields)
                             .into_iter()
@@ -1357,7 +1425,7 @@ impl Resolver<'_> {
                         rest: *rest,
                     };
                 } else if item.kind == ResolvedKind::Struct {
-                    *name = item.source()?.clone();
+                    *name = self.resolved_use(item.source()?, name)?;
                 } else {
                     return Err("resolved declaration is not a struct pattern".into());
                 }
@@ -1374,9 +1442,13 @@ impl Resolver<'_> {
             return Ok(None);
         };
         let path = self.single_path(name)?;
-        Ok(self
+        let mut resolved = self
             .path(&path, module, false, false)?
-            .filter(|item| item.kind == ResolvedKind::Variant))
+            .filter(|item| item.kind == ResolvedKind::Variant);
+        if let Some(item) = &mut resolved {
+            item.path = ResolvedPath::Source(self.resolved_use(item.source()?, &path)?);
+        }
+        Ok(resolved)
     }
     fn block(
         &mut self,
@@ -1553,8 +1625,10 @@ impl Resolver<'_> {
                 let Expr::Call { args, .. } = value else {
                     return Err("unresolved alias associated item".into());
                 };
+                let original_use = expanded.path(self.names())?;
                 let mut owner_path = expanded;
                 let method = owner_path.segments.pop().ok_or("missing associated item")?;
+                self.certify_generic(&mut owner_path, &original_use)?;
                 let owner = if owner_path
                     .segments
                     .iter()
@@ -1668,10 +1742,34 @@ impl Resolver<'_> {
                     && item.kind == ResolvedKind::Variant
                 {
                     *expr = Expr::EnumVariant {
-                        name: item.source()?.clone(),
+                        name: self.resolved_use(item.source()?, name)?,
                         shape: ir::VariantShape::Unit,
                         fields: Vec::new(),
                     };
+                } else if let Some(item) = self.path(name, module, true, false)? {
+                    if item.kind == ResolvedKind::TypeAlias {
+                        // Diagnose the invalid alias constructor before the
+                        // later declaration-wide unsupported-unit fence.
+                        return Err("type alias is not a value constructor".into());
+                    }
+                    if item.kind == ResolvedKind::Struct {
+                        let key = self.key(item.source()?)?;
+                        for declaration in &self.program.structs {
+                            self.alias_budget.charge_work(1)?;
+                            if self.key(&declaration.name)? == key
+                                && declaration.shape == StructShape::Unit
+                            {
+                                return Err(super::super::source::SourceError {
+                                    kind: super::super::source::SourceErrorKind::Unsupported,
+                                    primary: None,
+                                    message: "unit struct values are unsupported".into(),
+                                    _diagnostic_lease: None,
+                                    location: None,
+                                }
+                                .to_string());
+                            }
+                        }
+                    }
                 }
             }
             Expr::Match { scrutinee, arms } => {
@@ -1718,7 +1816,7 @@ impl Resolver<'_> {
                 }
                 if resolved.kind == ResolvedKind::Variant {
                     *expr = Expr::EnumVariant {
-                        name: resolved.source()?.clone(),
+                        name: self.resolved_use(resolved.source()?, name)?,
                         shape: ir::VariantShape::Tuple,
                         fields: std::mem::take(args)
                             .into_iter()
@@ -1727,7 +1825,7 @@ impl Resolver<'_> {
                             .collect(),
                     };
                 } else if resolved.kind == ResolvedKind::Function {
-                    *name = resolved.source()?.clone();
+                    *name = self.resolved_use(resolved.source()?, name)?;
                 } else {
                     return Err("resolved declaration is not callable".into());
                 }
@@ -1751,7 +1849,7 @@ impl Resolver<'_> {
                 }
                 if item.kind == ResolvedKind::Variant {
                     *expr = Expr::EnumVariant {
-                        name: item.source()?.clone(),
+                        name: self.resolved_use(item.source()?, name)?,
                         shape: ir::VariantShape::Struct,
                         fields: std::mem::take(fields)
                             .into_iter()
@@ -1759,7 +1857,7 @@ impl Resolver<'_> {
                             .collect(),
                     };
                 } else if item.kind == ResolvedKind::Struct {
-                    *name = item.source()?.clone();
+                    *name = self.resolved_use(item.source()?, name)?;
                 } else {
                     return Err("resolved declaration is not a struct".into());
                 }
@@ -2166,6 +2264,38 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     }
     program.validate_name_handles()?;
     Ok(program)
+}
+
+#[cfg(test)]
+mod unit_shape_tests {
+    use super::*;
+
+    #[test]
+    fn direct_unit_value_is_explicitly_unsupported_at_resolution() {
+        let parsed = parse_unresolved("struct S;fn main(){let x=S;}").unwrap();
+        let error = resolve(&parsed).unwrap_err();
+        assert_eq!(
+            error,
+            "in function crate::main: unsupported: unit struct values are unsupported"
+        );
+    }
+
+    #[test]
+    fn bare_alias_to_unit_remains_invalid_before_planning_unit_fence() {
+        let parsed = parse_unresolved("struct S;type A=S;fn main(){let x=A;}").unwrap();
+        let error = resolve(&parsed).unwrap_err();
+        assert_eq!(
+            error,
+            "in function crate::main: type alias is not a value constructor"
+        );
+    }
+
+    #[test]
+    fn unused_unit_declaration_survives_resolution_for_later_typed_fence() {
+        let parsed = parse_unresolved("struct S;fn main(){}").unwrap();
+        let program = resolve(&parsed).unwrap();
+        assert_eq!(program.structs[0].shape, StructShape::Unit);
+    }
 }
 
 #[cfg(test)]

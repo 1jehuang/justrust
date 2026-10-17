@@ -12,6 +12,12 @@ The later accepted NESTED-SOURCE-MACROS.md slice adds multiple original local
 definitions and nested/recursive expression invocations. Earlier single-definition
 restrictions below describe this historical checkpoint, not the later client.
 
+ITEM-SOURCE-MACROS.md records the later accepted original module-level definitions
+and item-position one-function client, with distinct module admission and real
+generated function scopes. Its complete hosted gate passes 2,156 tests in 106
+binaries. Generated attributes/modules, general item expansion and full Rust
+remain open.
+
 ## Admitted source path
 
 The bounded client accepts one function-local `macro_rules!` definition and

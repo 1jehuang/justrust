@@ -1,7 +1,7 @@
 //! Parser-only consumption of opaque literal captures. Matcher input stays opaque.
 use super::*;
 use crate::compiler::macro_fragments::FragmentKind;
-use crate::compiler::semantic_scope::{ExpansionAdmission, ScopeError};
+use crate::compiler::semantic_scope::{ExpansionAdmission, ExpansionTokenAdmission, ScopeError};
 use crate::compiler::token_tree::Node;
 
 #[derive(Debug)]
@@ -49,6 +49,13 @@ impl NameStoreBuilder {
         &mut self,
         opaque: Token,
         proof: &ExpansionAdmission,
+    ) -> Result<LiteralParts, LiteralError> {
+        self.literal_parts_in(opaque, &(*proof).into())
+    }
+    pub(crate) fn literal_parts_in(
+        &mut self,
+        opaque: Token,
+        proof: &ExpansionTokenAdmission,
     ) -> Result<LiteralParts, LiteralError> {
         proof.validate_token(self.session(), opaque)?;
         let TokenKind::Opaque(mut id) = opaque.kind else {

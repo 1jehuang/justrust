@@ -1,10 +1,13 @@
 # Original-source item macros and checked generated functions
 
-Status: implementation in progress after accepted nested-source checkpoint
-`9d7356315`. This is a bounded implementation contract, not native acceptance
-evidence. No item-position support is claimed until the complete gates pass.
+Status: this bounded original-source item client is accepted after nested-source
+checkpoint `9d7356315`. Final hosted all-target check
+`20261017-102443388-1584603`, complete regression
+`20261017-102446184-1584828` (2,156 tests, 106 binaries, zero failed/ignored/filtered),
+strict all-target lint `20261017-102503349-1585919`, formatting and diff checks pass.
+This is not general item-macro or full Rust support.
 
-## Intended client
+## Admitted client
 
 Original module-level macro_rules definitions may be selected by later
 unqualified item-position calls. Each invocation must emit exactly one
@@ -68,6 +71,16 @@ source or sent back through source-file discovery.
 
 ## Retained callable publication
 
+Canonical resolution must preserve a checked original-use certificate separately
+from the target semantic path. A generated call or type use can legitimately
+resolve to an original declaration, but the declaration's source occurrence is
+not authority for the generated use. The private certificate binds the exact
+canonical target and original use occurrences, collapses to the first use rather
+than forming recursive chains, and retains its charged storage. Generic paths
+check exact target occurrences before reusing a certificate. Public structural
+edits cannot mint or silently transfer one. Target-only parent/slice helpers are
+restricted to registry queries, never source AST replacement.
+
 Legitimately admitted emitted Function ASTs are retained in the same Program
 before immutable declaration registry and PlanCtx construction. They retain the
 same name/module/scope owners and exact checked lexical associations. Existing
@@ -79,7 +92,37 @@ Publication must use the exact retained Program, declaration, facts/world/budget
 and occurrence inventory. A checked mutable AST copy is not canonical publication
 authority. No new provider enum name by itself can repair a missing capability.
 
-## Gates before acceptance
+The parser retains real unit-struct syntax as an explicit Unit shape so that
+earlier alias-constructor validation is not bypassed by an Unsupported fence.
+Unit shapes still have no native value/constructor/ABI admission: planning rejects
+them after universal name validation and resolution. Empty record syntax remains
+its existing Unsupported boundary. This is deferred syntax, not unit-struct
+semantic support.
+
+## Executed acceptance gates
+
+The stock-first corpus contains 29 sources: 22 stock-valid and seven rejected.
+The native matrix contains 116 workers-1/8 CHECK/BUILD cells: ten runtime sources,
+seven ordinary invalid sources and twelve explicit Unsupported boundaries, with
+real executable stdout/exit and no compiler fallback. All earlier source, literal
+and nested macro corpora remain unchanged. Thirteen public authority controls
+exercise real parsed product/scope/name/body mutations, removals, foreign owners
+and exact generic-target certificate binding before planning effects.
+
+The complete gate includes unchanged backend, wide-integer, alias, source-loader
+and recursive-macro witnesses. Intermediate runs exposed real debug-stack
+overflows, target-only query misuse, an inactive-character/lifetime dispatch bug,
+and an `if !condition` shortcut incorrectly treated as a macro invocation. Repairs
+reduce retained parser frames, preserve checked semantic query boundaries and
+reuse typed token/name predicates. No stack environment, resource cap, old source
+witness or acceptance assertion was weakened. Unit diagnostic controls require
+the exact established function-context prefix. Twenty-three redacted run records,
+including failed attempts, are retained in
+`data/runs/xps14/2026-10-17-item-source-macros.jsonl`.
+
+The wide-integer oracle still takes about 12.3 seconds; strict lint reports a
+106k-line engine rebuild. These are correctness-run observations, not measured
+before/after speedups.
 
 Stock-first source cases cover emitted-function execution, generated locals,
 captured parameter versus marked local identity, item names, module inheritance,

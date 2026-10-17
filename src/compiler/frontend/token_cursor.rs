@@ -34,6 +34,9 @@ impl TokenView<'_> {
     pub(super) fn is_ident(&self) -> bool {
         self.kind == ParserTokenKind::Ident
     }
+    pub(super) fn is_lifetime(&self) -> bool {
+        self.kind == ParserTokenKind::Lifetime
+    }
     pub(super) fn is_opaque_literal(&self) -> bool {
         self.kind == ParserTokenKind::OpaqueLiteral
     }

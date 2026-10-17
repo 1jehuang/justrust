@@ -1,12 +1,16 @@
 //! Source checking, local inference and checked body construction.
 use super::*;
 
+const UNEXPANDED_MACRO_CHECK_ERROR: &str =
+    "unsupported: unexpanded macro syntax cannot enter active checking";
+
 pub(super) fn scope_diagnostic(error: super::super::semantic_scope::ScopeError) -> String {
     super::super::semantic_scope::scope_diagnostic(error)
 }
 
 pub(super) fn application_namespace(value: &Expr) -> Result<Namespace, String> {
     match value {
+        Expr::UnexpandedMacro(_) => Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
         Expr::Call { .. } => Ok(Namespace::Value),
         Expr::Struct { .. } | Expr::EnumVariant { .. } => Ok(Namespace::Type),
         _ => Err("unsupported generic application expression".into()),
@@ -681,6 +685,7 @@ impl Checker<'_> {
             .as_ref()
             .ok_or("inference requires planning context")?;
         let term = match expr {
+            Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
             Expr::Integer(literal) => self.infer_node(match literal.suffix {
                 Some(t) => InferKind::Rigid(ir::Ty::Int(t)),
                 None => InferKind::Integer,
@@ -780,7 +785,7 @@ impl Checker<'_> {
             }
             Expr::Struct { name, .. } | Expr::EnumVariant { name, .. } => {
                 let owner = if matches!(expr, Expr::EnumVariant { .. }) {
-                    name.parent(&*plan.program.names)
+                    name.semantic_parent(&*plan.program.names)
                         .map_err(native_adapter::name_diagnostic)?
                 } else {
                     name.clone()
@@ -993,6 +998,7 @@ pub(super) fn static_source_place(mut expr: &Expr) -> Result<Place, String> {
             return Err("receiver place nesting limit128".into());
         }
         match expr {
+            Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
             Expr::Var(local) => {
                 fields.reverse();
                 return Ok(Place {
@@ -1757,7 +1763,7 @@ impl<'a> Checker<'a> {
             .map_err(native_adapter::name_diagnostic)?;
         let member = *path.segments().last().ok_or("missing enum variant")?;
         let owner = path
-            .parent(self.names()?)
+            .semantic_parent(self.names()?)
             .map_err(native_adapter::name_diagnostic)?;
         Ok((owner, member))
     }
@@ -2451,6 +2457,7 @@ impl<'a> Checker<'a> {
     }
     pub(super) fn scalar_hint(&self, e: &Expr) -> Result<Option<ir::Ty>, String> {
         Ok(match e {
+            Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
             Expr::TraitCall {
                 owner,
                 trait_path,
@@ -4370,6 +4377,7 @@ impl<'a> Checker<'a> {
             }
         }
         let (kind, flow) = match e {
+            Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
             Expr::Cast { .. } => return Err("cast bypassed expression dispatcher".into()),
             Expr::Borrow { kind, place } => {
                 let (place, referent, _writable) = self.checked_place(place).map_err(|error|format!("B1 borrow requires an existing local-root static place; borrowed rvalues/non-local targets are unsupported: {error}"))?;

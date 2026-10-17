@@ -1,5 +1,46 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Checked module item macros and retained generated functions
+
+Original module definitions and later unqualified item calls now emit exactly one
+supported nongeneric free function. Distinct module admission, real fresh function
+scopes, exact product/name association and complete sealed-product coverage prevent
+unused-body, scope or same-spelling occurrence laundering. Canonical resolution
+retains private original-use certificates bound to exact target occurrences; pure
+registry parent/slice queries cannot become AST use authority. Inactive undefined
+calls produce a sealed nonplannable syntax certificate. RecordingReader controls
+verify only the five original-root observations and no generated-child IO for
+disabled calls and rejected generated module/attribute output.
+
+The 29-source stock-first corpus supplies 116 native workers-1/8 CHECK/BUILD cells,
+including helper calls, aliases, nominal return values, textual module inheritance
+and explicit Unsupported boundaries. Thirteen public mutation controls reject
+foreign owners, missing/duplicate products, body/scope/name transplants and generic
+target edits before planning effects. Existing source corpora remain unchanged.
+
+Intermediate full runs exposed real failures, not successful acceptance: debug
+stack overflow, canonical query edits rejected by new certificate guards, inactive
+character tokens misdispatched as lifetimes, and an `if !condition` macro shortcut.
+Small noninline dispatch boundaries remove unrelated parser scratch from recursive
+frames, while the macro shortcut now shares the actual identifier grammar gate.
+No cap, stack environment or old witness was changed. Unit syntax is represented
+explicitly but its native semantics remain Unsupported after resolution; alias
+constructor invalidity is preserved before that fence. Failed full run
+`20261017-102151697-1571817` remains in the receipt set alongside the successful
+repair, including its 21 failures rather than an abbreviated success claim.
+
+Final hosted all-target check `20261017-102443388-1584603`, complete regression
+`20261017-102446184-1584828` (2,156 tests / 106 binaries, zero failed, ignored or
+filtered), strict all-target lint `20261017-102503349-1585919`, fmt and diff checks
+pass. Twenty-three exact redacted records are in
+`data/runs/xps14/2026-10-17-item-source-macros.jsonl`; ITEM-SOURCE-MACROS.md describes
+the admitted boundary. Generated cfg/modules, general item expansion, unit value
+semantics and full Rust remain open.
+
+The slowest wide-integer oracle still takes 12.3s. Strict lint reports 5.6s for the
+106k-line test engine crate. These are correctness-run diagnostics, not measured
+before/after performance improvements or grounds to claim a compiler speedup.
+
 ## 2026-10-17: Nested original-source macros with bounded native recursion
 
 Multiple original function-local definitions now support textual redefinition,

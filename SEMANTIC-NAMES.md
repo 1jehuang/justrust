@@ -8,6 +8,9 @@ migration is accepted under `MODULE-IDENTITY.md`. A later bounded function-local
 source macro client and checked mixed-site lexical bindings are accepted under
 `SOURCE-MACROS.md`. General hygiene, Unicode semantic identifiers and broader
 source macro execution remain explicit work in `IMPLEMENTATION.md`.
+ITEM-SOURCE-MACROS.md records a later bounded generated-function client and private
+original-use certificates bound to exact canonical targets. Semantic path keys
+remain canonical identity, not occurrence or publication authority.
 
 ## One owner, real occurrences
 

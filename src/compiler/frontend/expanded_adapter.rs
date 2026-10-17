@@ -6,7 +6,9 @@ use crate::compiler::expansion_budget::{Counter, Storage};
 use crate::compiler::expansion_span::SpanId;
 use crate::compiler::macro_cursor::{LogicalToken, MacroCursor, TokenSlice};
 use crate::compiler::semantic_name::NameStoreBuilder;
-use crate::compiler::semantic_scope::ExpansionAdmission;
+use crate::compiler::semantic_scope::{
+    ExpansionAdmission, ExpansionTokenAdmission, ItemExpansionAdmission, ModuleAccess,
+};
 use crate::compiler::source::SourceErrorKind;
 use crate::compiler::token::{Delimiter, Edition, LiteralKind, Token, TokenKind};
 use crate::compiler::token_session::{BudgetVec, TokenError, TokenSession};
@@ -22,24 +24,30 @@ struct Frame {
 pub(super) fn literal_buffer(
     names: &mut NameStoreBuilder,
     opaque: Token,
-    admission: &ExpansionAdmission,
+    admission: &ExpansionTokenAdmission,
 ) -> Result<NativeTokenBuffer, ParseError> {
     use crate::compiler::semantic_name::LiteralError;
-    let parts: crate::compiler::semantic_name::LiteralParts = names
-        .literal_parts(opaque, admission)
-        .map_err(|error| match error {
-            LiteralError::Token(error) => transport_error(error),
-            LiteralError::Scope(error) => scope_error(error),
-            LiteralError::Unsupported { span } => {
-                failure(names.session(), span, "unsupported opaque literal class")
-            }
-        })?;
+    let parts: crate::compiler::semantic_name::LiteralParts = match admission {
+        ExpansionTokenAdmission::Expression(proof) => names.literal_parts(opaque, proof),
+        ExpansionTokenAdmission::Item(_) => names.literal_parts_in(opaque, admission),
+    }
+    .map_err(|error| match error {
+        LiteralError::Token(error) => transport_error(error),
+        LiteralError::Scope(error) => scope_error(error),
+        LiteralError::Unsupported { span } => {
+            failure(names.session(), span, "unsupported opaque literal class")
+        }
+    })?;
     if parts.outer_occurrence != opaque.span {
         return Err(transport_error(TokenError::InvalidHandle));
     }
-    let eof = names.expansion_eof(admission).map_err(scope_error)?;
+    let eof = match admission {
+        ExpansionTokenAdmission::Expression(proof) => names.expansion_eof(proof),
+        ExpansionTokenAdmission::Item(proof) => names.item_expansion_eof(proof),
+    }
+    .map_err(scope_error)?;
     let session = names.session();
-    let mut output = NativeTokenBuffer::expanded(session, admission)?;
+    let mut output = NativeTokenBuffer::expanded_in(session, admission)?;
     if let Some(minus) = parts.minus {
         if !matches!(minus.kind, TokenKind::Punct { ch: '-', .. }) {
             return Err(transport_error(TokenError::InvalidHandle));
@@ -97,6 +105,42 @@ pub(super) fn lower(
     eof: SpanId,
     admission: &ExpansionAdmission,
 ) -> Result<NativeTokenBuffer, ParseError> {
+    lower_in(
+        slice,
+        names,
+        edition,
+        eof,
+        &ExpansionTokenAdmission::Expression(*admission),
+    )
+}
+
+pub(super) fn lower_item(
+    slice: TokenSlice,
+    names: &mut NameStoreBuilder,
+    modules: &impl ModuleAccess,
+    edition: Edition,
+    eof: SpanId,
+    admission: &ItemExpansionAdmission,
+) -> Result<NativeTokenBuffer, ParseError> {
+    admission
+        .check_modules(names, modules)
+        .map_err(scope_error)?;
+    lower_in(
+        slice,
+        names,
+        edition,
+        eof,
+        &ExpansionTokenAdmission::Item(*admission),
+    )
+}
+
+fn lower_in(
+    slice: TokenSlice,
+    names: &mut NameStoreBuilder,
+    edition: Edition,
+    eof: SpanId,
+    admission: &ExpansionTokenAdmission,
+) -> Result<NativeTokenBuffer, ParseError> {
     let session = names.session();
     session
         .budget()
@@ -106,7 +150,10 @@ pub(super) fn lower(
     session.span(eof).map_err(transport_error)?;
     admission.validate_session(session).map_err(scope_error)?;
     admission.validate_span(session, eof).map_err(scope_error)?;
-    let mut output = NativeTokenBuffer::expanded(session, admission)?;
+    let mut output = match admission {
+        ExpansionTokenAdmission::Expression(proof) => NativeTokenBuffer::expanded(session, proof),
+        ExpansionTokenAdmission::Item(_) => NativeTokenBuffer::expanded_in(session, admission),
+    }?;
     output.retain_macro_slice(session, slice.clone())?;
     let mut frames =
         BudgetVec::new(session.budget(), Storage::Temporary).map_err(transport_error)?;
@@ -174,7 +221,7 @@ pub(super) fn lower(
 pub(super) fn validate_slice(
     session: &TokenSession,
     slice: &TokenSlice,
-    admission: &ExpansionAdmission,
+    admission: &ExpansionTokenAdmission,
 ) -> Result<(), ParseError> {
     let mut pending =
         BudgetVec::new(session.budget(), Storage::Temporary).map_err(transport_error)?;
@@ -441,6 +488,219 @@ mod tests {
         original_eof: SpanId,
         admission: ExpansionAdmission,
         _scopes: ScopeArenaBuilder,
+    }
+    struct ItemFixture {
+        names: NameStoreBuilder,
+        modules: crate::compiler::module_identity::ModuleArenaBuilder,
+        tokens: TokenSlice,
+        eof: SpanId,
+        original_eof: SpanId,
+        admission: ItemExpansionAdmission,
+        scopes: ScopeArenaBuilder,
+    }
+    fn item_fixture() -> ItemFixture {
+        let budget = ExpansionBudget::default();
+        let input = PreparedLexInput::identity(
+            Path::new("item.rs"),
+            "($name:ident,$x:literal)=>{fn $name()->i32{$x}}; (generated,7)",
+            &budget,
+        )
+        .unwrap();
+        let mut session = TokenSession::new(input.snapshot().clone(), budget.clone()).unwrap();
+        let lexed =
+            crate::compiler::lexer::lex_prepared(&input, Edition::E2024, &mut session).unwrap();
+        let original_eof = lexed.eof().span;
+        let definition = lexed.events()[0].token.span();
+        let mut events = BudgetVec::new(&budget, Storage::Temporary).unwrap();
+        for event in lexed.events() {
+            events.push(event.token).unwrap();
+        }
+        let stream = group(&session, events.as_slice(), GroupPolicy::OriginalSource).unwrap();
+        let root = TokenSlice::roots(&session, stream).unwrap();
+        let last = root.len(&session).unwrap() - 1;
+        let Node::Delimited { open: call, .. } = root.node(&session, last).unwrap() else {
+            panic!("expected invocation group")
+        };
+        let call = *call;
+        let args = root.children(&session, last).unwrap().unwrap();
+        let body = root.subslice(&session, 0..last).unwrap();
+        let file = session.sources().file(0).unwrap();
+        let mut names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let krate = names.register_crate_root(file).unwrap();
+        let rules = names
+            .compile_local_rules(
+                body,
+                DefinitionSite {
+                    span: definition,
+                    edition: Edition::E2024,
+                    defining_crate: krate,
+                },
+            )
+            .unwrap();
+        let expanded = names
+            .expand_local_rules(
+                &rules,
+                args,
+                CallSite {
+                    span: call,
+                    parent: None,
+                },
+            )
+            .unwrap();
+        let expansion = expanded.expansion(names.session()).unwrap();
+        let tokens = expanded.tokens(names.session()).unwrap();
+        let modules =
+            crate::compiler::module_identity::ModuleArenaBuilder::for_source(&names).unwrap();
+        let module = modules.source_root().unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
+        let frontier = scopes.module_root(&names, &modules, module, None).unwrap();
+        let admission = scopes
+            .anchor_item_expansion(&names, &modules, expansion, frontier, frontier)
+            .unwrap();
+        let eof = names.item_expansion_eof(&admission).unwrap();
+        ItemFixture {
+            names,
+            modules,
+            tokens,
+            eof,
+            original_eof,
+            admission,
+            scopes,
+        }
+    }
+
+    #[test]
+    fn item_transport_and_literal_consumption_use_real_module_proof_without_function_authority() {
+        let mut source = item_fixture();
+        let buffer = lower_item(
+            source.tokens.clone(),
+            &mut source.names,
+            &source.modules,
+            Edition::E2024,
+            source.eof,
+            &source.admission,
+        )
+        .unwrap();
+        assert!(buffer.current_macro_slice().is_some());
+        let value = buffer
+            .iter()
+            .position(|token| token.kind == ParserTokenKind::OpaqueLiteral)
+            .unwrap();
+        let view = super::super::TokenCursor::new(&buffer).peek(value).unwrap();
+        let isolated = buffer
+            .opaque_literal_buffer(&view, &mut source.names)
+            .unwrap();
+        assert_eq!(isolated[0].text, "7");
+        assert!(isolated.current_macro_slice().is_none());
+        source
+            .admission
+            .validate_span(source.names.session(), isolated[0].whole.span)
+            .unwrap();
+        let index = buffer
+            .iter()
+            .position(|token| token.text == "generated")
+            .unwrap();
+        let name_view = super::super::TokenCursor::new(&buffer).peek(index).unwrap();
+        let declaration = buffer.mint_name(&name_view, &mut source.names).unwrap();
+        assert_eq!(source.names.data(declaration).unwrap().span, name_view.span);
+        // Only this explicit product association issues real function authority.
+        let root = source
+            .scopes
+            .generated_function_root(
+                &source.names,
+                &source.modules,
+                &source.admission,
+                declaration,
+            )
+            .unwrap();
+        let function = source.scopes.function(root).unwrap();
+        source
+            .scopes
+            .seal_item_product(
+                &source.names,
+                &source.modules,
+                &source.admission,
+                function,
+                declaration,
+            )
+            .unwrap();
+        source
+            .scopes
+            .check_generated_function(
+                &source.names,
+                &source.modules,
+                function,
+                declaration,
+                source.modules.source_root().unwrap(),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn empty_item_transport_checks_exact_module_owner_and_actual_expansion_eof() {
+        let mut source = item_fixture();
+        let empty = source
+            .tokens
+            .subslice(source.names.session(), 0..0)
+            .unwrap();
+        let foreign_modules =
+            crate::compiler::module_identity::ModuleArenaBuilder::for_source(&source.names)
+                .unwrap();
+        assert_eq!(
+            lower_item(
+                empty.clone(),
+                &mut source.names,
+                &foreign_modules,
+                Edition::E2024,
+                source.eof,
+                &source.admission
+            )
+            .unwrap_err()
+            .kind,
+            SourceErrorKind::Contract
+        );
+        assert_eq!(
+            lower_item(
+                empty.clone(),
+                &mut source.names,
+                &source.modules,
+                Edition::E2024,
+                source.original_eof,
+                &source.admission
+            )
+            .unwrap_err()
+            .kind,
+            SourceErrorKind::Contract
+        );
+        let buffer = lower_item(
+            empty,
+            &mut source.names,
+            &source.modules,
+            Edition::E2024,
+            source.eof,
+            &source.admission,
+        )
+        .unwrap();
+        assert_eq!(buffer.len(), 1);
+        assert!(buffer.current_macro_slice().is_some());
+    }
+
+    #[test]
+    fn expansion_proof_singleton_capacity_is_retained_until_buffer_drop() {
+        let source = fixture("1");
+        let budget = source.names.budget().clone();
+        let before = budget.snapshot();
+        let buffer =
+            NativeTokenBuffer::expanded(source.names.session(), &source.admission).unwrap();
+        let live = budget.snapshot();
+        assert!(
+            live.retained_bytes
+                >= before.retained_bytes + std::mem::size_of::<ExpansionTokenAdmission>() as u64
+        );
+        assert_eq!(live.temporary_bytes, before.temporary_bytes);
+        drop(buffer);
+        assert_eq!(budget.snapshot().retained_bytes, before.retained_bytes);
+        assert_eq!(budget.snapshot().temporary_bytes, before.temporary_bytes);
     }
     fn fixture_rules(rules: &str, args: &str) -> Fixture {
         let budget = ExpansionBudget::default();

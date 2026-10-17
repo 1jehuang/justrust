@@ -185,6 +185,17 @@ impl NameStoreBuilder {
     /// This conservative charge is never refunded before the last NameStore Arc
     /// drops, including parser failure. It grants no payload or name authority.
     pub(crate) fn retain_parser_text(&mut self, bytes: usize) -> Result<(), NameError> {
+        self.retain_parser_bytes(bytes)
+    }
+
+    /// Reserve parser container backing retained by the published program.
+    /// Callers precharge growth and reconcile actual capacity before publication.
+    /// Like parser text this is conservative, not a name/session capability.
+    pub(crate) fn retain_parser_storage(&mut self, bytes: usize) -> Result<(), NameError> {
+        self.retain_parser_bytes(bytes)
+    }
+
+    fn retain_parser_bytes(&mut self, bytes: usize) -> Result<(), NameError> {
         self.budget().check()?;
         let additional = u64::try_from(bytes).map_err(|_| TokenError::IdExhausted)?;
         let total = self
@@ -205,10 +216,33 @@ impl NameStoreBuilder {
         lexical_edition: Edition,
         admission: &super::semantic_scope::ExpansionAdmission,
     ) -> Result<AstIdent, NameError> {
+        self.admit_proven_token(token, lexical_edition, &(*admission).into())
+    }
+    pub(crate) fn admit_item_token(
+        &mut self,
+        token: Token,
+        lexical_edition: Edition,
+        admission: &super::semantic_scope::ItemExpansionAdmission,
+    ) -> Result<AstIdent, NameError> {
+        self.admit_proven_token(token, lexical_edition, &(*admission).into())
+    }
+    fn admit_proven_token(
+        &mut self,
+        token: Token,
+        lexical_edition: Edition,
+        admission: &super::semantic_scope::ExpansionTokenAdmission,
+    ) -> Result<AstIdent, NameError> {
         admission
             .validate_token(self.session(), token)
             .map_err(|error| match error {
                 super::semantic_scope::ScopeError::Token(error) => NameError::Token(error),
+                super::semantic_scope::ScopeError::Name(error)
+                | super::semantic_scope::ScopeError::Module(
+                    super::module_identity::ModuleError::Name(error),
+                ) => error,
+                super::semantic_scope::ScopeError::Module(
+                    super::module_identity::ModuleError::Token(error),
+                ) => NameError::Token(error),
                 super::semantic_scope::ScopeError::UnsupportedProjection => {
                     NameError::Unsupported(UnsupportedName::NonRootContext)
                 }
@@ -257,6 +291,16 @@ impl NameStoreBuilder {
     pub(crate) fn expansion_eof(
         &mut self,
         proof: &super::semantic_scope::ExpansionAdmission,
+    ) -> Result<SpanId, super::semantic_scope::ScopeError> {
+        proof.check_names(self)?;
+        let expansion = proof.expansion(self)?;
+        let call = self.session().expansion(expansion)?.call;
+        let context = self.session().root_context();
+        Ok(self.store.session.reissue_span(call, context, expansion)?)
+    }
+    pub(crate) fn item_expansion_eof(
+        &mut self,
+        proof: &super::semantic_scope::ItemExpansionAdmission,
     ) -> Result<SpanId, super::semantic_scope::ScopeError> {
         proof.check_names(self)?;
         let expansion = proof.expansion(self)?;
@@ -609,6 +653,43 @@ mod tests {
         };
         assert_eq!(builder.store._lease.bytes(), before);
         assert!(matches!(builder.retain_parser_text(0),
+            Err(NameError::Token(TokenError::Budget(error))) if error == failure));
+        drop(occupied);
+        drop(builder);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        assert_eq!(budget.snapshot().temporary_bytes, 0);
+    }
+
+    #[test]
+    fn parser_storage_zero_capacity_and_final_owner_follow_same_conservative_lease() {
+        let budget = ExpansionBudget::default();
+        let (session, _, _) = fixture(budget.clone());
+        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let baseline = budget.snapshot().retained_bytes;
+        builder.retain_parser_storage(0).unwrap();
+        assert_eq!(budget.snapshot().retained_bytes, baseline);
+        builder.retain_parser_storage(19).unwrap();
+        let owner = builder.freeze().unwrap();
+        let last = owner.clone();
+        drop(owner);
+        assert_eq!(budget.snapshot().retained_bytes, baseline + 19);
+        drop(last);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+    }
+
+    #[test]
+    fn parser_storage_low_bytes_preserves_first_failure_including_zero_request() {
+        let budget = ExpansionBudget::default();
+        let (session, _, _) = fixture(budget.clone());
+        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let snapshot = budget.snapshot();
+        let available = budget.limits().bytes - snapshot.retained_bytes - snapshot.temporary_bytes;
+        let occupied = budget.reserve(Storage::Temporary, available).unwrap();
+        let failure = match builder.retain_parser_storage(1).unwrap_err() {
+            NameError::Token(TokenError::Budget(failure)) => failure,
+            error => panic!("expected byte budget failure: {error}"),
+        };
+        assert!(matches!(builder.retain_parser_storage(0),
             Err(NameError::Token(TokenError::Budget(error))) if error == failure));
         drop(occupied);
         drop(builder);

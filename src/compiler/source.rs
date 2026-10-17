@@ -431,7 +431,7 @@ impl<'a> Loader<'a> {
                     message,
                 )
             })?;
-            super::frontend::parse_syntax_unprepared(&syntax).map_err(|e| {
+            super::frontend::validate_inactive_syntax(&syntax).map_err(|e| {
                 Self::error(
                     e.kind,
                     e.has_location.then(|| {
@@ -1153,6 +1153,67 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn disabled_item_macro_calls_validate_syntax_without_child_observations() {
+        for root in [
+            "#[cfg(any())] undefined!(); fn main(){}",
+            "macro_rules! make{()=>{mod missing;};} #[cfg(any())] make!(); fn main(){}",
+        ] {
+            let mut reader = RecordingReader {
+                root: root.into(),
+                ..Default::default()
+            };
+            let prepared =
+                prepare_with_reader(Path::new("main.rs"), &SourceOptions::default(), &mut reader)
+                    .unwrap();
+            assert_eq!(prepared.files, 1);
+            super::super::frontend::parse_prepared(&prepared).unwrap();
+            assert_eq!(
+                reader
+                    .calls
+                    .iter()
+                    .map(|(kind, path)| {
+                        assert_eq!(path, Path::new("main.rs"), "{root}: {:?}", reader.calls);
+                        *kind
+                    })
+                    .collect::<Vec<_>>(),
+                ["canonicalize", "stat", "open", "stat-opened", "read"]
+            );
+        }
+    }
+
+    #[test]
+    fn unadmitted_generated_modules_and_attributes_make_zero_child_observations() {
+        for root in [
+            "macro_rules! make{()=>{mod missing;};} make!(); fn main(){}",
+            "macro_rules! make{()=>{#[cfg(any())] mod missing;};} make!(); fn main(){}",
+            "macro_rules! make{()=>{#[path=\"missing.rs\"] mod missing;};} make!(); fn main(){}",
+        ] {
+            let mut reader = RecordingReader {
+                root: root.into(),
+                ..Default::default()
+            };
+            let prepared =
+                prepare_with_reader(Path::new("main.rs"), &SourceOptions::default(), &mut reader)
+                    .unwrap();
+            assert_eq!(prepared.files, 1);
+            let error = super::super::frontend::parse_prepared(&prepared).unwrap_err();
+            assert_eq!(error.kind, SourceErrorKind::Unsupported, "{root}: {error}");
+            assert!(error.primary.is_some(), "{root}: {error}");
+            assert_eq!(
+                reader
+                    .calls
+                    .iter()
+                    .map(|(kind, path)| {
+                        assert_eq!(path, Path::new("main.rs"), "{root}: {:?}", reader.calls);
+                        *kind
+                    })
+                    .collect::<Vec<_>>(),
+                ["canonicalize", "stat", "open", "stat-opened", "read"]
+            );
+        }
+    }
+
     #[test]
     fn full_original_lexing_precedes_configuration_and_all_child_observations() {
         for root in [

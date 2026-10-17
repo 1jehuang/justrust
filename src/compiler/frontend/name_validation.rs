@@ -3,7 +3,7 @@
 use super::*;
 use crate::compiler::expansion_budget::{Counter, Storage};
 use crate::compiler::module_identity::ModuleError;
-use crate::compiler::semantic_scope::{ScopeError, ScopeId, scope_diagnostic};
+use crate::compiler::semantic_scope::{OccurrenceRole, ScopeError, ScopeId, scope_diagnostic};
 use crate::compiler::token_session::{BudgetVec, TokenError};
 
 fn transport(error: TokenError) -> String {
@@ -16,6 +16,12 @@ fn transport(error: TokenError) -> String {
 /// depth validation remains a separate gate, with its existing policy unchanged.
 pub(super) fn validate_program_names(program: &Program) -> Result<(), String> {
     let mut validator = Validator::new(program)?;
+    validator.require_coverage = true;
+    if let Some(scopes) = &program.scopes {
+        scopes
+            .check_item_authority(program.names.as_ref(), program.modules.as_ref())
+            .map_err(scope_diagnostic)?;
+    }
     validator.many(&program.functions, |value| Visit::Function(value, None))?;
     validator.many(&program.structs, Visit::Struct)?;
     validator.many(&program.enums, Visit::Enum)?;
@@ -24,7 +30,7 @@ pub(super) fn validate_program_names(program: &Program) -> Result<(), String> {
     validator.work(program.trait_imports.len())?;
     for (module, path) in &program.trait_imports {
         validator.source_module(*module)?;
-        validator.push(Visit::TraitPath(path))?;
+        validator.push(Visit::Import(*module, path))?;
     }
     validator.run()
 }
@@ -57,9 +63,11 @@ pub(super) fn validate_function_head_names(
 
 enum Visit<'a> {
     Function(&'a Function, Option<ModuleId>),
-    RestoreScope(Option<ScopeId>),
+    RestoreScope(Option<ScopeId>, ModuleId),
+    Import(ModuleId, &'a TraitPath),
     Head(&'a FunctionHead),
     Struct(&'a StructDecl),
+    StructShape(&'a StructDecl),
     Enum(&'a EnumDecl),
     Variant(&'a VariantDecl, ModuleId),
     Field(&'a FieldDecl, ModuleId),
@@ -92,6 +100,9 @@ struct Validator<'a> {
     root: ModuleId,
     pending: BudgetVec<Visit<'a>>,
     scope: Option<ScopeId>,
+    module: ModuleId,
+    generated: BudgetVec<ScopeId>,
+    require_coverage: bool,
 }
 impl<'a> Validator<'a> {
     fn new(program: &'a Program) -> Result<Self, String> {
@@ -108,17 +119,28 @@ impl<'a> Validator<'a> {
                 return Err(scope_diagnostic(ScopeError::ForeignNames));
             }
         }
+        let root = modules.source_root().map_err(module_diagnostic)?;
         Ok(Self {
             program,
-            root: modules.source_root().map_err(module_diagnostic)?,
+            root,
             pending: BudgetVec::new(names.budget(), Storage::Temporary).map_err(transport)?,
             scope: None,
+            module: root,
+            generated: BudgetVec::new(names.budget(), Storage::Temporary).map_err(transport)?,
+            require_coverage: false,
         })
     }
     fn run(mut self) -> Result<(), String> {
         while let Some(node) = self.pending.pop() {
             self.work(1)?;
             self.visit(node)?;
+        }
+        if self.require_coverage
+            && let Some(scopes) = &self.program.scopes
+        {
+            scopes
+                .check_item_function_coverage(self.generated.as_slice())
+                .map_err(scope_diagnostic)?;
         }
         Ok(())
     }
@@ -164,9 +186,24 @@ impl<'a> Validator<'a> {
             .map_err(module_diagnostic)
     }
     fn occurrence(&self, name: AstIdent) -> Result<(), String> {
+        let role = match self.scope {
+            Some(function) => OccurrenceRole::Function {
+                module: self.module,
+                function,
+            },
+            None => OccurrenceRole::OriginalModule(self.module),
+        };
+        self.occurrence_in(name, role)
+    }
+    fn occurrence_in(&self, name: AstIdent, role: OccurrenceRole) -> Result<(), String> {
         if let Some(scopes) = &self.program.scopes {
             scopes
-                .check_occurrence(self.program.names.as_ref(), name, self.scope)
+                .check_occurrence_in(
+                    self.program.names.as_ref(),
+                    self.program.modules.as_ref(),
+                    name,
+                    role,
+                )
                 .map_err(scope_diagnostic)?;
         } else {
             let data = self
@@ -188,11 +225,26 @@ impl<'a> Validator<'a> {
         Ok(())
     }
     fn declaration_path(&self, path: &AstPath, module: ModuleId) -> Result<(), String> {
+        self.declaration_path_in(path, module, OccurrenceRole::OriginalModule(module))
+    }
+    fn declaration_path_in(
+        &self,
+        path: &AstPath,
+        module: ModuleId,
+        role: OccurrenceRole,
+    ) -> Result<(), String> {
         self.work(path.len())?;
         path.check(self.program.names.as_ref())
             .map_err(native_adapter::name_diagnostic)?;
-        for segment in path.segments() {
-            self.occurrence(*segment)?;
+        for (index, segment) in path.segments().iter().enumerate() {
+            self.occurrence_in(
+                *segment,
+                if index + 1 == path.len() {
+                    role
+                } else {
+                    OccurrenceRole::OriginalModule(module)
+                },
+            )?;
         }
         if path.is_empty() || path.anchor() != PathAnchor::Crate {
             return Err(module_diagnostic(ModuleError::InvalidParent));
@@ -220,6 +272,14 @@ impl<'a> Validator<'a> {
         for (name, ty) in values {
             self.push(Visit::Binding(*name))?;
             self.push(Visit::Type(ty))?;
+        }
+        Ok(())
+    }
+    fn enter_scope(&mut self, scope: Option<ScopeId>, module: ModuleId) -> Result<(), String> {
+        if self.scope != scope || self.module != module {
+            self.push(Visit::RestoreScope(self.scope, self.module))?;
+            self.scope = scope;
+            self.module = module;
         }
         Ok(())
     }
@@ -254,17 +314,47 @@ impl<'a> Validator<'a> {
     fn visit(&mut self, node: Visit<'a>) -> Result<(), String> {
         match node {
             Visit::Function(function, containing_module) => {
+                let mut declaration_role = OccurrenceRole::OriginalModule(function.module);
                 if let Some(scope) = function.lexical_scope {
-                    self.program
+                    let scopes = self
+                        .program
                         .scopes
                         .as_ref()
-                        .ok_or_else(|| scope_diagnostic(ScopeError::InvalidHandle))?
-                        .check_function(scope)
+                        .ok_or_else(|| scope_diagnostic(ScopeError::InvalidHandle))?;
+                    scopes.check_function(scope).map_err(scope_diagnostic)?;
+                    let generated = scopes
+                        .generated_function_declaration(scope)
                         .map_err(scope_diagnostic)?;
-                }
-                if function.lexical_scope.is_some() || self.scope.is_some() {
-                    self.push(Visit::RestoreScope(self.scope))?;
-                    self.scope = function.lexical_scope;
+                    if containing_module.is_some() && generated.is_some() {
+                        return Err(scope_diagnostic(ScopeError::FunctionMismatch));
+                    }
+                    if containing_module.is_none() {
+                        let declaration = *function
+                            .name
+                            .segments()
+                            .last()
+                            .ok_or_else(|| scope_diagnostic(ScopeError::InvalidHandle))?;
+                        scopes
+                            .check_generated_function(
+                                self.program.names.as_ref(),
+                                self.program.modules.as_ref(),
+                                scope,
+                                declaration,
+                                function.module,
+                            )
+                            .map_err(scope_diagnostic)?;
+                        if generated.is_some() {
+                            if self.require_coverage {
+                                self.work(1)?;
+                                self.generated.push(scope).map_err(transport)?;
+                            }
+                            declaration_role = OccurrenceRole::GeneratedDeclaration {
+                                module: function.module,
+                                function: scope,
+                                declaration,
+                            };
+                        }
+                    }
                 }
                 self.visibility(&function.visibility, function.module)?;
                 if let Some(module) = containing_module {
@@ -274,9 +364,11 @@ impl<'a> Validator<'a> {
                     }
                 }
                 if containing_module.is_some() {
+                    self.enter_scope(function.lexical_scope, function.module)?;
                     self.push(Visit::Path(&function.name))?;
                 } else {
-                    self.declaration_path(&function.name, function.module)?;
+                    self.declaration_path_in(&function.name, function.module, declaration_role)?;
+                    self.enter_scope(function.lexical_scope, function.module)?;
                 }
                 self.push(Visit::Regions(&function.regions))?;
                 self.identifiers(&function.type_params, LookupClass::TypeParameter)?;
@@ -285,7 +377,14 @@ impl<'a> Validator<'a> {
                 self.push(Visit::Type(&function.result))?;
                 self.push(Visit::Block(&function.body))?;
             }
-            Visit::RestoreScope(scope) => self.scope = scope,
+            Visit::RestoreScope(scope, module) => {
+                self.scope = scope;
+                self.module = module;
+            }
+            Visit::Import(module, path) => {
+                self.enter_scope(None, module)?;
+                self.push(Visit::TraitPath(path))?;
+            }
             Visit::Head(head) => {
                 self.push(Visit::Ident(head.name, LookupClass::Member))?;
                 self.push(Visit::Regions(&head.regions))?;
@@ -295,6 +394,10 @@ impl<'a> Validator<'a> {
                 self.push(Visit::Type(&head.result))?;
             }
             Visit::Struct(declaration) => {
+                self.enter_scope(None, declaration.module)?;
+                // The worklist is LIFO: all field and name checks precede
+                // shape integrity, including malformed caller-mutated ASTs.
+                self.push(Visit::StructShape(declaration))?;
                 self.visibility(&declaration.visibility, declaration.module)?;
                 self.declaration_path(&declaration.name, declaration.module)?;
                 self.identifiers(&declaration.type_params, LookupClass::TypeParameter)?;
@@ -302,7 +405,19 @@ impl<'a> Validator<'a> {
                     Visit::Field(field, declaration.module)
                 })?;
             }
+            Visit::StructShape(declaration) => {
+                let valid = match declaration.shape {
+                    StructShape::Unit => declaration.fields.is_empty(),
+                    StructShape::Record => !declaration.fields.is_empty(),
+                };
+                if !valid {
+                    return Err(transport(TokenError::InvalidInput(
+                        "struct shape disagrees with its fields",
+                    )));
+                }
+            }
             Visit::Enum(declaration) => {
+                self.enter_scope(None, declaration.module)?;
                 self.visibility(&declaration.visibility, declaration.module)?;
                 self.declaration_path(&declaration.name, declaration.module)?;
                 self.identifiers(&declaration.type_params, LookupClass::TypeParameter)?;
@@ -323,6 +438,7 @@ impl<'a> Validator<'a> {
                 self.push(Visit::Type(&field.ty))?;
             }
             Visit::Impl(implementation) => {
+                self.enter_scope(None, implementation.module)?;
                 self.source_module(implementation.module)?;
                 if let Some(path) = &implementation.trait_path {
                     self.push(Visit::TraitPath(path))?;
@@ -339,6 +455,7 @@ impl<'a> Validator<'a> {
                 self.push(Visit::Function(&item.function, Some(module)))?;
             }
             Visit::Trait(declaration) => {
+                self.enter_scope(None, declaration.module)?;
                 self.visibility(&declaration.visibility, declaration.module)?;
                 self.declaration_path(&declaration.name, declaration.module)?;
                 self.many(&declaration.supertraits, Visit::TraitPath)?;
@@ -393,11 +510,17 @@ impl<'a> Validator<'a> {
             },
             Visit::GenericPath(path) => {
                 self.work(path.segments.len())?;
+                let checked = path
+                    .checked_path(self.program.names.as_ref())
+                    .map_err(native_adapter::name_diagnostic)?;
+                let occurrences = checked
+                    .source_occurrences(self.program.names.as_ref())
+                    .map_err(native_adapter::name_diagnostic)?;
+                self.work(occurrences.len())?;
+                for occurrence in occurrences {
+                    self.occurrence(*occurrence)?;
+                }
                 for segment in &path.segments {
-                    self.push(Visit::Ident(
-                        segment.name,
-                        LookupClass::Item(Namespace::Type),
-                    ))?;
                     self.many(&segment.args, Visit::Type)?;
                 }
             }
@@ -481,6 +604,14 @@ impl<'a> Validator<'a> {
                 }
             },
             Visit::Expr(expression) => match expression {
+                Expr::UnexpandedMacro(_) => {
+                    let mut error = crate::compiler::source::SourceError::syntax(
+                        None,
+                        "unexpanded macro syntax cannot be admitted as an active program",
+                    );
+                    error.kind = crate::compiler::source::SourceErrorKind::Unsupported;
+                    return Err(error.to_string());
+                }
                 Expr::TraitCall {
                     owner,
                     trait_path,
@@ -652,10 +783,12 @@ impl<'a> Validator<'a> {
             },
             Visit::Path(path) => {
                 self.work(path.len())?;
-                path.check(self.program.names.as_ref())
+                let occurrences = path
+                    .source_occurrences(self.program.names.as_ref())
                     .map_err(native_adapter::name_diagnostic)?;
-                for segment in path.segments() {
-                    self.occurrence(*segment)?;
+                self.work(occurrences.len())?;
+                for occurrence in occurrences {
+                    self.occurrence(*occurrence)?;
                 }
             }
             Visit::Ident(name, class) => {
@@ -765,6 +898,137 @@ mod tests {
         builder.functions.push(function);
         builder.finish().unwrap()
     }
+    fn generated_program(captured: bool) -> Program {
+        let source = if captured {
+            "macro_rules! make{($name:ident)=>{pub fn $name(x:i32)->i32{let local=x+1;local}};}make!(generated);fn original()->i32{0}"
+        } else {
+            "macro_rules! make{()=>{pub fn generated(x:i32)->i32{let local=x+1;local}};}make!();fn original()->i32{0}"
+        };
+        super::super::parse_syntax_unprepared(source)
+            .unwrap()
+            .program
+    }
+
+    #[test]
+    fn generated_function_products_bind_exact_declarations_and_cover_even_unused_public_items() {
+        for captured in [true, false] {
+            let input = generated_program(captured);
+            validate_program_names(&input).unwrap();
+            let scopes = input.scopes.as_ref().unwrap();
+            let index = input
+                .functions
+                .iter()
+                .position(|function| {
+                    function.lexical_scope.is_some_and(|scope| {
+                        scopes
+                            .generated_function_declaration(scope)
+                            .unwrap()
+                            .is_some()
+                    })
+                })
+                .unwrap();
+            let original = (0..input.functions.len())
+                .find(|other| *other != index)
+                .unwrap();
+            let mut missing = input.clone();
+            missing.functions.remove(index);
+            assert!(
+                validate_program_names(&missing)
+                    .unwrap_err()
+                    .starts_with("contract:")
+            );
+            // Bounded active validation is not a second whole-program coverage scan.
+            validate_function_names(&missing, &input.functions[original], None).unwrap();
+            let mut empty = input.clone();
+            empty.functions.clear();
+            assert!(
+                validate_program_names(&empty)
+                    .unwrap_err()
+                    .starts_with("contract:")
+            );
+            let mut duplicate = input.clone();
+            duplicate.functions.push(input.functions[index].clone());
+            assert!(
+                validate_program_names(&duplicate)
+                    .unwrap_err()
+                    .starts_with("contract:")
+            );
+            let mut changed_name = input.clone();
+            changed_name.functions[index].name = input.functions[original].name.clone();
+            assert!(
+                validate_program_names(&changed_name)
+                    .unwrap_err()
+                    .starts_with("contract:")
+            );
+            assert!(
+                validate_function_names(&changed_name, &changed_name.functions[index], None)
+                    .unwrap_err()
+                    .starts_with("contract:")
+            );
+            // Use certificates are not declaration-product authority. Even a
+            // real generated source occurrence cannot authorize another target.
+            let mut certified_wrong_declaration = input.clone();
+            certified_wrong_declaration.functions[index].name = input.functions[original]
+                .name
+                .with_resolved_use(input.names.as_ref(), &input.functions[index].name)
+                .unwrap();
+            assert!(
+                validate_program_names(&certified_wrong_declaration)
+                    .unwrap_err()
+                    .starts_with("contract:")
+            );
+            let mut detached = input.clone();
+            detached.functions[index].lexical_scope = None;
+            assert!(
+                validate_program_names(&detached)
+                    .unwrap_err()
+                    .starts_with("contract:")
+            );
+        }
+    }
+
+    #[test]
+    fn inactive_macro_syntax_cannot_be_inserted_into_an_unused_active_body() {
+        let mut builder = builder();
+        let path = builder.path("crate::unknown").unwrap();
+        let span = builder.names().data(path.segments()[0]).unwrap().span;
+        let names = builder.names();
+        let stream = crate::compiler::token_tree::group(
+            names.session(),
+            &[],
+            crate::compiler::token_tree::GroupPolicy::OriginalSource,
+        )
+        .unwrap();
+        let args =
+            crate::compiler::macro_cursor::TokenSlice::roots(names.session(), stream).unwrap();
+        let lease = names
+            .budget()
+            .reserve(
+                Storage::Retained,
+                std::mem::size_of::<UnexpandedMacroSyntax>() as u64,
+            )
+            .unwrap();
+        let syntax = Arc::new(UnexpandedMacroSyntax {
+            _path: path,
+            _args: args,
+            span,
+            _lease: lease,
+        });
+        let function = function(&mut builder);
+        builder.functions.push(function);
+        let mut input = builder.finish().unwrap();
+        input.functions[0].body.tail = Some(Box::new(Expr::UnexpandedMacro(syntax)));
+        assert!(
+            validate_program_names(&input)
+                .unwrap_err()
+                .starts_with("unsupported:")
+        );
+        assert!(
+            validate_function_names(&input, &input.functions[0], None)
+                .unwrap_err()
+                .starts_with("unsupported:")
+        );
+    }
     #[test]
     fn empty_program_still_checks_exact_name_arena_association() {
         let mut left = builder().finish().unwrap();
@@ -843,6 +1107,7 @@ mod tests {
         let path = input.path("crate::S").unwrap();
         input.structs.push(StructDecl {
             module,
+            shape: StructShape::Record,
             type_params: Vec::new(),
             name: path,
             visibility: ir::Visibility::Public,
@@ -853,6 +1118,39 @@ mod tests {
             }],
         });
         assert!(input.finish().is_err());
+    }
+    #[test]
+    fn struct_shape_integrity_does_not_reject_genuine_unit_names() {
+        let mut input = builder();
+        let module = input.module_root().unwrap();
+        let name = input.path("crate::Unit").unwrap();
+        input.structs.push(StructDecl {
+            module,
+            shape: StructShape::Unit,
+            type_params: Vec::new(),
+            name,
+            visibility: ir::Visibility::Public,
+            fields: Vec::new(),
+        });
+        let mut program = input.finish().unwrap();
+        validate_program_names(&program).unwrap();
+        program.structs[0].shape = StructShape::Record;
+        assert!(
+            validate_program_names(&program)
+                .unwrap_err()
+                .starts_with("contract:")
+        );
+        program.structs[0].shape = StructShape::Unit;
+        program.structs[0].fields.push(FieldDecl {
+            name: FieldName::Tuple(0),
+            ty: Type::Unit,
+            visibility: ir::Visibility::Public,
+        });
+        assert!(
+            validate_program_names(&program)
+                .unwrap_err()
+                .starts_with("contract:")
+        );
     }
     #[test]
     fn canonical_prefix_cannot_be_paired_with_another_source_module() {

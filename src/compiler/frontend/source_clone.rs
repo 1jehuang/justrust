@@ -139,6 +139,9 @@ pub(super) fn preflight_clone_node(
             _ => {}
         },
         DepthNode::Expr(expr) => match expr {
+            Expr::UnexpandedMacro(_) => {
+                return Err("unexpanded macro syntax cannot enter active AST cloning".into());
+            }
             Expr::Var(path) => clone_ast_path(path, budget)?,
             Expr::Println(text) => clone_text(text, budget)?,
             Expr::Float(literal) => clone_text(&literal.digits, budget)?,

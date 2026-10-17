@@ -72,12 +72,24 @@ struct PathData {
     _lease: ByteLease,
 }
 
+// This is a resolver-issued transport certificate, not a name or lookup key.
+// The two payloads are flat shared paths. Re-resolution collapses to the first
+// use site rather than constructing a recursive chain of certificates.
+struct ResolvedUse {
+    target_anchor: PathAnchor,
+    target: Arc<PathData>,
+    original_anchor: PathAnchor,
+    original: Arc<PathData>,
+    _lease: ByteLease,
+}
+
 /// A syntactic occurrence path. Semantic equality is available through PathKey,
 /// never through equality of occurrence handles or displayed source text.
 #[derive(Clone)]
 pub struct AstPath {
     anchor: PathAnchor,
     data: Arc<PathData>,
+    resolved_use: Option<Arc<ResolvedUse>>,
 }
 impl fmt::Debug for AstPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -196,6 +208,7 @@ impl AstPath {
                 keys,
                 _lease: lease,
             }),
+            resolved_use: None,
         })
     }
 
@@ -205,10 +218,126 @@ impl AstPath {
         if self.data.owner != names.session().id() {
             return Err(TokenError::ForeignHandle.into());
         }
+        if let Some(origin) = &self.resolved_use
+            && (origin.target_anchor != self.anchor
+                || !Arc::ptr_eq(&origin.target, &self.data)
+                || origin.original.owner != self.data.owner)
+        {
+            return Err(TokenError::InvalidInput("resolved path use certificate mismatch").into());
+        }
         for ident in self.segments() {
             names.check(*ident)?;
         }
         Ok(())
+    }
+
+    /// Attach original occurrence authority after semantic resolution. Only the
+    /// compiler's resolver can issue this certificate. Semantic keys continue to
+    /// use the target, while admission checks inspect the actual use site.
+    pub(crate) fn with_resolved_use(
+        &self,
+        names: &impl NameAccess,
+        source: &AstPath,
+    ) -> Result<Self, NameError> {
+        self.check(names)?;
+        source.check(names)?;
+        let (original_anchor, original) = match &source.resolved_use {
+            Some(origin) => (origin.original_anchor, origin.original.clone()),
+            None => (source.anchor, source.data.clone()),
+        };
+        let fixed = size_of::<ResolvedUse>()
+            .checked_add(2 * size_of::<usize>())
+            .ok_or(TokenError::IdExhausted)?;
+        let lease = names.budget().reserve(Storage::Retained, fixed as u64)?;
+        Ok(Self {
+            anchor: self.anchor,
+            data: self.data.clone(),
+            resolved_use: Some(Arc::new(ResolvedUse {
+                target_anchor: self.anchor,
+                target: self.data.clone(),
+                original_anchor,
+                original,
+                _lease: lease,
+            })),
+        })
+    }
+
+    pub(crate) fn source_occurrences(
+        &self,
+        names: &impl NameAccess,
+    ) -> Result<&[AstIdent], NameError> {
+        self.check(names)?;
+        Ok(match &self.resolved_use {
+            Some(origin) => origin.original.segments.as_slice(),
+            None => self.segments(),
+        })
+    }
+
+    pub(crate) fn original_use(&self, names: &impl NameAccess) -> Result<Self, NameError> {
+        self.check(names)?;
+        Ok(match &self.resolved_use {
+            Some(origin) => Self {
+                anchor: origin.original_anchor,
+                data: origin.original.clone(),
+                resolved_use: None,
+            },
+            None => self.clone(),
+        })
+    }
+
+    /// Public mutable generic segments may not rebind a resolver certificate to
+    /// a different target, even when both occurrences have the same NameKey.
+    pub(crate) fn check_target(
+        &self,
+        names: &impl NameAccess,
+        target: &AstPath,
+    ) -> Result<(), NameError> {
+        self.check(names)?;
+        target.check(names)?;
+        if self.anchor != target.anchor || self.len() != target.len() {
+            return Err(TokenError::InvalidInput("resolved generic target mismatch").into());
+        }
+        for (expected, actual) in self.segments().iter().zip(target.segments()) {
+            if super::semantic_name::occurrence_index(names, *expected)?
+                != super::semantic_name::occurrence_index(names, *actual)?
+            {
+                return Err(TokenError::InvalidInput(
+                    "resolved generic target occurrence mismatch",
+                )
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    fn check_structural_edit(&self) -> Result<(), NameError> {
+        if self.resolved_use.is_some() {
+            return Err(
+                TokenError::InvalidInput("cannot structurally edit a resolved use path").into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Semantic registry query only. The result is not a source-use occurrence
+    /// and must not replace an AST use. Public structural editing stays closed
+    /// for resolver-certified paths.
+    pub(crate) fn semantic_slice(
+        &self,
+        names: &impl NameAccess,
+        range: Range<usize>,
+        anchor: PathAnchor,
+    ) -> Result<Self, NameError> {
+        self.check(names)?;
+        Self::new(
+            names,
+            anchor,
+            self.segments().get(range).ok_or(TokenError::InvalidRange)?,
+        )
+    }
+
+    pub(crate) fn semantic_parent(&self, names: &impl NameAccess) -> Result<Self, NameError> {
+        self.semantic_slice(names, 0..self.len().saturating_sub(1), self.anchor)
     }
     pub fn segments(&self) -> &[AstIdent] {
         self.data.segments.as_slice()
@@ -234,6 +363,7 @@ impl AstPath {
     }
     pub fn push(&self, names: &impl NameAccess, ident: AstIdent) -> Result<Self, NameError> {
         self.check(names)?;
+        self.check_structural_edit()?;
         let count = self.len().checked_add(1).ok_or(TokenError::IdExhausted)?;
         Self::build(
             names,
@@ -259,12 +389,15 @@ impl AstPath {
         anchor: PathAnchor,
     ) -> Result<Self, NameError> {
         self.check(names)?;
+        self.check_structural_edit()?;
         let selected = self.segments().get(range).ok_or(TokenError::InvalidRange)?;
         Self::new(names, anchor, selected)
     }
     pub fn join(&self, names: &impl NameAccess, suffix: &AstPath) -> Result<Self, NameError> {
         self.check(names)?;
         suffix.check(names)?;
+        self.check_structural_edit()?;
+        suffix.check_structural_edit()?;
         if suffix.anchor != PathAnchor::Relative {
             return Err(TokenError::InvalidInput("path join suffix must be relative").into());
         }
@@ -289,6 +422,7 @@ impl AstPath {
         Self {
             anchor,
             data: self.data.clone(),
+            resolved_use: self.resolved_use.clone(),
         }
     }
 
@@ -389,6 +523,148 @@ mod tests {
         let mut state = DefaultHasher::new();
         key.hash(&mut state);
         state.finish()
+    }
+
+    #[test]
+    fn resolved_use_keeps_original_occurrences_without_changing_semantic_keys() {
+        let (names, [declaration, occurrence, other]) = fixture(ExpansionBudget::default());
+        let target = AstPath::new(&names, PathAnchor::Crate, &[declaration]).unwrap();
+        let source = AstPath::new(&names, PathAnchor::Relative, &[occurrence]).unwrap();
+        let resolved = target.with_resolved_use(&names, &source).unwrap();
+        let rebuilt = AstPath::new(&names, PathAnchor::Crate, &[declaration]).unwrap();
+        resolved.check_target(&names, &rebuilt).unwrap();
+        let same_key_other_occurrence =
+            AstPath::new(&names, PathAnchor::Crate, &[occurrence]).unwrap();
+        assert_eq!(
+            rebuilt.key(Namespace::Type),
+            same_key_other_occurrence.key(Namespace::Type)
+        );
+        assert!(matches!(
+            resolved.check_target(&names, &same_key_other_occurrence),
+            Err(NameError::Token(TokenError::InvalidInput(_)))
+        ));
+        assert_eq!(resolved.key(Namespace::Value), target.key(Namespace::Value));
+        assert_eq!(
+            hash(&resolved.key(Namespace::Value)),
+            hash(&target.key(Namespace::Value))
+        );
+        assert_eq!(
+            names
+                .span(resolved.source_occurrences(&names).unwrap()[0])
+                .unwrap(),
+            names.span(occurrence).unwrap()
+        );
+        assert_ne!(
+            names.span(resolved.segments()[0]).unwrap(),
+            names.span(occurrence).unwrap()
+        );
+        let next = AstPath::new(&names, PathAnchor::Crate, &[other]).unwrap();
+        let next = next.with_resolved_use(&names, &resolved).unwrap();
+        assert!(Arc::ptr_eq(
+            &next.resolved_use.as_ref().unwrap().original,
+            &source.data
+        ));
+        let original = next.original_use(&names).unwrap();
+        assert_eq!(original.anchor(), PathAnchor::Relative);
+        assert!(original.resolved_use.is_none());
+        assert!(Arc::ptr_eq(&original.data, &source.data));
+    }
+
+    #[test]
+    fn resolved_use_cannot_be_rebound_by_public_structural_operations() {
+        let (names, [declaration, occurrence, other]) = fixture(ExpansionBudget::default());
+        let target = AstPath::new(&names, PathAnchor::Crate, &[declaration]).unwrap();
+        let source = AstPath::new(&names, PathAnchor::Relative, &[occurrence]).unwrap();
+        let resolved = target.with_resolved_use(&names, &source).unwrap();
+        assert!(matches!(
+            resolved.push(&names, other),
+            Err(NameError::Token(TokenError::InvalidInput(_)))
+        ));
+        assert!(matches!(
+            resolved.slice(&names, 0..1, PathAnchor::Relative),
+            Err(NameError::Token(TokenError::InvalidInput(_)))
+        ));
+        assert!(matches!(
+            resolved.with_anchor(PathAnchor::Relative).check(&names),
+            Err(NameError::Token(TokenError::InvalidInput(_)))
+        ));
+        let mut altered = resolved.clone();
+        altered.data = AstPath::new(&names, PathAnchor::Crate, &[other])
+            .unwrap()
+            .data;
+        assert!(matches!(
+            altered.check(&names),
+            Err(NameError::Token(TokenError::InvalidInput(_)))
+        ));
+        let (foreign, [foreign_ident, _, _]) = fixture(ExpansionBudget::default());
+        let foreign_path = AstPath::new(&foreign, PathAnchor::Relative, &[foreign_ident]).unwrap();
+        assert!(matches!(
+            target.with_resolved_use(&names, &foreign_path),
+            Err(NameError::Token(TokenError::ForeignHandle))
+        ));
+    }
+
+    #[test]
+    fn resolved_use_certificate_shares_storage_and_releases_on_last_owner() {
+        let budget = ExpansionBudget::default();
+        let (names, [declaration, occurrence, _]) = fixture(budget.clone());
+        let target = AstPath::new(&names, PathAnchor::Crate, &[declaration]).unwrap();
+        let source = AstPath::new(&names, PathAnchor::Relative, &[occurrence]).unwrap();
+        let before = budget.snapshot().retained_bytes;
+        let resolved = target.with_resolved_use(&names, &source).unwrap();
+        assert_eq!(
+            budget.snapshot().retained_bytes - before,
+            (size_of::<ResolvedUse>() + 2 * size_of::<usize>()) as u64
+        );
+        let clone = resolved.clone();
+        let retained = budget.snapshot().retained_bytes;
+        assert!(Arc::ptr_eq(
+            resolved.resolved_use.as_ref().unwrap(),
+            clone.resolved_use.as_ref().unwrap()
+        ));
+        drop(resolved);
+        assert_eq!(budget.snapshot().retained_bytes, retained);
+        drop(source);
+        drop(target);
+        drop(names);
+        assert!(budget.snapshot().retained_bytes > 0);
+        drop(clone);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+    }
+
+    #[test]
+    fn resolved_use_denies_storage_before_certificate_allocation() {
+        let healthy = ExpansionBudget::default();
+        let (names, [declaration, occurrence, _]) = fixture(healthy.clone());
+        let target = AstPath::new(&names, PathAnchor::Crate, &[declaration]).unwrap();
+        let source = AstPath::new(&names, PathAnchor::Relative, &[occurrence]).unwrap();
+        let baseline = healthy.snapshot().retained_bytes;
+        drop((target, source, names));
+        let fixed = (size_of::<ResolvedUse>() + 2 * size_of::<usize>()) as u64;
+        let budget = ExpansionBudget::new(ExpansionLimits {
+            bytes: baseline + fixed - 1,
+            ..ExpansionLimits::default()
+        });
+        let (names, [declaration, occurrence, _]) = fixture(budget.clone());
+        let target = AstPath::new(&names, PathAnchor::Crate, &[declaration]).unwrap();
+        let source = AstPath::new(&names, PathAnchor::Relative, &[occurrence]).unwrap();
+        let key = target.key(Namespace::Value);
+        let before_hash = hash(&key);
+        let Err(NameError::Token(TokenError::Budget(first))) =
+            target.with_resolved_use(&names, &source)
+        else {
+            panic!("certificate allocation must be admitted first")
+        };
+        assert_eq!(budget.snapshot().retained_bytes, baseline);
+        let Err(NameError::Token(TokenError::Budget(again))) =
+            target.with_resolved_use(&names, &source)
+        else {
+            panic!("certificate admission failure must latch")
+        };
+        assert_eq!(first, again);
+        assert_eq!(hash(&key), before_hash);
+        drop((target, source, names, key));
+        assert_eq!(budget.snapshot().retained_bytes, 0);
     }
 
     #[test]
