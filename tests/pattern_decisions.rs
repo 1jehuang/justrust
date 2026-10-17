@@ -96,14 +96,14 @@ fn cases() -> Vec<Case> {
             source: r#"enum E{A(bool,i32),B}fn run(v:E)->i32{match v{E::A(true,n)=>n,E::B=>0}}fn main(){}"#,
             stdout: None,
             stock_diagnostic: Some("error[E0004]"),
-            outcome: Outcome::InvalidUnsupported,
+            outcome: Outcome::Invalid,
         },
         Case {
             name: "complete_bool_product",
             source: r#"enum E{A(bool,i32),B}fn run(v:E)->i32{match v{E::A(true,n)=>n,E::A(false,n)=>n,E::B=>0}}fn main(){if run(E::A(false,42))==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "late_binding_failed_test",
@@ -405,7 +405,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (23, 7));
-    assert_eq!(partition, (18, 5, 5, 2));
+    assert_eq!(partition, (19, 6, 4, 1));
 }
 #[test]
 fn stock_nested_pattern_decisions_oracle_edition2024_actual_toolchain() {
@@ -627,8 +627,8 @@ fn checked_decision_domains_scalar_atoms_tag_dominance_and_real_success_bindings
         decisions += own_decisions;
         count += 1;
     }
-    assert_eq!(count, 18);
-    assert!(decisions >= 18);
+    assert_eq!(count, 19);
+    assert!(decisions >= 19);
 }
 #[test]
 fn nested_decisions_keep_actual_type_privacy_move_and_dead_arm_errors_invalid() {
@@ -650,7 +650,7 @@ fn nested_decisions_keep_actual_type_privacy_move_and_dead_arm_errors_invalid() 
         );
         count += 1;
     }
-    assert_eq!(count, 5);
+    assert_eq!(count, 6);
 }
 #[test]
 fn valid_and_stock_invalid_unsupported_boundaries_are_distinct_and_phase_pinned() {
@@ -687,9 +687,6 @@ fn valid_and_stock_invalid_unsupported_boundaries_are_distinct_and_phase_pinned(
             let message = error.to_string();
             assert!(message.contains("unsupported:"), "{}:{message}", case.name);
             let expected = match case.name {
-                "complete_bool_product" | "incomplete_nested_invalid" => {
-                    "nested pattern exhaustiveness requires an irrefutable variant or catch-all fallback"
-                }
                 "plain_let_refutable_invalid" => {
                     "refutable enum patterns in irrefutable positions are unsupported"
                 }
@@ -709,7 +706,7 @@ fn valid_and_stock_invalid_unsupported_boundaries_are_distinct_and_phase_pinned(
             }
         }
     }
-    assert_eq!(counts, (3, 2, 2));
+    assert_eq!(counts, (3, 1, 1));
 }
 #[test]
 fn native_pattern_decisions_workers1_8_check_build_no_compiler_fallback() {
@@ -801,8 +798,8 @@ fn native_pattern_decisions_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 120);
-    assert_eq!(modes, (36, 36, 10, 10, 10, 10, 4, 4));
+    assert_eq!(modes, (38, 38, 12, 12, 8, 8, 2, 2));
     eprintln!(
-        "NATIVE PATTERN DECISIONS:120 cells, modes{modes:?};36 nonempty-output main images;20 stock-valid Unsupported cells and8 stock-invalid/native-Unsupported cells are distinct boundaries, not ordinary-invalid parity or full Rust support"
+        "NATIVE PATTERN DECISIONS:120 cells, modes{modes:?};38 nonempty-output main images;16 stock-valid Unsupported cells and4 stock-invalid/native-Unsupported cells are distinct boundaries, not ordinary-invalid parity or full Rust support"
     );
 }

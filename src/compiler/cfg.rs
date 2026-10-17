@@ -8682,6 +8682,47 @@ mod tests {
         assert!(super::super::ownership::analyze(&function).passed());
     }
 
+    #[test]
+    fn product_partition_keeps_exact_selected_moves_and_checks_redundant_arm_types() {
+        let source = checked(
+            "struct Cell{n:i32}fn f(p:(bool,Cell))->i32{match p{(true,cell)=>cell.n,(false,cell)=>cell.n,_=>42}}fn main(){}",
+            0,
+        );
+        let function = nominal_lowered(&source);
+        let root = function.params[0];
+        let moves: Vec<_> = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| match &statement.value {
+                Statement::Assign {
+                    value: Rvalue::Use(Operand::Move(selected)),
+                    ..
+                } if selected.local == root => Some(selected),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(moves.len(), 2);
+        assert!(
+            moves
+                .iter()
+                .all(|selected| selected.projection == [Projection::Field(1)])
+        );
+        assert!(
+            !function
+                .blocks
+                .iter()
+                .any(|block| matches!(block.terminator.value, Terminator::SwitchVariant { .. }))
+        );
+        assert!(super::super::ownership::analyze(&function).passed());
+        let program = super::super::frontend::parse("struct Cell{n:i32}fn f(p:(bool,Cell))->i32{match p{(true,cell)=>cell.n,(false,cell)=>cell.n,_=>false}}fn main(){}").unwrap();
+        let signatures = super::super::frontend::signature_table(&program).unwrap();
+        assert!(
+            super::super::frontend::type_function_with_signatures(&program, 0, &signatures)
+                .is_err()
+        );
+    }
+
     fn checked(source: &str, index: usize) -> ir::CheckedFunction {
         let program = super::super::frontend::parse(source).unwrap();
         let signatures = super::super::frontend::signature_table(&program).unwrap();

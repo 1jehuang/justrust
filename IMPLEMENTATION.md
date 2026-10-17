@@ -80,8 +80,15 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       successful binding moves. PATTERN-DECISIONS.md records stock30/native120
       cells per bootstrap profile, 26 public authority controls, nine unchanged
       historical witness promotions and complete 2,636-test / 130-binary hosted
-      acceptance. Full product usefulness/exhaustiveness, ordinary refutable
-      lets, guards and reference ergonomics remain open.
+      acceptance. Exact admitted product coverage is extended below; ordinary
+      refutable lets, guards and reference ergonomics remain open.
+- [x] Exact sparse usefulness/exhaustiveness for existing validated Decision
+      products, with symbolic integer complements, ordered query refinements
+      and transactional metered rows. PATTERN-USEFULNESS.md records stock32 /
+      native128 cells per profile, 24 public authority controls and complete
+      2,678-test / 132-binary hosted acceptance. Explicit inhabitance boundaries
+      retain conservative coverage; cyclic metadata and resource failures fail
+      closed. This is not general Rust pattern grammar or full compatibility.
 - [x] Fieldless nominal enums and scalar/enum match with exhaustive coverage.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
 - [x] Payload enums, typed downcasts, bounded selection proofs and native tagged values.

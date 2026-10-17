@@ -1,7 +1,7 @@
 //! Payload enum native acceptance for the bounded tuple/braced/unit milestone.
 //! All 44 exact fixtures were stock-classified with rustc 1.98.1, edition 2024.
 //! Stock is an external scratch oracle only and is never invoked by these tests.
-//! Nested refutable patterns, guards, or-patterns, references and Drop remain boundaries.
+//! Guards, or-patterns, references and Drop remain boundaries.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 use std::fs::{self, OpenOptions};
@@ -553,13 +553,13 @@ fn main() { run(); }
 }
 
 #[test]
-fn rejects_legal_unsupported_nested_refutable_payload() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "nested_refutable_payload",
+fn accepts_nested_refutable_payload_product_coverage() {
+    // Exact historical stock-valid fixture, now admitted by checked usefulness.
+    runs(
         r#"enum I{A,B} enum E{X(I)} fn run()->i32{match E::X(I::A){E::X(I::A)=>3,E::X(I::B)=>7}}
 fn main() { if run() == 3 { println!("payload oracle ok"); } }
 "#,
+        "payload oracle ok\n",
     );
 }
 

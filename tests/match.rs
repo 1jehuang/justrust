@@ -688,13 +688,13 @@ fn main() { if run() == 4 { println!("match oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_nested_refutable() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "nested_refutable",
+fn accepts_nested_refutable_product_coverage() {
+    // Exact historical stock-valid source, now admitted by checked usefulness.
+    runs(
         r#"enum E{A(bool)} fn run()->i32{match E::A(true){E::A(true)=>1,E::A(false)=>2}}
 fn main() { if run() == 1 { println!("match oracle ok"); } }
 "#,
+        "match oracle ok\n",
     );
 }
 

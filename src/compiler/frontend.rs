@@ -7,10 +7,10 @@
 //! Numeric literals support primitive integers through 128 bits.
 //! Inline modules, named nonempty braced structs, nonempty unit/tuple/braced enums, ordinary visibility, and
 //! module-level named/grouped imports have separate type/value namespaces. Named
-//! structs and enums are nominal and non-Copy. Match admits scalar literals,
-//! top-level variants with irrefutable payload patterns and whole-value
-//! bindings/wildcards with finite exhaustiveness. Nested enum patterns require
-//! a single-variant enum. Tuple-variant rest patterns remain unsupported.
+//! structs and enums are nominal and non-Copy. Checked pattern decisions retain
+//! ordered scalar/tag observations and initialize bindings only after all tests
+//! succeed. Scoped acceptance and remaining pattern boundaries are documented
+//! in PATTERN-DECISIONS.md and PATTERN-USEFULNESS.md.
 //! Move checking belongs to CFG analysis, not
 //! this semantic checker. Restricted visibility names lexical ancestor modules.
 //! External modules, glob imports, and block-local items are not
@@ -30,6 +30,7 @@ use super::semantic_path::{NameAccess, PathKey};
 use native_adapter::{NativeParserInput, NativeTokenBuffer};
 mod name_scope;
 mod name_validation;
+mod pattern_usefulness;
 mod program_symbols;
 mod token_cursor;
 pub use program_symbols::ProgramSymbols;

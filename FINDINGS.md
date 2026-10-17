@@ -1,5 +1,39 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: exact sparse pattern usefulness with fail-closed resources
+
+- Accepted scoped PATTERN-USEFULNESS.md implementation, not full Rust. Existing
+  typed Decision conjunctions now prove complete/holed Bool/enum/aggregate/array
+  products without adding source nodes, IR/CFG variants or runtime move authority.
+- Iterative sparse partition search fixes query constraints in actual test order,
+  then explores prior rows. Exact physical paths share assignments; nested
+  Downcasts require actual active tag cells, independent of the anchor row
+  chosen to split variants. Integer OTHER stays symbolic through full128bits.
+- Domain admission validates all retained metadata. Never/empty payload boundaries
+  preserve conservative proof; a by-value cycle is a Contract error, never a way
+  to skip facts validation. Existing work/depth/count/byte limits are unchanged.
+- Retained row growth stages actual-capacity backing before any prior-row move.
+  Private controls cover byte failure cleanup, all256u8 singleton rows under
+  default budgets, two payload-bearing variants and malformed covered rows.
+  Root failed receipt20261017-132300792-2402113 exposed a real latch gap:
+  PlanBudget permitted a later cheap charge after rejecting a costly operation.
+  The kernel now checks the recorded failure before any later coverage work;
+  the original failing assertion remains unchanged and passes.
+- Stock32 exact sources classify24valid/8invalid; native21runtime/6invalid/
+  3stock-validUnsupported/2stock-invalid-nativeUnsupported. Workers1/8 CHECK/
+  BUILD/no-fallback exercise128cells and42 nonempty-output ELF executions per
+  debug/release profile. Root independently compared all32sourcebytes/order.
+- Four exact historical outcome promotions preserve133source literals/order
+  across pattern_decisions/payload_enums/match. With those retained suites each
+  profile exercises660cells and194ELF runs; final release137tests passed.
+- Hosted library1046 passed; complete unfiltered2678tests/132binaries passed
+  with zero failures/ignored/filtered in15.3s (20261017-132808398-2425432).
+  Final release137 passed (20261017-132824911-2425281); strict all-target lint,
+  formatting and diff checks passed. Nineteen failed/passing receipts are in
+  data/runs/xps14/2026-10-17-pattern-usefulness.jsonl. These are correctness
+  receipts, not compiler speed claims. Full Rust and general pattern forms
+  remain open.
+
 ## 2026-10-17: ordered nested pattern decisions with tests before moves
 
 - Accepted scoped PATTERN-DECISIONS.md implementation, not full Rust or full

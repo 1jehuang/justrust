@@ -249,6 +249,46 @@ struct PendingPatternPlan {
     bindings: PendingPatternBindings,
 }
 impl PendingPatternPlan {
+    fn insert_coverage(
+        &self,
+        matrix: &mut super::pattern_usefulness::CoverageMatrix<'_>,
+    ) -> Result<bool, String> {
+        use super::pattern_usefulness::TestRef;
+        match &self.test {
+            PatternTest::Decision { tests, .. } => matrix.insert_row(tests.len(), |index| {
+                let test = &tests.as_slice()[index];
+                TestRef {
+                    projection: &test.projection,
+                    kind: &test.kind,
+                }
+            }),
+            PatternTest::Bool(value) => {
+                let kind = ir::PatternTestKind::Bool(*value);
+                matrix.insert_row(1, |_| TestRef {
+                    projection: &[],
+                    kind: &kind,
+                })
+            }
+            PatternTest::Int(value) => {
+                let kind = ir::PatternTestKind::Int(*value);
+                matrix.insert_row(1, |_| TestRef {
+                    projection: &[],
+                    kind: &kind,
+                })
+            }
+            PatternTest::EnumVariant { ty, variant } => {
+                let kind = ir::PatternTestKind::EnumVariant {
+                    ty: ty.clone(),
+                    variant: *variant,
+                };
+                matrix.insert_row(1, |_| TestRef {
+                    projection: &[],
+                    kind: &kind,
+                })
+            }
+            _ => matrix.insert_row(0, |_| unreachable!("zero-test coverage row callback")),
+        }
+    }
     fn coverage(&self) -> PatternCoverage {
         match &self.test {
             PatternTest::Bool(value) => PatternCoverage::Scalar(u128::from(*value)),
@@ -3002,7 +3042,7 @@ impl<'a> Checker<'a> {
         }
         Ok(())
     }
-    pub(super) fn facts(&self) -> ir::FactsCtx<'_> {
+    pub(super) fn facts(&self) -> ir::FactsCtx<'a> {
         if let Some(facts) = &self.signatures.facts {
             return ir::FactsCtx::Validated(facts);
         }
@@ -6016,7 +6056,18 @@ impl<'a> Checker<'a> {
         self.accessible(&ty)?;
         self.require(&flow, &ty)?;
         let plan = self.collect_pattern(pattern, &ty)?;
-        let total = plan.coverage().is_total(&ty);
+        let mut matrix = super::pattern_usefulness::CoverageMatrix::new(
+            ty.clone(),
+            self.facts(),
+            self.signatures.plan()?.budget.clone(),
+            self.names()?.budget().clone(),
+        )?;
+        let total = if let Some(matrix) = matrix.as_mut() {
+            plan.insert_coverage(matrix)?;
+            matrix.exhaustive()?
+        } else {
+            plan.coverage().is_total(&ty)
+        };
         let depth = self.scopes.len();
         let checked_else = self.match_arm_body(
             MatchBody::Block(else_block),
@@ -6115,6 +6166,12 @@ impl<'a> Checker<'a> {
         {
             return Err(self.reference_pattern_unsupported());
         }
+        let mut matrix = super::pattern_usefulness::CoverageMatrix::new(
+            domain.clone(),
+            self.facts(),
+            self.signatures.plan()?.budget.clone(),
+            self.names()?.budget().clone(),
+        )?;
         let mut catchall = false;
         let mut has_predicate = false;
         let mut seen_variants = super::super::token_session::BudgetVec::new(
@@ -6130,12 +6187,28 @@ impl<'a> Checker<'a> {
             let scope_depth = self.scopes.len();
             self.scopes.push(HashMap::new());
             let arm_result = (|| {
-                let (pattern, coverage) = if let Some(source_pattern) = arm.pattern {
+                let (pattern, coverage, exact_useful) = if let Some(source_pattern) = arm.pattern {
                     let plan = self.collect_pattern(source_pattern, &domain)?;
                     let coverage = plan.coverage();
-                    (self.publish_pattern(plan)?, coverage)
+                    let useful = matrix
+                        .as_mut()
+                        .map(|matrix| plan.insert_coverage(matrix))
+                        .transpose()?;
+                    (self.publish_pattern(plan)?, coverage, useful)
                 } else {
-                    (ir::MatchPattern::Wildcard, PatternCoverage::CatchAll)
+                    let useful = matrix
+                        .as_mut()
+                        .map(|matrix| {
+                            matrix.insert_row(0, |_| {
+                                unreachable!("zero-test semantic fallback callback")
+                            })
+                        })
+                        .transpose()?;
+                    (
+                        ir::MatchPattern::Wildcard,
+                        PatternCoverage::CatchAll,
+                        useful,
+                    )
                 };
                 let fully_covered = match &domain {
                     ir::Ty::Bool => covered.len() == 2,
@@ -6152,8 +6225,9 @@ impl<'a> Checker<'a> {
                     }
                     _ => coverage.full_key(),
                 };
-                let useful =
-                    !catchall && !fully_covered && key.is_none_or(|key| !covered.contains(&key));
+                let useful = exact_useful.unwrap_or_else(|| {
+                    !catchall && !fully_covered && key.is_none_or(|key| !covered.contains(&key))
+                });
                 let body = self.match_arm_body(
                     arm.body,
                     self.reachable && source.completes && useful,
@@ -6167,35 +6241,45 @@ impl<'a> Checker<'a> {
             // Even unreachable arms impose their source type obligation.
             result = self.join(&result, &arm_flow.ty, "match arms")?;
             completes |= useful && arm_flow.completes;
-            if let Some(key) = coverage.full_key() {
-                covered.insert(key);
-            }
-            match coverage {
-                PatternCoverage::CatchAll => catchall = true,
-                PatternCoverage::Variant(index) => {
-                    seen_variants.push(index).map_err(pattern_token_error)?
+            if matrix.is_none() {
+                if let Some(key) = coverage.full_key() {
+                    covered.insert(key);
                 }
-                PatternCoverage::Predicate { root_variant } => {
-                    has_predicate = true;
-                    if let Some(index) = root_variant {
-                        seen_variants.push(index).map_err(pattern_token_error)?;
+                match coverage {
+                    PatternCoverage::CatchAll => catchall = true,
+                    PatternCoverage::Variant(index) => {
+                        seen_variants.push(index).map_err(pattern_token_error)?
                     }
+                    PatternCoverage::Predicate { root_variant } => {
+                        has_predicate = true;
+                        if let Some(index) = root_variant {
+                            seen_variants.push(index).map_err(pattern_token_error)?;
+                        }
+                    }
+                    PatternCoverage::Scalar(_) => {}
                 }
-                PatternCoverage::Scalar(_) => {}
             }
             checked.push(ir::MatchArm { pattern, body });
         }
-        let exhaustive = catchall
-            || match &domain {
-                ir::Ty::Never => true,
-                ir::Ty::Bool => covered.len() == 2,
-                ir::Ty::Unit => covered.len() == 1,
-                ir::Ty::Enum(ty) => covered.len() == ty.def().variants.len(),
-                ir::Ty::Int(ty) => ty.bits() < 64 && covered.len() as u64 == (1u64 << ty.bits()),
-                _ => false,
-            };
+        let exhaustive = if let Some(matrix) = matrix.as_ref() {
+            matrix.exhaustive()?
+        } else {
+            catchall
+                || match &domain {
+                    ir::Ty::Never => true,
+                    ir::Ty::Bool => covered.len() == 2,
+                    ir::Ty::Unit => covered.len() == 1,
+                    ir::Ty::Enum(ty) => covered.len() == ty.def().variants.len(),
+                    ir::Ty::Int(ty) => {
+                        ty.bits() < 64 && covered.len() as u64 == (1u64 << ty.bits())
+                    }
+                    _ => false,
+                }
+        };
         if !exhaustive {
-            let all_variants_seen = if let ir::Ty::Enum(ty) = &domain {
+            let all_variants_seen = if matrix.is_some() {
+                false
+            } else if let ir::Ty::Enum(ty) = &domain {
                 let mut all = true;
                 for index in 0..ty.def().variants.len() {
                     self.signatures
@@ -6211,7 +6295,7 @@ impl<'a> Checker<'a> {
             } else {
                 true
             };
-            if has_predicate && all_variants_seen {
+            if matrix.is_none() && has_predicate && all_variants_seen {
                 return Err(super::super::source::SourceError {
                     kind: super::super::source::SourceErrorKind::Unsupported,
                     primary: None,
@@ -7520,6 +7604,53 @@ mod checked_identity_tests {
     use super::*;
 
     #[test]
+    fn exact_product_coverage_proves_bool_enum_array_and_record_partitions() {
+        for source in [
+            "struct Pair(bool,bool);fn value(v:Pair)->i32{match v{Pair(true,_)=>1,Pair(false,true)=>2,Pair(false,false)=>3}}fn main(){}",
+            "enum Inner{A(bool),B}enum Outer{Some(Inner),None}fn value(v:Outer)->i32{match v{Outer::Some(Inner::A(true))=>1,Outer::Some(Inner::A(false))=>2,Outer::Some(Inner::B)=>3,Outer::None=>4}}fn main(){}",
+            "fn value(v:[bool;2])->i32{match v{[true,_]=>1,[false,true]=>2,[false,false]=>3}}fn main(){}",
+            "struct Pair{x:bool,y:bool}fn value(v:Pair)->i32{match v{Pair{x:true,..}=>1,Pair{x:false,y:true}=>2,Pair{x:false,y:false}=>3}}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            check(&program).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+
+    #[test]
+    fn exact_product_holes_and_integer_complement_remain_invalid() {
+        for source in [
+            "struct Pair(bool,bool);fn value(v:Pair)->i32{match v{Pair(true,_)=>1,Pair(false,true)=>2}}fn main(){}",
+            "enum E{A(bool),B}fn value(v:E)->i32{match v{E::A(true)=>1,E::B=>0}}fn main(){}",
+            "struct Wide(i128);fn value(v:Wide)->i32{match v{Wide(-170141183460469231731687303715884105728i128)=>1,Wide(170141183460469231731687303715884105727i128)=>2}}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            let error = check(&program).unwrap_err();
+            assert!(error.contains("non-exhaustive"), "{source}: {error}");
+            assert!(!error.contains("unsupported:"), "{source}: {error}");
+        }
+        let program = parse("struct Wide(i128);fn value(v:Wide)->i32{match v{Wide(-170141183460469231731687303715884105728i128)=>1,Wide(170141183460469231731687303715884105727i128)=>2,_=>3}}fn main(){}").unwrap();
+        check(&program).unwrap();
+    }
+
+    #[test]
+    fn exact_subsumption_still_checks_dead_bodies_and_preserves_else_scope() {
+        for source in [
+            "struct Pair(bool,bool);fn value(v:Pair)->i32{match v{Pair(true,_)=>1,Pair(true,false)=>missing,Pair(false,_)=>2}}fn main(){}",
+            "struct Pair(bool,bool);fn value(v:Pair)->i32{match v{Pair(true,_)=>1,Pair(true,false)=>false,Pair(false,_)=>2}}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            assert!(
+                check(&program).is_err(),
+                "accepted dead invalid body: {source}"
+            );
+        }
+        let program = parse("enum E{A(bool,i32),B}fn value(v:E)->i32{let x=7;let E::A(true,x)=v else{return x;};x}fn main(){}").unwrap();
+        check(&program).unwrap();
+        let program = parse("enum E{A(bool,i32),B}fn value(v:E)->i32{let E::A(true,x)=v else{return x;};x}fn main(){}").unwrap();
+        assert!(check(&program).is_err());
+    }
+
+    #[test]
     fn decision_patterns_preserve_ordered_tags_and_failed_arm_moves() {
         for source in [
             "enum Inner{A(bool,i32),B}enum Outer{Some(Inner),None}fn value(v:Outer)->i32{match v{Outer::Some(Inner::A(true,x))=>x,Outer::Some(_)=>0,Outer::None=>0}}fn main(){}",
@@ -7535,11 +7666,7 @@ mod checked_identity_tests {
     #[test]
     fn decision_patterns_require_proven_coverage_without_weakening_plain_let() {
         let program = parse("enum E{A(bool),B}fn value(v:E)->i32{match v{E::A(true)=>1,E::A(false)=>2,E::B=>0}}fn main(){}").unwrap();
-        assert!(
-            check(&program)
-                .unwrap_err()
-                .contains("unsupported: nested pattern exhaustiveness")
-        );
+        check(&program).unwrap();
         let program =
             parse("enum E{A(bool),B}fn value(v:E)->i32{match v{E::A(true)=>1}}fn main(){}")
                 .unwrap();

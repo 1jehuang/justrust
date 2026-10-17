@@ -3496,6 +3496,26 @@ mod tests {
         }
     }
 
+    #[test]
+    fn product_partition_does_not_widen_moves_or_consume_failed_predicate_inputs() {
+        let result = analyze(&borrowed_source(
+            "struct Cell{n:i32}fn f(p:(bool,bool,Cell))->(bool,bool,Cell){match p{(true,true,cell)=>(true,true,cell),_=>p}}",
+        ));
+        assert!(result.passed(), "{:?}", result.diagnostics);
+        let result = analyze(&borrowed_source(
+            "struct Cell{n:i32}fn f(p:(bool,Cell))->(bool,Cell){let n=match p{(true,cell)=>cell.n,(false,cell)=>cell.n,_=>0};p}",
+        ));
+        assert!(result.complete);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.kind == ErrorKind::ReadNotDefinitelyInitialized),
+            "{:?}",
+            result.diagnostics
+        );
+    }
+
     fn borrowed_source(source: &str) -> cfg::Function {
         let program = super::super::frontend::parse(&format!("{source} fn main(){{}}")).unwrap();
         let signatures = super::super::frontend::signature_table(&program).unwrap();
