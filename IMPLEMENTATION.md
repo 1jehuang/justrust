@@ -298,6 +298,11 @@ iteration and suspended-state destruction each have executable oracle cases.
       output capacity. OPAQUE-LITERALS.md records 21 stock cases / 76 native cells
       plus the unchanged first source corpus; the complete frozen hosted gate
       passes 2,089 tests / 103 binaries, strict lint and formatting.
+- [x] Admit multiple original function-local definitions, textual shadow/redefinition
+      and nested/recursive expression calls with exact selected-definition and
+      parent-proof ownership. NESTED-SOURCE-MACROS.md records 17 added stock
+      sources / 68 native cells, unchanged earlier corpora, actual stack-frame
+      repair and the complete 2,105-test / 104-binary hosted gate.
 - [ ] Generalize nested/recursive expansion and namespace-specific hygiene,
       generated declarations, cfg-before-child-IO and graph discovery closure.
       Add real item/export/import/cross-crate clients and remaining fragment/AST

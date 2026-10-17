@@ -38,6 +38,7 @@ enum AdmittedNames {
     Expanded {
         names: BudgetVec<AdmittedExpandedName>,
         literals: BudgetVec<AdmittedOpaqueLiteral>,
+        macro_slice: Option<crate::compiler::macro_cursor::TokenSlice>,
         admission: crate::compiler::semantic_scope::ExpansionAdmission,
     },
 }
@@ -62,6 +63,40 @@ impl std::fmt::Debug for NativeTokenBuffer {
     }
 }
 impl NativeTokenBuffer {
+    /// Actual engine output only. Isolated literal-consumption buffers never
+    /// expose their semantic leaves as fresh macro matcher input.
+    pub(super) fn current_macro_slice(&self) -> Option<&crate::compiler::macro_cursor::TokenSlice> {
+        match &self.names {
+            AdmittedNames::Expanded { macro_slice, .. } => macro_slice.as_ref(),
+            AdmittedNames::Root(_) => None,
+        }
+    }
+
+    pub(super) fn retain_macro_slice(
+        &mut self,
+        session: &TokenSession,
+        slice: crate::compiler::macro_cursor::TokenSlice,
+    ) -> Result<(), ParseError> {
+        if !self.tokens.as_slice().is_empty() {
+            return Err(transport_error(TokenError::InvalidHandle));
+        }
+        let AdmittedNames::Expanded {
+            macro_slice,
+            admission,
+            ..
+        } = &mut self.names
+        else {
+            return Err(transport_error(TokenError::InvalidHandle));
+        };
+        admission.validate_session(session).map_err(scope_error)?;
+        super::expanded_adapter::validate_slice(session, &slice, admission)?;
+        if macro_slice.is_some() {
+            return Err(transport_error(TokenError::InvalidHandle));
+        }
+        *macro_slice = Some(slice);
+        Ok(())
+    }
+
     pub(super) fn macro_source(&self) -> Option<&crate::compiler::token_tree::TokenStream> {
         self.macro_source.as_ref()
     }
@@ -76,6 +111,7 @@ impl NativeTokenBuffer {
             names: AdmittedNames::Expanded {
                 names: BudgetVec::new(budget, Storage::Retained).map_err(transport_error)?,
                 literals: BudgetVec::new(budget, Storage::Retained).map_err(transport_error)?,
+                macro_slice: None,
                 admission: *admission,
             },
             _text_leases: BudgetVec::new(budget, Storage::Retained).map_err(transport_error)?,
@@ -731,7 +767,8 @@ impl NativeParserInput {
                                 "invalid punctuation range",
                             )
                         })?;
-                        if !punctuation(text) && !(text == "$" && input.macro_source.is_some()) {
+                        let deferred = !punctuation(text) && input.macro_source.is_some();
+                        if !punctuation(text) && !deferred {
                             return Err(event_error(
                                 event,
                                 if matches!(text, "#" | "@" | "?" | "$" | "~") {
@@ -759,7 +796,11 @@ impl NativeParserInput {
                             range,
                             event.line,
                             event.column,
-                            ParserTokenKind::Punct,
+                            if deferred {
+                                ParserTokenKind::DeferredUnsupported
+                            } else {
+                                ParserTokenKind::Punct
+                            },
                             None,
                             &parts[..count],
                         )?;
@@ -1347,6 +1388,36 @@ mod tests {
         ] {
             let error = super::super::parse_syntax_unprepared(source).err().unwrap();
             assert_eq!(error.kind, SourceErrorKind::Syntax, "{source}: {error}");
+        }
+    }
+
+    #[test]
+    fn matcher_only_punctuation_is_deferred_without_semantic_admission() {
+        let countdown = "fn main(){macro_rules! walk{()=>{40};(@ $($rest:tt)*)=>{walk!($($rest)*)+1};}if walk!(@ @ @)==43{println!(\"ok\");}}";
+        let input = super::super::lex(countdown).unwrap();
+        assert!(
+            input.tokens.as_slice().iter().any(|token| token.kind
+                == ParserTokenKind::DeferredUnsupported
+                && token.text == "@")
+        );
+        super::super::parse_syntax_unprepared(countdown).unwrap();
+        for punctuation in ["@", "#", "?", "~", "$"] {
+            assert_eq!(
+                super::super::lex(punctuation).unwrap_err().kind,
+                SourceErrorKind::Unsupported
+            );
+        }
+        for source in [
+            "fn main(){let _=@;}",
+            "fn main(){macro_rules! discard{($x:tt)=>{0};}let _=@;}",
+            "fn main(){macro_rules! emit{()=>{@};}let _=emit!();}",
+        ] {
+            let error = super::super::parse_syntax_unprepared(source).err().unwrap();
+            assert_eq!(
+                error.kind,
+                SourceErrorKind::Unsupported,
+                "{source}: {error}"
+            );
         }
     }
 

@@ -1,5 +1,36 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Nested original-source macros with bounded native recursion
+
+Multiple original function-local definitions now support textual redefinition,
+block shadow/restore and nested/recursive expression invocation. Selection seals
+the exact driver/definition/frontiers before expansion; nested proofs validate
+the current occurrence and exact parent while allowing only checked ancestor
+single-mark contexts. Actual expanded slices remain matcher input, including
+opaque literals. No generated definitions, item/export/import expansion or general
+stacked-context admission is claimed. NESTED-SOURCE-MACROS.md defines the boundary.
+
+The first public recursive gate `20261017-093040913-1342385` genuinely aborted
+with stack overflow despite 824 passing library controls. Fallible charged
+singleton root owners and small noninline dispatch/preparation boundaries remove
+large retained parser scratch from the recursive chain. The unchanged typed
+recursion gate then passed in `20261017-093515329-1362645`; that intermediate run
+still failed legal matcher-only punctuation transport. DeferredUnsupported now
+transports canonical macro tokens without admitting them as expressions. No
+stack environment, source witness, harness or cap was changed. A later new-test
+Literal variant pattern compile error is retained in the receipt file too.
+
+The new stock-first 17-source corpus has 68 native workers-1/8 CHECK/BUILD cells.
+All three new/old source matrices pass in `20261017-093821761-1376557`. Final hosted
+all-target check `20261017-094041236-1386804`, full 2,105-test / 104-binary suite
+`20261017-094044045-1387251` (zero failed, ignored or filtered), strict all-target
+lint `20261017-094102336-1388370`, fmt and diff checks pass. Nine exact scoped
+records are in `data/runs/xps14/2026-10-17-nested-source-macros.jsonl`.
+
+The final suite reports a 12.2s wide-integer oracle critical path; strict lint
+reports a 102k-line crate rebuild. These observations are not before/after
+performance evidence. No compile-speed or full Rust compatibility claim follows.
+
 ## 2026-10-17: Opaque source literal consumption without matcher flattening
 
 The same bounded function-local source driver now consumes `literal` captures

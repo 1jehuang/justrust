@@ -7,6 +7,10 @@ in `20261017-092115516-1299372`, all-target check
 `20261017-092129356-1300588`, formatting and whitespace checks. This extends the
 accepted `tt`/`ident` client, not the full Rust macro implementation.
 
+The later accepted NESTED-SOURCE-MACROS.md slice adds multiple original local
+definitions and nested/recursive expression invocations. Earlier single-definition
+restrictions below describe this historical checkpoint, not the later client.
+
 ## Exact added client
 
 The added slice permits the existing pure engine's `literal` fragment in the same

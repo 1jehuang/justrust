@@ -106,8 +106,8 @@ pub(super) fn lower(
     session.span(eof).map_err(transport_error)?;
     admission.validate_session(session).map_err(scope_error)?;
     admission.validate_span(session, eof).map_err(scope_error)?;
-    validate_slice(session, &slice, admission)?;
     let mut output = NativeTokenBuffer::expanded(session, admission)?;
+    output.retain_macro_slice(session, slice.clone())?;
     let mut frames =
         BudgetVec::new(session.budget(), Storage::Temporary).map_err(transport_error)?;
     frames
@@ -171,7 +171,7 @@ pub(super) fn lower(
     Ok(output)
 }
 
-fn validate_slice(
+pub(super) fn validate_slice(
     session: &TokenSession,
     slice: &TokenSlice,
     admission: &ExpansionAdmission,
@@ -406,6 +406,15 @@ fn push_punctuation(
         ));
     }
     if !native_adapter::punctuation(text) {
+        if output.current_macro_slice().is_some() {
+            return output.push_expanded(
+                session,
+                text,
+                ParserTokenKind::DeferredUnsupported,
+                parts,
+                None,
+            );
+        }
         return Err(failure(
             session,
             parts[0].span,
@@ -562,6 +571,8 @@ mod tests {
             let isolated = buffer
                 .opaque_literal_buffer(&view, &mut source.names)
                 .unwrap();
+            assert!(buffer.current_macro_slice().is_some());
+            assert!(isolated.current_macro_slice().is_none());
             assert_eq!(
                 isolated
                     .iter()
@@ -580,6 +591,126 @@ mod tests {
             cursor.bump();
             assert!(cursor.current().matches(""));
         }
+    }
+
+    #[test]
+    fn current_macro_slice_is_exact_engine_output_not_underlying_siblings() {
+        let mut source = fixture("left!(1) + right!(2)");
+        let session = source.names.session();
+        assert_eq!(source.tokens.len(session).unwrap(), 7);
+        let Node::Delimited { open: right, .. } = source.tokens.node(session, 6).unwrap() else {
+            panic!("expected right invocation group")
+        };
+        let right = *right;
+        let selected = source.tokens.subslice(session, 0..3).unwrap();
+        let buffer = lower(
+            selected.clone(),
+            &mut source.names,
+            Edition::E2024,
+            source.eof,
+            &source.admission,
+        )
+        .unwrap();
+        let actual = buffer.current_macro_slice().unwrap();
+        let session = source.names.session();
+        assert_eq!(actual.len(session).unwrap(), 3);
+        for index in 0..3 {
+            assert!(std::ptr::eq(
+                actual.node(session, index).unwrap(),
+                selected.node(session, index).unwrap()
+            ));
+            if let Node::Delimited { open, .. } = actual.node(session, index).unwrap() {
+                assert_ne!(*open, right);
+            }
+        }
+        let Node::Delimited { open, .. } = actual.node(session, 2).unwrap() else {
+            panic!("expected retained invocation group")
+        };
+        let view = super::super::TokenCursor::new(&buffer).peek(2).unwrap();
+        assert_eq!(view.span, *open);
+        let args = actual.children(session, 2).unwrap().unwrap();
+        assert_eq!(args.len(session).unwrap(), 1);
+        let Node::Leaf(token) = args.node(session, 0).unwrap() else {
+            panic!("expected actual argument leaf")
+        };
+        let TokenKind::Literal { spelling, .. } = token.kind else {
+            panic!("expected literal argument")
+        };
+        assert_eq!(session.symbol(spelling).unwrap(), "1");
+    }
+
+    #[test]
+    fn deferred_punctuation_keeps_actual_matcher_tokens_but_not_literal_inventory() {
+        let mut source = fixture("@ # ? ~");
+        let buffer = run(&mut source).unwrap();
+        let actual = buffer.current_macro_slice().unwrap();
+        let session = source.names.session();
+        for (index, ch) in ['@', '#', '?', '~'].into_iter().enumerate() {
+            let view = super::super::TokenCursor::new(&buffer).peek(index).unwrap();
+            assert!(view.is_deferred_unsupported());
+            assert!(!view.matches(view.text));
+            assert!(!view.is_ident());
+            assert!(!view.string);
+            assert!(matches!(actual.node(session, index).unwrap(),
+                Node::Leaf(Token { kind: TokenKind::Punct { ch: actual, .. }, span })
+                    if *actual == ch && *span == view.span));
+        }
+        let mut isolated = NativeTokenBuffer::expanded(session, &source.admission).unwrap();
+        assert!(isolated.current_macro_slice().is_none());
+        let span = buffer[0].whole.span;
+        let error = push_punctuation(&mut isolated, session, "@", &[part(session, span).unwrap()])
+            .unwrap_err();
+        assert_eq!(error.kind, SourceErrorKind::Unsupported);
+        assert!(isolated.is_empty());
+    }
+
+    #[test]
+    fn macro_slice_installation_rejects_foreign_or_unadmitted_payload_and_replacement() {
+        let source = fixture_rules("($x:literal)=>{$x};", "(1)");
+        let session = source.names.session();
+        let Node::Leaf(Token {
+            kind: TokenKind::Opaque(id),
+            ..
+        }) = source.tokens.node(session, 0).unwrap()
+        else {
+            panic!("expected actual opaque output")
+        };
+        let original_payload = session.fragment(*id).unwrap().tokens().clone();
+        let mut buffer = NativeTokenBuffer::expanded(session, &source.admission).unwrap();
+        assert_eq!(
+            buffer
+                .retain_macro_slice(session, original_payload)
+                .unwrap_err()
+                .kind,
+            SourceErrorKind::Contract
+        );
+        assert!(buffer.current_macro_slice().is_none());
+        let foreign = fixture("1");
+        assert_eq!(
+            buffer
+                .retain_macro_slice(session, foreign.tokens.clone())
+                .unwrap_err()
+                .kind,
+            SourceErrorKind::Contract
+        );
+        assert!(buffer.current_macro_slice().is_none());
+        buffer
+            .retain_macro_slice(session, source.tokens.clone())
+            .unwrap();
+        assert_eq!(
+            buffer
+                .retain_macro_slice(session, source.tokens.clone())
+                .unwrap_err()
+                .kind,
+            SourceErrorKind::Contract
+        );
+        let actual = buffer.current_macro_slice().unwrap();
+        assert!(std::ptr::eq(
+            actual.node(session, 0).unwrap(),
+            source.tokens.node(session, 0).unwrap()
+        ));
+        assert!(matches!(actual.node(session, 0).unwrap(),
+            Node::Leaf(Token { kind: TokenKind::Opaque(actual), .. }) if actual == id));
     }
 
     #[test]

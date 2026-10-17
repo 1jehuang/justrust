@@ -4373,6 +4373,7 @@ enum ParserTokenKind {
     Lifetime,
     OpaqueLiteral,
     DeferredLiteral,
+    DeferredUnsupported,
     Eof,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4531,6 +4532,70 @@ fn canonical_path_text_len(
 #[cfg(test)]
 mod local_macro_parser_tests {
     use super::*;
+    fn syntax_with_budget(
+        source: &str,
+        budget: &super::super::expansion_budget::ExpansionBudget,
+    ) -> Result<ParsedProgram, ParseError> {
+        let input = super::super::source::PreparedLexInput::identity(
+            std::path::Path::new("nested.rs"),
+            source,
+            budget,
+        )
+        .map_err(native_adapter::source_error)?;
+        parse_syntax_tokens(native_input(&input, budget.clone())?)
+    }
+    #[test]
+    fn nested_source_depth_is_live_through_parse_and_restored_for_siblings() {
+        use super::super::expansion_budget::{
+            BudgetResource, Depth, ExpansionBudget, ExpansionLimits,
+        };
+        let mut limits = ExpansionLimits::default();
+        limits.depths[Depth::Expansion as usize] = 2;
+        let budget = ExpansionBudget::new(limits);
+        let result = syntax_with_budget("fn main(){macro_rules! leaf{()=>{1};}macro_rules! pass{()=>{leaf!()};}let a:i32=pass!();let b:i32=pass!();}", &budget).unwrap();
+        assert!(budget.snapshot().failure.is_none());
+        drop(result);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        assert_eq!(budget.snapshot().temporary_bytes, 0);
+
+        let budget = ExpansionBudget::new(limits);
+        let error = syntax_with_budget("fn main(){macro_rules! leaf{()=>{1};}macro_rules! pass{()=>{leaf!()};}macro_rules! outer{()=>{pass!()};}let a:i32=outer!();}", &budget).unwrap_err();
+        assert_eq!(error.kind, super::super::source::SourceErrorKind::Limit);
+        assert_eq!(
+            budget.snapshot().failure.unwrap().resource,
+            BudgetResource::Depth(Depth::Expansion)
+        );
+        drop(error);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        assert_eq!(budget.snapshot().temporary_bytes, 0);
+    }
+    #[test]
+    fn parser_root_owner_preflights_bytes_and_releases_after_borrowed_children() {
+        use super::super::expansion_budget::{ExpansionBudget, Storage};
+        let budget = ExpansionBudget::default();
+        let mut owner = ParserState::owned(7u64, &budget).unwrap();
+        let reserved = budget.snapshot().temporary_bytes;
+        assert!(reserved >= std::mem::size_of::<u64>() as u64);
+        {
+            let mut child = ParserState::Borrowed(&mut *owner);
+            *child = 11;
+        }
+        assert_eq!(budget.snapshot().temporary_bytes, reserved);
+        assert_eq!(owner.into_owned().unwrap(), 11);
+        assert_eq!(budget.snapshot().temporary_bytes, 0);
+        let blocker = budget
+            .reserve(Storage::Temporary, budget.limits().bytes - 7)
+            .unwrap();
+        let error = match ParserState::owned(7u64, &budget) {
+            Ok(_) => panic!("root owner allocated without admission"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind, super::super::source::SourceErrorKind::Limit);
+        assert_eq!(budget.snapshot().temporary_bytes, blocker.bytes());
+        drop(error);
+        drop(blocker);
+        assert_eq!(budget.snapshot().temporary_bytes, 0);
+    }
     #[test]
     fn println_owned_format_denies_bytes_before_allocating_output() {
         use super::super::expansion_budget::{BudgetResource, ExpansionBudget, Storage};
@@ -4751,15 +4816,19 @@ mod local_macro_parser_tests {
         );
     }
 }
+struct ParserOwned<T> {
+    values: Vec<T>,
+    _lease: super::expansion_budget::ByteLease,
+}
 enum ParserState<'a, T> {
-    Owned(T),
+    Owned(ParserOwned<T>),
     Borrowed(&'a mut T),
 }
 impl<T> std::ops::Deref for ParserState<'_, T> {
     type Target = T;
     fn deref(&self) -> &T {
         match self {
-            Self::Owned(value) => value,
+            Self::Owned(value) => &value.values[0],
             Self::Borrowed(value) => value,
         }
     }
@@ -4767,15 +4836,48 @@ impl<T> std::ops::Deref for ParserState<'_, T> {
 impl<T> std::ops::DerefMut for ParserState<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
         match self {
-            Self::Owned(value) => value,
+            Self::Owned(value) => &mut value.values[0],
             Self::Borrowed(value) => value,
         }
     }
 }
 impl<T> ParserState<'_, T> {
+    fn owned(
+        value: T,
+        budget: &super::expansion_budget::ExpansionBudget,
+    ) -> Result<Self, ParseError> {
+        budget
+            .charge(super::expansion_budget::Counter::Work, 1)
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        let bytes = u64::try_from(std::mem::size_of::<T>()).map_err(|_| {
+            native_adapter::transport_error(super::token_session::TokenError::IdExhausted)
+        })?;
+        let mut lease = budget
+            .reserve(super::expansion_budget::Storage::Temporary, bytes)
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(1)
+            .map_err(|_| native_adapter::transport_error(budget.poison_allocation().into()))?;
+        let actual = (values.capacity() as u64)
+            .checked_mul(bytes)
+            .ok_or_else(|| {
+                native_adapter::transport_error(super::token_session::TokenError::IdExhausted)
+            })?;
+        lease
+            .resize(actual)
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        values.push(value);
+        Ok(Self::Owned(ParserOwned {
+            values,
+            _lease: lease,
+        }))
+    }
     fn into_owned(self) -> Result<T, ParseError> {
         match self {
-            Self::Owned(value) => Ok(value),
+            Self::Owned(mut value) => value.values.pop().ok_or_else(|| {
+                native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+            }),
             Self::Borrowed(_) => Err(native_adapter::transport_error(
                 super::token_session::TokenError::InvalidInput("missing parser lexical owner"),
             )),
@@ -4809,7 +4911,8 @@ struct Parser<'input, 'names> {
     names: &'names mut NameStoreBuilder,
     modules: ParserState<'names, ModuleArenaBuilder>,
     lexical: ParserState<'names, ParserLexicalState>,
-    in_expansion: bool,
+    expansion: Option<super::semantic_scope::ExpansionAdmission>,
+    expansion_depth: u32,
     module: ModuleId,
     alias_target: bool,
     pending_bounds: Vec<TypeBound>,
@@ -4827,6 +4930,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         match error {
             DriverError::Token(error) => native_adapter::transport_error(error),
             DriverError::Name(error) => native_adapter::name_error(error),
+            DriverError::Scope(error) => scope_parse_error(error),
             DriverError::Unsupported { span, message } => native_adapter::expanded_error(
                 self.names.session(),
                 span,
@@ -4881,10 +4985,16 @@ impl<'input, 'names> Parser<'input, 'names> {
             .function
             .as_ref()
             .ok_or_else(|| self.unsupported("function-local macro context required"))?;
-        let body = function
-            .driver
-            .group_body(open, self.names)
-            .map_err(|error| self.driver_error(error))?;
+        let body = if let Some(source) = self.input.current_macro_slice() {
+            function.driver.group_body_in(source, open, self.names)
+        } else if self.expansion.is_some() {
+            return Err(native_adapter::transport_error(
+                super::token_session::TokenError::InvalidHandle,
+            ));
+        } else {
+            function.driver.group_body(open, self.names)
+        }
+        .map_err(|error| self.driver_error(error))?;
         let mut stack = super::token_session::BudgetVec::new(
             self.names.budget(),
             super::expansion_budget::Storage::Temporary,
@@ -4919,7 +5029,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(body)
     }
     fn local_macro_definition(&mut self) -> Result<(), ParseError> {
-        if self.in_expansion {
+        if self.expansion.is_some() {
             return Err(self.unsupported("nested or generated macro definitions are unsupported"));
         }
         self.expect("macro_rules")?;
@@ -4968,13 +5078,40 @@ impl<'input, 'names> Parser<'input, 'names> {
         result.map_err(|error| self.driver_error(error))
     }
     fn local_macro_expression(&mut self) -> Result<Expr, ParseError> {
-        if self.in_expansion {
-            return Err(self.unsupported("nested and recursive macro invocations are unsupported"));
-        }
+        let (buffer, admission, depth) = self.prepare_local_macro()?;
+        self.isolated_expression_at(&buffer, Some(admission), depth)
+    }
+    // Selection/lowering scratch is gone before recursively parsing the child.
+    #[inline(never)]
+    fn prepare_local_macro(
+        &mut self,
+    ) -> Result<
+        (
+            NativeTokenBuffer,
+            super::semantic_scope::ExpansionAdmission,
+            u32,
+        ),
+        ParseError,
+    > {
         if self.lexical.function.is_none() {
             return Err(self.error("unknown function-local macro"));
         }
         let span = self.token().span;
+        let parent = if let Some(proof) = &self.expansion {
+            proof
+                .validate_span(self.names.session(), span)
+                .map_err(scope_parse_error)?;
+            Some(proof.expansion(self.names).map_err(scope_parse_error)?)
+        } else {
+            None
+        };
+        let depth = self.expansion_depth.checked_add(1).ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::IdExhausted)
+        })?;
+        self.names
+            .budget()
+            .check_depth(super::expansion_budget::Depth::Expansion, depth)
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
         let name = self.ident()?;
         self.expect("!")?;
         let args = self.macro_group()?;
@@ -4984,27 +5121,19 @@ impl<'input, 'names> Parser<'input, 'names> {
             .as_ref()
             .ok_or_else(|| self.unsupported("function-local macro context required"))?;
         let call = function.frontier;
-        let definition = function
-            .driver
-            .definition_frontier()
-            .ok_or_else(|| self.error("unknown function-local macro"))?;
         let scopes = self.lexical.scopes.as_ref().ok_or_else(|| {
             native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
         })?;
-        if scopes.function(call).map_err(scope_parse_error)? != function.driver.owner()
-            || !scopes
-                .visible_from(definition, call)
-                .map_err(scope_parse_error)?
-        {
-            return Err(self.error("function-local macro is not visible at this lexical point"));
-        }
+        let selected = function
+            .driver
+            .select(name, call, scopes, self.names)
+            .map_err(|error| self.driver_error(error))?;
         let expanded = function
             .driver
             .expand(
-                name,
+                selected,
                 args,
-                super::macro_rules::CallSite { span, parent: None },
-                call,
+                super::macro_rules::CallSite { span, parent },
                 self.names,
             )
             .map_err(|error| self.driver_error(error))?;
@@ -5014,30 +5143,50 @@ impl<'input, 'names> Parser<'input, 'names> {
         let slice = expanded
             .tokens(self.names.session())
             .map_err(|error| self.driver_error(super::source_macro::DriverError::Macro(error)))?;
-        let admission = self
-            .lexical
-            .scopes
-            .as_mut()
-            .ok_or_else(|| {
-                native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
-            })?
-            .anchor_expansion(self.names, expansion, definition, call)
-            .map_err(scope_parse_error)?;
+        let scopes = self.lexical.scopes.as_mut().ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+        })?;
+        let admission = if let Some(parent) = &self.expansion {
+            scopes.anchor_nested_expansion(
+                self.names,
+                expansion,
+                selected.definition(),
+                selected.call(),
+                parent,
+            )
+        } else {
+            scopes.anchor_expansion(
+                self.names,
+                expansion,
+                selected.definition(),
+                selected.call(),
+            )
+        }
+        .map_err(scope_parse_error)?;
         let eof = self
             .names
             .expansion_eof(&admission)
             .map_err(scope_parse_error)?;
         let buffer =
             expanded_adapter::lower(slice, self.names, self.names.edition(), eof, &admission)?;
-        self.isolated_expression(&buffer)
+        Ok((buffer, admission, depth))
     }
     fn isolated_expression(&mut self, buffer: &NativeTokenBuffer) -> Result<Expr, ParseError> {
+        self.isolated_expression_at(buffer, self.expansion, self.expansion_depth)
+    }
+    fn isolated_expression_at(
+        &mut self,
+        buffer: &NativeTokenBuffer,
+        expansion: Option<super::semantic_scope::ExpansionAdmission>,
+        expansion_depth: u32,
+    ) -> Result<Expr, ParseError> {
         let mut child = Parser {
             input: buffer,
             names: &mut *self.names,
             modules: ParserState::Borrowed(&mut *self.modules),
             lexical: ParserState::Borrowed(&mut *self.lexical),
-            in_expansion: true,
+            expansion,
+            expansion_depth,
             module: self.module,
             alias_target: false,
             pending_bounds: Vec::new(),
@@ -5275,7 +5424,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         if !found {
             return Ok((self.block()?, None));
         }
-        if self.in_expansion {
+        if self.expansion.is_some() {
             return Err(self.unsupported("nested source macro definitions are unsupported"));
         }
         if self.lexical.scopes.is_none() {
@@ -5314,12 +5463,15 @@ impl<'input, 'names> Parser<'input, 'names> {
     ) -> Result<Self, ParseError> {
         let modules = ModuleArenaBuilder::for_source(names).map_err(module_parse_error)?;
         let module = modules.source_root().map_err(module_parse_error)?;
+        let modules = ParserState::owned(modules, names.budget())?;
+        let lexical = ParserState::owned(ParserLexicalState::default(), names.budget())?;
         Ok(Self {
             input: tokens,
             names,
-            modules: ParserState::Owned(modules),
-            lexical: ParserState::Owned(ParserLexicalState::default()),
-            in_expansion: false,
+            modules,
+            lexical,
+            expansion: None,
+            expansion_depth: 0,
             module,
             alias_target: false,
             pending_bounds: Vec::new(),
@@ -5346,11 +5498,16 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
     }
     fn error(&self, message: &str) -> ParseError {
+        let kind = if self.token().is_deferred_unsupported() {
+            super::source::SourceErrorKind::Unsupported
+        } else {
+            super::source::SourceErrorKind::Syntax
+        };
         if self.token().provenance == TokenProvenance::Expanded {
             return native_adapter::expanded_error(
                 self.names.session(),
                 self.token().span,
-                super::source::SourceErrorKind::Syntax,
+                kind,
                 &format!("{message}, found {:?}", self.token().text),
             );
         }
@@ -5361,7 +5518,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         ParseError {
             _diagnostic_lease: None,
             primary,
-            kind: super::source::SourceErrorKind::Syntax,
+            kind,
             has_location: true,
             bytes: self.token().bytes.clone(),
             line: self.token().line,
@@ -5371,7 +5528,10 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     fn limit(&self, message: &str) -> ParseError {
         let mut error = self.error(message);
-        if error.kind == super::source::SourceErrorKind::Syntax {
+        if matches!(
+            error.kind,
+            super::source::SourceErrorKind::Syntax | super::source::SourceErrorKind::Unsupported
+        ) {
             error.kind = super::source::SourceErrorKind::Limit;
         }
         error
@@ -7126,6 +7286,10 @@ impl<'input, 'names> Parser<'input, 'names> {
         if !println_syntax && self.cursor.peek(1).is_some_and(|token| token.matches("!")) {
             return self.local_macro_expression();
         }
+        self.ordinary_named_expr(println_syntax)
+    }
+    #[inline(never)]
+    fn ordinary_named_expr(&mut self, println_syntax: bool) -> Result<Expr, ParseError> {
         let generic_path = self.generic_path(false)?;
         let name = generic_path
             .checked_path(self.names)

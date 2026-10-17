@@ -8,6 +8,10 @@ full Rust macro implementation. The first client passed 2,070 tests / 102 binari
 `20261017-090525946-1227837`, strict all-target lint
 `20261017-090544741-1229123`, formatting and whitespace checks.
 
+The later accepted NESTED-SOURCE-MACROS.md slice adds multiple original local
+definitions and nested/recursive expression invocations. Earlier single-definition
+restrictions below describe this historical checkpoint, not the later client.
+
 ## Admitted source path
 
 The bounded client accepts one function-local `macro_rules!` definition and

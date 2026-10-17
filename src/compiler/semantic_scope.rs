@@ -8,7 +8,7 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use super::expansion_budget::{BudgetFailure, ByteLease, Counter, ExpansionBudget, Storage};
+use super::expansion_budget::{BudgetFailure, ByteLease, Counter, Depth, ExpansionBudget, Storage};
 use super::expansion_span::ExpansionId;
 use super::hygiene::{ContextData, Transparency};
 use super::semantic_name::{self, AstIdent, LookupClass, NameError, NameKey};
@@ -136,7 +136,7 @@ struct Association {
 
 /// Driver-issued admission for one real expansion and its lexical points.
 /// It cannot be constructed from a span/context and grants no body proof.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ExpansionAdmission {
     owner: NonZeroU64,
     session: SessionId,
@@ -198,10 +198,23 @@ impl ExpansionAdmission {
                 parent,
                 expansion,
                 transparency: Transparency::SemiTransparent,
-            } if expansion == self.expansion
-                && matches!(session.context(parent)?, ContextData::Root) =>
-            {
-                Ok(())
+            } if matches!(session.context(parent)?, ContextData::Root) => {
+                // Source-defined rules have root definition contexts. Nested
+                // calls may capture a single mark from an active ancestor, but
+                // the occurrence itself must still belong to this invocation.
+                let mut current = Some(self.expansion);
+                let mut depth = 0u32;
+                while let Some(candidate) = current {
+                    session.budget().charge(Counter::Work, 1)?;
+                    depth = depth.checked_add(1).ok_or(TokenError::IdExhausted)?;
+                    session.budget().check_depth(Depth::Expansion, depth)?;
+                    let record = session.expansion(candidate)?;
+                    if candidate == expansion {
+                        return Ok(());
+                    }
+                    current = record.parent;
+                }
+                Err(ScopeError::UnsupportedProjection)
             }
             _ => Err(ScopeError::UnsupportedProjection),
         }
@@ -433,8 +446,64 @@ impl ScopeArenaBuilder {
             call,
             function,
         };
+        self.save_anchor(admission)
+    }
+    /// Admit a nested source-rule call only through its actual active parent
+    /// proof. A session expansion ID or call span alone cannot create an anchor.
+    pub(crate) fn anchor_nested_expansion(
+        &mut self,
+        names: &impl NameAccess,
+        expansion: ExpansionId,
+        definition: FrontierId,
+        call: FrontierId,
+        parent: &ExpansionAdmission,
+    ) -> Result<ExpansionAdmission, ScopeError> {
+        self.check_names(names)?;
+        self.arena.transition()?;
+        parent.check_names(names)?;
+        if parent.owner != self.arena.owner {
+            return Err(ScopeError::ForeignOwner);
+        }
+        if self.arena.anchor(parent.expansion)? != Some(*parent) {
+            return Err(ScopeError::ConflictingAssociation);
+        }
+        let record = names.session().expansion(expansion)?;
+        if record.parent != Some(parent.expansion) {
+            return Err(ScopeError::ConflictingAssociation);
+        }
+        parent.validate_span(names.session(), record.call)?;
+        let definition_span = names.session().span(record.definition)?;
+        if definition_span.expansion.is_some()
+            || !matches!(
+                names.session().context(definition_span.context)?,
+                ContextData::Root
+            )
+        {
+            return Err(ScopeError::UnsupportedProjection);
+        }
+        let function = self.function(definition)?;
+        if self.function(call)? != function || parent.function != function {
+            return Err(ScopeError::FunctionMismatch);
+        }
+        if !self.visible_from(definition, call)? {
+            return Err(ScopeError::ConflictingAssociation);
+        }
+        self.save_anchor(ExpansionAdmission {
+            owner: self.arena.owner,
+            session: self.arena.names,
+            expansion,
+            definition,
+            call,
+            function,
+        })
+    }
+    fn save_anchor(
+        &mut self,
+        admission: ExpansionAdmission,
+    ) -> Result<ExpansionAdmission, ScopeError> {
+        let expansion = admission.expansion;
         if let Some(previous) = self.arena.anchor(expansion)? {
-            return if previous.definition == definition && previous.call == call {
+            return if previous == admission {
                 Ok(previous)
             } else {
                 Err(ScopeError::ConflictingAssociation)
@@ -1038,6 +1107,348 @@ mod tests {
             literal,
             capture,
         )
+    }
+
+    struct NestedFixture {
+        names: NameStoreBuilder,
+        original: SpanId,
+        parent: (ExpansionId, Token),
+        child: (ExpansionId, Token),
+        sibling: (ExpansionId, Token),
+        captured_parent: Token,
+        captured_sibling: Token,
+        stacked: Token,
+        bad_call: ExpansionId,
+    }
+    fn nested_fixture() -> NestedFixture {
+        let budget = ExpansionBudget::default();
+        let sources = SourceSnapshot::from_text(Path::new("nested.rs"), "x", &budget).unwrap();
+        let mut session = TokenSession::new(sources, budget).unwrap();
+        let file = session.sources().file(0).unwrap();
+        let original = session
+            .original_span(session.sources().span(file, 0, 1).unwrap())
+            .unwrap();
+        let defining_crate = session.register_crate_root(file).unwrap();
+        let root = session.root_context();
+        let symbol = session.intern_symbol("x").unwrap();
+        let parent_id = session
+            .add_expansion(ExpansionRecord {
+                definition: original,
+                call: original,
+                parent: None,
+                defining_crate,
+                edition: Edition::E2024,
+            })
+            .unwrap();
+        let parent_context = session
+            .apply_mark(root, parent_id, Transparency::SemiTransparent)
+            .unwrap();
+        let parent_token = Token {
+            kind: TokenKind::Ident(Ident {
+                symbol,
+                raw: false,
+                context: parent_context,
+            }),
+            span: session
+                .reissue_span(original, parent_context, parent_id)
+                .unwrap(),
+        };
+        let child_id = session
+            .add_expansion(ExpansionRecord {
+                definition: original,
+                call: parent_token.span,
+                parent: Some(parent_id),
+                defining_crate,
+                edition: Edition::E2024,
+            })
+            .unwrap();
+        let child_context = session
+            .apply_mark(root, child_id, Transparency::SemiTransparent)
+            .unwrap();
+        let child_token = Token {
+            kind: TokenKind::Ident(Ident {
+                symbol,
+                raw: false,
+                context: child_context,
+            }),
+            span: session
+                .reissue_span(original, child_context, child_id)
+                .unwrap(),
+        };
+        let sibling_id = session
+            .add_expansion(ExpansionRecord {
+                definition: original,
+                call: original,
+                parent: None,
+                defining_crate,
+                edition: Edition::E2024,
+            })
+            .unwrap();
+        let sibling_context = session
+            .apply_mark(root, sibling_id, Transparency::SemiTransparent)
+            .unwrap();
+        let sibling_token = Token {
+            kind: TokenKind::Ident(Ident {
+                symbol,
+                raw: false,
+                context: sibling_context,
+            }),
+            span: session
+                .reissue_span(original, sibling_context, sibling_id)
+                .unwrap(),
+        };
+        let captured_parent = Token {
+            kind: parent_token.kind,
+            span: session
+                .reissue_span(parent_token.span, parent_context, child_id)
+                .unwrap(),
+        };
+        let captured_sibling = Token {
+            kind: sibling_token.kind,
+            span: session
+                .reissue_span(sibling_token.span, sibling_context, child_id)
+                .unwrap(),
+        };
+        let stacked_context = session
+            .apply_mark(parent_context, child_id, Transparency::SemiTransparent)
+            .unwrap();
+        let stacked = Token {
+            kind: TokenKind::Ident(Ident {
+                symbol,
+                raw: false,
+                context: stacked_context,
+            }),
+            span: session
+                .reissue_span(original, stacked_context, child_id)
+                .unwrap(),
+        };
+        let bad_call = session
+            .add_expansion(ExpansionRecord {
+                definition: original,
+                call: original,
+                parent: Some(parent_id),
+                defining_crate,
+                edition: Edition::E2024,
+            })
+            .unwrap();
+        let names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        NestedFixture {
+            names,
+            original,
+            parent: (parent_id, parent_token),
+            child: (child_id, child_token),
+            sibling: (sibling_id, sibling_token),
+            captured_parent,
+            captured_sibling,
+            stacked,
+            bad_call,
+        }
+    }
+
+    #[test]
+    fn nested_capture_keeps_outer_binder_and_inner_literal_keeps_definition_binding() {
+        let mut f = nested_fixture();
+        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let root = scopes.function_root(&f.names).unwrap();
+        let x = f.names.intern_root("x", f.original).unwrap();
+        let (definition, source_binding) = scopes.bind(&f.names, root, x).unwrap();
+        let parent = scopes
+            .anchor_expansion(&f.names, f.parent.0, definition, definition)
+            .unwrap();
+        let block = scopes.enter(&f.names, definition).unwrap();
+        let outer_binder = f
+            .names
+            .admit_expanded_token(f.parent.1, Edition::E2024, &parent)
+            .unwrap();
+        let (call, outer_binding) = scopes.bind(&f.names, block, outer_binder).unwrap();
+        let child = scopes
+            .anchor_nested_expansion(&f.names, f.child.0, definition, call, &parent)
+            .unwrap();
+        let capture = f
+            .names
+            .admit_expanded_token(f.captured_parent, Edition::E2024, &child)
+            .unwrap();
+        let literal = f
+            .names
+            .admit_expanded_token(f.child.1, Edition::E2024, &child)
+            .unwrap();
+        assert_eq!(
+            scopes.resolve_reference(&f.names, call, capture).unwrap(),
+            Some(outer_binding)
+        );
+        assert_eq!(
+            scopes.resolve_reference(&f.names, call, literal).unwrap(),
+            Some(source_binding)
+        );
+        assert_eq!(
+            scopes
+                .anchor_nested_expansion(&f.names, f.child.0, definition, call, &parent)
+                .unwrap(),
+            child
+        );
+    }
+
+    #[test]
+    fn ancestor_context_never_admits_old_occurrence_sibling_or_stacked_context() {
+        let f = nested_fixture();
+        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let root = scopes.function_root(&f.names).unwrap();
+        let parent = scopes
+            .anchor_expansion(&f.names, f.parent.0, root, root)
+            .unwrap();
+        scopes
+            .anchor_expansion(&f.names, f.sibling.0, root, root)
+            .unwrap();
+        let child = scopes
+            .anchor_nested_expansion(&f.names, f.child.0, root, root, &parent)
+            .unwrap();
+        child
+            .validate_token(f.names.session(), f.captured_parent)
+            .unwrap();
+        child.validate_token(f.names.session(), f.child.1).unwrap();
+        assert!(matches!(
+            child.validate_token(f.names.session(), f.parent.1),
+            Err(ScopeError::Token(TokenError::InvalidInput(_)))
+        ));
+        for token in [f.captured_sibling, f.stacked] {
+            assert!(matches!(
+                child.validate_token(f.names.session(), token),
+                Err(ScopeError::UnsupportedProjection)
+            ));
+        }
+    }
+
+    #[test]
+    fn nested_anchor_checks_exact_parent_arena_call_and_function() {
+        let f = nested_fixture();
+        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let root = scopes.function_root(&f.names).unwrap();
+        let parent = scopes
+            .anchor_expansion(&f.names, f.parent.0, root, root)
+            .unwrap();
+        let sibling = scopes
+            .anchor_expansion(&f.names, f.sibling.0, root, root)
+            .unwrap();
+        assert!(matches!(
+            scopes.anchor_nested_expansion(&f.names, f.child.0, root, root, &sibling),
+            Err(ScopeError::ConflictingAssociation)
+        ));
+        assert!(matches!(
+            scopes.anchor_nested_expansion(&f.names, f.bad_call, root, root, &parent),
+            Err(ScopeError::Token(TokenError::InvalidInput(_)))
+        ));
+        let block = scopes.enter(&f.names, root).unwrap();
+        let forged = ExpansionAdmission {
+            call: block,
+            ..parent
+        };
+        assert!(matches!(
+            scopes.anchor_nested_expansion(&f.names, f.child.0, root, root, &forged),
+            Err(ScopeError::ConflictingAssociation)
+        ));
+        let mut foreign = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let foreign_root = foreign.function_root(&f.names).unwrap();
+        assert!(matches!(
+            foreign.anchor_nested_expansion(
+                &f.names,
+                f.child.0,
+                foreign_root,
+                foreign_root,
+                &parent
+            ),
+            Err(ScopeError::ForeignOwner)
+        ));
+        let other_function = scopes.function_root(&f.names).unwrap();
+        assert!(matches!(
+            scopes.anchor_nested_expansion(
+                &f.names,
+                f.child.0,
+                other_function,
+                other_function,
+                &parent
+            ),
+            Err(ScopeError::FunctionMismatch)
+        ));
+        let (foreign_names, _, _, _, _) = fixture();
+        assert!(
+            scopes
+                .anchor_nested_expansion(&foreign_names, f.child.0, root, root, &parent)
+                .is_err()
+        );
+        let budget = f.names.budget().clone();
+        let failure = budget.charge(Counter::Work, u64::MAX).unwrap_err();
+        assert!(
+            matches!(scopes.anchor_nested_expansion(&f.names,f.child.0,root,root,&parent),Err(ScopeError::Token(TokenError::Budget(error))) if error==failure)
+        );
+    }
+
+    #[test]
+    fn ancestor_validation_work_is_charged_before_chain_read() {
+        let f = nested_fixture();
+        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let root = scopes.function_root(&f.names).unwrap();
+        let parent = scopes
+            .anchor_expansion(&f.names, f.parent.0, root, root)
+            .unwrap();
+        let child = scopes
+            .anchor_nested_expansion(&f.names, f.child.0, root, root, &parent)
+            .unwrap();
+        let budget = f.names.budget();
+        let used = budget.snapshot().counters[Counter::Work as usize];
+        let limit = budget.limits().counters[Counter::Work as usize];
+        // Span validation consumes the final unit, before the first ancestry
+        // visit must charge and latch its own failure instead of succeeding.
+        budget.charge(Counter::Work, limit - used - 1).unwrap();
+        assert!(matches!(
+            child.validate_token(f.names.session(), f.captured_parent),
+            Err(ScopeError::Token(TokenError::Budget(_)))
+        ));
+        assert!(budget.check().is_err());
+    }
+
+    #[test]
+    fn nested_expansion_depth_limit_stays_at_configured_boundary() {
+        use super::super::expansion_budget::{BudgetResource, ExpansionLimits};
+        let budget = ExpansionBudget::new(ExpansionLimits {
+            depths: [512, 256, 2],
+            ..ExpansionLimits::default()
+        });
+        let source = SourceSnapshot::from_text(Path::new("depth.rs"), "x", &budget).unwrap();
+        let file = source.file(0).unwrap();
+        let original = source.span(file, 0, 1).unwrap();
+        let mut session = TokenSession::new(source, budget.clone()).unwrap();
+        let span = session.original_span(original).unwrap();
+        let defining_crate = session.register_crate_root(file).unwrap();
+        let record = ExpansionRecord {
+            definition: span,
+            call: span,
+            parent: None,
+            defining_crate,
+            edition: Edition::E2024,
+        };
+        let first = session.add_expansion(record).unwrap();
+        let second = session
+            .add_expansion(ExpansionRecord {
+                parent: Some(first),
+                ..record
+            })
+            .unwrap();
+        let failure = match session
+            .add_expansion(ExpansionRecord {
+                parent: Some(second),
+                ..record
+            })
+            .unwrap_err()
+        {
+            TokenError::Budget(failure) => failure,
+            error => panic!("expected expansion depth limit: {error}"),
+        };
+        assert_eq!(failure.resource, BudgetResource::Depth(Depth::Expansion));
+        assert_eq!(failure.requested, 3);
+        assert_eq!(failure.limit, 2);
+        assert_eq!(budget.check().unwrap_err(), failure);
+        drop(session);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
     }
 
     #[test]

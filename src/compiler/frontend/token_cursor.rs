@@ -27,6 +27,7 @@ impl TokenView<'_> {
                 && self.kind != ParserTokenKind::String
                 && self.kind != ParserTokenKind::OpaqueLiteral
                 && self.kind != ParserTokenKind::DeferredLiteral
+                && self.kind != ParserTokenKind::DeferredUnsupported
                 && self.text == text
         }
     }
@@ -35,6 +36,9 @@ impl TokenView<'_> {
     }
     pub(super) fn is_opaque_literal(&self) -> bool {
         self.kind == ParserTokenKind::OpaqueLiteral
+    }
+    pub(super) fn is_deferred_unsupported(&self) -> bool {
+        self.kind == ParserTokenKind::DeferredUnsupported
     }
 }
 

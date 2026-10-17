@@ -7,15 +7,18 @@ use super::macro_rules::{CallSite, DefinitionSite, ExpandedTokens, MacroError, R
 use super::semantic_name::{
     AstIdent, LookupClass, NameError, NameKey, NameStoreBuilder, Namespace,
 };
-use super::semantic_scope::{FrontierId, ScopeId};
-use super::token_session::{BudgetVec, SessionId, TokenError};
+use super::semantic_scope::{FrontierId, ScopeArenaBuilder, ScopeId};
+use super::token_session::{BudgetVec, SessionId, TokenError, allocate_identity};
 use super::token_tree::{Node, TokenStream};
+use std::num::NonZeroU64;
+use std::sync::atomic::AtomicU64;
 
 #[derive(Debug)]
 pub(super) enum DriverError {
     Token(TokenError),
     Name(NameError),
     Macro(MacroError),
+    Scope(super::semantic_scope::ScopeError),
     Unsupported { span: SpanId, message: &'static str },
 }
 impl From<TokenError> for DriverError {
@@ -44,11 +47,30 @@ struct LocalRules {
     definition: FrontierId,
     rules: RulesDef,
 }
+/// Issued by one function's append-only driver. It fixes the selected rule and
+/// lexical points before expansion, rather than redoing textual lookup later.
+#[derive(Clone, Copy)]
+pub(super) struct CheckedDef {
+    driver: NonZeroU64,
+    owner: ScopeId,
+    index: u32,
+    definition: FrontierId,
+    call: FrontierId,
+}
+impl CheckedDef {
+    pub(super) fn definition(self) -> FrontierId {
+        self.definition
+    }
+    pub(super) fn call(self) -> FrontierId {
+        self.call
+    }
+}
 pub(super) struct LocalMacroDriver {
+    id: NonZeroU64,
     source: TokenStream,
     owner: ScopeId,
     session: SessionId,
-    rules: Option<LocalRules>,
+    rules: BudgetVec<LocalRules>,
     _lease: ByteLease,
 }
 impl LocalMacroDriver {
@@ -61,11 +83,13 @@ impl LocalMacroDriver {
         let lease = names
             .budget()
             .reserve(Storage::Retained, std::mem::size_of::<Self>() as u64)?;
+        static NEXT_DRIVER: AtomicU64 = AtomicU64::new(1);
         Ok(Self {
+            id: allocate_identity(&NEXT_DRIVER)?,
             source,
             owner,
             session: names.session().id(),
-            rules: None,
+            rules: BudgetVec::new(names.budget(), Storage::Retained)?,
             _lease: lease,
         })
     }
@@ -77,12 +101,6 @@ impl LocalMacroDriver {
         self.source.roots(names.session())?;
         Ok(())
     }
-    pub(super) fn owner(&self) -> ScopeId {
-        self.owner
-    }
-    pub(super) fn definition_frontier(&self) -> Option<FrontierId> {
-        self.rules.as_ref().map(|rules| rules.definition)
-    }
     /// Find an actual checked group by its opening span, never by printable text
     /// or prepared offsets. The flat temporary walk is charged before expansion.
     pub(super) fn group_body(
@@ -90,28 +108,33 @@ impl LocalMacroDriver {
         open: SpanId,
         names: &NameStoreBuilder,
     ) -> Result<TokenSlice, DriverError> {
+        let source = TokenSlice::roots(names.session(), self.source.clone())?;
+        self.group_body_in(&source, open, names)
+    }
+    pub(super) fn group_body_in(
+        &self,
+        source: &TokenSlice,
+        open: SpanId,
+        names: &NameStoreBuilder,
+    ) -> Result<TokenSlice, DriverError> {
         self.check(names)?;
         let session = names.session();
         session.span(open)?;
         let mut pending = BudgetVec::new(names.budget(), Storage::Temporary)?;
-        pending.push(self.source.roots(session)?)?;
+        pending.push(source.clone())?;
         while let Some(range) = pending.pop() {
-            for id in self.source.children(session, &range)? {
+            for index in 0..range.len(session)? {
                 names.budget().charge(Counter::Work, 1)?;
                 if let Node::Delimited {
                     open: actual,
                     children,
                     ..
-                } = self.source.node(session, *id)?
+                } = range.node(session, index)?
                 {
                     if *actual == open {
-                        return Ok(TokenSlice::new(
-                            session,
-                            self.source.clone(),
-                            children.clone(),
-                        )?);
+                        return Ok(range.group_children(session, children.clone())?);
                     }
-                    pending.push(children.clone())?;
+                    pending.push(range.group_children(session, children.clone())?)?;
                 }
             }
         }
@@ -126,46 +149,77 @@ impl LocalMacroDriver {
         names: &mut NameStoreBuilder,
     ) -> Result<(), DriverError> {
         self.check(names)?;
-        if self.rules.is_some() {
+        if names.session().span(site.span)?.expansion.is_some() {
             return Err(DriverError::Unsupported {
                 span: site.span,
-                message: "only one function-local macro definition is supported",
+                message: "generated macro definitions are unsupported",
             });
         }
         let key = names.key(name, LookupClass::Item(Namespace::Macro))?;
         let rules = names.compile_local_rules(body, site)?;
-        self.rules = Some(LocalRules {
+        u32::try_from(self.rules.len()).map_err(|_| TokenError::IdExhausted)?;
+        self.rules.push(LocalRules {
             name: key,
             definition: frontier,
             rules,
-        });
+        })?;
         Ok(())
+    }
+    pub(super) fn select(
+        &self,
+        name: AstIdent,
+        call: FrontierId,
+        scopes: &ScopeArenaBuilder,
+        names: &NameStoreBuilder,
+    ) -> Result<CheckedDef, DriverError> {
+        self.check(names)?;
+        scopes.check_names(names).map_err(DriverError::Scope)?;
+        if scopes.function(call).map_err(DriverError::Scope)? != self.owner {
+            return Err(TokenError::ForeignHandle.into());
+        }
+        let key = names.key(name, LookupClass::Item(Namespace::Macro))?;
+        for (index, rules) in self.rules.as_slice().iter().enumerate().rev() {
+            names.budget().charge(Counter::Work, 1)?;
+            if rules.name == key
+                && scopes
+                    .visible_from(rules.definition, call)
+                    .map_err(DriverError::Scope)?
+            {
+                return Ok(CheckedDef {
+                    driver: self.id,
+                    owner: self.owner,
+                    index: u32::try_from(index).map_err(|_| TokenError::IdExhausted)?,
+                    definition: rules.definition,
+                    call,
+                });
+            }
+        }
+        Err(MacroError::Syntax {
+            span: Some(names.span(name)?),
+            message: "unknown function-local macro at this lexical point",
+        }
+        .into())
     }
     /// Lexical visibility and function ownership are checked by the parser's
     /// ScopeArena before this call and again when issuing ExpansionAdmission.
     pub(super) fn expand(
         &self,
-        name: AstIdent,
+        selected: CheckedDef,
         args: TokenSlice,
         site: CallSite,
-        _frontier: FrontierId,
         names: &mut NameStoreBuilder,
     ) -> Result<ExpandedTokens, DriverError> {
         self.check(names)?;
-        let key = names.key(name, LookupClass::Item(Namespace::Macro))?;
-        let Some(rules) = &self.rules else {
-            return Err(MacroError::Syntax {
-                span: Some(site.span),
-                message: "unknown function-local macro",
-            }
-            .into());
-        };
-        if rules.name != key {
-            return Err(MacroError::Syntax {
-                span: Some(site.span),
-                message: "unknown function-local macro",
-            }
-            .into());
+        if selected.owner != self.owner || selected.driver != self.id {
+            return Err(TokenError::ForeignHandle.into());
+        }
+        let rules = self
+            .rules
+            .as_slice()
+            .get(selected.index as usize)
+            .ok_or(TokenError::InvalidHandle)?;
+        if selected.definition != rules.definition {
+            return Err(TokenError::InvalidHandle.into());
         }
         names
             .expand_local_rules(&rules.rules, args, site)
@@ -181,5 +235,146 @@ impl LocalMacroDriver {
                     other => other,
                 })
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compiler::expansion_budget::{BudgetResource, ExpansionBudget};
+    use crate::compiler::source::PreparedLexInput;
+    use crate::compiler::token::Edition;
+    use crate::compiler::token_tree::{GroupPolicy, group};
+    use std::path::Path;
+
+    struct Fixture {
+        names: NameStoreBuilder,
+        scopes: ScopeArenaBuilder,
+        driver: LocalMacroDriver,
+        first: TokenSlice,
+        second: TokenSlice,
+        site: DefinitionSite,
+        name: AstIdent,
+        at: FrontierId,
+    }
+    fn fixture() -> Fixture {
+        let budget = ExpansionBudget::default();
+        let projection =
+            PreparedLexInput::identity(Path::new("rules.rs"), "()=>{1};()=>{2};", &budget).unwrap();
+        let mut session =
+            super::super::token_session::TokenSession::new(projection.snapshot().clone(), budget)
+                .unwrap();
+        let lexed =
+            super::super::lexer::lex_prepared(&projection, Edition::E2024, &mut session).unwrap();
+        let events: Vec<_> = lexed.events().iter().map(|event| event.token).collect();
+        let stream = group(&session, &events, GroupPolicy::OriginalSource).unwrap();
+        let span = events[0].span();
+        let file = session.sources().file(0).unwrap();
+        let defining_crate = session.register_crate_root(file).unwrap();
+        let source = TokenSlice::roots(&session, stream.clone()).unwrap();
+        let middle = source.len(&session).unwrap() / 2;
+        let first = source.subslice(&session, 0..middle).unwrap();
+        let second = source
+            .subslice(&session, middle..source.len(&session).unwrap())
+            .unwrap();
+        let mut names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let name = names.intern_root("value", span).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
+        let at = scopes.function_root(&names).unwrap();
+        let owner = scopes.function(at).unwrap();
+        let driver = LocalMacroDriver::new(stream, owner, &names).unwrap();
+        Fixture {
+            names,
+            scopes,
+            driver,
+            first,
+            second,
+            site: DefinitionSite {
+                span,
+                edition: Edition::E2024,
+                defining_crate,
+            },
+            name,
+            at,
+        }
+    }
+    #[test]
+    fn selected_definition_is_committed_and_foreign_driver_handles_reject() {
+        let mut f = fixture();
+        f.driver
+            .define(f.name, f.first.clone(), f.site, f.at, &mut f.names)
+            .unwrap();
+        let selected = f.driver.select(f.name, f.at, &f.scopes, &f.names).unwrap();
+        f.driver
+            .define(f.name, f.second.clone(), f.site, f.at, &mut f.names)
+            .unwrap();
+        let latest = f.driver.select(f.name, f.at, &f.scopes, &f.names).unwrap();
+        assert_eq!(selected.index, 0);
+        assert_eq!(latest.index, 1);
+        let args = f.first.subslice(f.names.session(), 0..0).unwrap();
+        let site = CallSite {
+            span: f.site.span,
+            parent: None,
+        };
+        let old_output = f
+            .driver
+            .expand(selected, args.clone(), site, &mut f.names)
+            .unwrap();
+        let new_output = f
+            .driver
+            .expand(latest, args.clone(), site, &mut f.names)
+            .unwrap();
+        for (output, expected) in [(old_output, "1"), (new_output, "2")] {
+            let output = output.tokens(f.names.session()).unwrap();
+            let Node::Leaf(super::super::token::Token {
+                kind: super::super::token::TokenKind::Literal { spelling, .. },
+                ..
+            }) = output.node(f.names.session(), 0).unwrap()
+            else {
+                panic!("expected literal");
+            };
+            assert_eq!(f.names.session().symbol(*spelling).unwrap(), expected);
+        }
+        let other =
+            LocalMacroDriver::new(f.driver.source.clone(), f.driver.owner, &f.names).unwrap();
+        assert!(matches!(
+            other.expand(selected, args.clone(), site, &mut f.names),
+            Err(DriverError::Token(TokenError::ForeignHandle))
+        ));
+        let invalid = CheckedDef {
+            index: u32::MAX,
+            ..selected
+        };
+        assert!(matches!(
+            f.driver.expand(invalid, args, site, &mut f.names),
+            Err(DriverError::Token(TokenError::InvalidHandle))
+        ));
+    }
+    #[test]
+    fn reverse_search_exhaustion_is_resource_not_no_match() {
+        let mut f = fixture();
+        for _ in 0..64 {
+            f.driver
+                .define(f.name, f.first.clone(), f.site, f.at, &mut f.names)
+                .unwrap();
+        }
+        let absent = f.names.intern_root("absent", f.site.span).unwrap();
+        let budget = f.names.budget().clone();
+        let remaining = budget.limits().counters[Counter::Work as usize]
+            - budget.snapshot().counters[Counter::Work as usize];
+        budget.charge(Counter::Work, remaining - 8).unwrap();
+        assert!(matches!(
+            f.driver.select(absent, f.at, &f.scopes, &f.names),
+            Err(DriverError::Token(TokenError::Budget(_)))
+                | Err(DriverError::Scope(_))
+                | Err(DriverError::Name(NameError::Token(TokenError::Budget(_))))
+        ));
+        assert_eq!(
+            budget.snapshot().failure.unwrap().resource,
+            BudgetResource::Counter(Counter::Work)
+        );
+        drop(f);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        assert_eq!(budget.snapshot().temporary_bytes, 0);
     }
 }
