@@ -534,6 +534,7 @@ struct ExpansionEntry {
 }
 
 pub struct TokenSession {
+    pub(super) fragments: BudgetVec<super::macro_fragments::FragmentPayload>,
     id: SessionId,
     sources: SourceSnapshot,
     budget: ExpansionBudget,
@@ -556,6 +557,7 @@ impl TokenSession {
         budget.charge(Counter::HygieneContexts, 1)?;
         contexts.push(ContextData::Root)?;
         Ok(Self {
+            fragments: BudgetVec::new(&budget, Storage::Retained)?,
             _lease: lease,
             id,
             sources,
@@ -768,6 +770,23 @@ impl TokenSession {
             origin,
             context,
             expansion,
+        })
+    }
+    /// Fresh expansion occurrence with an explicit backward edge to its input.
+    pub fn reissue_span(
+        &mut self,
+        previous: SpanId,
+        context: SyntaxContextId,
+        current_expansion: ExpansionId,
+    ) -> Result<SpanId, TokenError> {
+        self.span(previous)?;
+        self.push_span(SpanData {
+            origin: SpanOrigin::Synthetic {
+                anchor: previous,
+                reason: SyntheticReason::ExpansionToken,
+            },
+            context,
+            expansion: Some(current_expansion),
         })
     }
     pub fn context(&self, id: SyntaxContextId) -> Result<&ContextData, TokenError> {

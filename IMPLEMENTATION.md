@@ -253,14 +253,24 @@ iteration and suspended-state destruction each have executable oracle cases.
 - [ ] Migrate the actual root-context AST, resolver and retained source replay to
       checked, store-owned semantic identifiers and structured paths. Preserve
       the existing source corpus and resource fences. A name side table beside
-      authoritative string lookup does not close this gate.
-- [ ] Add checked owning token slices, logical macro cursors and opaque literal
+      authoritative string lookup does not close this gate. SEMANTIC-NAMES.md
+      records the delivered owned stores/paths, actual loop-label integration,
+      retained-plan owner checks and explicit fixture builders. Remaining AST
+      fields and maps still require the full vertical migration.
+- [ ] Replace IR restricted-visibility and nominal/module prefix String authority
+      with checked module identities retained by the source program/catalog.
+      Source modules predate fresh declaration snapshots, so a DeclId or a
+      rendered path is not a substitute for a checked module owner.
+- [x] Add checked owning token slices, logical macro cursors and opaque literal
       fragment transport without flattening forwarding opacity or granting
-      semantic publication authority.
-- [ ] Validate a pure ordered `tt`/`ident`/`literal` matcher/transcriber, including
+      semantic publication authority. The actual checked utility and signed
+      forwarding representation are documented in MACRO-RULES.md.
+- [x] Validate a pure ordered `tt`/`ident`/`literal` matcher/transcriber, including
       partial-literal commitment, repetition cardinality, lazy selected-arm
-      transcription failures and monotonic resource accounting. Utility output
-      alone is not native source macro acceptance.
+      transcription failures and monotonic resource accounting. Independent
+      public tests include 81 stock cases and 14 utility tests; complete
+      coordinated acceptance is 1,951 tests/98 binaries with strict lint/fmt.
+      Utility output alone is not native source macro acceptance.
 - [ ] Integrate namespace-specific mixed-site scope anchors, lexical expansion
       discovery, generated cfg-before-child-IO and complete-unit publication,
       then run actual worker-1/8 CHECK/BUILD/executable macro clients.

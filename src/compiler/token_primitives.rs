@@ -18,6 +18,8 @@ pub use super::lexer::{
     DecodedString, DocComment, DocStyle, LexError, LexedEof, LexedEvent, LexedTokens, LiteralInfo,
     decode_normal_string, lex_prepared,
 };
+pub use super::macro_cursor::{CursorMark, LogicalToken, MacroCursor, TokenSlice};
+pub use super::macro_fragments::{FragmentId, FragmentKind, FragmentPayload, LiteralCapture};
 pub use super::resource_accounting::ReservationAccounting;
 pub use super::source::source_map::{SourceFile, SourceMap, SourceSpan};
 pub use super::token::{

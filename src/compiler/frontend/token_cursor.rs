@@ -13,6 +13,7 @@ pub(super) struct TokenView<'input> {
     pub(super) string: bool,
     pub(super) bytes: Range<usize>,
     pub(super) span: crate::compiler::expansion_span::SpanId,
+    pub(super) name: Option<std::num::NonZeroU32>,
     kind: ParserTokenKind,
 }
 
@@ -154,6 +155,7 @@ impl<'input> TokenCursor<'input> {
             string: token.string,
             bytes: part.bytes(),
             span: part.span,
+            name: token.name,
             kind: token.kind,
         }
     }

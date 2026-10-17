@@ -67,6 +67,32 @@ pub struct TokenStream {
     inner: Arc<StreamData>,
 }
 impl TokenStream {
+    pub fn subrange(
+        &self,
+        session: &TokenSession,
+        parent: &TreeRange,
+        range: Range<usize>,
+    ) -> Result<TreeRange, TokenError> {
+        let len = self.children(session, parent)?.len();
+        if range.start > range.end || range.end > len {
+            return Err(TokenError::InvalidRange);
+        }
+        let start = parent
+            .range
+            .start
+            .checked_add(checked_index(session, range.start)?)
+            .ok_or(TokenError::InvalidRange)?;
+        let end = parent
+            .range
+            .start
+            .checked_add(checked_index(session, range.end)?)
+            .ok_or(TokenError::InvalidRange)?;
+        Ok(TreeRange {
+            session: parent.session,
+            stream: parent.stream,
+            range: start..end,
+        })
+    }
     fn check_session(&self, session: &TokenSession) -> Result<(), TokenError> {
         session.budget().check()?;
         if self.inner.session != session.id() {

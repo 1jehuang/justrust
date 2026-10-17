@@ -20,7 +20,9 @@ use super::traits as tr;
 use std::collections::HashMap;
 
 mod native_adapter;
-use native_adapter::NativeParserInput;
+use super::semantic_name::{AstIdent, LookupClass, NameKey, NameStore, NameStoreBuilder};
+pub use super::semantic_path::{AstPath, PathAnchor};
+use native_adapter::{NativeParserInput, NativeTokenBuffer};
 mod token_cursor;
 use token_cursor::{TokenCursor, TokenView};
 
@@ -42,9 +44,7 @@ mod canonical_source_replay_tests {
             .iter()
             .any(|function| function.name == "main")
         {
-            program
-                .functions
-                .extend(parse("fn main(){}").unwrap().functions);
+            program = parse(&format!("{source}\nfn main(){{}}")).unwrap();
         }
         program
     }
@@ -3171,6 +3171,8 @@ impl PlanCtx {
     }
 }
 
+#[cfg(test)]
+mod name_tests;
 mod recipes;
 #[cfg(test)]
 mod slice_tests;
@@ -3178,6 +3180,7 @@ pub use tr::CallableProvider;
 
 #[derive(Clone, Debug)]
 pub struct Program {
+    pub names: Arc<NameStore>,
     pub functions: Vec<Function>,
     pub structs: Vec<StructDecl>,
     pub enums: Vec<EnumDecl>,
@@ -3191,6 +3194,167 @@ pub struct ParsedProgram {
     pub program: Program,
     items: HashMap<String, Vec<Item>>,
     empty_use_prefixes: Vec<(String, String)>,
+}
+/// Parser construction state has no detached or placeholder name store. The
+/// final program is published only after its one mutable owner is frozen.
+#[derive(Default)]
+struct ProgramDeclarations {
+    functions: Vec<Function>,
+    structs: Vec<StructDecl>,
+    enums: Vec<EnumDecl>,
+    impls: Vec<ImplDecl>,
+    traits: Vec<TraitDecl>,
+    trait_imports: Vec<(String, String)>,
+}
+struct ParsedDeclarations {
+    program: ProgramDeclarations,
+    items: HashMap<String, Vec<Item>>,
+    empty_use_prefixes: Vec<(String, String)>,
+}
+impl ProgramDeclarations {
+    fn publish(self, names: Arc<NameStore>) -> Program {
+        Program {
+            names,
+            functions: self.functions,
+            structs: self.structs,
+            enums: self.enums,
+            impls: self.impls,
+            traits: self.traits,
+            trait_imports: self.trait_imports,
+        }
+    }
+}
+/// Explicit structural construction for fixtures and native AST producers. All
+/// nodes must use identifiers issued by this one owner before publication.
+pub struct ProgramBuilder {
+    names: NameStoreBuilder,
+    fixture_anchor: super::expansion_span::SpanId,
+    pub functions: Vec<Function>,
+    pub structs: Vec<StructDecl>,
+    pub enums: Vec<EnumDecl>,
+    pub impls: Vec<ImplDecl>,
+    pub traits: Vec<TraitDecl>,
+    pub trait_imports: Vec<(String, String)>,
+}
+impl ProgramBuilder {
+    pub fn new(
+        name: &std::path::Path,
+        source: &str,
+        budget: &super::expansion_budget::ExpansionBudget,
+    ) -> Result<Self, String> {
+        let input = super::source::PreparedLexInput::identity(name, source, budget)
+            .map_err(|error| error.to_string())?;
+        let mut session =
+            super::token_session::TokenSession::new(input.snapshot().clone(), budget.clone())
+                .map_err(|error| error.to_string())?;
+        let fixture_anchor = session
+            .original_span(input.eof().map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+        let names = NameStoreBuilder::new(session, super::token::Edition::E2024)
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            names,
+            fixture_anchor,
+            functions: Vec::new(),
+            structs: Vec::new(),
+            enums: Vec::new(),
+            impls: Vec::new(),
+            traits: Vec::new(),
+            trait_imports: Vec::new(),
+        })
+    }
+    pub fn names(&self) -> &NameStoreBuilder {
+        &self.names
+    }
+    pub fn ident(&mut self, text: &str) -> Result<AstIdent, String> {
+        self.names
+            .intern_root(text, self.fixture_anchor)
+            .map_err(native_adapter::name_diagnostic)
+    }
+    /// Fixture grammar only. The source parser never prints/relexes identifiers
+    /// or uses this structural text factory to recover semantic authority.
+    pub fn path(&mut self, text: &str) -> Result<AstPath, String> {
+        let mut parts = text.split("::").peekable();
+        let mut anchor = PathAnchor::Relative;
+        match parts.peek().copied() {
+            Some("crate") => {
+                anchor = PathAnchor::Crate;
+                parts.next();
+            }
+            Some("self") => {
+                anchor = PathAnchor::SelfModule;
+                parts.next();
+            }
+            Some("Self") => {
+                anchor = PathAnchor::SelfType;
+                parts.next();
+            }
+            Some("super") => {
+                let mut levels = 0u16;
+                while parts.peek() == Some(&"super") {
+                    parts.next();
+                    levels = levels
+                        .checked_add(1)
+                        .ok_or("fixture path ancestor overflow")?;
+                }
+                anchor = PathAnchor::Super(levels);
+            }
+            _ => {}
+        }
+        let budget = self.names.budget().clone();
+        let mut segments = super::token_session::BudgetVec::new(
+            &budget,
+            super::expansion_budget::Storage::Temporary,
+        )
+        .map_err(|error| error.to_string())?;
+        for part in parts {
+            segments
+                .push(self.ident(part)?)
+                .map_err(|error| error.to_string())?;
+        }
+        AstPath::new(&self.names, anchor, segments.as_slice()).map_err(|error| error.to_string())
+    }
+    pub fn finish(self) -> Result<Program, String> {
+        let names = self
+            .names
+            .freeze()
+            .map_err(native_adapter::name_diagnostic)?;
+        let program = ProgramDeclarations {
+            functions: self.functions,
+            structs: self.structs,
+            enums: self.enums,
+            impls: self.impls,
+            traits: self.traits,
+            trait_imports: self.trait_imports,
+        }
+        .publish(names);
+        program.validate_name_handles()?;
+        Ok(program)
+    }
+}
+impl Program {
+    fn validate_name_handles(&self) -> Result<(), String> {
+        for function in &self.functions {
+            walk_depth_checked(DepthNode::Block(&function.body), None, Some(&self.names))?;
+        }
+        for implementation in &self.impls {
+            for item in &implementation.items {
+                walk_depth_checked(
+                    DepthNode::Block(&item.function.body),
+                    None,
+                    Some(&self.names),
+                )?;
+            }
+        }
+        for declaration in &self.traits {
+            for item in &declaration.items {
+                if let Some(default) = &item.default {
+                    walk_depth_checked(DepthNode::Block(&default.body), None, Some(&self.names))?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Debug)]
 struct Item {
@@ -3230,6 +3394,25 @@ fn parent(path: &str) -> &str {
 pub enum Constness {
     Runtime,
     Const,
+}
+/// Wildcards never enter a lexical binding map or acquire a semantic name key.
+#[derive(Clone, Copy, Debug)]
+pub enum BindingName {
+    Named(AstIdent),
+    Wildcard,
+}
+/// Builtin lifetime syntax is distinct from a user-declared lifetime binder.
+#[derive(Clone, Copy, Debug)]
+pub enum RegionName {
+    Named(AstIdent),
+    Static,
+    Infer,
+}
+/// Tuple positions are structural indices, not decimal identifier spellings.
+#[derive(Clone, Copy, Debug)]
+pub enum FieldName {
+    Named(AstIdent),
+    Tuple(usize),
 }
 #[derive(Clone, Debug)]
 pub struct Function {
@@ -3493,7 +3676,7 @@ pub enum Stmt {
     ImplicitExpr(Expr),
     Return(Option<Expr>),
     While {
-        label: Option<String>,
+        label: Option<AstIdent>,
         condition: Expr,
         body: Block,
     },
@@ -3821,19 +4004,19 @@ pub enum Expr {
     Block(Block),
     /// `'label: { ... }`. Only labeled breaks may target it (E0695/E0696).
     LabeledBlock {
-        label: String,
+        label: AstIdent,
         body: Block,
     },
     Loop {
-        label: Option<String>,
+        label: Option<AstIdent>,
         body: Block,
     },
     Break {
-        label: Option<String>,
+        label: Option<AstIdent>,
         value: Option<Box<Expr>>,
     },
     Continue {
-        label: Option<String>,
+        label: Option<AstIdent>,
     },
     Println(String),
 }
@@ -3937,6 +4120,7 @@ struct Token {
     whole: TokenPart,
     constituents: [Option<super::expansion_span::SpanId>; 3],
     suffixes: [Option<TokenPart>; 2],
+    name: Option<std::num::NonZeroU32>,
 }
 fn compound_operator(token: TokenView<'_>) -> Option<BinaryOp> {
     if token.string {
@@ -3977,8 +4161,9 @@ fn native_input(
         .map_err(native_adapter::lex_error)?;
     NativeParserInput::new(lexed, session, projection)
 }
-struct Parser<'input> {
-    input: &'input NativeParserInput,
+struct Parser<'input, 'names> {
+    input: &'input NativeTokenBuffer,
+    names: &'names mut NameStoreBuilder,
     alias_target: bool,
     pending_bounds: Vec<TypeBound>,
     cursor: TokenCursor<'input>,
@@ -3988,10 +4173,11 @@ struct Parser<'input> {
     use_expansions: usize,
     use_expansion_bytes: usize,
 }
-impl<'input> Parser<'input> {
-    fn new(tokens: &'input NativeParserInput) -> Self {
+impl<'input, 'names> Parser<'input, 'names> {
+    fn new(tokens: &'input NativeTokenBuffer, names: &'names mut NameStoreBuilder) -> Self {
         Self {
             input: tokens,
+            names,
             alias_target: false,
             pending_bounds: Vec::new(),
             cursor: TokenCursor::new(tokens),
@@ -4017,7 +4203,7 @@ impl<'input> Parser<'input> {
         }
     }
     fn error(&self, message: &str) -> ParseError {
-        let primary = match self.input.original(self.token().span) {
+        let primary = match native_adapter::original(self.names.session(), self.token().span) {
             Ok(primary) => Some(primary),
             Err(error) => return error,
         };
@@ -4527,7 +4713,7 @@ impl<'input> Parser<'input> {
         self.expect(")")?;
         Ok((ir::Visibility::Restricted(scope), true))
     }
-    fn items(&mut self, module: &str, parsed: &mut ParsedProgram) -> Result<(), ParseError> {
+    fn items(&mut self, module: &str, parsed: &mut ParsedDeclarations) -> Result<(), ParseError> {
         if self.nesting > 128 {
             return Err(self.limit("module nesting exceeds limit 128"));
         }
@@ -4560,7 +4746,7 @@ impl<'input> Parser<'input> {
     fn nonmodule_item(
         &mut self,
         module: &str,
-        parsed: &mut ParsedProgram,
+        parsed: &mut ParsedDeclarations,
         visibility: ir::Visibility,
         explicit_visibility: bool,
     ) -> Result<(), ParseError> {
@@ -4895,7 +5081,7 @@ impl<'input> Parser<'input> {
     }
     fn insert_item(
         &self,
-        parsed: &mut ParsedProgram,
+        parsed: &mut ParsedDeclarations,
         path: &str,
         visibility: ir::Visibility,
         kind: ItemKind,
@@ -5436,7 +5622,7 @@ impl<'input> Parser<'input> {
                 let label = if self.is("while") {
                     None
                 } else {
-                    let label = self.token().text.trim_start_matches('\'').to_owned();
+                    let label = self.input.mint_name(&self.token(), self.names)?;
                     self.cursor.bump();
                     self.expect(":")?;
                     Some(label)
@@ -5709,7 +5895,7 @@ impl<'input> Parser<'input> {
     }
     #[inline(never)]
     fn labeled_expression(&mut self, min: u8, statement: bool) -> Result<Expr, ParseError> {
-        let label = self.token().text.trim_start_matches('\'').to_owned();
+        let label = self.input.mint_name(&self.token(), self.names)?;
         self.cursor.bump();
         self.expect(":")?;
         let left = if self.eat("loop") {
@@ -5799,7 +5985,7 @@ impl<'input> Parser<'input> {
             }
         } else if self.eat("break") {
             let label = if self.token().text.starts_with('\'') {
-                let label = self.token().text.trim_start_matches('\'').to_owned();
+                let label = self.input.mint_name(&self.token(), self.names)?;
                 self.cursor.bump();
                 Some(label)
             } else {
@@ -5813,7 +5999,7 @@ impl<'input> Parser<'input> {
             Expr::Break { label, value }
         } else if self.eat("continue") {
             let label = if self.token().text.starts_with('\'') {
-                let label = self.token().text.trim_start_matches('\'').to_owned();
+                let label = self.input.mint_name(&self.token(), self.names)?;
                 self.cursor.bump();
                 Some(label)
             } else {
@@ -6128,16 +6314,12 @@ fn literal_format(text: &str) -> Result<String, String> {
 
 /// Parse syntax only, retaining imports and visibility for the signatures phase.
 fn parse_syntax_tokens(tokens: NativeParserInput) -> Result<ParsedProgram, ParseError> {
-    let mut parser = Parser::new(&tokens);
-    let mut parsed = ParsedProgram {
-        program: Program {
-            functions: Vec::new(),
-            structs: Vec::new(),
-            enums: Vec::new(),
-            impls: Vec::new(),
-            traits: Vec::new(),
-            trait_imports: Vec::new(),
-        },
+    let (tokens, session) = tokens.into_parts();
+    let mut names = NameStoreBuilder::new(session, super::token::Edition::E2024)
+        .map_err(native_adapter::name_error)?;
+    let mut parser = Parser::new(&tokens, &mut names);
+    let mut parsed = ParsedDeclarations {
+        program: ProgramDeclarations::default(),
         items: HashMap::new(),
         empty_use_prefixes: Vec::new(),
     };
@@ -6174,7 +6356,12 @@ fn parse_syntax_tokens(tokens: NativeParserInput) -> Result<ParsedProgram, Parse
             }
         }
     }
-    Ok(parsed)
+    let names = names.freeze().map_err(native_adapter::name_error)?;
+    Ok(ParsedProgram {
+        program: parsed.program.publish(names),
+        items: parsed.items,
+        empty_use_prefixes: parsed.empty_use_prefixes,
+    })
 }
 /// Syntax-only preparation seam. Does not process attributes, resolve names, or
 /// access files. The source preparation owner supplies attribute-masked text.
@@ -7795,30 +7982,99 @@ fn validate_depth(root: DepthNode<'_>) -> Result<(), String> {
     walk_depth(root, None)
 }
 fn walk_depth(root: DepthNode<'_>, budget: Option<&ir::PlanBudget>) -> Result<(), String> {
-    let mut stack = vec![(root, 0usize)];
+    walk_depth_checked(root, budget, None)
+}
+fn name_walk_work(names: Option<&NameStore>, amount: u64) -> Result<(), String> {
+    if let Some(names) = names {
+        names
+            .budget()
+            .charge(super::expansion_budget::Counter::Work, amount)
+            .map_err(|error| {
+                super::source::SourceError::from_token(super::token_session::TokenError::Budget(
+                    error,
+                ))
+                .to_string()
+            })?;
+    }
+    Ok(())
+}
+fn walk_depth_checked(
+    root: DepthNode<'_>,
+    budget: Option<&ir::PlanBudget>,
+    names: Option<&NameStore>,
+) -> Result<(), String> {
+    let mut stack = Vec::new();
+    let mut checked_stack = names
+        .map(|names| {
+            super::token_session::BudgetVec::new(
+                names.budget(),
+                super::expansion_budget::Storage::Temporary,
+            )
+        })
+        .transpose()
+        .map_err(|error| super::source::SourceError::from_token(error).to_string())?;
+    name_walk_work(names, 1)?;
+    if let Some(stack) = &mut checked_stack {
+        stack
+            .push((root, 0usize))
+            .map_err(|error| super::source::SourceError::from_token(error).to_string())?;
+    } else {
+        stack.push((root, 0usize));
+    }
     let mut pattern_nodes = 0usize;
-    while let Some((node, depth)) = stack.pop() {
+    while let Some((node, depth)) = if let Some(stack) = &mut checked_stack {
+        stack.pop()
+    } else {
+        stack.pop()
+    } {
+        if let Some(names) = names {
+            name_walk_work(Some(names), 1)?;
+            let check =
+                |label: AstIdent| names.check(label).map_err(native_adapter::name_diagnostic);
+            match &node {
+                DepthNode::Expr(
+                    Expr::Loop { label, .. } | Expr::Break { label, .. } | Expr::Continue { label },
+                ) => {
+                    if let Some(label) = label {
+                        check(*label)?;
+                    }
+                }
+                DepthNode::Expr(Expr::LabeledBlock { label, .. }) => check(*label)?,
+                _ => {}
+            }
+        }
         if let Some(budget) = budget {
             preflight_clone_node(&node, budget)?;
         }
         if depth > 128 {
             return Err("AST nesting exceeds limit 128".into());
         }
-        let mut push = |node| stack.push((node, depth + 1));
+        let mut push = |node| -> Result<(), String> {
+            name_walk_work(names, 1)?;
+            if let Some(stack) = &mut checked_stack {
+                stack
+                    .push((node, depth + 1))
+                    .map_err(|error| super::source::SourceError::from_token(error).to_string())?;
+            } else {
+                stack.push((node, depth + 1));
+            }
+            Ok(())
+        };
         match node {
-            DepthNode::Type(Type::Ref { referent, .. }) => push(DepthNode::Type(referent)),
+            DepthNode::Type(Type::Ref { referent, .. }) => push(DepthNode::Type(referent))?,
             DepthNode::Type(Type::Array(element, _) | Type::Slice(element)) => {
-                push(DepthNode::Type(element))
+                push(DepthNode::Type(element))?
             }
             DepthNode::Type(Type::Tuple(fields)) => {
                 for field in fields {
-                    push(DepthNode::Type(field));
+                    push(DepthNode::Type(field))?;
                 }
             }
             DepthNode::Type(Type::Apply(path)) => {
                 for segment in &path.segments {
+                    name_walk_work(names, 1)?;
                     for arg in &segment.args {
-                        push(DepthNode::Type(arg));
+                        push(DepthNode::Type(arg))?;
                     }
                 }
             }
@@ -7830,26 +8086,27 @@ fn walk_depth(root: DepthNode<'_>, budget: Option<&ir::PlanBudget>) -> Result<()
                 }
                 match pattern {
                     Pattern::Apply { path, pattern } => {
-                        push(DepthNode::Pattern(pattern));
+                        push(DepthNode::Pattern(pattern))?;
                         for segment in &path.segments {
+                            name_walk_work(names, 1)?;
                             for arg in &segment.args {
-                                push(DepthNode::Type(arg));
+                                push(DepthNode::Type(arg))?;
                             }
                         }
                     }
                     Pattern::Variant { fields, .. } => {
                         for (_, p) in fields {
-                            push(DepthNode::Pattern(p));
+                            push(DepthNode::Pattern(p))?;
                         }
                     }
                     Pattern::Tuple(fields) => {
                         for pattern in fields {
-                            push(DepthNode::Pattern(pattern));
+                            push(DepthNode::Pattern(pattern))?;
                         }
                     }
                     Pattern::Struct { fields, .. } => {
                         for (_, pattern) in fields {
-                            push(DepthNode::Pattern(pattern));
+                            push(DepthNode::Pattern(pattern))?;
                         }
                     }
                     _ => {}
@@ -7862,18 +8119,18 @@ fn walk_depth(root: DepthNode<'_>, budget: Option<&ir::PlanBudget>) -> Result<()
                     args,
                     ..
                 } => {
-                    push(DepthNode::Expr(receiver));
+                    push(DepthNode::Expr(receiver))?;
                     for ty in type_args {
-                        push(DepthNode::Type(ty));
+                        push(DepthNode::Type(ty))?;
                     }
                     for arg in args {
-                        push(DepthNode::Expr(arg));
+                        push(DepthNode::Expr(arg))?;
                     }
                 }
                 Expr::TraitCall { owner, args, .. } => {
-                    push(DepthNode::Type(owner));
+                    push(DepthNode::Type(owner))?;
                     for arg in args {
-                        push(DepthNode::Expr(arg));
+                        push(DepthNode::Expr(arg))?;
                     }
                 }
                 Expr::AssociatedCall {
@@ -7882,69 +8139,70 @@ fn walk_depth(root: DepthNode<'_>, budget: Option<&ir::PlanBudget>) -> Result<()
                     args,
                     ..
                 } => {
-                    push(DepthNode::Type(owner));
+                    push(DepthNode::Type(owner))?;
                     for ty in type_args {
-                        push(DepthNode::Type(ty));
+                        push(DepthNode::Type(ty))?;
                     }
                     for arg in args {
-                        push(DepthNode::Expr(arg));
+                        push(DepthNode::Expr(arg))?;
                     }
                 }
                 Expr::Apply { path, value } => {
-                    push(DepthNode::Expr(value));
+                    push(DepthNode::Expr(value))?;
                     for segment in &path.segments {
+                        name_walk_work(names, 1)?;
                         for arg in &segment.args {
-                            push(DepthNode::Type(arg));
+                            push(DepthNode::Type(arg))?;
                         }
                     }
                 }
                 Expr::Cast { value, target } => {
-                    push(DepthNode::Expr(value));
-                    push(DepthNode::Type(target));
+                    push(DepthNode::Expr(value))?;
+                    push(DepthNode::Type(target))?;
                 }
                 Expr::Array(elements) => {
                     for e in elements {
-                        push(DepthNode::Expr(e));
+                        push(DepthNode::Expr(e))?;
                     }
                 }
-                Expr::Deref { value } => push(DepthNode::Expr(value)),
-                Expr::Repeat { value, .. } => push(DepthNode::Expr(value)),
+                Expr::Deref { value } => push(DepthNode::Expr(value))?,
+                Expr::Repeat { value, .. } => push(DepthNode::Expr(value))?,
                 Expr::DynamicIndex { base, index } => {
-                    push(DepthNode::Expr(base));
-                    push(DepthNode::Expr(index));
+                    push(DepthNode::Expr(base))?;
+                    push(DepthNode::Expr(index))?;
                 }
-                Expr::Index { base, .. } => push(DepthNode::Expr(base)),
+                Expr::Index { base, .. } => push(DepthNode::Expr(base))?,
                 Expr::EnumVariant { fields, .. } => {
                     for (_, e) in fields {
-                        push(DepthNode::Expr(e));
+                        push(DepthNode::Expr(e))?;
                     }
                 }
                 Expr::Match { scrutinee, arms } => {
-                    push(DepthNode::Expr(scrutinee));
+                    push(DepthNode::Expr(scrutinee))?;
                     for arm in arms {
-                        push(DepthNode::Pattern(&arm.pattern));
-                        push(DepthNode::Expr(&arm.body));
+                        push(DepthNode::Pattern(&arm.pattern))?;
+                        push(DepthNode::Expr(&arm.body))?;
                     }
                 }
                 Expr::Tuple(fields) => {
                     for field in fields {
-                        push(DepthNode::Expr(field));
+                        push(DepthNode::Expr(field))?;
                     }
                 }
                 Expr::Struct { fields, .. } => {
                     for (_, value) in fields {
-                        push(DepthNode::Expr(value));
+                        push(DepthNode::Expr(value))?;
                     }
                 }
-                Expr::Field { base, .. } => push(DepthNode::Expr(base)),
-                Expr::Unary { value, .. } => push(DepthNode::Expr(value)),
+                Expr::Field { base, .. } => push(DepthNode::Expr(base))?,
+                Expr::Unary { value, .. } => push(DepthNode::Expr(value))?,
                 Expr::Binary { left, right, .. } => {
-                    push(DepthNode::Expr(left));
-                    push(DepthNode::Expr(right));
+                    push(DepthNode::Expr(left))?;
+                    push(DepthNode::Expr(right))?;
                 }
                 Expr::Call { args, .. } => {
                     for arg in args {
-                        push(DepthNode::Expr(arg));
+                        push(DepthNode::Expr(arg))?;
                     }
                 }
                 Expr::If {
@@ -7952,57 +8210,69 @@ fn walk_depth(root: DepthNode<'_>, budget: Option<&ir::PlanBudget>) -> Result<()
                     then_block,
                     else_block,
                 } => {
-                    push(DepthNode::Expr(condition));
-                    push(DepthNode::Block(then_block));
-                    push(DepthNode::Block(else_block));
+                    push(DepthNode::Expr(condition))?;
+                    push(DepthNode::Block(then_block))?;
+                    push(DepthNode::Block(else_block))?;
                 }
                 Expr::Block(block)
                 | Expr::Loop { body: block, .. }
-                | Expr::LabeledBlock { body: block, .. } => push(DepthNode::Block(block)),
+                | Expr::LabeledBlock { body: block, .. } => push(DepthNode::Block(block))?,
                 Expr::Break {
                     value: Some(value), ..
-                } => push(DepthNode::Expr(value)),
+                } => push(DepthNode::Expr(value))?,
                 _ => {}
             },
             DepthNode::Block(block) => {
                 for stmt in &block.statements {
+                    name_walk_work(names, 1)?;
+                    if let (
+                        Some(names),
+                        Stmt::While {
+                            label: Some(label), ..
+                        },
+                    ) = (names, stmt)
+                    {
+                        names
+                            .check(*label)
+                            .map_err(native_adapter::name_diagnostic)?;
+                    }
                     match stmt {
-                        Stmt::Declare { ty, .. } => push(DepthNode::Type(ty)),
+                        Stmt::Declare { ty, .. } => push(DepthNode::Type(ty))?,
                         Stmt::Let { value, ty, .. } => {
-                            push(DepthNode::Expr(value));
-                            push(DepthNode::Type(ty));
+                            push(DepthNode::Expr(value))?;
+                            push(DepthNode::Type(ty))?;
                         }
                         Stmt::LetPattern { pattern, ty, value } => {
-                            push(DepthNode::Pattern(pattern));
-                            push(DepthNode::Type(ty));
-                            push(DepthNode::Expr(value));
+                            push(DepthNode::Pattern(pattern))?;
+                            push(DepthNode::Type(ty))?;
+                            push(DepthNode::Expr(value))?;
                         }
                         Stmt::AssignDeref { carrier, value } => {
-                            push(DepthNode::Expr(value));
-                            push(DepthNode::Expr(carrier));
+                            push(DepthNode::Expr(value))?;
+                            push(DepthNode::Expr(carrier))?;
                         }
                         Stmt::AssignIndex { index, value, .. }
                         | Stmt::AssignIndexOp { index, value, .. } => {
-                            push(DepthNode::Expr(value));
-                            push(DepthNode::Expr(index));
+                            push(DepthNode::Expr(value))?;
+                            push(DepthNode::Expr(index))?;
                         }
                         Stmt::Assign { value, .. }
                         | Stmt::AssignOp { value, .. }
                         | Stmt::AssignPlace { value, .. }
                         | Stmt::Expr(value)
                         | Stmt::ImplicitExpr(value)
-                        | Stmt::Return(Some(value)) => push(DepthNode::Expr(value)),
+                        | Stmt::Return(Some(value)) => push(DepthNode::Expr(value))?,
                         Stmt::While {
                             condition, body, ..
                         } => {
-                            push(DepthNode::Expr(condition));
-                            push(DepthNode::Block(body));
+                            push(DepthNode::Expr(condition))?;
+                            push(DepthNode::Block(body))?;
                         }
                         Stmt::Return(None) => {}
                     }
                 }
                 if let Some(tail) = &block.tail {
-                    push(DepthNode::Expr(tail));
+                    push(DepthNode::Expr(tail))?;
                 }
             }
         }
@@ -8185,6 +8455,7 @@ impl PlanCtx {
         budget: &ir::PlanBudget,
     ) -> Result<Self, String> {
         let program = shared.as_ref();
+        program.validate_name_handles()?;
         // Signature construction sees all source declarations, not just demanded
         // instances. Unsupported unused const bodies cannot escape publication.
         for function in &program.functions {
@@ -11217,7 +11488,7 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
 }
 struct LoopFrame {
     id: ir::LoopId,
-    label: Option<String>,
+    label: Option<NameKey>,
     is_block: bool,
     accepts_value: bool,
     checking_condition: bool,
@@ -12877,12 +13148,30 @@ impl<'a> Checker<'a> {
         });
         id
     }
-    fn loop_target(&self, operation: &str, label: Option<&str>) -> Result<usize, String> {
+    fn label_key(&self, label: Option<AstIdent>) -> Result<Option<NameKey>, String> {
+        let names = &self.signatures.plan()?.program.names;
+        label
+            .map(|label| {
+                names
+                    .key(label, LookupClass::Label)
+                    .map_err(native_adapter::name_diagnostic)
+            })
+            .transpose()
+    }
+    fn loop_target(&self, operation: &str, label: Option<AstIdent>) -> Result<usize, String> {
+        let key = self.label_key(label)?;
         let index = if let Some(label) = label {
+            let text = self
+                .signatures
+                .plan()?
+                .program
+                .names
+                .spelling(label)
+                .map_err(native_adapter::name_diagnostic)?;
             self.loops
                 .iter()
-                .rposition(|f| f.label.as_deref() == Some(label))
-                .ok_or_else(|| format!("undeclared label '{label}"))?
+                .rposition(|f| f.label == key)
+                .ok_or_else(|| format!("undeclared label '{text}"))?
         } else {
             self.loops
                 .len()
@@ -14149,7 +14438,8 @@ impl<'a> Checker<'a> {
                 } => {
                     // Never skip a condition's target barrier to an outer loop.
                     let id = self.enter_loop(false);
-                    self.loops.last_mut().unwrap().label = label.clone();
+                    let key = self.label_key(*label)?;
+                    self.loops.last_mut().unwrap().label = key;
                     let condition = self.expr(condition)?;
                     let f = self.flow(condition);
                     self.require(&f, &ir::Ty::Bool)?;
@@ -15900,7 +16190,8 @@ impl<'a> Checker<'a> {
             }
             Expr::Loop { label, body } => {
                 let id = self.enter_loop(true);
-                self.loops.last_mut().unwrap().label = label.clone();
+                let key = self.label_key(*label)?;
+                self.loops.last_mut().unwrap().label = key;
                 self.loops.last_mut().unwrap().expected = expected.cloned();
                 // A loop has its own intrinsic completion facts even when the
                 // enclosing expression is unreachable. Only its own body paths
@@ -15915,7 +16206,7 @@ impl<'a> Checker<'a> {
                 (ir::ExprKind::Loop { id, body }, flow)
             }
             Expr::Break { label, value } => {
-                let index = self.loop_target("break", label.as_deref())?;
+                let index = self.loop_target("break", *label)?;
                 let target = self.loops[index].id;
                 let expected = self.loops[index].expected.clone();
                 let value = value
@@ -15941,14 +16232,15 @@ impl<'a> Checker<'a> {
                 (ir::ExprKind::Break { target, value }, Flow::never())
             }
             Expr::Continue { label } => {
-                let index = self.loop_target("continue", label.as_deref())?;
+                let index = self.loop_target("continue", *label)?;
                 let target = self.loops[index].id;
                 (ir::ExprKind::Continue { target }, Flow::never())
             }
             Expr::LabeledBlock { label, body } => {
                 let id = self.enter_loop(true);
+                let key = self.label_key(Some(*label))?;
                 let frame = self.loops.last_mut().unwrap();
-                frame.label = Some(label.clone());
+                frame.label = key;
                 frame.is_block = true;
                 frame.expected = expected.cloned();
                 let (body, body_flow) = self.block_expected_when(body, true, expected)?;
@@ -16093,6 +16385,12 @@ fn type_callable_source(
 ) -> Result<ir::CheckedFunction, String> {
     plan.check_budget(budget)?;
     budget.charge_work(1)?;
+    if !Arc::ptr_eq(&program.names, &plan.program.names) {
+        return Err(super::source::SourceError::from_token(
+            super::token_session::TokenError::ForeignHandle,
+        )
+        .to_string());
+    }
     if matches!(
         plan.callable_provider(declaration)?,
         CallableProvider::Recipe { .. }
@@ -16131,7 +16429,7 @@ fn type_callable_source(
     }
     let signature = plan.function_schema(declaration)?.signature;
     let context = plan.callable_context(declaration)?;
-    validate_depth(DepthNode::Block(&f.body))?;
+    walk_depth_checked(DepthNode::Block(&f.body), None, Some(&program.names))?;
     let module = context.module.join("::");
     let mut c = Checker::new(&signatures, signature.result.clone(), module);
     c.declaration = Some(declaration);
@@ -19813,8 +20111,10 @@ mod typed_tests {
 mod prepared_location_tests {
     use super::*;
 
-    fn parser(tokens: &NativeParserInput) -> Parser<'_> {
-        Parser::new(tokens)
+    fn parser_parts(tokens: NativeParserInput) -> (NativeTokenBuffer, NameStoreBuilder) {
+        let (tokens, session) = tokens.into_parts();
+        let names = NameStoreBuilder::new(session, super::super::token::Edition::E2024).unwrap();
+        (tokens, names)
     }
 
     #[test]
@@ -19847,7 +20147,8 @@ mod prepared_location_tests {
     fn split_angles_and_shared_references_keep_exact_remaining_bytes() {
         for (text, expected) in [(">>", ">"), (">=", "="), (">>=", ">=")] {
             let tokens = lex(text).unwrap();
-            let mut parser = parser(&tokens);
+            let (tokens, mut names) = parser_parts(tokens);
+            let mut parser = Parser::new(&tokens, &mut names);
             parser.close_angle().unwrap();
             assert_eq!(parser.token().text, expected);
             assert_eq!(parser.token().bytes, 1..text.len());
@@ -19858,7 +20159,8 @@ mod prepared_location_tests {
             }
         }
         let tokens = lex("&&&&").unwrap();
-        let mut parser = parser(&tokens);
+        let (tokens, mut names) = parser_parts(tokens);
+        let mut parser = Parser::new(&tokens, &mut names);
         let error = parser.ty().unwrap_err();
         assert_eq!(tokens[0].whole.bytes(), 0..2);
         assert_eq!(tokens[1].whole.bytes(), 2..4);
@@ -19874,7 +20176,8 @@ mod prepared_location_tests {
             ("1+2", SourceErrorKind::Syntax, 3..3),
         ] {
             let tokens = lex(text).unwrap();
-            let mut parser = parser(&tokens);
+            let (tokens, mut names) = parser_parts(tokens);
+            let mut parser = Parser::new(&tokens, &mut names);
             parser.use_expansions = 7;
             parser.use_expansion_bytes = 19;
             let error = parser.array_number("array length").unwrap_err();
@@ -19890,7 +20193,8 @@ mod prepared_location_tests {
         for text in ["&&i64", "& &i64", "&&&&i64", "Outer<Inner<i64>>="] {
             let tokens = lex(text).unwrap();
             let original = format!("{tokens:?}");
-            let mut parser = parser(&tokens);
+            let (tokens, mut names) = parser_parts(tokens);
+            let mut parser = Parser::new(&tokens, &mut names);
             let ty = parser.ty().unwrap();
             if text.starts_with("Outer") {
                 assert!(matches!(ty, Type::Apply(_)));

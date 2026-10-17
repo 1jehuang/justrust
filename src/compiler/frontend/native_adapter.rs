@@ -14,6 +14,91 @@ pub(super) struct NativeParserInput {
     tokens: BudgetVec<Token>,
     session: TokenSession,
     text_leases: BudgetVec<crate::compiler::expansion_budget::ByteLease>,
+    names: BudgetVec<AdmittedRootName>,
+}
+/// Issued only after the native identifier's context, rawness and spelling have
+/// passed the bounded root-only ingress gate. This is not a hygiene projection.
+struct AdmittedRootName {
+    symbol: crate::compiler::token_session::SymbolId,
+    span: SpanId,
+    edition: crate::compiler::token::Edition,
+    logical: u32,
+}
+/// Independently owned lexical views. These strings never borrow the session,
+/// so parsing may mint semantic identifiers while holding token views.
+pub(super) struct NativeTokenBuffer {
+    tokens: BudgetVec<Token>,
+    names: BudgetVec<AdmittedRootName>,
+    _text_leases: BudgetVec<crate::compiler::expansion_budget::ByteLease>,
+}
+impl Deref for NativeTokenBuffer {
+    type Target = [Token];
+    fn deref(&self) -> &Self::Target {
+        self.tokens.as_slice()
+    }
+}
+impl std::fmt::Debug for NativeTokenBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.tokens.as_slice()).finish()
+    }
+}
+impl NativeTokenBuffer {
+    pub(super) fn mint_name(
+        &self,
+        token: &super::TokenView<'_>,
+        names: &mut crate::compiler::semantic_name::NameStoreBuilder,
+    ) -> Result<crate::compiler::semantic_name::AstIdent, ParseError> {
+        let index = token
+            .name
+            .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+        let admitted = self
+            .names
+            .as_slice()
+            .get(index.get() as usize - 1)
+            .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+        let logical = self
+            .tokens
+            .as_slice()
+            .get(admitted.logical as usize)
+            .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+        if !std::ptr::eq(logical.text.as_str(), token.text)
+            || logical.name != Some(index)
+            || token.span != logical.whole.span
+            || token.bytes != logical.whole.bytes()
+        {
+            return Err(transport_error(TokenError::ForeignHandle));
+        }
+        let token = crate::compiler::token::Token {
+            kind: TokenKind::Ident(crate::compiler::token::Ident {
+                symbol: admitted.symbol,
+                context: names.session().root_context(),
+                raw: false,
+            }),
+            span: admitted.span,
+        };
+        names
+            .from_token(token, admitted.edition)
+            .map_err(name_error)
+    }
+}
+
+pub(super) fn name_error(error: crate::compiler::semantic_name::NameError) -> ParseError {
+    use crate::compiler::semantic_name::NameError;
+    match error {
+        NameError::Token(error) => transport_error(error),
+        error @ NameError::Unsupported(_) => {
+            simple_error(SourceErrorKind::Unsupported, &error.to_string())
+        }
+        error @ (NameError::ExpectedIdentifier | NameError::InvalidIdentifier) => {
+            simple_error(SourceErrorKind::Syntax, &error.to_string())
+        }
+    }
+}
+pub(super) fn name_diagnostic(error: crate::compiler::semantic_name::NameError) -> String {
+    let error = name_error(error);
+    let mut diagnostic = SourceError::syntax(error.primary, error.message);
+    diagnostic.kind = error.kind;
+    diagnostic.to_string()
 }
 impl std::fmt::Debug for NativeParserInput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -27,6 +112,16 @@ impl Deref for NativeParserInput {
     }
 }
 impl NativeParserInput {
+    pub(super) fn into_parts(self) -> (NativeTokenBuffer, TokenSession) {
+        (
+            NativeTokenBuffer {
+                tokens: self.tokens,
+                names: self.names,
+                _text_leases: self.text_leases,
+            },
+            self.session,
+        )
+    }
     pub(super) fn new(
         lexed: LexedTokens,
         session: TokenSession,
@@ -52,10 +147,12 @@ impl NativeParserInput {
             return Err(error);
         }
         let budget = session.budget().clone();
+        let edition = lexed.edition();
         let mut input = Self {
             tokens: BudgetVec::new(&budget, Storage::Retained).map_err(transport_error)?,
             text_leases: BudgetVec::new(&budget, Storage::Retained).map_err(transport_error)?,
             session,
+            names: BudgetVec::new(&budget, Storage::Retained).map_err(transport_error)?,
         };
         let events = lexed.events();
         let mut at = 0;
@@ -100,6 +197,7 @@ impl NativeParserInput {
                             None,
                             &[native_part(event)?],
                         )?;
+                        input.attach_name(token, edition)?;
                         at += 1;
                     }
                     TokenKind::Literal { kind, spelling } => {
@@ -214,6 +312,10 @@ impl NativeParserInput {
                             None,
                             &[native_part(event)?, native_part(next)?],
                         )?;
+                        let InputToken::Leaf(name_token) = next.token else {
+                            unreachable!("validated lifetime identifier leaf")
+                        };
+                        input.attach_name(name_token, edition)?;
                         at += 2;
                     }
                     TokenKind::Punct { .. } => {
@@ -307,6 +409,13 @@ impl NativeParserInput {
                             event,
                             SourceErrorKind::Unsupported,
                             "macro crate identities are unsupported",
+                        ));
+                    }
+                    TokenKind::Opaque(_) => {
+                        return Err(event_error(
+                            event,
+                            SourceErrorKind::Unsupported,
+                            "opaque macro fragments are unsupported by this parser",
                         ));
                     }
                 },
@@ -430,8 +539,69 @@ impl NativeParserInput {
                 whole,
                 constituents,
                 suffixes,
+                name: None,
             })
             .map_err(transport_error)
+    }
+
+    fn attach_name(
+        &mut self,
+        token: crate::compiler::token::Token,
+        edition: crate::compiler::token::Edition,
+    ) -> Result<(), ParseError> {
+        let TokenKind::Ident(ident) = token.kind else {
+            return Err(transport_error(TokenError::InvalidInput(
+                "invalid native parser name payload",
+            )));
+        };
+        token.validate(&self.session).map_err(transport_error)?;
+        if ident.raw
+            || ident.context != self.session.root_context()
+            || !self
+                .session
+                .symbol(ident.symbol)
+                .map_err(transport_error)?
+                .is_ascii()
+        {
+            return Err(transport_error(TokenError::InvalidInput(
+                "invalid native parser name payload",
+            )));
+        }
+        let index = u32::try_from(self.names.len())
+            .ok()
+            .and_then(|index| index.checked_add(1))
+            .and_then(std::num::NonZeroU32::new)
+            .ok_or_else(|| transport_error(TokenError::IdExhausted))?;
+        let logical = self
+            .tokens
+            .len()
+            .checked_sub(1)
+            .and_then(|index| u32::try_from(index).ok())
+            .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+        self.names
+            .push(AdmittedRootName {
+                symbol: ident.symbol,
+                span: token.span,
+                edition,
+                logical,
+            })
+            .map_err(transport_error)?;
+        let mut logical = self
+            .tokens
+            .pop()
+            .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+        if logical.name.is_some()
+            || !matches!(
+                logical.kind,
+                ParserTokenKind::Ident | ParserTokenKind::Lifetime
+            )
+        {
+            return Err(transport_error(TokenError::InvalidInput(
+                "invalid native parser name payload",
+            )));
+        }
+        logical.name = Some(index);
+        self.tokens.push(logical).map_err(transport_error)
     }
 
     fn push_number(
@@ -518,30 +688,29 @@ impl NativeParserInput {
         }
         Ok(())
     }
+}
 
-    pub(super) fn original(
-        &self,
-        span: SpanId,
-    ) -> Result<crate::compiler::source::SourceSpan, ParseError> {
-        use crate::compiler::expansion_span::SpanOrigin;
-        let mut current = span;
-        for _ in 0..512 {
-            match self.session.span(current).map_err(transport_error)?.origin {
-                SpanOrigin::Original(original) => {
-                    return self
-                        .session
-                        .sources()
-                        .render_span(original)
-                        .map_err(transport_error);
-                }
-                SpanOrigin::Synthetic { anchor, .. } => current = anchor,
+pub(super) fn original(
+    session: &TokenSession,
+    span: SpanId,
+) -> Result<crate::compiler::source::SourceSpan, ParseError> {
+    use crate::compiler::expansion_span::SpanOrigin;
+    let mut current = span;
+    for _ in 0..512 {
+        match session.span(current).map_err(transport_error)?.origin {
+            SpanOrigin::Original(original) => {
+                return session
+                    .sources()
+                    .render_span(original)
+                    .map_err(transport_error);
             }
+            SpanOrigin::Synthetic { anchor, .. } => current = anchor,
         }
-        Err(simple_error(
-            SourceErrorKind::Contract,
-            "parser token provenance is cyclic or too deep",
-        ))
     }
+    Err(simple_error(
+        SourceErrorKind::Contract,
+        "parser token provenance is cyclic or too deep",
+    ))
 }
 fn native_part(event: &LexedEvent) -> Result<TokenPart, ParseError> {
     TokenPart::new(event.token.span(), event.prepared.clone())
@@ -778,20 +947,26 @@ mod tests {
             .flatten()
             .zip([13..14, 14..15, 15..16])
         {
-            let original = input.original(*part).unwrap();
+            let original = original(&input.session, *part).unwrap();
             assert_eq!((original.lo as usize..original.hi as usize), expected);
         }
         let mut cursor = super::super::TokenCursor::new(&input);
         assert!(cursor.consume_type_gt());
         let suffix = cursor.current();
         assert_eq!(suffix.bytes, 14..16);
-        let original = input.original(suffix.span).unwrap();
-        assert_eq!((original.lo, original.hi), (14, 16));
+        let projected = original(&input.session, suffix.span).unwrap();
+        assert_eq!((projected.lo, projected.hi), (14, 16));
         assert!(cursor.consume_type_gt());
-        assert_eq!(input.original(cursor.current().span).unwrap().lo, 15);
+        assert_eq!(
+            original(&input.session, cursor.current().span).unwrap().lo,
+            15
+        );
         cursor.bump();
         assert!(cursor.consume_type_amp_prefix());
-        assert_eq!(input.original(cursor.current().span).unwrap().lo, 18);
+        assert_eq!(
+            original(&input.session, cursor.current().span).unwrap().lo,
+            18
+        );
     }
 
     #[test]

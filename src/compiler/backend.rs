@@ -2012,14 +2012,15 @@ mod tests {
             Type::Unit,
             block(statements, None),
         ));
-        Program {
-            functions: others,
-            structs: vec![],
-            enums: vec![],
-            impls: vec![],
-            traits: vec![],
-            trait_imports: vec![],
-        }
+        let budget = crate::compiler::token_primitives::ExpansionBudget::default();
+        let mut builder = crate::compiler::frontend::ProgramBuilder::new(
+            std::path::Path::new("<backend-fixture>"),
+            "",
+            &budget,
+        )
+        .unwrap();
+        builder.functions = others;
+        builder.finish().unwrap()
     }
     fn executable(program: &Program) -> std::path::PathBuf {
         executable_bytes(&emit(program).unwrap())

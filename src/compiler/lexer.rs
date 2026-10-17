@@ -85,8 +85,13 @@ pub struct LexedTokens {
     eof: LexedEof,
     session: SessionId,
     view: PreparedViewId,
+    edition: Edition,
 }
 impl LexedTokens {
+    /// Edition used by the source lexer, retained independently of parser mode.
+    pub fn edition(&self) -> Edition {
+        self.edition
+    }
     pub fn events(&self) -> &[LexedEvent] {
         self.events.as_slice()
     }
@@ -547,6 +552,7 @@ pub fn lex_prepared(
         },
         session: session.id(),
         view: input.view_id(),
+        edition,
     })
 }
 

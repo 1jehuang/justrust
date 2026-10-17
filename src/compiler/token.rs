@@ -41,6 +41,8 @@ pub struct Ident {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TokenKind {
+    /// Checked session-owned literal grammar identity, never semantic authority.
+    Opaque(super::macro_fragments::FragmentId),
     Ident(Ident),
     Literal {
         kind: LiteralKind,
@@ -65,6 +67,9 @@ impl Token {
     pub fn validate(&self, session: &TokenSession) -> Result<(), TokenError> {
         let span = session.span(self.span)?;
         match self.kind {
+            TokenKind::Opaque(id) => {
+                session.fragment(id)?;
+            }
             TokenKind::Ident(ident) => {
                 session.symbol(ident.symbol)?;
                 session.context(ident.context)?;

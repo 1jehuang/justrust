@@ -1,5 +1,32 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Owned labels and pure macro rules, not general hygiene admission
+
+SEMANTIC-NAMES.md records the checked compact name store, shared structured paths,
+lease-owning diagnostic display, explicit fixture builder, and first actual AST
+label integration. Parsed/resolved programs retain the same name-store Arc;
+plan-backed typing rejects foreign stores before body/recipe dispatch. Universal
+label validation now uses a charged iterative stack, preserves typed resource
+failures, and includes unused bodies. Other AST name fields and resolver maps
+still need their full vertical migration, including IR module/privacy identities.
+
+MACRO-RULES.md records the actual token-only engine: checked owning slices,
+logical operators/lifetimes, signed opaque literal forwarding, flat ordered
+matching, repetition/capture accounting and committed selected-arm errors.
+Independent public tests passed 15/15, including 81 stock cases and 14 utility
+tests, in `20261017-071543969-731024`. This is not source-level native macro
+acceptance or a mixed-site resolver. Actual stock was recorded separately from
+the immutable Reference pin.
+
+After the independently committed publication-event repair below, the complete
+coordinated suite passed 1,951 tests/98 binaries without retry output in
+`20261017-072549738-775993`; warning-free all-target check
+`20261017-072603261-776840`, strict all-target lint
+`20261017-072603747-776966`, fmt and diff checks passed. The original 65,537-use,
+4,096-parameter and ordinary-stack depth fences remain unchanged. Failed and
+successful checkpoint receipts are retained in
+`data/runs/xps14/2026-10-17-semantic-macro.jsonl`. No speed or full Rust claim.
+
 ## 2026-10-17: Publication proof events must precede visible slot results
 
 During the next coordinated compiler checkpoint,
