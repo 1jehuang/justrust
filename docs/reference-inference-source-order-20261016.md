@@ -129,3 +129,32 @@ unchanged unless a separately evidenced, explicit promotion is authorized.
 
 This investigation advances a specific Full Rust prerequisite. It does not close
 Full Rust, claim new accepted syntax, or claim a speedup.
+
+## Separately frozen shared-local first-domain baseline
+
+Before any source-admission change, two additional sources were frozen in a
+separate manifest and made read-only before their first compiler execution:
+
+| Source | Original binding authority | SHA256 |
+|---|---|---|
+| `shared_parameter` | `pass(reference: &i32)` parameter, then `let output=id(reference)` | `d7189ebe4f61c86f792d2af807a84162d6b34bcb4d08e318ab42d888165786b3` |
+| `shared_annotated_local` | Earlier `let reference: &i32=&value`, then `let output=id(reference)` | `357c130b2028b9f16f4e0eb48abf821187fc5fadaee1d73970e35c49c9f1df23` |
+
+Both stock BUILD and genuine metadata-only CHECK returned 0. Each actual stock
+executable returned 0 with exact `inference local ok\n` and empty stderr.
+Current native workers 1 and 8 each returned 1 in BUILD and CHECK with the
+intentional newly inferred structural-reference Unsupported diagnostic, and
+created no executable. This is a measured compatibility gap, not native success.
+Stock commands used `--edition=2021 --error-format=json --crate-type=bin`, adding
+`--emit=metadata` only for CHECK. Native commands used the public source-file CLI,
+`--workers 1` or `--workers 8`, and either `-o` for BUILD or `--check` without `-o`.
+
+The unchanged first-attempt receipt is
+`experiments/results/20261016-reference-inference-shared-local-baseline.jsonl`,
+SHA256 `45712d1cd527de6164b097638aaecb15225927fe0ec46e0cf1d74fbecbd49c2f`.
+Its source hashes, all 30 streams from 15 processes, absence of timeout/truncation,
+stock executable and metadata artifact records, and raw byte equality to the
+initial receipt were verified. A regular zero-byte metadata artifact is valid.
+The native compiler hash remains the implementation binary recorded above.
+These are new independent sources, not replacements or promotions of the six
+prior witnesses or frozen32 X29. They establish a baseline only, not admission GO.

@@ -9730,3 +9730,27 @@ accessor are concrete implementation prerequisites, not external blockers.
 Details and exact observed requirement mapping are in
 `docs/reference-inference-source-order-20261016.md`. No source admission, old
 classification, stable installation, budget cap or full-Rust claim changed.
+
+### Proposed shared-local inference slice: real baseline, 2026-10-16
+
+Separately froze two new sources before their first compiler execution: a shared
+reference parameter and an earlier explicitly annotated shared local, each passed
+as a Var to omitted-actual `id<T>(T)->T` in an unannotated direct let initializer.
+These are not source replacements or promotions of frozen32 or the prior six
+source-order witnesses. Both stock BUILD and genuine metadata-only CHECK passed.
+Both actual stock executables exited 0 with exact `inference local ok\n` and empty
+stderr. Native public CLI BUILD/CHECK at workers 1 and 8 remained intentional
+Unsupported and emitted no executable. This establishes the exact proposed
+first-slice compatibility gap, not a successful compiler change.
+
+Raw unchanged first-attempt evidence is
+`experiments/results/20261016-reference-inference-shared-local-baseline.jsonl`,
+SHA256 `45712d1cd527de6164b097638aaecb15225927fe0ec46e0cf1d74fbecbd49c2f`.
+Verified both source hashes, all 30 process stream hashes from 15 processes,
+no timeout/truncation, artifact records and byte equality with the original raw
+receipt. Stock metadata artifacts are regular zero-byte files, which is valid.
+The compiler binary is the same implementation hash as the six-case study.
+The source-provenance review identifies canonical plan-owned input, exact parent
+context including authoritative None, and checked binding origin as prerequisites.
+The replay proposal remains under independent review. No source admission,
+frozen fixture, capability, budget limit or installed toolchain changed.
