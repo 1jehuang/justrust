@@ -7149,9 +7149,6 @@ impl<'input, 'names> Parser<'input, 'names> {
                 if self.is(")") {
                     return Err(self.unsupported("empty tuple structs are unsupported"));
                 }
-                if !type_params.is_empty() {
-                    return Err(self.unsupported("generic tuple structs are unsupported"));
-                }
                 loop {
                     let (visibility, _) = self.visibility(module)?;
                     let ty = self.ty()?;
@@ -9400,10 +9397,33 @@ mod inactive_item_syntax_tests {
     }
 
     #[test]
+    fn generic_tuple_struct_parser_retains_actual_type_parameter_identity() {
+        let program = parse("struct Generic<T>(T);fn main(){}").unwrap();
+        let declaration = &program.structs[0];
+        assert_eq!(declaration.shape, StructShape::Tuple);
+        assert_eq!(declaration.type_params.len(), 1);
+        assert_eq!(declaration.fields.len(), 1);
+        assert!(matches!(declaration.fields[0].name, FieldName::Tuple(0)));
+        let Type::Param(parameter) = declaration.fields[0].ty else {
+            panic!("generic tuple field lost its actual source parameter");
+        };
+        assert_eq!(
+            program
+                .names
+                .key(parameter, LookupClass::TypeParameter)
+                .unwrap(),
+            program
+                .names
+                .key(declaration.type_params[0], LookupClass::TypeParameter)
+                .unwrap()
+        );
+        check(&program).unwrap();
+    }
+
+    #[test]
     fn tuple_struct_parser_preserves_explicit_unadmitted_syntax_boundaries() {
         for source in [
             "struct Empty();fn main(){}",
-            "struct Generic<T>(T);fn main(){}",
             "struct Pair(i32);fn main(){let p=Pair{0:42};}",
             "struct Pair(i32);fn main(){let Pair{0:x}=Pair(42);}",
         ] {
@@ -10770,8 +10790,8 @@ impl PlanCtx {
     ) -> Result<Self, String> {
         let program = shared.as_ref();
         program.validate_name_handles()?;
-        // Source constructors retain nominal identity. Generic unit and tuple
-        // declarations remain outside the initial source-shape admission.
+        // Source constructors retain nominal identity. Generic unit declarations
+        // remain outside source-shape admission.
         budget.charge_work(program.structs.len())?;
         for declaration in &program.structs {
             if !declaration.type_params.is_empty() {
@@ -10779,10 +10799,7 @@ impl PlanCtx {
                     StructShape::Unit => {
                         return Err("unsupported: generic unit structs are unsupported".into());
                     }
-                    StructShape::Tuple => {
-                        return Err("unsupported: generic tuple structs are unsupported".into());
-                    }
-                    StructShape::Record => {}
+                    StructShape::Record | StructShape::Tuple => {}
                 }
             }
         }

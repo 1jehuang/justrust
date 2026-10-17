@@ -767,7 +767,7 @@ impl<'c, 's> Inference<'c, 's> {
         Ok(Some(args))
     }
 }
-impl Checker<'_> {
+impl<'s> Checker<'s> {
     pub(super) fn inference_core(&self) -> Result<CallInferenceState, String> {
         let budget = &self
             .signatures
@@ -939,7 +939,41 @@ impl Checker<'_> {
                 if env.arity() == 0 {
                     self.infer_type_term(&ty, None, depth + 1)?
                 } else {
-                    self.infer_node(InferKind::Unknown(false))?
+                    let count = match expr {
+                        Expr::Struct { fields, .. } => fields.len(),
+                        Expr::TupleStruct { fields, .. } => fields.len(),
+                        Expr::EnumVariant { fields, .. } => fields.len(),
+                        _ => return Err("constructor evidence dispatch invariant".into()),
+                    };
+                    self.infer_storage(count)?;
+                    let mut evidence = self.retained_pattern_vec(count)?;
+                    let variant = match expr {
+                        Expr::Struct { fields, .. } => {
+                            for (name, value) in fields {
+                                evidence.push((InferField::Named(name), value));
+                            }
+                            None
+                        }
+                        Expr::TupleStruct { fields, .. } => {
+                            for (index, value) in fields.iter().enumerate() {
+                                evidence.push((InferField::Tuple(index), value));
+                            }
+                            None
+                        }
+                        Expr::EnumVariant { fields, .. } => {
+                            for (selector, value) in fields {
+                                let selector = match selector {
+                                    FieldSelector::Tuple(index) => InferField::Tuple(*index),
+                                    FieldSelector::Named(name) => InferField::Named(name),
+                                    _ => return Err("invalid constructor evidence selector".into()),
+                                };
+                                evidence.push((selector, value));
+                            }
+                            Some(self.split_variant(name)?.1)
+                        }
+                        _ => return Err("constructor evidence dispatch invariant".into()),
+                    };
+                    self.constructor_evidence(&owner, variant, &evidence, depth + 1)?
                 }
             }
             Expr::Apply { path, value } => {
@@ -1061,14 +1095,15 @@ impl Checker<'_> {
         }
         solver.finish(fallback)
     }
-    pub(super) fn infer_constructor(
-        &self,
+    fn constructor_constraints<'c>(
+        &'c self,
         name: &AstPath,
         variant: Option<AstIdent>,
         fields: &[(InferField<'_>, &Expr)],
         expected: Option<&ir::Ty>,
-        fallback: bool,
-    ) -> Result<Option<ir::Ty>, String> {
+        depth: usize,
+    ) -> Result<(ir::DeclId, Inference<'c, 's>), String> {
+        self.infer_work(depth)?;
         let plan = self
             .signatures
             .plan
@@ -1082,9 +1117,9 @@ impl Checker<'_> {
         let (env, schema) = plan.nominal_schema(declaration, &plan.budget)?;
         let mut solver = Inference::new(self, env)?;
         if let Some(expected) = expected {
-            let formal = solver.schema(&schema, 0)?;
-            let evidence = self.infer_type_term(expected, None, 0)?;
-            solver.constrain(&formal, &evidence, 0)?;
+            let formal = solver.schema(&schema, depth + 1)?;
+            let evidence = self.infer_type_term(expected, None, depth + 1)?;
+            solver.constrain(&formal, &evidence, depth + 1)?;
         }
         let variant_index = variant
             .map(|name| self.variant_index(declaration, name))
@@ -1106,13 +1141,68 @@ impl Checker<'_> {
                 InferField::Named(name) => self.member_index(declaration, variant_index, **name)?,
             };
             let field = definitions.get(index).ok_or("unknown constructor field")?;
-            let formal = solver.schema(&field.ty, 0)?;
-            let evidence = self.inference_evidence(expr, 0)?;
-            solver.constrain(&formal, &evidence, 0)?;
+            let formal = solver.schema(&field.ty, depth + 1)?;
+            let evidence = self.inference_evidence(expr, depth + 1)?;
+            solver.constrain(&formal, &evidence, depth + 1)?;
         }
+        Ok((declaration, solver))
+    }
+    fn check_slot_free_evidence(&self, term: &InferTerm, depth: usize) -> Result<(), String> {
+        self.infer_work(depth)?;
+        match term.as_ref() {
+            InferKind::Slot(_) => {
+                return Err("contract: constructor schema slot escaped into evidence".into());
+            }
+            InferKind::Tuple(fields) | InferKind::Nominal(_, fields) => {
+                for field in fields.iter() {
+                    self.check_slot_free_evidence(field, depth + 1)?;
+                }
+            }
+            InferKind::Array(inner, _) | InferKind::Ref(_, inner) => {
+                self.check_slot_free_evidence(inner, depth + 1)?
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    fn constructor_evidence(
+        &self,
+        name: &AstPath,
+        variant: Option<AstIdent>,
+        fields: &[(InferField<'_>, &Expr)],
+        depth: usize,
+    ) -> Result<InferTerm, String> {
+        let (declaration, solver) =
+            self.constructor_constraints(name, variant, fields, None, depth + 1)?;
+        let slots = solver.core.slots();
+        self.infer_storage(slots.len())?;
+        let mut terms = self.retained_pattern_vec(slots.len())?;
+        for slot in slots {
+            self.infer_work(depth + 1)?;
+            let term = match slot {
+                Some(term) => term.clone(),
+                None => self.infer_node(InferKind::Unknown(false))?,
+            };
+            self.check_slot_free_evidence(&term, depth + 1)?;
+            terms.push(term);
+        }
+        // Preserve literal classes until the OUTER solver's existing fallback.
+        self.infer_node(InferKind::Nominal(declaration, terms.into()))
+    }
+    pub(super) fn infer_constructor(
+        &self,
+        name: &AstPath,
+        variant: Option<AstIdent>,
+        fields: &[(InferField<'_>, &Expr)],
+        expected: Option<&ir::Ty>,
+        fallback: bool,
+    ) -> Result<Option<ir::Ty>, String> {
+        let (declaration, solver) =
+            self.constructor_constraints(name, variant, fields, expected, 0)?;
         let Some(args) = solver.finish(fallback)? else {
             return Ok(None);
         };
+        let plan = self.signatures.plan()?;
         Ok(Some(plan.intern_nominal(
             declaration,
             &args,
@@ -1838,9 +1928,6 @@ impl<'a> Checker<'a> {
             }
             StructShape::Record => Ok(StructShape::Record),
             StructShape::Tuple => {
-                if !source.type_params.is_empty() || !ty.def().type_args.is_empty() {
-                    return Err("unsupported: generic tuple structs".into());
-                }
                 if source.fields.is_empty() {
                     return Err("unsupported: zero-field tuple structs".into());
                 }
@@ -7456,6 +7543,99 @@ mod checked_identity_tests {
         assert!(parse("mod m{pub struct Pack(pub i32,i32,pub i32);pub fn make()->Pack{Pack(1,2,3)}}fn value()->i32{match m::make(){m::Pack(a,..,z)=>a+z}}fn main(){}").and_then(|program| check(&program)).is_err());
         let program = parse("enum Item{Only(i32,i32,i32)}fn value()->i32{match Item::Only(1,2,3){Item::Only(a,..,z)=>a+z}}fn main(){}").unwrap();
         check(&program).unwrap();
+    }
+
+    #[test]
+    fn nested_constructor_evidence_defers_fallback_until_outer_constraints() {
+        for source in [
+            r#"struct Wrap<T>(T);fn unwrap<T>(w:Wrap<T>)->T{let Wrap(x)=w;x}fn main(){if unwrap(Wrap(42))==42{println!("ok");}}"#,
+            "struct Wrap<T>(T);fn unwrap<T>(w:Wrap<T>)->T{let Wrap(x)=w;x}fn value()->u8{unwrap(Wrap(42))}fn main(){}",
+            "struct Wrap<T>(T);fn pick<T>(w:Wrap<T>,value:T)->T{value}fn main(){let x=pick(Wrap(42),1u8);}",
+            "struct Wrap<T>(T);fn pick<T>(w:Wrap<T>,value:T)->T{value}fn main(){let x=pick(Wrap(2147483648),0i64);}",
+            "struct Pair<T>(T,T);fn first<T>(p:Pair<T>)->T{let Pair(x,_)=p;x}fn main(){let x=first(Pair(42,1u8));}",
+            "struct Wrap<T>(T);fn take<T>(w:Wrap<Wrap<T>>)->T{let Wrap(Wrap(x))=w;x}fn main(){let x=take(Wrap(Wrap(42)));}",
+        ] {
+            let program = parse(source).unwrap();
+            check(&program).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+        for source in [
+            "struct Wrap<T>(T);fn pick<T>(w:Wrap<T>,value:T)->T{value}fn main(){let x=pick(Wrap(true),1i32);}",
+            "struct Pair<T>(T,T);fn first<T>(p:Pair<T>)->T{let Pair(x,_)=p;x}fn main(){let x=first(Pair(1u8,2i32));}",
+        ] {
+            let program = parse(source).unwrap();
+            assert!(check(&program).is_err(), "accepted {source}");
+        }
+    }
+
+    #[test]
+    fn constructor_evidence_is_slot_free_and_does_not_evaluate_operands() {
+        let program = parse(r#"struct Wrap<T>(T);fn tick()->i32{println!("once");42}fn unwrap<T>(w:Wrap<T>)->T{let Wrap(x)=w;x}fn main(){let x=unwrap(Wrap(tick()));}"#).unwrap();
+        let signatures = signature_table(&program).unwrap();
+        let function = &program.functions[2];
+        let Stmt::Let {
+            value: Expr::Call { args, .. },
+            ..
+        } = &function.body.statements[0]
+        else {
+            panic!("expected genuine call");
+        };
+        let checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+        let evidence = checker.inference_evidence(&args[0], 0).unwrap();
+        checker.check_slot_free_evidence(&evidence, 0).unwrap();
+        assert!(
+            matches!(evidence.as_ref(), InferKind::Nominal(_, terms) if matches!(terms[0].as_ref(), InferKind::Rigid(ir::Ty::Int(ir::IntTy::I32))))
+        );
+        assert!(checker.locals.is_empty());
+        assert!(checker.exprs.is_empty());
+        let typed = type_function_with_signatures(&program, 2, &signatures).unwrap();
+        assert_eq!(
+            typed
+                .exprs
+                .iter()
+                .filter(|e| matches!(e.kind, ir::ExprKind::Call { .. }))
+                .count(),
+            2
+        );
+        let escaped = checker.infer_node(InferKind::Slot(0)).unwrap();
+        assert!(
+            checker
+                .check_slot_free_evidence(&escaped, 0)
+                .unwrap_err()
+                .contains("contract:")
+        );
+    }
+
+    #[test]
+    fn generic_tuple_structs_use_existing_actuals_inference_and_pattern_domains() {
+        for source in [
+            "struct Wrap<T>(T);fn unwrap<T>(w:Wrap<T>)->T{let Wrap(x)=w;x}fn value()->i32{unwrap(Wrap(42))}fn main(){}",
+            "struct Pair<T,U>(T,U);fn value()->i32{let pair:Pair<i32,bool> = Pair(42,true);let Pair(number,flag)=pair;if flag{number}else{0}}fn main(){}",
+            "struct Pair<T,U>(T,U);fn value()->i32{let Pair(a,..,z)=Pair::<i32,i32>(40,2);a+z}fn main(){}",
+            "struct Wrap<T>(T);fn value<T>(w:Wrap<T>)->T{match w{Wrap(x)=>x}}fn main(){}",
+            "struct Wrap<T>(T);fn value<T>(w:Wrap<T>)->T{let Wrap(x)=w else{loop{}};x}fn main(){}",
+            "struct Wrap<T>(T);fn value()->i32{let [Wrap(x)]=[Wrap(42)];x}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            check(&program).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+
+    #[test]
+    fn generic_tuple_structs_preserve_universal_moves_and_actual_type_separation() {
+        for source in [
+            "struct Wrap<T>(T);fn duplicate<T>(w:Wrap<T>)->T{let Wrap(x)=w;let y=x;x}fn main(){let result=duplicate(Wrap(42));}",
+            "struct Wrap<T>(T);fn value(){let wrong:Wrap<i32> = Wrap(true);}fn main(){}",
+            "struct Pair<T>(T,T);fn value(){let wrong=Pair(1,true);}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            assert!(check(&program).is_err(), "accepted {source}");
+        }
+        let source = "struct Wrap<T>(T);fn value(){let x=Wrap::<i32>();}fn main(){}";
+        let rejected = match parse(source) {
+            Ok(program) => check(&program).is_err(),
+            Err(_) => true,
+        };
+        assert!(rejected, "accepted {source}");
     }
 
     #[test]

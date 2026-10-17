@@ -1255,9 +1255,9 @@ impl Resolver<'_> {
                 "zero-field tuple structs are unsupported",
             ));
         }
-        if !declaration.type_params.is_empty() {
-            return Err(Self::unsupported("generic tuple structs are unsupported"));
-        }
+        // Generic actuals belong to the surrounding checked GenericPath. Shape
+        // admission must not erase that application or reject its declaration;
+        // nominal planning validates parameter arity, bounds and substitutions.
         if declaration.fields.len() > 4096 {
             return Err("nominal field resource limit exceeded".into());
         }
@@ -2773,6 +2773,71 @@ mod tuple_shape_tests {
             resolve(&parsed).unwrap_err(),
             "in function crate::main: unsupported: first-class tuple struct constructors are unsupported"
         );
+    }
+}
+
+#[cfg(test)]
+mod generic_tuple_resolution_tests {
+    use super::*;
+
+    #[test]
+    fn imported_generic_tuple_constructor_keeps_actuals_and_original_use() {
+        let source = "mod m{pub struct Pair<T>(pub T,pub i32);}use m::Pair as P;fn main(){let p=P::<i32>(1,2);let P(x,y)=p;}";
+        let program = resolve(&parse_unresolved(source).unwrap()).unwrap();
+        let Stmt::Let {
+            value: Expr::Apply { path, value },
+            ..
+        } = &program.functions[0].body.statements[0]
+        else {
+            panic!("generic tuple constructor lost its application");
+        };
+        let Expr::TupleStruct { name, fields } = value.as_ref() else {
+            panic!("generic tuple constructor became a callable");
+        };
+        assert_eq!(fields.len(), 2);
+        assert_eq!(path.segments.last().unwrap().args.len(), 1);
+        let key = name_scope::path_key(program.names.as_ref(), name, Namespace::Type).unwrap();
+        assert_eq!(
+            key,
+            name_scope::path_key(
+                program.names.as_ref(),
+                &program.structs[0].name,
+                Namespace::Type,
+            )
+            .unwrap()
+        );
+        let application = path.path(program.names.as_ref()).unwrap();
+        assert_eq!(
+            name_scope::path_key(program.names.as_ref(), &application, Namespace::Type).unwrap(),
+            key
+        );
+        assert!(
+            !application
+                .source_occurrences(program.names.as_ref())
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !name
+                .source_occurrences(program.names.as_ref())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn generic_tuple_constructor_keeps_arity_privacy_and_alias_boundaries() {
+        for source in [
+            "struct Pair<T>(T,i32);fn main(){let p=Pair::<i32>(1);}",
+            "mod m{pub struct Pair<T>(pub T,i32);}fn main(){let p=m::Pair::<i32>(1,2);}",
+            "struct Pair<T>(T);type A<T>=Pair<T>;fn main(){let p=A::<i32>(1);}",
+            "struct Pair<T>(T);fn main(){let Pair=1;}",
+        ] {
+            assert!(
+                resolve(&parse_unresolved(source).unwrap()).is_err(),
+                "{source}"
+            );
+        }
     }
 }
 

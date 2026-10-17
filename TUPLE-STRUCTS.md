@@ -2,6 +2,11 @@
 
 Status: **accepted bounded milestone, October 17, 2026**. Full Rust compatibility
 remains open.
+
+Later extension: `GENERIC-TUPLE-STRUCTS.md` admits generic nonempty tuple structs
+through exact nominal applications and universal checking. Its retained 36-source
+matrix promotes only the original generic constructor witness, without changing
+source bytes, order or output. The initial milestone evidence below is historical.
 The accepted nominal unit-struct milestone is `e6e9386fd`, documented in
 `UNIT-STRUCTS.md`. This milestone must preserve that contract and its tests.
 

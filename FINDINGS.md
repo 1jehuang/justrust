@@ -1,5 +1,37 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: generic tuple structs with exact applications and deferred constructor evidence
+
+- Accepted bounded GENERIC-TUPLE-STRUCTS.md coverage, not full Rust. Original
+  nonempty tuple source shape and contiguous physical field identities remain
+  authoritative. Source DeclId, rigid parameters and concrete nominal arguments
+  select the same existing schema substitution pipeline as generic records.
+- Resolver and parser admission retain actual GenericPath original-use
+  certificates. Constructors are not callable identities. All constructor-field
+  privacy, zero-tuple/unit/first-class boundaries and indexed-move fences remain.
+- Frozen stock32/native128 corpus exposed a real nested constructor evidence
+  gap in unwrap(Wrap(42)) and first(Pair(42,true)). The fix composes constrained
+  slot-free nominal terms, preserving integer/float classes until the OUTER
+  solver applies context and fallback. It emits no locals, expressions or moves.
+  Nested generic function-return inference is not added.
+- Public23 controls use actual generic declarations, ParamIds and same-world
+  application facts. Duplicate/missing/OOB constructor fields reject at existing
+  CFG lowering; substituted operand types reject at typed CFG validation.
+  Structural IR admission is not misreported as complete constructor validation.
+- Historical tuple source bytes/order/stdout are unchanged. Only the exact
+  generic constructor witness is promoted, preserving the 36-source/144-cell
+  matrix. New stock32 has22valid/10invalid; native18Runtime/10Invalid/4valid
+  Unsupported,128worker1/8CHECKBUILD cells and36executedELFs per bootstrap profile.
+- Debug/release targeted32 each, library1022 and full2586/128 all pass with zero
+  failures/ignored/filtered tests. Strict all-target lint, formatting and diff
+  checks pass. No compiler fallback, speedup or public ABI claim follows.
+- Twenty-two actual failed/passing receipts are retained in
+  data/runs/xps14/2026-10-17-generic-tuple-structs.jsonl, including in-flight
+  compile fences, the frozen nested-evidence failure and exact lint correction.
+  Final check20261017-125300466-2260242, debug125301186-2260289,
+  release125305524-2260699, lint125309130-2261124 and full125309922-2260155
+  use the same20261017 prefix. Full Rust compatibility remains open.
+
 ## 2026-10-17: genuine let-else with persistent success bindings and actual failure divergence
 
 - Accepted only LET-ELSE.md bounded native syntax. Real initializer/else source

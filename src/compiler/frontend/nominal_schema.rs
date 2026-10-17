@@ -462,11 +462,10 @@ impl PlanState {
                                     "unsupported: zero-field tuple structs are unsupported".into(),
                                 );
                             }
-                            if !d.type_params.is_empty() || !args.is_empty() {
-                                return Err(
-                                    "unsupported: generic tuple structs are unsupported".into()
-                                );
-                            }
+                            // The application key, parameter bindings and argument
+                            // evidence were validated above for this exact DeclId.
+                            // Keep tuple fields on the same substitution path as
+                            // record fields, preserving actual nominal arguments.
                             for (index, field) in d.fields.iter().enumerate() {
                                 budget.charge_work(1)?;
                                 if !matches!(field.name, FieldName::Tuple(actual) if actual == index)
@@ -625,5 +624,55 @@ mod tests {
         let one = schema_field_key(program.names.as_ref(), FieldName::Tuple(1)).unwrap();
         assert_ne!(zero, one);
         assert_ne!(zero, named);
+    }
+
+    #[test]
+    fn generic_tuple_application_keeps_exact_declaration_actuals_and_substituted_fields() {
+        let program =
+            parse("struct Pair<T,U>(T,(U,T));struct Other<T,U>(T,(U,T));fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declarations = program
+            .structs
+            .iter()
+            .map(|declaration| {
+                let key = name_scope::path_key(
+                    program.names.as_ref(),
+                    &declaration.name,
+                    Namespace::Type,
+                )
+                .unwrap();
+                *plan.registry.nominals.get(&key).unwrap()
+            })
+            .collect::<Vec<_>>();
+        let args = [ir::Ty::Bool, ir::Ty::Unit];
+        let first = plan
+            .intern_nominal(declarations[0], &args, ir::FactsCtx::Concrete, &budget)
+            .unwrap();
+        let again = plan
+            .intern_nominal(declarations[0], &args, ir::FactsCtx::Concrete, &budget)
+            .unwrap();
+        let other = plan
+            .intern_nominal(declarations[1], &args, ir::FactsCtx::Concrete, &budget)
+            .unwrap();
+        let (ir::Ty::Struct(first), ir::Ty::Struct(again), ir::Ty::Struct(other)) =
+            (first, again, other)
+        else {
+            panic!("generic tuple application lost nominal struct carrier");
+        };
+        assert_eq!(first.def().source_decl, declarations[0]);
+        assert_eq!(first.def().type_args.as_ref(), &args);
+        assert_eq!(first.def().id, again.def().id);
+        assert_ne!(first.def().id, other.def().id);
+        assert_eq!(first.def().fields[0].ty, ir::Ty::Bool);
+        assert_eq!(
+            first.def().fields[1].ty,
+            ir::Ty::Tuple(Arc::from([ir::Ty::Unit, ir::Ty::Bool]))
+        );
+        assert!(
+            plan.intern_nominal(declarations[0], &args[..1], ir::FactsCtx::Concrete, &budget)
+                .unwrap_err()
+                .contains("wrong generic arity")
+        );
     }
 }

@@ -8403,6 +8403,51 @@ mod tests {
         assert!(function.validate().unwrap_err().contains("Copy type"));
     }
 
+    #[test]
+    fn generic_tuple_templates_select_real_sparse_fields_without_enum_tags() {
+        use crate::compiler::{frontend, ownership};
+        for (source, expected_field) in [
+            (
+                "struct Wrap<T>(T);fn f<T>(p:Wrap<T>)->T{let Wrap(value)=p;value}fn main(){}",
+                0,
+            ),
+            (
+                "struct Pair<T,U>(T,U);fn f<T,U>(p:Pair<T,U>)->U{let Pair(..,value)=p;value}fn main(){}",
+                1,
+            ),
+        ] {
+            let budget = ir::PlanBudget::default();
+            let program = frontend::parse(source).unwrap();
+            let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let frontend::PublishedCallableBody::Source(publication) = plan
+                .publish_callable_body(plan.function_decl(0).unwrap(), &budget)
+                .unwrap()
+            else {
+                panic!("canonical source publication required")
+            };
+            let template = lower_source_template(&publication, &budget).unwrap();
+            let function = template.function();
+            let parameter = function.params[0];
+            assert_eq!(function.blocks.iter().flat_map(|block| &block.statements).filter(|statement| matches!(
+                &statement.value,
+                Statement::Assign { value: Rvalue::Use(Operand::Move(selected)), .. }
+                    if selected.local == parameter && selected.projection == [Projection::Field(expected_field)]
+            )).count(), 1, "{source}");
+            assert!(
+                !function.blocks.iter().any(|block| matches!(
+                    block.terminator.value,
+                    Terminator::SwitchVariant { .. }
+                ))
+            );
+            assert!(
+                ownership::verify_template(template)
+                    .unwrap()
+                    .analysis()
+                    .passed()
+            );
+        }
+    }
+
     fn checked(source: &str, index: usize) -> ir::CheckedFunction {
         let program = super::super::frontend::parse(source).unwrap();
         let signatures = super::super::frontend::signature_table(&program).unwrap();

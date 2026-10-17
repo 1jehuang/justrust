@@ -1,12 +1,12 @@
 # Generic tuple structs: existing nominal and universal authority
 
-Status: pending implementation acceptance. Full Rust compatibility remains open.
+Status: accepted bounded native implementation on October 17, 2026. Full Rust compatibility remains open.
 
 ## Frozen slice
 
 Admit original nonempty `StructShape::Tuple` declarations with the existing supported type parameters, bounds and actual types. Retain real contiguous `FieldName::Tuple(index)` source identities, declaration visibility and every constructor-field restriction. Generic unit and zero-field tuple structs, first-class constructors, numeric brace construction, const/lifetime parameter features and reference carrier forms outside the existing contract remain closed.
 
-No new source AST, checked IR, constructor callable identity, ABI or general inference rule is introduced. Explicit applications, expected-type evidence and already-supported bounded first-order constructor inference must pass the same nominal application and universal checking machinery as existing generic records.
+No new source AST, checked IR, constructor callable identity, ABI or general inference rule is introduced. Explicit applications, expected-type evidence and bounded first-order constructor inference must pass the same nominal application and universal checking machinery as existing generic records. Nested constructor evidence may compose existing nominal terms and field constraints without resolving numeric literal classes early. Nested generic function-return inference remains outside this slice.
 
 ## Exact nominal application
 
@@ -20,7 +20,16 @@ Generic function bodies are checked universally with rigid parameters before con
 
 Let, match, if-let, while-let, let-else and positional-rest plans consume the exact instantiated source field types. Generic tuple-struct plans use ordinary Field projections, never enum Downcast fiction. Genuine source binders and inventory occurrence order remain unchanged. Existing selected-only moves, omitted-field nonconsumption, constructor privacy and non-Copy indexed extraction fences remain intact.
 
-Nested or unconstrained constructor evidence is admitted only where existing inference already supports it. No printed-name fallback, inferred nominal shape, ghost binder or erased application argument is permitted.
+Nested constructor evidence retains exact declaration-qualified nominal terms, rigid parameters and unresolved integer/float classes until the outer solver applies its normal contextual constraints and final fallback. Missing evidence remains unknown. Evidence collection is pure, depth/work/storage bounded and cannot evaluate a source expression, emit locals or move values. No printed-name fallback, inferred nominal shape, ghost binder or erased application argument is permitted.
+
+## Observed acceptance
+
+- Exact stock corpus: 32 sources, 22 valid and 10 invalid. Native partition: 18 Runtime, 10 Invalid and four valid Unsupported boundaries.
+- Workers 1/8 CHECK/BUILD: 128 cells and 36 executed ELF images per bootstrap profile, repeated in debug and release. The retained 36-source tuple corpus preserves all source bytes/order/stdout and promotes only its generic constructor witness.
+- Public application/schema authority: 23 tests. Structural IR permits constructor field payloads that are independently rejected at the existing CFG lowering or typed aggregate validation boundary. No broader structural-validator claim is made.
+- Final targeted debug/release gates: 32 tests each. Library: 1,022 tests. Complete hosted regression: 2,586 tests across 128 binaries, with zero failed, ignored or filtered tests. Strict all-target lint, formatting and diff checks pass.
+- Frozen native, application and universal-body witnesses pass without stock compiler fallback. Pure nested constructor evidence is checked for deferred numeric classes, later sibling constraints, repeated parameters, slot exclusion and no expression/local emission.
+- Retained 22 actual failed and passing run summaries: `data/runs/xps14/2026-10-17-generic-tuple-structs.jsonl`. Final check `20261017-125300466-2260242`, debug `20261017-125301186-2260289`, release `20261017-125305524-2260699`, strict lint `20261017-125309130-2261124`, full `20261017-125309922-2260155`.
 
 ## Acceptance gates
 

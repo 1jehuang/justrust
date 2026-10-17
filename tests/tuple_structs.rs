@@ -1,7 +1,7 @@
-//! Nonempty nongeneric tuple structs with checked nominal field identities.
-//! Not first-class constructors, refutable aggregate matches, generics, or Rust ABI/layout.
+//! Nonempty tuple structs with checked nominal field identities.
+//! Includes the retained generic constructor witness, not full generic or ABI/layout compatibility.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
-use justrust_engine::compiler::{frontend, source};
+use justrust_engine::compiler::{frontend, ir, source};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -249,7 +249,7 @@ fn cases() -> Vec<Case> {
             source: r#"struct Wrap<T>(T);fn main(){let value=Wrap(42);if value.0==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "tuple_first_class_constructor_boundary",
@@ -445,7 +445,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (19, 17));
-    assert_eq!(partition, (12, 17, 7));
+    assert_eq!(partition, (13, 17, 6));
 }
 #[test]
 fn stock_tuple_struct_constructor_pattern_move_privacy_oracle_edition2024() {
@@ -480,7 +480,11 @@ fn tuple_source_shapes_use_numeric_fields_and_boundaries_keep_their_actual_phase
             }
             for decl in tuples {
                 assert!(!decl.fields.is_empty());
-                assert!(decl.type_params.is_empty());
+                if case.name == "tuple_generic_boundary" {
+                    assert_eq!(decl.type_params.len(), 1);
+                } else {
+                    assert!(decl.type_params.is_empty());
+                }
                 for (index, field) in decl.fields.iter().enumerate() {
                     assert!(
                         matches!(field.name,frontend::FieldName::Tuple(actual) if actual==index),
@@ -488,6 +492,16 @@ fn tuple_source_shapes_use_numeric_fields_and_boundaries_keep_their_actual_phase
                         case.name
                     );
                 }
+            }
+            if case.name == "tuple_generic_boundary" {
+                let signatures = frontend::signature_table(&program).unwrap();
+                let function =
+                    frontend::type_function_with_signatures(&program, 0, &signatures).unwrap();
+                function.validate().unwrap();
+                assert!(function.exprs.iter().any(|expression| matches!(
+                    &expression.kind,
+                    ir::ExprKind::Struct { ty, .. } if ty.def().type_args.len() == 1
+                )));
             }
             counts.0 += 1;
         } else if case.name == "tuple_first_class_constructor_boundary" {
@@ -520,7 +534,7 @@ fn tuple_source_shapes_use_numeric_fields_and_boundaries_keep_their_actual_phase
             counts.1 += 1;
         }
     }
-    assert_eq!(counts, (12, 6, 1));
+    assert_eq!(counts, (13, 5, 1));
 }
 #[test]
 fn native_tuple_structs_workers1_8_check_build_no_compiler_fallback() {
@@ -607,8 +621,8 @@ fn native_tuple_structs_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 144);
-    assert_eq!(modes, (24, 24, 34, 34, 14, 14));
+    assert_eq!(modes, (26, 26, 34, 34, 12, 12));
     eprintln!(
-        "NATIVE TUPLE STRUCTS:144 cells, modes{modes:?};24 executed native images;28 Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
+        "NATIVE TUPLE STRUCTS:144 cells, modes{modes:?};26 executed native images;24 Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
     );
 }

@@ -3409,6 +3409,59 @@ mod tests {
         );
     }
 
+    #[test]
+    fn generic_tuple_instantiated_sparse_moves_preserve_omitted_siblings() {
+        for source in [
+            "struct Cell{n:i32}struct Pair<T,U>(T,U);fn f(p:Pair<Cell,Cell>)->i32{let Pair(selected,..)=p;selected.n+p.1.n}",
+            "struct Cell{n:i32}struct Pair<T,U>(T,U);fn f(p:Pair<Cell,Cell>)->i32{let Pair(..,selected)=p;p.0.n+selected.n}",
+            "struct Pair<T,U>(T,U);fn f(p:Pair<i32,bool>)->Pair<i32,bool>{let Pair(first,..)=p;let n=first+1;p}",
+            "struct Cell{n:i32}struct Wrap<T>(T);fn f(p:Wrap<Cell>)->Cell{let Wrap(value)=p;value}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+        let result = analyze(&borrowed_source(
+            "struct Cell{n:i32}struct Pair<T,U>(T,U);fn f(p:Pair<Cell,Cell>)->Pair<Cell,Cell>{let Pair(selected,..)=p;let n=selected.n;p}",
+        ));
+        assert!(result.complete);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.kind == ErrorKind::ReadNotDefinitelyInitialized)
+        );
+    }
+
+    #[test]
+    fn generic_tuple_rigid_field_moves_do_not_inherit_favorable_instance_copy() {
+        for source in [
+            "struct Wrap<T>(T);fn f<T>(p:Wrap<T>)->T{let Wrap(value)=p;value}fn main(){}",
+            "struct Pair<T,U>(T,U);fn f<T,U>(p:Pair<T,U>)->(T,U){let Pair(first,..)=p;(first,p.1)}fn main(){}",
+            "struct Wrap<T>(T);fn f<T:Copy>(p:Wrap<T>)->(T,T){let Wrap(value)=p;(value,value)}fn main(){}",
+        ] {
+            let budget = super::super::ir::PlanBudget::default();
+            let (source_body, facts) = trait_callable_fixture(source, "f", &budget);
+            let proof =
+                verify_template(cfg::lower_template(source_body, facts, &budget).unwrap()).unwrap();
+            assert!(proof.analysis().passed(), "{source}");
+        }
+        let budget = super::super::ir::PlanBudget::default();
+        let (source_body, facts) = trait_callable_fixture(
+            "struct Wrap<T>(T);fn f<T>(p:Wrap<T>)->(T,T){let Wrap(value)=p;(value,value)}fn main(){let pair=f::<i32>(Wrap::<i32>(1));}",
+            "f",
+            &budget,
+        );
+        let failure =
+            verify_template(cfg::lower_template(source_body, facts, &budget).unwrap()).unwrap_err();
+        assert!(failure.complete);
+        assert!(
+            failure
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.kind == ErrorKind::ReadNotDefinitelyInitialized)
+        );
+    }
+
     fn borrowed_source(source: &str) -> cfg::Function {
         let program = super::super::frontend::parse(&format!("{source} fn main(){{}}")).unwrap();
         let signatures = super::super::frontend::signature_table(&program).unwrap();

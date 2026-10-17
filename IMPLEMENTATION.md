@@ -27,9 +27,16 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       privacy, nominal let patterns and existing native aggregate transport.
       TUPLE-STRUCTS.md records stock36/native144 debug/release bootstrap cells,
       eleven public schema controls and complete 2,209-test / 110-binary gates.
-      Generic/empty forms, constructor values and numeric brace syntax remain
-      explicit unsupported boundaries. The later aggregate match milestone
+      Empty forms, constructor values and numeric brace syntax remain
+      explicit unsupported boundaries. Generic tuple coverage is recorded below.
+      The later aggregate match milestone
       promotes the exact retained tuple-match source without changing its bytes.
+- [x] Generic nonempty tuple structs with exact declaration-qualified nominal
+      applications, rigid universal checking, instantiated fields and conditional
+      pattern plans. GENERIC-TUPLE-STRUCTS.md records stock32/native128 cells per
+      bootstrap profile, 23 public authority controls and complete 2,586-test /
+      128-binary hosted acceptance. Nested constructor evidence retains literal
+      classes until contextual solving, without new generic function inference.
 - [x] Irrefutable nested aggregate match destructuring with explicit checked
       aggregate domains, genuine arm locals, plain Field projections and selective
       moves. AGGREGATE-MATCHES.md records stock26/native104 debug/release cells,
