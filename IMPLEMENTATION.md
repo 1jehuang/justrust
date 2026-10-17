@@ -39,6 +39,8 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       dispatch and explicit Sized proof for owned trait Self values.
 - [x] Nested grouped imports, named aliases, type-only self leaves and validated
       empty prefixes, with global logical expansion bounds.
+- [x] Named public reexports with canonical identity, inherited variant export
+      eligibility and namespace-specific original/intermediary visibility.
 
 ## Remaining implementation program
 
