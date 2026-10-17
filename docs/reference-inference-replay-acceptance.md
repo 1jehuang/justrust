@@ -92,6 +92,16 @@ renderer, and primitive-receiver wrapper correspondence. This was source
 inspection only, not a claim that the reviewer executed the acceptance runs or
 proved every compiler path.
 
+## Committed-revision rerun
+
+After implementation `905952852` and evidence `1c9b7860b` were pushed, the complete
+unchanged result was rerun: formatting, all-target check
+`20261016-183002478-2729021`, all 1,480 tests across 72 binaries
+`20261016-183005232-2729564`, and strict all-target lint
+`20261016-183007889-2728965` all passed. The requirement mapping above therefore
+covers the final integrated implementation, not merely intermediate patches.
+General Rust support outside the documented slice remains open.
+
 ## Recorded central runs
 
 - Full suite: `20261016-182614825-2662754`, 1,480 passed, zero failed.
