@@ -1,5 +1,41 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: complete generic trait applications through proof and native keys
+
+- Accepted bounded GENERIC-TRAITS.md, not full Rust. Source trait binders retain
+  Self then original parameters; impls, bounds, supertraits, UFCS, unique dot
+  dispatch and defaults carry the complete checked TraitRef. Coherence and head
+  matching share substitutions across Self and every actual. Non-Self references,
+  generic methods, associated types and new trait-argument inference stay closed.
+- Integration exposed real correctness gaps. Validated nominal owner checking
+  under the PlanState mutex reentered the same lock; full validation now runs
+  outside the lowering guard, preserving original world/environment authority.
+  Same-Self distinct trait applications collided in native associated instance
+  keys; version-4 semantic identity includes every actual under the original impl
+  binder. A private permutation/discovery-order regression pins both properties.
+- Enlarging inline TraitCall metadata regressed the unchanged 300-block parser
+  witness to stack abort. Parentheses and long operators were separately shown
+  passing. A fallibly allocated TraitPath box restores ordinary stack behavior
+  without raising nesting limits, test stacks or changing source witnesses.
+  Failed isolated block run: 20261017-135039575-2530236. The original and three
+  isolated routes pass in the final library gate.
+- Existing standalone constructor numeric fallback now establishes a method
+  receiver without consulting method arguments, results or candidate impls.
+  Contextual constructor evidence remains unfixed until its enclosing solver;
+  narrow width and once-only tests accompany the unchanged Wrap(42) witness.
+- Stock corpus: 28 sources, 13 valid / 15 invalid. Native: 12 runtime, 14 invalid,
+  one valid unsupported and one invalid unsupported, with 112 workers-1/8
+  CHECK/BUILD cells and 24 real ELF images per bootstrap profile. Twenty-six
+  public authority tests retain actual facts through source/application/proof
+  corruptions. The historical unique-application trait source is unchanged.
+- Final hosted checks: all-target 20261017-135659195-2559251; library 1,076
+  passing 20261017-135701902-2559386; strict lint 20261017-135709152-2559967;
+  full unfiltered 2,740 tests / 134 binaries 20261017-135714487-2558941; release
+  corpus/authority/dispatch regressions 126 tests 20261017-135741480-2562222.
+  All final test gates have zero failures, ignored or filtered tests. Formatting
+  and diff checks pass. Failed and passing summaries are retained together in
+  data/runs/xps14/2026-10-17-generic-traits.jsonl. No compile-speed claim follows.
+
 ## 2026-10-17: exact sparse pattern usefulness with fail-closed resources
 
 - Accepted scoped PATTERN-USEFULNESS.md implementation, not full Rust. Existing

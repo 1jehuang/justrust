@@ -3826,7 +3826,7 @@ pub enum BuiltinTrait {
 }
 #[derive(Clone, Debug)]
 pub enum TraitPath {
-    Source(AstPath),
+    Source(GenericPath),
     Builtin(BuiltinTrait),
 }
 #[derive(Clone, Debug)]
@@ -3837,6 +3837,8 @@ pub struct TypeBound {
 #[derive(Clone, Debug)]
 pub struct TraitDecl {
     pub module: ModuleId,
+    pub type_params: Vec<AstIdent>,
+    pub bounds: Vec<TypeBound>,
     pub supertraits: Vec<TraitPath>,
     pub name: AstPath,
     pub visibility: ir::Visibility,
@@ -4415,7 +4417,7 @@ pub enum Expr {
     UnexpandedMacro(Arc<UnexpandedMacroSyntax>),
     TraitCall {
         owner: Type,
-        trait_path: TraitPath,
+        trait_path: Box<TraitPath>,
         name: AstIdent,
         args: Vec<Expr>,
     },
@@ -6400,6 +6402,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
     }
 
+    #[inline(never)]
     fn type_arguments(&mut self) -> Result<Vec<Type>, ParseError> {
         self.expect("<")?;
         let mut args = Vec::new();
@@ -6407,7 +6410,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             if args.len() >= 32 {
                 return Err(self.limit("generic argument resource limit 32"));
             }
-            args.push(self.ty()?);
+            let ty = self.ty()?;
+            self.reserve_parser_items(&mut args, 1)?;
+            args.push(ty);
             if !self.eat(",") || self.token().text.starts_with('>') {
                 break;
             }
@@ -6415,6 +6420,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.close_angle()?;
         Ok(args)
     }
+    #[inline(never)]
     fn generic_path(&mut self, type_context: bool) -> Result<GenericPath, ParseError> {
         let anchor = self.path_anchor()?;
         let mut segments = Vec::new();
@@ -6441,6 +6447,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             } else {
                 Vec::new()
             };
+            self.reserve_parser_items(&mut segments, 1)?;
             segments.push(PathSegment { name, args });
             if !self.eat("::") {
                 break;
@@ -6462,8 +6469,10 @@ impl<'input, 'names> Parser<'input, 'names> {
             resolved_use: None,
         })
     }
+    #[inline(never)]
     fn type_parameters(&mut self) -> Result<Vec<AstIdent>, ParseError> {
         self.pending_bounds.clear();
+        let declarations = self.predeclare_type_parameters()?;
         if !self.eat("<") {
             return Ok(Vec::new());
         }
@@ -6482,15 +6491,18 @@ impl<'input, 'names> Parser<'input, 'names> {
                     "lifetime parameters on nominal and impl declarations are unsupported",
                 ));
             }
-            let name = self.ident()?;
+            let name = self.predeclared_parameter(&declarations, params.len())?;
             if self.contains_name(&params, name, LookupClass::TypeParameter)? {
                 return Err(self.error("duplicate type parameter"));
             }
+            self.reserve_parser_items(&mut params, 1)?;
             params.push(name);
             if self.eat(":") {
                 let mut traits = Vec::new();
                 loop {
-                    traits.push(TraitPath::Source(self.path()?));
+                    let path = self.trait_path()?;
+                    self.reserve_parser_items(&mut traits, 1)?;
+                    traits.push(path);
                     if traits.len() > 256 {
                         return Err(self.limit("predicate limit exceeded"));
                     }
@@ -6498,10 +6510,13 @@ impl<'input, 'names> Parser<'input, 'names> {
                         break;
                     }
                 }
-                self.pending_bounds.push(TypeBound {
+                let mut bounds = std::mem::take(&mut self.pending_bounds);
+                self.reserve_parser_items(&mut bounds, 1)?;
+                bounds.push(TypeBound {
                     parameter: name,
                     traits,
                 });
+                self.pending_bounds = bounds;
             }
             if self.is("=") {
                 return Err(self.unsupported("generic defaults are unsupported"));
@@ -6512,6 +6527,177 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         self.close_angle()?;
         Ok(params)
+    }
+    #[inline(never)]
+    fn trait_path(&mut self) -> Result<TraitPath, ParseError> {
+        let path = self.generic_path(true)?;
+        self.check_trait_path(&path)?;
+        Ok(TraitPath::Source(path))
+    }
+    fn check_trait_path(&self, path: &GenericPath) -> Result<(), ParseError> {
+        if path.segments.is_empty() {
+            return Err(self.error("expected a trait declaration path"));
+        }
+        if path.segments[..path.segments.len() - 1]
+            .iter()
+            .any(|segment| !segment.args.is_empty())
+        {
+            return Err(self.unsupported("trait arguments must belong to the final trait segment"));
+        }
+        Ok(())
+    }
+    fn unapplied_trait_path(&mut self, path: &AstPath) -> Result<GenericPath, ParseError> {
+        let mut segments = Vec::new();
+        self.reserve_parser_items(&mut segments, path.segments().len())?;
+        for name in path.segments() {
+            self.names
+                .budget()
+                .charge(super::expansion_budget::Counter::Work, 1)
+                .map_err(|error| native_adapter::transport_error(error.into()))?;
+            segments.push(PathSegment {
+                name: *name,
+                args: Vec::new(),
+            });
+        }
+        Ok(GenericPath {
+            anchor: path.anchor(),
+            segments,
+            resolved_use: Some(path.clone()),
+        })
+    }
+    fn reserve_parser_items<T>(
+        &mut self,
+        items: &mut Vec<T>,
+        additional: usize,
+    ) -> Result<(), ParseError> {
+        let needed = items
+            .len()
+            .checked_add(additional)
+            .ok_or_else(|| self.limit("parser item count overflow"))?;
+        if needed <= items.capacity() {
+            return Ok(());
+        }
+        let old = items.capacity();
+        let capacity = old
+            .max(4)
+            .checked_mul(2)
+            .map(|n| n.max(needed))
+            .ok_or_else(|| self.limit("parser item capacity overflow"))?;
+        let planned = (capacity - old)
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or_else(|| self.limit("parser item storage overflow"))?;
+        self.names
+            .retain_parser_storage(planned)
+            .map_err(native_adapter::name_error)?;
+        items
+            .try_reserve_exact(capacity - items.len())
+            .map_err(|_| {
+                native_adapter::transport_error(self.names.budget().poison_allocation().into())
+            })?;
+        let extra = items
+            .capacity()
+            .saturating_sub(capacity)
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or_else(|| self.limit("parser item storage overflow"))?;
+        self.names
+            .retain_parser_storage(extra)
+            .map_err(native_adapter::name_error)
+    }
+    /// Predeclare only real generic-name tokens. The full parser subsequently
+    /// consumes those exact occurrences, including forward references in bounds.
+    /// This is a cursor pass over the same immutable tokens, not a second lexer.
+    fn predeclare_type_parameters(&mut self) -> Result<Vec<AstIdent>, ParseError> {
+        let mut declarations = Vec::new();
+        if !self.is("<") {
+            return Ok(declarations);
+        }
+        let mut scan = TokenCursor::new(self.input);
+        if !scan.restore(self.cursor.checkpoint()) {
+            return Err(native_adapter::transport_error(
+                super::token_session::TokenError::InvalidHandle,
+            ));
+        }
+        scan.bump();
+        let mut angles = 1usize;
+        let mut groups = 0usize;
+        let mut at_parameter = true;
+        loop {
+            self.names
+                .budget()
+                .charge(super::expansion_budget::Counter::Work, 1)
+                .map_err(|error| native_adapter::transport_error(error.into()))?;
+            let token = scan.current();
+            if token.matches("") {
+                break;
+            }
+            if at_parameter {
+                at_parameter = false;
+                if token.is_ident() && !token.matches("const") {
+                    if declarations.len() >= 32 {
+                        return Err(self.limit("generic parameter resource limit 32"));
+                    }
+                    let name = self.input.mint_name(&token, self.names)?;
+                    self.reserve_parser_items(&mut declarations, 1)?;
+                    declarations.push(name);
+                }
+            }
+            if groups == 0 && token.matches("<") {
+                angles = angles
+                    .checked_add(1)
+                    .ok_or_else(|| self.limit("generic nesting overflow"))?;
+                if angles > 128 {
+                    return Err(self.limit("type nesting exceeds limit 128"));
+                }
+            } else if groups == 0 && scan.consume_type_gt() {
+                angles -= 1;
+                if angles == 0 {
+                    break;
+                }
+                continue;
+            } else if angles == 1 && groups == 0 && token.matches(",") {
+                at_parameter = true;
+            } else if token.matches("(") || token.matches("[") || token.matches("{") {
+                groups = groups
+                    .checked_add(1)
+                    .ok_or_else(|| self.limit("generic group nesting overflow"))?;
+            } else if token.matches(")") || token.matches("]") || token.matches("}") {
+                groups = groups.saturating_sub(1);
+            }
+            scan.bump();
+        }
+        let mut visible = std::mem::take(&mut self.type_params);
+        self.reserve_parser_items(&mut visible, declarations.len())?;
+        self.names
+            .budget()
+            .charge(
+                super::expansion_budget::Counter::Work,
+                declarations.len() as u64,
+            )
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        visible.extend_from_slice(&declarations);
+        self.type_params = visible;
+        Ok(declarations)
+    }
+    fn predeclared_parameter(
+        &mut self,
+        declarations: &[AstIdent],
+        index: usize,
+    ) -> Result<AstIdent, ParseError> {
+        if !self.is_identifier() {
+            return Err(self.error("expected an ASCII identifier"));
+        }
+        let name = *declarations.get(index).ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+        })?;
+        if self.names.span(name).map_err(native_adapter::name_error)? != self.token().span {
+            return Err(native_adapter::transport_error(
+                super::token_session::TokenError::InvalidInput(
+                    "generic declaration cursor differs from its original token",
+                ),
+            ));
+        }
+        self.cursor.bump();
+        Ok(name)
     }
     fn path_anchor(&mut self) -> Result<PathAnchor, ParseError> {
         if self.eat("crate") {
@@ -6961,17 +7147,29 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Ok(());
         } else if self.eat("trait") {
             let name = self.ident()?;
-            if self.is("<") {
-                return Err(self.unsupported("trait generics are unsupported"));
+            let type_params = self.type_parameters()?;
+            if type_params.len() >= 32 {
+                return Err(self.limit("trait binder resource limit 32 includes Self"));
             }
+            let mut bounds = std::mem::take(&mut self.pending_bounds);
             let mut supertraits = Vec::new();
             if self.eat(":") {
                 loop {
                     if supertraits.len() >= 256 {
                         return Err(self.limit("supertrait limit exceeded"));
                     }
-                    supertraits.push(TraitPath::Source(self.path()?));
+                    let path = self.trait_path()?;
+                    self.reserve_parser_items(&mut supertraits, 1)?;
+                    supertraits.push(path);
                     if !self.eat("+") {
+                        break;
+                    }
+                }
+            }
+            if self.eat("where") {
+                loop {
+                    self.where_type_predicate(&mut bounds)?;
+                    if !self.eat(",") || self.is("{") {
                         break;
                     }
                 }
@@ -6989,7 +7187,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 if self.is("type") {
                     return Err(self.unsupported("associated types are unsupported"));
                 }
-                let (signature, receiver) = self.function_head(&[], true)?;
+                let (signature, receiver) = self.function_head(&type_params, true)?;
                 if !item_names.insert(self.name_key(signature.name, LookupClass::Member)?) {
                     return Err(self.error("duplicate required trait item"));
                 }
@@ -7025,6 +7223,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.expect("}")?;
             parsed.program.traits.push(TraitDecl {
                 module,
+                type_params,
+                bounds,
                 supertraits,
                 name: module_path
                     .push(self.names, name)
@@ -7207,10 +7407,13 @@ impl<'input, 'names> Parser<'input, 'names> {
             let mut bounds = std::mem::take(&mut self.pending_bounds);
             let first_ty = self.ty()?;
             let (trait_path, self_ty) = if self.eat("for") {
-                let Type::Named(name) = first_ty else {
-                    return Err(self.unsupported("trait arguments are unsupported"));
+                let path = match first_ty {
+                    Type::Named(name) => self.unapplied_trait_path(&name)?,
+                    Type::Apply(path) => path,
+                    _ => return Err(self.error("expected a trait declaration before for")),
                 };
-                (Some(TraitPath::Source(name)), self.ty()?)
+                self.check_trait_path(&path)?;
+                (Some(TraitPath::Source(path)), self.ty()?)
             } else {
                 (None, first_ty)
             };
@@ -7463,7 +7666,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             if traits.len() >= 256 {
                 return Err(self.limit("predicate limit exceeded"));
             }
-            traits.push(TraitPath::Source(self.path()?));
+            let path = self.trait_path()?;
+            self.reserve_parser_items(&mut traits, 1)?;
+            traits.push(path);
             if !self.eat("+") {
                 break;
             }
@@ -7471,6 +7676,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         if bounds.len() >= 4096 {
             return Err(self.limit("predicate limit exceeded"));
         }
+        self.reserve_parser_items(bounds, 1)?;
         bounds.push(TypeBound { parameter, traits });
         Ok(())
     }
@@ -7540,6 +7746,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         regions: &mut RegionDecls,
     ) -> Result<Vec<AstIdent>, ParseError> {
         self.pending_bounds.clear();
+        let declarations = self.predeclare_type_parameters()?;
         let mut params = Vec::new();
         if !self.eat("<") {
             return Ok(params);
@@ -7573,10 +7780,11 @@ impl<'input, 'names> Parser<'input, 'names> {
                 if params.len() >= 32 {
                     return Err(self.limit("generic parameter resource limit32"));
                 }
-                let name = self.ident()?;
+                let name = self.predeclared_parameter(&declarations, params.len())?;
                 if self.contains_name(&params, name, LookupClass::TypeParameter)? {
                     return Err(self.error("duplicate type parameter"));
                 }
+                self.reserve_parser_items(&mut params, 1)?;
                 params.push(name);
                 if self.eat(":") {
                     let mut traits = Vec::new();
@@ -7584,15 +7792,20 @@ impl<'input, 'names> Parser<'input, 'names> {
                         if traits.len() >= 256 {
                             return Err(self.limit("predicate limit exceeded"));
                         }
-                        traits.push(TraitPath::Source(self.path()?));
+                        let path = self.trait_path()?;
+                        self.reserve_parser_items(&mut traits, 1)?;
+                        traits.push(path);
                         if !self.eat("+") {
                             break;
                         }
                     }
-                    self.pending_bounds.push(TypeBound {
+                    let mut bounds = std::mem::take(&mut self.pending_bounds);
+                    self.reserve_parser_items(&mut bounds, 1)?;
+                    bounds.push(TypeBound {
                         parameter: name,
                         traits,
                     });
+                    self.pending_bounds = bounds;
                 }
                 if self.is("=") {
                     return Err(self.unsupported("generic defaults are unsupported"));
@@ -7602,7 +7815,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 break;
             }
         }
-        self.expect(">")?;
+        self.close_angle()?;
         Ok(params)
     }
     fn function_head(
@@ -7621,14 +7834,26 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.expect("fn")?;
         let name = self.ident()?;
         let mut regions = RegionDecls::default();
+        self.type_params.clear();
+        let mut visible = std::mem::take(&mut self.type_params);
+        self.reserve_parser_items(&mut visible, inherited.len())?;
+        visible.extend_from_slice(inherited);
+        self.type_params = visible;
         let type_params = self.callable_generics(&mut regions)?;
         let mut bounds = std::mem::take(&mut self.pending_bounds);
-        self.type_params = inherited.to_vec();
+        let mut visible = std::mem::take(&mut self.type_params);
+        visible.clear();
+        self.reserve_parser_items(&mut visible, inherited.len())?;
+        visible.extend_from_slice(inherited);
+        self.type_params = visible;
         for name in &type_params {
             if self.contains_name(&self.type_params, *name, LookupClass::TypeParameter)? {
                 return Err(self.error("duplicate visible generic parameter"));
             }
-            self.type_params.push(*name);
+            let mut visible = std::mem::take(&mut self.type_params);
+            self.reserve_parser_items(&mut visible, 1)?;
+            visible.push(*name);
+            self.type_params = visible;
         }
         self.expect("(")?;
         let mut params = Vec::new();
@@ -8301,7 +8526,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Err(self.limit("syntax nesting exceeds limit 128"));
         }
         self.nesting += 1;
-        let result = self.expr_inner(min);
+        let result = self.expr_inner_mode(min, false);
         self.nesting -= 1;
         result
     }
@@ -8469,9 +8694,6 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
         })
     }
-    fn expr_inner(&mut self, min: u8) -> Result<Expr, ParseError> {
-        self.expr_inner_mode(min, false)
-    }
     fn expr_inner_mode(&mut self, min: u8, statement: bool) -> Result<Expr, ParseError> {
         if self.token().is_lifetime() {
             return self.labeled_expression(min, statement);
@@ -8511,10 +8733,15 @@ impl<'input, 'names> Parser<'input, 'names> {
         };
         self.expr_continuation(left, min, statement)
     }
+    #[inline(never)]
     fn trait_call_prefix(&mut self) -> Result<Expr, ParseError> {
         let owner = self.ty()?;
         self.expect("as")?;
-        let trait_path = TraitPath::Source(self.path()?);
+        let trait_path = self.trait_path()?;
+        let trait_path = self
+            .names
+            .try_parser_box(trait_path)
+            .map_err(native_adapter::name_error)?;
         self.expect(">")?;
         self.expect("::")?;
         let name = self.ident()?;
@@ -10119,6 +10346,148 @@ pub fn parse(source: &str) -> Result<Program, String> {
 
 mod root_resolution;
 pub use root_resolution::resolve;
+#[cfg(test)]
+mod generic_trait_source_tests {
+    use super::*;
+
+    fn parameter(program: &Program, ty: &Type, expected: AstIdent) {
+        let Type::Param(actual) = ty else {
+            panic!("trait actual did not retain its lexical type parameter: {ty:?}");
+        };
+        assert_eq!(
+            program
+                .names
+                .key(*actual, LookupClass::TypeParameter)
+                .unwrap(),
+            program
+                .names
+                .key(expected, LookupClass::TypeParameter)
+                .unwrap()
+        );
+    }
+    fn actuals(path: &TraitPath) -> &[Type] {
+        let TraitPath::Source(path) = path else {
+            panic!("source trait became a builtin")
+        };
+        &path.segments.last().unwrap().args
+    }
+
+    #[test]
+    fn source_trait_parameters_bind_forward_actuals_and_inherited_method_types() {
+        let parsed = parse_unresolved("trait Base<T>{}trait Derived<T:Base<U>,U>:Base<T> where U:Base<T>{fn choose(self,x:U)->T;fn keep(self,x:T)->T{x}}fn forward<T:Base<U>,U>(x:T,y:U){}fn shadow<T:Base<i32>,i32>(x:T,y:i32){}fn main(){}").unwrap();
+        let program = &parsed.program;
+        let declaration = &program.traits[1];
+        assert_eq!(declaration.type_params.len(), 2);
+        assert_eq!(declaration.bounds.len(), 2);
+        parameter(
+            program,
+            &actuals(&declaration.bounds[0].traits[0])[0],
+            declaration.type_params[1],
+        );
+        parameter(
+            program,
+            &actuals(&declaration.bounds[1].traits[0])[0],
+            declaration.type_params[0],
+        );
+        parameter(
+            program,
+            &actuals(&declaration.supertraits[0])[0],
+            declaration.type_params[0],
+        );
+        let required = &declaration.items[0].signature;
+        assert!(required.type_params.is_empty());
+        parameter(program, &required.params[0].1, declaration.type_params[1]);
+        parameter(program, &required.result, declaration.type_params[0]);
+        let default = declaration.items[1].default.as_ref().unwrap();
+        assert!(default.type_params.is_empty());
+        parameter(program, &default.params[0].1, declaration.type_params[0]);
+        parameter(program, &default.result, declaration.type_params[0]);
+        for function in &program.functions[..2] {
+            parameter(
+                program,
+                &actuals(&function.bounds[0].traits[0])[0],
+                function.type_params[1],
+            );
+        }
+        parameter(
+            program,
+            &program.functions[1].params[1].1,
+            program.functions[1].type_params[1],
+        );
+    }
+
+    #[test]
+    fn source_trait_impl_and_ufcs_keep_actual_types_without_extra_calls() {
+        let parsed = parse_unresolved("trait Use<T>{fn use_it(self,x:T)->T;}struct S;impl Use<(i32,bool)> for S{fn use_it(self,x:(i32,bool))->(i32,bool){x}}impl Use<i32> for S{fn use_it(self,x:i32)->i32{x}}fn invoke(s:S)->i32{<S as Use<i32>>::use_it(s,42)}fn main(){}").unwrap();
+        let program = &parsed.program;
+        assert!(
+            matches!(actuals(program.impls[0].trait_path.as_ref().unwrap()), [Type::Tuple(fields)] if fields.len()==2)
+        );
+        let function = &program.functions[0];
+        let Expr::TraitCall {
+            trait_path, args, ..
+        } = function.body.tail.as_deref().unwrap()
+        else {
+            panic!("UFCS source call lost its actual syntax");
+        };
+        assert!(matches!(actuals(trait_path), [Type::Int(ir::IntTy::I32)]));
+        assert_eq!(args.len(), 2);
+        let budget = ir::PlanBudget::default();
+        let body = sr::OriginalBodyId::new(&budget).unwrap();
+        let inventory = SourceInventory::build(program, function, body, &budget).unwrap();
+        assert_eq!(inventory.calls.len(), 1);
+        assert!(inventory.calls[0].ordinary.is_none());
+    }
+
+    #[test]
+    fn source_trait_argument_placement_and_method_generic_boundaries_stay_closed() {
+        for source in [
+            "trait T{fn value<U>(x:U);}fn main(){}",
+            "trait T<const N:usize>{}fn main(){}",
+            "trait T<U=i32>{}fn main(){}",
+            "fn f<T:module<i32>::Trait>(){}fn main(){}",
+        ] {
+            let error = parse_syntax_unprepared(source).unwrap_err();
+            assert_eq!(
+                error.kind,
+                super::super::source::SourceErrorKind::Unsupported,
+                "{source}: {error}"
+            );
+        }
+        let params = (0..32)
+            .map(|i| format!("T{i}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let error =
+            parse_syntax_unprepared(&format!("trait T<{params}>{{}}fn main(){{}}")).unwrap_err();
+        assert_eq!(error.kind, super::super::source::SourceErrorKind::Limit);
+    }
+
+    #[test]
+    fn generic_parameter_predeclaration_checks_work_before_scanning_and_releases() {
+        use super::super::expansion_budget::{BudgetResource, Counter};
+        let (tokens, session) = lex("<T:Bound<U>,U>").unwrap().into_parts();
+        let mut names =
+            NameStoreBuilder::new(session, super::super::token::Edition::E2024).unwrap();
+        let budget = names.budget().clone();
+        let mut parser = Parser::new(&tokens, &mut names).unwrap();
+        let remaining = budget.limits().counters[Counter::Work as usize]
+            - budget.snapshot().counters[Counter::Work as usize];
+        budget.charge(Counter::Work, remaining).unwrap();
+        let error = parser.predeclare_type_parameters().unwrap_err();
+        assert_eq!(error.kind, super::super::source::SourceErrorKind::Limit);
+        assert_eq!(
+            budget.snapshot().failure.unwrap().resource,
+            BudgetResource::Counter(Counter::Work)
+        );
+        assert!(parser.type_params.is_empty());
+        drop(parser);
+        drop(names);
+        drop(tokens);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        assert_eq!(budget.snapshot().temporary_bytes, 0);
+    }
+}
 enum DepthNode<'a> {
     Type(&'a Type),
     Pattern(&'a Pattern),
@@ -10281,8 +10650,21 @@ fn walk_depth_checked(
                         push(DepthNode::Expr(arg))?;
                     }
                 }
-                Expr::TraitCall { owner, args, .. } => {
+                Expr::TraitCall {
+                    owner,
+                    trait_path,
+                    args,
+                    ..
+                } => {
                     push(DepthNode::Type(owner))?;
+                    if let TraitPath::Source(path) = trait_path.as_ref() {
+                        for segment in &path.segments {
+                            name_walk_work(names, 1)?;
+                            for arg in &segment.args {
+                                push(DepthNode::Type(arg))?;
+                            }
+                        }
+                    }
                     for arg in args {
                         push(DepthNode::Expr(arg))?;
                     }
@@ -10576,7 +10958,7 @@ impl DeclRegistry {
         Ok(match path {
             TraitPath::Source(path) => TraitLookupKey::Source(name_scope::path_key(
                 self.names.as_ref(),
-                path,
+                &path.path(self.names.as_ref())?,
                 Namespace::Type,
             )?),
             TraitPath::Builtin(kind) => TraitLookupKey::Builtin(*kind),
@@ -10781,6 +11163,45 @@ fn validate_const_forwarding(
 impl PlanCtx {
     pub fn resolve_trait_path(&self, path: &TraitPath) -> Result<ir::DeclId, String> {
         self.registry.resolve_trait_path(path)
+    }
+    pub fn resolve_trait_use(
+        &self,
+        owner: &ir::Ty,
+        path: &TraitPath,
+        env: &TypeEnv,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::TraitRef, String> {
+        self.check_budget(budget)?;
+        let structural = match caller {
+            ir::FactsCtx::Validated(facts) => {
+                if !facts.budget().same_authority(budget)
+                    || !Arc::ptr_eq(facts.world(), &self.trait_world()?)
+                {
+                    return Err("trait use changed validated caller authority".into());
+                }
+                ir::FactsCtx::Universal(facts.env().as_ref())
+            }
+            ir::FactsCtx::Universal(scope) => ir::FactsCtx::Universal(scope),
+            ir::FactsCtx::Concrete => ir::FactsCtx::Concrete,
+        };
+        // World validation may call SchemaAdapter::validate_nominal, which
+        // needs this same state mutex. Only structural checks with the exact
+        // caller binder may execute while source actuals are being interned.
+        caller.validate_ty_with_budget(owner, budget)?;
+        let application = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| "generic plan context poisoned")?;
+            state.source_trait_ref(&self.registry, path, owner, &env.params, structural, budget)?
+        };
+        caller.validate_ty_with_budget(&application.self_ty, budget)?;
+        for actual in application.args.iter() {
+            budget.charge_work(1)?;
+            caller.validate_ty_with_budget(actual, budget)?;
+        }
+        Ok(application)
     }
     pub fn from_program(program: &Program, budget: &ir::PlanBudget) -> Result<Self, String> {
         preflight_program_clone(program, budget)?;
@@ -11033,11 +11454,13 @@ impl PlanCtx {
                 index: u32::try_from(registry.declarations.len())
                     .map_err(|_| "generic declaration count overflow")?,
             };
-            let arity = if kind == ir::DeclKind::Trait {
-                1
-            } else {
-                params.len()
-            };
+            let arity = params
+                .len()
+                .checked_add(usize::from(kind == ir::DeclKind::Trait))
+                .ok_or("generic parameter resource overflow")?;
+            if arity > budget.limits().params {
+                return Err("generic parameter resource limit exceeded".into());
+            }
             let param_env = Arc::new(ir::ParamEnv::new(ir::BinderId { declaration: id }, arity)?);
             if matches!(
                 kind,
@@ -11148,7 +11571,7 @@ impl PlanCtx {
                 Some(&declaration.name),
                 declaration.module,
                 DeclItemName::Source(item),
-                &[],
+                &declaration.type_params,
                 ir::DeclKind::Trait,
                 index,
             )?;
@@ -11388,7 +11811,7 @@ impl PlanCtx {
         for (implementation, block) in program.impls.iter().enumerate() {
             let impl_id = registry.impl_ids[implementation];
             let info = registry.declaration(impl_id)?;
-            let bindings = generic_bindings(&registry, &info.env, budget)?;
+            let mut bindings = generic_bindings(&registry, &info.env, budget)?;
             let caller = if info.env.is_generic() {
                 ir::FactsCtx::Universal(&info.env)
             } else {
@@ -11410,6 +11833,23 @@ impl PlanCtx {
             };
             let mut used = std::collections::HashSet::new();
             collect_source_params(program.names.as_ref(), &block.self_ty, &mut used, budget, 0)?;
+            if let Some(path) = &block.trait_path {
+                bindings.insert(GenericBindingKey::SelfType, self_ty.clone());
+                state.source_trait_ref(&registry, path, &self_ty, &bindings, caller, budget)?;
+                if let TraitPath::Source(path) = path {
+                    for segment in &path.segments {
+                        for actual in &segment.args {
+                            collect_source_params(
+                                program.names.as_ref(),
+                                actual,
+                                &mut used,
+                                budget,
+                                0,
+                            )?;
+                        }
+                    }
+                }
+            }
             if block
                 .type_params
                 .iter()
@@ -11583,37 +12023,87 @@ impl PlanCtx {
                     context.receiver,
                 )?,
             );
+            let mut rows = Vec::new();
+            append_implicit_sized(&registry, &info.env, &mut rows, budget)?;
+            if let CallableSource::Associated { implementation, .. } =
+                registry.callable_sources[index]
+            {
+                append_source_bounds(
+                    &mut state,
+                    &registry,
+                    &bindings,
+                    &program.impls[implementation].bounds,
+                    &mut rows,
+                    caller,
+                    budget,
+                )?;
+                if let Some(path) = &program.impls[implementation].trait_path {
+                    let trait_ref = state.source_trait_ref(
+                        &registry,
+                        path,
+                        context
+                            .self_ty
+                            .as_ref()
+                            .ok_or("trait impl item without Self")?,
+                        &bindings,
+                        caller,
+                        budget,
+                    )?;
+                    if rows.len() >= tr::MAX_PREDICATES {
+                        return Err("predicate environment limit exceeded".into());
+                    }
+                    budget.retain_bytes(std::mem::size_of::<ir::Predicate>())?;
+                    let old_capacity = rows.capacity();
+                    rows.try_reserve_exact(1).map_err(|_| {
+                        super::source::SourceError::from_token(
+                            super::token_session::TokenError::Budget(
+                                registry.names.budget().poison_allocation(),
+                            ),
+                        )
+                        .to_string()
+                    })?;
+                    budget.retain_bytes(
+                        rows.capacity()
+                            .saturating_sub(old_capacity)
+                            .saturating_sub(1)
+                            .checked_mul(std::mem::size_of::<ir::Predicate>())
+                            .ok_or("trait impl item predicate capacity overflow")?,
+                    )?;
+                    rows.push(ir::Predicate::Implements(trait_ref));
+                }
+            }
+            append_source_bounds(
+                &mut state, &registry, &bindings, &f.bounds, &mut rows, caller, budget,
+            )?;
+            if let CallableSource::TraitDefault { trait_index, .. } =
+                registry.callable_sources[index]
+            {
+                let declaration = registry.trait_ids[trait_index];
+                let owner = registry.declaration(declaration)?;
+                append_source_bounds(
+                    &mut state,
+                    &registry,
+                    &bindings,
+                    &program.traits[trait_index].bounds,
+                    &mut rows,
+                    caller,
+                    budget,
+                )?;
+                let mut args = symbolic_args(&owner.param_env, budget)?;
+                args.remove(0);
+                budget.retain_bytes(256 + args.capacity() * std::mem::size_of::<ir::Ty>())?;
+                rows.push(ir::Predicate::Implements(ir::TraitRef {
+                    declaration,
+                    self_ty: context.self_ty.clone().ok_or("default without Self")?,
+                    args: args.into(),
+                }));
+            }
             state.functions.insert(
                 id,
                 tr::GenericSchema {
                     env: info.env.clone(),
                     signature,
-                    predicates: {
-                        let mut rows = Vec::new();
-                        append_implicit_sized(&registry, &info.env, &mut rows, budget)?;
-                        if let CallableSource::Associated { implementation, .. } =
-                            registry.callable_sources[index]
-                        {
-                            append_source_bounds(
-                                &registry,
-                                &bindings,
-                                &program.impls[implementation].bounds,
-                                &mut rows,
-                                budget,
-                            )?;
-                        }
-                        append_source_bounds(&registry, &bindings, &f.bounds, &mut rows, budget)?;
-                        if let CallableSource::TraitDefault { trait_index, .. } =
-                            registry.callable_sources[index]
-                        {
-                            rows.push(ir::Predicate::Implements(ir::TraitRef {
-                                declaration: registry.trait_ids[trait_index],
-                                self_ty: context.self_ty.clone().ok_or("default without Self")?,
-                                args: Arc::from([]),
-                            }));
-                        }
-                        rows.into()
-                    },
+                    predicates: rows.into(),
                 },
             );
         }
@@ -11671,6 +12161,22 @@ impl PlanCtx {
                         item.receiver,
                     )?,
                 );
+                let mut rows = Vec::new();
+                append_implicit_sized(&registry, &info.env, &mut rows, budget)?;
+                append_source_bounds(
+                    &mut state, &registry, &bindings, &t.bounds, &mut rows, caller, budget,
+                )?;
+                append_source_bounds(
+                    &mut state, &registry, &bindings, &h.bounds, &mut rows, caller, budget,
+                )?;
+                let mut args = symbolic_args(&registry.declaration(tid)?.param_env, budget)?;
+                args.remove(0);
+                budget.retain_bytes(256 + args.capacity() * std::mem::size_of::<ir::Ty>())?;
+                rows.push(ir::Predicate::Implements(ir::TraitRef {
+                    declaration: tid,
+                    self_ty: ir::Ty::Param(self_param),
+                    args: args.into(),
+                }));
                 state.functions.insert(
                     id,
                     tr::GenericSchema {
@@ -11680,13 +12186,7 @@ impl PlanCtx {
                             params,
                             result,
                         },
-                        predicates: {
-                            let mut rows = Vec::new();
-                            append_source_bounds(
-                                &registry, &bindings, &h.bounds, &mut rows, budget,
-                            )?;
-                            rows.into()
-                        },
+                        predicates: rows.into(),
                     },
                 );
             }
@@ -11773,6 +12273,79 @@ impl PlanCtx {
         for (ti, t) in program.traits.iter().enumerate() {
             let id = self.registry.trait_ids[ti];
             let info = self.declaration(id)?;
+            let bindings = generic_bindings(&self.registry, &info.env, budget)?;
+            let caller = ir::FactsCtx::Universal(&info.env);
+            let self_ty = ir::Ty::Param(ir::ParamId {
+                owner: info.param_env.binder(),
+                index: 0,
+            });
+            let supertraits = {
+                let mut state = self
+                    .state
+                    .lock()
+                    .map_err(|_| "generic plan context poisoned")?;
+                let mut rows = Vec::new();
+                append_implicit_sized(&self.registry, &info.env, &mut rows, budget)?;
+                append_source_bounds(
+                    &mut state,
+                    &self.registry,
+                    &bindings,
+                    &t.bounds,
+                    &mut rows,
+                    caller,
+                    budget,
+                )?;
+                for path in &t.supertraits {
+                    if rows.len() >= tr::MAX_PREDICATES {
+                        return Err("predicate environment limit exceeded".into());
+                    }
+                    let application = state.source_trait_ref(
+                        &self.registry,
+                        path,
+                        &self_ty,
+                        &bindings,
+                        caller,
+                        budget,
+                    )?;
+                    budget.retain_bytes(256)?;
+                    rows.try_reserve_exact(1).map_err(|_| {
+                        super::source::SourceError::from_token(
+                            super::token_session::TokenError::Budget(
+                                self.registry.names.budget().poison_allocation(),
+                            ),
+                        )
+                        .to_string()
+                    })?;
+                    rows.push(ir::Predicate::Implements(application));
+                }
+                budget.charge_work(rows.len())?;
+                budget.retain_bytes(
+                    rows.len()
+                        .checked_mul(2 * std::mem::size_of::<ir::TraitRef>())
+                        .and_then(|bytes| bytes.checked_add(2 * std::mem::size_of::<usize>()))
+                        .ok_or("trait implication storage overflow")?,
+                )?;
+                let mut applications = Vec::new();
+                applications.try_reserve_exact(rows.len()).map_err(|_| {
+                    super::source::SourceError::from_token(
+                        super::token_session::TokenError::Budget(
+                            self.registry.names.budget().poison_allocation(),
+                        ),
+                    )
+                    .to_string()
+                })?;
+                budget.retain_bytes(
+                    applications
+                        .capacity()
+                        .saturating_sub(rows.len())
+                        .checked_mul(std::mem::size_of::<ir::TraitRef>())
+                        .ok_or("trait implication capacity overflow")?,
+                )?;
+                for ir::Predicate::Implements(application) in rows {
+                    applications.push(application);
+                }
+                applications
+            };
             traits.push(tr::TraitHeader {
                 declaration: id,
                 self_param: ir::ParamId {
@@ -11781,21 +12354,7 @@ impl PlanCtx {
                 },
                 env: info.env.clone(),
                 items: self.registry.trait_items[ti].clone().into(),
-                supertraits: t
-                    .supertraits
-                    .iter()
-                    .map(|path| {
-                        Ok(ir::TraitRef {
-                            declaration: self.resolve_trait_path(path)?,
-                            self_ty: ir::Ty::Param(ir::ParamId {
-                                owner: info.param_env.binder(),
-                                index: 0,
-                            }),
-                            args: Arc::from([]),
-                        })
-                    })
-                    .collect::<Result<Vec<_>, String>>()?
-                    .into(),
+                supertraits: supertraits.into(),
             });
             for (ii, item) in t.items.iter().enumerate() {
                 let declaration = self.registry.trait_items[ti][ii];
@@ -11824,23 +12383,32 @@ impl PlanCtx {
             };
             let declaration = self.registry.impl_ids[bi];
             let info = self.declaration(declaration)?;
-            let trait_decl = self.resolve_trait_path(path)?;
-            let bindings = generic_bindings(&self.registry, &info.env, budget)?;
+            let mut bindings = generic_bindings(&self.registry, &info.env, budget)?;
             let caller = if info.env.is_generic() {
                 ir::FactsCtx::Universal(&info.env)
             } else {
                 ir::FactsCtx::Concrete
             };
             let self_ty = self.source_ty(&block.self_ty, &bindings, caller, budget)?;
+            bindings.insert(GenericBindingKey::SelfType, self_ty.clone());
             let mut predicates = Vec::new();
             append_implicit_sized(&self.registry, &info.env, &mut predicates, budget)?;
-            append_source_bounds(
-                &self.registry,
-                &bindings,
-                &block.bounds,
-                &mut predicates,
-                budget,
-            )?;
+            let trait_ref = {
+                let mut state = self
+                    .state
+                    .lock()
+                    .map_err(|_| "generic plan context poisoned")?;
+                append_source_bounds(
+                    &mut state,
+                    &self.registry,
+                    &bindings,
+                    &block.bounds,
+                    &mut predicates,
+                    caller,
+                    budget,
+                )?;
+                state.source_trait_ref(&self.registry, path, &self_ty, &bindings, caller, budget)?
+            };
             let mut pairs = Vec::new();
             for id in &self.registry.associated_ids[bi] {
                 budget.charge_work(1)?;
@@ -11854,11 +12422,7 @@ impl PlanCtx {
             }
             impls.push(tr::ImplHeader {
                 declaration,
-                trait_ref: ir::TraitRef {
-                    declaration: trait_decl,
-                    self_ty,
-                    args: Arc::from([]),
-                },
+                trait_ref,
                 schema_env: info.env.clone(),
                 predicates: predicates.into(),
                 items: pairs.into(),
@@ -12443,11 +13007,94 @@ fn receiver_mode(receiver: ReceiverKind) -> ir::ReceiverMode {
         ReceiverKind::Borrowed { kind } => ir::ReceiverMode::Borrowed { kind },
     }
 }
+impl PlanState {
+    fn source_trait_ref(
+        &mut self,
+        registry: &DeclRegistry,
+        path: &TraitPath,
+        owner: &ir::Ty,
+        bindings: &HashMap<GenericBindingKey, ir::Ty>,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::TraitRef, String> {
+        budget.charge_work(1)?;
+        caller.validate_ty_with_budget(owner, budget)?;
+        let mut args = Vec::new();
+        if let TraitPath::Source(path) = path {
+            // Check the exact original-use certificate, never synthesize a new
+            // path from the final printable segment.
+            path.path(registry.names.as_ref())?;
+            let count = path.segments.iter().try_fold(0usize, |count, segment| {
+                count
+                    .checked_add(segment.args.len())
+                    .ok_or("trait actual count overflow")
+            })?;
+            budget.charge_work(count + path.segments.len())?;
+            let bytes = count
+                .checked_mul(std::mem::size_of::<ir::Ty>())
+                .ok_or("trait actual storage overflow")?;
+            budget.retain_bytes(bytes)?;
+            args.try_reserve_exact(count).map_err(|_| {
+                super::source::SourceError::from_token(super::token_session::TokenError::Budget(
+                    registry.names.budget().poison_allocation(),
+                ))
+                .to_string()
+            })?;
+            budget.retain_bytes(
+                args.capacity()
+                    .saturating_sub(count)
+                    .checked_mul(std::mem::size_of::<ir::Ty>())
+                    .ok_or("trait actual storage overflow")?,
+            )?;
+            // Every written actual is checked before shape/arity rejection.
+            for segment in &path.segments {
+                for actual in &segment.args {
+                    let ty =
+                        self.source_ty(registry, actual, bindings, caller, budget, 0, false)?;
+                    ir::reject_references(&ty, budget)?;
+                    caller.validate_ty_with_budget(&ty, budget)?;
+                    args.push(ty);
+                }
+            }
+            if path
+                .segments
+                .iter()
+                .take(path.segments.len().saturating_sub(1))
+                .any(|segment| !segment.args.is_empty())
+            {
+                return Err("unsupported: only final trait segment may carry arguments".into());
+            }
+        }
+        let declaration = registry.resolve_trait_path(path)?;
+        let expected = registry
+            .declaration(declaration)?
+            .param_env
+            .arity()
+            .checked_sub(1)
+            .ok_or("contract: trait missing Self binder")?;
+        if args.len() != expected {
+            return Err("trait type argument arity mismatch".into());
+        }
+        budget.retain_bytes(
+            args.len()
+                .checked_mul(std::mem::size_of::<ir::Ty>())
+                .and_then(|bytes| bytes.checked_add(2 * std::mem::size_of::<usize>()))
+                .ok_or("trait actual storage overflow")?,
+        )?;
+        Ok(ir::TraitRef {
+            declaration,
+            self_ty: owner.clone(),
+            args: args.into(),
+        })
+    }
+}
 fn append_source_bounds(
+    state: &mut PlanState,
     registry: &DeclRegistry,
     bindings: &HashMap<GenericBindingKey, ir::Ty>,
     bounds: &[TypeBound],
     out: &mut Vec<ir::Predicate>,
+    caller: ir::FactsCtx<'_>,
     budget: &ir::PlanBudget,
 ) -> Result<(), String> {
     for row in bounds {
@@ -12461,11 +13108,14 @@ fn append_source_bounds(
                 return Err("predicate environment limit exceeded".into());
             }
             budget.retain_bytes(256)?;
-            out.push(ir::Predicate::Implements(ir::TraitRef {
-                declaration: registry.resolve_trait_path(path)?,
-                self_ty: ty.clone(),
-                args: Arc::from([]),
-            }));
+            let trait_ref = state.source_trait_ref(registry, path, ty, bindings, caller, budget)?;
+            out.try_reserve_exact(1).map_err(|_| {
+                super::source::SourceError::from_token(super::token_session::TokenError::Budget(
+                    registry.names.budget().poison_allocation(),
+                ))
+                .to_string()
+            })?;
+            out.push(ir::Predicate::Implements(trait_ref));
         }
     }
     Ok(())
@@ -13114,10 +13764,22 @@ fn generic_bindings(
         let info = registry.declaration(scope.binder().declaration)?;
         if info.kind == ir::DeclKind::Trait {
             let values = symbolic_args(scope, budget)?;
-            let [self_ty] = values.as_slice() else {
-                return Err("contract: trait Self binder arity".into());
-            };
+            let (self_ty, actuals) = values
+                .split_first()
+                .ok_or("contract: trait Self binder arity")?;
+            if actuals.len() != info.type_params.len() {
+                return Err("contract: trait parameter binder arity".into());
+            }
             bindings.insert(GenericBindingKey::SelfType, self_ty.clone());
+            for (name, ty) in info.type_params.iter().zip(actuals) {
+                budget.charge_work(1)?;
+                if bindings
+                    .insert(registry.parameter_key(*name)?, ty.clone())
+                    .is_some()
+                {
+                    return Err("duplicate visible generic parameter".into());
+                }
+            }
             continue;
         }
         for (name, ty) in info.type_params.iter().zip(symbolic_args(scope, budget)?) {
@@ -13144,10 +13806,8 @@ fn append_implicit_sized(
         .ok_or("missing canonical Sized identity")?;
     for scope in env.scopes() {
         let declaration = registry.declaration(scope.binder().declaration)?;
-        if declaration.kind == ir::DeclKind::Trait {
-            continue;
-        }
-        for index in 0..scope.arity() {
+        let first = usize::from(declaration.kind == ir::DeclKind::Trait);
+        for index in first..scope.arity() {
             budget.charge_work(1)?;
             if rows.len() >= 256 {
                 return Err("predicate limit exceeded".into());
@@ -13167,14 +13827,30 @@ fn append_implicit_sized(
 }
 fn symbolic_args(env: &ir::ParamEnv, budget: &ir::PlanBudget) -> Result<Vec<ir::Ty>, String> {
     budget.charge_work(env.arity())?;
-    Ok((0..env.arity())
-        .map(|index| {
-            ir::Ty::Param(ir::ParamId {
-                owner: env.binder(),
-                index: index as u16,
-            })
-        })
-        .collect())
+    budget.retain_bytes(
+        env.arity()
+            .checked_mul(std::mem::size_of::<ir::Ty>())
+            .ok_or("symbolic argument storage overflow")?,
+    )?;
+    let mut args = Vec::new();
+    args.try_reserve_exact(env.arity()).map_err(|_| {
+        // Force the shared planning ledger into its sticky resource state.
+        let _ = budget.retain_bytes(usize::MAX);
+        "resource: symbolic argument allocation failed".to_owned()
+    })?;
+    budget.retain_bytes(
+        args.capacity()
+            .saturating_sub(env.arity())
+            .checked_mul(std::mem::size_of::<ir::Ty>())
+            .ok_or("symbolic argument capacity overflow")?,
+    )?;
+    for index in 0..env.arity() {
+        args.push(ir::Ty::Param(ir::ParamId {
+            owner: env.binder(),
+            index: index as u16,
+        }));
+    }
+    Ok(args)
 }
 fn param_bindings(
     registry: &DeclRegistry,

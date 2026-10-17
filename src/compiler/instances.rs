@@ -4,7 +4,7 @@ use super::{frontend, ir, traits};
 use std::sync::Arc;
 
 const SEMANTICS: &[u8] =
-    b"jr-native-generic-carriers-v3/linux-x86_64/checked/carrier-regions-storage-effects/structured-declaration-paths/trait-owned-declarations";
+    b"jr-native-generic-carriers-v4/linux-x86_64/checked/carrier-regions-storage-effects/structured-declaration-paths/complete-trait-applications";
 
 pub(super) struct InstanceIdentity {
     pub symbol: String,
@@ -98,6 +98,24 @@ impl Encoder<'_> {
                 (Some(trait_decl), Some(trait_item)) => {
                     self.append(b"T")?;
                     self.declaration(trait_decl)?;
+                    let world = self.context.trait_world()?;
+                    let mut application = None;
+                    for implementation in world.impl_headers() {
+                        self.budget.charge_work(1)?;
+                        if implementation.declaration == owner.impl_decl {
+                            application = Some(&implementation.trait_ref);
+                            break;
+                        }
+                    }
+                    let application =
+                        application.ok_or("trait instance key has no checked impl application")?;
+                    if application.declaration != trait_decl {
+                        return Err("trait instance key disagrees with checked impl owner".into());
+                    }
+                    self.count(application.args.len())?;
+                    for argument in application.args.iter() {
+                        self.pattern(argument, &env, 0)?;
+                    }
                     if self.context.declaration(trait_item)?.kind != ir::DeclKind::TraitItem {
                         return Err("trait instance key has non-item owner".into());
                     }
@@ -817,6 +835,60 @@ mod tests {
         assert!(identity(&target, &first, &budget).is_ok());
         assert!(identity(&target, &second, &budget).is_err());
         assert!(second.is_entry_decl(target.declaration).is_err());
+    }
+
+    #[test]
+    fn trait_implementation_keys_include_every_actual_and_ignore_discovery_order() {
+        fn keys(source: &str) -> Vec<Vec<u8>> {
+            let program = frontend::parse(source).unwrap();
+            let budget = ir::PlanBudget::default();
+            let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let mut keys = Vec::new();
+            for index in 0..context.callable_count() {
+                let declaration = context.callable_decl(index).unwrap();
+                if context
+                    .semantic_path(declaration)
+                    .unwrap()
+                    .associated
+                    .as_ref()
+                    .is_some_and(|owner| owner.trait_decl.is_some())
+                {
+                    keys.push(
+                        identity(
+                            &ir::CallTarget {
+                                declaration,
+                                type_args: Arc::from([]),
+                            },
+                            &context,
+                            &budget,
+                        )
+                        .unwrap()
+                        .canonical
+                        .to_vec(),
+                    );
+                }
+            }
+            keys.sort();
+            assert_eq!(keys.len(), 2);
+            assert_ne!(keys[0], keys[1]);
+            keys
+        }
+        assert_eq!(
+            keys(
+                "struct S;trait Get<T>{fn get(self)->T;}impl Get<i32> for S{fn get(self)->i32{7}}impl Get<bool> for S{fn get(self)->bool{true}}fn main(){}"
+            ),
+            keys(
+                "fn unrelated(){}trait Get<T>{fn get(self)->T;}struct S;impl Get<bool> for S{fn get(self)->bool{true}}impl Get<i32> for S{fn get(self)->i32{7}}fn main(){}"
+            ),
+        );
+        assert_eq!(
+            keys(
+                "struct S;trait Pair<A,B>{fn first(self,a:A,b:B)->A;}impl Pair<i32,bool> for S{fn first(self,a:i32,b:bool)->i32{a}}impl Pair<bool,i32> for S{fn first(self,a:bool,b:i32)->bool{a}}fn main(){}"
+            ),
+            keys(
+                "trait Pair<A,B>{fn first(self,a:A,b:B)->A;}struct S;impl Pair<bool,i32> for S{fn first(self,a:bool,b:i32)->bool{a}}impl Pair<i32,bool> for S{fn first(self,a:i32,b:bool)->i32{a}}fn unrelated(){}fn main(){}"
+            ),
+        );
     }
 
     #[test]

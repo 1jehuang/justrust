@@ -252,6 +252,41 @@ pub(super) fn inventory(
         }
         Ok(())
     }
+    fn trait_path(
+        path: &TraitPath,
+        ds: &mut Vec<tr::RecipeDescriptor>,
+        b: &ir::PlanBudget,
+        depth: usize,
+    ) -> Result<(), String> {
+        b.check_depth(depth)?;
+        b.charge_work(1)?;
+        if let TraitPath::Source(path) = path {
+            b.charge_work(path.segments.len())?;
+            for segment in &path.segments {
+                b.charge_work(segment.args.len())?;
+                for actual in &segment.args {
+                    ty(actual, ds, b, depth + 1)?;
+                }
+            }
+        }
+        Ok(())
+    }
+    fn bounds(
+        values: &[TypeBound],
+        ds: &mut Vec<tr::RecipeDescriptor>,
+        b: &ir::PlanBudget,
+        depth: usize,
+    ) -> Result<(), String> {
+        b.check_depth(depth)?;
+        b.charge_work(values.len())?;
+        for bound in values {
+            b.charge_work(bound.traits.len())?;
+            for path in &bound.traits {
+                trait_path(path, ds, b, depth + 1)?;
+            }
+        }
+        Ok(())
+    }
     fn block(
         value: &Block,
         ds: &mut Vec<tr::RecipeDescriptor>,
@@ -392,8 +427,14 @@ pub(super) fn inventory(
                     expr(e, ds, b, d + 1)?;
                 }
             }
-            Expr::TraitCall { owner, args, .. } => {
+            Expr::TraitCall {
+                owner,
+                trait_path: path,
+                args,
+                ..
+            } => {
                 ty(owner, ds, b, d + 1)?;
+                trait_path(path, ds, b, d + 1)?;
                 for e in args {
                     expr(e, ds, b, d + 1)?;
                 }
@@ -471,6 +512,8 @@ pub(super) fn inventory(
         ds: &mut Vec<tr::RecipeDescriptor>,
         b: &ir::PlanBudget,
     ) -> Result<(), String> {
+        b.charge_work(f.type_params.len())?;
+        bounds(&f.bounds, ds, b, 0)?;
         for (_, t) in &f.params {
             ty(t, ds, b, 0)?;
         }
@@ -481,6 +524,11 @@ pub(super) fn inventory(
         function(f, &mut descriptors, budget)?;
     }
     for i in &program.impls {
+        budget.charge_work(i.type_params.len())?;
+        bounds(&i.bounds, &mut descriptors, budget, 0)?;
+        if let Some(path) = &i.trait_path {
+            trait_path(path, &mut descriptors, budget, 0)?;
+        }
         ty(&i.self_ty, &mut descriptors, budget, 0)?;
         for m in &i.items {
             function(&m.function, &mut descriptors, budget)?;
@@ -499,7 +547,14 @@ pub(super) fn inventory(
         }
     }
     for t in &program.traits {
+        budget.charge_work(t.type_params.len())?;
+        bounds(&t.bounds, &mut descriptors, budget, 0)?;
+        for path in &t.supertraits {
+            trait_path(path, &mut descriptors, budget, 0)?;
+        }
         for i in &t.items {
+            budget.charge_work(i.signature.type_params.len())?;
+            bounds(&i.signature.bounds, &mut descriptors, budget, 0)?;
             for (_, t) in &i.signature.params {
                 ty(t, &mut descriptors, budget, 0)?;
             }
@@ -508,6 +563,9 @@ pub(super) fn inventory(
                 function(default, &mut descriptors, budget)?;
             }
         }
+    }
+    for (_, path) in &program.trait_imports {
+        trait_path(path, &mut descriptors, budget, 0)?;
     }
     let mut inventory = tr::RecipeShapeInventory::new();
     for descriptor in descriptors {
@@ -706,6 +764,74 @@ pub(super) fn checked_body(
 #[cfg(test)]
 mod wide_tests {
     use super::*;
+
+    #[test]
+    fn trait_actual_recipes_include_unused_bounds_supertraits_impls_and_default_ufcs() {
+        let parsed = super::super::parse_unresolved(
+            "trait Bound<T>{}trait Parent<T>{}\
+             trait Decl<T:Bound<[bool;2]>>:Parent<[bool;3]>{\
+             fn provided(&self){let _=<S as Act<[bool;7]>>::go(S);}}\
+             struct Wrap<T>(T);impl<T:Bound<[bool;4]>>Bound<[bool;5]> for Wrap<T>{}\
+             trait Act<T>{fn go(self)->i32;}struct S;\
+             impl Act<[bool;7]> for S{fn go(self)->i32{7}}\
+             fn unused<U:Bound<[bool;6]>>(){}fn main(){}",
+        )
+        .unwrap();
+        let budget = ir::PlanBudget::default();
+        let shapes = inventory(&parsed.program, &budget).unwrap();
+        let builder = tr::CoreCatalogBuilder::new(
+            ir::SnapshotId::allocate().unwrap(),
+            parsed.program.modules.clone(),
+            &budget,
+        )
+        .unwrap();
+        let source_start = builder.source_start();
+        let catalog = builder.finish(source_start, shapes, &budget).unwrap();
+        for len in 2..=7 {
+            let descriptor = tr::RecipeDescriptor::CloneArray { len };
+            match catalog.recipe(descriptor) {
+                Ok(_) => {}
+                Err(error) => {
+                    let footprint = counts(descriptor, &budget).unwrap();
+                    let admission =
+                        crate::compiler::ownership::preflight_recipe_counts(&footprint, &budget)
+                            .unwrap();
+                    let crate::compiler::ownership::RecipeAdmission::IntrinsicLimit(reason) =
+                        admission
+                    else {
+                        panic!(
+                            "missing actually written trait argument array length {len}: {error}"
+                        );
+                    };
+                    assert_eq!(error.kind(), tr::FactsErrorKind::Resource);
+                    assert_eq!(error.to_string(), reason.message());
+                }
+            }
+            assert!(!budget.has_resource_failure());
+        }
+        let absent = catalog
+            .recipe(tr::RecipeDescriptor::CloneArray { len: 8 })
+            .unwrap_err();
+        assert_eq!(absent.kind(), tr::FactsErrorKind::InvalidMetadata);
+        assert_eq!(absent.to_string(), "Clone recipe shape was not inventoried");
+        assert!(!budget.has_resource_failure());
+    }
+
+    #[test]
+    fn unused_trait_argument_recipe_depth_failure_is_not_silently_ignored() {
+        let parsed = super::super::parse_unresolved(
+            "trait Bound<T>{}fn unused<U:Bound<[[bool;2];3]>>(){}fn main(){}",
+        )
+        .unwrap();
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            depth: 1,
+            ..ir::PlanLimits::default()
+        });
+        assert!(inventory(&parsed.program, &budget).is_err());
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Depth);
+        assert_eq!(failure.requested, 2);
+    }
 
     #[test]
     fn wide_clone_recipe_is_scalar_read_load_without_aggregate_origins() {

@@ -1010,6 +1010,11 @@ pub struct ValidatedTraitWorld {
 }
 
 impl ValidatedTraitWorld {
+    /// Immutable implementation headers retained by this validated world.
+    pub fn impl_headers(&self) -> &[ImplHeader] {
+        &self.headers.impls
+    }
+
     pub fn build(
         mut headers: HeaderSet,
         schema: Arc<dyn SchemaCx + Send + Sync>,
@@ -1153,7 +1158,7 @@ impl ValidatedTraitWorld {
                 predicates: &env,
                 phase: FactsPhase::Universal,
             };
-            world.require_impl_wf(h, &h.trait_ref.self_ty, context, &mut Vec::new())?;
+            world.require_impl_wf(h, &h.trait_ref, context, &mut Vec::new())?;
         }
         world.build_environments()?;
         world.validate_default_body_signatures()?;
@@ -1315,6 +1320,33 @@ impl ValidatedTraitWorld {
             "declaration has no authoritative predicate environment",
         ))
     }
+    fn trait_arguments(&self, goal: &TraitRef) -> Result<Vec<Ty>> {
+        let header = self.trait_header(goal.declaration)?;
+        if goal.args.len().checked_add(1) != Some(header.env.total_arity()) {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "trait argument arity mismatch",
+            ));
+        }
+        let mut arguments = Vec::new();
+        push(&self.budget, &mut arguments, goal.self_ty.clone())?;
+        for argument in goal.args.iter() {
+            push(&self.budget, &mut arguments, argument.clone())?;
+        }
+        Ok(arguments)
+    }
+    fn symbolic_trait_ref(&self, declaration: DeclId) -> Result<TraitRef> {
+        let header = self.trait_header(declaration)?;
+        let mut args = Vec::new();
+        for parameter in header.env.ordered_params().skip(1) {
+            push(&self.budget, &mut args, Ty::Param(parameter))?;
+        }
+        Ok(TraitRef {
+            declaration,
+            self_ty: Ty::Param(header.self_param),
+            args: args.into(),
+        })
+    }
     fn validate_ref_in(
         &self,
         goal: &TraitRef,
@@ -1328,14 +1360,18 @@ impl ValidatedTraitWorld {
                 "trait reference does not name a trait",
             ));
         }
-        self.trait_header(goal.declaration)?;
-        if !goal.args.is_empty() {
-            return Err(FactsError::unsupported(
+        let header = self.trait_header(goal.declaration)?;
+        self.validate_ty(&goal.self_ty, env, maybe_unsized, true, 0)?;
+        for argument in goal.args.iter() {
+            self.validate_actual(argument, env)?;
+            charged(&self.budget, ir::reject_references(argument, &self.budget))?;
+        }
+        if goal.args.len().checked_add(1) != Some(header.env.total_arity()) {
+            return Err(FactsError::invalid(
                 &self.budget,
-                "unsupported: generic trait arguments",
+                "trait argument arity mismatch",
             ));
         }
-        self.validate_ty(&goal.self_ty, env, maybe_unsized, true, 0)?;
         Ok(())
     }
     fn validate_predicates(
@@ -1378,16 +1414,12 @@ impl ValidatedTraitWorld {
         let mut declared = Vec::new();
         self.append_predicate(
             &mut declared,
-            &Predicate::Implements(TraitRef {
-                declaration: owner,
-                self_ty: Ty::Param(parameter),
-                args: Arc::from([]),
-            }),
+            &Predicate::Implements(self.symbolic_trait_ref(owner)?),
         )?;
         for predicate in predicates {
             self.append_predicate(&mut declared, predicate)?;
         }
-        self.close_predicates(&mut declared)?;
+        self.close_predicates(&mut declared, &self.trait_header(owner)?.env)?;
         Ok((!self.predicates_prove_sized(parameter, &declared)?).then_some(parameter))
     }
     fn validate_ty(
@@ -2055,7 +2087,12 @@ impl ValidatedTraitWorld {
                 || !self.same_env(&info.env, &h.env)?
                 || !h.env.contains(h.self_param)
                 || h.self_param.owner.declaration != h.declaration
-                || h.env.total_arity() != 1
+                || h.self_param.index != 0
+                || h.env.total_arity() == 0
+                || h.env.total_arity() > 32
+                || h.env.total_arity() != info.own_env.arity()
+                || h.env.scopes().len() != 1
+                || h.env.ordered_params().next() != Some(h.self_param)
             {
                 return Err(FactsError::invalid(
                     &self.budget,
@@ -2234,7 +2271,7 @@ impl ValidatedTraitWorld {
                 charged(&self.budget, self.budget.charge_work(1))?;
                 if a.trait_ref.declaration == b.trait_ref.declaration {
                     let mut bindings = Vec::new();
-                    if self.unify(
+                    let mut overlaps = self.unify(
                         Term {
                             side: 0,
                             ty: &a.trait_ref.self_ty,
@@ -2245,7 +2282,25 @@ impl ValidatedTraitWorld {
                         },
                         &mut bindings,
                         0,
-                    )? {
+                    )?;
+                    if a.trait_ref.args.len() != b.trait_ref.args.len() {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "trait impl head arity mismatch",
+                        ));
+                    }
+                    for (left, right) in a.trait_ref.args.iter().zip(b.trait_ref.args.iter()) {
+                        if !overlaps {
+                            break;
+                        }
+                        overlaps = self.unify(
+                            Term { side: 0, ty: left },
+                            Term { side: 1, ty: right },
+                            &mut bindings,
+                            0,
+                        )?;
+                    }
+                    if overlaps {
                         return Err(FactsError::ambiguous(
                             &self.budget,
                             "overlapping trait impl heads (predicate absence cannot establish disjointness)",
@@ -2279,7 +2334,6 @@ impl ValidatedTraitWorld {
     fn validate_source_default(&self, item: &TraitItemHeader, default: DeclId) -> Result<()> {
         let info = self.info(default)?;
         let callable = self.callable_header(default)?;
-        let owner = self.trait_header(item.trait_decl)?;
         if self.catalog.declaration(default).is_some()
             || info.kind != DeclKind::AssociatedFunction
             || info.owner != Some(item.trait_decl)
@@ -2302,13 +2356,9 @@ impl ValidatedTraitWorld {
         self.implicit_sized(&item.schema.env, &mut required)?;
         self.append_predicate(
             &mut required,
-            &Predicate::Implements(TraitRef {
-                declaration: item.trait_decl,
-                self_ty: Ty::Param(owner.self_param),
-                args: Arc::from([]),
-            }),
+            &Predicate::Implements(self.symbolic_trait_ref(item.trait_decl)?),
         )?;
-        self.close_predicates(&mut required)?;
+        self.close_predicates(&mut required, &item.schema.env)?;
         let mut provided = Vec::new();
         for predicate in callable.schema.predicates.iter() {
             self.append_predicate(&mut provided, predicate)?;
@@ -2316,13 +2366,9 @@ impl ValidatedTraitWorld {
         self.implicit_sized(&callable.schema.env, &mut provided)?;
         self.append_predicate(
             &mut provided,
-            &Predicate::Implements(TraitRef {
-                declaration: item.trait_decl,
-                self_ty: Ty::Param(owner.self_param),
-                args: Arc::from([]),
-            }),
+            &Predicate::Implements(self.symbolic_trait_ref(item.trait_decl)?),
         )?;
-        self.close_predicates(&mut provided)?;
+        self.close_predicates(&mut provided, &callable.schema.env)?;
         for (left, right) in [(&required, &provided), (&provided, &required)] {
             for predicate in left.iter() {
                 let mut present = false;
@@ -2422,7 +2468,11 @@ impl ValidatedTraitWorld {
         self.validate_ref_in(&h.trait_ref, &h.schema_env, None)?;
         self.validate_predicates(&h.predicates, &h.schema_env, None)?;
         for p in h.schema_env.ordered_params() {
-            if !self.contains_param(&h.trait_ref.self_ty, p, 0)? {
+            let mut constrained = self.contains_param(&h.trait_ref.self_ty, p, 0)?;
+            for argument in h.trait_ref.args.iter() {
+                constrained |= self.contains_param(argument, p, 0)?;
+            }
+            if !constrained {
                 return Err(FactsError::invalid(
                     &self.budget,
                     "unconstrained trait impl parameter",
@@ -2502,7 +2552,7 @@ impl ValidatedTraitWorld {
                 predicates: &env,
                 phase: FactsPhase::Universal,
             };
-            let (expected, _) = self.instantiate_item(item, &h.trait_ref.self_ty, context)?;
+            let (expected, _) = self.instantiate_item(item, &h.trait_ref, context)?;
             self.validate_signature_shape(&expected.signature, &h.schema_env, None)?;
             self.validate_predicates(&expected.predicates, &h.schema_env, None)?;
             if !self.eq_types(
@@ -2522,8 +2572,12 @@ impl ValidatedTraitWorld {
                     "trait implementation signature does not match required declaration",
                 ));
             }
+            let owner_membership = Predicate::Implements(h.trait_ref.clone());
             for predicate in target.schema.predicates.iter() {
-                let mut allowed = false;
+                // The checked item owner is this exact implementation, so its
+                // full application is known inside the implementation body.
+                // Another application with the same Self is not that proof.
+                let mut allowed = self.eq_predicate(predicate, &owner_membership)?;
                 for candidate in env.predicates.iter().chain(expected.predicates.iter()) {
                     if self.eq_predicate(predicate, candidate)? {
                         allowed = true;
@@ -2540,33 +2594,63 @@ impl ValidatedTraitWorld {
         }
         Ok(())
     }
-    fn supers_for(&self, goal: &TraitRef) -> Result<Vec<Predicate>> {
+    fn supers_for(&self, goal: &TraitRef, caller: &GenericEnv) -> Result<Vec<Predicate>> {
         let header = self.trait_header(goal.declaration)?;
-        let mut supers = Vec::new();
-        for declared in header.supertraits.iter() {
-            if !matches!(&declared.self_ty, Ty::Param(p) if *p == header.self_param) {
-                return Err(FactsError::unsupported(
-                    &self.budget,
-                    "unsupported: supertrait Self type transformation",
-                ));
-            }
+        if goal.args.len().checked_add(1) != Some(header.env.total_arity()) {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "trait argument arity mismatch",
+            ));
+        }
+        let mut declared = Vec::new();
+        for requirement in header.supertraits.iter() {
             push(
                 &self.budget,
-                &mut supers,
-                Predicate::Implements(TraitRef {
-                    declaration: declared.declaration,
-                    self_ty: goal.self_ty.clone(),
-                    args: declared.args.clone(),
-                }),
+                &mut declared,
+                Predicate::Implements(requirement.clone()),
             )?;
         }
-        Ok(supers)
+        if declared.is_empty() {
+            return Ok(declared);
+        }
+        // Preserve the old zero-argument path and its reference-Self behavior.
+        if header.env.total_arity() == 1
+            && header.supertraits.iter().all(|requirement| {
+                matches!(requirement.self_ty, Ty::Param(p) if p == header.self_param)
+                    && requirement.args.is_empty()
+            })
+        {
+            for Predicate::Implements(requirement) in &mut declared {
+                requirement.self_ty = goal.self_ty.clone();
+            }
+            return Ok(declared);
+        }
+        let arguments = self.trait_arguments(goal)?;
+        retain::<ir::RefContract>(&self.budget, 1)?;
+        let schema = GenericSchema {
+            env: header.env.clone(),
+            signature: Signature {
+                ref_contract: Arc::new(ir::RefContract::default()),
+                params: Vec::new(),
+                result: Ty::Unit,
+            },
+            predicates: declared.into(),
+        };
+        let instantiated =
+            self.schema
+                .instantiate_schema(&schema, &arguments, caller, &self.budget)?;
+        self.validate_predicates(&instantiated.predicates, caller, None)?;
+        let mut result = Vec::new();
+        for predicate in instantiated.predicates.iter() {
+            push(&self.budget, &mut result, predicate.clone())?;
+        }
+        Ok(result)
     }
-    fn close_predicates(&self, predicates: &mut Vec<Predicate>) -> Result<()> {
+    fn close_predicates(&self, predicates: &mut Vec<Predicate>, caller: &GenericEnv) -> Result<()> {
         let mut index = 0;
         while index < predicates.len() {
             let Predicate::Implements(goal) = &predicates[index];
-            let supers = self.supers_for(goal)?;
+            let supers = self.supers_for(goal, caller)?;
             for p in supers {
                 self.append_predicate(predicates, &p)?;
             }
@@ -2576,7 +2660,7 @@ impl ValidatedTraitWorld {
     }
     fn implicit_sized(&self, env: &GenericEnv, predicates: &mut Vec<Predicate>) -> Result<()> {
         for p in env.ordered_params() {
-            if self.info(p.owner.declaration)?.kind == DeclKind::Trait {
+            if self.info(p.owner.declaration)?.kind == DeclKind::Trait && p.index == 0 {
                 continue;
             }
             self.append_predicate(
@@ -2606,7 +2690,7 @@ impl ValidatedTraitWorld {
                 self.append_predicate(&mut predicates, p)?;
             }
             self.implicit_sized(&h.schema_env, &mut predicates)?;
-            self.close_predicates(&mut predicates)?;
+            self.close_predicates(&mut predicates, &h.schema_env)?;
             retain::<PredicateEnv>(&self.budget, 1)?;
             let index = self.environments.len();
             push(
@@ -3652,16 +3736,18 @@ impl ValidatedTraitWorld {
     fn require_impl_wf(
         &self,
         h: &ImplHeader,
-        actual: &Ty,
+        goal: &TraitRef,
         context: ProofContext<'_>,
         active: &mut Vec<GoalKey>,
     ) -> Result<()> {
-        let goal = TraitRef {
-            declaration: h.trait_ref.declaration,
-            self_ty: actual.clone(),
-            args: Arc::from([]),
-        };
-        for p in self.supers_for(&goal)? {
+        if goal.declaration != h.trait_ref.declaration {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "implementation well-formedness changed trait identity",
+            ));
+        }
+        let actual = &goal.self_ty;
+        for p in self.supers_for(goal, context.env())? {
             self.require_in(&p, context, active)?;
         }
         if goal.declaration != self.catalog.id(CatalogItem::Copy) {
@@ -3742,13 +3828,9 @@ impl ValidatedTraitWorld {
             self.implicit_sized(&item.schema.env, &mut predicates)?;
             self.append_predicate(
                 &mut predicates,
-                &Predicate::Implements(TraitRef {
-                    declaration: item.trait_decl,
-                    self_ty: Ty::Param(self.trait_header(item.trait_decl)?.self_param),
-                    args: Arc::from([]),
-                }),
+                &Predicate::Implements(self.symbolic_trait_ref(item.trait_decl)?),
             )?;
-            self.close_predicates(&mut predicates)?;
+            self.close_predicates(&mut predicates, &item.schema.env)?;
             retain::<PredicateEnv>(&self.budget, 1)?;
             let env = Arc::new(PredicateEnv {
                 world: self.id,
@@ -3768,11 +3850,7 @@ impl ValidatedTraitWorld {
             if let Some(item) = self.source_default_item(callable.declaration)? {
                 self.append_predicate(
                     &mut requirements,
-                    &Predicate::Implements(TraitRef {
-                        declaration: item.trait_decl,
-                        self_ty: Ty::Param(self.trait_header(item.trait_decl)?.self_param),
-                        args: Arc::from([]),
-                    }),
+                    &Predicate::Implements(self.symbolic_trait_ref(item.trait_decl)?),
                 )?;
             }
             let owner = self.info(callable.declaration)?.owner;
@@ -3789,7 +3867,7 @@ impl ValidatedTraitWorld {
                     self.append_predicate(&mut requirements, p)?;
                 }
             }
-            self.close_predicates(&mut requirements)?;
+            self.close_predicates(&mut requirements, &callable.schema.env)?;
             retain::<Predicate>(&self.budget, requirements.len())?;
             let declared: Arc<[Predicate]> = requirements.clone().into();
             push(
@@ -3803,7 +3881,7 @@ impl ValidatedTraitWorld {
                     &Predicate::Implements(h.trait_ref.clone()),
                 )?;
             }
-            self.close_predicates(&mut requirements)?;
+            self.close_predicates(&mut requirements, &callable.schema.env)?;
             retain::<PredicateEnv>(&self.budget, 1)?;
             let env = Arc::new(PredicateEnv {
                 world: self.id,
@@ -4501,10 +4579,19 @@ impl ValidatedTraitWorld {
     fn instantiate_item(
         &self,
         item: &TraitItemHeader,
-        actual: &Ty,
+        goal: &TraitRef,
         context: ProofContext<'_>,
     ) -> Result<(InstantiatedSchema, Option<Arc<SignatureTopologyProof>>)> {
         self.check_context(context)?;
+        if goal.declaration != item.trait_decl {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "trait item application owner mismatch",
+            ));
+        }
+        self.validate_ref_in(goal, context.env(), None)?;
+        let actual = &goal.self_ty;
+        let arguments = self.trait_arguments(goal)?;
         let owner = self.trait_header(item.trait_decl)?;
         let info = self.info(item.declaration)?;
         if info.kind != DeclKind::TraitItem
@@ -4567,10 +4654,15 @@ impl ValidatedTraitWorld {
         {
             charged(&self.budget, self.budget.charge_work(1))?;
             if parameter != owner.self_param {
-                return Err(FactsError::unsupported(
-                    &self.budget,
-                    "unsupported: executable method type parameters",
-                ));
+                if !owner.env.contains(parameter) {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "latent carrier has foreign trait parameter",
+                    ));
+                }
+                // Non-Self trait actuals are reference-free, so their latent
+                // parameter tails introduce no runtime reference positions.
+                continue;
             }
             charged(
                 &self.budget,
@@ -4585,7 +4677,7 @@ impl ValidatedTraitWorld {
         }
         let mut instantiated = self.schema.instantiate_schema(
             &item.schema,
-            std::slice::from_ref(actual),
+            &arguments,
             context.env(),
             &self.budget,
         )?;
@@ -4788,7 +4880,7 @@ impl ValidatedTraitWorld {
         instantiated.signature.ref_contract = realized.clone();
         self.validate_signature_shape(&instantiated.signature, context.env(), None)?;
         self.validate_position_coverage(&instantiated.signature)?;
-        retain::<Ty>(&self.budget, 1)?;
+        retain::<Ty>(&self.budget, arguments.len())?;
         retain::<SignatureTopologyProof>(&self.budget, 1)?;
         let proof = Arc::new(SignatureTopologyProof {
             world: self.id,
@@ -4796,7 +4888,7 @@ impl ValidatedTraitWorld {
             environment: context.predicates.index,
             phase: context.phase,
             declaration: item.declaration,
-            arguments: Arc::from([actual.clone()]),
+            arguments: arguments.into(),
             schema: origin,
             fixed_regions: fixed_regions.into(),
             carriers: carriers.into(),
@@ -4818,7 +4910,11 @@ impl ValidatedTraitWorld {
             || proof.environment != context.predicates.index
             || proof.phase != context.phase
             || !proof.budget.same_authority(&self.budget)
-            || proof.arguments.len() != 1
+            || proof.arguments.len()
+                != self
+                    .trait_header(self.item_header(proof.declaration)?.trait_decl)?
+                    .env
+                    .total_arity()
             || proof.fixed_regions.len() != usize::from(proof.schema.fixed.region_count)
             || !self
                 .origins
@@ -5048,6 +5144,22 @@ impl ValidatedTraitWorld {
             )? {
                 continue;
             }
+            if implementation.trait_ref.args.len() != goal.args.len() {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "trait implementation application arity mismatch",
+                ));
+            }
+            let mut matches = true;
+            for (head, actual) in implementation.trait_ref.args.iter().zip(goal.args.iter()) {
+                if !self.match_head(head, actual, &implementation.schema_env, &mut slots, 0)? {
+                    matches = false;
+                    break;
+                }
+            }
+            if !matches {
+                continue;
+            }
             let mut args = Vec::new();
             for slot in slots {
                 push(
@@ -5064,17 +5176,23 @@ impl ValidatedTraitWorld {
             // Use the raw structural substitution callback, never invoke body
             // checking or a second compiler to justify an implementation.
             retain::<ir::RefContract>(&self.budget, 1)?;
+            let mut head_arguments = Vec::new();
+            for argument in implementation.trait_ref.args.iter() {
+                push(&self.budget, &mut head_arguments, argument.clone())?;
+            }
             let schema = GenericSchema {
                 env: implementation.schema_env.clone(),
                 signature: Signature {
                     ref_contract: Arc::new(ir::RefContract::default()),
-                    params: Vec::new(),
+                    params: head_arguments,
                     result: implementation.trait_ref.self_ty.clone(),
                 },
                 predicates: implementation.predicates.clone(),
             };
             let instantiated = self.instantiate_in(&schema, &args, facts, None)?;
-            if !self.eq_ty(&instantiated.signature.result, &goal.self_ty, 0)? {
+            if !self.eq_ty(&instantiated.signature.result, &goal.self_ty, 0)?
+                || !self.eq_types(&instantiated.signature.params, &goal.args, 0)?
+            {
                 return Err(FactsError::invalid(
                     &self.budget,
                     "impl head substitution disagrees with matched goal",
@@ -5093,7 +5211,7 @@ impl ValidatedTraitWorld {
             if !satisfied {
                 continue;
             }
-            self.require_impl_wf(implementation, &goal.self_ty, facts, active)?;
+            self.require_impl_wf(implementation, goal, facts, active)?;
             if selected.is_some() {
                 return Err(FactsError::ambiguous(
                     &self.budget,
@@ -5180,7 +5298,7 @@ impl ValidatedTraitWorld {
                 return Ok(Some(ProofOutcome::NotProven));
             }
         }
-        for supertrait in self.supers_for(goal)? {
+        for supertrait in self.supers_for(goal, context.env())? {
             if matches!(
                 self.prove_in(&supertrait, context, active)?,
                 ProofOutcome::NotProven
@@ -5215,8 +5333,7 @@ impl ValidatedTraitWorld {
             context,
             &mut Vec::new(),
         )?;
-        let (instantiated, topology) =
-            self.instantiate_item(item, &call.trait_ref.self_ty, context)?;
+        let (instantiated, topology) = self.instantiate_item(item, &call.trait_ref, context)?;
         for predicate in instantiated.predicates.iter() {
             self.require_in(predicate, context, &mut Vec::new())?;
         }
@@ -5474,7 +5591,7 @@ impl TraitCx for ValidatedTraitWorld {
                         self.ensure_provider(default)?;
                         target = Some(CallTarget {
                             declaration: default,
-                            type_args: Arc::from([call.trait_ref.self_ty.clone()]),
+                            type_args: self.trait_arguments(&call.trait_ref)?.into(),
                         });
                     }
                     break;
@@ -6545,6 +6662,218 @@ mod tests {
         Ty::Ref {
             kind: BorrowKind::Shared,
             referent: Arc::new(ty),
+        }
+    }
+
+    fn generic_marker_case() -> Case {
+        let mut c = case();
+        let declaration = c.headers.traits[0].declaration;
+        let parameters = scope(declaration, 2, &c.budget);
+        Arc::make_mut(&mut c.headers.traits)[0].env =
+            env(std::slice::from_ref(&parameters), &c.budget);
+        let implementations = Arc::make_mut(&mut c.headers.impls);
+        implementations[1].trait_ref.args = Arc::from([Ty::Bool]);
+        let Predicate::Implements(requirement) =
+            &mut Arc::make_mut(&mut implementations[0].predicates)[0];
+        requirement.args = Arc::from([Ty::Bool]);
+        c
+    }
+
+    #[test]
+    fn generic_trait_coherence_and_selection_use_all_arguments() {
+        let mut c = generic_marker_case();
+        let mut alternate = c.headers.impls[1].clone();
+        alternate.declaration =
+            test_support::source_decl(c.value_trait.snapshot, 21, &c.budget).unwrap();
+        alternate.trait_ref.args = Arc::from([Ty::Int(IntTy::I32)]);
+        let mut implementations = c.headers.impls.to_vec();
+        implementations.push(alternate);
+        c.headers.impls = implementations.into();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        for argument in [Ty::Bool, Ty::Int(IntTy::I32)] {
+            let goal = Predicate::Implements(TraitRef {
+                declaration: c.headers.traits[0].declaration,
+                self_ty: c.leaf.clone(),
+                args: Arc::from([argument]),
+            });
+            assert!(matches!(
+                world.prove_goal(&goal, &facts).unwrap(),
+                ProofOutcome::Proved(_)
+            ));
+        }
+        let mut duplicate = c.headers.impls[2].clone();
+        duplicate.declaration =
+            test_support::source_decl(c.value_trait.snapshot, 22, &c.budget).unwrap();
+        let mut implementations = c.headers.impls.to_vec();
+        implementations.push(duplicate);
+        c.headers.impls = implementations.into();
+        assert!(matches!(c.build(), Err(error) if error.kind() == FactsErrorKind::Ambiguous));
+    }
+
+    #[test]
+    fn generic_impl_parameter_constrained_only_by_trait_argument_is_matched() {
+        let mut c = generic_marker_case();
+        let declaration = c.headers.impls[1].declaration;
+        let parameters = scope(declaration, 1, &c.budget);
+        let parameter = Ty::Param(ParamId {
+            owner: parameters.binder(),
+            index: 0,
+        });
+        let implementation = &mut Arc::make_mut(&mut c.headers.impls)[1];
+        implementation.schema_env = env(&[parameters], &c.budget);
+        implementation.trait_ref.args = Arc::from([parameter]);
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let goal = Predicate::Implements(TraitRef {
+            declaration: c.headers.traits[0].declaration,
+            self_ty: c.leaf.clone(),
+            args: Arc::from([Ty::Int(IntTy::I32)]),
+        });
+        assert!(matches!(
+            world.prove_goal(&goal, &facts).unwrap(),
+            ProofOutcome::Proved(_)
+        ));
+    }
+
+    #[test]
+    fn generic_trait_actuals_validate_before_excess_arity() {
+        let c = generic_marker_case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let goal = Predicate::Implements(TraitRef {
+            declaration: c.headers.traits[0].declaration,
+            self_ty: c.leaf.clone(),
+            args: Arc::from([Ty::Bool, reference(Ty::Bool)]),
+        });
+        assert!(
+            matches!(world.prove_goal(&goal, &facts), Err(error) if error.kind() == FactsErrorKind::Unsupported)
+        );
+    }
+
+    #[test]
+    fn generic_trait_nominal_argument_containing_reference_is_unsupported() {
+        let mut c = generic_marker_case();
+        let declaration = test_support::source_decl(c.value_trait.snapshot, 23, &c.budget).unwrap();
+        let Ty::Struct(value) = nominal(
+            c.modules.core_root(),
+            c.value_trait.snapshot,
+            3,
+            declaration,
+            Vec::new(),
+        ) else {
+            unreachable!()
+        };
+        let mut definition = value.def().clone();
+        definition.fields = Arc::from([FieldDef {
+            name: "borrow".into(),
+            ty: reference(Ty::Bool),
+            visibility: ir::Visibility::Public,
+        }]);
+        let argument = Ty::Struct(StructTy::new(definition));
+        c.types.push(argument.clone());
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let goal = Predicate::Implements(TraitRef {
+            declaration: c.headers.traits[0].declaration,
+            self_ty: c.leaf.clone(),
+            args: Arc::from([argument]),
+        });
+        assert!(
+            matches!(world.prove_goal(&goal, &facts), Err(error) if error.kind() == FactsErrorKind::Unsupported)
+        );
+    }
+
+    fn generic_value_case() -> Case {
+        let mut c = case();
+        let parameters = scope(c.value_trait, 2, &c.budget);
+        let parameter = Ty::Param(ParamId {
+            owner: parameters.binder(),
+            index: 1,
+        });
+        Arc::make_mut(&mut c.headers.traits)[1].env =
+            env(std::slice::from_ref(&parameters), &c.budget);
+        let item = &mut Arc::make_mut(&mut c.headers.items)[0];
+        item.schema.env = env(
+            &[parameters, item.schema.env.scopes()[1].clone()],
+            &c.budget,
+        );
+        item.schema.signature.result = parameter;
+        Arc::make_mut(&mut c.headers.impls)[0].trait_ref.args = Arc::from([Ty::Int(IntTy::I32)]);
+        let Predicate::Implements(requirement) =
+            &mut Arc::make_mut(&mut Arc::make_mut(&mut c.headers.callables)[1].schema.predicates)
+                [0];
+        requirement.args = Arc::from([Ty::Int(IntTy::I32)]);
+        c
+    }
+
+    #[test]
+    fn generic_trait_item_and_default_dispatch_preserve_full_application() {
+        for omit_override in [true, false] {
+            let mut c = generic_value_case();
+            let default = add_source_default(&mut c, omit_override);
+            let world = c.build().unwrap();
+            let facts = world.callable_facts(c.caller).unwrap();
+            let mut call = c.call(c.boxed.clone());
+            call.trait_ref.args = Arc::from([Ty::Int(IntTy::I32)]);
+            let signature = world.instantiate_trait_signature(&call, &facts).unwrap();
+            assert!(
+                world
+                    .eq_ty(&signature.result, &Ty::Int(IntTy::I32), 0)
+                    .unwrap()
+            );
+            let resolved = world.resolve_trait_call(&call, &facts).unwrap();
+            let Callee::Direct(target) = resolved.callee() else {
+                panic!("expected closed provider")
+            };
+            assert_eq!(
+                target.declaration,
+                if omit_override { default } else { c.body }
+            );
+            if omit_override {
+                assert!(
+                    world
+                        .eq_types(
+                            &target.type_args,
+                            &[c.boxed.clone(), Ty::Int(IntTy::I32)],
+                            0
+                        )
+                        .unwrap()
+                );
+            } else {
+                assert!(
+                    world
+                        .eq_types(&target.type_args, std::slice::from_ref(&c.leaf), 0)
+                        .unwrap()
+                );
+            }
+            world.instance_facts(target).unwrap();
+        }
+    }
+
+    #[test]
+    fn implementation_body_accepts_only_exact_owner_trait_application() {
+        for exact in [true, false] {
+            let mut c = generic_value_case();
+            let mut owner = c.headers.impls[0].trait_ref.clone();
+            if !exact {
+                owner.args = Arc::from([Ty::Bool]);
+            }
+            Arc::make_mut(&mut c.headers.callables)[0].schema.predicates =
+                Arc::from([Predicate::Implements(owner)]);
+            if exact {
+                let world = c.build().unwrap();
+                let facts = world.callable_facts(c.body).unwrap();
+                let goal = Predicate::Implements(c.headers.impls[0].trait_ref.clone());
+                assert!(matches!(
+                    world.prove_goal(&goal, &facts).unwrap(),
+                    ProofOutcome::Proved(_)
+                ));
+            } else {
+                assert!(
+                    matches!(c.build(), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+                );
+            }
         }
     }
 

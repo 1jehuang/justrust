@@ -478,12 +478,12 @@ fn main(){if run()==7{println!("traits oracle ok");}}
 }
 
 #[test]
-fn rejects_legal_unsupported_generic_trait_parameters() {
-    rejects(
-        "legalunsupported: generic_trait_parameters",
+fn accepts_generic_trait_parameters_with_unique_application() {
+    runs(
         r###"struct S{x:i32}trait Value<T>{fn value(self,x:T)->i32;}impl Value<i32> for S{fn value(self,x:i32)->i32{self.x+x}}fn run()->i32{S{x:3}.value(4)}
 fn main(){if run()==7{println!("traits oracle ok");}}
 "###,
+        "traits oracle ok\n",
     );
 }
 

@@ -25,15 +25,6 @@ impl ResolvedItem {
             _ => Err("catalog target is not a source declaration".into()),
         }
     }
-    fn trait_path(&self) -> Result<TraitPath, String> {
-        match &self.path {
-            ResolvedPath::Source(path) if self.kind == ResolvedKind::Trait => {
-                Ok(TraitPath::Source(path.clone()))
-            }
-            ResolvedPath::Builtin(trait_id) => Ok(TraitPath::Builtin(*trait_id)),
-            _ => Err("resolved declaration is not a trait".into()),
-        }
-    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResolvedKind {
@@ -628,21 +619,68 @@ impl Resolver<'_> {
         let TraitPath::Source(source) = path else {
             return Ok(());
         };
-        let resolved = self.path(source, module, true, false)?;
+        for segment in &mut source.segments {
+            for argument in &mut segment.args {
+                self.ty(argument, module)?;
+            }
+        }
+        if source.segments.is_empty() {
+            return Err("empty trait application path".into());
+        }
+        if source.segments[..source.segments.len() - 1]
+            .iter()
+            .any(|segment| !segment.args.is_empty())
+        {
+            return Err(
+                "unsupported: trait arguments must belong to the final trait segment".into(),
+            );
+        }
+        let original = source.path(self.names())?;
+        let resolved = self.path(&original, module, true, false)?;
         if let Some(item) = resolved {
             if item.kind != ResolvedKind::Trait {
-                return Err(format!("{} is not a trait", self.display(source)?));
+                return Err(format!("{} is not a trait", self.display(&original)?));
             }
-            *path = match item.trait_path()? {
-                TraitPath::Source(target) => TraitPath::Source(self.resolved_use(&target, source)?),
-                builtin => builtin,
-            };
-        } else if let Some(ident) = source.single()
+            match item.path {
+                ResolvedPath::Source(target) => {
+                    let mut canonical = self.alias_source_path(&target)?;
+                    canonical
+                        .segments
+                        .last_mut()
+                        .ok_or("empty canonical trait path")?
+                        .args = std::mem::take(
+                        &mut source.segments.last_mut().ok_or("empty trait path")?.args,
+                    );
+                    self.certify_generic(&mut canonical, &original)?;
+                    *path = TraitPath::Source(canonical);
+                }
+                ResolvedPath::Builtin(id) => {
+                    if source
+                        .segments
+                        .iter()
+                        .any(|segment| !segment.args.is_empty())
+                    {
+                        return Err("builtin traits take no type arguments".into());
+                    }
+                    *path = TraitPath::Builtin(id);
+                }
+                ResolvedPath::CatalogModule(_) => {
+                    return Err("resolved declaration is not a trait".into());
+                }
+            }
+        } else if let Some(ident) = original.single()
             && let Some(id) = self.builtin_trait(ident)?
         {
+            if source
+                .segments
+                .iter()
+                .any(|segment| !segment.args.is_empty())
+            {
+                return Err("builtin traits take no type arguments".into());
+            }
             *path = TraitPath::Builtin(id);
         } else {
-            return Err(format!("unresolved trait {}", self.display(source)?));
+            return Err(format!("unresolved trait {}", self.display(&original)?));
         }
         Ok(())
     }
@@ -2554,27 +2592,55 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                     .trait_imports
                     .try_reserve(1)
                     .map_err(|_| "trait import allocation failed")?;
-                program
-                    .trait_imports
-                    .push((item.module, target.trait_path()?));
+                let path = match &target.path {
+                    ResolvedPath::Source(path) => {
+                        TraitPath::Source(resolver.alias_source_path(path)?)
+                    }
+                    ResolvedPath::Builtin(id) => TraitPath::Builtin(*id),
+                    ResolvedPath::CatalogModule(_) => {
+                        return Err("trait import names a module".into());
+                    }
+                };
+                program.trait_imports.push((item.module, path));
             }
         }
     }
     for declaration in &mut program.traits {
+        clone_vector(&declaration.type_params, &resolver.alias_budget)?;
+        resolver.type_params = declaration.type_params.clone();
+        resolver.self_nominal = None;
+        resolver.self_allowed = true;
+        resolver.bounds(&mut declaration.bounds, declaration.module)?;
         for path in &mut declaration.supertraits {
             resolver.trait_path(path, declaration.module)?;
         }
-        resolver.self_nominal = None;
-        resolver.self_allowed = true;
         for item in &mut declaration.items {
-            resolver.type_params = item.signature.type_params.clone();
+            clone_vector(&declaration.type_params, &resolver.alias_budget)?;
+            resolver.type_params = declaration.type_params.clone();
+            resolver.charge_entries::<AstIdent>(item.signature.type_params.len())?;
+            resolver
+                .type_params
+                .try_reserve(item.signature.type_params.len())
+                .map_err(|_| "trait method parameter allocation failed")?;
+            resolver
+                .type_params
+                .extend_from_slice(&item.signature.type_params);
             resolver.bounds(&mut item.signature.bounds, declaration.module)?;
             resolver.ty(&mut item.signature.result, declaration.module)?;
             for (_, ty) in &mut item.signature.params {
                 resolver.ty(ty, declaration.module)?;
             }
             if let Some(function) = &mut item.default {
-                resolver.type_params = function.type_params.clone();
+                clone_vector(&declaration.type_params, &resolver.alias_budget)?;
+                resolver.type_params = declaration.type_params.clone();
+                resolver.charge_entries::<AstIdent>(function.type_params.len())?;
+                resolver
+                    .type_params
+                    .try_reserve(function.type_params.len())
+                    .map_err(|_| "trait default parameter allocation failed")?;
+                resolver
+                    .type_params
+                    .extend_from_slice(&function.type_params);
                 resolver.bounds(&mut function.bounds, declaration.module)?;
                 resolver.ty(&mut function.result, declaration.module)?;
                 for (_, ty) in &mut function.params {
@@ -3424,6 +3490,68 @@ mod unit_shape_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generic_trait_applications_preserve_import_certificates_and_all_actuals() {
+        let parsed = parse_unresolved("mod defs{pub trait Convert<A>{fn convert(self)->A;}}use defs::Convert as C;struct S;impl C<i32> for S{fn convert(self)->i32{7}}fn relay<T,U:C<T>>(x:U)->T{x.convert()}fn main(){let n=<S as C<i32>>::convert(S);}").unwrap();
+        let program = resolve(&parsed).unwrap();
+        let TraitPath::Source(path) = program.impls[0].trait_path.as_ref().unwrap() else {
+            panic!("source trait became a builtin");
+        };
+        assert_eq!(path.segments.last().unwrap().args.len(), 1);
+        assert!(matches!(
+            path.segments.last().unwrap().args[0],
+            Type::Int(_)
+        ));
+        let canonical = path.path(program.names.as_ref()).unwrap();
+        let original = canonical.original_use(program.names.as_ref()).unwrap();
+        assert_ne!(canonical.segments().len(), original.segments().len());
+        assert_eq!(program.trait_imports.len(), 1);
+        let TraitPath::Source(import) = &program.trait_imports[0].1 else {
+            panic!("source trait import became a builtin");
+        };
+        assert!(
+            import
+                .segments
+                .iter()
+                .all(|segment| segment.args.is_empty())
+        );
+        let TraitPath::Source(bound) = &program.functions[0].bounds[0].traits[0] else {
+            panic!("source bound became a builtin");
+        };
+        assert!(matches!(
+            bound.segments.last().unwrap().args[0],
+            Type::Param(_)
+        ));
+    }
+
+    #[test]
+    fn trait_parameters_remain_in_scope_for_supertraits_required_and_default_items() {
+        let parsed = parse_unresolved("trait Convert<A>{fn convert(self)->A;}trait Relay<T:Copy>:Convert<T>{fn relay(self,x:T)->T;fn echo(self,x:T)->T{x}}fn main(){}").unwrap();
+        let program = resolve(&parsed).unwrap();
+        assert_eq!(program.traits[1].type_params.len(), 1);
+        let TraitPath::Source(parent) = &program.traits[1].supertraits[0] else {
+            panic!("source supertrait became a builtin");
+        };
+        assert!(matches!(
+            parent.segments.last().unwrap().args[0],
+            Type::Param(_)
+        ));
+        for item in &program.traits[1].items {
+            assert!(matches!(item.signature.result, Type::Param(_)));
+        }
+        for source in [
+            "trait Bad<T:Copy<i32>>{fn f(self);}fn main(){}",
+            "trait Bad<T:core::marker::Copy<i32>>{fn f(self);}fn main(){}",
+        ] {
+            let parsed = parse_unresolved(source).unwrap();
+            assert!(
+                resolve(&parsed)
+                    .unwrap_err()
+                    .contains("builtin traits take no type arguments")
+            );
+        }
+    }
 
     #[test]
     fn anchored_module_reexports_preserve_original_visibility() {

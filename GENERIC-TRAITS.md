@@ -1,6 +1,7 @@
 # Generic trait applications and checked obligation transport
 
-Status: pending implementation acceptance. Full Rust compatibility remains open.
+Status: accepted bounded implementation on October 17, 2026. Full Rust
+compatibility remains open.
 
 ## Source and binder contract
 
@@ -46,6 +47,11 @@ checked applications from authoritative impls/assumptions and must be unique.
 No first-impl choice, printable-name permission or new implicit trait-argument
 inference is admitted.
 
+A constructor used as a method receiver may use its existing standalone numeric
+literal fallback to establish Self. This does not infer its type from method
+arguments, return context or candidate impls, and does not change contextual
+constructor evidence used by enclosing calls.
+
 ## Resources and acceptance
 
 Keep existing name/module/source owners, world snapshots, ParamIds, obligation
@@ -63,3 +69,27 @@ without compiler fallback, real ELF execution in debug/release bootstrap profile
 strict lint/formatting and complete unfiltered regressions. Preserve historical
 source witnesses byte-for-byte when promoting an exact newly admitted outcome.
 No Iterator, associated-type, full-trait-system or full Rust claim follows.
+
+## Executed acceptance
+
+The stock-first corpus retains 28 sources: 13 stock-valid and 15 stock-invalid.
+Native outcomes are 12 runtime, 14 invalid, one stock-valid unsupported and one
+stock-invalid unsupported. The two unsupported cases require choosing among
+multiple trait applications without explicit UFCS, not erased arguments or a
+first-impl choice. Workers 1/8 CHECK/BUILD execute 112 cells and 24 real ELF
+images per bootstrap profile, with compiler fallback disabled. Twenty-six public
+authority tests retain original facts through argument, owner, binder, signature
+and source mutations. The historical generic-trait source is promoted unchanged.
+
+Final hosted gates pass all-target checking, 1,076 library tests, strict all-target
+Clippy, formatting, and the complete unfiltered 2,740-test / 134-binary suite.
+The release bootstrap gate passes 126 tests across the new corpus/authority and
+retained trait/default/associated-item suites. Failed and passing receipts are
+retained in `data/runs/xps14/2026-10-17-generic-traits.jsonl`.
+
+Integration found and repaired a validated-facts mutex reentry, native instance
+keys that omitted trait actuals, and recursive parser stack growth from an inline
+generic trait-call payload. Complete application identity is encoded in version-4
+native semantic keys; the parser now fallibly boxes that payload without raising
+nesting limits or test stacks. Original nesting witnesses and isolated routes
+pass. These are correctness findings, not measured compile-speed claims.

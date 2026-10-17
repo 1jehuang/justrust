@@ -70,6 +70,7 @@ enum Visit<'a> {
     MatchArm(&'a MatchArm),
     IfLetThen(&'a Pattern, &'a Block),
     Import(ModuleId, &'a TraitPath),
+    ImportShape(&'a GenericPath),
     Head(&'a FunctionHead),
     Struct(&'a StructDecl),
     StructShape(&'a StructDecl),
@@ -424,7 +425,20 @@ impl<'a> Validator<'a> {
             }
             Visit::Import(module, path) => {
                 self.enter_scope(None, module)?;
+                if let TraitPath::Source(path) = path {
+                    // Check all argument handles before enforcing the import
+                    // shape, including caller-mutated unused imports.
+                    self.push(Visit::ImportShape(path))?;
+                }
                 self.push(Visit::TraitPath(path))?;
+            }
+            Visit::ImportShape(path) => {
+                self.work(path.segments.len())?;
+                if path.segments.iter().any(|segment| !segment.args.is_empty()) {
+                    return Err(transport(TokenError::InvalidInput(
+                        "trait imports cannot contain application arguments",
+                    )));
+                }
             }
             Visit::Head(head) => {
                 self.push(Visit::Ident(head.name, LookupClass::Member))?;
@@ -509,6 +523,8 @@ impl<'a> Validator<'a> {
                 self.enter_scope(None, declaration.module)?;
                 self.visibility(&declaration.visibility, declaration.module)?;
                 self.declaration_path(&declaration.name, declaration.module)?;
+                self.identifiers(&declaration.type_params, LookupClass::TypeParameter)?;
+                self.many(&declaration.bounds, Visit::Bound)?;
                 self.many(&declaration.supertraits, Visit::TraitPath)?;
                 self.many(&declaration.items, |item| {
                     Visit::TraitItem(item, declaration.module)
@@ -576,7 +592,7 @@ impl<'a> Validator<'a> {
                 }
             }
             Visit::TraitPath(path) => match path {
-                TraitPath::Source(path) => self.push(Visit::Path(path))?,
+                TraitPath::Source(path) => self.push(Visit::GenericPath(path))?,
                 TraitPath::Builtin(
                     BuiltinTrait::Sized
                     | BuiltinTrait::Copy
@@ -1019,6 +1035,132 @@ mod tests {
         builder.functions.push(function);
         builder.finish().unwrap()
     }
+
+    fn trait_application(builder: &mut ProgramBuilder, name: &str, args: Vec<Type>) -> TraitPath {
+        let path = builder.path(name).unwrap();
+        let mut segments: Vec<_> = path
+            .segments()
+            .iter()
+            .map(|name| PathSegment {
+                name: *name,
+                args: Vec::new(),
+            })
+            .collect();
+        segments.last_mut().unwrap().args = args;
+        TraitPath::Source(GenericPath {
+            anchor: path.anchor(),
+            segments,
+            resolved_use: None,
+        })
+    }
+
+    #[test]
+    fn unused_trait_parameters_bounds_and_all_application_arguments_are_checked() {
+        let mut foreign = builder();
+        let foreign_name = foreign.ident("Foreign").unwrap();
+        let foreign_path = foreign.path("crate::Other").unwrap();
+        let _foreign = foreign.finish().unwrap();
+        let mut input = builder();
+        let module = input.module_root().unwrap();
+        let parameter = input.ident("T").unwrap();
+        let name = input.path("crate::Unused").unwrap();
+        let bound = trait_application(
+            &mut input,
+            "crate::Other",
+            vec![
+                Type::Bool,
+                Type::Tuple(vec![Type::Unit, Type::Param(parameter)]),
+            ],
+        );
+        let parent = trait_application(&mut input, "crate::Parent", vec![Type::Param(parameter)]);
+        input.traits.push(TraitDecl {
+            module,
+            type_params: vec![parameter],
+            bounds: vec![TypeBound {
+                parameter,
+                traits: vec![bound],
+            }],
+            supertraits: vec![parent],
+            name,
+            visibility: ir::Visibility::Public,
+            items: Vec::new(),
+        });
+        let valid = input.finish().unwrap();
+        let budget = valid.names.budget();
+        let baseline = budget.snapshot().temporary_bytes;
+        validate_program_names(&valid).unwrap();
+        assert_eq!(budget.snapshot().temporary_bytes, baseline);
+        for site in 0..5 {
+            let mut malformed = valid.clone();
+            let declaration = &mut malformed.traits[0];
+            match site {
+                0 => declaration.type_params[0] = foreign_name,
+                1 => declaration.bounds[0].parameter = foreign_name,
+                2 => {
+                    let TraitPath::Source(path) = &mut declaration.bounds[0].traits[0] else {
+                        unreachable!()
+                    };
+                    path.segments.last_mut().unwrap().args[1] =
+                        Type::Tuple(vec![Type::Unit, Type::Param(foreign_name)]);
+                }
+                3 => {
+                    let TraitPath::Source(path) = &mut declaration.supertraits[0] else {
+                        unreachable!()
+                    };
+                    path.segments.last_mut().unwrap().args[0] = Type::Param(foreign_name);
+                }
+                _ => {
+                    let TraitPath::Source(path) = &mut declaration.supertraits[0] else {
+                        unreachable!()
+                    };
+                    path.resolved_use = Some(foreign_path.clone());
+                }
+            }
+            assert!(
+                validate_program_names(&malformed)
+                    .unwrap_err()
+                    .starts_with("contract:"),
+                "site {site}"
+            );
+            assert_eq!(budget.snapshot().temporary_bytes, baseline);
+        }
+        assert!(budget.snapshot().failure.is_none());
+    }
+
+    #[test]
+    fn generic_trait_imports_check_all_handles_then_reject_application_shape() {
+        let mut input = builder();
+        let module = input.module_root().unwrap();
+        let import = trait_application(&mut input, "crate::Imported", Vec::new());
+        input.trait_imports.push((module, import));
+        let valid = input.finish().unwrap();
+        validate_program_names(&valid).unwrap();
+        let mut malformed = valid.clone();
+        let TraitPath::Source(path) = &mut malformed.trait_imports[0].1 else {
+            unreachable!()
+        };
+        path.segments.last_mut().unwrap().args.push(Type::Bool);
+        assert!(
+            validate_program_names(&malformed)
+                .unwrap_err()
+                .contains("trait imports cannot contain application arguments")
+        );
+        let mut foreign = builder();
+        let foreign_name = foreign.ident("Foreign").unwrap();
+        let _foreign = foreign.finish().unwrap();
+        let TraitPath::Source(path) = &mut malformed.trait_imports[0].1 else {
+            unreachable!()
+        };
+        path.segments
+            .last_mut()
+            .unwrap()
+            .args
+            .push(Type::Param(foreign_name));
+        let error = validate_program_names(&malformed).unwrap_err();
+        assert!(error.starts_with("contract:"));
+        assert!(!error.contains("trait imports cannot contain application arguments"));
+    }
+
     fn generated_program(captured: bool) -> Program {
         let source = if captured {
             "macro_rules! make{($name:ident)=>{pub fn $name(x:i32)->i32{let local=x+1;local}};}make!(generated);fn original()->i32{0}"

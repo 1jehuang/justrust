@@ -3687,6 +3687,29 @@ impl<'a> Checker<'a> {
     pub(super) fn require_index(&self, flow: &Flow) -> Result<(), String> {
         self.require(flow,&ir::Ty::Int(ir::IntTy::Usize)).map_err(|_|"runtime index requires usize, without implicit i32 conversion; backward numeric inference is unsupported".into())
     }
+    #[inline(never)]
+    fn method_receiver_hint(&self, receiver: &Expr) -> Result<Option<ir::Ty>, String> {
+        if let Some(ty) = self.scalar_hint(receiver)? {
+            return Ok(Some(ty));
+        }
+        let mut base = receiver;
+        let mut depth = 0;
+        while let Expr::Apply { value, .. } = base {
+            self.infer_work(depth)?;
+            depth += 1;
+            base = value;
+        }
+        if matches!(
+            base,
+            Expr::Struct { .. } | Expr::TupleStruct { .. } | Expr::EnumVariant { .. }
+        ) {
+            let evidence = self.inference_evidence(receiver, 0)?;
+            // The receiver is typed independently, exactly like a standalone
+            // constructor. Do not infer it from method inputs, results or impls.
+            return Inference::empty(self)?.resolve(&evidence, true, 0);
+        }
+        Ok(None)
+    }
     pub(super) fn scalar_hint(&self, e: &Expr) -> Result<Option<ir::Ty>, String> {
         Ok(match e {
             Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
@@ -3702,9 +3725,15 @@ impl<'a> Checker<'a> {
                     .as_ref()
                     .ok_or("missing trait registry")?;
                 let owner = checked_local_ty(owner, self.signatures)?;
-                let tid = plan.resolve_trait_path(trait_path)?;
+                let trait_ref = plan.resolve_trait_use(
+                    &owner,
+                    trait_path,
+                    self.signatures,
+                    self.facts(),
+                    &plan.budget,
+                )?;
                 Some(
-                    plan.select_trait(&owner, tid, name, &[], self.facts(), false, &plan.budget)?
+                    plan.select_trait(&trait_ref, name, &[], self.facts(), false, &plan.budget)?
                         .ok_or("trait obligation not proven")?
                         .1
                         .result,
@@ -3759,7 +3788,7 @@ impl<'a> Checker<'a> {
                 type_args,
                 ..
             } => {
-                if let Some(owner) = self.scalar_hint(receiver)? {
+                if let Some(owner) = self.method_receiver_hint(receiver)? {
                     let plan = self
                         .signatures
                         .plan
@@ -5473,7 +5502,7 @@ impl<'a> Checker<'a> {
             .clone()
             .ok_or("method call requires registry")?;
         let ty = self
-            .scalar_hint(receiver)?
+            .method_receiver_hint(receiver)?
             .ok_or("unsupported unresolved receiver type")?;
         self.infer_storage(type_args.len())?;
         let actuals = type_args
@@ -5643,7 +5672,7 @@ impl<'a> Checker<'a> {
                 args,
             } => {
                 let ty = self
-                    .scalar_hint(receiver)?
+                    .method_receiver_hint(receiver)?
                     .ok_or("unsupported unresolved receiver type; use a typed local")?;
                 let owner = match ty {
                     ir::Ty::Ref { referent, .. } => referent.as_ref().clone(),
@@ -5680,10 +5709,15 @@ impl<'a> Checker<'a> {
             .map(|t| self.checked_type_actual(t))
             .collect::<Result<Vec<_>, _>>()?;
         let (target, signature, mode) = if let Expr::TraitCall { trait_path, .. } = expression {
-            let tid = plan.resolve_trait_path(trait_path)?;
-            plan.select_trait(
+            let trait_ref = plan.resolve_trait_use(
                 &owner,
-                tid,
+                trait_path,
+                self.signatures,
+                self.facts(),
+                &plan.budget,
+            )?;
+            plan.select_trait(
+                &trait_ref,
                 name,
                 &actuals,
                 self.facts(),
@@ -7345,6 +7379,29 @@ fn signature_source_equal(
         equal &= a.traits.len() == b.traits.len();
         for (a, b) in a.traits.iter().zip(&b.traits) {
             equal &= plan.resolve_trait_path(a)? == plan.resolve_trait_path(b)?;
+            for path in [a, b] {
+                if let TraitPath::Source(path) = path {
+                    for segment in &path.segments {
+                        plan.budget
+                            .charge_work(segment.args.len().saturating_add(1))?;
+                        for argument in &segment.args {
+                            argument.semantic_eq(argument, names)?;
+                        }
+                    }
+                }
+            }
+            match (a, b) {
+                (TraitPath::Source(a), TraitPath::Source(b)) => {
+                    let a = a.segments.iter().flat_map(|segment| &segment.args);
+                    let b = b.segments.iter().flat_map(|segment| &segment.args);
+                    equal &= a.clone().count() == b.clone().count();
+                    for (a, b) in a.zip(b) {
+                        equal &= a.semantic_eq(b, names)?;
+                    }
+                }
+                (TraitPath::Builtin(a), TraitPath::Builtin(b)) => equal &= a == b,
+                _ => equal = false,
+            }
         }
     }
     Ok(equal)
@@ -7602,6 +7659,60 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod checked_identity_tests {
     use super::*;
+
+    #[test]
+    fn constructor_method_receiver_fallback_preserves_explicit_and_local_widths() {
+        for source in [
+            "struct Wrap<T>(T);trait Convert<T>{fn convert(self)->T;}impl<T> Convert<T> for Wrap<T>{fn convert(self)->T{let Wrap(x)=self;x}}fn value()->u8{Wrap(42u8).convert()}fn main(){}",
+            "struct Wrap<T>(T);trait Convert<T>{fn convert(self)->T;}impl<T> Convert<T> for Wrap<T>{fn convert(self)->T{let Wrap(x)=self;x}}fn value()->u8{let x:Wrap<u8>=Wrap(42);x.convert()}fn main(){}",
+            "struct Wrap<T>(T);trait Convert<T>{fn convert(self)->T;}impl<T> Convert<T> for Wrap<T>{fn convert(self)->T{let Wrap(x)=self;x}}fn value()->u8{Wrap::<u8>(42).convert()}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            check(&program).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+
+    #[test]
+    fn constructor_method_receiver_hint_never_evaluates_its_operand() {
+        let program = parse(r#"struct Wrap<T>(T);trait Convert<T>{fn convert(self)->T;}impl<T> Convert<T> for Wrap<T>{fn convert(self)->T{let Wrap(x)=self;x}}fn tick()->i32{println!("once");42}fn value()->i32{Wrap(tick()).convert()}fn main(){}"#).unwrap();
+        let signatures = signature_table(&program).unwrap();
+        let function = &program.functions[1];
+        let Some(Expr::MethodCall { receiver, .. }) = function.body.tail.as_deref() else {
+            panic!("genuine method receiver");
+        };
+        let checker = Checker::new(&signatures, ir::Ty::Int(ir::IntTy::I32), function.module);
+        assert!(matches!(
+            checker.method_receiver_hint(receiver).unwrap(),
+            Some(ir::Ty::Struct(_))
+        ));
+        assert!(checker.locals.is_empty());
+        assert!(checker.exprs.is_empty());
+        let typed = type_function_with_signatures(&program, 1, &signatures).unwrap();
+        assert_eq!(
+            typed
+                .exprs
+                .iter()
+                .filter(|expression| matches!(expression.kind, ir::ExprKind::Call { .. }))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn immutable_function_head_equality_keeps_trait_application_actuals() {
+        let program = parse("trait Convert<T>{fn convert(self)->T;}fn run<T:Convert<i32>>(value:T)->i32{value.convert()}fn main(){}").unwrap();
+        let signatures = signature_table(&program).unwrap();
+        let plan = signatures.plan().unwrap();
+        let original = &program.functions[0];
+        let mut changed = original.clone();
+        let TraitPath::Source(path) = &mut changed.bounds[0].traits[0] else {
+            panic!("source trait bound");
+        };
+        let argument = path.segments.last_mut().unwrap().args.first_mut().unwrap();
+        *argument = Type::Bool;
+        assert!(!signature_source_equal(plan, original.into(), (&changed).into()).unwrap());
+        assert!(signature_source_equal(plan, original.into(), original.into()).unwrap());
+    }
 
     #[test]
     fn exact_product_coverage_proves_bool_enum_array_and_record_partitions() {

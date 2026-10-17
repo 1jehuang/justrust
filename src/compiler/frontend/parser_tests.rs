@@ -857,6 +857,25 @@ fn nesting_limits() {
     assert!(parse(&blocks).unwrap_err().contains("nesting"));
 }
 #[test]
+fn nesting_limit_parenthesis_route() {
+    let source = format!(
+        "fn main(){{let x={}1{};}}",
+        "(".repeat(300),
+        ")".repeat(300)
+    );
+    assert!(parse(&source).unwrap_err().contains("nesting"));
+}
+#[test]
+fn nesting_limit_operator_route() {
+    let source = format!("fn main(){{let x=1{};}}", "+1".repeat(10000));
+    assert!(parse(&source).unwrap_err().contains("nesting"));
+}
+#[test]
+fn nesting_limit_block_route() {
+    let source = format!("fn main(){{{}{} }}", "{".repeat(300), "}".repeat(300));
+    assert!(parse(&source).unwrap_err().contains("nesting"));
+}
+#[test]
 fn independent_checks() {
     let p = parse("fn wrong()->i32 {true} fn main(){}").unwrap();
     check_signatures(&p).unwrap();

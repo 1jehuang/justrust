@@ -41,11 +41,23 @@ fn clone_ast_path(_path: &AstPath, budget: &ir::PlanBudget) -> Result<(), String
     budget.charge_work(1)
 }
 
-fn clone_trait_path(path: &TraitPath, budget: &ir::PlanBudget) -> Result<(), String> {
+fn clone_trait_path_shallow(path: &TraitPath, budget: &ir::PlanBudget) -> Result<(), String> {
     match path {
-        TraitPath::Source(path) => clone_ast_path(path, budget),
+        TraitPath::Source(path) => clone_path(path, budget),
         TraitPath::Builtin(_) => budget.charge_work(1),
     }
+}
+
+fn clone_trait_path(path: &TraitPath, budget: &ir::PlanBudget) -> Result<(), String> {
+    clone_trait_path_shallow(path, budget)?;
+    if let TraitPath::Source(path) = path {
+        for segment in &path.segments {
+            for actual in &segment.args {
+                walk_depth(DepthNode::Type(actual), Some(budget))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn clone_regions(regions: &RegionDecls, budget: &ir::PlanBudget) -> Result<(), String> {
@@ -170,7 +182,11 @@ pub(super) fn preflight_clone_node(
             Expr::TraitCall {
                 trait_path, args, ..
             } => {
-                clone_trait_path(trait_path, budget)?;
+                budget.retain_bytes(std::mem::size_of::<TraitPath>())?;
+                // The parent depth walker visits the actual type arguments.
+                // Admit just this node's GenericPath backing here, without a
+                // second recursive walk of its children.
+                clone_trait_path_shallow(trait_path, budget)?;
                 clone_vector(args, budget)?;
             }
             Expr::Apply { path, .. } => clone_path(path, budget)?,
@@ -284,6 +300,8 @@ pub(super) fn preflight_program_clone(
     for declaration in &program.traits {
         clone_visibility(&declaration.visibility, budget)?;
         clone_ast_path(&declaration.name, budget)?;
+        clone_names(&declaration.type_params, budget)?;
+        clone_bounds(&declaration.bounds, budget)?;
         clone_vector(&declaration.supertraits, budget)?;
         for path in &declaration.supertraits {
             clone_trait_path(path, budget)?;
@@ -336,6 +354,71 @@ mod tests {
     use crate::compiler::expansion_budget::ExpansionBudget;
     use crate::compiler::module_identity::ModuleArenaBuilder;
     use std::path::Path;
+
+    #[test]
+    fn unused_trait_actual_clone_admits_path_vectors_and_nested_type_storage() {
+        let parsed = super::super::parse_unresolved(
+            "trait Bound<T>{}fn unused<U:Bound<(bool,[i32;7])>>(){}fn main(){}",
+        )
+        .unwrap();
+        let path = &parsed.program.functions[0].bounds[0].traits[0];
+        let TraitPath::Source(actual) = path else {
+            panic!("expected genuine source generic trait application");
+        };
+        assert_eq!(actual.segments.len(), 1);
+        assert_eq!(actual.segments[0].args.len(), 1);
+        let segments = std::mem::size_of_val(actual.segments.as_slice()) * 2 + 128;
+        let args = std::mem::size_of_val(actual.segments[0].args.as_slice()) * 2 + 128;
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: segments + args - 1,
+            ..Default::default()
+        });
+        assert!(clone_trait_path(path, &budget).is_err());
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
+        assert_eq!(failure.used, segments);
+        assert_eq!(failure.requested, args);
+
+        let Type::Tuple(children) = &actual.segments[0].args[0] else {
+            panic!("expected actual nested tuple argument");
+        };
+        let children_bytes = std::mem::size_of_val(children.as_slice()) * 2 + 128;
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: segments + args + 1024 + children_bytes - 1,
+            ..Default::default()
+        });
+        assert!(clone_trait_path(path, &budget).is_err());
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.used, segments + args + 1024);
+        assert_eq!(failure.requested, children_bytes);
+        clone_trait_path(path, &ir::PlanBudget::default()).unwrap();
+    }
+
+    #[test]
+    fn trait_declaration_parameters_and_bounds_are_real_clone_payloads() {
+        let parsed = super::super::parse_unresolved(
+            "trait Bound<T>{}trait Owner<T:Bound<[bool;3]>>{}fn main(){}",
+        )
+        .unwrap();
+        let declaration = &parsed.program.traits[1];
+        assert_eq!(declaration.type_params.len(), 1);
+        assert_eq!(declaration.bounds.len(), 1);
+        let bytes = std::mem::size_of_val(declaration.type_params.as_slice()) * 2 + 128;
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: bytes - 1,
+            ..Default::default()
+        });
+        assert!(clone_names(&declaration.type_params, &budget).is_err());
+        assert_eq!(budget.first_resource_failure().unwrap().requested, bytes);
+        let bytes = std::mem::size_of_val(declaration.bounds.as_slice()) * 2 + 128;
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: bytes - 1,
+            ..Default::default()
+        });
+        assert!(clone_bounds(&declaration.bounds, &budget).is_err());
+        assert_eq!(budget.first_resource_failure().unwrap().requested, bytes);
+        preflight_program_clone(&parsed.program, &ir::PlanBudget::default()).unwrap();
+    }
 
     #[test]
     fn visibility_clone_is_inline_and_does_not_retain_scope_text() {
@@ -410,6 +493,28 @@ mod tests {
             before.retained_bytes
         );
         assert!(budget.usage_snapshot().bytes >= std::mem::size_of::<Program>());
+    }
+
+    #[test]
+    fn trait_call_clone_admits_actual_trait_path_box_before_children() {
+        let parsed = super::super::parse_unresolved(
+            "struct S;trait Act<T>{fn go(self)->T;}fn main(){<S as Act<i32>>::go(S)}",
+        )
+        .unwrap();
+        let expression = parsed.program.functions[0].body.tail.as_deref().unwrap();
+        assert!(matches!(expression, Expr::TraitCall { .. }));
+        let required = std::mem::size_of::<TraitPath>();
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: 1024 + required - 1,
+            ..Default::default()
+        });
+        assert!(preflight_clone_node(&DepthNode::Expr(expression), &budget).is_err());
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
+        assert_eq!(failure.used, 1024);
+        assert_eq!(failure.requested, required);
+        assert_eq!(budget.usage_snapshot().bytes, 1024);
+        assert!(!failure.arithmetic_overflow);
     }
 
     #[test]
