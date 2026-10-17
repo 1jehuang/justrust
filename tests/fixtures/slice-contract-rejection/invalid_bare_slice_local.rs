@@ -1,5 +1,5 @@
 // stock: reject
-// category: type
+// category: excluded
 fn main() {
     let storage = [7u8; 1];
     let bytes: [u8] = storage;

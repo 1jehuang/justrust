@@ -3,7 +3,10 @@
 These are standalone Rust 2021 binary crates, not modules of a Cargo test target.
 They freeze negative input for the bounded shared `&[u8]` milestone described in
 `next-real-program-worker-proposal.md`. No native compiler acceptance or rejection
-is claimed by this corpus or its stock validation.
+is claimed by this corpus or its stock validation. The two headers are independent:
+`stock` records Rust validity, while `category` selects the milestone's diagnostic
+family. Bare by-value slices are both Rust-invalid and explicitly excluded from
+the milestone, so they use `stock: reject` with `category: excluded`.
 
 Each source starts with machine-readable `// stock: accept|reject` and
 `// category: ...` headers agreed with the public CLI rejection harness owner.
@@ -34,7 +37,10 @@ were run on October 16, 2026 local time (October 17 UTC), with the command below
 | `unsupported_slice_iteration.rs` | Legal but unsupported | 5 | 0 | Slice iteration and reference dereference |
 
 The bare slice cases are intentionally **Rust-invalid**, not merely a current
-compiler limitation. The legal return fixture does not return local storage.
+compiler limitation. Their `excluded` category additionally records the explicit
+bare-slice admission fence and expects an unsupported-domain native diagnostic.
+This does not change their stock rejection or label them legal Rust. The legal
+return fixture does not return local storage.
 Conversely, the lifetime cases avoid slice-return contracts so they test a local
 origin escaping its scope without relying on an already excluded return feature.
 The unused name/type cases are independent of reachability and dead-code emission.
