@@ -6,7 +6,12 @@ import argparse
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--binary',type=pathlib.Path,default=root/'target/debug/jr-rust')
 parser.add_argument('--output',type=pathlib.Path,required=True)
+parser.add_argument('--rustc',type=pathlib.Path,default=pathlib.Path('/usr/bin/rustc'))
+parser.add_argument('--workers',default='1,8')
 args=parser.parse_args()
+workers_list=[int(w) for w in args.workers.split(',')]
+if not workers_list or any(w < 1 or w > 4096 for w in workers_list):
+ parser.error('workers must be between 1 and 4096')
 out=args.output
 binary=args.binary.resolve(strict=True)
 def run(argv):
@@ -18,12 +23,12 @@ def run(argv):
 with out.open('x') as f,tempfile.TemporaryDirectory(prefix='jr-intermediate-') as temp:
  d=pathlib.Path(temp)
  def emit(row): f.write(json.dumps(row,sort_keys=True)+'\n');f.flush()
- emit({'record':'environment','revision':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'stock':run(['/usr/bin/rustc','-Vv']),'scope':'unchanged repository example gallery; not external Cargo ecosystem coverage'})
+ emit({'record':'environment','revision':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),'binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'stock':run([str(args.rustc),'-Vv']),'scope':'unchanged repository example gallery; not external Cargo ecosystem coverage'})
  for i,source in enumerate(sorted((root/'examples/compiler').glob('*.rs'))):
   stock=d/f'stock{i}'
-  row={'record':'program','source':str(source.relative_to(root)),'source_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'stock_compile':run(['/usr/bin/rustc','--edition=2024','-C','overflow-checks=yes',source,'-o',stock]),'candidate':[]}
+  row={'record':'program','source':str(source.relative_to(root)),'source_sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'stock_compile':run([str(args.rustc),'--edition=2024','-C','overflow-checks=yes',source,'-o',stock]),'candidate':[]}
   if row['stock_compile'].get('exit')==0:row['stock_runtime']=run([stock])
-  for workers in (1,8):
+  for workers in workers_list:
    for mode in ('check','build'):
     target=d/f'ours{i}-{workers}'
     command=[binary,source,'--workers',workers]+(['--check'] if mode=='check' else ['-o',target])
