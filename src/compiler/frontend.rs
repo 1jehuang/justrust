@@ -19,6 +19,2482 @@ use super::ir;
 use super::traits as tr;
 use std::collections::HashMap;
 
+use super::source_replay as sr;
+use tr::FactsError;
+
+pub(super) enum PublishedCallableBody {
+    Source(Arc<sr::CanonicalSourcePublication>),
+    Recipe(Arc<ir::CheckedFunction>),
+}
+
+#[cfg(test)]
+mod canonical_source_replay_tests {
+    use super::*;
+    fn fixture_program(source: &str) -> Program {
+        let mut program = parse(source).unwrap();
+        if !program
+            .functions
+            .iter()
+            .any(|function| function.name == "main")
+        {
+            program
+                .functions
+                .extend(parse("fn main(){}").unwrap().functions);
+        }
+        program
+    }
+    fn published(
+        source: &str,
+        index: usize,
+    ) -> (
+        Program,
+        PlanCtx,
+        ir::PlanBudget,
+        Arc<sr::CanonicalSourcePublication>,
+    ) {
+        let program = fixture_program(source);
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(index).unwrap();
+        let publication = match plan.publish_callable_body(declaration, &budget) {
+            Ok(PublishedCallableBody::Source(body)) => body,
+            Ok(_) => panic!("expected original source"),
+            Err(error) => panic!("{error:?}"),
+        };
+        (program, plan, budget, publication)
+    }
+    fn kind_error<T>(result: Result<T, FactsError>) -> tr::FactsErrorKind {
+        match result {
+            Err(error) => error.kind(),
+            Ok(_) => panic!("unexpected replay success"),
+        }
+    }
+    #[test]
+    fn shared_origins_and_legacy_adapter_boundary() {
+        for (source, index) in [
+            (
+                "fn id<T>(x:T)->T{x}fn f(r:&i32){let y=id(r);}fn main(){}",
+                1,
+            ),
+            (
+                "fn id<T>(x:T)->T{x}fn main(){let v=7;let r:&i32=&v;let y=id(r);}",
+                1,
+            ),
+        ] {
+            let (program, plan, budget, publication) = published(source, index);
+            ir::validate_published_source(&publication, &budget).unwrap();
+            let calls = publication
+                .source()
+                .exprs
+                .iter()
+                .enumerate()
+                .filter_map(|(i, e)| {
+                    if let ir::ExprKind::Call { args, .. } = &e.kind {
+                        Some((ir::ExprId(i), args))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(calls.len(), 1);
+            let (call, args) = calls[0];
+            assert_eq!(args.len(), 1);
+            assert!(matches!(
+                publication.source().exprs[args[0].0].kind,
+                ir::ExprKind::Local(_)
+            ));
+            assert_eq!(
+                publication.replay().expected(call, 0, &budget).unwrap(),
+                Some(ir::CallExpectation::NoFirmReference)
+            );
+            // Public cloned-Program adapters cannot acquire the private canonical capability.
+            assert!(
+                type_callable_with_plan(
+                    &program.clone(),
+                    plan.function_decl(index).unwrap(),
+                    &plan,
+                    &budget
+                )
+                .is_err()
+            );
+        }
+        let program=parse("fn id<T>(x:T)->T{x}fn forward<U>(u:U)->U{id(u)}fn main(){let x=id::<i32>(7);let y=id(8);}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        for index in [1, 2] {
+            type_callable_with_plan(
+                &program.clone(),
+                plan.function_decl(index).unwrap(),
+                &plan,
+                &budget,
+            )
+            .unwrap();
+        }
+    }
+    #[test]
+    fn bounded_contexts_shadowing_dead_calls_and_legacy_constructors() {
+        for source in [
+            "fn id<T>(x:T)->T{x}fn f(r:&i32){let y:&i32=id(r);}",
+            "fn id<T>(x:T)->T{x}fn f<'a>(r:&'a i32)->&'a i32{id(r)}",
+            "fn id<T>(x:T)->T{x}fn f(){let v=1;let y=id(&v);}",
+            "fn id<T>(x:T)->T{x}fn f(r:&mut i32){let y=id(r);}",
+            "fn same<T>(x:T,y:T)->T{x}fn f(r:&i32){let y=same(r,r);}",
+            "fn id<T>(x:T)->T{x}fn f(r:&i32){let a=r;let y=id(a);}",
+            "fn id<T>(x:T)->T{x}fn f(r:&i32){{let a:&i32=r;let y=id(a);}}",
+            "fn id<T>(x:T)->T{x}fn f(r:&i32){let y=if true{id(r)}else{r};}",
+        ] {
+            let program = fixture_program(source);
+            let budget = ir::PlanBudget::default();
+            let plan = PlanCtx::from_program(&program, &budget).unwrap();
+            assert_eq!(
+                kind_error(plan.publish_callable_body(plan.function_decl(1).unwrap(), &budget)),
+                tr::FactsErrorKind::Unsupported,
+                "{source}"
+            );
+        }
+        let (_, _, budget, shadow) = published(
+            "fn id<T>(x:T)->T{x}fn main(){let v=1;let w=2;let r:&i32=&v;let r:&i32=&w;let y=id(r);}",
+            1,
+        );
+        let last = shadow
+            .source()
+            .locals
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, local)| local.name == "r")
+            .unwrap()
+            .0;
+        let arg = shadow
+            .source()
+            .exprs
+            .iter()
+            .find_map(|expr| {
+                if let ir::ExprKind::Call { args, .. } = &expr.kind {
+                    Some(args[0])
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert!(
+            matches!(shadow.source().exprs[arg.0].kind,ir::ExprKind::Local(local) if local.0==last)
+        );
+        ir::validate_published_source(&shadow, &budget).unwrap();
+        let (_, _, budget, dead) =
+            published("fn id<T>(x:T)->T{x}fn f(r:&i32){return;let y=id(r);}", 1);
+        ir::validate_published_source(&dead, &budget).unwrap();
+        let (_, _, budget, legacy) = published(
+            "enum E{A(i32),B}fn main(){let p=E::A(1);let (a,b)=(1,2);let x=3;{let q=4;}}",
+            0,
+        );
+        ir::validate_published_source(&legacy, &budget).unwrap();
+        // Associated omitted method inference is still not admitted by this ordinary-call slice.
+        let program = fixture_program(
+            "struct S{x:i32}impl S{fn id<T>(x:T)->T{x}}fn f(r:&i32){let y=S::id(r);}",
+        );
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        assert!(
+            plan.publish_callable_body(plan.function_decl(0).unwrap(), &budget)
+                .is_err()
+        );
+    }
+    #[test]
+    fn retained_authority_mutations_and_same_ledger_resource() {
+        let (_, _, budget, publication) =
+            published("fn f(a:i32,b:i32){let x=1;let y=2;{let z=3;}}", 0);
+        let original = publication.original().source_for_test();
+        replay_source_body(
+            &original,
+            publication.source(),
+            publication.facts(),
+            &budget,
+        )
+        .unwrap();
+        let mut mutated = original.clone();
+        let a = mutated.binding_mapping[0].1;
+        let b = mutated.binding_mapping[1].1;
+        mutated.binding_mapping[0].1 = b;
+        mutated.binding_mapping[1].1 = a;
+        assert_eq!(
+            kind_error(replay_source_body(
+                &mutated,
+                publication.source(),
+                publication.facts(),
+                &budget
+            )),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+        let roots = original
+            .binding_mapping
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| original.bindings[row.0].statement.is_some())
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>();
+        let mut mutated = original.clone();
+        let a = mutated.binding_mapping[roots[0]].1;
+        let b = mutated.binding_mapping[roots[1]].1;
+        mutated.binding_mapping[roots[0]].1 = b;
+        mutated.binding_mapping[roots[1]].1 = a;
+        assert_eq!(
+            kind_error(replay_source_body(
+                &mutated,
+                publication.source(),
+                publication.facts(),
+                &budget
+            )),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+        for mutation in 0..4 {
+            let mut mutated = original.clone();
+            match mutation {
+                0 => {
+                    mutated.binding_mapping.pop();
+                }
+                1 => mutated.binding_mapping.push(mutated.binding_mapping[0]),
+                2 => mutated.binding_mapping[0].0 = usize::MAX,
+                _ => mutated.identity = sr::OriginalBodyId::new(&budget).unwrap(),
+            }
+            assert_eq!(
+                kind_error(replay_source_body(
+                    &mutated,
+                    publication.source(),
+                    publication.facts(),
+                    &budget
+                )),
+                tr::FactsErrorKind::InvalidMetadata
+            );
+        }
+        // Independently emitted occurrence positions must not be derived from a mutated local mapping.
+        let function = original
+            .plan
+            .callable_body(&original.plan.program, original.declaration)
+            .unwrap();
+        let inventory =
+            SourceInventory::build(function, original.identity.clone(), &budget).unwrap();
+        let cap = CanonicalSourceCapability {
+            plan: original.plan.clone(),
+            declaration: original.declaration,
+            facts: original.facts.clone(),
+            inventory,
+            calls: Default::default(),
+            bindings: Default::default(),
+            narrow: Default::default(),
+            emissions: Default::default(),
+            error: Default::default(),
+        };
+        let checked = type_callable_source(
+            &original.plan.program,
+            original.declaration,
+            &original.plan,
+            &budget,
+            Some(&cap),
+        )
+        .unwrap();
+        let before = canonical_root_positions(&cap, &budget).unwrap();
+        {
+            let mut mappings = cap.bindings.borrow_mut();
+            let a = mappings[roots[0]].1;
+            let b = mappings[roots[1]].1;
+            mappings[roots[0]].1 = b;
+            mappings[roots[1]].1 = a;
+        }
+        let after = canonical_root_positions(&cap, &budget).unwrap();
+        assert_eq!(before, after);
+        let mut forged = original.clone();
+        forged.binding_mapping = cap.bindings.borrow().clone();
+        forged.root_positions = after;
+        assert_eq!(
+            kind_error(validate_binding_coverage(&forged, &checked, &budget)),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+        // Nested/pattern/deferred origins are inventoried but carry no retained binding authority.
+        for (index, site) in original.bindings.iter().enumerate() {
+            if !site.required {
+                assert!(!original.binding_mapping.iter().any(|row| row.0 == index));
+                assert!(original.root_positions[index].is_none());
+            }
+        }
+        let (_, _, shared_budget, shared) =
+            published("fn id<T>(x:T)->T{x}fn f(r:&i32,s:&i32){let y=id(r);}", 1);
+        let mut payload = shared.source().as_ref().clone();
+        let local = payload.params[1];
+        let argument = payload
+            .exprs
+            .iter()
+            .find_map(|expr| {
+                if let ir::ExprKind::Call { args, .. } = &expr.kind {
+                    Some(args[0])
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        payload.exprs[argument.0].kind = ir::ExprKind::Local(local);
+        assert_eq!(
+            kind_error(sr::replay_original_calls(
+                Arc::new(payload),
+                shared.original(),
+                shared.facts(),
+                &shared_budget
+            )),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+        let mut source = shared.original().source_for_test();
+        source.calls[0].direct_let = None;
+        assert_eq!(
+            kind_error(replay_source_body(
+                &source,
+                shared.source(),
+                shared.facts(),
+                &shared_budget
+            )),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+        let same = budget.clone();
+        assert!(same.same_authority(&budget));
+        for bit in (0..usize::BITS).rev() {
+            let _ = same.charge_work(1usize << bit);
+        }
+        assert!(same.charge_work(1).is_err());
+        assert_eq!(
+            kind_error(publication.validate_source(
+                publication.source(),
+                publication.facts(),
+                &same
+            )),
+            tr::FactsErrorKind::Resource
+        );
+        let foreign = ir::PlanBudget::default();
+        assert_eq!(
+            kind_error(publication.validate_source(
+                publication.source(),
+                publication.facts(),
+                &foreign
+            )),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SourceBindingSite {
+    node: sr::SourceNode,
+    annotation: Option<Type>,
+    required: bool,
+    is_declare: bool,
+    parameter: Option<usize>,
+    statement: Option<usize>,
+}
+#[derive(Clone, Debug)]
+struct SourceCallSite {
+    node: sr::SourceNode,
+    ordinary: Option<String>,
+    application: Option<GenericPath>,
+    argument_binding: Option<sr::SourceNode>,
+    direct_let: Option<sr::SourceNode>,
+    args_pointer: usize,
+}
+// Addresses are only a transient index into the exact owned AST during checking.
+// They are stripped before OriginalSource is retained.
+struct SourceInventory {
+    owner: sr::OriginalBodyId,
+    calls: Vec<SourceCallSite>,
+    bindings: Vec<SourceBindingSite>,
+    call_pointers: HashMap<usize, usize>,
+    statement_pointers: HashMap<usize, usize>,
+    scopes: Vec<HashMap<String, sr::SourceNode>>,
+    root_block_pointer: usize,
+}
+fn reserve_source_map<K: std::hash::Hash + Eq, V>(
+    map: &mut HashMap<K, V>,
+    budget: &ir::PlanBudget,
+) -> Result<(), FactsError> {
+    if map.len() < map.capacity() {
+        return Ok(());
+    }
+    let target = map
+        .capacity()
+        .checked_mul(2)
+        .map(|n| n.max(4))
+        .ok_or_else(|| FactsError::resource(budget, "source map capacity overflow"))?;
+    let row = std::mem::size_of::<K>()
+        .checked_add(std::mem::size_of::<V>())
+        .and_then(|n| n.checked_add(32))
+        .ok_or_else(|| FactsError::resource(budget, "source map row overflow"))?;
+    let slots = map
+        .capacity()
+        .checked_add(
+            target
+                .checked_mul(2)
+                .ok_or_else(|| FactsError::resource(budget, "source map peak overflow"))?,
+        )
+        .ok_or_else(|| FactsError::resource(budget, "source map peak overflow"))?;
+    sr::work(budget, map.len())?;
+    sr::retain(
+        budget,
+        slots
+            .checked_mul(row)
+            .and_then(|n| n.checked_add(64))
+            .ok_or_else(|| FactsError::resource(budget, "source map allocation overflow"))?,
+    )?;
+    map.try_reserve(target - map.len())
+        .map_err(|_| FactsError::resource(budget, "source map allocation"))?;
+    Ok(())
+}
+fn insert_source_pointer(
+    map: &mut HashMap<usize, usize>,
+    key: usize,
+    index: usize,
+    budget: &ir::PlanBudget,
+) -> Result<(), FactsError> {
+    sr::work(budget, 1)?;
+    reserve_source_map(map, budget)?;
+    if map.insert(key, index).is_some() {
+        return Err(FactsError::invalid(
+            budget,
+            "duplicate original source pointer",
+        ));
+    }
+    Ok(())
+}
+fn source_node_equal(
+    left: &sr::SourceNode,
+    right: &sr::SourceNode,
+    budget: &ir::PlanBudget,
+) -> Result<bool, FactsError> {
+    sr::work(budget, left.path.len())?;
+    sr::work(budget, right.path.len())?;
+    sr::work(budget, 1)?;
+    Ok(left == right)
+}
+fn source_binding_index(
+    bindings: &[SourceBindingSite],
+    node: &sr::SourceNode,
+    budget: &ir::PlanBudget,
+) -> Result<Option<usize>, FactsError> {
+    for (index, site) in bindings.iter().enumerate() {
+        if source_node_equal(&site.node, node, budget)? {
+            return Ok(Some(index));
+        }
+    }
+    Ok(None)
+}
+fn compare_source_type_work(
+    ty: &Type,
+    budget: &ir::PlanBudget,
+    at: usize,
+) -> Result<(), FactsError> {
+    sr::depth(budget, at)?;
+    sr::work(budget, 1)?;
+    match ty {
+        Type::Apply(path) => compare_source_path_work(path, budget, at + 1)?,
+        Type::Param(name) | Type::Named(name) => sr::work(budget, name.len())?,
+        Type::Ref {
+            region, referent, ..
+        } => {
+            if let Some(name) = region {
+                sr::work(budget, name.len())?;
+            }
+            compare_source_type_work(referent, budget, at + 1)?;
+        }
+        Type::Array(element, _) => compare_source_type_work(element, budget, at + 1)?,
+        Type::Tuple(fields) => {
+            for field in fields {
+                compare_source_type_work(field, budget, at + 1)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+fn compare_source_path_work(
+    path: &GenericPath,
+    budget: &ir::PlanBudget,
+    at: usize,
+) -> Result<(), FactsError> {
+    sr::depth(budget, at)?;
+    sr::work(budget, 1)?;
+    for segment in &path.segments {
+        sr::work(budget, segment.name.len())?;
+        for ty in &segment.args {
+            compare_source_type_work(ty, budget, at + 1)?;
+        }
+    }
+    Ok(())
+}
+fn compare_call_site_work(
+    site: &SourceCallSite,
+    budget: &ir::PlanBudget,
+) -> Result<(), FactsError> {
+    sr::work(budget, site.node.path.len())?;
+    if let Some(node) = &site.argument_binding {
+        sr::work(budget, node.path.len())?;
+    }
+    if let Some(node) = &site.direct_let {
+        sr::work(budget, node.path.len())?;
+    }
+    if let Some(name) = &site.ordinary {
+        sr::work(budget, name.len())?;
+    }
+    if let Some(path) = &site.application {
+        compare_source_path_work(path, budget, 0)?;
+    }
+    Ok(())
+}
+fn validate_original_callee(
+    original: &ir::Callee,
+    actual: &ir::Callee,
+    budget: &ir::PlanBudget,
+) -> Result<(), FactsError> {
+    sr::work(budget, 1)?;
+    let role = match (original, actual) {
+        (ir::Callee::Direct(a), ir::Callee::Direct(b)) => a.declaration == b.declaration,
+        (ir::Callee::TraitItem(a), ir::Callee::TraitItem(b)) => {
+            a.item == b.item
+                && a.trait_ref.declaration == b.trait_ref.declaration
+                && a.trait_ref.args.len() == b.trait_ref.args.len()
+        }
+        _ => false,
+    };
+    if !role || original.type_arguments().len() != actual.type_arguments().len() {
+        return Err(FactsError::invalid(
+            budget,
+            "original source call changed provider role",
+        ));
+    }
+    let mut left = original.metadata_types();
+    let mut right = actual.metadata_types();
+    loop {
+        match (left.next(), right.next()) {
+            (None, None) => break,
+            (Some(a), Some(b)) => {
+                if !replay_type_equal(a, b, budget)? {
+                    return Err(FactsError::invalid(
+                        budget,
+                        "original solved call actual changed",
+                    ));
+                }
+            }
+            _ => {
+                return Err(FactsError::invalid(
+                    budget,
+                    "original call metadata count changed",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+fn copy_source_string(value: &str, budget: &ir::PlanBudget) -> Result<String, FactsError> {
+    sr::work(budget, value.len())?;
+    let mut result = String::new();
+    result
+        .try_reserve_exact(value.len())
+        .map_err(|_| FactsError::resource(budget, "source string allocation"))?;
+    result.push_str(value);
+    Ok(result)
+}
+fn copy_source_path(
+    path: &GenericPath,
+    budget: &ir::PlanBudget,
+    at: usize,
+) -> Result<GenericPath, FactsError> {
+    sr::depth(budget, at)?;
+    sr::work(budget, 1)?;
+    let mut segments = Vec::new();
+    segments
+        .try_reserve_exact(path.segments.len())
+        .map_err(|_| FactsError::resource(budget, "source path copy allocation"))?;
+    for segment in &path.segments {
+        let mut args = Vec::new();
+        args.try_reserve_exact(segment.args.len())
+            .map_err(|_| FactsError::resource(budget, "source path argument allocation"))?;
+        for ty in &segment.args {
+            args.push(copy_source_type(ty, budget, at + 1)?);
+        }
+        segments.push(PathSegment {
+            name: copy_source_string(&segment.name, budget)?,
+            args,
+        });
+    }
+    Ok(GenericPath { segments })
+}
+fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Type, FactsError> {
+    sr::depth(budget, at)?;
+    sr::work(budget, 1)?;
+    Ok(match ty {
+        Type::Apply(path) => Type::Apply(copy_source_path(path, budget, at + 1)?),
+        Type::Param(name) => Type::Param(copy_source_string(name, budget)?),
+        Type::Named(name) => Type::Named(copy_source_string(name, budget)?),
+        Type::Ref {
+            kind,
+            region,
+            referent,
+        } => Type::Ref {
+            kind: *kind,
+            region: region
+                .as_ref()
+                .map(|r| copy_source_string(r, budget))
+                .transpose()?,
+            referent: Box::new(copy_source_type(referent, budget, at + 1)?),
+        },
+        Type::Array(element, len) => {
+            Type::Array(Box::new(copy_source_type(element, budget, at + 1)?), *len)
+        }
+        Type::Tuple(fields) => {
+            let mut result = Vec::new();
+            result
+                .try_reserve_exact(fields.len())
+                .map_err(|_| FactsError::resource(budget, "source tuple type allocation"))?;
+            for field in fields {
+                result.push(copy_source_type(field, budget, at + 1)?);
+            }
+            Type::Tuple(result)
+        }
+        Type::SelfType => Type::SelfType,
+        Type::Int(kind) => Type::Int(*kind),
+        Type::Bool => Type::Bool,
+        Type::Unit => Type::Unit,
+        Type::Never => Type::Never,
+        Type::Infer => Type::Infer,
+    })
+}
+fn retain_source_path(
+    path: &GenericPath,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<(), FactsError> {
+    sr::depth(budget, depth)?;
+    sr::work(budget, 1)?;
+    sr::retain(
+        budget,
+        path.segments
+            .len()
+            .checked_mul(2 * std::mem::size_of::<PathSegment>())
+            .and_then(|n| n.checked_add(32))
+            .ok_or_else(|| FactsError::resource(budget, "source path sizing overflow"))?,
+    )?;
+    for segment in &path.segments {
+        sr::work(budget, segment.name.len())?;
+        sr::retain(budget, segment.name.len())?;
+        for ty in &segment.args {
+            retain_source_type(ty, budget, depth + 1)?;
+        }
+    }
+    Ok(())
+}
+fn retain_source_type(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Result<(), FactsError> {
+    sr::depth(budget, depth)?;
+    sr::work(budget, 1)?;
+    sr::retain(budget, 2 * std::mem::size_of::<Type>() + 32)?;
+    match ty {
+        Type::Apply(path) => retain_source_path(path, budget, depth + 1)?,
+        Type::Param(name) | Type::Named(name) => {
+            sr::work(budget, name.len())?;
+            sr::retain(budget, name.len())?;
+        }
+        Type::Ref {
+            region, referent, ..
+        } => {
+            if let Some(name) = region {
+                sr::work(budget, name.len())?;
+                sr::retain(budget, name.len())?;
+            }
+            retain_source_type(referent, budget, depth + 1)?;
+        }
+        Type::Array(element, _) => retain_source_type(element, budget, depth + 1)?,
+        Type::Tuple(fields) => {
+            for field in fields {
+                retain_source_type(field, budget, depth + 1)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+impl SourceInventory {
+    fn build(
+        function: &Function,
+        owner: sr::OriginalBodyId,
+        budget: &ir::PlanBudget,
+    ) -> Result<Self, FactsError> {
+        sr::retain(budget, 128)?;
+        let mut scopes = Vec::new();
+        scopes
+            .try_reserve_exact(1)
+            .map_err(|_| FactsError::resource(budget, "source root scope allocation"))?;
+        scopes.push(HashMap::new());
+        let mut this = Self {
+            owner: owner.clone(),
+            calls: Vec::new(),
+            bindings: Vec::new(),
+            call_pointers: HashMap::new(),
+            statement_pointers: HashMap::new(),
+            scopes,
+            root_block_pointer: &function.body as *const Block as usize,
+        };
+        let root = sr::SourceNode {
+            owner,
+            path: Arc::from([]),
+        };
+        for (index, (name, ty)) in function.params.iter().enumerate() {
+            let node = root.child(0, index, budget)?;
+            this.bind(name, node, Some(ty), Some(index), None, budget)?;
+        }
+        this.block(&function.body, &root.child(1, 0, budget)?, true, budget, 0)?;
+        Ok(this)
+    }
+    fn bind(
+        &mut self,
+        name: &str,
+        node: sr::SourceNode,
+        annotation: Option<&Type>,
+        parameter: Option<usize>,
+        statement: Option<usize>,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), FactsError> {
+        sr::work(budget, name.len())?;
+        sr::retain(
+            budget,
+            name.len()
+                .checked_add(256)
+                .ok_or_else(|| FactsError::resource(budget, "source binding storage overflow"))?,
+        )?;
+        if let Some(ty) = annotation {
+            retain_source_type(ty, budget, 0)?;
+        }
+        let annotation = annotation
+            .map(|ty| copy_source_type(ty, budget, 0))
+            .transpose()?;
+        reserve_source_map(self.scopes.last_mut().unwrap(), budget)?;
+        self.scopes
+            .last_mut()
+            .unwrap()
+            .insert(copy_source_string(name, budget)?, node.clone());
+        sr::push(
+            &mut self.bindings,
+            SourceBindingSite {
+                node,
+                annotation,
+                parameter,
+                statement,
+                required: parameter.is_some(),
+                is_declare: false,
+            },
+            budget,
+        )
+    }
+    fn lookup(
+        &self,
+        name: &str,
+        budget: &ir::PlanBudget,
+    ) -> Result<Option<sr::SourceNode>, FactsError> {
+        for scope in self.scopes.iter().rev() {
+            sr::work(budget, name.len())?;
+            sr::work(budget, 1)?;
+            if let Some(node) = scope.get(name) {
+                return Ok(Some(node.clone()));
+            }
+        }
+        Ok(None)
+    }
+    fn shadow_pattern(
+        &mut self,
+        pattern: &Pattern,
+        node: &sr::SourceNode,
+        budget: &ir::PlanBudget,
+        depth: usize,
+    ) -> Result<(), FactsError> {
+        sr::depth(budget, depth)?;
+        sr::work(budget, 1)?;
+        match pattern {
+            Pattern::Binding { name, .. } | Pattern::Path(name) => {
+                self.bind(name, node.clone(), None, None, None, budget)?
+            }
+            Pattern::Apply { pattern, .. } => {
+                self.shadow_pattern(pattern, node, budget, depth + 1)?
+            }
+            Pattern::Tuple(fields) => {
+                for (i, p) in fields.iter().enumerate() {
+                    self.shadow_pattern(p, &node.child(8, i, budget)?, budget, depth + 1)?;
+                }
+            }
+            Pattern::Variant { fields, .. } => {
+                for (i, (_, p)) in fields.iter().enumerate() {
+                    self.shadow_pattern(p, &node.child(8, i, budget)?, budget, depth + 1)?;
+                }
+            }
+            Pattern::Struct { fields, .. } => {
+                for (i, (_, p)) in fields.iter().enumerate() {
+                    self.shadow_pattern(p, &node.child(8, i, budget)?, budget, depth + 1)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    fn block(
+        &mut self,
+        block: &Block,
+        node: &sr::SourceNode,
+        top: bool,
+        budget: &ir::PlanBudget,
+        depth: usize,
+    ) -> Result<(), FactsError> {
+        sr::depth(budget, depth)?;
+        sr::retain(budget, 128)?;
+        self.scopes
+            .try_reserve(1)
+            .map_err(|_| FactsError::resource(budget, "source scope stack allocation"))?;
+        self.scopes.push(HashMap::new());
+        for (index, statement) in block.statements.iter().enumerate() {
+            sr::work(budget, 1)?;
+            let here = node.child(2, index, budget)?;
+            match statement {
+                Stmt::Let {
+                    name, ty, value, ..
+                } => {
+                    let absent = top && *ty == Type::Infer && matches!(value, Expr::Call { .. });
+                    self.expr(
+                        value,
+                        &here.child(3, 0, budget)?,
+                        None,
+                        if absent { Some(here.clone()) } else { None },
+                        budget,
+                        depth + 1,
+                    )?;
+                    let binding = self.bindings.len();
+                    self.bind(
+                        name,
+                        here.clone(),
+                        if *ty == Type::Infer { None } else { Some(ty) },
+                        None,
+                        if top { Some(index) } else { None },
+                        budget,
+                    )?;
+                    self.bindings[binding].required = top;
+                    insert_source_pointer(
+                        &mut self.statement_pointers,
+                        statement as *const Stmt as usize,
+                        binding,
+                        budget,
+                    )?;
+                }
+                Stmt::Declare { name, ty, .. } => {
+                    let binding = self.bindings.len();
+                    self.bind(
+                        name,
+                        here.clone(),
+                        if *ty == Type::Infer { None } else { Some(ty) },
+                        None,
+                        if top { Some(index) } else { None },
+                        budget,
+                    )?;
+                    // Deferred untyped declarations are synthesized later and cannot be shared replay origins.
+                    self.bindings[binding].required = top && !matches!(ty, Type::Infer);
+                    self.bindings[binding].is_declare = true;
+                    insert_source_pointer(
+                        &mut self.statement_pointers,
+                        statement as *const Stmt as usize,
+                        binding,
+                        budget,
+                    )?;
+                }
+                Stmt::LetPattern { pattern, value, .. } => {
+                    self.expr(
+                        value,
+                        &here.child(3, 0, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                    self.shadow_pattern(pattern, &here, budget, depth + 1)?;
+                }
+                Stmt::AssignDeref { carrier, value } => {
+                    self.expr(
+                        carrier,
+                        &here.child(4, 0, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                    self.expr(
+                        value,
+                        &here.child(4, 1, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
+                Stmt::AssignIndex { index, value, .. }
+                | Stmt::AssignIndexOp { index, value, .. } => {
+                    self.expr(
+                        index,
+                        &here.child(4, 0, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                    self.expr(
+                        value,
+                        &here.child(4, 1, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
+                Stmt::Assign { value, .. }
+                | Stmt::AssignOp { value, .. }
+                | Stmt::AssignPlace { value, .. }
+                | Stmt::Expr(value)
+                | Stmt::ImplicitExpr(value)
+                | Stmt::Return(Some(value)) => self.expr(
+                    value,
+                    &here.child(4, 0, budget)?,
+                    None,
+                    None,
+                    budget,
+                    depth + 1,
+                )?,
+                Stmt::While { condition, body } => {
+                    self.expr(
+                        condition,
+                        &here.child(4, 0, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                    self.block(body, &here.child(5, 0, budget)?, false, budget, depth + 1)?;
+                }
+                Stmt::Return(None) => {}
+            }
+        }
+        if let Some(tail) = &block.tail {
+            self.expr(
+                tail,
+                &node.child(6, 0, budget)?,
+                None,
+                None,
+                budget,
+                depth + 1,
+            )?;
+        }
+        self.scopes.pop();
+        Ok(())
+    }
+    fn expr(
+        &mut self,
+        expr: &Expr,
+        node: &sr::SourceNode,
+        application: Option<&GenericPath>,
+        direct_let: Option<sr::SourceNode>,
+        budget: &ir::PlanBudget,
+        depth: usize,
+    ) -> Result<(), FactsError> {
+        sr::depth(budget, depth)?;
+        sr::work(budget, 1)?;
+        match expr {
+            Expr::Apply { path, value } => {
+                return self.expr(
+                    value,
+                    &node.child(7, 0, budget)?,
+                    Some(path),
+                    None,
+                    budget,
+                    depth + 1,
+                );
+            }
+            Expr::Call { name, args } => {
+                sr::work(budget, name.len())?;
+                sr::retain(
+                    budget,
+                    name.len()
+                        .checked_add(128)
+                        .ok_or_else(|| FactsError::resource(budget, "source call name overflow"))?,
+                )?;
+                if let Some(path) = application {
+                    retain_source_path(path, budget, 0)?;
+                }
+                let binding = if let [Expr::Var(name)] = args.as_slice() {
+                    self.lookup(name, budget)?
+                } else {
+                    None
+                };
+                let index = self.calls.len();
+                sr::push(
+                    &mut self.calls,
+                    SourceCallSite {
+                        node: node.clone(),
+                        ordinary: Some(copy_source_string(name, budget)?),
+                        application: application
+                            .map(|path| copy_source_path(path, budget, 0))
+                            .transpose()?,
+                        argument_binding: binding,
+                        direct_let,
+                        args_pointer: args.as_ptr() as usize,
+                    },
+                    budget,
+                )?;
+                insert_source_pointer(
+                    &mut self.call_pointers,
+                    expr as *const Expr as usize,
+                    index,
+                    budget,
+                )?;
+                for (i, arg) in args.iter().enumerate() {
+                    self.expr(
+                        arg,
+                        &node.child(9, i, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
+            }
+            Expr::MethodCall { args, .. }
+            | Expr::AssociatedCall { args, .. }
+            | Expr::TraitCall { args, .. } => {
+                let index = self.calls.len();
+                sr::push(
+                    &mut self.calls,
+                    SourceCallSite {
+                        node: node.clone(),
+                        ordinary: None,
+                        application: None,
+                        argument_binding: None,
+                        direct_let: None,
+                        args_pointer: args.as_ptr() as usize,
+                    },
+                    budget,
+                )?;
+                insert_source_pointer(
+                    &mut self.call_pointers,
+                    expr as *const Expr as usize,
+                    index,
+                    budget,
+                )?;
+                if let Expr::MethodCall { receiver, .. } = expr {
+                    self.expr(
+                        receiver,
+                        &node.child(10, 0, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
+                for (i, arg) in args.iter().enumerate() {
+                    self.expr(
+                        arg,
+                        &node.child(9, i, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
+            }
+            Expr::Cast { value, .. }
+            | Expr::Deref { value }
+            | Expr::Repeat { value, .. }
+            | Expr::Unary { value, .. } => self.expr(
+                value,
+                &node.child(11, 0, budget)?,
+                None,
+                None,
+                budget,
+                depth + 1,
+            )?,
+            Expr::Array(fields) | Expr::Tuple(fields) => {
+                for (i, e) in fields.iter().enumerate() {
+                    self.expr(
+                        e,
+                        &node.child(12, i, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
+            }
+            Expr::DynamicIndex { base, index }
+            | Expr::Binary {
+                left: base,
+                right: index,
+                ..
+            } => {
+                self.expr(
+                    base,
+                    &node.child(13, 0, budget)?,
+                    None,
+                    None,
+                    budget,
+                    depth + 1,
+                )?;
+                self.expr(
+                    index,
+                    &node.child(13, 1, budget)?,
+                    None,
+                    None,
+                    budget,
+                    depth + 1,
+                )?;
+            }
+            Expr::Index { base, .. } | Expr::Field { base, .. } => self.expr(
+                base,
+                &node.child(13, 0, budget)?,
+                None,
+                None,
+                budget,
+                depth + 1,
+            )?,
+            Expr::EnumVariant { fields, .. } => {
+                for (i, (_, e)) in fields.iter().enumerate() {
+                    self.expr(
+                        e,
+                        &node.child(14, i, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
+            }
+            Expr::Struct { fields, .. } => {
+                for (i, (_, e)) in fields.iter().enumerate() {
+                    self.expr(
+                        e,
+                        &node.child(14, i, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
+            }
+            Expr::Match { scrutinee, arms } => {
+                self.expr(
+                    scrutinee,
+                    &node.child(15, 0, budget)?,
+                    None,
+                    None,
+                    budget,
+                    depth + 1,
+                )?;
+                for (i, arm) in arms.iter().enumerate() {
+                    sr::retain(budget, 128)?;
+                    self.scopes
+                        .try_reserve(1)
+                        .map_err(|_| FactsError::resource(budget, "source arm scope allocation"))?;
+                    self.scopes.push(HashMap::new());
+                    let here = node.child(16, i, budget)?;
+                    self.shadow_pattern(&arm.pattern, &here, budget, depth + 1)?;
+                    self.expr(
+                        &arm.body,
+                        &here.child(17, 0, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                    self.scopes.pop();
+                }
+            }
+            Expr::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                self.expr(
+                    condition,
+                    &node.child(18, 0, budget)?,
+                    None,
+                    None,
+                    budget,
+                    depth + 1,
+                )?;
+                self.block(
+                    then_block,
+                    &node.child(18, 1, budget)?,
+                    false,
+                    budget,
+                    depth + 1,
+                )?;
+                self.block(
+                    else_block,
+                    &node.child(18, 2, budget)?,
+                    false,
+                    budget,
+                    depth + 1,
+                )?;
+            }
+            Expr::Block(block) | Expr::Loop { body: block } => {
+                self.block(block, &node.child(19, 0, budget)?, false, budget, depth + 1)?
+            }
+            Expr::Break { value: Some(value) } => self.expr(
+                value,
+                &node.child(20, 0, budget)?,
+                None,
+                None,
+                budget,
+                depth + 1,
+            )?,
+            Expr::Borrow { .. }
+            | Expr::Integer(_)
+            | Expr::Bool(_)
+            | Expr::Var(_)
+            | Expr::Continue
+            | Expr::Break { value: None }
+            | Expr::Println(_) => {}
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct RawSharedOccurrence {
+    source_index: usize,
+    binding_index: usize,
+    local: ir::LocalId,
+    trace: Arc<sr::SharedIdentityTrace>,
+}
+pub(super) struct CanonicalSourceCapability {
+    plan: PlanCtx,
+    declaration: ir::DeclId,
+    facts: Arc<tr::ValidatedFacts>,
+    inventory: SourceInventory,
+    calls: std::cell::RefCell<Vec<(usize, ir::ExprId, ir::Callee)>>,
+    bindings: std::cell::RefCell<Vec<(usize, ir::LocalId)>>,
+    narrow: std::cell::RefCell<Vec<RawSharedOccurrence>>,
+    emissions: std::cell::RefCell<Vec<(usize, usize)>>,
+    error: std::cell::RefCell<Option<FactsError>>,
+}
+#[cfg_attr(test, derive(Clone))]
+pub(super) struct OriginalSource {
+    plan: PlanCtx,
+    declaration: ir::DeclId,
+    facts: Arc<tr::ValidatedFacts>,
+    identity: sr::OriginalBodyId,
+    calls: Vec<SourceCallSite>,
+    bindings: Vec<SourceBindingSite>,
+    call_mapping: Vec<(usize, ir::ExprId, ir::Callee)>,
+    binding_mapping: Vec<(usize, ir::LocalId)>,
+    narrow: Vec<RawSharedOccurrence>,
+    root_positions: Vec<Option<usize>>,
+}
+impl CanonicalSourceCapability {
+    fn render(&self, error: FactsError) -> String {
+        let diagnostic = error.clone().into_legacy_diagnostic(&self.plan.budget);
+        *self.error.borrow_mut() = Some(if self.plan.budget.has_resource_failure() {
+            FactsError::resource(&self.plan.budget, "source diagnostic budget exhausted")
+        } else {
+            error
+        });
+        diagnostic
+    }
+    pub(super) fn validate_original(
+        &self,
+        original: &OriginalSource,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), FactsError> {
+        validate_original_context(original, &self.facts, budget)?;
+        if original.identity != self.inventory.owner
+            || original.declaration != self.declaration
+            || !Arc::ptr_eq(&original.plan.program, &self.plan.program)
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "original body changed canonical input",
+            ));
+        }
+        Ok(())
+    }
+    fn record_call(&self, expr: &Expr, id: ir::ExprId, kind: &ir::ExprKind) -> Result<(), String> {
+        let budget = &self.plan.budget;
+        sr::work(budget, 1).map_err(|e| self.render(e))?;
+        let index = self
+            .inventory
+            .call_pointers
+            .get(&(expr as *const Expr as usize))
+            .copied()
+            .ok_or_else(|| {
+                self.render(FactsError::invalid(
+                    budget,
+                    "source call has no original occurrence",
+                ))
+            })?;
+        let ir::ExprKind::Call { target, .. } = kind else {
+            return Err(self.render(FactsError::invalid(
+                budget,
+                "original source call did not produce a call",
+            )));
+        };
+        sr::retain(budget, std::mem::size_of::<ir::Callee>()).map_err(|e| self.render(e))?;
+        sr::push(
+            &mut self.calls.borrow_mut(),
+            (index, id, target.clone()),
+            budget,
+        )
+        .map_err(|e| self.render(e))
+    }
+    fn record_emission(&self, statement: &Stmt, position: usize) -> Result<(), String> {
+        let budget = &self.plan.budget;
+        sr::work(budget, 1).map_err(|e| self.render(e))?;
+        if let Some(index) = self
+            .inventory
+            .statement_pointers
+            .get(&(statement as *const Stmt as usize))
+        {
+            let site = &self.inventory.bindings[*index];
+            if site.required && site.statement.is_some() {
+                sr::push(&mut self.emissions.borrow_mut(), (*index, position), budget)
+                    .map_err(|e| self.render(e))?;
+            }
+        }
+        Ok(())
+    }
+    fn shift_root_emissions(&self, block: &Block, position: usize) -> Result<(), String> {
+        if block as *const Block as usize != self.inventory.root_block_pointer {
+            return Ok(());
+        }
+        let budget = &self.plan.budget;
+        sr::work(budget, self.emissions.borrow().len()).map_err(|e| self.render(e))?;
+        for (_, actual) in self.emissions.borrow_mut().iter_mut() {
+            if *actual >= position {
+                *actual = actual.checked_add(1).ok_or_else(|| {
+                    self.render(FactsError::resource(
+                        budget,
+                        "root insertion position overflow",
+                    ))
+                })?;
+            }
+        }
+        Ok(())
+    }
+    fn record_binding(&self, statement: &Stmt, local: ir::LocalId) -> Result<(), String> {
+        let budget = &self.plan.budget;
+        sr::work(budget, 1).map_err(|e| self.render(e))?;
+        if let Some(index) = self
+            .inventory
+            .statement_pointers
+            .get(&(statement as *const Stmt as usize))
+        {
+            if !self.inventory.bindings[*index].required {
+                return Ok(());
+            }
+            sr::push(&mut self.bindings.borrow_mut(), (*index, local), budget)
+                .map_err(|e| self.render(e))?;
+        }
+        Ok(())
+    }
+    fn shared_actual(
+        &self,
+        declaration: ir::DeclId,
+        args: &[Expr],
+        expected: Option<&ir::Ty>,
+        checker: &Checker<'_>,
+    ) -> Result<Option<ir::Ty>, String> {
+        let budget = &self.plan.budget;
+        if expected.is_some() {
+            return Ok(None);
+        }
+        sr::work(
+            budget,
+            self.inventory
+                .calls
+                .len()
+                .checked_add(self.inventory.bindings.len())
+                .ok_or_else(|| {
+                    self.render(FactsError::resource(budget, "source lookup work overflow"))
+                })?,
+        )
+        .map_err(|e| self.render(e))?;
+        let Some((index, site)) = self.inventory.calls.iter().enumerate().find(|(_, site)| {
+            site.args_pointer == args.as_ptr() as usize && site.ordinary.is_some()
+        }) else {
+            return Ok(None);
+        };
+        if site.application.is_some() || site.direct_let.is_none() {
+            return Ok(None);
+        }
+        let [Expr::Var(name)] = args else {
+            return Ok(None);
+        };
+        let local = checker.lookup(name)?;
+        let ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent,
+        } = &checker.locals[local.0].ty
+        else {
+            return Ok(None);
+        };
+        let Some(binding) = &site.argument_binding else {
+            return Ok(None);
+        };
+        let Some(binding_index) = source_binding_index(&self.inventory.bindings, binding, budget)
+            .map_err(|e| self.render(e))?
+        else {
+            return Ok(None);
+        };
+        let origin = &self.inventory.bindings[binding_index];
+        if origin.parameter.is_none() && (origin.annotation.is_none() || origin.statement.is_none())
+        {
+            return Ok(None);
+        }
+        require_ordinary_free(&self.plan, declaration, budget).map_err(|e| self.render(e))?;
+        let view = self
+            .facts
+            .original_callable_schema(tr::OriginalCallableSubject::Direct(declaration))
+            .map_err(|e| self.render(e))?;
+        require_reference_free(referent, budget, 0).map_err(|e| self.render(e))?;
+        let trace = sr::infer_shared_identity(&view, referent, budget, &mut |decl, args| {
+            self.plan
+                .intern_nominal(decl, args, ir::FactsCtx::Validated(&self.facts), budget)
+                .map_err(|e| source_error(budget, &e))
+        })
+        .map_err(|e| self.render(e))?;
+        let actual = trace.actual().clone();
+        sr::push(
+            &mut self.narrow.borrow_mut(),
+            RawSharedOccurrence {
+                source_index: index,
+                binding_index,
+                local,
+                trace,
+            },
+            budget,
+        )
+        .map_err(|e| self.render(e))?;
+        Ok(Some(actual))
+    }
+    fn identity_arguments(&self, args: &[Expr]) -> Result<bool, String> {
+        let budget = &self.plan.budget;
+        sr::work(budget, self.inventory.calls.len()).map_err(|e| self.render(e))?;
+        let Some(index) = self
+            .inventory
+            .calls
+            .iter()
+            .position(|site| site.args_pointer == args.as_ptr() as usize)
+        else {
+            return Ok(false);
+        };
+        sr::work(budget, self.narrow.borrow().len()).map_err(|e| self.render(e))?;
+        Ok(self
+            .narrow
+            .borrow()
+            .iter()
+            .any(|row| row.source_index == index))
+    }
+}
+
+pub(super) fn replay_type_equal(
+    left: &ir::Ty,
+    right: &ir::Ty,
+    budget: &ir::PlanBudget,
+) -> Result<bool, FactsError> {
+    metered_type_equal(left, right, budget, 0).map_err(|e| source_error(budget, &e))
+}
+fn source_error(budget: &ir::PlanBudget, message: &str) -> FactsError {
+    if budget.has_resource_failure() {
+        FactsError::resource(budget, message)
+    } else {
+        FactsError::invalid(budget, message)
+    }
+}
+fn require_ordinary_free(
+    plan: &PlanCtx,
+    declaration: ir::DeclId,
+    budget: &ir::PlanBudget,
+) -> Result<(), FactsError> {
+    let info = plan
+        .declaration(declaration)
+        .map_err(|e| source_error(budget, &e))?;
+    let index = plan
+        .callable_index(declaration)
+        .map_err(|e| source_error(budget, &e))?;
+    if info.kind != ir::DeclKind::Function
+        || !matches!(
+            plan.registry.callable_sources.get(index),
+            Some(CallableSource::Free(_))
+        )
+    {
+        return Err(FactsError::unsupported(
+            budget,
+            "new reference inference requires an ordinary free source function",
+        ));
+    }
+    Ok(())
+}
+fn require_reference_free(
+    ty: &ir::Ty,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<(), FactsError> {
+    sr::depth(budget, depth)?;
+    sr::work(budget, 1)?;
+    match ty {
+        ir::Ty::Ref { .. } | ir::Ty::Param(_) => {
+            return Err(FactsError::unsupported(
+                budget,
+                "shared identity referent must be reference-free and Param-free",
+            ));
+        }
+        ir::Ty::Tuple(fields) => {
+            for ty in fields.iter() {
+                require_reference_free(ty, budget, depth + 1)?;
+            }
+        }
+        ir::Ty::Array { element, .. } => require_reference_free(element, budget, depth + 1)?,
+        ir::Ty::Struct(t) => {
+            for ty in t.def().type_args.iter() {
+                require_reference_free(ty, budget, depth + 1)?;
+            }
+            for f in t.def().fields.iter() {
+                require_reference_free(&f.ty, budget, depth + 1)?;
+            }
+        }
+        ir::Ty::Enum(t) => {
+            for ty in t.def().type_args.iter() {
+                require_reference_free(ty, budget, depth + 1)?;
+            }
+            for v in t.def().variants.iter() {
+                for f in v.fields.iter() {
+                    require_reference_free(&f.ty, budget, depth + 1)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+pub(super) fn validate_original_occurrence(
+    original: &OriginalSource,
+    node: &sr::SourceNode,
+    budget: &ir::PlanBudget,
+) -> Result<(), FactsError> {
+    sr::work(budget, 1)?;
+    if node.owner != original.identity {
+        return Err(FactsError::invalid(
+            budget,
+            "retained replay changed source identity",
+        ));
+    }
+    Ok(())
+}
+pub(super) fn validate_original_context(
+    original: &OriginalSource,
+    facts: &tr::ValidatedFacts,
+    budget: &ir::PlanBudget,
+) -> Result<(), FactsError> {
+    sr::work(budget, 1)?;
+    if !std::ptr::eq(original.facts.as_ref(), facts)
+        || !facts.budget().same_authority(budget)
+        || !original.plan.budget.same_authority(budget)
+        || facts.declaration() != original.declaration
+    {
+        return Err(FactsError::invalid(
+            budget,
+            "original source changed caller context",
+        ));
+    }
+    let view = original
+        .facts
+        .original_callable_schema(tr::OriginalCallableSubject::Direct(original.declaration))?;
+    view.validate_for(facts)?;
+    if !Arc::ptr_eq(
+        facts.world(),
+        &original
+            .plan
+            .trait_world()
+            .map_err(|e| source_error(budget, &e))?,
+    ) {
+        return Err(FactsError::invalid(budget, "original source changed world"));
+    }
+    Ok(())
+}
+
+fn contains_source_ref(
+    ty: &ir::Ty,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, FactsError> {
+    sr::depth(budget, depth)?;
+    sr::work(budget, 1)?;
+    Ok(match ty {
+        ir::Ty::Ref { .. } => true,
+        ir::Ty::Tuple(fields) => {
+            let mut any = false;
+            for t in fields.iter() {
+                any |= contains_source_ref(t, budget, depth + 1)?;
+            }
+            any
+        }
+        ir::Ty::Array { element, .. } => contains_source_ref(element, budget, depth + 1)?,
+        ir::Ty::Struct(t) => {
+            let mut any = false;
+            for t in t.def().type_args.iter() {
+                any |= contains_source_ref(t, budget, depth + 1)?;
+            }
+            for f in t.def().fields.iter() {
+                any |= contains_source_ref(&f.ty, budget, depth + 1)?;
+            }
+            any
+        }
+        ir::Ty::Enum(t) => {
+            let mut any = false;
+            for t in t.def().type_args.iter() {
+                any |= contains_source_ref(t, budget, depth + 1)?;
+            }
+            for v in t.def().variants.iter() {
+                for f in v.fields.iter() {
+                    any |= contains_source_ref(&f.ty, budget, depth + 1)?;
+                }
+            }
+            any
+        }
+        _ => false,
+    })
+}
+fn canonical_root_positions(
+    cap: &CanonicalSourceCapability,
+    budget: &ir::PlanBudget,
+) -> Result<Vec<Option<usize>>, FactsError> {
+    let count = cap.inventory.bindings.len();
+    sr::work(budget, count)?;
+    sr::retain(
+        budget,
+        count
+            .checked_mul(std::mem::size_of::<Option<usize>>())
+            .and_then(|n| n.checked_add(32))
+            .ok_or_else(|| FactsError::resource(budget, "root occurrence storage overflow"))?,
+    )?;
+    let mut positions = Vec::new();
+    positions
+        .try_reserve_exact(count)
+        .map_err(|_| FactsError::resource(budget, "root occurrence allocation"))?;
+    positions.resize(count, None);
+    for (index, position) in cap.emissions.borrow().iter() {
+        sr::work(budget, 1)?;
+        let site = cap
+            .inventory
+            .bindings
+            .get(*index)
+            .ok_or_else(|| FactsError::invalid(budget, "orphan source emission occurrence"))?;
+        if !site.required || site.statement.is_none() {
+            return Err(FactsError::invalid(
+                budget,
+                "nonroot source emission retained",
+            ));
+        }
+        if positions[*index].replace(*position).is_some() {
+            return Err(FactsError::invalid(
+                budget,
+                "duplicate source emission occurrence",
+            ));
+        }
+    }
+    Ok(positions)
+}
+fn validate_binding_coverage(
+    original: &OriginalSource,
+    checked: &ir::CheckedFunction,
+    budget: &ir::PlanBudget,
+) -> Result<(), FactsError> {
+    let count = original
+        .bindings
+        .len()
+        .checked_add(checked.locals.len())
+        .ok_or_else(|| FactsError::resource(budget, "binding coverage count overflow"))?;
+    sr::retain(
+        budget,
+        count
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(64))
+            .ok_or_else(|| FactsError::resource(budget, "binding coverage storage overflow"))?,
+    )?;
+    sr::work(budget, count)?;
+    if original.root_positions.len() != original.bindings.len() {
+        return Err(FactsError::invalid(
+            budget,
+            "root source position table length changed",
+        ));
+    }
+    let context = original
+        .plan
+        .callable_context(original.declaration)
+        .map_err(|e| source_error(budget, &e))?;
+    let offset = usize::from(context.receiver != ReceiverKind::None);
+    let mut seen = Vec::new();
+    seen.try_reserve_exact(original.bindings.len())
+        .map_err(|_| FactsError::resource(budget, "source binding coverage allocation"))?;
+    seen.resize(original.bindings.len(), false);
+    let mut locals = Vec::new();
+    locals
+        .try_reserve_exact(checked.locals.len())
+        .map_err(|_| FactsError::resource(budget, "checked binding coverage allocation"))?;
+    locals.resize(checked.locals.len(), false);
+    for (index, local) in &original.binding_mapping {
+        sr::work(budget, 1)?;
+        let source = original
+            .bindings
+            .get(*index)
+            .ok_or_else(|| FactsError::invalid(budget, "orphan source binding index"))?;
+        if !source.required || std::mem::replace(&mut seen[*index], true) {
+            return Err(FactsError::invalid(
+                budget,
+                "duplicate or unclassified source binding mapping",
+            ));
+        }
+        if let Some(parameter) = source.parameter {
+            if checked.params.get(
+                parameter
+                    .checked_add(offset)
+                    .ok_or_else(|| FactsError::resource(budget, "parameter position overflow"))?,
+            ) != Some(local)
+                || original.root_positions[*index].is_some()
+            {
+                return Err(FactsError::invalid(
+                    budget,
+                    "original parameter changed checked position",
+                ));
+            }
+        } else {
+            if source.statement.is_none() {
+                return Err(FactsError::invalid(
+                    budget,
+                    "nonroot binding retained authority",
+                ));
+            }
+            let position = original.root_positions[*index]
+                .ok_or_else(|| FactsError::invalid(budget, "root binding lost checked position"))?;
+            let matched = match checked.body.statements.get(position) {
+                Some(ir::Stmt::Let { local: actual, .. }) => !source.is_declare && actual == local,
+                Some(ir::Stmt::Declare { local: actual }) => source.is_declare && actual == local,
+                _ => false,
+            };
+            if !matched {
+                return Err(FactsError::invalid(
+                    budget,
+                    "original root statement changed checked local",
+                ));
+            }
+        }
+        let slot = locals.get_mut(local.0).ok_or_else(|| {
+            FactsError::invalid(budget, "source binding maps outside checked locals")
+        })?;
+        if std::mem::replace(slot, true) {
+            return Err(FactsError::invalid(
+                budget,
+                "two source bindings map to one checked local",
+            ));
+        }
+    }
+    for (index, (site, present)) in original.bindings.iter().zip(seen).enumerate() {
+        if !site.required && original.root_positions[index].is_some() {
+            return Err(FactsError::invalid(
+                budget,
+                "nonorigin root position retained",
+            ));
+        }
+        sr::work(budget, 1)?;
+        if site.required != present {
+            return Err(FactsError::invalid(
+                budget,
+                "dead or live original binding lacks correspondence",
+            ));
+        }
+    }
+    Ok(())
+}
+fn mapped_source_binding(
+    original: &OriginalSource,
+    index: usize,
+    budget: &ir::PlanBudget,
+) -> Result<ir::LocalId, FactsError> {
+    sr::work(budget, original.binding_mapping.len())?;
+    let mut found = None;
+    for (source, local) in &original.binding_mapping {
+        if *source == index && found.replace(*local).is_some() {
+            return Err(FactsError::invalid(
+                budget,
+                "duplicate source binding correspondence",
+            ));
+        }
+    }
+    found.ok_or_else(|| FactsError::invalid(budget, "missing source binding correspondence"))
+}
+fn source_binding_type(
+    original: &OriginalSource,
+    index: usize,
+    checked: &ir::CheckedFunction,
+    signatures: &Signatures,
+    budget: &ir::PlanBudget,
+) -> Result<(ir::LocalId, ir::Ty), FactsError> {
+    let site = original
+        .bindings
+        .get(index)
+        .ok_or_else(|| FactsError::invalid(budget, "source binding index outside original body"))?;
+    let local = mapped_source_binding(original, index, budget)?;
+    let caller = original
+        .facts
+        .original_callable_schema(tr::OriginalCallableSubject::Direct(original.declaration))?;
+    let ty = if let Some(parameter) = site.parameter {
+        let context = original
+            .plan
+            .callable_context(original.declaration)
+            .map_err(|e| source_error(budget, &e))?;
+        let position = parameter + usize::from(context.receiver != ReceiverKind::None);
+        if checked.params.get(position) != Some(&local) {
+            return Err(FactsError::invalid(
+                budget,
+                "source parameter changed checked position",
+            ));
+        }
+        caller
+            .signature()
+            .params
+            .get(position)
+            .ok_or_else(|| FactsError::invalid(budget, "source parameter outside caller schema"))?
+            .clone()
+    } else {
+        if site.statement.is_none() {
+            return Err(FactsError::unsupported(
+                budget,
+                "shared binding requires a direct annotated local",
+            ));
+        }
+        let statement = original.root_positions[index].ok_or_else(|| {
+            FactsError::invalid(budget, "shared source lost root checked position")
+        })?;
+        if site.annotation.is_none() {
+            return Err(FactsError::unsupported(
+                budget,
+                "inferred-local source binding is outside shared replay",
+            ));
+        }
+        let Some(ir::Stmt::Let { local: actual, .. }) = checked.body.statements.get(statement)
+        else {
+            return Err(FactsError::unsupported(
+                budget,
+                "shared local requires direct source statement correspondence",
+            ));
+        };
+        if *actual != local {
+            return Err(FactsError::invalid(
+                budget,
+                "source annotation mapped to sibling local",
+            ));
+        }
+        checked_local_ty(site.annotation.as_ref().unwrap(), signatures)
+            .map_err(|e| source_error(budget, &e))?
+    };
+    let actual = checked
+        .locals
+        .get(local.0)
+        .ok_or_else(|| FactsError::invalid(budget, "source binding outside checked locals"))?;
+    if !metered_type_equal(&actual.ty, &ty, budget, 0)
+        .map_err(|e| FactsError::resource(budget, &e))?
+    {
+        return Err(FactsError::invalid(
+            budget,
+            "source binding type changed after checking",
+        ));
+    }
+    Ok((local, ty))
+}
+
+pub(super) fn replay_source_body(
+    original: &OriginalSource,
+    checked: &Arc<ir::CheckedFunction>,
+    facts: &Arc<tr::ValidatedFacts>,
+    budget: &ir::PlanBudget,
+) -> Result<Vec<sr::NarrowValidatedCall>, FactsError> {
+    validate_original_context(original, facts, budget)?;
+    if checked.body_substitution.is_some() {
+        return Err(FactsError::invalid(
+            budget,
+            "original source is a substituted payload",
+        ));
+    }
+    let function = original
+        .plan
+        .callable_body(&original.plan.program, original.declaration)
+        .map_err(|e| source_error(budget, &e))?;
+    let fresh = SourceInventory::build(function, original.identity.clone(), budget)?;
+    if fresh.calls.len() != original.calls.len() || fresh.bindings.len() != original.bindings.len()
+    {
+        return Err(FactsError::invalid(
+            budget,
+            "source occurrence inventory changed",
+        ));
+    }
+    for (fresh, retained) in fresh.calls.iter().zip(&original.calls) {
+        compare_call_site_work(fresh, budget)?;
+        compare_call_site_work(retained, budget)?;
+        sr::work(budget, 1)?;
+        if fresh.node != retained.node
+            || fresh.ordinary != retained.ordinary
+            || fresh.application != retained.application
+            || fresh.argument_binding != retained.argument_binding
+            || fresh.direct_let != retained.direct_let
+            || retained.args_pointer != 0
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "retained source call or parent context changed",
+            ));
+        }
+    }
+    for (fresh, retained) in fresh.bindings.iter().zip(&original.bindings) {
+        sr::work(budget, fresh.node.path.len())?;
+        sr::work(budget, retained.node.path.len())?;
+        sr::work(budget, 1)?;
+        if let Some(ty) = &fresh.annotation {
+            compare_source_type_work(ty, budget, 0)?;
+        }
+        if let Some(ty) = &retained.annotation {
+            compare_source_type_work(ty, budget, 0)?;
+        }
+        if fresh.node != retained.node
+            || fresh.annotation != retained.annotation
+            || fresh.parameter != retained.parameter
+            || fresh.statement != retained.statement
+            || fresh.required != retained.required
+            || fresh.is_declare != retained.is_declare
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "retained source binding changed",
+            ));
+        }
+    }
+    sr::retain(
+        budget,
+        checked
+            .exprs
+            .len()
+            .checked_mul(2)
+            .ok_or_else(|| FactsError::resource(budget, "source call coverage overflow"))?,
+    )?;
+    let mut seen = Vec::new();
+    seen.try_reserve_exact(checked.exprs.len())
+        .map_err(|_| FactsError::resource(budget, "source call coverage allocation"))?;
+    seen.resize(checked.exprs.len(), false);
+    validate_binding_coverage(original, checked, budget)?;
+    let mut decisions = Vec::new();
+    let mut signatures = original
+        .plan
+        .environment(Some(original.declaration))
+        .map_err(|e| source_error(budget, &e))?;
+    signatures.facts = Some(facts.clone());
+    let caller_context = original
+        .plan
+        .callable_context(original.declaration)
+        .map_err(|e| source_error(budget, &e))?;
+    sr::retain(
+        budget,
+        original
+            .calls
+            .len()
+            .checked_mul(std::mem::size_of::<Option<usize>>())
+            .ok_or_else(|| FactsError::resource(budget, "source call position storage overflow"))?,
+    )?;
+    sr::work(budget, original.calls.len())?;
+    let mut positions = Vec::new();
+    positions
+        .try_reserve_exact(original.calls.len())
+        .map_err(|_| FactsError::resource(budget, "source call position allocation"))?;
+    positions.resize(original.calls.len(), None);
+    for (position, (index, _, _)) in original.call_mapping.iter().enumerate() {
+        sr::work(budget, 1)?;
+        let slot = positions
+            .get_mut(*index)
+            .ok_or_else(|| FactsError::invalid(budget, "orphan original call index"))?;
+        if slot.replace(position).is_some() {
+            return Err(FactsError::invalid(
+                budget,
+                "duplicate original call correspondence",
+            ));
+        }
+    }
+    sr::retain(
+        budget,
+        checked
+            .exprs
+            .len()
+            .checked_mul(std::mem::size_of::<Option<usize>>())
+            .ok_or_else(|| FactsError::resource(budget, "source evidence index overflow"))?,
+    )?;
+    sr::work(budget, checked.exprs.len())?;
+    let mut evidence_positions = Vec::new();
+    evidence_positions
+        .try_reserve_exact(checked.exprs.len())
+        .map_err(|_| FactsError::resource(budget, "source evidence index allocation"))?;
+    evidence_positions.resize(checked.exprs.len(), None);
+    for (position, row) in checked.call_evidence.iter().enumerate() {
+        sr::work(budget, 1)?;
+        let slot = evidence_positions
+            .get_mut(row.call.0)
+            .ok_or_else(|| FactsError::invalid(budget, "source evidence outside checked arena"))?;
+        if slot.replace(position).is_some() {
+            return Err(FactsError::invalid(
+                budget,
+                "duplicate source call evidence",
+            ));
+        }
+    }
+    for (index, site) in original.calls.iter().enumerate() {
+        sr::work(budget, 1)?;
+        let position = positions[index].ok_or_else(|| {
+            FactsError::invalid(budget, "dead or live original call lacks correspondence")
+        })?;
+        let (_, id, original_target) = &original.call_mapping[position];
+        let id = *id;
+        let slot = seen
+            .get_mut(id.0)
+            .ok_or_else(|| FactsError::invalid(budget, "original call outside checked arena"))?;
+        if std::mem::replace(slot, true) {
+            return Err(FactsError::invalid(
+                budget,
+                "checked call mapped from two source occurrences",
+            ));
+        }
+        let ir::ExprKind::Call {
+            target,
+            args,
+            signature,
+            ..
+        } = &checked.exprs[id.0].kind
+        else {
+            return Err(FactsError::invalid(
+                budget,
+                "original call mapped to non-call",
+            ));
+        };
+        validate_original_callee(original_target, target, budget)?;
+        let Some(name) = &site.ordinary else {
+            // Source provider/selection role is frozen before publication; no ordinary omitted-call exemption.
+            ir::validate_callee(target, signature, ir::FactsCtx::Validated(facts))
+                .map_err(|e| source_error(budget, &e))?;
+            continue;
+        };
+        let expected_decl =
+            *original.plan.registry.functions.get(name).ok_or_else(|| {
+                FactsError::invalid(budget, "original call name outside registry")
+            })?;
+        let ir::Callee::Direct(target) = target else {
+            return Err(FactsError::invalid(
+                budget,
+                "ordinary source call changed canonical role",
+            ));
+        };
+        if target.declaration != expected_decl {
+            return Err(FactsError::invalid(
+                budget,
+                "ordinary source call changed declaration",
+            ));
+        }
+        let view =
+            facts.original_callable_schema(tr::OriginalCallableSubject::Direct(expected_decl))?;
+        view.validate_for(facts)?;
+        if let Some(path) = &site.application {
+            let checker = Checker::new(&signatures, ir::Ty::Unit, caller_context.module.join("::"));
+            checker
+                .push_application(path)
+                .map_err(|e| source_error(budget, &e))?;
+            let application = checker.applications.borrow_mut().pop().ok_or_else(|| {
+                FactsError::invalid(budget, "explicit source application vanished")
+            })?;
+            if application.1.len() != target.type_args.len() {
+                return Err(FactsError::invalid(
+                    budget,
+                    "explicit source actual count changed",
+                ));
+            }
+            for (original, actual) in application.1.iter().zip(target.type_args.iter()) {
+                if !metered_type_equal(original, actual, budget, 0)
+                    .map_err(|e| FactsError::resource(budget, &e))?
+                {
+                    return Err(FactsError::invalid(
+                        budget,
+                        "explicit source actual term changed",
+                    ));
+                }
+            }
+            let evidence = &checked.call_evidence[evidence_positions[id.0].ok_or_else(|| {
+                FactsError::invalid(budget, "explicit source call missing old trace")
+            })?];
+            let mut rows = Vec::new();
+            for row in application.2.iter() {
+                sr::push(&mut rows, row.clone(), budget)?;
+            }
+            for (argument, ty) in application.1.iter().enumerate() {
+                let locations =
+                    ir::carrier_locations(ty, budget).map_err(|e| source_error(budget, &e))?;
+                for location in locations.iter() {
+                    if !matches!(location.channel, ir::CarrierChannel::Fixed(_)) {
+                        continue;
+                    }
+                    let mut present = false;
+                    for row in &rows {
+                        sr::work(budget, row.location.path.0.len())?;
+                        sr::work(budget, location.path.0.len())?;
+                        if row.argument == argument && row.location == *location {
+                            present = true;
+                            break;
+                        }
+                    }
+                    if !present {
+                        sr::push(
+                            &mut rows,
+                            ir::TypeActualRegion {
+                                argument,
+                                location: location.clone(),
+                                source: ir::ActualRegion::Elided,
+                            },
+                            budget,
+                        )?;
+                    }
+                }
+            }
+            if rows.len() != evidence.type_actual_regions.len() {
+                return Err(FactsError::invalid(
+                    budget,
+                    "explicit source region count changed",
+                ));
+            }
+            for (row, actual) in rows.iter().zip(evidence.type_actual_regions.iter()) {
+                sr::work(budget, row.location.path.0.len())?;
+                sr::work(budget, actual.location.path.0.len())?;
+                sr::work(budget, 1)?;
+                if actual != row {
+                    return Err(FactsError::invalid(
+                        budget,
+                        "explicit source region occurrence changed",
+                    ));
+                }
+            }
+            continue;
+        }
+        let ir::Callee::Direct(original_target) = original_target else {
+            return Err(FactsError::invalid(
+                budget,
+                "ordinary original target lost Direct role",
+            ));
+        };
+        let mut new_reference = false;
+        for actual in original_target.type_args.iter() {
+            new_reference |= contains_source_ref(actual, budget, 0)?;
+        }
+        if !new_reference {
+            continue;
+        }
+        require_ordinary_free(&original.plan, expected_decl, budget)?;
+        let parent = site.direct_let.as_ref().ok_or_else(|| {
+            FactsError::unsupported(
+                budget,
+                "inferred reference requires direct unannotated let context",
+            )
+        })?;
+        let binding = site.argument_binding.as_ref().ok_or_else(|| {
+            FactsError::unsupported(
+                budget,
+                "inferred reference requires original shared local Var",
+            )
+        })?;
+        let binding_index = source_binding_index(&original.bindings, binding, budget)?
+            .ok_or_else(|| FactsError::invalid(budget, "original argument binding missing"))?;
+        let (local, ty) =
+            source_binding_type(original, binding_index, checked, &signatures, budget)?;
+        let ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent,
+        } = &ty
+        else {
+            return Err(FactsError::unsupported(
+                budget,
+                "mutable inferred reference remains unsupported",
+            ));
+        };
+        require_reference_free(referent, budget, 0)?;
+        let trace = sr::infer_shared_identity(&view, referent, budget, &mut |decl, args| {
+            original
+                .plan
+                .intern_nominal(decl, args, ir::FactsCtx::Validated(facts), budget)
+                .map_err(|e| source_error(budget, &e))
+        })?;
+        sr::work(budget, original.narrow.len())?;
+        let mut retained = None;
+        for raw in &original.narrow {
+            if raw.source_index == index && retained.replace(raw).is_some() {
+                return Err(FactsError::invalid(
+                    budget,
+                    "duplicate original shared frontier",
+                ));
+            }
+        }
+        let retained = retained.ok_or_else(|| {
+            FactsError::invalid(budget, "new reference lacks original shared frontier")
+        })?;
+        if retained.binding_index != binding_index || retained.local != local {
+            return Err(FactsError::invalid(
+                budget,
+                "shared frontier changed original binding identity",
+            ));
+        }
+        retained.trace.validate_replayed(&trace, budget)?;
+        let actual = trace.actual();
+        if target.type_args.len() != 1 || !replay_type_equal(&target.type_args[0], actual, budget)?
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "replayed actual differs from canonical target",
+            ));
+        }
+        if args.len() != 1 {
+            return Err(FactsError::invalid(
+                budget,
+                "shared replay argument count changed",
+            ));
+        }
+        let value = checked
+            .exprs
+            .get(args[0].0)
+            .ok_or_else(|| FactsError::invalid(budget, "shared replay argument outside arena"))?;
+        if !matches!(value.kind,ir::ExprKind::Local(actual) if actual==local)
+            || !replay_type_equal(&value.ty, &ty, budget)?
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "shared Var identity changed into an adjusted or sibling value",
+            ));
+        }
+        let output_index = source_binding_index(&original.bindings, parent, budget)?
+            .ok_or_else(|| FactsError::invalid(budget, "original initializer parent missing"))?;
+        let output = mapped_source_binding(original, output_index, budget)?;
+        let statement = original.root_positions[output_index].ok_or_else(|| {
+            FactsError::invalid(
+                budget,
+                "shared initializer parent is not a direct statement",
+            )
+        })?;
+        if original.bindings[output_index].annotation.is_some() {
+            return Err(FactsError::invalid(
+                budget,
+                "shared absent context forged from annotation",
+            ));
+        }
+        if !matches!(checked.body.statements.get(statement),Some(ir::Stmt::Let{local,value}) if *local==output && *value==id)
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "original initializer changed checked let occurrence",
+            ));
+        }
+        if signature.params.len() != 1
+            || !replay_type_equal(&signature.params[0], actual, budget)?
+            || !replay_type_equal(&signature.result, actual, budget)?
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "shared canonical signature changed",
+            ));
+        }
+        let evidence = &checked.call_evidence[evidence_positions[id.0]
+            .ok_or_else(|| FactsError::invalid(budget, "new shared call missing trace"))?];
+        sr::work(budget, evidence.type_actual_regions.len())?;
+        sr::work(budget, 1)?;
+        if evidence.arguments.len() != 1
+            || evidence.arguments[0].argument != 0
+            || evidence.arguments[0].value != args[0]
+            || evidence.arguments[0].expectation != ir::CallExpectation::NoFirmReference
+            || evidence
+                .type_actual_regions
+                .iter()
+                .any(|r| r.source != ir::ActualRegion::Elided)
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "shared original trace or fresh elision changed",
+            ));
+        }
+        ir::FactsCtx::Validated(facts)
+            .validate_ty_with_budget(actual, budget)
+            .map_err(|e| source_error(budget, &e))?;
+        validate_argument(referent, ir::FactsCtx::Validated(facts), budget, 0)
+            .map_err(|e| source_error(budget, &e))?;
+        sr::push(
+            &mut decisions,
+            sr::NarrowValidatedCall {
+                call: id,
+                source: site.node.clone(),
+                trace,
+            },
+            budget,
+        )?;
+    }
+    if original.narrow.len() != decisions.len() {
+        return Err(FactsError::invalid(
+            budget,
+            "unused or missing original shared frontier",
+        ));
+    }
+    if original.call_mapping.len() != original.calls.len() {
+        return Err(FactsError::invalid(budget, "orphan original call mapping"));
+    }
+    for (index, expr) in checked.exprs.iter().enumerate() {
+        sr::work(budget, 1)?;
+        if matches!(expr.kind, ir::ExprKind::Call { .. }) && !seen[index] {
+            return Err(FactsError::invalid(
+                budget,
+                "orphan checked call lacks original occurrence",
+            ));
+        }
+    }
+    Ok(decisions)
+}
+
+impl PlanCtx {
+    pub(super) fn publish_callable_body(
+        &self,
+        declaration: ir::DeclId,
+        budget: &ir::PlanBudget,
+    ) -> Result<PublishedCallableBody, FactsError> {
+        self.check_budget(budget)
+            .map_err(|e| source_error(budget, &e))?;
+        let env = self
+            .callable_env(declaration)
+            .map_err(|e| source_error(budget, &e))?;
+        match self
+            .callable_provider(declaration)
+            .map_err(|e| source_error(budget, &e))?
+        {
+            CallableProvider::Recipe { .. } => {
+                let count = env.total_arity();
+                budget
+                    .charge_nodes(count)
+                    .map_err(|e| FactsError::resource(budget, &e))?;
+                sr::work(budget, count)?;
+                sr::retain(
+                    budget,
+                    count
+                        .checked_mul(2 * std::mem::size_of::<ir::Ty>())
+                        .and_then(|n| n.checked_add(32))
+                        .ok_or_else(|| {
+                            FactsError::resource(budget, "recipe symbolic target overflow")
+                        })?,
+                )?;
+                let mut actuals = Vec::new();
+                actuals.try_reserve_exact(count).map_err(|_| {
+                    FactsError::resource(budget, "recipe symbolic target allocation")
+                })?;
+                actuals.extend(env.ordered_params().map(ir::Ty::Param));
+                sr::work(budget, count)?;
+                let target = ir::CallTarget {
+                    declaration,
+                    type_args: actuals.into(),
+                };
+                let facts = self
+                    .callable_facts(declaration)
+                    .map_err(|e| source_error(budget, &e))?;
+                let checked = self
+                    .checked_body(&target, &facts, budget)
+                    .map_err(|e| source_error(budget, &e))?;
+                sr::retain(budget, std::mem::size_of::<ir::CheckedFunction>() + 32)?;
+                Ok(PublishedCallableBody::Recipe(Arc::new(checked)))
+            }
+            CallableProvider::UnavailableProvided { .. } => Err(FactsError::unsupported(
+                budget,
+                "unavailable canonical body",
+            )),
+            CallableProvider::Source { .. } => {
+                let facts = if env.is_generic() {
+                    self.callable_facts(declaration)
+                } else {
+                    self.instance_facts(&ir::CallTarget {
+                        declaration,
+                        type_args: Arc::from([]),
+                    })
+                }
+                .map_err(|e| source_error(budget, &e))?;
+                let function = self
+                    .callable_body(&self.program, declaration)
+                    .map_err(|e| source_error(budget, &e))?;
+                let identity = sr::OriginalBodyId::new(budget)?;
+                let inventory = SourceInventory::build(function, identity.clone(), budget)?;
+                let mut cap = CanonicalSourceCapability {
+                    plan: self.clone(),
+                    declaration,
+                    facts: facts.clone(),
+                    inventory,
+                    calls: Default::default(),
+                    bindings: Default::default(),
+                    narrow: Default::default(),
+                    emissions: Default::default(),
+                    error: Default::default(),
+                };
+                let checked = match type_callable_source(
+                    &self.program,
+                    declaration,
+                    self,
+                    budget,
+                    Some(&cap),
+                ) {
+                    Ok(checked) => checked,
+                    Err(message) => {
+                        return Err(if budget.has_resource_failure() {
+                            source_error(budget, &message)
+                        } else {
+                            cap.error
+                                .borrow_mut()
+                                .take()
+                                .unwrap_or_else(|| source_error(budget, &message))
+                        });
+                    }
+                };
+                let root_positions = canonical_root_positions(&cap, budget)?;
+                // Move precharged source-only records. Never clone the AST or output arena.
+                let mut calls = std::mem::take(&mut cap.inventory.calls);
+                for call in &mut calls {
+                    call.args_pointer = 0;
+                }
+                let source = OriginalSource {
+                    plan: self.clone(),
+                    declaration,
+                    facts: facts.clone(),
+                    identity,
+                    calls,
+                    bindings: std::mem::take(&mut cap.inventory.bindings),
+                    call_mapping: cap.calls.take(),
+                    binding_mapping: cap.bindings.take(),
+                    narrow: cap.narrow.take(),
+                    root_positions,
+                };
+                let original = sr::OriginalBody::from_source(&cap, source, budget)?;
+                let mut cx = self.clone();
+                let final_payload =
+                    ir::canonicalize_source_calls(&checked, &facts, &mut cx, &cap, budget)?;
+                sr::retain(budget, std::mem::size_of::<ir::CheckedFunction>() + 32)?;
+                let source = Arc::new(final_payload);
+                let publication =
+                    sr::publish_canonical_source(cap, source, original, facts, budget)?;
+                Ok(PublishedCallableBody::Source(publication))
+            }
+        }
+    }
+}
+
 mod recipes;
 pub use tr::CallableProvider;
 
@@ -7022,248 +9498,62 @@ fn validate_shift_counts(
     }
     Ok(())
 }
-// Frontend-private inference evidence. No node is a checked expression or public type hole.
-type InferTerm = Arc<InferKind>;
-#[derive(Clone, Debug)]
-enum InferKind {
-    Slot(usize),
-    Rigid(ir::Ty),
-    Integer,
-    Unknown(bool),
-    Tuple(Arc<[InferTerm]>),
-    Array(InferTerm, usize),
-    Ref(ir::BorrowKind, InferTerm),
-    Nominal(ir::DeclId, Arc<[InferTerm]>),
-}
+// The legacy adapter shares all constraints with source replay, but keeps its admission fence.
+use super::source_replay::{CallInferenceState, InferKind, InferTerm};
 enum InferField<'a> {
     Named(&'a str),
     Tuple(usize),
 }
 struct Inference<'c, 's> {
     checker: &'c Checker<'s>,
-    env: Option<Arc<ir::ParamEnv>>,
-    slots: Vec<Option<InferTerm>>,
+    core: CallInferenceState,
 }
 impl<'c, 's> Inference<'c, 's> {
     fn new(checker: &'c Checker<'s>, env: Arc<ir::ParamEnv>) -> Result<Self, String> {
-        checker.infer_storage(env.arity())?;
-        let slots = vec![None; env.arity()];
-        Ok(Self {
-            checker,
-            env: Some(env),
-            slots,
-        })
+        let budget = &checker
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("inference requires planning context")?
+            .budget;
+        let core = CallInferenceState::new(Some(env), budget)
+            .map_err(|e| e.into_legacy_diagnostic(budget))?;
+        Ok(Self { checker, core })
+    }
+    fn empty(checker: &'c Checker<'s>) -> Result<Self, String> {
+        let budget = &checker
+            .signatures
+            .plan
+            .as_ref()
+            .ok_or("inference requires planning context")?
+            .budget;
+        let core =
+            CallInferenceState::new(None, budget).map_err(|e| e.into_legacy_diagnostic(budget))?;
+        Ok(Self { checker, core })
     }
     fn schema(&self, ty: &ir::Ty, depth: usize) -> Result<InferTerm, String> {
-        self.checker.infer_type_term(
-            ty,
-            Some(
-                self.env
-                    .as_ref()
-                    .ok_or("schema conversion requires authoritative binder")?
-                    .binder(),
-            ),
-            depth,
-        )
-    }
-    fn taint(&self, term: &InferTerm, depth: usize) -> Result<InferTerm, String> {
-        self.checker.infer_work(depth)?;
-        let kind = match term.as_ref() {
-            InferKind::Integer => InferKind::Unknown(true),
-            InferKind::Unknown(numeric) => InferKind::Unknown(*numeric),
-            InferKind::Tuple(fields) => {
-                self.checker.infer_storage(fields.len())?;
-                InferKind::Tuple(
-                    fields
-                        .iter()
-                        .map(|f| self.taint(f, depth + 1))
-                        .collect::<Result<Vec<_>, _>>()?
-                        .into(),
-                )
-            }
-            InferKind::Ref(kind, referent) => {
-                InferKind::Ref(*kind, self.taint(referent, depth + 1)?)
-            }
-            InferKind::Array(element, len) => {
-                InferKind::Array(self.taint(element, depth + 1)?, *len)
-            }
-            InferKind::Nominal(decl, args) => {
-                self.checker.infer_storage(args.len())?;
-                InferKind::Nominal(
-                    *decl,
-                    args.iter()
-                        .map(|a| self.taint(a, depth + 1))
-                        .collect::<Result<Vec<_>, _>>()?
-                        .into(),
-                )
-            }
-            _ => return Ok(term.clone()),
-        };
-        self.checker.infer_node(kind)
+        self.core.schema(ty, depth).map_err(|e| {
+            e.into_legacy_diagnostic(&self.checker.signatures.plan.as_ref().unwrap().budget)
+        })
     }
     fn merge(&self, a: &InferTerm, b: &InferTerm, depth: usize) -> Result<InferTerm, String> {
-        self.checker.infer_work(depth)?;
-        if Arc::ptr_eq(a, b) {
-            return Ok(a.clone());
-        }
-        match (a.as_ref(), b.as_ref()) {
-            (InferKind::Unknown(n), other) | (other, InferKind::Unknown(n)) => {
-                if *n
-                    && !matches!(
-                        other,
-                        InferKind::Integer
-                            | InferKind::Unknown(_)
-                            | InferKind::Rigid(ir::Ty::Int(_))
-                    )
-                {
-                    return Err(
-                        "generic integer-domain constraint conflicts with noninteger type".into(),
-                    );
-                }
-                if let InferKind::Unknown(m) = other {
-                    return self.checker.infer_node(InferKind::Unknown(*n || *m));
-                }
-                self.taint(
-                    if matches!(a.as_ref(), InferKind::Unknown(_)) {
-                        b
-                    } else {
-                        a
-                    },
-                    depth + 1,
-                )
-            }
-            (InferKind::Integer, InferKind::Integer) => Ok(a.clone()),
-            (InferKind::Integer, InferKind::Rigid(ir::Ty::Int(_))) => Ok(b.clone()),
-            (InferKind::Rigid(ir::Ty::Int(_)), InferKind::Integer) => Ok(a.clone()),
-            (InferKind::Rigid(x), InferKind::Rigid(y)) if x == y => Ok(a.clone()),
-            (InferKind::Tuple(x), InferKind::Tuple(y)) if x.len() == y.len() => {
-                self.checker.infer_storage(x.len())?;
-                self.checker.infer_node(InferKind::Tuple(
-                    x.iter()
-                        .zip(y.iter())
-                        .map(|(x, y)| self.merge(x, y, depth + 1))
-                        .collect::<Result<Vec<_>, _>>()?
-                        .into(),
-                ))
-            }
-            (InferKind::Ref(k, x), InferKind::Ref(l, y)) if k == l => self
-                .checker
-                .infer_node(InferKind::Ref(*k, self.merge(x, y, depth + 1)?)),
-            (InferKind::Array(x, n), InferKind::Array(y, m)) if n == m => self
-                .checker
-                .infer_node(InferKind::Array(self.merge(x, y, depth + 1)?, *n)),
-            (InferKind::Nominal(d, x), InferKind::Nominal(e, y))
-                if d == e && x.len() == y.len() =>
-            {
-                self.checker.infer_storage(x.len())?;
-                self.checker.infer_node(InferKind::Nominal(
-                    *d,
-                    x.iter()
-                        .zip(y.iter())
-                        .map(|(x, y)| self.merge(x, y, depth + 1))
-                        .collect::<Result<Vec<_>, _>>()?
-                        .into(),
-                ))
-            }
-            _ => Err("conflicting generic inference constraints".into()),
-        }
+        self.core.merge(a, b, depth).map_err(|e| {
+            e.into_legacy_diagnostic(&self.checker.signatures.plan.as_ref().unwrap().budget)
+        })
     }
-    fn occurs(&self, slot: usize, term: &InferTerm, depth: usize) -> Result<(), String> {
-        self.checker.infer_work(depth)?;
-        match term.as_ref() {
-            InferKind::Slot(index) if *index == slot => {
-                return Err("cyclic generic inference constraint".into());
-            }
-            InferKind::Tuple(fields) | InferKind::Nominal(_, fields) => {
-                for f in fields.iter() {
-                    self.occurs(slot, f, depth + 1)?;
-                }
-            }
-            InferKind::Array(element, _) | InferKind::Ref(_, element) => {
-                self.occurs(slot, element, depth + 1)?
-            }
-            _ => {}
-        }
-        Ok(())
+    fn constrain(&mut self, a: &InferTerm, b: &InferTerm, depth: usize) -> Result<(), String> {
+        self.core.constrain(a, b, depth).map_err(|e| {
+            e.into_legacy_diagnostic(&self.checker.signatures.plan.as_ref().unwrap().budget)
+        })
     }
-    fn constrain(
-        &mut self,
-        schema: &InferTerm,
-        evidence: &InferTerm,
-        depth: usize,
-    ) -> Result<(), String> {
-        self.checker.infer_work(depth)?;
-        if matches!(evidence.as_ref(), InferKind::Rigid(ir::Ty::Never))
-            || matches!(schema.as_ref(), InferKind::Rigid(ir::Ty::Never))
-        {
-            return Ok(());
-        }
-        match schema.as_ref() {
-            InferKind::Slot(slot) => {
-                self.occurs(*slot, evidence, depth + 1)?;
-                let value = if let Some(old) = &self.slots[*slot] {
-                    self.merge(old, evidence, depth + 1)?
-                } else {
-                    evidence.clone()
-                };
-                self.slots[*slot] = Some(value);
-                Ok(())
-            }
-            InferKind::Tuple(fields) => match evidence.as_ref() {
-                InferKind::Tuple(actual) if fields.len() == actual.len() => {
-                    for (f, a) in fields.iter().zip(actual.iter()) {
-                        self.constrain(f, a, depth + 1)?;
-                    }
-                    Ok(())
-                }
-                InferKind::Unknown(_) => {
-                    for f in fields.iter() {
-                        self.constrain(f, evidence, depth + 1)?;
-                    }
-                    Ok(())
-                }
-                _ => Err("generic tuple inference shape mismatch".into()),
-            },
-            InferKind::Ref(kind, referent) => match evidence.as_ref() {
-                InferKind::Ref(actual_kind, actual) if kind == actual_kind => {
-                    self.constrain(referent, actual, depth + 1)
-                }
-                InferKind::Unknown(_) => self.constrain(referent, evidence, depth + 1),
-                _ => Err("generic reference inference kind or shape mismatch".into()),
-            },
-            InferKind::Array(element, len) => match evidence.as_ref() {
-                InferKind::Array(actual, n) if len == n => {
-                    self.constrain(element, actual, depth + 1)
-                }
-                InferKind::Unknown(_) => self.constrain(element, evidence, depth + 1),
-                _ => Err("generic array inference shape mismatch".into()),
-            },
-            InferKind::Nominal(decl, args) => match evidence.as_ref() {
-                InferKind::Nominal(actual, values)
-                    if decl == actual && args.len() == values.len() =>
-                {
-                    for (f, a) in args.iter().zip(values.iter()) {
-                        self.constrain(f, a, depth + 1)?;
-                    }
-                    Ok(())
-                }
-                InferKind::Unknown(_) => {
-                    for f in args.iter() {
-                        self.constrain(f, evidence, depth + 1)?;
-                    }
-                    Ok(())
-                }
-                _ => Err("generic nominal inference identity mismatch".into()),
-            },
-            InferKind::Rigid(_) => {
-                if matches!(evidence.as_ref(), InferKind::Unknown(_)) {
-                    Ok(())
-                } else {
-                    self.merge(schema, evidence, depth + 1).map(|_| ())
-                }
-            }
-            _ => Err("invalid generic schema inference marker".into()),
-        }
+    fn materialize(
+        &self,
+        declaration: ir::DeclId,
+        actuals: &[ir::Ty],
+    ) -> Result<ir::Ty, FactsError> {
+        let plan = self.checker.signatures.plan.as_ref().unwrap();
+        plan.intern_nominal(declaration, actuals, self.checker.facts(), &plan.budget)
+            .map_err(|e| source_error(&plan.budget, &e))
     }
     fn resolve(
         &self,
@@ -7271,119 +9561,63 @@ impl<'c, 's> Inference<'c, 's> {
         fallback: bool,
         depth: usize,
     ) -> Result<Option<ir::Ty>, String> {
-        self.checker.infer_work(depth)?;
-        Ok(match term.as_ref() {
-            InferKind::Rigid(ty) => Some(ty.clone()),
-            InferKind::Integer if fallback => Some(ir::Ty::Int(ir::IntTy::I32)),
-            InferKind::Integer | InferKind::Unknown(_) => None,
-            InferKind::Slot(_) => {
-                return Err("unresolved schema slot escaped inference binding".into());
-            }
-            InferKind::Tuple(fields) => {
-                self.checker.infer_storage(fields.len())?;
-                let mut result = Vec::with_capacity(fields.len());
-                for f in fields.iter() {
-                    let Some(ty) = self.resolve(f, fallback, depth + 1)? else {
-                        return Ok(None);
-                    };
-                    result.push(ty);
-                }
-                Some(ir::Ty::Tuple(result.into()))
-            }
-            InferKind::Ref(kind, referent) => {
-                self.resolve(referent, fallback, depth + 1)?
-                    .map(|referent| ir::Ty::Ref {
-                        kind: *kind,
-                        referent: Arc::new(referent),
-                    })
-            }
-            InferKind::Array(element, len) => {
-                self.resolve(element, fallback, depth + 1)?
-                    .map(|element| ir::Ty::Array {
-                        element: Arc::new(element),
-                        len: *len,
-                    })
-            }
-            InferKind::Nominal(decl, args) => {
-                self.checker.infer_storage(args.len())?;
-                let mut values = Vec::with_capacity(args.len());
-                for a in args.iter() {
-                    let Some(ty) = self.resolve(a, fallback, depth + 1)? else {
-                        return Ok(None);
-                    };
-                    values.push(ty);
-                }
-                let plan = self
-                    .checker
-                    .signatures
-                    .plan
-                    .as_ref()
-                    .ok_or("inference requires planning context")?;
-                Some(plan.intern_nominal(*decl, &values, self.checker.facts(), &plan.budget)?)
-            }
-        })
+        let budget = &self.checker.signatures.plan.as_ref().unwrap().budget;
+        self.core
+            .resolve(term, fallback, depth, &mut |decl, args| {
+                self.materialize(decl, args)
+            })
+            .map_err(|e| e.into_legacy_diagnostic(budget))
     }
     fn finish(&self, fallback: bool) -> Result<Option<Vec<ir::Ty>>, String> {
-        self.checker.infer_storage(self.slots.len())?;
-        let mut args = Vec::with_capacity(self.slots.len());
-        let plan = self
-            .checker
-            .signatures
-            .plan
-            .as_ref()
-            .ok_or("inference requires planning context")?;
-        for slot in &self.slots {
-            let Some(term) = slot else {
-                return Ok(None);
-            };
-            let Some(ty) = self.resolve(term, fallback, 0)? else {
-                return Ok(None);
-            };
+        let plan = self.checker.signatures.plan.as_ref().unwrap();
+        let Some(args) = self
+            .core
+            .finish(fallback, &mut |decl, args| self.materialize(decl, args))
+            .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?
+        else {
+            return Ok(None);
+        };
+        for ty in &args {
+            if let Some(cap) = self.checker.canonical
+                && contains_source_ref(ty, &plan.budget, 0).map_err(|e| cap.render(e))?
+            {
+                return Err(cap.render(FactsError::unsupported(
+                    &plan.budget,
+                    "new inferred reference is outside direct shared Var replay",
+                )));
+            }
             if matches!(ty, ir::Ty::Ref { .. }) {
                 return Err("unsupported generic inference: newly inferred structural reference actual; use explicit type arguments".into());
             }
-            validate_argument(&ty, self.checker.facts(), &plan.budget, 0)?;
-            args.push(ty);
+            validate_argument(ty, self.checker.facts(), &plan.budget, 0)?;
         }
         Ok(Some(args))
     }
 }
 impl Checker<'_> {
-    fn infer_work(&self, depth: usize) -> Result<(), String> {
-        let plan = self
+    fn inference_core(&self) -> Result<CallInferenceState, String> {
+        let budget = &self
             .signatures
             .plan
             .as_ref()
-            .ok_or("inference requires planning context")?;
-        plan.budget.check_depth(depth)?;
-        plan.budget.charge_work(1)
+            .ok_or("inference requires planning context")?
+            .budget;
+        CallInferenceState::new(None, budget).map_err(|e| e.into_legacy_diagnostic(budget))
+    }
+    fn infer_work(&self, depth: usize) -> Result<(), String> {
+        self.inference_core()?
+            .work(depth)
+            .map_err(|e| e.into_legacy_diagnostic(&self.signatures.plan.as_ref().unwrap().budget))
     }
     fn infer_storage(&self, count: usize) -> Result<(), String> {
-        let plan = self
-            .signatures
-            .plan
-            .as_ref()
-            .ok_or("inference requires planning context")?;
-        plan.budget.retain_bytes(
-            count
-                .checked_mul(
-                    4 * (std::mem::size_of::<InferTerm>() + std::mem::size_of::<ir::Ty>() + 64),
-                )
-                .and_then(|n| n.checked_add(128))
-                .ok_or("inference allocation resource overflow")?,
-        )
+        self.inference_core()?
+            .storage(count)
+            .map_err(|e| e.into_legacy_diagnostic(&self.signatures.plan.as_ref().unwrap().budget))
     }
     fn infer_node(&self, kind: InferKind) -> Result<InferTerm, String> {
-        let plan = self
-            .signatures
-            .plan
-            .as_ref()
-            .ok_or("inference requires planning context")?;
-        plan.budget.charge_nodes(1)?;
-        plan.budget.charge_work(1)?;
-        plan.budget
-            .retain_bytes(std::mem::size_of::<InferKind>() + 128)?;
-        Ok(Arc::new(kind))
+        self.inference_core()?
+            .node(kind)
+            .map_err(|e| e.into_legacy_diagnostic(&self.signatures.plan.as_ref().unwrap().budget))
     }
     fn infer_type_term(
         &self,
@@ -7391,54 +9625,9 @@ impl Checker<'_> {
         schema: Option<ir::BinderId>,
         depth: usize,
     ) -> Result<InferTerm, String> {
-        self.infer_work(depth)?;
-        let kind = match ty {
-            ir::Ty::Param(param) if schema == Some(param.owner) => {
-                InferKind::Slot(param.index as usize)
-            }
-            ir::Ty::Tuple(fields) => {
-                self.infer_storage(fields.len())?;
-                InferKind::Tuple(
-                    fields
-                        .iter()
-                        .map(|t| self.infer_type_term(t, schema, depth + 1))
-                        .collect::<Result<Vec<_>, _>>()?
-                        .into(),
-                )
-            }
-            ir::Ty::Ref { kind, referent } => {
-                InferKind::Ref(*kind, self.infer_type_term(referent, schema, depth + 1)?)
-            }
-            ir::Ty::Array { element, len } => {
-                InferKind::Array(self.infer_type_term(element, schema, depth + 1)?, *len)
-            }
-            ir::Ty::Struct(ty) => {
-                self.infer_storage(ty.def().type_args.len())?;
-                InferKind::Nominal(
-                    ty.def().source_decl,
-                    ty.def()
-                        .type_args
-                        .iter()
-                        .map(|t| self.infer_type_term(t, schema, depth + 1))
-                        .collect::<Result<Vec<_>, _>>()?
-                        .into(),
-                )
-            }
-            ir::Ty::Enum(ty) => {
-                self.infer_storage(ty.def().type_args.len())?;
-                InferKind::Nominal(
-                    ty.def().source_decl,
-                    ty.def()
-                        .type_args
-                        .iter()
-                        .map(|t| self.infer_type_term(t, schema, depth + 1))
-                        .collect::<Result<Vec<_>, _>>()?
-                        .into(),
-                )
-            }
-            _ => InferKind::Rigid(ty.clone()),
-        };
-        self.infer_node(kind)
+        self.inference_core()?
+            .type_term(ty, schema, depth)
+            .map_err(|e| e.into_legacy_diagnostic(&self.signatures.plan.as_ref().unwrap().budget))
     }
     fn inference_evidence(&self, expr: &Expr, depth: usize) -> Result<InferTerm, String> {
         self.infer_work(depth)?;
@@ -7493,11 +9682,7 @@ impl Checker<'_> {
             }
             Expr::Array(fields) => {
                 let mut elements = None;
-                let dummy = Inference {
-                    checker: self,
-                    env: None,
-                    slots: Vec::new(),
-                };
+                let dummy = Inference::empty(self)?;
                 for f in fields {
                     let term = self.inference_evidence(f, depth + 1)?;
                     elements = Some(if let Some(old) = elements {
@@ -7614,11 +9799,7 @@ impl Checker<'_> {
             }
             Expr::Field { base, field } => {
                 let base = self.inference_evidence(base, depth + 1)?;
-                let dummy = Inference {
-                    checker: self,
-                    env: None,
-                    slots: Vec::new(),
-                };
+                let dummy = Inference::empty(self)?;
                 if let Some(ty) = dummy.resolve(&base, false, depth + 1)? {
                     let receiver = if let ir::Ty::Ref { referent, .. } = &ty {
                         referent.as_ref()
@@ -7658,6 +9839,20 @@ impl Checker<'_> {
             .plan
             .as_ref()
             .ok_or("inference requires planning context")?;
+        if let Some(cap) = self.canonical
+            && let Some(actual) = cap.shared_actual(declaration, args, expected, self)?
+        {
+            self.infer_storage(1)?;
+            let mut actuals = Vec::new();
+            actuals.try_reserve_exact(1).map_err(|_| {
+                cap.render(FactsError::resource(
+                    &plan.budget,
+                    "shared actual allocation",
+                ))
+            })?;
+            actuals.push(actual);
+            return Ok(Some(actuals));
+        }
         let schema = plan.function_schema(declaration)?;
         if schema.signature.params.len() != args.len() {
             return Err("generic function argument count mismatch".into());
@@ -7803,6 +9998,7 @@ type CheckedApplication = (String, Vec<ir::Ty>, Arc<[ir::TypeActualRegion]>);
 
 struct Checker<'a> {
     signatures: &'a Signatures,
+    canonical: Option<&'a CanonicalSourceCapability>,
     scopes: Vec<HashMap<String, ir::LocalId>>,
     pending_references: Vec<PendingReferenceDecl>,
     locals: Vec<ir::LocalDecl>,
@@ -8341,6 +10537,7 @@ impl<'a> Checker<'a> {
             field_indices: std::cell::RefCell::new(HashMap::new()),
             applications: std::cell::RefCell::new(Vec::new()),
             inference_evidence_cache: std::cell::RefCell::new(HashMap::new()),
+            canonical: None,
         }
     }
     fn charge_node(&self, bytes: usize) -> Result<(), String> {
@@ -8808,12 +11005,7 @@ impl<'a> Checker<'a> {
             }
             Expr::Apply { .. } => {
                 let evidence = self.inference_evidence(e, 0)?;
-                Inference {
-                    checker: self,
-                    env: None,
-                    slots: Vec::new(),
-                }
-                .resolve(&evidence, false, 0)?
+                Inference::empty(self)?.resolve(&evidence, false, 0)?
             }
             Expr::AssociatedCall {
                 owner,
@@ -8881,12 +11073,7 @@ impl<'a> Checker<'a> {
             }
             Expr::Struct { .. } | Expr::EnumVariant { .. } => {
                 let evidence = self.inference_evidence(e, 0)?;
-                Inference {
-                    checker: self,
-                    env: None,
-                    slots: Vec::new(),
-                }
-                .resolve(&evidence, false, 0)?
+                Inference::empty(self)?.resolve(&evidence, false, 0)?
             }
             Expr::Cast { target, .. } => Some(checked_local_ty(target, self.signatures)?),
             Expr::Deref { value } => match self.scalar_hint(value)? {
@@ -9523,6 +11710,9 @@ impl<'a> Checker<'a> {
                     let ty = checked_local_ty(ty, self.signatures)?;
                     self.accessible(&ty)?;
                     let local = self.local(name, ty, *mutable)?;
+                    if let Some(cap) = self.canonical {
+                        cap.record_binding(s, local)?;
+                    }
                     (ir::Stmt::Declare { local }, true)
                 }
                 Stmt::Let {
@@ -9547,6 +11737,9 @@ impl<'a> Checker<'a> {
                         ty
                     };
                     let local = self.local(name, t, *mutable)?;
+                    if let Some(cap) = self.canonical {
+                        cap.record_binding(s, local)?;
+                    }
                     (ir::Stmt::Let { local, value }, f.completes)
                 }
                 Stmt::LetPattern { pattern, ty, value } => {
@@ -9784,6 +11977,9 @@ impl<'a> Checker<'a> {
                     )
                 }
             };
+            if let Some(cap) = self.canonical {
+                cap.record_emission(s, statements.len())?;
+            }
             statements.push(statement);
             live &= completes;
         }
@@ -9818,7 +12014,14 @@ impl<'a> Checker<'a> {
             let local = pending
                 .local
                 .ok_or("untyped deferred reference declaration remains underconstrained")?;
-            statements.insert(pending.position + offset, ir::Stmt::Declare { local });
+            let position = pending
+                .position
+                .checked_add(offset)
+                .ok_or("pending declaration position overflow")?;
+            if let Some(cap) = self.canonical {
+                cap.shift_root_emissions(b, position)?;
+            }
+            statements.insert(position, ir::Stmt::Declare { local });
         }
         self.scopes.pop();
         Ok((ir::Block { statements, tail }, flow))
@@ -9830,6 +12033,33 @@ impl<'a> Checker<'a> {
         self.expr_with_expectation(e, expected.into())
     }
     fn expr_with_expectation(
+        &mut self,
+        e: &Expr,
+        expectation: Expectation<'_>,
+    ) -> Result<ir::ExprId, String> {
+        let result = self.expr_with_expectation_inner(e, expectation)?;
+        if matches!(
+            e,
+            Expr::Call { .. }
+                | Expr::MethodCall { .. }
+                | Expr::AssociatedCall { .. }
+                | Expr::TraitCall { .. }
+        ) && let Some(cap) = self.canonical
+        {
+            // Primitive rvalue receivers use the existing single-evaluation block
+            // wrapper. The original method occurrence binds its tail call, not
+            // the wrapper expression, while the wrapper remains in the IR.
+            let call = match (e, &self.exprs[result.0].kind) {
+                (Expr::MethodCall { .. }, ir::ExprKind::Block(block)) => block
+                    .tail
+                    .ok_or("canonical method wrapper lost its tail call")?,
+                _ => result,
+            };
+            cap.record_call(e, call, &self.exprs[call.0].kind)?;
+        }
+        Ok(result)
+    }
+    fn expr_with_expectation_inner(
         &mut self,
         e: &Expr,
         expectation: Expectation<'_>,
@@ -10036,11 +12266,20 @@ impl<'a> Checker<'a> {
         // This signature is the original source-stage signature. Inference may
         // not introduce new structural reference actuals, so a later argument
         // cannot retroactively make an opaque parameter a firm Ref expectation.
+        let identity = match self.canonical {
+            Some(cap) => cap.identity_arguments(source_args)?,
+            None => false,
+        };
+        if identity && (receiver.is_some() || source_args.len() != 1) {
+            return Err("shared replay identity argument shape changed".into());
+        }
         let expectations = signature
             .params
             .iter()
             .map(|ty| match ty {
-                ir::Ty::Ref { kind, .. } => ir::CallExpectation::FirmReference { kind: *kind },
+                ir::Ty::Ref { kind, .. } if !identity => {
+                    ir::CallExpectation::FirmReference { kind: *kind }
+                }
                 _ => ir::CallExpectation::NoFirmReference,
             })
             .collect::<Vec<_>>();
@@ -10058,7 +12297,11 @@ impl<'a> Checker<'a> {
             .zip(&signature.params[offset..])
             .enumerate()
         {
-            let (id, reason) = self.call_argument(source, ty, self.reachable && completes)?;
+            let (id, reason) = if identity {
+                (self.expr(source)?, None)
+            } else {
+                self.call_argument(source, ty, self.reachable && completes)?
+            };
             let flow = self.flow(id);
             self.require(&flow, ty)?;
             completes &= flow.completes;
@@ -11472,6 +13715,15 @@ pub fn type_callable_with_plan(
     plan: &PlanCtx,
     budget: &ir::PlanBudget,
 ) -> Result<ir::CheckedFunction, String> {
+    type_callable_source(program, declaration, plan, budget, None)
+}
+fn type_callable_source(
+    program: &Program,
+    declaration: ir::DeclId,
+    plan: &PlanCtx,
+    budget: &ir::PlanBudget,
+    canonical: Option<&CanonicalSourceCapability>,
+) -> Result<ir::CheckedFunction, String> {
     plan.check_budget(budget)?;
     budget.charge_work(1)?;
     if matches!(
@@ -11488,13 +13740,17 @@ pub fn type_callable_with_plan(
         return plan.checked_body(&target, &facts, budget);
     }
     let f = plan.callable_body(program, declaration)?;
-    let signatures = plan.environment(Some(declaration))?;
+    let mut signatures = plan.environment(Some(declaration))?;
+    if let Some(cap) = canonical {
+        signatures.facts = Some(cap.facts.clone());
+    }
     let signature = plan.function_schema(declaration)?.signature;
     let context = plan.callable_context(declaration)?;
     validate_depth(DepthNode::Block(&f.body))?;
     let module = context.module.join("::");
     let mut c = Checker::new(&signatures, signature.result.clone(), module);
     c.declaration = Some(declaration);
+    c.canonical = canonical;
     let mut params = Vec::new();
     let offset = if context.receiver != ReceiverKind::None {
         let local = c.bind("self", signature.params[0].clone())?;
@@ -11508,8 +13764,27 @@ pub fn type_callable_with_plan(
     if signature.params.len() != f.params.len() + offset {
         return Err("callable parameter count mismatch".into());
     }
-    for ((name, _), ty) in f.params.iter().zip(&signature.params[offset..]) {
-        params.push(c.bind(name, ty.clone())?);
+    for (parameter, ((name, _), ty)) in f.params.iter().zip(&signature.params[offset..]).enumerate()
+    {
+        let local = c.bind(name, ty.clone())?;
+        if let Some(cap) = canonical {
+            sr::work(budget, 1).map_err(|e| cap.render(e))?;
+            let index = parameter;
+            if !cap
+                .inventory
+                .bindings
+                .get(index)
+                .is_some_and(|site| site.parameter == Some(parameter))
+            {
+                return Err(cap.render(FactsError::invalid(
+                    budget,
+                    "source parameter prefix occurrence changed",
+                )));
+            }
+            sr::push(&mut cap.bindings.borrow_mut(), (index, local), budget)
+                .map_err(|e| cap.render(e))?;
+        }
+        params.push(local);
     }
     let (body, flow) = c
         .block_expected(&f.body, Some(&signature.result))
@@ -11527,6 +13802,9 @@ pub fn type_callable_with_plan(
         body_substitution: None,
         body,
     };
+    if canonical.is_some() {
+        return Ok(checked);
+    }
     let facts = plan.callable_facts(declaration)?;
     ir::validate_call_evidence(&checked, &facts, budget)?;
     let mut cx = plan.clone();

@@ -345,6 +345,79 @@ pub struct ValidatedFacts {
     predicates: Arc<PredicateEnv>,
     requirements: Arc<[ProofEvidence]>,
 }
+
+/// An original header lookup, not an executable instantiation or body proof.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum OriginalCallableSubject<'a> {
+    Direct(DeclId),
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "reserved original trait replay subject remains explicitly unsupported"
+        )
+    )]
+    TraitItem(&'a TraitCall),
+}
+
+/// Context-bound and deliberately not cached in the world it retains.
+#[derive(Debug)]
+pub(super) struct OriginalCallableView {
+    facts: Arc<ValidatedFacts>,
+    declaration: DeclId,
+    schema: GenericSchema,
+    source_regions: Arc<ir::SourceRegionEnv>,
+    receiver: ReceiverMode,
+}
+impl OriginalCallableView {
+    #[cfg(test)]
+    pub(super) fn declaration(&self) -> DeclId {
+        self.declaration
+    }
+    #[cfg(test)]
+    pub(super) fn subject(&self) -> OriginalCallableSubject<'_> {
+        OriginalCallableSubject::Direct(self.declaration)
+    }
+    pub(super) fn generic_env(&self) -> &Arc<GenericEnv> {
+        &self.schema.env
+    }
+    pub(super) fn signature(&self) -> &Signature {
+        &self.schema.signature
+    }
+    #[cfg(test)]
+    pub(super) fn predicates(&self) -> &Arc<[Predicate]> {
+        &self.schema.predicates
+    }
+    #[cfg(test)]
+    pub(super) fn source_region_env(&self) -> &Arc<ir::SourceRegionEnv> {
+        &self.source_regions
+    }
+    #[cfg(test)]
+    pub(super) fn receiver(&self) -> ReceiverMode {
+        self.receiver
+    }
+    #[cfg(test)]
+    pub(super) fn facts(&self) -> &Arc<ValidatedFacts> {
+        &self.facts
+    }
+    pub(super) fn validate_for(&self, facts: &ValidatedFacts) -> Result<()> {
+        facts.world.check_original_context(facts)?;
+        if !std::ptr::eq(self.facts.as_ref(), facts) {
+            return Err(FactsError::invalid(
+                facts.budget(),
+                "original callable view changed its exact caller facts",
+            ));
+        }
+        let info = facts.world.info(self.declaration)?;
+        if self.source_regions.declaration != self.declaration || self.receiver != info.receiver {
+            return Err(FactsError::invalid(
+                facts.budget(),
+                "original callable view changed its header authority",
+            ));
+        }
+        Ok(())
+    }
+}
 impl ValidatedFacts {
     pub fn world(&self) -> &Arc<ValidatedTraitWorld> {
         &self.world
@@ -383,6 +456,77 @@ impl ValidatedFacts {
     }
     pub fn registry_snapshot(&self) -> SnapshotId {
         self.world.registry
+    }
+    pub(super) fn original_callable_schema(
+        self: &Arc<Self>,
+        subject: OriginalCallableSubject<'_>,
+    ) -> Result<Arc<OriginalCallableView>> {
+        self.world.check_original_context(self)?;
+        let declaration = match subject {
+            OriginalCallableSubject::Direct(declaration) => declaration,
+            OriginalCallableSubject::TraitItem(call) => {
+                self.world.item_header(call.item)?;
+                return Err(FactsError::unsupported(
+                    self.budget(),
+                    "original trait-call inference replay is not implemented",
+                ));
+            }
+        };
+        let info = self.world.info(declaration)?;
+        if !matches!(info.kind, DeclKind::Function | DeclKind::AssociatedFunction) {
+            return Err(FactsError::invalid(
+                self.budget(),
+                "original direct-call subject is not a callable declaration",
+            ));
+        }
+        self.world.ensure_provider(declaration)?;
+        let schema = self.world.callable_schema(declaration)?;
+        if !self.world.same_env(&schema.env, &info.env)? {
+            return Err(FactsError::invalid(
+                self.budget(),
+                "original callable header changed its authoritative binder order",
+            ));
+        }
+        let source_regions = self.source_region_env(declaration)?;
+        self.budget()
+            .charge_nodes(1)
+            .map_err(|error| FactsError::resource(self.budget(), &error))?;
+        self.budget()
+            .retain_bytes(
+                std::mem::size_of::<OriginalCallableView>() + 2 * std::mem::size_of::<usize>(),
+            )
+            .map_err(|error| FactsError::resource(self.budget(), &error))?;
+        Ok(Arc::new(OriginalCallableView {
+            facts: self.clone(),
+            declaration,
+            schema,
+            source_regions,
+            receiver: info.receiver,
+        }))
+    }
+    /// Provider role is derived from validated world headers and catalog, not a
+    /// caller flag. Registry source ordinals remain the frontend's authority.
+    pub(super) fn is_source_callable(&self, declaration: DeclId) -> Result<bool> {
+        self.world.check_original_context(self)?;
+        let info = self.world.info(declaration)?;
+        self.world.callable_header(declaration)?;
+        self.world.ensure_provider(declaration)?;
+        if let Some(record) = self.world.catalog.declaration(declaration) {
+            return match record.callable_provider {
+                Some(CallableProvider::Recipe { .. }) => Ok(false),
+                _ => Err(FactsError::invalid(
+                    self.budget(),
+                    "catalog callable has no validated executable provider",
+                )),
+            };
+        }
+        if !matches!(info.kind, DeclKind::Function | DeclKind::AssociatedFunction) {
+            return Err(FactsError::invalid(
+                self.budget(),
+                "source provider is not an executable callable declaration",
+            ));
+        }
+        Ok(true)
     }
     pub fn validate_signature(
         &self,
@@ -3563,6 +3707,48 @@ impl ValidatedTraitWorld {
             }
         }
         Ok(true)
+    }
+    fn check_original_context(&self, facts: &ValidatedFacts) -> Result<()> {
+        self.check_facts(facts, true)?;
+        self.check_context(ProofContext::from_facts(facts))?;
+        self.info(facts.declaration())?;
+        self.callable_header(facts.declaration())?;
+        match &facts.subject {
+            FactsSubject::UniversalCallable(declaration) => {
+                let expected = self.predicate_env(*declaration)?;
+                if !Arc::ptr_eq(&expected, &facts.predicates) {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "original header read changed its universal caller environment",
+                    ));
+                }
+            }
+            FactsSubject::ClosedInstance(target) => {
+                if !Arc::ptr_eq(&self.empty, &facts.predicates)
+                    || target.type_args.len()
+                        != self
+                            .callable_header(target.declaration)?
+                            .schema
+                            .env
+                            .total_arity()
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "original header read changed its closed caller subject or empty context",
+                    ));
+                }
+                for ty in target.type_args.iter() {
+                    self.validate_ty(ty, self.empty.env(), None, true, 0)?;
+                }
+            }
+            FactsSubject::SchemaItem(_) => {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "schema-only facts cannot read executable original call headers",
+                ));
+            }
+        }
+        Ok(())
     }
     fn check_facts(&self, facts: &ValidatedFacts, executable: bool) -> Result<()> {
         charged(&self.budget, self.budget.charge_work(1))?;
@@ -6807,6 +6993,118 @@ mod tests {
                 predicates: Arc::from([]),
             },
         }
+    }
+
+    #[test]
+    fn original_callable_view_retains_rigid_header_and_exact_subject() {
+        let budget = PlanBudget::default();
+        let header = carrier_header(&budget, 1, |p| sig(vec![p[0].clone()], p[0].clone()));
+        let world = test_support::world(std::slice::from_ref(&header), &budget).unwrap();
+        let universal = world.callable_facts(header.declaration).unwrap();
+        let target = CallTarget {
+            declaration: header.declaration,
+            type_args: Arc::from([reference(Ty::Int(IntTy::I32))]),
+        };
+        let closed = world.instance_facts(&target).unwrap();
+        for facts in [&universal, &closed] {
+            let view = facts
+                .original_callable_schema(OriginalCallableSubject::Direct(header.declaration))
+                .unwrap();
+            assert_eq!(view.declaration(), header.declaration);
+            assert!(
+                matches!(view.subject(), OriginalCallableSubject::Direct(d) if d == header.declaration)
+            );
+            assert!(Arc::ptr_eq(view.facts(), facts));
+            assert!(
+                world
+                    .same_env(view.generic_env(), &header.schema.env)
+                    .unwrap()
+            );
+            assert!(
+                world
+                    .eq_signature(view.signature(), &header.schema.signature)
+                    .unwrap()
+            );
+            assert_eq!(
+                view.predicates().as_ref(),
+                universal.predicates().predicates()
+            );
+            assert_eq!(view.source_region_env().declaration, header.declaration);
+            assert_eq!(view.receiver(), ReceiverMode::None);
+            assert!(matches!(view.signature().result, Ty::Param(_)));
+            view.validate_for(facts).unwrap();
+            assert!(facts.is_source_callable(header.declaration).unwrap());
+        }
+        assert!(
+            !closed
+                .carrier_contract(SignatureSubject::Body)
+                .unwrap()
+                .ref_contract()
+                .results
+                .is_empty()
+        );
+        assert!(header.schema.signature.ref_contract.results.is_empty());
+    }
+
+    #[test]
+    fn original_callable_view_rejects_foreign_schema_and_rebound_contexts() {
+        let c = borrowed_case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let view = facts
+            .original_callable_schema(OriginalCallableSubject::Direct(c.caller))
+            .unwrap();
+        let rebound = Arc::new((*facts).clone());
+        assert!(
+            matches!(view.validate_for(&rebound), Err(e) if e.kind() == FactsErrorKind::InvalidMetadata)
+        );
+        let other = c.build().unwrap();
+        assert!(
+            view.validate_for(&other.callable_facts(c.caller).unwrap())
+                .is_err()
+        );
+        let mut foreign = c.caller;
+        foreign.snapshot = SnapshotId::allocate().unwrap();
+        assert!(
+            matches!(facts.original_callable_schema(OriginalCallableSubject::Direct(foreign)), Err(e) if e.kind() == FactsErrorKind::InvalidMetadata)
+        );
+        let schema = world.schema_facts(c.item).unwrap();
+        assert!(
+            matches!(schema.original_callable_schema(OriginalCallableSubject::Direct(c.caller)), Err(e) if e.kind() == FactsErrorKind::InvalidMetadata)
+        );
+        assert!(
+            matches!(facts.original_callable_schema(OriginalCallableSubject::TraitItem(&c.call(c.caller_parameter.clone()))), Err(e) if e.kind() == FactsErrorKind::Unsupported)
+        );
+        let mut forged = (*facts).clone();
+        forged.predicates = world.empty.clone();
+        assert!(
+            matches!(Arc::new(forged).original_callable_schema(OriginalCallableSubject::Direct(c.caller)), Err(e) if e.kind() == FactsErrorKind::InvalidMetadata)
+        );
+    }
+
+    #[test]
+    fn original_callable_view_uses_existing_ledger_on_every_lookup() {
+        let budget = PlanBudget::default();
+        let header = carrier_header(&budget, 1, |p| sig(vec![p[0].clone()], p[0].clone()));
+        let world = test_support::world(std::slice::from_ref(&header), &budget).unwrap();
+        let facts = world.callable_facts(header.declaration).unwrap();
+        let first = facts
+            .original_callable_schema(OriginalCallableSubject::Direct(header.declaration))
+            .unwrap();
+        let second = facts
+            .original_callable_schema(OriginalCallableSubject::Direct(header.declaration))
+            .unwrap();
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert!(Arc::ptr_eq(first.facts(), second.facts()));
+        // Failed oversized charges do not consume the remaining allowance.
+        for bit in (0..usize::BITS).rev() {
+            let _ = budget.charge_work(1usize << bit);
+        }
+        assert!(budget.charge_work(1).is_err());
+        assert!(
+            matches!(facts.original_callable_schema(OriginalCallableSubject::Direct(header.declaration)), Err(e) if e.is_resource())
+        );
+        assert!(matches!(first.validate_for(&facts), Err(e) if e.is_resource()));
     }
 
     #[test]

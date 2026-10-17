@@ -80,12 +80,21 @@ pub struct GeneratedCfgShape {
     target: Option<ir::CallTarget>,
     capsules: std::sync::Arc<[std::sync::Arc<ir::ValidatedCallEvidence>]>,
     body_proof: Option<std::sync::Arc<ir::BodySubstitutionProof>>,
+    original_publication: Option<std::sync::Arc<super::source_replay::CanonicalSourcePublication>>,
     budget: ir::PlanBudget,
 }
 impl GeneratedCfgShape {
     fn capture(
         f: &Function,
         facts: &super::traits::ValidatedFacts,
+        budget: &ir::PlanBudget,
+    ) -> Result<Self, String> {
+        Self::capture_with_publication(f, facts, None, budget)
+    }
+    fn capture_with_publication(
+        f: &Function,
+        facts: &super::traits::ValidatedFacts,
+        publication: Option<&std::sync::Arc<super::source_replay::CanonicalSourcePublication>>,
         budget: &ir::PlanBudget,
     ) -> Result<Self, String> {
         f.preflight_plan(ir::FactsCtx::from_validated(facts), budget)?;
@@ -109,6 +118,7 @@ impl GeneratedCfgShape {
             entry: f.entry,
             return_local: f.return_local,
             body_proof: f.body_substitution.clone(),
+            original_publication: publication.cloned(),
             budget: budget.clone(),
             world: facts.world().clone(),
             declaration: facts.declaration(),
@@ -125,6 +135,29 @@ impl GeneratedCfgShape {
     ) -> Result<(), String> {
         f.preflight_plan(ir::FactsCtx::from_validated(facts), budget)?;
         f.snapshot_storage(budget)?;
+        if let Some(publication) = &self.original_publication {
+            ir::validate_published_source(publication, budget)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?;
+            publication
+                .validate_source(publication.source(), facts, budget)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?;
+            if f.body_substitution.is_some() {
+                return Err("original source CFG cannot carry a generated body proof".into());
+            }
+            for capsule in f.call_evidence.iter() {
+                budget.charge_work(1).map_err(|error| {
+                    super::traits::FactsError::resource(budget, &error)
+                        .into_legacy_diagnostic(budget)
+                })?;
+                if !std::sync::Arc::ptr_eq(capsule.source(), publication.source())
+                    || !capsule.original().is_some_and(|original| {
+                        std::sync::Arc::ptr_eq(original, publication.replay())
+                    })
+                {
+                    return Err("source CFG capsule changed canonical publication".into());
+                }
+            }
+        }
         if !self.budget.same_authority(budget)
             || !std::sync::Arc::ptr_eq(&self.world, facts.world())
             || self.declaration != facts.declaration()
@@ -641,6 +674,96 @@ pub fn lower_template(
     })
 }
 
+/// Canonical Source lowering always retains its publication, including bodies
+/// with no calls. Recipe/raw typed IR cannot substitute for this association.
+pub(super) fn lower_source_template(
+    publication: &std::sync::Arc<super::source_replay::CanonicalSourcePublication>,
+    budget: &ir::PlanBudget,
+) -> Result<TemplateCfg, super::traits::FactsError> {
+    use super::traits::FactsError;
+    let authority = publication.facts();
+    require_facts(authority, super::traits::FactsPhase::Universal, budget)
+        .map_err(|error| FactsError::from_message(budget, &error))?;
+    let nodes = publication
+        .source()
+        .exprs
+        .len()
+        .checked_add(publication.source().locals.len())
+        .and_then(|count| count.checked_add(1))
+        .ok_or_else(|| FactsError::resource(budget, "source template node overflow"))?;
+    budget
+        .charge_nodes(nodes)
+        .map_err(|error| FactsError::resource(budget, &error))?;
+    let lowered = lower_source(publication, budget)?;
+    let header = 2usize
+        .checked_mul(std::mem::size_of::<usize>())
+        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Function>()))
+        .ok_or_else(|| FactsError::resource(budget, "source template storage overflow"))?;
+    budget
+        .retain_bytes(header)
+        .map_err(|error| FactsError::resource(budget, &error))?;
+    Ok(TemplateCfg {
+        source: publication.source().clone(),
+        facts: authority.clone(),
+        function: std::sync::Arc::new(lowered),
+        budget: budget.clone(),
+    })
+}
+
+pub(super) fn lower_source_closed(
+    publication: &std::sync::Arc<super::source_replay::CanonicalSourcePublication>,
+    budget: &ir::PlanBudget,
+) -> Result<Function, super::traits::FactsError> {
+    require_facts(
+        publication.facts(),
+        super::traits::FactsPhase::Closed,
+        budget,
+    )
+    .map_err(|error| super::traits::FactsError::from_message(budget, &error))?;
+    lower_source(publication, budget)
+}
+
+fn lower_source(
+    publication: &std::sync::Arc<super::source_replay::CanonicalSourcePublication>,
+    budget: &ir::PlanBudget,
+) -> Result<Function, super::traits::FactsError> {
+    use super::traits::FactsError;
+    let source = publication.source();
+    let authority = publication.facts();
+    publication.validate_source(source, authority, budget)?;
+    let facts = ir::FactsCtx::from_validated(authority);
+    let mut function = lower_internal_with_source(
+        source,
+        facts,
+        Some(budget),
+        SourceLowering::Original(publication),
+    )
+    .map_err(|error| FactsError::from_message(budget, &error))?;
+    function.call_evidence = ir::validated_call_capsules(publication, budget)?;
+    budget
+        .charge_nodes(1)
+        .map_err(|error| FactsError::resource(budget, &error))?;
+    function.lowering_proof = Some(std::sync::Arc::new(
+        GeneratedCfgShape::capture_with_publication(
+            &function,
+            authority,
+            Some(publication),
+            budget,
+        )
+        .map_err(|error| FactsError::from_message(budget, &error))?,
+    ));
+    function
+        .preflight_plan(facts, budget)
+        .map_err(|error| FactsError::from_message(budget, &error))?;
+    function
+        .validate_with_facts(facts)
+        .map_err(|error| FactsError::from_message(budget, &error))?;
+    function
+        .validate_provenance(authority, budget)
+        .map_err(|error| FactsError::from_message(budget, &error))?;
+    Ok(function)
+}
+
 fn concrete_carrier_count(ty: &Ty, facts: ir::FactsCtx<'_>) -> Result<usize, String> {
     if let Some(authority) = facts.validated() {
         Ok(ir::carrier_locations(ty, authority.budget())?
@@ -859,6 +982,31 @@ impl Function {
         }
         Ok(bytes)
     }
+    /// Native Source graph boundary. A legacy/raw capsule, including a body with
+    /// no calls, cannot stand in for the required canonical publication.
+    pub(super) fn validate_source_publication(
+        &self,
+        publication: &std::sync::Arc<super::source_replay::CanonicalSourcePublication>,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), super::traits::FactsError> {
+        use super::traits::FactsError;
+        let shape = self.lowering_proof.as_ref().ok_or_else(|| {
+            FactsError::invalid(budget, "source CFG has no canonical publication shape")
+        })?;
+        if !shape
+            .original_publication
+            .as_ref()
+            .is_some_and(|original| std::sync::Arc::ptr_eq(original, publication))
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "source CFG publication association changed",
+            ));
+        }
+        self.validate_provenance(publication.facts(), budget)
+            .map_err(|error| FactsError::from_message(budget, &error))
+    }
+
     pub fn validate_provenance(
         &self,
         facts: &super::traits::ValidatedFacts,
@@ -2958,6 +3106,20 @@ fn lower_internal(
     facts: ir::FactsCtx<'_>,
     budget: Option<&ir::PlanBudget>,
 ) -> Result<Function, String> {
+    lower_internal_with_source(source, facts, budget, SourceLowering::Legacy)
+}
+
+enum SourceLowering<'a> {
+    Legacy,
+    Original(&'a std::sync::Arc<super::source_replay::CanonicalSourcePublication>),
+}
+
+fn lower_internal_with_source(
+    source: &ir::CheckedFunction,
+    facts: ir::FactsCtx<'_>,
+    budget: Option<&ir::PlanBudget>,
+    authority: SourceLowering<'_>,
+) -> Result<Function, String> {
     if let Some(budget) = budget {
         source.preflight_plan(facts, budget)?;
         budget.retain_bytes(
@@ -2972,7 +3134,23 @@ fn lower_internal(
         budget.charge_nodes(1)?;
         budget.retain_bytes(std::mem::size_of::<PendingBlock>())?;
     }
-    source.validate_with_facts(facts)?;
+    match authority {
+        SourceLowering::Legacy => source.validate_with_facts(facts)?,
+        SourceLowering::Original(publication) => {
+            let budget = budget.ok_or("original source lowering requires planning authority")?;
+            let facts = facts
+                .validated()
+                .ok_or("original source lowering requires validated facts")?;
+            if !std::ptr::eq(source, publication.source().as_ref()) {
+                return Err("source lowering changed exact checked payload".into());
+            }
+            publication
+                .validate_source(publication.source(), facts, budget)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?;
+            ir::validate_published_source(publication, budget)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?;
+        }
+    }
     let arena_size = source
         .exprs
         .len()
@@ -3140,6 +3318,164 @@ fn lower_internal(
         })
         .collect();
     Ok(lowerer.result)
+}
+
+#[cfg(test)]
+mod original_replay_transport_tests {
+    use super::*;
+    use crate::compiler::{frontend, ownership};
+    use std::sync::Arc;
+
+    fn published(
+        plan: &frontend::PlanCtx,
+        index: usize,
+        budget: &ir::PlanBudget,
+    ) -> Arc<crate::compiler::source_replay::CanonicalSourcePublication> {
+        let declaration = plan.function_decl(index).unwrap();
+        let frontend::PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, budget).unwrap()
+        else {
+            panic!("canonical source publication required")
+        };
+        publication
+    }
+
+    #[test]
+    fn original_source_zero_call_missing_and_transplanted_publication_fences() {
+        let budget = ir::PlanBudget::default();
+        let program = frontend::parse("fn empty(){} fn other(){} fn main(){}").unwrap();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let publication = published(&plan, 0, &budget);
+        let other = published(&plan, 1, &budget);
+        let function = lower_source_closed(&publication, &budget).unwrap();
+        assert!(function.call_evidence.is_empty());
+        assert!(function.lowering_proof.is_some());
+        function
+            .validate_source_publication(&publication, &budget)
+            .unwrap();
+        assert!(
+            function
+                .validate_source_publication(&other, &budget)
+                .is_err()
+        );
+        let raw = lower_with_facts(publication.source(), publication.facts(), &budget).unwrap();
+        assert!(raw.lowering_proof.is_none());
+        assert!(
+            raw.validate_source_publication(&publication, &budget)
+                .is_err()
+        );
+        let mut detached = function.clone();
+        detached.lowering_proof = None;
+        assert!(
+            detached
+                .validate_source_publication(&publication, &budget)
+                .is_err()
+        );
+        let other_function = lower_source_closed(&other, &budget).unwrap();
+        let mut transplanted = function.clone();
+        transplanted.lowering_proof = other_function.lowering_proof.clone();
+        assert!(
+            transplanted
+                .validate_source_publication(&publication, &budget)
+                .is_err()
+        );
+        assert!(
+            transplanted
+                .validate_source_publication(&other, &budget)
+                .is_err()
+        );
+        let republished = published(&plan, 0, &budget);
+        assert!(!Arc::ptr_eq(&publication, &republished));
+        assert!(
+            function
+                .validate_source_publication(&republished, &budget)
+                .is_err()
+        );
+        assert!(lower_source_template(&publication, &budget).is_err());
+    }
+
+    #[test]
+    fn original_source_generic_exact_template_phase_bridge() {
+        let budget = ir::PlanBudget::default();
+        let program = frontend::parse(
+            "fn id<T:Copy>(x:T)->T{x} fn forward<T:Copy>(x:T)->T{id::<T>(x)} fn main(){}",
+        )
+        .unwrap();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let publication = published(&plan, 1, &budget);
+        assert_eq!(
+            publication.facts().phase(),
+            crate::compiler::traits::FactsPhase::Universal
+        );
+        assert!(lower_source_closed(&publication, &budget).is_err());
+        let lowered = lower_source_template(&publication, &budget).unwrap();
+        assert!(Arc::ptr_eq(lowered.source(), publication.source()));
+        lowered
+            .function()
+            .validate_source_publication(&publication, &budget)
+            .unwrap();
+        let verified = ownership::verify_template(lowered).unwrap();
+        let target = ir::CallTarget {
+            declaration: plan.function_decl(1).unwrap(),
+            type_args: Arc::from([Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: Arc::new(Ty::Int(IntTy::I32)),
+            }]),
+        };
+        let facts = plan.instance_facts(&target).unwrap();
+        assert!(
+            publication
+                .validate_source(publication.source(), &facts, &budget)
+                .is_err()
+        );
+        let instance = ir::instantiate_checked(
+            &verified,
+            &target.type_args,
+            &facts,
+            &mut plan.clone(),
+            &budget,
+        )
+        .unwrap();
+        let function = lower_with_facts(&instance, &facts, &budget).unwrap();
+        function.validate_provenance(&facts, &budget).unwrap();
+        assert!(
+            function
+                .lowering_proof
+                .as_ref()
+                .unwrap()
+                .original_publication
+                .is_none()
+        );
+        let proof = function.body_substitution.as_ref().unwrap();
+        assert!(Arc::ptr_eq(proof.template().source(), publication.source()));
+        proof
+            .template()
+            .function()
+            .validate_source_publication(&publication, &budget)
+            .unwrap();
+        assert_eq!(function.call_evidence.len(), 1);
+        assert!(Arc::ptr_eq(
+            &function.call_evidence[0],
+            &verified.function().call_evidence[0]
+        ));
+        assert!(Arc::ptr_eq(
+            function.call_evidence[0].original().unwrap(),
+            publication.replay()
+        ));
+        // A closed specialization is not reclassified as a fresh original call.
+        assert_eq!(
+            function.call_evidence[0].trace().arguments[0].expectation,
+            ir::CallExpectation::NoFirmReference
+        );
+        assert!(
+            function
+                .validate_source_publication(&publication, &budget)
+                .is_err()
+        );
+        let mut detached = function;
+        detached.body_substitution = None;
+        assert!(detached.validate_provenance(&facts, &budget).is_err());
+    }
 }
 
 #[cfg(test)]

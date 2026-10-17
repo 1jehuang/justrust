@@ -7,6 +7,7 @@ mod instances;
 pub mod ir;
 pub mod ownership;
 pub mod source;
+mod source_replay;
 pub mod traits;
 
 use crate::{Context, Engine, Error, Key, Provider, Report, TaskFuture};
@@ -64,6 +65,45 @@ pub(super) fn analysis_diagnostic(
     writer.text
 }
 
+/// Present typed source errors only at the existing bounded graph diagnostic boundary.
+fn source_fact_error(error: traits::FactsError, budget: &ir::PlanBudget) -> Error {
+    const EXHAUSTED: &str = "source planning ResourceLimit (diagnostic transport exhausted)";
+    let category = match error.kind() {
+        traits::FactsErrorKind::InvalidMetadata => "InvalidMetadata",
+        traits::FactsErrorKind::Unsupported => "Unsupported",
+        traits::FactsErrorKind::Unproved => "Unproved",
+        traits::FactsErrorKind::Ambiguous => "Ambiguous",
+        traits::FactsErrorKind::Cycle => "Cycle",
+        traits::FactsErrorKind::Resource => "ResourceLimit",
+    };
+    let Ok(message) = error.into_diagnostic(budget) else {
+        return Error::new(EXHAUSTED);
+    };
+    let Some(bytes) = category
+        .len()
+        .checked_add(2)
+        .and_then(|n| n.checked_add(message.len()))
+    else {
+        return Error::new(EXHAUSTED);
+    };
+    if budget
+        .charge_work(bytes)
+        .and_then(|()| budget.charge_diagnostic_bytes(bytes))
+        .and_then(|()| budget.retain_bytes(bytes))
+        .is_err()
+    {
+        return Error::new(EXHAUSTED);
+    }
+    let mut rendered = String::new();
+    if rendered.try_reserve_exact(bytes).is_err() {
+        return Error::new(EXHAUSTED);
+    }
+    rendered.push_str(category);
+    rendered.push_str(": ");
+    rendered.push_str(&message);
+    Error::new(rendered)
+}
+
 const PARSE: u32 = 100;
 const SIGNATURES: u32 = 101;
 const BODY: u32 = 102;
@@ -88,6 +128,7 @@ enum Input {
 }
 struct DeclarationFacts {
     checked: OnceLock<Arc<ir::CheckedFunction>>,
+    publication: OnceLock<Arc<source_replay::CanonicalSourcePublication>>,
     lowered: OnceLock<cfg::TemplateCfg>,
     verified: OnceLock<ownership::VerifiedTemplateCfg>,
     analysis: OnceLock<Arc<ownership::Analysis>>,
@@ -96,6 +137,7 @@ impl DeclarationFacts {
     fn new() -> Self {
         Self {
             checked: OnceLock::new(),
+            publication: OnceLock::new(),
             lowered: OnceLock::new(),
             verified: OnceLock::new(),
             analysis: OnceLock::new(),
@@ -139,6 +181,43 @@ struct Snapshot {
 #[derive(Clone)]
 struct CompilerProvider(Arc<Snapshot>);
 impl CompilerProvider {
+    fn validated_body(&self, index: usize) -> Result<&Arc<ir::CheckedFunction>, Error> {
+        let slot = self.declaration(index)?;
+        let source = slot
+            .checked
+            .get()
+            .ok_or_else(|| Error::new("missing original checked body"))?;
+        let declaration = self.types()?.callable_decl(index).map_err(Error::new)?;
+        let facts = if let Some(publication) = slot.publication.get() {
+            publication.facts().clone()
+        } else {
+            self.types()?
+                .callable_facts(declaration)
+                .map_err(Error::new)?
+        };
+        if facts.declaration() != declaration {
+            return Err(Error::new(
+                "source publication changed its caller declaration",
+            ));
+        }
+        if facts
+            .is_source_callable(declaration)
+            .map_err(|error| source_fact_error(error, &self.0.budget))?
+        {
+            let publication = slot
+                .publication
+                .get()
+                .ok_or_else(|| Error::new("native Source body has no canonical publication"))?;
+            publication
+                .validate_source(source, &facts, &self.0.budget)
+                .map_err(|error| source_fact_error(error, &self.0.budget))?;
+        } else if slot.publication.get().is_some() {
+            return Err(Error::new(
+                "Recipe body cannot substitute a Source publication",
+            ));
+        }
+        Ok(source)
+    }
     fn scratch_vec<T>(&self, count: usize) -> Result<(Vec<T>, ir::PlanReservation), Error> {
         self.0.budget.charge_work(count).map_err(Error::new)?;
         let bytes = count
@@ -169,35 +248,6 @@ impl CompilerProvider {
                 "unsupported: unavailable provided body in executable declaration inventory",
             )),
         }
-    }
-    fn symbolic_target(
-        &self,
-        declaration: ir::DeclId,
-        facts: &traits::ValidatedFacts,
-    ) -> Result<(ir::CallTarget, ir::PlanReservation), Error> {
-        let count = facts.env().total_arity();
-        let budget = &self.0.budget;
-        budget.charge_nodes(count).map_err(Error::new)?;
-        budget.charge_work(count).map_err(Error::new)?;
-        // Vec-to-Arc conversion retains both buffers at its allocation peak.
-        let bytes = count
-            .checked_mul(2 * std::mem::size_of::<ir::Ty>())
-            .and_then(|n| n.checked_add(2 * std::mem::size_of::<usize>()))
-            .ok_or_else(|| Error::new("symbolic callable target byte limit exceeded"))?;
-        let reservation = budget.reserve_bytes(bytes).map_err(Error::new)?;
-        let mut arguments = Vec::new();
-        arguments
-            .try_reserve_exact(count)
-            .map_err(|_| Error::new("symbolic callable target allocation limit exceeded"))?;
-        arguments.extend(facts.env().ordered_params().map(ir::Ty::Param));
-        budget.charge_work(count).map_err(Error::new)?;
-        Ok((
-            ir::CallTarget {
-                declaration,
-                type_args: arguments.into(),
-            },
-            reservation,
-        ))
     }
     fn types(&self) -> Result<&frontend::PlanCtx, Error> {
         self.0
@@ -333,17 +383,47 @@ impl Provider for CompilerProvider {
                     let slot = this.declaration(index)?;
                     if key.kind == TEMPLATE_BODY {
                         let declaration = this.types()?.callable_decl(index).map_err(Error::new)?;
-                        let facts = this
+                        let body = this
                             .types()?
-                            .callable_facts(declaration)
-                            .map_err(Error::new)?;
-                        let (target, _target_reservation) =
-                            this.symbolic_target(declaration, &facts)?;
-                        let checked = this
-                            .types()?
-                            .checked_body(&target, &facts, &this.0.budget)
-                            .map_err(Error::new)?;
-                        publish(&slot.checked, Arc::new(checked))?;
+                            .publish_callable_body(declaration, &this.0.budget)
+                            .map_err(|error| source_fact_error(error, &this.0.budget))?;
+                        match body {
+                            frontend::PublishedCallableBody::Source(publication) => {
+                                if !publication
+                                    .facts()
+                                    .is_source_callable(declaration)
+                                    .map_err(|error| source_fact_error(error, &this.0.budget))?
+                                {
+                                    return Err(Error::new(
+                                        "Source publication has a Recipe provider",
+                                    ));
+                                }
+                                publication
+                                    .validate_source(
+                                        publication.source(),
+                                        publication.facts(),
+                                        &this.0.budget,
+                                    )
+                                    .map_err(|error| source_fact_error(error, &this.0.budget))?;
+                                publish(&slot.checked, publication.source().clone())?;
+                                publish(&slot.publication, publication)?;
+                            }
+                            frontend::PublishedCallableBody::Recipe(checked) => {
+                                let facts = this
+                                    .types()?
+                                    .callable_facts(declaration)
+                                    .map_err(Error::new)?;
+                                if facts
+                                    .is_source_callable(declaration)
+                                    .map_err(|error| source_fact_error(error, &this.0.budget))?
+                                {
+                                    return Err(Error::new(
+                                        "Source provider omitted canonical publication",
+                                    ));
+                                }
+                                publish(&slot.checked, checked)?;
+                            }
+                        }
                     } else if key.kind == UNIVERSAL_LOWER {
                         cx.read(cx.request(function(TEMPLATE_BODY, index)).get(0))
                             .await?;
@@ -357,16 +437,23 @@ impl Provider for CompilerProvider {
                                 "universal lowering requires a generic source or registered recipe",
                             ));
                         }
-                        let source = slot
-                            .checked
-                            .get()
-                            .ok_or_else(|| Error::new("missing template body"))?
-                            .clone();
-                        publish(
-                            &slot.lowered,
+                        let source = this.validated_body(index)?.clone();
+                        let lowered = if facts
+                            .is_source_callable(declaration)
+                            .map_err(|error| source_fact_error(error, &this.0.budget))?
+                        {
+                            cfg::lower_source_template(
+                                slot.publication.get().ok_or_else(|| {
+                                    Error::new("missing canonical universal Source publication")
+                                })?,
+                                &this.0.budget,
+                            )
+                            .map_err(|error| source_fact_error(error, &this.0.budget))?
+                        } else {
                             cfg::lower_template(source, facts, &this.0.budget)
-                                .map_err(Error::new)?,
-                        )?;
+                                .map_err(Error::new)?
+                        };
+                        publish(&slot.lowered, lowered)?;
                     } else {
                         cx.read(cx.request(function(UNIVERSAL_LOWER, index)).get(0))
                             .await?;
@@ -438,18 +525,15 @@ impl Provider for CompilerProvider {
                         .await?;
                     let callable_count = this.types()?.callable_count();
                     let (mut sources, _sources_reservation) = this.scratch_vec(callable_count)?;
-                    for slot in this
+                    for (index, _slot) in this
                         .0
                         .declarations
                         .get()
                         .ok_or_else(|| Error::new("missing declaration facts"))?
+                        .iter()
+                        .enumerate()
                     {
-                        sources.push(
-                            slot.checked
-                                .get()
-                                .cloned()
-                                .ok_or_else(|| Error::new("missing universal checked body"))?,
-                        );
+                        sources.push(this.validated_body(index)?.clone());
                     }
                     let mut context = this.types()?.clone();
                     let plan = instances::build(&mut context, &sources, &this.0.budget)
@@ -503,32 +587,49 @@ impl Provider for CompilerProvider {
                     let slot = this.native(index)?;
                     if key.kind == BODY {
                         let declaration = this.declaration(instance.source_index)?;
-                        let facts = this
-                            .types()?
-                            .instance_facts(&instance.target)
-                            .map_err(Error::new)?;
-                        let mut context = this.types()?.clone();
-                        let checked = if !this.universal_body(instance.target.declaration)? {
-                            let source = declaration
-                                .checked
-                                .get()
-                                .ok_or_else(|| Error::new("missing checked body"))?;
-                            Arc::new(
-                                ir::close_checked_calls(
-                                    source,
-                                    &facts,
-                                    &mut context,
-                                    &this.0.budget,
-                                )
-                                .map_err(|error| {
-                                    Error::new(error.into_legacy_diagnostic(&this.0.budget))
-                                })?,
-                            )
+                        let source = this.validated_body(instance.source_index)?;
+                        let (facts, checked) = if !this
+                            .universal_body(instance.target.declaration)?
+                        {
+                            let publication = declaration.publication.get().ok_or_else(|| {
+                                Error::new("nongeneric Source has no original publication")
+                            })?;
+                            let facts = publication.facts();
+                            if facts.phase() != traits::FactsPhase::Closed
+                                || facts.target() != Some(&instance.target)
+                                || !facts
+                                    .is_source_callable(instance.target.declaration)
+                                    .map_err(|error| source_fact_error(error, &this.0.budget))?
+                            {
+                                return Err(Error::new(
+                                    "nongeneric Source publication changed its closed target",
+                                ));
+                            }
+                            publication
+                                .validate_source(source, facts, &this.0.budget)
+                                .map_err(|error| source_fact_error(error, &this.0.budget))?;
+                            (facts.clone(), source.clone())
                         } else {
+                            let facts = this
+                                .types()?
+                                .instance_facts(&instance.target)
+                                .map_err(Error::new)?;
+                            let mut context = this.types()?.clone();
                             let verified = declaration.verified.get().ok_or_else(|| {
                                 Error::new("missing exact universal template proof")
                             })?;
-                            Arc::new(
+                            if facts
+                                .is_source_callable(instance.target.declaration)
+                                .map_err(|error| source_fact_error(error, &this.0.budget))?
+                            {
+                                verified.function().validate_source_publication(
+                                    declaration.publication.get().ok_or_else(|| {
+                                        Error::new("generic Source template omitted canonical publication")
+                                    })?,
+                                    &this.0.budget,
+                                ).map_err(|error| source_fact_error(error, &this.0.budget))?;
+                            }
+                            let checked = Arc::new(
                                 ir::instantiate_checked(
                                     verified,
                                     &instance.target.type_args,
@@ -537,7 +638,8 @@ impl Provider for CompilerProvider {
                                     &this.0.budget,
                                 )
                                 .map_err(Error::new)?,
-                            )
+                            );
+                            (facts, checked)
                         };
                         publish(&slot.facts, facts)?;
                         publish(&slot.checked, checked)?;
@@ -547,19 +649,33 @@ impl Provider for CompilerProvider {
                             .checked
                             .get()
                             .ok_or_else(|| Error::new("missing instantiated body"))?;
-                        publish(
-                            &slot.lowered,
-                            Arc::new(
-                                cfg::lower_with_facts(
+                        let lowered = if !this.universal_body(instance.target.declaration)? {
+                            let declaration = this.declaration(instance.source_index)?;
+                            let publication = declaration.publication.get().ok_or_else(|| {
+                                Error::new("closed Source lowering has no canonical publication")
+                            })?;
+                            publication
+                                .validate_source(
                                     checked,
-                                    slot.facts.get().ok_or_else(|| {
-                                        Error::new("missing exact closed instance facts")
-                                    })?,
+                                    slot.facts
+                                        .get()
+                                        .ok_or_else(|| Error::new("missing closed Source facts"))?,
                                     &this.0.budget,
                                 )
-                                .map_err(Error::new)?,
-                            ),
-                        )?;
+                                .map_err(|error| source_fact_error(error, &this.0.budget))?;
+                            cfg::lower_source_closed(publication, &this.0.budget)
+                                .map_err(|error| source_fact_error(error, &this.0.budget))?
+                        } else {
+                            cfg::lower_with_facts(
+                                checked,
+                                slot.facts.get().ok_or_else(|| {
+                                    Error::new("missing exact closed instance facts")
+                                })?,
+                                &this.0.budget,
+                            )
+                            .map_err(Error::new)?
+                        };
+                        publish(&slot.lowered, Arc::new(lowered))?;
                     } else if key.kind == ANALYZE {
                         cx.read(cx.request(function(LOWER, index)).get(0)).await?;
                         let lowered = slot
@@ -572,6 +688,21 @@ impl Provider for CompilerProvider {
                             .get()
                             .cloned()
                             .ok_or_else(|| Error::new("missing exact closed instance facts"))?;
+                        if !this.universal_body(instance.target.declaration)? {
+                            lowered
+                                .validate_source_publication(
+                                    this.declaration(instance.source_index)?
+                                        .publication
+                                        .get()
+                                        .ok_or_else(|| {
+                                            Error::new(
+                                                "closed Source CFG omitted canonical publication",
+                                            )
+                                        })?,
+                                    &this.0.budget,
+                                )
+                                .map_err(|error| source_fact_error(error, &this.0.budget))?;
+                        }
                         let closed =
                             cfg::close(lowered, facts, &this.0.budget).map_err(Error::new)?;
                         let effects =
@@ -963,5 +1094,22 @@ mod diagnostic_tests {
             analysis_diagnostic(&budget, "instance", 3, &empty),
             "instance 3: initialization/move analysis (complete=true): []"
         );
+        let category_budget = ir::PlanBudget::default();
+        let unsupported =
+            traits::FactsError::unsupported(&category_budget, "narrow source boundary");
+        assert_eq!(
+            source_fact_error(unsupported, &category_budget).to_string(),
+            "Unsupported: narrow source boundary"
+        );
+        let exhausted = ir::PlanBudget::default();
+        let error =
+            traits::FactsError::unsupported(&exhausted, "must not hide exhausted transport");
+        for bit in (0..usize::BITS).rev() {
+            let _ = exhausted.charge_work(1usize << bit);
+        }
+        let rendered = source_fact_error(error, &exhausted).to_string();
+        assert!(rendered.contains("ResourceLimit"));
+        assert!(!rendered.contains("Unsupported"));
+        assert!(rendered.len() < 80);
     }
 }

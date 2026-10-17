@@ -696,6 +696,8 @@ pub struct ValidatedCallEvidence {
     call: ExprId,
     facts: Arc<super::traits::ValidatedFacts>,
     trace: CallEvidence,
+    // Source-only replay ownership. Never retain the enclosing publication here.
+    original: Option<Arc<super::source_replay::ValidatedOriginalCalls>>,
 }
 impl ValidatedCallEvidence {
     pub fn source(&self) -> &Arc<CheckedFunction> {
@@ -710,6 +712,115 @@ impl ValidatedCallEvidence {
     pub fn trace(&self) -> &CallEvidence {
         &self.trace
     }
+    pub(super) fn original(&self) -> Option<&Arc<super::source_replay::ValidatedOriginalCalls>> {
+        self.original.as_ref()
+    }
+}
+
+/// Bind only a completed, exact canonical source publication. Raw typed IR uses
+/// `bind_call_evidence` and cannot mint source inference permission.
+pub(super) fn validated_call_capsules(
+    publication: &Arc<super::source_replay::CanonicalSourcePublication>,
+    budget: &PlanBudget,
+) -> Result<Arc<[Arc<ValidatedCallEvidence>]>, super::traits::FactsError> {
+    use super::traits::FactsError;
+    let source = publication.source();
+    let facts = publication.facts();
+    publication.validate_source(source, facts, budget)?;
+    validate_published_source(publication, budget)?;
+    let count = source.call_evidence.len();
+    let (nodes, bytes) = original_capsule_allocation(count, budget)?;
+    budget
+        .charge_nodes(nodes)
+        .map_err(|error| FactsError::resource(budget, &error))?;
+    budget
+        .retain_bytes(bytes)
+        .map_err(|error| FactsError::resource(budget, &error))?;
+    let mut capsules = Vec::new();
+    capsules
+        .try_reserve_exact(count)
+        .map_err(|_| FactsError::resource(budget, "original capsule allocation resource limit"))?;
+    for trace in source.call_evidence.iter() {
+        budget
+            .charge_work(1)
+            .map_err(|error| FactsError::resource(budget, &error))?;
+        capsules.push(Arc::new(ValidatedCallEvidence {
+            source: source.clone(),
+            call: trace.call,
+            facts: facts.clone(),
+            trace: trace.clone(),
+            original: Some(publication.replay().clone()),
+        }));
+    }
+    Ok(capsules.into())
+}
+
+fn original_capsule_allocation(
+    count: usize,
+    budget: &PlanBudget,
+) -> Result<(usize, usize), super::traits::FactsError> {
+    use super::traits::FactsError;
+    let nodes = count
+        .checked_add(1)
+        .ok_or_else(|| FactsError::resource(budget, "original capsule node overflow"))?;
+    let header = 2usize
+        .checked_mul(std::mem::size_of::<usize>())
+        .ok_or_else(|| FactsError::resource(budget, "original capsule header overflow"))?;
+    let row = std::mem::size_of::<ValidatedCallEvidence>()
+        .checked_add(
+            6usize
+                .checked_mul(std::mem::size_of::<usize>())
+                .ok_or_else(|| FactsError::resource(budget, "original capsule row overflow"))?,
+        )
+        .ok_or_else(|| FactsError::resource(budget, "original capsule row overflow"))?;
+    let bytes = count
+        .checked_mul(row)
+        .and_then(|bytes| bytes.checked_add(header))
+        .ok_or_else(|| FactsError::resource(budget, "original capsule storage overflow"))?;
+    Ok((nodes, bytes))
+}
+
+/// Mandatory final validation before a canonical source publication is minted.
+pub(super) fn validate_source_candidate(
+    source: &Arc<CheckedFunction>,
+    facts: &Arc<super::traits::ValidatedFacts>,
+    replayed: &super::source_replay::ReplayedOriginalCalls,
+    budget: &PlanBudget,
+) -> Result<(), super::traits::FactsError> {
+    use super::traits::FactsError;
+    replayed.validate_binding(source, facts, budget)?;
+    source
+        .preflight_plan(FactsCtx::from_validated(facts), budget)
+        .map_err(|error| FactsError::from_message(budget, &error))?;
+    if source.body_substitution.is_some() {
+        return Err(FactsError::invalid(
+            budget,
+            "source candidate is a generated body",
+        ));
+    }
+    source
+        .validate_with_evidence(
+            FactsCtx::from_validated(facts),
+            CallEvidencePolicy::Original(replayed.validated()),
+        )
+        .map_err(|error| FactsError::from_message(budget, &error))
+}
+
+/// Reuse the full factory validation only for its exact immutable publication.
+/// This is not a validator for supplied or subsequently mutated checked payloads.
+pub(super) fn validate_published_source(
+    publication: &Arc<super::source_replay::CanonicalSourcePublication>,
+    budget: &PlanBudget,
+) -> Result<(), super::traits::FactsError> {
+    use super::traits::FactsError;
+    publication.validate_source(publication.source(), publication.facts(), budget)?;
+    if publication.source().body_substitution.is_some() {
+        return Err(FactsError::invalid(
+            budget,
+            "source publication is a generated body",
+        ));
+    }
+    Ok(())
 }
 
 pub fn bind_call_evidence(
@@ -745,15 +856,31 @@ pub fn bind_call_evidence(
             call: trace.call,
             facts: facts.clone(),
             trace: trace.clone(),
+            original: None,
         }));
     }
     Ok(capsules.into())
+}
+
+#[derive(Clone, Copy)]
+enum CallEvidencePolicy<'a> {
+    Legacy,
+    Original(&'a super::source_replay::ValidatedOriginalCalls),
 }
 
 pub(super) fn validate_call_evidence(
     source: &CheckedFunction,
     facts: &super::traits::ValidatedFacts,
     budget: &PlanBudget,
+) -> Result<(), String> {
+    validate_call_evidence_with_policy(source, facts, budget, CallEvidencePolicy::Legacy)
+}
+
+fn validate_call_evidence_with_policy(
+    source: &CheckedFunction,
+    facts: &super::traits::ValidatedFacts,
+    budget: &PlanBudget,
+    policy: CallEvidencePolicy<'_>,
 ) -> Result<(), String> {
     if let Some(proof) = &source.body_substitution {
         return proof.validate(source, facts, budget);
@@ -793,9 +920,16 @@ pub(super) fn validate_call_evidence(
         }
         for (index, trace) in evidence.arguments.iter().enumerate() {
             budget.charge_work(1)?;
-            let expected = match &signature.params[index] {
+            let legacy_expected = match &signature.params[index] {
                 Ty::Ref { kind, .. } => CallExpectation::FirmReference { kind: *kind },
                 _ => CallExpectation::NoFirmReference,
+            };
+            let expected = match policy {
+                CallEvidencePolicy::Legacy => legacy_expected,
+                CallEvidencePolicy::Original(replay) => replay
+                    .expected(evidence.call, index, budget)
+                    .map_err(|error| error.into_legacy_diagnostic(budget))?
+                    .unwrap_or(legacy_expected),
             };
             if trace.argument != index
                 || trace.value != args[index]
@@ -1306,6 +1440,7 @@ struct PlanUsage {
     bytes: usize,
     obligations: usize,
     diagnostic_bytes: usize,
+    resource_failed: bool,
 }
 #[derive(Clone, Debug)]
 pub struct PlanBudget {
@@ -1351,6 +1486,13 @@ impl PlanBudget {
     pub fn same_authority(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.usage, &other.usage)
     }
+    /// Resource classification evidence from this exact shared planning ledger.
+    /// Reservations may release storage, but never clear a failed operation.
+    pub(super) fn has_resource_failure(&self) -> bool {
+        self.usage
+            .lock()
+            .map_or(true, |usage| usage.resource_failed)
+    }
     fn charge(
         &self,
         amount: usize,
@@ -1361,14 +1503,14 @@ impl PlanBudget {
             .usage
             .lock()
             .map_err(|_| "generic planning budget poisoned")?;
-        let counter = select(&mut usage);
-        let next = counter
-            .checked_add(amount)
-            .ok_or("generic planning resource limit exceeded")?;
-        if next > limit {
-            return Err("generic planning resource limit exceeded".into());
-        }
-        *counter = next;
+        let next = match select(&mut usage).checked_add(amount) {
+            Some(next) if next <= limit => next,
+            _ => {
+                usage.resource_failed = true;
+                return Err("generic planning resource limit exceeded".into());
+            }
+        };
+        *select(&mut usage) = next;
         Ok(())
     }
     pub fn charge_work(&self, amount: usize) -> Result<(), String> {
@@ -1399,6 +1541,9 @@ impl PlanBudget {
     }
     pub fn check_depth(&self, depth: usize) -> Result<(), String> {
         if depth > self.limits.depth {
+            if let Ok(mut usage) = self.usage.lock() {
+                usage.resource_failed = true;
+            }
             Err("generic planning depth limit exceeded".into())
         } else {
             Ok(())
@@ -1997,6 +2142,27 @@ pub fn substitute_callee(
             .callee()
             .clone()),
     }
+}
+
+/// Private unsealed source transform. The consumed source capability and final
+/// exact-Arc replay validator, not this intermediate value, establish authority.
+pub(super) fn canonicalize_source_calls(
+    source: &CheckedFunction,
+    facts: &super::traits::ValidatedFacts,
+    cx: &mut impl SubstitutionCx,
+    _cap: &super::frontend::CanonicalSourceCapability,
+    budget: &PlanBudget,
+) -> Result<CheckedFunction, super::traits::FactsError> {
+    if facts.phase() == super::traits::FactsPhase::Schema
+        || !facts.budget().same_authority(budget)
+        || source.body_substitution.is_some()
+    {
+        return Err(super::traits::FactsError::invalid(
+            budget,
+            "canonical source transform requires original executable facts",
+        ));
+    }
+    canonicalize_call_metadata(source, facts, cx, budget)
 }
 
 pub fn canonicalize_checked_calls(
@@ -4469,11 +4635,18 @@ impl CheckedFunction {
         self.validate_with_facts(FactsCtx::Concrete)
     }
     pub fn validate_with_facts(&self, facts: FactsCtx<'_>) -> Result<(), String> {
+        self.validate_with_evidence(facts, CallEvidencePolicy::Legacy)
+    }
+    fn validate_with_evidence(
+        &self,
+        facts: FactsCtx<'_>,
+        policy: CallEvidencePolicy<'_>,
+    ) -> Result<(), String> {
         if let Some(authority) = facts.validated() {
             if let Some(proof) = &self.body_substitution {
                 proof.validate(self, authority, authority.budget())?;
             } else {
-                validate_call_evidence(self, authority, authority.budget())?;
+                validate_call_evidence_with_policy(self, authority, authority.budget(), policy)?;
             }
         }
         facts.validate_ty(&self.result)?;
@@ -4940,6 +5113,179 @@ impl CheckedFunction {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod original_replay_transport_tests {
+    use super::*;
+    use crate::compiler::{frontend, traits::FactsErrorKind};
+
+    #[test]
+    fn original_replay_raw_forgery_exact_owner_facts_and_resource_fences() {
+        let latch = PlanBudget::new(PlanLimits {
+            bytes: 8,
+            ..PlanLimits::default()
+        });
+        let shared = latch.clone();
+        assert!(!latch.has_resource_failure());
+        let reservation = latch.reserve_bytes(4).unwrap();
+        assert!(!shared.has_resource_failure());
+        assert!(shared.retain_bytes(5).is_err());
+        assert!(latch.has_resource_failure());
+        drop(reservation);
+        assert_eq!(latch.usage.lock().unwrap().bytes, 0);
+        shared.retain_bytes(1).unwrap();
+        assert!(latch.has_resource_failure());
+        assert!(shared.has_resource_failure());
+        assert!(!PlanBudget::default().has_resource_failure());
+        let depth = PlanBudget::default();
+        depth.check_depth(depth.limits().depth).unwrap();
+        assert!(!depth.has_resource_failure());
+        assert!(depth.clone().check_depth(depth.limits().depth + 1).is_err());
+        assert!(depth.has_resource_failure());
+        let overflow = PlanBudget::default();
+        overflow.usage.lock().unwrap().work = usize::MAX;
+        assert!(overflow.clone().charge_work(1).is_err());
+        assert!(overflow.has_resource_failure());
+        let poisoned = PlanBudget::default();
+        let poison_clone = poisoned.clone();
+        let panic = std::panic::catch_unwind(|| {
+            let _guard = poisoned.usage.lock().unwrap();
+            panic!("intentional ledger poison for conservative resource evidence");
+        });
+        assert!(panic.is_err());
+        assert!(poisoned.has_resource_failure());
+        assert!(poison_clone.has_resource_failure());
+        assert!(poison_clone.charge_work(1).is_err());
+        let budget = PlanBudget::default();
+        assert_eq!(
+            original_capsule_allocation(0, &budget).unwrap(),
+            (1, 2 * std::mem::size_of::<usize>())
+        );
+        assert_eq!(
+            original_capsule_allocation(usize::MAX, &budget)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::Resource
+        );
+        assert_eq!(
+            original_capsule_allocation(usize::MAX / 2, &budget)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::Resource
+        );
+        for exhausted in 0..3 {
+            let limited = PlanBudget::default();
+            let empty = frontend::parse("fn empty(){} fn main(){}").unwrap();
+            let empty_plan = frontend::PlanCtx::from_program(&empty, &limited).unwrap();
+            let frontend::PublishedCallableBody::Source(empty_publication) = empty_plan
+                .publish_callable_body(empty_plan.function_decl(0).unwrap(), &limited)
+                .unwrap()
+            else {
+                panic!("canonical empty publication required")
+            };
+            assert!(
+                validated_call_capsules(&empty_publication, &limited)
+                    .unwrap()
+                    .is_empty()
+            );
+            let (used_nodes, used_bytes, used_work) = {
+                let used = limited.usage.lock().unwrap();
+                (used.nodes, used.bytes, used.work)
+            };
+            match exhausted {
+                0 => limited
+                    .charge_nodes(limited.limits().nodes - used_nodes)
+                    .unwrap(),
+                1 => limited
+                    .retain_bytes(limited.limits().bytes - used_bytes)
+                    .unwrap(),
+                _ => limited
+                    .charge_work(limited.limits().work - used_work)
+                    .unwrap(),
+            }
+            assert!(!limited.has_resource_failure());
+            assert_eq!(
+                validated_call_capsules(&empty_publication, &limited)
+                    .unwrap_err()
+                    .kind(),
+                FactsErrorKind::Resource
+            );
+            assert!(limited.has_resource_failure());
+        }
+        let program = frontend::parse(
+            "fn id<T:Copy>(x:T)->T{x} fn caller(r:&i32){let held=id(r);} fn main(){}",
+        )
+        .unwrap();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(1).unwrap();
+        let frontend::PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("canonical source publication required")
+        };
+        validate_published_source(&publication, &budget).unwrap();
+        let source = publication.source();
+        let facts = publication.facts();
+        let capsules = validated_call_capsules(&publication, &budget).unwrap();
+        assert_eq!(capsules.len(), 1);
+        assert!(Arc::ptr_eq(capsules[0].source(), source));
+        assert!(Arc::ptr_eq(
+            capsules[0].original().unwrap(),
+            publication.replay()
+        ));
+        assert_eq!(
+            capsules[0].trace().arguments[0].expectation,
+            CallExpectation::NoFirmReference
+        );
+        // The new permission belongs only to the original source publication.
+        assert!(bind_call_evidence(source.clone(), facts.clone(), &budget).is_err());
+        let mut raw = source.as_ref().clone();
+        let mut rows = raw.call_evidence.to_vec();
+        let mut arguments = rows[0].arguments.to_vec();
+        arguments[0].expectation = CallExpectation::FirmReference {
+            kind: BorrowKind::Shared,
+        };
+        rows[0].arguments = arguments.into();
+        raw.call_evidence = rows.into();
+        let raw = Arc::new(raw);
+        let legacy = bind_call_evidence(raw.clone(), facts.clone(), &budget).unwrap();
+        assert!(legacy.iter().all(|capsule| capsule.original().is_none()));
+        assert!(publication.validate_source(&raw, facts, &budget).is_err());
+        let same_types = Arc::new(source.as_ref().clone());
+        assert!(
+            publication
+                .validate_source(&same_types, facts, &budget)
+                .is_err()
+        );
+        let mut edited = source.clone();
+        Arc::make_mut(&mut edited).name.push_str("_changed");
+        assert!(!Arc::ptr_eq(&edited, source));
+        assert!(
+            publication
+                .validate_source(&edited, facts, &budget)
+                .is_err()
+        );
+        let equal_facts = Arc::new(facts.as_ref().clone());
+        assert!(
+            publication
+                .validate_source(source, &equal_facts, &budget)
+                .is_err()
+        );
+        assert!(
+            publication
+                .validate_source(source, facts, &PlanBudget::default())
+                .is_err()
+        );
+        publication.validate_source(source, facts, &budget).unwrap();
+        // Exhaust this exact ledger, not a fresh low-budget foreign authority.
+        let used = budget.usage.lock().unwrap().work;
+        budget.charge_work(budget.limits().work - used).unwrap();
+        let error = publication
+            .validate_source(source, facts, &budget)
+            .unwrap_err();
+        assert_eq!(error.kind(), FactsErrorKind::Resource);
     }
 }
 
