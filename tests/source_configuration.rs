@@ -299,7 +299,7 @@ fn fixtures() -> Vec<Fixture> {
     cases.push(case(
         "disabled_const_fn_boundary",
         "#[cfg(any())] const fn unused(value: i32) -> i32 { value }",
-        Unsupported,
+        Supported,
         "",
     ));
     cases.push(case(

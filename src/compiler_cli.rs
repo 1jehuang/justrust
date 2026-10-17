@@ -12,7 +12,7 @@ mod compiler_profile;
 static ALLOCATION_PROFILE: allocation_profile::ProfilingAllocator<std::alloc::System> =
     allocation_profile::ProfilingAllocator::new(std::alloc::System);
 
-const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--cfg NAME_OR_KEY_VALUE] [--trace NEW_TRACE] [--profile NEW_JSON]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n--cfg may be repeated for user names or key=\"value\" predicates; native target/profile cfg is fixed.\n--profile writes bounded task timings and exact first budget failure without CFG dumps.\nAllocator counters require a binary built with --features allocation-profile.\n";
+const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--cfg NAME_OR_KEY_VALUE] [--trace NEW_TRACE] [--profile NEW_JSON]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n--cfg may be repeated for user names or key=\"value\" predicates; native target/profile cfg is fixed.\n--source-lock PATH --source-item NAME adds a verified source declaration probe, not a library crate.\n--profile writes bounded task timings and exact first budget failure without CFG dumps.\nAllocator counters require a binary built with --features allocation-profile.\n";
 
 fn allocator_json() -> String {
     #[cfg(feature = "allocation-profile")]
@@ -44,6 +44,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut workers = 1usize;
     let mut check = false;
     let mut source_options = compiler::source::SourceOptions::default();
+    let mut source_lock: Option<PathBuf> = None;
+    let mut source_item: Option<String> = None;
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {
@@ -52,6 +54,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
             Some("--check") => check = true,
+            Some("--source-lock") => {
+                let path = args.next().ok_or("missing source lock path")?;
+                if source_lock.replace(path.into()).is_some() {
+                    return Err("--source-lock may only be supplied once".into());
+                }
+            }
+            Some("--source-item") => {
+                let item = args.next().ok_or("missing source item name")?;
+                let item = item.to_str().ok_or("source item must be UTF-8")?;
+                if item.is_empty() || item.len() > 1024 {
+                    return Err("source item must contain 1..1024 bytes".into());
+                }
+                if source_item.replace(item.to_owned()).is_some() {
+                    return Err("--source-item may only be supplied once".into());
+                }
+            }
             Some("--cfg") => {
                 let specification = args.next().ok_or("missing cfg specification")?;
                 source_options.cfg.insert_user(
@@ -85,6 +103,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let source = source.ok_or("missing Rust source file, use --help")?;
+    let probe = match (source_lock, source_item) {
+        (Some(lock_path), Some(item)) => {
+            Some(compiler::source::SourceProbeRequest { lock_path, item })
+        }
+        (None, None) => None,
+        _ => return Err("--source-lock and --source-item must be supplied together".into()),
+    };
     if !(1..=4096).contains(&workers) {
         return Err("workers must be 1..4096".into());
     }
@@ -104,12 +129,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err(format!("output already exists: {}", path.display()).into());
     }
-    let compiled = compiler::compile_file_observed_with_options(
-        source.clone(),
-        workers,
-        check,
-        source_options,
-    );
+    let compiled = match probe {
+        Some(request) => compiler::compile_probe_file_observed_with_options(
+            source.clone(),
+            workers,
+            check,
+            source_options,
+            request,
+        ),
+        None => compiler::compile_file_observed_with_options(
+            source.clone(),
+            workers,
+            check,
+            source_options,
+        ),
+    };
     let compiler_wall_ns = start.elapsed().as_nanos();
     // Snapshot before profile serialization so its own allocations are excluded.
     let allocation = profile.as_ref().map(|_| allocator_json());

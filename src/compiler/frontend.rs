@@ -201,6 +201,181 @@ mod canonical_source_replay_tests {
         );
     }
     #[test]
+    fn root_borrow_identity_inference_keeps_source_and_loan_authority() {
+        for source in [
+            "fn renamed<T>(x:T)->T{x}fn main(){let value=42i32;let r=renamed(&value);if *r==42{println!(\"ok\");}}",
+            "fn renamed<T>(x:T)->T{x}fn main(){let mut value=1i32;let r=renamed(&mut value);*r=42;if value==42{println!(\"ok\");}}",
+            "fn renamed<T>(x:T)->T{x}fn caller(value:i32){let r=renamed(&value);let out=*r;}fn main(){caller(42);}",
+            "fn renamed<T>(x:T)->T{x}fn main(){let value=true;let r=renamed(&value);if *r{println!(\"ok\");}}",
+            "fn renamed<T>(x:T)->T{x}fn main(){let value:i32=1+2;let r=renamed(&value);let out=*r;}",
+        ] {
+            for workers in [1, 8] {
+                for check in [true, false] {
+                    super::super::compile(source.into(), workers, check)
+                        .unwrap_or_else(|error| panic!("{source}: {error}"));
+                }
+            }
+        }
+        for source in [
+            "fn renamed<T>(x:T)->T{x}fn main(){let value=1i32;let r=renamed(&mut value);*r=2;}",
+            "fn renamed<T>(x:T)->T{x}fn main(){let mut value=1i32;let first=&mut value;let second=renamed(&mut value);*first=*second;}",
+            "fn renamed<T>(x:T)->T{x}fn main(){let mut value=1i32;let r=renamed(&value);value=2;let later=*r;}",
+            "fn renamed<T>(x:T)->T{x}fn main(){let mut value=1i32;let r=renamed(&mut value);let moved=r;let invalid=*r;}",
+        ] {
+            for workers in [1, 8] {
+                for check in [true, false] {
+                    let failure = super::super::compile_observed(source.into(), workers, check)
+                        .err()
+                        .unwrap();
+                    assert!(
+                        failure
+                            .analyses
+                            .iter()
+                            .any(|(_, analysis)| !analysis.passed()),
+                        "{source}: {}",
+                        failure.error
+                    );
+                }
+            }
+        }
+        let bounded = "fn renamed<T:core::marker::Copy>(x:T)->T{x}fn main(){let mut value=1i32;let r=renamed(&mut value);*r=2;}";
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let failure = super::super::compile_observed(bounded.into(), workers, check)
+                    .err()
+                    .unwrap();
+                assert!(
+                    !failure.error.to_string().contains("Unsupported"),
+                    "{}",
+                    failure.error
+                );
+                assert!(
+                    failure
+                        .report
+                        .unwrap()
+                        .node_evaluations
+                        .iter()
+                        .all(|(key, _)| key.kind != 103)
+                );
+            }
+        }
+        for source in [
+            "fn renamed<T>(x:T)->T{x}struct S{x:i32}fn main(){let value=S{x:1};let r=renamed(&value.x);}",
+            "fn renamed<T>(x:T)->T{x}fn runtime()->i32{1}fn main(){let value=runtime();let r=renamed(&value);}",
+            "fn renamed<T>(x:T)->T{x}fn main(){let value=1i32;let nested=&value;let r=renamed(&nested);}",
+        ] {
+            let error = super::super::compile(source.into(), 1, true).err().unwrap();
+            assert!(
+                error.to_string().contains("unsupported")
+                    || error.to_string().contains("Unsupported"),
+                "{source}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn root_borrow_replay_rejects_kind_place_capability_and_initializer_mutations() {
+        let (_, _, budget, publication) = published(
+            "fn renamed<T>(x:T)->T{x}fn main(){let mut left=1i32;let mut right=2i32;let r=renamed(&mut left);*r=3;}",
+            1,
+        );
+        let original = publication.original().source_for_test();
+        let source = publication.source();
+        replay_source_body(&original, source, publication.facts(), &budget).unwrap();
+        let borrow = source
+            .exprs
+            .iter()
+            .position(|e| matches!(e.kind, ir::ExprKind::Borrow { .. }))
+            .unwrap();
+        let root = source.locals.iter().position(|l| l.name == "left").unwrap();
+        let sibling = source
+            .locals
+            .iter()
+            .position(|l| l.name == "right")
+            .unwrap();
+        let ir::Stmt::Let {
+            value: initializer, ..
+        } = source.body.statements[0]
+        else {
+            panic!("root let missing")
+        };
+        for mutation in 0..7 {
+            let mut changed = source.as_ref().clone();
+            match mutation {
+                0 => {
+                    let ir::ExprKind::Borrow { kind, .. } = &mut changed.exprs[borrow].kind else {
+                        unreachable!()
+                    };
+                    *kind = ir::BorrowKind::Shared;
+                }
+                1 => {
+                    let ir::ExprKind::Borrow { place, .. } = &mut changed.exprs[borrow].kind else {
+                        unreachable!()
+                    };
+                    place.local = ir::LocalId(sibling);
+                }
+                2 => {
+                    let ir::ExprKind::Borrow { place, .. } = &mut changed.exprs[borrow].kind else {
+                        unreachable!()
+                    };
+                    place.projection.push(ir::Projection::Deref);
+                }
+                3 => changed.locals[root].mutable = false,
+                4 => {
+                    let ir::ExprKind::Int(value) = &mut changed.exprs[initializer.0].kind else {
+                        unreachable!()
+                    };
+                    value.bits = 2;
+                }
+                5 => changed.exprs[initializer.0].ty = ir::Ty::Int(ir::IntTy::U32),
+                _ => changed.exprs[borrow].kind = ir::ExprKind::Local(ir::LocalId(root)),
+            }
+            assert_eq!(
+                kind_error(replay_source_body(
+                    &original,
+                    &Arc::new(changed),
+                    publication.facts(),
+                    &budget
+                )),
+                tr::FactsErrorKind::InvalidMetadata,
+                "mutation {mutation}"
+            );
+        }
+        let mut changed = original.clone();
+        let function = &mut Arc::make_mut(&mut changed.plan.program).functions[1];
+        let Stmt::Let {
+            value: Expr::Integer(literal),
+            ..
+        } = &mut function.body.statements[0]
+        else {
+            panic!("source literal missing")
+        };
+        literal.suffix = Some(ir::IntTy::U32);
+        assert_eq!(
+            kind_error(replay_source_body(
+                &changed,
+                source,
+                publication.facts(),
+                &budget
+            )),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+        for kind in [Some(ir::BorrowKind::Shared), None] {
+            let mut changed = original.clone();
+            changed.calls[0].argument_borrow = kind;
+            assert_eq!(
+                kind_error(replay_source_body(
+                    &changed,
+                    source,
+                    publication.facts(),
+                    &budget
+                )),
+                tr::FactsErrorKind::InvalidMetadata
+            );
+        }
+    }
+
+    #[test]
     fn retained_authority_mutations_and_same_ledger_resource() {
         let (_, _, budget, publication) =
             published("fn f(a:i32,b:i32){let x=1;let y=2;{let z=3;}}", 0);
@@ -400,6 +575,7 @@ struct SourceCallSite {
     ordinary: Option<String>,
     application: Option<GenericPath>,
     argument_binding: Option<sr::SourceNode>,
+    argument_borrow: Option<ir::BorrowKind>,
     direct_let: Option<sr::SourceNode>,
     args_pointer: usize,
 }
@@ -1038,10 +1214,12 @@ impl SourceInventory {
                 if let Some(path) = application {
                     retain_source_path(path, budget, 0)?;
                 }
-                let binding = if let [Expr::Var(name)] = args.as_slice() {
-                    self.lookup(name, budget)?
-                } else {
-                    None
+                let (binding, argument_borrow) = match args.as_slice() {
+                    [Expr::Var(name)] => (self.lookup(name, budget)?, None),
+                    [Expr::Borrow { kind, place }] if place.fields.is_empty() => {
+                        (self.lookup(&place.local, budget)?, Some(*kind))
+                    }
+                    _ => (None, None),
                 };
                 let index = self.calls.len();
                 sr::push(
@@ -1054,6 +1232,7 @@ impl SourceInventory {
                             .map(|path| copy_source_path(path, budget, 0))
                             .transpose()?,
                         argument_binding: binding,
+                        argument_borrow,
                         direct_let,
                         args_pointer: args.as_ptr() as usize,
                     },
@@ -1088,6 +1267,7 @@ impl SourceInventory {
                         ordinary: None,
                         application: None,
                         argument_binding: None,
+                        argument_borrow: None,
                         direct_let: None,
                         args_pointer: args.as_ptr() as usize,
                     },
@@ -1535,17 +1715,40 @@ impl CanonicalSourceCapability {
         if site.application.is_some() || site.direct_let.is_none() {
             return Ok(None);
         }
-        let [Expr::Var(name)] = args else {
-            return Ok(None);
+        let (name, fresh_borrow) = match args {
+            [Expr::Var(name)] => (name, None),
+            [Expr::Borrow { kind, place }] if place.fields.is_empty() => {
+                (&place.local, Some(*kind))
+            }
+            _ => return Ok(None),
         };
+        if fresh_borrow != site.argument_borrow {
+            return Err(self.render(FactsError::invalid(
+                budget,
+                "original borrow argument classification changed",
+            )));
+        }
+        if fresh_borrow.is_some() {
+            // This extension owns only the original one-slot forwarding schema.
+            // Other borrowed argument shapes must retain their existing inference path.
+            sr::work(budget, 1).map_err(|e| self.render(e))?;
+            let view = self
+                .facts
+                .original_callable_schema(tr::OriginalCallableSubject::Direct(declaration))
+                .map_err(|e| self.render(e))?;
+            let scopes = view.generic_env().scopes();
+            if scopes.len() != 1 || scopes[0].arity() != 1 || view.signature().params.len() != 1 {
+                return Ok(None);
+            }
+            let parameter = ir::Ty::Param(ir::ParamId {
+                owner: scopes[0].binder(),
+                index: 0,
+            });
+            if view.signature().params[0] != parameter || view.signature().result != parameter {
+                return Ok(None);
+            }
+        }
         let local = checker.lookup(name)?;
-        let ir::Ty::Ref {
-            kind: ir::BorrowKind::Shared,
-            referent,
-        } = &checker.locals[local.0].ty
-        else {
-            return Ok(None);
-        };
         let Some(binding) = &site.argument_binding else {
             return Ok(None);
         };
@@ -1555,21 +1758,54 @@ impl CanonicalSourceCapability {
             return Ok(None);
         };
         let origin = &self.inventory.bindings[binding_index];
-        if origin.parameter.is_none() && (origin.annotation.is_none() || origin.statement.is_none())
-        {
-            return Ok(None);
-        }
+        let (kind, referent) = if let Some(kind) = fresh_borrow {
+            let function = self
+                .plan
+                .callable_body(&self.plan.program, self.declaration)?;
+            let source = root_borrow_origin(function, origin, checker.signatures, budget)
+                .map_err(|e| self.render(e))?;
+            let checked = &checker.locals[local.0];
+            if checked.mutable != source.mutable
+                || !replay_type_equal(&checked.ty, &source.ty, budget)
+                    .map_err(|e| self.render(e))?
+            {
+                return Err(self.render(FactsError::invalid(
+                    budget,
+                    "borrow root type or mutable capability changed",
+                )));
+            }
+            (kind, source.ty)
+        } else {
+            let ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent,
+            } = &checker.locals[local.0].ty
+            else {
+                return Ok(None);
+            };
+            if origin.parameter.is_none()
+                && (origin.annotation.is_none() || origin.statement.is_none())
+            {
+                return Ok(None);
+            }
+            (ir::BorrowKind::Shared, referent.as_ref().clone())
+        };
         require_ordinary_free(&self.plan, declaration, budget).map_err(|e| self.render(e))?;
         let view = self
             .facts
             .original_callable_schema(tr::OriginalCallableSubject::Direct(declaration))
             .map_err(|e| self.render(e))?;
-        require_reference_free(referent, budget, 0).map_err(|e| self.render(e))?;
-        let trace = sr::infer_shared_identity(&view, referent, budget, &mut |decl, args| {
+        require_reference_free(&referent, budget, 0).map_err(|e| self.render(e))?;
+        let mut materialize = |decl, args: &[ir::Ty]| {
             self.plan
                 .intern_nominal(decl, args, ir::FactsCtx::Validated(&self.facts), budget)
                 .map_err(|e| source_error(budget, &e))
-        })
+        };
+        let trace = if kind == ir::BorrowKind::Shared {
+            sr::infer_shared_identity(&view, &referent, budget, &mut materialize)
+        } else {
+            sr::infer_reference_identity(&view, kind, &referent, budget, &mut materialize)
+        }
         .map_err(|e| self.render(e))?;
         let actual = trace.actual().clone();
         sr::push(
@@ -2022,6 +2258,165 @@ fn source_binding_type(
     Ok((local, ty))
 }
 
+enum RootBorrowLiteral {
+    Int(ir::IntValue),
+    Bool(bool),
+}
+struct RootBorrowOrigin {
+    ty: ir::Ty,
+    mutable: bool,
+    literal: Option<RootBorrowLiteral>,
+}
+/// Fresh-borrow inference is deliberately limited to scalar root bindings whose
+/// type is independently recoverable from the immutable source, not the checked
+/// local arena. Nested references, projections and general initializer inference
+/// stay outside this frontier.
+fn root_borrow_origin(
+    function: &Function,
+    site: &SourceBindingSite,
+    signatures: &Signatures,
+    budget: &ir::PlanBudget,
+) -> Result<RootBorrowOrigin, FactsError> {
+    sr::work(budget, 1)?;
+    let origin = if let Some(parameter) = site.parameter {
+        let index = u32::try_from(parameter)
+            .map_err(|_| FactsError::resource(budget, "borrow parameter index overflow"))?;
+        if site.node.path.as_ref() != [0, index] {
+            return Err(FactsError::invalid(
+                budget,
+                "borrow parameter occurrence changed",
+            ));
+        }
+        let (_, ty) = function
+            .params
+            .get(parameter)
+            .ok_or_else(|| FactsError::invalid(budget, "borrow parameter outside source"))?;
+        RootBorrowOrigin {
+            ty: checked_local_ty(ty, signatures).map_err(|e| source_error(budget, &e))?,
+            mutable: false,
+            literal: None,
+        }
+    } else {
+        let statement = site.statement.ok_or_else(|| {
+            FactsError::unsupported(budget, "fresh borrow requires a root source binding")
+        })?;
+        let index = u32::try_from(statement)
+            .map_err(|_| FactsError::resource(budget, "borrow statement index overflow"))?;
+        if site.node.path.as_ref() != [1, 0, 2, index] {
+            return Err(FactsError::invalid(
+                budget,
+                "borrow root statement occurrence changed",
+            ));
+        }
+        let Some(Stmt::Let {
+            ty, mutable, value, ..
+        }) = function.body.statements.get(statement)
+        else {
+            return Err(FactsError::unsupported(
+                budget,
+                "fresh borrow requires a direct source let",
+            ));
+        };
+        let (ty, literal) = if *ty != Type::Infer {
+            (
+                checked_local_ty(ty, signatures).map_err(|e| source_error(budget, &e))?,
+                None,
+            )
+        } else {
+            match value {
+                Expr::Integer(literal) if literal.suffix.is_some() => {
+                    let value = resolve_integer(literal, false, None)
+                        .map_err(|e| source_error(budget, &e))?;
+                    (ir::Ty::Int(value.ty), Some(RootBorrowLiteral::Int(value)))
+                }
+                Expr::Bool(value) => (ir::Ty::Bool, Some(RootBorrowLiteral::Bool(*value))),
+                _ => {
+                    return Err(FactsError::unsupported(
+                        budget,
+                        "fresh borrow root requires an annotation or suffixed integer/Bool literal",
+                    ));
+                }
+            }
+        };
+        RootBorrowOrigin {
+            ty,
+            mutable: *mutable,
+            literal,
+        }
+    };
+    if !matches!(origin.ty, ir::Ty::Int(_) | ir::Ty::Bool) {
+        return Err(FactsError::unsupported(
+            budget,
+            "fresh borrow inference requires an integer or Bool root",
+        ));
+    }
+    Ok(origin)
+}
+
+fn source_root_borrow_type(
+    original: &OriginalSource,
+    index: usize,
+    checked: &ir::CheckedFunction,
+    signatures: &Signatures,
+    budget: &ir::PlanBudget,
+) -> Result<(ir::LocalId, ir::Ty), FactsError> {
+    let site = original
+        .bindings
+        .get(index)
+        .ok_or_else(|| FactsError::invalid(budget, "borrow binding outside source"))?;
+    let function = original
+        .plan
+        .callable_body(&original.plan.program, original.declaration)
+        .map_err(|e| source_error(budget, &e))?;
+    let origin = root_borrow_origin(function, site, signatures, budget)?;
+    let local = mapped_source_binding(original, index, budget)?;
+    let actual = checked
+        .locals
+        .get(local.0)
+        .ok_or_else(|| FactsError::invalid(budget, "borrow root outside checked locals"))?;
+    if actual.mutable != origin.mutable || !replay_type_equal(&actual.ty, &origin.ty, budget)? {
+        return Err(FactsError::invalid(
+            budget,
+            "borrow root type or mutable capability changed",
+        ));
+    }
+    if let Some(literal) = origin.literal {
+        let position = original.root_positions[index]
+            .ok_or_else(|| FactsError::invalid(budget, "borrow literal lost root statement"))?;
+        let Some(ir::Stmt::Let {
+            local: bound,
+            value,
+        }) = checked.body.statements.get(position)
+        else {
+            return Err(FactsError::invalid(
+                budget,
+                "borrow literal changed source statement",
+            ));
+        };
+        if *bound != local {
+            return Err(FactsError::invalid(
+                budget,
+                "borrow literal mapped to sibling local",
+            ));
+        }
+        let value = checked.exprs.get(value.0).ok_or_else(|| {
+            FactsError::invalid(budget, "borrow literal outside checked expressions")
+        })?;
+        let same = match (literal, &value.kind) {
+            (RootBorrowLiteral::Int(expected), ir::ExprKind::Int(actual)) => expected == *actual,
+            (RootBorrowLiteral::Bool(expected), ir::ExprKind::Bool(actual)) => expected == *actual,
+            _ => false,
+        };
+        if !same || !replay_type_equal(&value.ty, &origin.ty, budget)? {
+            return Err(FactsError::invalid(
+                budget,
+                "borrow source literal initializer changed",
+            ));
+        }
+    }
+    Ok((local, origin.ty))
+}
+
 /// Exact replay of typed builtin `.len()` occurrences. Every row names a distinct
 /// syntactic candidate with no ordinary call correspondence, maps to exactly one
 /// checked SliceLen over its retained receiver, rows follow source order, and
@@ -2187,6 +2582,7 @@ pub(super) fn replay_source_body(
             || fresh.ordinary != retained.ordinary
             || fresh.application != retained.application
             || fresh.argument_binding != retained.argument_binding
+            || fresh.argument_borrow != retained.argument_borrow
             || fresh.direct_let != retained.direct_let
             || retained.args_pointer != 0
         {
@@ -2460,25 +2856,42 @@ pub(super) fn replay_source_body(
         })?;
         let binding_index = source_binding_index(&original.bindings, binding, budget)?
             .ok_or_else(|| FactsError::invalid(budget, "original argument binding missing"))?;
-        let (local, ty) =
-            source_binding_type(original, binding_index, checked, &signatures, budget)?;
-        let ir::Ty::Ref {
-            kind: ir::BorrowKind::Shared,
-            referent,
-        } = &ty
-        else {
-            return Err(FactsError::unsupported(
-                budget,
-                "mutable inferred reference remains unsupported",
-            ));
+        let (local, kind, referent, ty) = if let Some(kind) = site.argument_borrow {
+            let (local, referent) =
+                source_root_borrow_type(original, binding_index, checked, &signatures, budget)?;
+            sr::retain(budget, std::mem::size_of::<ir::Ty>() + 32)?;
+            let ty = ir::Ty::Ref {
+                kind,
+                referent: Arc::new(referent.clone()),
+            };
+            (local, kind, referent, ty)
+        } else {
+            let (local, ty) =
+                source_binding_type(original, binding_index, checked, &signatures, budget)?;
+            let ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent,
+            } = &ty
+            else {
+                return Err(FactsError::unsupported(
+                    budget,
+                    "mutable inferred reference Var remains unsupported",
+                ));
+            };
+            (local, ir::BorrowKind::Shared, referent.as_ref().clone(), ty)
         };
-        require_reference_free(referent, budget, 0)?;
-        let trace = sr::infer_shared_identity(&view, referent, budget, &mut |decl, args| {
+        require_reference_free(&referent, budget, 0)?;
+        let mut materialize = |decl, args: &[ir::Ty]| {
             original
                 .plan
                 .intern_nominal(decl, args, ir::FactsCtx::Validated(facts), budget)
                 .map_err(|e| source_error(budget, &e))
-        })?;
+        };
+        let trace = if kind == ir::BorrowKind::Shared {
+            sr::infer_shared_identity(&view, &referent, budget, &mut materialize)
+        } else {
+            sr::infer_reference_identity(&view, kind, &referent, budget, &mut materialize)
+        }?;
         sr::work(budget, original.narrow.len())?;
         let mut retained = None;
         for raw in &original.narrow {
@@ -2517,12 +2930,16 @@ pub(super) fn replay_source_body(
             .exprs
             .get(args[0].0)
             .ok_or_else(|| FactsError::invalid(budget, "shared replay argument outside arena"))?;
-        if !matches!(value.kind,ir::ExprKind::Local(actual) if actual==local)
-            || !replay_type_equal(&value.ty, &ty, budget)?
-        {
+        let exact_argument = if let Some(expected) = site.argument_borrow {
+            matches!(&value.kind, ir::ExprKind::Borrow { kind, place, timing: ir::BorrowTiming::Immediate }
+                if *kind == expected && place.local == local && place.projection.is_empty())
+        } else {
+            matches!(value.kind, ir::ExprKind::Local(actual) if actual == local)
+        };
+        if !exact_argument || !replay_type_equal(&value.ty, &ty, budget)? {
             return Err(FactsError::invalid(
                 budget,
-                "shared Var identity changed into an adjusted or sibling value",
+                "reference identity argument changed original borrow kind, place or Var",
             ));
         }
         let output_index = source_binding_index(&original.bindings, parent, budget)?
@@ -2577,7 +2994,7 @@ pub(super) fn replay_source_body(
         ir::FactsCtx::Validated(facts)
             .validate_ty_with_budget(actual, budget)
             .map_err(|e| source_error(budget, &e))?;
-        validate_argument(referent, ir::FactsCtx::Validated(facts), budget, 0)
+        validate_argument(&referent, ir::FactsCtx::Validated(facts), budget, 0)
             .map_err(|e| source_error(budget, &e))?;
         sr::push(
             &mut decisions,
@@ -2803,8 +3220,15 @@ fn qualify(module: &str, name: &str) -> String {
 fn parent(path: &str) -> &str {
     path.rsplit_once("::").map_or("", |(p, _)| p)
 }
+/// Declaration qualification only. `Const` does not imply an available CTFE engine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Constness {
+    Runtime,
+    Const,
+}
 #[derive(Clone, Debug)]
 pub struct Function {
+    pub constness: Constness,
     pub visibility: ir::Visibility,
     pub bounds: Vec<TypeBound>,
     pub name: String,
@@ -2851,6 +3275,7 @@ pub struct TraitItemDecl {
 }
 #[derive(Clone, Debug)]
 pub struct FunctionHead {
+    pub constness: Constness,
     pub name: String,
     pub regions: RegionDecls,
     pub type_params: Vec<String>,
@@ -4309,9 +4734,13 @@ impl Parser {
         Ok(())
     }
     fn array_number(&mut self, context: &str) -> Result<usize, ParseError> {
+        let start = self.at;
         let token = self.token();
         if token.string {
             return Err(self.error(&format!("{context} requires an integer literal")));
+        }
+        if !token.text.starts_with(|c: char| c.is_ascii_digit()) {
+            return self.unsupported_array_expression(context);
         }
         let literal = parse_integer_literal(&token.text).map_err(|e| self.error(&e))?;
         let value = resolve_integer(&literal, false, Some(&ir::Ty::Int(ir::IntTy::Usize)))
@@ -4322,11 +4751,22 @@ impl Parser {
         let number = value.bits as usize;
         self.at += 1;
         if !self.is("]") {
-            return Err(self.error(
-                "const-expression array lengths/indices are unsupported; use a decimal literal",
-            ));
+            self.at = start;
+            return self.unsupported_array_expression(context);
         }
         Ok(number)
+    }
+    fn unsupported_array_expression(&mut self, context: &str) -> Result<usize, ParseError> {
+        // Validate the bounded expression grammar before classifying the
+        // constant-evaluation boundary. Missing expressions, malformed literals
+        // and missing closing brackets remain syntax errors, not fake CTFE.
+        self.nested_expr()?;
+        if !self.is("]") {
+            return Err(self.error("expected closing bracket after array count expression"));
+        }
+        Err(self.unsupported(&format!(
+            "const-expression {context} is unsupported; use an integer literal"
+        )))
     }
     /// Visibility paths are lexical ancestors, never general name-resolution
     /// paths. Checking the canonical spelling here prevents aliases from
@@ -4422,10 +4862,13 @@ impl Parser {
         if !self.token().string
             && matches!(
                 self.token().text.as_str(),
-                "const" | "async" | "unsafe" | "extern" | "static" | "union" | "macro_rules"
+                "async" | "unsafe" | "extern" | "static" | "union" | "macro_rules"
             )
         {
             return Err(self.unsupported("item syntax is unsupported"));
+        }
+        if self.is("const") && !self.tokens.get(self.at + 1).is_some_and(|t| t.text == "fn") {
+            return Err(self.unsupported("const items and constant evaluation are unsupported"));
         }
         let (name, kind) = if self.eat("use") {
             let mut imports = Vec::new();
@@ -4496,6 +4939,7 @@ impl Parser {
                 }
                 let default = if self.is("{") {
                     Some(Function {
+                        constness: signature.constness,
                         visibility: visibility.clone(),
                         bounds: signature.bounds.clone(),
                         name: signature.name.clone(),
@@ -4710,7 +5154,7 @@ impl Parser {
             });
             self.type_params.clear();
             return Ok(());
-        } else if self.is("fn") {
+        } else if self.is("fn") || self.is("const") {
             let mut function = self.function()?;
             function.visibility = visibility.clone();
             let name = function.name.clone();
@@ -4884,6 +5328,7 @@ impl Parser {
         let (head, receiver) = self.function_head(inherited, associated)?;
         Ok((
             Function {
+                constness: head.constness,
                 visibility: ir::Visibility::Public,
                 name: head.name,
                 regions: head.regions,
@@ -4904,6 +5349,15 @@ impl Parser {
         }
         let mut seen_type = false;
         loop {
+            if self.eat("const") {
+                self.ident()?;
+                self.expect(":")?;
+                self.ty()?;
+                if !self.is(">") && !self.is(",") && !self.is("=") {
+                    return Err(self.error("expected const generic parameter delimiter"));
+                }
+                return Err(self.unsupported("const generic parameters are unsupported"));
+            }
             if self.token().text.starts_with('\'') {
                 if seen_type {
                     return Err(self.error("lifetime parameters must precede type parameters"));
@@ -4956,6 +5410,14 @@ impl Parser {
         inherited: &[String],
         associated: bool,
     ) -> Result<(FunctionHead, ReceiverKind), ParseError> {
+        let constness = if self.eat("const") {
+            if associated {
+                return Err(self.unsupported("const associated functions are unsupported"));
+            }
+            Constness::Const
+        } else {
+            Constness::Runtime
+        };
         self.expect("fn")?;
         let name = self.ident()?;
         let mut regions = RegionDecls::default();
@@ -5032,6 +5494,7 @@ impl Parser {
         }
         Ok((
             FunctionHead {
+                constness,
                 name,
                 regions,
                 type_params,
@@ -5599,6 +6062,11 @@ impl Parser {
     }
     #[inline(never)]
     fn expr_prefix(&mut self, statement: bool) -> Result<Expr, ParseError> {
+        if self.is("const") {
+            return Err(
+                self.unsupported("const expressions and constant evaluation are unsupported")
+            );
+        }
         let left = if self.eat("<") {
             self.trait_call_prefix()?
         } else if self.eat("&") {
@@ -7995,6 +8463,37 @@ fn schema_fields_storage(fields: &[FieldDecl], budget: &ir::PlanBudget) -> Resul
     }
     Ok(bytes)
 }
+/// A deliberately narrow const-valid body envelope, not constant evaluation.
+/// The ordinary type, region and universal move proofs remain mandatory. Moving
+/// the sole argument directly into the result has no discarded value to drop,
+/// called function to qualify, or executed effect to pretend is const-valid.
+fn validate_const_forwarding(function: &Function, budget: &ir::PlanBudget) -> Result<(), String> {
+    budget.charge_work(1)?;
+    if function.constness == Constness::Runtime {
+        return Ok(());
+    }
+    let [(parameter, ty)] = function.params.as_slice() else {
+        return Err("unsupported: const fn requires exactly one forwarded parameter".into());
+    };
+    budget.charge_work(parameter.len())?;
+    if parameter == "_"
+        || !function.body.statements.is_empty()
+        || !matches!(function.body.tail.as_deref(), Some(Expr::Var(name)) if name == parameter)
+    {
+        return Err(
+            "unsupported: const fn body must only forward its parameter as the tail expression"
+                .into(),
+        );
+    }
+    // Charge and depth-check both source types before their structural equality
+    // comparison, including callers constructing public ASTs without parsing.
+    budget.charge_work(source_type_storage(ty, budget, 0)?)?;
+    budget.charge_work(source_type_storage(&function.result, budget, 0)?)?;
+    if *ty != function.result {
+        return Err("unsupported: const fn forwarding result must match its parameter type".into());
+    }
+    Ok(())
+}
 impl PlanCtx {
     pub fn from_program(program: &Program, budget: &ir::PlanBudget) -> Result<Self, String> {
         preflight_program_clone(program, budget)?;
@@ -8005,6 +8504,32 @@ impl PlanCtx {
         budget: &ir::PlanBudget,
     ) -> Result<Self, String> {
         let program = shared.as_ref();
+        // Signature construction sees all source declarations, not just demanded
+        // instances. Unsupported unused const bodies cannot escape publication.
+        for function in &program.functions {
+            validate_const_forwarding(function, budget)?;
+        }
+        for implementation in &program.impls {
+            for item in &implementation.items {
+                budget.charge_work(1)?;
+                if item.function.constness != Constness::Runtime {
+                    return Err("unsupported: const associated functions are unsupported".into());
+                }
+            }
+        }
+        for declaration in &program.traits {
+            for item in &declaration.items {
+                budget.charge_work(1)?;
+                if item.signature.constness != Constness::Runtime
+                    || item
+                        .default
+                        .as_ref()
+                        .is_some_and(|f| f.constness != Constness::Runtime)
+                {
+                    return Err("unsupported: const associated functions are unsupported".into());
+                }
+            }
+        }
         let snapshot = ir::SnapshotId::allocate()?;
         let catalog_builder = tr::CoreCatalogBuilder::new(snapshot, budget)
             .map_err(|e| e.into_legacy_diagnostic(budget))?;
@@ -15901,6 +16426,24 @@ fn type_callable_source(
         return plan.checked_body(&target, &facts, budget);
     }
     let f = plan.callable_body(program, declaration)?;
+    if f.constness != plan.callable_body(&plan.program, declaration)?.constness {
+        return Err(
+            "source callable constness differs from its immutable planning declaration".into(),
+        );
+    }
+    if let CallableSource::TraitDefault { trait_index, item } =
+        plan.registry.callable_sources[plan.callable_index(declaration)?]
+    {
+        let supplied = &program.traits[trait_index].items[item].signature;
+        let original = &plan.program.traits[trait_index].items[item].signature;
+        if supplied.constness != original.constness || supplied.constness != f.constness {
+            return Err(
+                "source trait signature constness differs from its immutable planning declaration"
+                    .into(),
+            );
+        }
+    }
+    validate_const_forwarding(f, budget)?;
     let mut signatures = plan.environment(Some(declaration))?;
     if let Some(cap) = canonical {
         signatures.facts = Some(cap.facts.clone());
@@ -15996,6 +16539,11 @@ pub fn type_function_with_env(
         .functions
         .get(index)
         .ok_or_else(|| format!("invalid function index {index}"))?;
+    if f.constness == Constness::Const {
+        return Err(
+            "unsupported: const fn checking requires its authoritative planning context".into(),
+        );
+    }
     if !f.type_params.is_empty() && signatures.param_env.is_none() {
         let plan = signatures
             .plan
@@ -16048,6 +16596,232 @@ pub fn check(program: &Program) -> Result<(), String> {
         check_function_with_signatures(program, i, &signatures)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod const_declaration_tests {
+    use super::*;
+
+    #[test]
+    fn const_declaration_qualifier_survives_resolution_and_runtime_publication() {
+        let source = "mod m{pub const fn forward<T>(value:T)->T{value}}fn main(){let a=m::forward::<u64>(7u64);if a==7u64{println!(\"forwarded\");}}";
+        let unresolved = parse_unresolved(source).unwrap();
+        assert_eq!(unresolved.program.functions[0].constness, Constness::Const);
+        let program = resolve(&unresolved).unwrap();
+        assert_eq!(program.functions[0].name, "m::forward");
+        assert_eq!(program.functions[0].constness, Constness::Const);
+        assert_eq!(program.functions[1].constness, Constness::Runtime);
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        assert!(matches!(
+            plan.callable_provider(declaration).unwrap(),
+            CallableProvider::Source { .. }
+        ));
+        assert!(matches!(
+            plan.publish_callable_body(declaration, &budget).unwrap(),
+            PublishedCallableBody::Source(_)
+        ));
+        let runtime = source.replacen("const fn", "fn", 1);
+        let baseline = super::super::compile(runtime, 1, false).unwrap();
+        for workers in [1, 8] {
+            for check_only in [true, false] {
+                let compiled = super::super::compile(source.into(), workers, check_only).unwrap();
+                assert_eq!(compiled.executable.is_none(), check_only);
+                if !check_only {
+                    assert_eq!(compiled.executable, baseline.executable);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unused_const_bodies_cannot_launder_effects_calls_shadowing_or_destruction() {
+        for declaration in [
+            "const fn f<T>(x:T){}",
+            "const fn f<T>(x:T)->(T,T){(x,x)}",
+            "const fn f(x:u8)->u8{other(x)}",
+            "const fn f(x:u8)->u8{let x=other(x);x}",
+            "const fn f(x:u8)->u8{{x}}",
+            "const fn f(x:u8)->u8{return x;}",
+            "const fn f(x:u8)->u8{println!(\"effect\");x}",
+            "const fn f(x:u8,y:u8)->u8{x}",
+            "const fn f(x:u8)->u64{x}",
+        ] {
+            let source = format!("fn other(x:u8)->u8{{x}}{declaration}fn main(){{}}");
+            let program = parse(&source).unwrap();
+            let error = PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap_err();
+            assert!(
+                error.starts_with("unsupported: const fn"),
+                "{declaration}: {error}"
+            );
+            for workers in [1, 8] {
+                for check_only in [true, false] {
+                    assert!(super::super::compile(source.clone(), workers, check_only).is_err());
+                }
+            }
+        }
+        // The const gate must not narrow ordinary runtime function bodies.
+        check(&parse("fn f(x:u8)->u8{let y=x;y}fn main(){}").unwrap()).unwrap();
+    }
+
+    #[test]
+    fn const_required_contexts_and_associated_qualifiers_remain_unsupported() {
+        for source in [
+            "const VALUE:u8=1;fn main(){}",
+            "fn main(){let x=const {1};}",
+            "const fn id(x:u8)->u8{x}fn main(){let x=[0u8;id(1u8)];}",
+            "const fn id(x:u8)->u8{x}fn main(){let x:[u8;id(1u8)]=[0u8];}",
+            "fn f<const N:usize>(){}fn main(){}",
+            "struct S{x:u8}impl S{const fn f(x:u8)->u8{x}}fn main(){}",
+            "trait T{const fn f(x:u8)->u8;}fn main(){}",
+        ] {
+            let error = parse(source).unwrap_err();
+            assert!(error.contains("unsupported"), "{source}: {error}");
+        }
+        // The original private attributes still belong to the source-policy
+        // owner. Const declaration syntax must not silently enable them.
+        assert!(parse("#[rustc_diagnostic_item=\"convert_identity\"]pub const fn identity<T>(x:T)->T{x}fn main(){}").unwrap_err().contains("unsupported"));
+    }
+
+    #[test]
+    fn array_const_expression_boundary_preserves_malformed_literal_syntax() {
+        use super::super::source::SourceErrorKind;
+        for source in [
+            "fn main(){let x=[0u8;id(1u8)];}",
+            "fn main(){let x:[u8;id(1u8)]=[0u8];}",
+            "fn main(){let x=[0u8;1+2];}",
+            "fn main(){let x:[u8;1+2]=[0u8];}",
+        ] {
+            assert_eq!(
+                parse_syntax_unprepared(source).unwrap_err().kind,
+                SourceErrorKind::Unsupported,
+                "{source}"
+            );
+        }
+        for source in [
+            "fn main(){let x=[0u8;0x];}",
+            "fn main(){let x:[u8;0x]=[0u8];}",
+            "fn main(){let x=[0u8;id(];}",
+            "fn main(){let x=[0u8;1+];}",
+            "fn main(){let x=[0u8;];}",
+            "fn f<const>(){}fn main(){}",
+            "fn f<const N>(){}fn main(){}",
+            "fn f<const N:>(){}fn main(){}",
+            "fn f<const N:usize extra>(){}fn main(){}",
+        ] {
+            assert_eq!(
+                parse_syntax_unprepared(source).unwrap_err().kind,
+                SourceErrorKind::Syntax,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn constness_changes_cannot_reuse_an_existing_planning_declaration() {
+        for source in [
+            "const fn f<T>(x:T)->T{x}fn main(){}",
+            "fn f<T>(x:T)->T{x}fn main(){}",
+        ] {
+            let mut program = parse(source).unwrap();
+            let budget = ir::PlanBudget::default();
+            let plan = PlanCtx::from_program(&program, &budget).unwrap();
+            program.functions[0].constness = match program.functions[0].constness {
+                Constness::Runtime => Constness::Const,
+                Constness::Const => Constness::Runtime,
+            };
+            let error =
+                type_callable_with_plan(&program, plan.function_decl(0).unwrap(), &plan, &budget)
+                    .unwrap_err();
+            assert!(error.contains("constness differs"), "{error}");
+        }
+        let mut program = parse("trait T{fn f(x:u8)->u8{x}}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan
+            .registry
+            .function_ids
+            .iter()
+            .zip(&plan.registry.callable_sources)
+            .find_map(|(id, source)| {
+                matches!(source, CallableSource::TraitDefault { .. }).then_some(*id)
+            })
+            .unwrap();
+        program.traits[0].items[0].signature.constness = Constness::Const;
+        assert!(
+            type_callable_with_plan(&program, declaration, &plan, &budget)
+                .unwrap_err()
+                .contains("signature constness differs")
+        );
+    }
+
+    #[test]
+    fn public_ast_cannot_bypass_associated_const_policy_or_generic_moves() {
+        let mut program =
+            parse("struct S{x:u8}impl S{fn f(x:u8)->u8{x}}trait T{fn f(x:u8)->u8{x}}fn main(){}")
+                .unwrap();
+        assert_eq!(
+            program.traits[0].items[0].signature.constness,
+            Constness::Runtime
+        );
+        program.impls[0].items[0].function.constness = Constness::Const;
+        assert!(
+            PlanCtx::from_program(&program, &ir::PlanBudget::default())
+                .unwrap_err()
+                .contains("const associated")
+        );
+        program.impls[0].items[0].function.constness = Constness::Runtime;
+        program.traits[0].items[0]
+            .default
+            .as_mut()
+            .unwrap()
+            .constness = Constness::Const;
+        assert!(
+            PlanCtx::from_program(&program, &ir::PlanBudget::default())
+                .unwrap_err()
+                .contains("const associated")
+        );
+        program.traits[0].items[0]
+            .default
+            .as_mut()
+            .unwrap()
+            .constness = Constness::Runtime;
+        program.traits[0].items[0].signature.constness = Constness::Const;
+        assert!(
+            PlanCtx::from_program(&program, &ir::PlanBudget::default())
+                .unwrap_err()
+                .contains("const associated")
+        );
+        let source = "struct S{x:u8}const fn f<T>(x:T)->T{x}fn main(){let s=S{x:1u8};let moved=f::<S>(s);let invalid=s.x;}";
+        assert!(super::super::compile(source.into(), 1, true).is_err());
+    }
+
+    #[test]
+    fn syntax_only_const_admission_does_not_claim_body_validity_or_ctfe() {
+        let forwarding = "const fn unused(value:i32)->i32{value}";
+        let syntax = parse_syntax_unprepared(forwarding).unwrap();
+        assert_eq!(syntax.program.functions[0].constness, Constness::Const);
+        let effectful = "fn runtime(value:i32)->i32{value}const fn unused(value:i32)->i32{runtime(value)}fn main(){}";
+        // Raw syntax checking must not acquire semantic obligations: inactive
+        // items use this seam too. Active universal checking remains separate.
+        assert!(parse_syntax_unprepared(effectful).is_ok());
+        assert!(
+            PlanCtx::from_program(&parse(effectful).unwrap(), &ir::PlanBudget::default())
+                .unwrap_err()
+                .starts_with("unsupported: const fn")
+        );
+        for source in [
+            format!("#[cfg(any())] {forwarding}fn main(){{}}"),
+            "#[cfg(any())] const fn unused(value:i32)->i32{unknown(value)}fn main(){}".into(),
+        ] {
+            for workers in [1, 8] {
+                for check_only in [true, false] {
+                    assert!(super::super::compile(source.clone(), workers, check_only).is_ok());
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -19467,7 +20241,6 @@ mod prepared_location_tests {
         let unsupported = parse_syntax_unprepared("fn f(x: !) {}").err().unwrap();
         assert_eq!(unsupported.kind, SourceErrorKind::Unsupported);
         for text in [
-            "const fn unused(value: i32) -> i32 { value }",
             "async fn unused() {}",
             "fn unused() { let value = 'x'; }",
             "fn unused() { let value = r\"raw\"; }",

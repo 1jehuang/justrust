@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "name": "core::convert::identity",
+      "path": "probes/identity/convert.rs",
+      "source_sha256": "0fd346eff31bfa6cc7c79fc4cba8367e98c579ccd7072dd141ce0bea76b602ac",
+      "start": 2258,
+      "end": 3893,
+      "item_sha256": "c4187b524514fd5daf107703898a3489da0cdf7806eea13988f4f7a365c4d6a8",
+      "license": "MIT OR Apache-2.0",
+      "attribution": "The Rust Project Contributors",
+      "source_revision": "d907fba494adcabfdd642a18a7918b0c9847d35b"
+    }
+  ]
+}

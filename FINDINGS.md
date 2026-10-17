@@ -10083,3 +10083,32 @@ and is a future test-scheduling diagnostic, not evidence of a compiler speedup.
 Receipts: `data/runs/xps14/2026-10-17-source-preparation.jsonl`. Source maps
 remain one coarse per-compilation snapshot, not persistent incremental facts.
 No unchanged core/alloc/std or full Rust claim follows from this milestone.
+
+## 2026-10-17: unchanged identity declaration runtime checkpoint
+
+Final hosted check `20261017-054934250-340621`, full regression
+`20261017-054934732-340695` (1758 tests, 93 binaries), strict lint
+`20261017-054948603-341641` and formatting pass. The unchanged original attributed
+identity declaration executes natively with authored clients, without stock
+compiler delegation. Its parent/range hashes, original file locations and exact
+MIT/Apache/COPYRIGHT inputs are retained. This is one function, not whole core.
+Exact-source stock E0658 and duplicate diagnostic-item experiments remain policy
+rejections, separate from installed-core behavioral references.
+
+Identity conformance `20261017-054428725-318116` passes 18 stock behavioral
+classifications, 72 native cells and 64 separate CLI/lock rejection gates.
+Initial run `20261017-053354866-270222` exposed eight unsupported reference cells.
+They were repaired with original scalar-root borrow evidence and exact capability
+replay, not fixture reclassification. Full run `20261017-054525312-322059` then
+found two existing nested-reference regressions and a const-generic diagnostic
+category mismatch. Exact-schema gating restored the old route; the final full
+run passes with both new root-borrow tests and unchanged nested-reference tests.
+
+Source conformance `20261017-054435579-318114` passes 86 classified sources and
+344 native cells after one byte-preserving disabled-const syntax promotion.
+Retained summaries include the failures in
+`data/runs/xps14/2026-10-17-core-identity.jsonl`. Const-required contexts,
+general reference inference, complete macro expansion, library crate artifacts,
+core/alloc/std and full Rust remain open. The wide-integer oracle still dominates
+test wall time at about 12.2 seconds. These are correctness measurements, not a
+compiler speedup claim.

@@ -3,6 +3,7 @@
 use super::source_cfg::{
     CfgSet, Meta, MetaError, MetaValue, evaluate, parse_meta, validate_string_literal,
 };
+use super::source_probe::VerifiedIdentityContext;
 use std::ops::Range;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,6 +87,25 @@ enum Owner {
 }
 
 pub fn prepare(text: &str, cfg: &CfgSet) -> Result<AttributeOutput, AttributeError> {
+    prepare_with_context(text, cfg, None)
+}
+
+/// A verified source snapshot may retain these specific inert metadata forms.
+/// This does not register any language item, intrinsic, diagnostic provider, or
+/// const capability. Ordinary source preparation never receives this context.
+pub(super) fn prepare_verified_identity(
+    text: &str,
+    cfg: &CfgSet,
+    context: &VerifiedIdentityContext,
+) -> Result<AttributeOutput, AttributeError> {
+    prepare_with_context(text, cfg, Some(context))
+}
+
+fn prepare_with_context(
+    text: &str,
+    cfg: &CfgSet,
+    identity_metadata: Option<&VerifiedIdentityContext>,
+) -> Result<AttributeOutput, AttributeError> {
     if text.len() > 8 * 1024 * 1024 {
         return Err(error(
             AttributeErrorKind::Limit,
@@ -97,6 +117,7 @@ pub fn prepare(text: &str, cfg: &CfgSet) -> Result<AttributeOutput, AttributeErr
     let mut filter = Filter {
         text,
         cfg,
+        identity_metadata,
         tokens,
         bytes: text.as_bytes().to_vec(),
         records: Vec::new(),
@@ -113,6 +134,7 @@ pub fn prepare(text: &str, cfg: &CfgSet) -> Result<AttributeOutput, AttributeErr
 struct Filter<'a> {
     text: &'a str,
     cfg: &'a CfgSet,
+    identity_metadata: Option<&'a VerifiedIdentityContext>,
     tokens: Vec<Token>,
     bytes: Vec<u8>,
     records: Vec<AttributeRecord>,
@@ -349,7 +371,12 @@ impl Filter<'_> {
         }
         Ok(())
     }
-    fn attributes(&mut self, attrs: &[Attr], owner: Owner) -> Result<bool, AttributeError> {
+    fn attributes(
+        &mut self,
+        attrs: &[Attr],
+        owner: Owner,
+        item: Option<Range<usize>>,
+    ) -> Result<bool, AttributeError> {
         let record_start = self.records.len();
         self.work = self.work.saturating_add(attrs.len());
         if self.work > MAX_WORK {
@@ -402,7 +429,35 @@ impl Filter<'_> {
                 "attributes at this attachment position are unsupported",
             ));
         }
+        let mut seen_identity_metadata = std::collections::BTreeSet::new();
         for raw in effective {
+            if self.identity_metadata.is_some()
+                && matches!(
+                    raw.name.as_str(),
+                    "stable" | "rustc_const_stable" | "rustc_diagnostic_item"
+                )
+            {
+                let permitted = owner == Owner::Function
+                    && item.as_ref().is_some_and(|item| {
+                        self.identity_metadata.is_some_and(|context| {
+                            context.permits_metadata(self.text, raw.range.clone(), item.clone())
+                        })
+                    });
+                if !permitted
+                    || !valid_identity_metadata(&parse_meta(
+                        &self.text[raw.range.clone()],
+                        raw.range.start,
+                    )?)
+                    || !seen_identity_metadata.insert(raw.name.clone())
+                {
+                    return Err(error(
+                        AttributeErrorKind::Unsupported,
+                        raw.range,
+                        "identity probe metadata requires an exact verified source owner and supported inert form",
+                    ));
+                }
+                continue;
+            }
             let meta = if matches!(raw.name.as_str(), "doc" | "inline") {
                 parse_meta(&self.text[raw.range.clone()], raw.range.start).map_err(|e| {
                     if raw.name == "doc" && !e.limit {
@@ -505,7 +560,7 @@ impl Filter<'_> {
             inner.push(attr);
             i = next;
         }
-        if !self.attributes(&inner, owner)? {
+        if !self.attributes(&inner, owner, None)? {
             self.inactive(region.clone())?;
             self.mask(region);
             return Ok(());
@@ -586,7 +641,11 @@ impl Filter<'_> {
                 | "static" | "type" => Owner::FreeItem,
                 _ => Owner::Unsupported,
             };
-            if !self.attributes(&attrs, item_owner)? {
+            if !self.attributes(
+                &attrs,
+                item_owner,
+                Some(self.tokens[item_start].range.start..self.tokens[stop - 1].range.end),
+            )? {
                 self.inactive(
                     self.tokens[item_start].range.start..self.tokens[stop - 1].range.end,
                 )?;
@@ -667,6 +726,26 @@ impl Filter<'_> {
             }
         }
         Ok(())
+    }
+}
+
+/// Validate only source metadata spelling. This helper returns no compiler
+/// authority and cannot authorize an owner or a source snapshot.
+fn valid_identity_metadata(meta: &Meta) -> bool {
+    match (meta.name.as_str(), &meta.value) {
+        ("stable" | "rustc_const_stable", MetaValue::List(args)) if args.len() == 2 => {
+            let expected_feature = if meta.name == "stable" {
+                "convert_id"
+            } else {
+                "const_identity"
+            };
+            args[0].name == "feature"
+                && matches!(&args[0].value, MetaValue::String(value) if value == expected_feature)
+                && args[1].name == "since"
+                && matches!(&args[1].value, MetaValue::String(value) if value == "1.33.0")
+        }
+        ("rustc_diagnostic_item", MetaValue::String(value)) => value == "convert_identity",
+        _ => false,
     }
 }
 
@@ -1131,6 +1210,66 @@ mod tests {
     use super::*;
     fn prep(s: &str) -> Result<AttributeOutput, AttributeError> {
         prepare(s, &CfgSet::default())
+    }
+    #[test]
+    fn pinned_identity_metadata_forms_are_exact_and_inert() {
+        for text in [
+            r#"stable(feature="convert_id",since="1.33.0")"#,
+            r#"rustc_const_stable(feature="const_identity",since="1.33.0")"#,
+            r#"rustc_diagnostic_item="convert_identity""#,
+        ] {
+            assert!(
+                valid_identity_metadata(&parse_meta(text, 0).unwrap()),
+                "{text}"
+            );
+        }
+        // Validation of source spelling alone does not activate the probe path.
+        assert_eq!(prep(r#"#[stable(feature="convert_id",since="1.33.0")] pub const fn identity<T>(x:T)->T{x}"#).unwrap_err().kind, AttributeErrorKind::Unsupported);
+    }
+    #[test]
+    fn identity_metadata_does_not_have_an_ignore_private_attributes_bucket() {
+        for text in [
+            r#"stable(feature="other",since="1.33.0")"#,
+            r#"stable(feature="convert_id",since="1.34.0")"#,
+            r#"stable(since="1.33.0",feature="convert_id")"#,
+            r#"stable(feature="convert_id",feature="convert_id")"#,
+            r#"stable(feature="convert_id",since="1.33.0",extra="x")"#,
+            r#"rustc_const_stable(feature="convert_id",since="1.33.0")"#,
+            r#"rustc_const_stable(feature="const_identity")"#,
+            r#"rustc_diagnostic_item="other""#,
+            "rustc_diagnostic_item(convert_identity)",
+            "rustc_intrinsic",
+            "lang=\"identity\"",
+            "feature(rustc_attrs)",
+        ] {
+            assert!(
+                !valid_identity_metadata(&parse_meta(text, 0).unwrap()),
+                "{text}"
+            );
+        }
+    }
+    #[test]
+    fn ordinary_source_cannot_self_activate_identity_metadata_policy() {
+        for attr in [
+            r#"stable(feature="convert_id",since="1.33.0")"#,
+            r#"rustc_const_stable(feature="const_identity",since="1.33.0")"#,
+            r#"rustc_diagnostic_item="convert_identity""#,
+        ] {
+            for name in ["identity", "unrelated"] {
+                let source = format!("/// Kept docs\n#[{attr}] #[inline(always)] fn {name}(){{}}");
+                assert_eq!(
+                    prep(&source).unwrap_err().kind,
+                    AttributeErrorKind::Unsupported,
+                    "{source}"
+                );
+            }
+        }
+        assert_eq!(
+            prep("#[verified_identity] fn identity(){}")
+                .unwrap_err()
+                .kind,
+            AttributeErrorKind::Syntax
+        );
     }
     #[test]
     fn disabled_module_and_nested_cfg_attr_do_not_activate_path() {

@@ -124,6 +124,7 @@ const UNIVERSAL_EFFECTS_READY: u32 = 115;
 enum Input {
     Text(String),
     File(PathBuf),
+    ProbeFile(PathBuf, source::SourceProbeRequest),
     Program(Arc<frontend::Program>),
 }
 struct DeclarationFacts {
@@ -304,6 +305,9 @@ impl Provider for CompilerProvider {
                 SOURCE => {
                     let prepared = match &this.0.input {
                         Input::File(path) => source::prepare_file(path, &this.0.source_options),
+                        Input::ProbeFile(path, request) => {
+                            source::prepare_probe_file(path, &this.0.source_options, request)
+                        }
                         Input::Text(text) => {
                             source::prepare_text("<text>", text, &this.0.source_options)
                         }
@@ -896,6 +900,40 @@ pub fn compile_file_observed_with_options(
     compile_input_with_options(Input::File(path), workers, check_only, options)
 }
 
+/// Compile a client with an explicitly source-locked provider declaration.
+/// The provider still passes ordinary parsing, universal checks and native lowering.
+/// This does not compile a library crate or authorize intrinsic implementations.
+pub fn compile_probe_file_observed(
+    path: PathBuf,
+    workers: usize,
+    check_only: bool,
+    request: source::SourceProbeRequest,
+) -> Result<Compilation, Failure> {
+    compile_probe_file_observed_with_options(
+        path,
+        workers,
+        check_only,
+        source::SourceOptions::default(),
+        request,
+    )
+}
+
+/// Like the probe entry point, with an immutable explicit native cfg set.
+pub fn compile_probe_file_observed_with_options(
+    path: PathBuf,
+    workers: usize,
+    check_only: bool,
+    options: source::SourceOptions,
+    request: source::SourceProbeRequest,
+) -> Result<Compilation, Failure> {
+    compile_input_with_options(
+        Input::ProbeFile(path, request),
+        workers,
+        check_only,
+        options,
+    )
+}
+
 fn retained_analyses(snapshot: &Snapshot) -> Vec<(usize, Arc<ownership::Analysis>)> {
     let mut analyses = Vec::new();
     if let Some(slots) = snapshot.declarations.get() {
@@ -1038,7 +1076,7 @@ fn compile_input_configured(
     let executable = snapshot.executable.get().cloned();
     let (source_bytes, source_files) = match &snapshot.input {
         Input::Program(_) => (0, 0),
-        Input::Text(_) | Input::File(_) => {
+        Input::Text(_) | Input::File(_) | Input::ProbeFile(_, _) => {
             let loaded = snapshot.source.get().ok_or_else(|| Failure {
                 error: Error::new("missing loaded source accounting"),
                 report: Some(Box::new(report.clone())),

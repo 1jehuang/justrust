@@ -10,8 +10,11 @@ pub mod source_attrs;
 pub mod source_cfg;
 #[path = "source_map.rs"]
 pub mod source_map;
+#[path = "source_probe.rs"]
+pub mod source_probe;
 pub use source_cfg::CfgSet;
 pub use source_map::{FileId, OriginSegment, SourceMap, SourceSpan};
+pub use source_probe::{SourceProbeRecord, SourceProbeRequest, prepare_probe_file};
 const MAX_FILE_DEPTH: usize = 64;
 const MAX_MODULE_DEPTH: usize = 128;
 const MAX_BYTES: usize = 8 * 1024 * 1024;
@@ -96,6 +99,8 @@ pub struct PreparedSource {
     pub sources: SourceMap,
     pub origins: Vec<OriginSegment>,
     pub attributes: Vec<PreparedAttribute>,
+    /// Reviewed source pin audit records, never semantic or publication authority.
+    pub probes: Vec<SourceProbeRecord>,
     pub source_bytes: usize,
     pub files: usize,
 }

@@ -52,6 +52,10 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Configured text/file SOURCE preparation, bounded cfg/cfg_attr and inert
       attribute policy, cfg-before-child-IO discovery and original syntax spans
       under SOURCE-PREPARATION.md. Full inactive syntax and expansion remain open.
+- [x] Explicit source-locked original attributed identity declaration at runtime,
+      retained constness with universally checked forwarding-only bodies and
+      scalar-root shared/mutable inference replay under CORE-IDENTITY.md. This
+      is not CTFE, a library crate artifact or whole-core compilation.
 
 ## Remaining implementation program
 
@@ -805,3 +809,15 @@ original syntax locations and resource/ordinary-stack guards. Hosted all-target
 check, 1731 tests in 90 binaries and strict lint pass, alongside 86 stock
 fixtures and 344 native worker/mode cells. Full syntax/macros, semantic spans,
 library roots, core/alloc/std and full Rust acceptance remain open.
+
+### Source-locked identity runtime checkpoint
+
+`CORE-IDENTITY.md` delivers one unchanged attributed function plus authored
+clients, strict full-file/range provenance and scoped inert metadata. All 1758
+hosted tests in 93 binaries, strict lint, 72 native identity cells and 344 source
+configuration cells pass. Exact-source stock internal-attribute rejections are
+recorded separately from installed-core behavioral references. The first native
+64/72 and first full 1755/1758 failures remain retained: root-borrow replay was
+repaired without demoting valid clients or existing nested-reference fixtures.
+Constness does not imply CTFE. Full library crates, macro expansion and full
+Rust remain open.

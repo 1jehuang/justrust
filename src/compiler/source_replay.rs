@@ -938,6 +938,19 @@ pub(super) fn infer_shared_identity(
     budget: &ir::PlanBudget,
     materialize: &mut impl FnMut(ir::DeclId, &[ir::Ty]) -> Result<ir::Ty, FactsError>,
 ) -> Result<Arc<SharedIdentityTrace>, FactsError> {
+    infer_reference_identity(view, ir::BorrowKind::Shared, referent, budget, materialize)
+}
+
+/// The original source boundary must prove the immediate borrow and its capability.
+/// The retained evidence includes the exact kind, so mutable and shared traces
+/// cannot validate against each other. This does not widen general inference.
+pub(super) fn infer_reference_identity(
+    view: &tr::OriginalCallableView,
+    kind: ir::BorrowKind,
+    referent: &ir::Ty,
+    budget: &ir::PlanBudget,
+    materialize: &mut impl FnMut(ir::DeclId, &[ir::Ty]) -> Result<ir::Ty, FactsError>,
+) -> Result<Arc<SharedIdentityTrace>, FactsError> {
     let env = view.generic_env();
     if env.scopes().len() != 1 || env.scopes()[0].arity() != 1 || view.signature().params.len() != 1
     {
@@ -970,7 +983,7 @@ pub(super) fn infer_shared_identity(
     }
     state.storage(1)?;
     let input = ir::Ty::Ref {
-        kind: ir::BorrowKind::Shared,
+        kind,
         referent: Arc::new(referent.clone()),
     };
     let evidence = state.type_term(&input, None, 0)?;
@@ -1009,6 +1022,50 @@ pub(super) fn infer_shared_identity(
         after,
         actual,
     }))
+}
+
+#[cfg(test)]
+mod reference_identity_trace_tests {
+    use super::*;
+
+    #[test]
+    fn reference_identity_trace_preserves_exact_capability_and_evidence() {
+        let budget = ir::PlanBudget::default();
+        let binder = ir::BinderId {
+            declaration: ir::DeclId {
+                snapshot: ir::SnapshotId::allocate().unwrap(),
+                index: 0,
+            },
+        };
+        let state = CallInferenceState::new(None, &budget).unwrap();
+        let trace = |kind| {
+            let actual = ir::Ty::Ref {
+                kind,
+                referent: Arc::new(ir::Ty::Int(ir::IntTy::I32)),
+            };
+            let evidence = state.type_term(&actual, None, 0).unwrap();
+            SharedIdentityTrace {
+                binder,
+                before: state.node(InferKind::Slot(0)).unwrap(),
+                after: evidence.clone(),
+                evidence,
+                actual,
+            }
+        };
+        let shared = trace(ir::BorrowKind::Shared);
+        let mutable = trace(ir::BorrowKind::Mut);
+        shared.validate_replayed(&shared, &budget).unwrap();
+        mutable.validate_replayed(&mutable, &budget).unwrap();
+        assert!(shared.validate_replayed(&mutable, &budget).is_err());
+        assert!(mutable.validate_replayed(&shared, &budget).is_err());
+
+        let mut changed = mutable.clone();
+        changed.actual = shared.actual.clone();
+        assert!(mutable.validate_replayed(&changed, &budget).is_err());
+        let mut replaced = mutable.clone();
+        replaced.after = trace(ir::BorrowKind::Mut).after;
+        assert!(mutable.validate_replayed(&replaced, &budget).is_err());
+    }
 }
 
 #[cfg(test)]

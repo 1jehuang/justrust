@@ -1959,6 +1959,7 @@ mod tests {
     }
     fn function(name: &str, params: Vec<(String, Type)>, result: Type, body: Block) -> Function {
         Function {
+            constness: crate::compiler::frontend::Constness::Runtime,
             visibility: ir::Visibility::Public,
             name: name.into(),
             regions: Default::default(),

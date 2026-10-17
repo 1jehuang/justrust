@@ -66,6 +66,23 @@ contracts remain unchanged. Builtin reference fields and mixed-capability result
 inputs are separate delivered slices. Method elision, `'_`, trait autoderef and
 general Rust lifetimes remain open.
 
+## Source-locked identity runtime probe
+
+`CORE-IDENTITY.md` accepts one unchanged attributed const function at runtime,
+not the whole convert module or a core crate. Full-file/range hashes and original
+locations are retained; exact verified stability/diagnostic attributes are inert
+metadata, never semantic implementation authority. Constness is retained and
+all const declarations are checked against a narrow structural forwarding body
+subset. General const legality and CTFE remain unsupported.
+
+The source-derived direct scalar-root borrow frontier preserves original binding,
+borrow kind, mutable capability and immutable replay evidence for exact `(T)->T`
+source calls. It does not relax general reference inference or intercept existing
+nested-reference call shapes. All 1758 hosted tests and 72 native identity cells
+pass. Exact-source stock policy rejections, behavioral references, valid native
+acceptance and unsupported boundaries remain separately classified. Full source
+libraries, crate artifacts, alloc/std and full Rust are still open.
+
 ## Contract and completion criteria
 
 - Define supported editions, targets and stable language versions explicitly.
