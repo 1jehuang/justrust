@@ -4371,6 +4371,8 @@ enum ParserTokenKind {
     String,
     Punct,
     Lifetime,
+    OpaqueLiteral,
+    DeferredLiteral,
     Eof,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4530,6 +4532,52 @@ fn canonical_path_text_len(
 mod local_macro_parser_tests {
     use super::*;
     #[test]
+    fn println_owned_format_denies_bytes_before_allocating_output() {
+        use super::super::expansion_budget::{BudgetResource, ExpansionBudget, Storage};
+        let budget = ExpansionBudget::default();
+        let mut builder =
+            ProgramBuilder::new(std::path::Path::new("format.rs"), "", &budget).unwrap();
+        let before = budget.snapshot();
+        let blocker = budget
+            .reserve(
+                Storage::Temporary,
+                budget.limits().bytes - before.retained_bytes - before.temporary_bytes - 2,
+            )
+            .unwrap();
+        let error = literal_format_owned("{{}}", &mut builder.names).unwrap_err();
+        assert_eq!(error.kind, super::super::source::SourceErrorKind::Limit);
+        let denied = budget.snapshot();
+        assert_eq!(denied.retained_bytes, before.retained_bytes);
+        let failure = denied.failure.unwrap();
+        assert_eq!(failure.resource, BudgetResource::Bytes);
+        assert_eq!(failure.requested, 3);
+        drop(error);
+        drop(builder);
+        drop(blocker);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        assert_eq!(budget.snapshot().temporary_bytes, 0);
+    }
+    #[test]
+    fn println_owned_format_charge_survives_until_last_name_owner() {
+        let budget = super::super::expansion_budget::ExpansionBudget::default();
+        let mut builder =
+            ProgramBuilder::new(std::path::Path::new("format.rs"), "", &budget).unwrap();
+        let before = budget.snapshot().retained_bytes;
+        let text = literal_format_owned("é{{ok}}", &mut builder.names).unwrap();
+        assert_eq!(text, "é{ok}");
+        let charged = budget.snapshot().retained_bytes - before;
+        assert!(charged >= text.capacity() as u64);
+        drop(text);
+        assert_eq!(budget.snapshot().retained_bytes - before, charged);
+        let program = builder.finish().unwrap();
+        let owner = program.names.clone();
+        drop(program);
+        assert!(budget.snapshot().retained_bytes >= charged);
+        drop(owner);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        assert_eq!(budget.snapshot().temporary_bytes, 0);
+    }
+    #[test]
     fn lexical_replay_transport_preserves_resource_and_unsupported_causes() {
         use super::super::expansion_budget::{
             BudgetFailure, BudgetFailureKind, BudgetResource, Counter,
@@ -4611,18 +4659,77 @@ mod local_macro_parser_tests {
         }
     }
     #[test]
-    fn literal_fragment_cannot_bypass_source_ingress_when_unused_or_discarded() {
+    fn literal_fragment_unused_discarded_and_consumed_are_admitted() {
         for source in [
             "fn main(){macro_rules! one{($value:literal)=>{1};}}",
             "fn main(){macro_rules! one{($value:literal)=>{1};}let value:i32=one!(2);}",
+            "fn main(){macro_rules! one{($value:literal)=>{$value};}let value:i32=one!(2);}",
         ] {
-            let error = parse_syntax_unprepared(source).unwrap_err();
-            assert_eq!(
-                error.kind,
-                super::super::source::SourceErrorKind::Unsupported
-            );
-            assert!(error.message.contains("literal fragments"));
+            let program = parse(source).unwrap();
+            check(&program).unwrap();
         }
+    }
+    #[test]
+    fn opaque_signed_minimum_retains_existing_direct_unary_shape() {
+        for (ty, literal) in [
+            ("i32", "-2147483648i32"),
+            ("i128", "-170141183460469231731687303715884105728i128"),
+        ] {
+            let source = format!(
+                "fn main(){{macro_rules! one{{($value:literal)=>{{$value}};}}let value:{ty}=one!({literal});}}"
+            );
+            let program = parse(&source).unwrap();
+            let Stmt::Let {
+                value:
+                    Expr::Unary {
+                        op: UnaryOp::Neg,
+                        value,
+                    },
+                ..
+            } = &program.functions[0].body.statements[0]
+            else {
+                panic!("opaque literal changed unary shape");
+            };
+            assert!(matches!(value.as_ref(), Expr::Integer(_)));
+            check(&program).unwrap();
+        }
+    }
+    #[test]
+    fn opaque_minus_is_atomic_before_outer_cast() {
+        let program = parse("fn main(){macro_rules! one{($value:literal)=>{$value as i64};}let value:i64=one!(-1i32);}").unwrap();
+        let Stmt::Let {
+            value: Expr::Cast { value, .. },
+            ..
+        } = &program.functions[0].body.statements[0]
+        else {
+            panic!("outer cast no longer wraps atom");
+        };
+        assert!(matches!(
+            value.as_ref(),
+            Expr::Unary {
+                op: UnaryOp::Neg,
+                ..
+            }
+        ));
+        check(&program).unwrap();
+    }
+    #[test]
+    fn opaque_bool_numeric_and_contextual_string_use_real_source_forwarding() {
+        let program = parse("fn forward(n:i32)->i32{n}fn main(){macro_rules! emit{($n:literal,$flag:literal,$text:literal)=>{if $flag{if forward($n)==-45{println!($text);}}};}emit!(-45,true,\"ok\");}").unwrap();
+        check(&program).unwrap();
+        let error = parse_syntax_unprepared(
+            "fn main(){macro_rules! one{($value:literal)=>{$value};}let value=one!(\"text\");}",
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.kind,
+            super::super::source::SourceErrorKind::Unsupported
+        );
+        let program = parse(
+            "fn main(){macro_rules! one{($value:literal)=>{$value};}let value:bool=one!(-true);}",
+        )
+        .unwrap();
+        assert!(check(&program).is_err());
     }
     #[test]
     fn compact_provenance_tags_never_alias_prepared_coordinates() {
@@ -4922,8 +5029,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             .map_err(scope_parse_error)?;
         let buffer =
             expanded_adapter::lower(slice, self.names, self.names.edition(), eof, &admission)?;
+        self.isolated_expression(&buffer)
+    }
+    fn isolated_expression(&mut self, buffer: &NativeTokenBuffer) -> Result<Expr, ParseError> {
         let mut child = Parser {
-            input: &buffer,
+            input: buffer,
             names: &mut *self.names,
             modules: ParserState::Borrowed(&mut *self.modules),
             lexical: ParserState::Borrowed(&mut *self.lexical),
@@ -4931,7 +5041,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             module: self.module,
             alias_target: false,
             pending_bounds: Vec::new(),
-            cursor: TokenCursor::new(&buffer),
+            cursor: TokenCursor::new(buffer),
             nesting: self.nesting,
             allow_struct: self.allow_struct,
             type_params: std::mem::take(&mut self.type_params),
@@ -4947,6 +5057,57 @@ impl<'input, 'names> Parser<'input, 'names> {
         });
         self.type_params = std::mem::take(&mut child.type_params);
         result
+    }
+    fn opaque_literal_expression(&mut self) -> Result<Expr, ParseError> {
+        let buffer = self
+            .input
+            .opaque_literal_buffer(&self.token(), self.names)?;
+        let cursor = TokenCursor::new(&buffer);
+        if cursor.current().string
+            || (cursor.current().matches("-") && cursor.peek(1).is_some_and(|token| token.string))
+        {
+            return Err(self.unsupported("standalone string expressions are unsupported"));
+        }
+        let value = self.isolated_expression(&buffer)?;
+        self.cursor.bump();
+        Ok(value)
+    }
+    fn println_literal(&mut self) -> Result<String, ParseError> {
+        if self.token().is_opaque_literal() {
+            let buffer = self
+                .input
+                .opaque_literal_buffer(&self.token(), self.names)?;
+            let mut cursor = TokenCursor::new(&buffer);
+            if !cursor.current().string {
+                return Err(self.error("println! requires one literal string"));
+            }
+            let text =
+                literal_format_owned(cursor.current().text, self.names).map_err(|error| {
+                    if error.kind == super::source::SourceErrorKind::Syntax {
+                        self.error(&error.message)
+                    } else {
+                        error
+                    }
+                })?;
+            cursor.bump();
+            if !cursor.current().matches("") {
+                return Err(self.error("println! requires one literal string"));
+            }
+            self.cursor.bump();
+            return Ok(text);
+        }
+        if !self.token().string {
+            return Err(self.error("println! requires one literal string"));
+        }
+        let text = literal_format_owned(self.token().text, self.names).map_err(|error| {
+            if error.kind == super::source::SourceErrorKind::Syntax {
+                self.error(&error.message)
+            } else {
+                error
+            }
+        })?;
+        self.cursor.bump();
+        Ok(text)
     }
     fn enter_lexical(&mut self) -> Result<Option<super::semantic_scope::FrontierId>, ParseError> {
         let previous = self.frontier();
@@ -6977,12 +7138,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return Err(self.error("only println! is supported"));
             }
             self.expect("(")?;
-            if !self.token().string {
-                return Err(self.error("println! requires one literal string"));
-            }
-            let text = self.token().text.to_owned();
-            self.cursor.bump();
-            let text = literal_format(&text).map_err(|e| self.error(&e))?;
+            let text = self.println_literal()?;
             self.eat(",");
             self.expect(")")?;
             Expr::Println(text)
@@ -7153,6 +7309,9 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     #[inline(never)]
     fn expr_prefix(&mut self, statement: bool) -> Result<Expr, ParseError> {
+        if self.token().is_opaque_literal() {
+            return self.opaque_literal_expression();
+        }
         if self.is("const") {
             return Err(
                 self.unsupported("const expressions and constant evaluation are unsupported")
@@ -7512,12 +7671,46 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(left)
     }
 }
-fn literal_format(text: &str) -> Result<String, String> {
+fn literal_format_owned(text: &str, names: &mut NameStoreBuilder) -> Result<String, ParseError> {
+    use super::expansion_budget::Counter;
+    let budget = names.budget().clone();
+    budget
+        .charge(Counter::Work, text.len() as u64)
+        .map_err(|error| native_adapter::transport_error(error.into()))?;
     let mut chars = text.chars();
-    let mut out = String::new();
+    let mut planned = 0usize;
     while let Some(c) = chars.next() {
         if (c == '{' || c == '}') && chars.next() != Some(c) {
-            return Err("println! formatting placeholders are unsupported".into());
+            return Err(native_adapter::source_error(
+                super::source::SourceError::syntax(
+                    None,
+                    "println! formatting placeholders are unsupported",
+                ),
+            ));
+        }
+        planned += c.len_utf8();
+    }
+    let capacity = planned.checked_add(1).ok_or_else(|| {
+        native_adapter::transport_error(super::token_session::TokenError::InvalidRange)
+    })?;
+    budget
+        .charge(Counter::Work, capacity as u64)
+        .map_err(|error| native_adapter::transport_error(error.into()))?;
+    names
+        .retain_parser_text(capacity)
+        .map_err(native_adapter::name_error)?;
+    let mut out = String::new();
+    out.try_reserve_exact(capacity)
+        .map_err(|_| native_adapter::transport_error(budget.poison_allocation().into()))?;
+    if out.capacity() > capacity {
+        names
+            .retain_parser_text(out.capacity() - capacity)
+            .map_err(native_adapter::name_error)?;
+    }
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '{' || c == '}' {
+            chars.next();
         }
         out.push(c);
     }

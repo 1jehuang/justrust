@@ -134,12 +134,6 @@ impl LocalMacroDriver {
         }
         let key = names.key(name, LookupClass::Item(Namespace::Macro))?;
         let rules = names.compile_local_rules(body, site)?;
-        if !rules.supports_local_fragments(names.session())? {
-            return Err(DriverError::Unsupported {
-                span: site.span,
-                message: "literal fragments are not yet admitted by source macro client",
-            });
-        }
         self.rules = Some(LocalRules {
             name: key,
             definition: frontier,

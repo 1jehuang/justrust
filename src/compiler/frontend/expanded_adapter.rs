@@ -17,6 +17,77 @@ struct Frame {
     close: Option<(Delimiter, SpanId)>,
 }
 
+/// The only semantic unwrapping boundary. This private buffer is consumed by
+/// the existing expression parser as one atom, never returned to macro matching.
+pub(super) fn literal_buffer(
+    names: &mut NameStoreBuilder,
+    opaque: Token,
+    admission: &ExpansionAdmission,
+) -> Result<NativeTokenBuffer, ParseError> {
+    use crate::compiler::semantic_name::LiteralError;
+    let parts: crate::compiler::semantic_name::LiteralParts = names
+        .literal_parts(opaque, admission)
+        .map_err(|error| match error {
+            LiteralError::Token(error) => transport_error(error),
+            LiteralError::Scope(error) => scope_error(error),
+            LiteralError::Unsupported { span } => {
+                failure(names.session(), span, "unsupported opaque literal class")
+            }
+        })?;
+    if parts.outer_occurrence != opaque.span {
+        return Err(transport_error(TokenError::InvalidHandle));
+    }
+    let eof = names.expansion_eof(admission).map_err(scope_error)?;
+    let session = names.session();
+    let mut output = NativeTokenBuffer::expanded(session, admission)?;
+    if let Some(minus) = parts.minus {
+        if !matches!(minus.kind, TokenKind::Punct { ch: '-', .. }) {
+            return Err(transport_error(TokenError::InvalidHandle));
+        }
+        output.push_expanded(
+            session,
+            "-",
+            ParserTokenKind::Punct,
+            &[part(session, minus.span)?],
+            None,
+        )?;
+    }
+    // No arbitrary payload token can become a name or a recursive opaque atom.
+    match parts.value.kind {
+        TokenKind::Literal {
+            kind: LiteralKind::Integer | LiteralKind::Float | LiteralKind::String,
+            ..
+        } => {}
+        TokenKind::Ident(ident)
+            if !ident.raw
+                && matches!(
+                    session.symbol(ident.symbol).map_err(transport_error)?,
+                    "true" | "false"
+                ) => {}
+        _ => {
+            return Err(failure(
+                session,
+                parts.value.span,
+                "unsupported opaque literal class",
+            ));
+        }
+    }
+    push_logical(
+        &mut output,
+        session,
+        LogicalToken::Leaf(parts.value),
+        names.edition(),
+    )?;
+    output.push_expanded(
+        session,
+        "",
+        ParserTokenKind::Eof,
+        &[part(session, eof)?],
+        None,
+    )?;
+    Ok(output)
+}
+
 /// A private anchor proof is required even for empty or punctuation-only output.
 /// The buffer is independent of the mutable name owner used by the parser.
 pub(super) fn lower(
@@ -262,11 +333,9 @@ fn push_logical(
                     token.span,
                     "raw, byte, character and C literals are unsupported",
                 )),
-                TokenKind::Opaque(_) => Err(failure(
-                    session,
-                    token.span,
-                    "opaque literal fragments are unsupported by the expression parser",
-                )),
+                TokenKind::Opaque(_) => {
+                    output.push_opaque_literal(session, token, part(session, token.span)?)
+                }
                 TokenKind::DollarCrate(_) => Err(failure(
                     session,
                     token.span,
@@ -467,6 +536,179 @@ mod tests {
     }
 
     #[test]
+    fn opaque_literals_use_checked_isolated_buffers_without_changing_matcher_tokens() {
+        for (argument, expected) in [
+            ("(1)", vec!["1", ""]),
+            ("(-1)", vec!["-", "1", ""]),
+            ("(1.25)", vec!["1.25", ""]),
+            ("(true)", vec!["true", ""]),
+            ("(-false)", vec!["-", "false", ""]),
+            ("(\"hello\\nworld\")", vec!["hello\nworld", ""]),
+        ] {
+            let mut source = fixture_rules("($x:literal)=>{$x};", argument);
+            let buffer = run(&mut source).unwrap();
+            assert_eq!(buffer.len(), 2);
+            let mut cursor = super::super::TokenCursor::new(&buffer);
+            let view = cursor.current();
+            assert!(view.is_opaque_literal());
+            assert!(!view.is_ident());
+            assert!(!view.matches(view.text));
+            assert!(!cursor.consume_type_gt());
+            assert!(!cursor.consume_type_amp_prefix());
+            assert_eq!(
+                buffer.mint_name(&view, &mut source.names).unwrap_err().kind,
+                SourceErrorKind::Contract
+            );
+            let isolated = buffer
+                .opaque_literal_buffer(&view, &mut source.names)
+                .unwrap();
+            assert_eq!(
+                isolated
+                    .iter()
+                    .map(|token| token.text.as_str())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            let Node::Leaf(Token {
+                kind: TokenKind::Opaque(_),
+                span,
+            }) = source.tokens.node(source.names.session(), 0).unwrap()
+            else {
+                panic!("semantic consumption must not replace the matcher fragment")
+            };
+            assert_eq!(*span, view.span);
+            cursor.bump();
+            assert!(cursor.current().matches(""));
+        }
+    }
+
+    #[test]
+    fn opaque_payload_parts_keep_original_occurrences_and_current_expansion() {
+        let mut source = fixture_rules("($x:literal)=>{$x};", "(-17)");
+        let Node::Leaf(outer) = source.tokens.node(source.names.session(), 0).unwrap() else {
+            panic!("expected opaque leaf")
+        };
+        let TokenKind::Opaque(id) = outer.kind else {
+            panic!("expected opaque fragment")
+        };
+        let payload = source.names.session().fragment(id).unwrap().tokens();
+        let original = (0..2)
+            .map(|index| {
+                let Node::Leaf(token) = payload.node(source.names.session(), index).unwrap() else {
+                    panic!("expected literal constituent")
+                };
+                (
+                    token.span,
+                    source.names.session().original(token.span, 512).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let expansion = source.names.session().span(outer.span).unwrap().expansion;
+        let buffer = run(&mut source).unwrap();
+        let view = super::super::TokenCursor::new(&buffer).current();
+        let isolated = buffer
+            .opaque_literal_buffer(&view, &mut source.names)
+            .unwrap();
+        for (token, (previous, original)) in isolated.iter().zip(original) {
+            assert_ne!(token.whole.span, previous);
+            assert_eq!(
+                source
+                    .names
+                    .session()
+                    .original(token.whole.span, 512)
+                    .unwrap(),
+                original
+            );
+            assert_eq!(
+                source
+                    .names
+                    .session()
+                    .span(token.whole.span)
+                    .unwrap()
+                    .expansion,
+                expansion
+            );
+            assert_eq!(
+                token.whole.provenance(),
+                super::super::TokenProvenance::Expanded
+            );
+            assert_eq!(token.whole.bytes(), 0..0);
+        }
+    }
+
+    #[test]
+    fn opaque_accessor_rejects_foreign_buffers_and_name_owners() {
+        let mut source = fixture_rules("($x:literal)=>{$x};", "(1)");
+        let buffer = run(&mut source).unwrap();
+        let second = run(&mut source).unwrap();
+        let foreign = super::super::TokenCursor::new(&second).current();
+        assert_eq!(
+            buffer
+                .opaque_literal_buffer(&foreign, &mut source.names)
+                .unwrap_err()
+                .kind,
+            SourceErrorKind::Contract
+        );
+        let view = super::super::TokenCursor::new(&buffer).current();
+        let mut other = fixture("1");
+        assert_eq!(
+            buffer
+                .opaque_literal_buffer(&view, &mut other.names)
+                .unwrap_err()
+                .kind,
+            SourceErrorKind::Contract
+        );
+        let mut forged = view.clone();
+        forged.name = None;
+        assert_eq!(
+            buffer
+                .opaque_literal_buffer(&forged, &mut source.names)
+                .unwrap_err()
+                .kind,
+            SourceErrorKind::Contract
+        );
+        let mut forged = view.clone();
+        forged.span = source.eof;
+        assert_eq!(
+            buffer
+                .opaque_literal_buffer(&forged, &mut source.names)
+                .unwrap_err()
+                .kind,
+            SourceErrorKind::Contract
+        );
+        buffer
+            .opaque_literal_buffer(&view, &mut source.names)
+            .unwrap();
+    }
+
+    #[test]
+    fn isolated_literal_capacity_is_owned_until_buffer_drop_and_richer_classes_stay_unsupported() {
+        let mut source = fixture_rules("($x:literal)=>{$x};", "(\"retained payload\")");
+        let budget = source.names.budget().clone();
+        let buffer = run(&mut source).unwrap();
+        let view = super::super::TokenCursor::new(&buffer).current();
+        let isolated = buffer
+            .opaque_literal_buffer(&view, &mut source.names)
+            .unwrap();
+        let live = budget.snapshot();
+        drop(isolated);
+        let released = budget.snapshot();
+        assert!(released.retained_bytes < live.retained_bytes);
+        assert_eq!(released.temporary_bytes, live.temporary_bytes);
+        for argument in ["('x')", "(b'x')", "(r\"raw\")", "(b\"bytes\")", "(c\"C\")"] {
+            let mut source = fixture_rules("($x:literal)=>{$x};", argument);
+            let buffer = run(&mut source).unwrap();
+            let view = super::super::TokenCursor::new(&buffer).current();
+            let error = buffer
+                .opaque_literal_buffer(&view, &mut source.names)
+                .unwrap_err();
+            assert_eq!(error.kind, SourceErrorKind::Unsupported, "{argument}");
+            assert!(error.primary.is_some());
+            assert!(!error.has_location);
+        }
+    }
+
+    #[test]
     fn normal_float_string_and_nested_groups_keep_native_literal_kinds() {
         let mut source = fixture("((1.25 + 2))");
         let buffer = run(&mut source).unwrap();
@@ -502,11 +744,6 @@ mod tests {
             assert!(error.primary.is_some());
             assert!(!error.has_location);
         }
-        let mut source = fixture_rules("($x:literal)=>{$x};", "(1)");
-        assert_eq!(
-            run(&mut source).unwrap_err().kind,
-            SourceErrorKind::Unsupported
-        );
     }
 
     #[test]

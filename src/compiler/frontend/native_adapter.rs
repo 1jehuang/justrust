@@ -37,12 +37,17 @@ enum AdmittedNames {
     Root(BudgetVec<AdmittedRootName>),
     Expanded {
         names: BudgetVec<AdmittedExpandedName>,
+        literals: BudgetVec<AdmittedOpaqueLiteral>,
         admission: crate::compiler::semantic_scope::ExpansionAdmission,
     },
 }
 struct AdmittedExpandedName {
     token: crate::compiler::token::Token,
     edition: crate::compiler::token::Edition,
+    logical: u32,
+}
+struct AdmittedOpaqueLiteral {
+    token: crate::compiler::token::Token,
     logical: u32,
 }
 impl Deref for NativeTokenBuffer {
@@ -70,11 +75,104 @@ impl NativeTokenBuffer {
             tokens: BudgetVec::new(budget, Storage::Retained).map_err(transport_error)?,
             names: AdmittedNames::Expanded {
                 names: BudgetVec::new(budget, Storage::Retained).map_err(transport_error)?,
+                literals: BudgetVec::new(budget, Storage::Retained).map_err(transport_error)?,
                 admission: *admission,
             },
             _text_leases: BudgetVec::new(budget, Storage::Retained).map_err(transport_error)?,
             macro_source: None,
         })
+    }
+
+    pub(super) fn push_opaque_literal(
+        &mut self,
+        session: &TokenSession,
+        token: crate::compiler::token::Token,
+        part: TokenPart,
+    ) -> Result<(), ParseError> {
+        let AdmittedNames::Expanded {
+            literals,
+            admission,
+            ..
+        } = &mut self.names
+        else {
+            return Err(transport_error(TokenError::InvalidHandle));
+        };
+        admission
+            .validate_token(session, token)
+            .map_err(scope_error)?;
+        if !matches!(token.kind, TokenKind::Opaque(_)) || part.span != token.span {
+            return Err(transport_error(TokenError::InvalidHandle));
+        }
+        let index = literals
+            .len()
+            .checked_add(1)
+            .and_then(|index| u32::try_from(index).ok())
+            .and_then(std::num::NonZeroU32::new)
+            .ok_or_else(|| transport_error(TokenError::IdExhausted))?;
+        let logical = u32::try_from(self.tokens.len())
+            .map_err(|_| transport_error(TokenError::IdExhausted))?;
+        literals
+            .push(AdmittedOpaqueLiteral { token, logical })
+            .map_err(transport_error)?;
+        // A nonempty private sentinel makes buffer-identity pointer checks
+        // meaningful. It is never matched or parsed as source spelling.
+        self.push_expanded(
+            session,
+            "<opaque>",
+            ParserTokenKind::OpaqueLiteral,
+            &[part],
+            None,
+        )?;
+        let mut logical = self
+            .tokens
+            .pop()
+            .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+        logical.name = Some(index);
+        self.tokens.push(logical).map_err(transport_error)
+    }
+
+    /// Resolve only this buffer's opaque occurrence into a private, isolated
+    /// semantic parser input. The matcher stream and FragmentId stay opaque.
+    pub(super) fn opaque_literal_buffer(
+        &self,
+        view: &super::TokenView<'_>,
+        names: &mut crate::compiler::semantic_name::NameStoreBuilder,
+    ) -> Result<NativeTokenBuffer, ParseError> {
+        let AdmittedNames::Expanded {
+            literals,
+            admission,
+            ..
+        } = &self.names
+        else {
+            return Err(transport_error(TokenError::InvalidHandle));
+        };
+        if !view.is_opaque_literal() {
+            return Err(transport_error(TokenError::InvalidHandle));
+        }
+        let index = view
+            .name
+            .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+        let record = literals
+            .as_slice()
+            .get(index.get() as usize - 1)
+            .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+        let logical = self
+            .tokens
+            .as_slice()
+            .get(record.logical as usize)
+            .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+        if logical.kind != ParserTokenKind::OpaqueLiteral
+            || !std::ptr::eq(logical.text.as_str(), view.text)
+            || logical.name != Some(index)
+            || view.span != record.token.span
+            || view.span != logical.whole.span
+            || view.bytes != logical.whole.bytes()
+            || view.provenance != super::TokenProvenance::Expanded
+            || logical.whole.provenance() != super::TokenProvenance::Expanded
+        {
+            return Err(transport_error(TokenError::ForeignHandle));
+        }
+        super::expanded_adapter::literal_buffer(names, record.token, admission)
     }
 
     pub(super) fn push_expanded(
@@ -187,6 +285,9 @@ impl NativeTokenBuffer {
         token: &super::TokenView<'_>,
         names: &mut crate::compiler::semantic_name::NameStoreBuilder,
     ) -> Result<crate::compiler::semantic_name::AstIdent, ParseError> {
+        if token.is_opaque_literal() {
+            return Err(transport_error(TokenError::InvalidHandle));
+        }
         let index = token
             .name
             .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
@@ -231,6 +332,7 @@ impl NativeTokenBuffer {
         let AdmittedNames::Expanded {
             names: admitted,
             admission,
+            ..
         } = &self.names
         else {
             return Err(transport_error(TokenError::InvalidHandle));
@@ -462,6 +564,22 @@ impl NativeParserInput {
                                     ));
                                 }
                                 if !info.suffix.is_empty() {
+                                    if input.macro_source.is_some() {
+                                        // The canonical inventory retains the literal.
+                                        // This unparsed, non-string view can only be
+                                        // skipped, never consumed as a valid string.
+                                        input.push_range(
+                                            projection,
+                                            event.prepared.clone(),
+                                            event.line,
+                                            event.column,
+                                            ParserTokenKind::DeferredLiteral,
+                                            None,
+                                            &[native_part(event)?],
+                                        )?;
+                                        at += 1;
+                                        continue;
+                                    }
                                     return Err(event_error(
                                         event,
                                         SourceErrorKind::Syntax,
@@ -1206,6 +1324,31 @@ mod tests {
     use crate::compiler::expansion_budget::ExpansionBudget;
     use crate::compiler::source::{OriginSegment, SourceOptions, SourceSpan, prepare_text};
     use std::path::Path;
+
+    #[test]
+    fn discarded_string_suffix_is_transport_only_and_consumption_still_fails() {
+        let discarded =
+            "fn main(){macro_rules! discard{($x:literal)=>{0};}let _=discard!(\"ok\"wat);}";
+        let input = super::super::lex(discarded).unwrap();
+        let deferred = input
+            .tokens
+            .as_slice()
+            .iter()
+            .find(|token| token.kind == ParserTokenKind::DeferredLiteral)
+            .unwrap();
+        assert_eq!(deferred.text, "\"ok\"wat");
+        assert!(!deferred.string);
+        super::super::parse_syntax_unprepared(discarded).unwrap();
+        for source in [
+            "fn main(){println!(\"bad\"wat);}",
+            "fn main(){macro_rules! discard{($x:literal)=>{0};}println!(\"bad\"wat);}",
+            "fn main(){macro_rules! forward{($x:literal)=>{$x};}let _=forward!(\"bad\"wat);}",
+            "fn main(){macro_rules! emit{()=>{\"bad\"wat};}let _=emit!();}",
+        ] {
+            let error = super::super::parse_syntax_unprepared(source).err().unwrap();
+            assert_eq!(error.kind, SourceErrorKind::Syntax, "{source}: {error}");
+        }
+    }
 
     #[test]
     fn joint_less_minus_is_transportable_but_not_an_expression() {

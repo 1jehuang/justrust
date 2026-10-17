@@ -13,6 +13,9 @@ use super::token_session::{
     BudgetVec, SessionId, SpanId, SymbolId, SyntaxContextId, TokenError, TokenSession,
 };
 
+mod literal_consume;
+pub(crate) use literal_consume::{LiteralError, LiteralParts};
+
 /// A checked occurrence in a single program's append-only canonical name arena.
 /// It intentionally has no semantic Eq/Hash implementation. Use NameKey instead.
 #[derive(Clone, Copy, Debug)]
@@ -177,6 +180,23 @@ impl fmt::Debug for NameStore {
 }
 
 impl NameStoreBuilder {
+    /// Reserve capacity for parser text escaping into the program AST. Callers
+    /// charge planned capacity before allocation, then any actual-capacity delta.
+    /// This conservative charge is never refunded before the last NameStore Arc
+    /// drops, including parser failure. It grants no payload or name authority.
+    pub(crate) fn retain_parser_text(&mut self, bytes: usize) -> Result<(), NameError> {
+        self.budget().check()?;
+        let additional = u64::try_from(bytes).map_err(|_| TokenError::IdExhausted)?;
+        let total = self
+            .store
+            ._lease
+            .bytes()
+            .checked_add(additional)
+            .ok_or(TokenError::IdExhausted)?;
+        self.store._lease.resize(total)?;
+        Ok(())
+    }
+
     /// Compiler-only ingress after the source driver binds actual lexical sites.
     /// This is not the public root-name constructor and grants no replay proof.
     pub(crate) fn admit_expanded_token(
@@ -554,6 +574,46 @@ mod tests {
             }),
         };
         (session, token, eof)
+    }
+
+    #[test]
+    fn retained_parser_text_stays_charged_until_final_name_owner() {
+        let budget = ExpansionBudget::default();
+        let (session, _, _) = fixture(budget.clone());
+        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let baseline = budget.snapshot().retained_bytes;
+        builder.retain_parser_text(37).unwrap();
+        builder.retain_parser_text(11).unwrap();
+        assert_eq!(budget.snapshot().retained_bytes, baseline + 48);
+        let owner = builder.freeze().unwrap();
+        let last = owner.clone();
+        drop(owner);
+        assert_eq!(budget.snapshot().retained_bytes, baseline + 48);
+        drop(last);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        assert_eq!(budget.snapshot().temporary_bytes, 0);
+    }
+
+    #[test]
+    fn retained_parser_text_rejects_before_capacity_admission_and_latches_budget() {
+        let budget = ExpansionBudget::default();
+        let (session, _, _) = fixture(budget.clone());
+        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let snapshot = budget.snapshot();
+        let available = budget.limits().bytes - snapshot.retained_bytes - snapshot.temporary_bytes;
+        let occupied = budget.reserve(Storage::Temporary, available).unwrap();
+        let before = builder.store._lease.bytes();
+        let failure = match builder.retain_parser_text(1).unwrap_err() {
+            NameError::Token(TokenError::Budget(failure)) => failure,
+            error => panic!("expected byte budget failure: {error}"),
+        };
+        assert_eq!(builder.store._lease.bytes(), before);
+        assert!(matches!(builder.retain_parser_text(0),
+            Err(NameError::Token(TokenError::Budget(error))) if error == failure));
+        drop(occupied);
+        drop(builder);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        assert_eq!(budget.snapshot().temporary_bytes, 0);
     }
 
     #[test]

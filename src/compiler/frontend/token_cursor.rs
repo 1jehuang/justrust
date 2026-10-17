@@ -25,11 +25,16 @@ impl TokenView<'_> {
         } else {
             self.kind != ParserTokenKind::Eof
                 && self.kind != ParserTokenKind::String
+                && self.kind != ParserTokenKind::OpaqueLiteral
+                && self.kind != ParserTokenKind::DeferredLiteral
                 && self.text == text
         }
     }
     pub(super) fn is_ident(&self) -> bool {
         self.kind == ParserTokenKind::Ident
+    }
+    pub(super) fn is_opaque_literal(&self) -> bool {
+        self.kind == ParserTokenKind::OpaqueLiteral
     }
 }
 

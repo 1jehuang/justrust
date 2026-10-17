@@ -292,10 +292,16 @@ iteration and suspended-state destruction each have executable oracle cases.
       hosted suite passes 2,070 tests / 102 binaries, strict lint and formatting.
       Root public admission stays closed; private expansion proofs do not grant
       body or publication authority.
+- [x] Consume opaque `literal` fragments at the native expression boundary without
+      flattening matcher forwarding. Preserve signed minima and existing numeric/
+      bool semantics, normal-string println only, typed suffix phases and retained
+      output capacity. OPAQUE-LITERALS.md records 21 stock cases / 76 native cells
+      plus the unchanged first source corpus; the complete frozen hosted gate
+      passes 2,089 tests / 103 binaries, strict lint and formatting.
 - [ ] Generalize nested/recursive expansion and namespace-specific hygiene,
       generated declarations, cfg-before-child-IO and graph discovery closure.
-      Add real item/export/import/cross-crate clients and opaque literal AST
-      consumption before claiming general macro support.
+      Add real item/export/import/cross-crate clients and remaining fragment/AST
+      consumers before claiming general macro support.
 
 The macro specification input is Rust Reference commit
 `f1e8ba23e46236877fe90c86e4cb7075ad37b776`,

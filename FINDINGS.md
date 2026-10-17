@@ -1,5 +1,41 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Opaque source literal consumption without matcher flattening
+
+The same bounded function-local source driver now consumes `literal` captures
+through a compiler-private proof-checked payload helper and an isolated existing
+expression parser. The resulting expression is one outer atom, retaining signed
+i32/i128 minimum behavior without positive-magnitude prechecking or fake AST
+wrappers. Numeric/bool semantics remain with the existing checker. Normal strings
+are admitted only in the existing println literal slot; standalone string typing,
+recursive/item expansion and general hygiene remain open. OPAQUE-LITERALS.md
+records the exact boundary and retained-capacity policy.
+
+The stock-first added corpus has 21 sources and 76 workers-1/8 native CHECK/BUILD
+cells. It includes real numeric/bool/minimum runtimes, discarded arbitrary
+suffixes, returned-invalid suffixes, negative bool and explicit string-expression
+Unsupported cases. The unchanged 17-stock/48-native source matrix also passes in
+`20261017-092051812-1297792`. The final frozen all-target check
+`20261017-092115024-1299346`, full 2,089-test / 103-binary suite
+`20261017-092115516-1299372`, strict all-target lint
+`20261017-092129356-1300588`, formatting and whitespace checks all pass with zero
+failed, ignored or filtered tests. The existing 65,537-use and 4,096-parameter
+resource witnesses remain unchanged. The 12.45-second wide-integer stock/native
+oracle remains the slowest full-suite test, not a new compiler speed claim.
+
+The first runtime matrix failed correctly in `20261017-091615659-1277231` because
+the original adapter rejected a discarded suffixed string before matching. A
+private DeferredLiteral parser kind now transports only the raw lexical input
+without granting String semantics; ordinary or actual consumed invalid suffixes
+still reject. Review separately caught formatted println output outliving the
+isolated buffer's text lease. Work and fallible actual-capacity admission now
+precede output allocation, with a conservative original-output reservation held
+through the last NameStore owner and tested under lowered bytes. Matcher payloads
+stay opaque, exact constituent origins and typed failures are preserved, and no
+body/publication authority is issued. All cited failed and passing records are
+retained in `data/runs/xps14/2026-10-17-opaque-literals.jsonl`. No full Rust or
+performance speedup claim follows.
+
 ## 2026-10-17: First real function-local source macro and mixed-site locals
 
 The bounded native client now accepts one function-local `tt`/`ident` macro and

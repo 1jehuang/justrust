@@ -1,8 +1,9 @@
 # Function-local source macros and checked mixed-site locals
 
 Status: the bounded first function-local `tt` / `ident` source client is accepted
-on the frozen hosted gate after `12826bfe3`. This is not the full Rust macro
-implementation. Final acceptance passed all 2,070 tests across 102 binaries in
+on the frozen hosted gate after `12826bfe3`. OPAQUE-LITERALS.md records the later
+accepted `literal` consumer and its 2,089-test / 103-binary gate. Neither is the
+full Rust macro implementation. The first client passed 2,070 tests / 102 binaries in
 `20261017-090528020-1227907`, all-target check
 `20261017-090525946-1227837`, strict all-target lint
 `20261017-090544741-1229123`, formatting and whitespace checks.
@@ -11,7 +12,8 @@ implementation. Final acceptance passed all 2,070 tests across 102 binaries in
 
 The bounded client accepts one function-local `macro_rules!` definition and
 expression-position invocation in the same function or nested blocks. It reuses
-the existing ordered `tt` / `ident` matcher and transcriber. Output must form one
+the existing ordered `tt` / `ident` / `literal` matcher and transcriber. Opaque
+literal consumption follows the separate OPAQUE-LITERALS.md boundary. Output must form one
 complete expression in the existing grammar. Existing `println!` handling remains
 its separate supported builtin path.
 
@@ -101,8 +103,9 @@ The following remain unsupported by this client:
   definitions and item-position output.
 - Macro imports/exports, cross-crate `$crate`, procedural macros and richer
   fragment parsers.
-- Opaque literal AST consumption, even though the pure matcher utility can
-  represent and forward opaque literals.
+- General string expression typing and richer literal classes. The accepted
+  opaque numeric/bool expression and normal-string println consumer is bounded
+  separately in OPAQUE-LITERALS.md.
 - General nested/opaque hygiene, expanded labels/lifetimes, raw identifiers and
   Unicode semantic identifier normalization.
 - Receiver-bearing contextual macro functions until the receiver has an explicit
