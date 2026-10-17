@@ -1,5 +1,40 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Native floats and target-resolved labeled exits
+
+The clean-room implementation now carries distinct f32/f64 types through checked
+IR, CFG, ownership/borrow facts, private aggregate/call transport and native
+emission. Saturating float-to-integer conversion handles NaN, infinities, finite
+endpoint neighborhoods and the unsigned high-half path. Executable stock/native
+comparisons cover signed zero, subnormals, unordered comparisons, width rounding,
+canonical Clone and iterated remainder across extreme exponent gaps. Labels map
+to actual lexical targets, and labeled blocks have an exit/result without a loop
+back edge. Target-specific cleanup preserves pending operands, move state and
+loans. Historical legal labeled-loop fixtures are promoted unchanged.
+
+Integration testing exposed two correctness/resource defects before publication:
+float equality was missing from authoritative trait-schema comparison, rejecting
+all generated CloneFloat headers, and adding label parsing to the large recursive
+primary-expression frame overflowed the ordinary test stack. Exact float type
+comparison and a separate non-inlined label parser fixed them without weakening
+schema validation or increasing the test stack. The normal-stack nesting gate
+passes in run `20261017-031112594-3517995`.
+
+All-target check `20261017-031201245-3527437` passes. Full hosted regression run
+`20261017-031332671-3543206` passes 1,576 tests in 78 binaries, with 4.49 seconds
+recorded hosted wall time and 10.43 seconds client wall including synchronization.
+Strict all-target lint `20261017-031343109-3542975` and formatting pass. Five float
+graph gates (`20261017-031137794-3523652`) and three label graph gates
+(`20261017-031249651-3533747`) additionally verify malformed facts, unused
+violations and contextual break typing. These timings describe these validation
+runs, not a before/after speedup or representative full-Rust performance.
+Six cited path-redacted stable-client exports are retained in `data/runs/`.
+
+Source default trait method bodies remain explicitly unsupported even when
+unused or overridden, rather than silently omitting their validation. Full Rust,
+standard-library builds, existing-project support and representative performance
+acceptance remain open in `IMPLEMENTATION.md`.
+
 ## 2026-10-16: Fixed arrays preserve operand effects and indexed storage reads
 
 Implemented bounded `[T; N]` values, left-to-right literals, once-only repeats,

@@ -1,4 +1,4 @@
-//! Bounded native CLI acceptance of unlabelled loops, break and continue.
+//! Bounded native CLI acceptance of loops, break and continue.
 //! Stock rustc is never invoked by these tests.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
@@ -405,10 +405,14 @@ fn while_break_values_outside_control_and_self_condition_control_reject() {
 }
 
 #[test]
+fn historical_labeled_loop_builds_checks_and_runs() {
+    runs("fn main(){'outer: loop {break 'outer;}}", "");
+}
+
+#[test]
 fn loop_milestone_boundaries_reject_without_silent_fallback() {
     // Intentional native subset boundaries, not stock Rust invalidity claims.
     for (label, source) in [
-        ("labelled loop", "fn main(){'outer: loop {break 'outer;}}"),
         ("labelled break", "fn main(){loop {break 'missing;}}"),
         ("labelled continue", "fn main(){loop {continue 'missing;}}"),
         ("for loop", "fn main(){for i in 0..3 {}}"),

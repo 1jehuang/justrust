@@ -141,6 +141,10 @@ impl Encoder<'_> {
                 self.append(&[0])?;
                 self.text(integer.name())
             }
+            traits::RecipeDescriptor::CloneFloat(float) => {
+                self.append(&[7])?;
+                self.text(float.name())
+            }
             traits::RecipeDescriptor::CloneBool => self.append(&[1]),
             traits::RecipeDescriptor::CloneUnit => self.append(&[2]),
             traits::RecipeDescriptor::CloneNever => self.append(&[3]),
@@ -172,6 +176,10 @@ impl Encoder<'_> {
             ir::Ty::Int(integer) => {
                 self.append(b"i")?;
                 self.text(integer.name())
+            }
+            ir::Ty::Float(float) => {
+                self.append(b"f")?;
+                self.text(float.name())
             }
             ir::Ty::Bool => self.append(b"b"),
             ir::Ty::Unit => self.append(b"u"),
@@ -228,6 +236,10 @@ impl Encoder<'_> {
             ir::Ty::Int(integer) => {
                 self.append(b"i")?;
                 self.text(integer.name())
+            }
+            ir::Ty::Float(float) => {
+                self.append(b"f")?;
+                self.text(float.name())
             }
             ir::Ty::Bool => self.append(b"b"),
             ir::Ty::Unit => self.append(b"u"),
@@ -357,6 +369,7 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
             ir::Ty::Struct(_)
             | ir::Ty::Enum(_)
             | ir::Ty::Int(_)
+            | ir::Ty::Float(_)
             | ir::Ty::Bool
             | ir::Ty::Unit
             | ir::Ty::Never => {}

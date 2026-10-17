@@ -3,12 +3,13 @@
 use super::*;
 use crate::compiler::ir::{BinderId, BorrowKind, IntTy};
 
-pub const CATALOG_VERSION: u32 = 1;
+pub const CATALOG_VERSION: u32 = 2;
 const BASE_COUNT: u32 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RecipeDescriptor {
     CloneInt(IntTy),
+    CloneFloat(ir::FloatTy),
     CloneBool,
     CloneUnit,
     CloneNever,
@@ -40,6 +41,13 @@ impl RecipeDescriptor {
             Self::CloneTuple { arity } => (4, arity),
             Self::CloneArray { len } => (5, len),
             Self::CloneSharedRef => (6, 0),
+            Self::CloneFloat(float) => (
+                7,
+                match float {
+                    ir::FloatTy::F32 => 0,
+                    ir::FloatTy::F64 => 1,
+                },
+            ),
         }
     }
 }
@@ -629,6 +637,7 @@ fn recipe_schema(
     }
     let value = match descriptor {
         RecipeDescriptor::CloneInt(i) => Ty::Int(i),
+        RecipeDescriptor::CloneFloat(float) => Ty::Float(float),
         RecipeDescriptor::CloneBool => Ty::Bool,
         RecipeDescriptor::CloneUnit => Ty::Unit,
         RecipeDescriptor::CloneNever => {

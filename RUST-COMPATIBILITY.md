@@ -21,9 +21,13 @@ cases stock metadata accepts before its codegen rejects arithmetic_overflow.
 Bounded static diagnostics do not claim general consteval/lint equivalence.
 Builtin statement compound assignments preserve RHS-first/current-place order,
 initialized scalar reads and single-address dynamic updates. Trait-overloaded
-assignments and general compound expressions remain open. Noninteger casts,
-128-bit integers, floats and broader inference remain separate work. The full
-Rust compatibility goal remains open.
+assignments and general compound expressions remain open. `FLOATS.md` adds
+native f32/f64 values, arithmetic/remainder, IEEE comparisons, numeric casts,
+canonical Copy/Clone and bounded float-domain inference. `LABELED-CONTROL-FLOW.md`
+adds lexically resolved loop/while/block labels and target-specific cleanup.
+Float library methods/formatting, general const evaluation, platform FFI,
+128-bit integers and broader inference remain separate work. The full Rust
+compatibility goal remains open.
 
 ## Builtin reference field slice
 

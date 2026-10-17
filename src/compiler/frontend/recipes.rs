@@ -194,6 +194,8 @@ pub(super) fn inventory(
         )?;
     }
     for d in [
+        tr::RecipeDescriptor::CloneFloat(ir::FloatTy::F32),
+        tr::RecipeDescriptor::CloneFloat(ir::FloatTy::F64),
         tr::RecipeDescriptor::CloneBool,
         tr::RecipeDescriptor::CloneUnit,
         tr::RecipeDescriptor::CloneSharedRef,
@@ -278,7 +280,9 @@ pub(super) fn inventory(
                 | Stmt::Expr(value)
                 | Stmt::ImplicitExpr(value)
                 | Stmt::Return(Some(value)) => expr(value, ds, b, d + 1)?,
-                Stmt::While { condition, body } => {
+                Stmt::While {
+                    condition, body, ..
+                } => {
                     expr(condition, ds, b, d + 1)?;
                     block(body, ds, b, d + 1)?;
                 }
@@ -423,8 +427,10 @@ pub(super) fn inventory(
                 block(then_block, ds, b, d + 1)?;
                 block(else_block, ds, b, d + 1)?;
             }
-            Expr::Block(v) | Expr::Loop { body: v } => block(v, ds, b, d + 1)?,
-            Expr::Break { value: Some(v) } => expr(v, ds, b, d + 1)?,
+            Expr::Block(v) | Expr::Loop { body: v, .. } | Expr::LabeledBlock { body: v, .. } => {
+                block(v, ds, b, d + 1)?
+            }
+            Expr::Break { value: Some(v), .. } => expr(v, ds, b, d + 1)?,
             _ => {}
         }
         Ok(())

@@ -292,6 +292,7 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
         | (Rvalue::ArrayToSlice { reference: a }, Rvalue::ArrayToSlice { reference: b })
         | (Rvalue::SliceLen { slice: a }, Rvalue::SliceLen { slice: b })
         | (Rvalue::IntCast { value: a, .. }, Rvalue::IntCast { value: b, .. })
+        | (Rvalue::FloatCast { value: a, .. }, Rvalue::FloatCast { value: b, .. })
         | (Rvalue::Unary { value: a, .. }, Rvalue::Unary { value: b, .. })
         | (Rvalue::IndexCopy { index: a, .. }, Rvalue::IndexCopy { index: b, .. }) => {
             same_operand_types(a, b, budget)
@@ -426,6 +427,7 @@ pub enum Statement {
 pub enum Constant {
     Enum { ty: ir::EnumTy, variant: usize },
     Int(IntValue),
+    Float(ir::FloatValue),
     Bool(bool),
     Unit,
 }
@@ -442,6 +444,12 @@ pub enum Rvalue {
     IntCast {
         value: Operand,
         to: IntTy,
+    },
+    /// Numeric `as` with at least one float endpoint. Float-to-int saturates
+    /// and maps NaN to zero, int/float-to-float rounds to nearest-even.
+    FloatCast {
+        value: Operand,
+        to: ir::NumTy,
     },
     Borrow(LoanId),
     IndexCopy {
@@ -529,6 +537,7 @@ impl Rvalue {
         match self {
             Self::Use(value)
             | Self::IntCast { value, .. }
+            | Self::FloatCast { value, .. }
             | Self::Unary { value, .. }
             | Self::Repeat { value, .. }
             | Self::ArrayToSlice { reference: value }
@@ -1437,7 +1446,9 @@ impl Function {
                     facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?
                 }
                 Operand::Copy(place) | Operand::Move(place) => path(place, budget)?,
-                Operand::Constant(Constant::Int(_) | Constant::Bool(_) | Constant::Unit) => {}
+                Operand::Constant(
+                    Constant::Int(_) | Constant::Float(_) | Constant::Bool(_) | Constant::Unit,
+                ) => {}
             }
             Ok(())
         }
@@ -1480,6 +1491,7 @@ impl Function {
                         match value {
                             Rvalue::Use(value)
                             | Rvalue::IntCast { value, .. }
+                            | Rvalue::FloatCast { value, .. }
                             | Rvalue::Unary { value, .. }
                             | Rvalue::ArrayToSlice { reference: value }
                             | Rvalue::SliceLen { slice: value } => operand(value, budget, facts)?,
@@ -1576,6 +1588,10 @@ impl Function {
             Operand::Constant(Constant::Int(value)) => {
                 value.validate()?;
                 Ok(Ty::Int(value.ty))
+            }
+            Operand::Constant(Constant::Float(value)) => {
+                value.validate()?;
+                Ok(Ty::Float(value.ty))
             }
             Operand::Constant(Constant::Bool(_)) => Ok(Ty::Bool),
             Operand::Constant(Constant::Unit) => Ok(Ty::Unit),
@@ -1680,6 +1696,15 @@ impl Function {
             op,
             BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
         );
+        if matches!(left, Ty::Float(_)) {
+            if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor) {
+                return Err("CFG bitwise operator requires integer or bool operands".into());
+            }
+            if left != right {
+                return Err("CFG operand type mismatch".into());
+            }
+            return Ok(if comparison { Ty::Bool } else { left });
+        }
         if !matches!(left, Ty::Int(_))
             && !(matches!(op, BinaryOp::Eq | BinaryOp::Ne) && matches!(left, Ty::Bool | Ty::Unit))
             && !(matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor)
@@ -1738,6 +1763,17 @@ impl Function {
                     return Err("CFG integer cast requires integer source".into());
                 }
                 Ok(Ty::Int(*to))
+            }
+            Rvalue::FloatCast { value, to } => {
+                let from = ir::NumTy::of(&self.operand_ty_with_facts(value, facts)?)
+                    .ok_or("CFG float cast requires numeric source")?;
+                if !matches!(
+                    (from, to),
+                    (ir::NumTy::Float(_), _) | (_, ir::NumTy::Float(_))
+                ) {
+                    return Err("CFG float cast requires a float endpoint".into());
+                }
+                Ok(to.ty())
             }
             Rvalue::Borrow(id) => {
                 let site = self.loan_sites.get(id.0).ok_or("invalid CFG loan site")?;
@@ -1830,9 +1866,10 @@ impl Function {
                 let ty = self.operand_ty_with_facts(value, facts)?;
                 match (op, &ty) {
                     (UnaryOp::Neg, Ty::Int(integer)) if integer.is_signed() => Ok(ty),
+                    (UnaryOp::Neg, Ty::Float(_)) => Ok(ty),
                     (UnaryOp::Not, Ty::Int(_) | Ty::Bool) => Ok(ty),
                     (UnaryOp::Not, Ty::Never) => Ok(Ty::Never),
-                    _ => Err("CFG unary operator requires compatible integer or bool type".into()),
+                    _ => Err("CFG unary operator requires compatible numeric or bool type".into()),
                 }
             }
             Rvalue::Binary { op, left, right } => {
@@ -2145,7 +2182,7 @@ struct PendingBlock {
 
 struct LoopTarget {
     id: LoopId,
-    head: BlockId,
+    head: Option<BlockId>,
     exit: BlockId,
     destination: Option<Place>,
     scope_depth: usize,
@@ -2671,7 +2708,7 @@ impl Lowerer<'_> {
                     self.terminate(Terminator::Goto(head), Some(*condition))?;
                     self.loops.push(LoopTarget {
                         id: *id,
-                        head,
+                        head: Some(head),
                         exit,
                         destination: None,
                         scope_depth: self.scopes.len(),
@@ -2743,14 +2780,24 @@ impl Lowerer<'_> {
         // Keep long admitted cast chains out of the large aggregate/control
         // lowering frame. The same depth/work guard still covers every cast.
         let result = match self.source.exprs.get(id.0).map(|expr| &expr.kind) {
-            Some(ir::ExprKind::IntCast { value, to }) => self.materialize_cast(id, *value, *to),
+            Some(ir::ExprKind::IntCast { value, to }) => {
+                self.materialize_cast(id, *value, |value| Rvalue::IntCast { value, to: *to })
+            }
+            Some(ir::ExprKind::FloatCast { value, to }) => {
+                self.materialize_cast(id, *value, |value| Rvalue::FloatCast { value, to: *to })
+            }
             _ => self.materialize_expression_inner(id),
         };
         self.lowering_depth -= 1;
         result
     }
 
-    fn materialize_cast(&mut self, id: ExprId, value: ExprId, to: IntTy) -> Result<Place, String> {
+    fn materialize_cast(
+        &mut self,
+        id: ExprId,
+        value: ExprId,
+        cast: impl FnOnce(Operand) -> Rvalue,
+    ) -> Result<Place, String> {
         let destination = place(
             *self
                 .expressions
@@ -2759,7 +2806,7 @@ impl Lowerer<'_> {
         );
         self.live(destination.local, Some(id));
         let value = self.expression(value)?;
-        self.assign(destination.clone(), Rvalue::IntCast { value, to }, Some(id));
+        self.assign(destination.clone(), cast(value), Some(id));
         Ok(destination)
     }
 
@@ -2810,6 +2857,19 @@ impl Lowerer<'_> {
                     origin,
                 );
             }
+            ir::ExprKind::FloatCast { value, to } => {
+                let value = self.expression(*value)?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::FloatCast { value, to: *to },
+                    origin,
+                );
+            }
+            ir::ExprKind::Float(value) => self.assign(
+                destination.clone(),
+                Rvalue::Use(Operand::Constant(Constant::Float(*value))),
+                origin,
+            ),
             ir::ExprKind::Borrow { place, .. } => {
                 let loan = self
                     .loans
@@ -3103,13 +3163,27 @@ impl Lowerer<'_> {
                 self.current = join;
             }
             ir::ExprKind::Block(body) => self.body(body, Some(destination.clone()))?,
+            ir::ExprKind::LabeledBlock { id: block_id, body } => {
+                let exit = self.block();
+                self.loops.push(LoopTarget {
+                    id: *block_id,
+                    head: None,
+                    exit,
+                    destination: Some(destination.clone()),
+                    scope_depth: self.scopes.len(),
+                });
+                self.body(body, Some(destination.clone()))?;
+                self.terminate(Terminator::Goto(exit), origin)?;
+                self.loops.pop();
+                self.current = exit;
+            }
             ir::ExprKind::Loop { id: loop_id, body } => {
                 let head = self.block();
                 let exit = self.block();
                 self.terminate(Terminator::Goto(head), origin)?;
                 self.loops.push(LoopTarget {
                     id: *loop_id,
-                    head,
+                    head: Some(head),
                     exit,
                     destination: Some(destination.clone()),
                     scope_depth: self.scopes.len(),
@@ -3147,7 +3221,10 @@ impl Lowerer<'_> {
                     .rev()
                     .find(|frame| frame.id == *target)
                     .ok_or("missing CFG continue target")?;
-                let (head, depth) = (frame.head, frame.scope_depth);
+                let (head, depth) = (
+                    frame.head.ok_or("cannot continue a labeled block")?,
+                    frame.scope_depth,
+                );
                 self.cleanup(depth, origin);
                 self.terminate(Terminator::Goto(head), origin)?;
                 self.disconnected();
@@ -7129,6 +7206,7 @@ mod tests {
                             }
                             Rvalue::Use(value)
                             | Rvalue::IntCast { value, .. }
+                            | Rvalue::FloatCast { value, .. }
                             | Rvalue::Unary { value, .. }
                             | Rvalue::Repeat { value, .. }
                             | Rvalue::ArrayToSlice { reference: value }

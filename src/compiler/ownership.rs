@@ -1456,6 +1456,10 @@ fn preflight_with_plan(
                         preflight_ty(&Ty::Int(*to), 0, &mut budget)?;
                         operand(value, &mut budget)?;
                     }
+                    Rvalue::FloatCast { value, to } => {
+                        preflight_ty(&to.ty(), 0, &mut budget)?;
+                        operand(value, &mut budget)?;
+                    }
                     Rvalue::Use(op)
                     | Rvalue::Unary { value: op, .. }
                     | Rvalue::ArrayToSlice { reference: op }
@@ -1657,7 +1661,7 @@ impl<'a> MoveShape<'a> {
             Ty::Ref { .. } if ty.shared_byte_slice() => Self::Scalar,
             Ty::Slice { .. } => return Err(Exhausted),
             Ty::Ref { referent, .. } if referent.contains_slice() => return Err(Exhausted),
-            Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Ref { .. } => Self::Scalar,
+            Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Ref { .. } => Self::Scalar,
         })
     }
 }
@@ -2510,7 +2514,8 @@ impl Transfer<'_> {
             }
             Rvalue::Use(op)
             | Rvalue::Unary { value: op, .. }
-            | Rvalue::IntCast { value: op, .. } => self.operand(state, op)?,
+            | Rvalue::IntCast { value: op, .. }
+            | Rvalue::FloatCast { value: op, .. } => self.operand(state, op)?,
             // Unsizing copies the shared reference once. Its loan and origins
             // are the operand's; length metadata grants no storage authority.
             Rvalue::ArrayToSlice { reference } => self.operand(state, reference)?,

@@ -1449,7 +1449,7 @@ impl ValidatedTraitWorld {
                     }
                 }
             }
-            Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
+            Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
         }
         if let Some(key) = key {
             walk.insert(key, height, &self.budget)?;
@@ -1778,6 +1778,7 @@ impl ValidatedTraitWorld {
         match (left, right) {
             (Ty::Param(a), Ty::Param(b)) => Ok(a == b),
             (Ty::Int(a), Ty::Int(b)) => Ok(a == b),
+            (Ty::Float(a), Ty::Float(b)) => Ok(a == b),
             (Ty::Bool, Ty::Bool) | (Ty::Unit, Ty::Unit) | (Ty::Never, Ty::Never) => Ok(true),
             (Ty::Tuple(a), Ty::Tuple(b)) => self.eq_types(a, b, depth + 1),
             (
@@ -4847,7 +4848,7 @@ impl ValidatedTraitWorld {
             Ty::Ref { kind, .. } => item == CatalogItem::Sized || *kind == ir::BorrowKind::Shared,
             // `[T]` is neither Sized nor Copy/Clone.
             Ty::Slice { .. } => false,
-            Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => true,
+            Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => true,
         };
         if !known {
             return Ok(Some(ProofOutcome::NotProven));
@@ -5181,6 +5182,7 @@ impl TraitCx for ValidatedTraitWorld {
             let mut args = Vec::new();
             let descriptor = match &call.trait_ref.self_ty {
                 Ty::Int(i) => RecipeDescriptor::CloneInt(*i),
+                Ty::Float(float) => RecipeDescriptor::CloneFloat(*float),
                 Ty::Bool => RecipeDescriptor::CloneBool,
                 Ty::Unit => RecipeDescriptor::CloneUnit,
                 Ty::Never => {
@@ -6883,6 +6885,14 @@ mod tests {
         assert!(facts.must_copy(&Ty::Int(IntTy::I32)).unwrap());
         assert!(!facts.must_copy(&c.caller_parameter).unwrap());
         assert!(!facts.must_copy(&c.leaf).unwrap());
+        let f32_ty = Ty::Float(ir::FloatTy::F32);
+        let f64_ty = Ty::Float(ir::FloatTy::F64);
+        assert!(facts.must_copy(&f32_ty).unwrap());
+        assert!(facts.must_copy(&f64_ty).unwrap());
+        assert!(world.eq_ty(&f32_ty, &f32_ty, 0).unwrap());
+        assert!(world.eq_ty(&f64_ty, &f64_ty, 0).unwrap());
+        assert!(!world.eq_ty(&f32_ty, &f64_ty, 0).unwrap());
+        assert!(!world.eq_ty(&f32_ty, &Ty::Int(IntTy::I32), 0).unwrap());
         let shared = Ty::Ref {
             kind: BorrowKind::Shared,
             referent: Arc::new(Ty::Int(IntTy::I32)),

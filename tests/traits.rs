@@ -180,6 +180,14 @@ fn runs(source: &str, expected: &str) {
 }
 
 #[test]
+fn accepts_canonical_float_clone_recipes() {
+    runs(
+        r#"fn duplicate<T:Clone>(x:&T)->T{x.clone()}fn main(){let a=1.5f32;let b=2.5f64;let x=duplicate::<f32>(&a);let y=duplicate::<f64>(&b);if x==1.5f32&&y==2.5f64{println!("float clone ok");}}"#,
+        "float clone ok\n",
+    );
+}
+
+#[test]
 fn accepts_required_static_value_and_root_self_return() {
     runs(
         r###"struct S{x:i32}trait Take{fn make(x:i32)->Self;fn consume(self)->Self;fn value(self)->i32;}impl Take for S{fn make(x:i32)->Self{S{x}}fn consume(self)->Self{self}fn value(self)->i32{self.x}}fn run()->i32{<S as Take>::make(7).consume().value()}

@@ -11,6 +11,8 @@ pub(super) enum InferKind {
     Slot(usize),
     Rigid(ir::Ty),
     Integer,
+    Float,
+    UnknownFloat,
     Unknown(bool),
     Tuple(Arc<[InferTerm]>),
     Array(InferTerm, usize),
@@ -58,7 +60,11 @@ impl CallInferenceState {
         Ok(match term.as_ref() {
             InferKind::Rigid(ty) => Some(ty.clone()),
             InferKind::Integer if fallback => Some(ir::Ty::Int(ir::IntTy::I32)),
-            InferKind::Integer | InferKind::Unknown(_) => None,
+            InferKind::Float if fallback => Some(ir::Ty::Float(ir::FloatTy::F64)),
+            InferKind::Integer
+            | InferKind::Float
+            | InferKind::UnknownFloat
+            | InferKind::Unknown(_) => None,
             InferKind::Slot(_) => {
                 return Err(FactsError::invalid(
                     &self.budget,
@@ -214,6 +220,7 @@ impl CallInferenceState {
         self.work(depth)?;
         let kind = match term.as_ref() {
             InferKind::Integer => InferKind::Unknown(true),
+            InferKind::Float | InferKind::UnknownFloat => InferKind::UnknownFloat,
             InferKind::Unknown(numeric) => InferKind::Unknown(*numeric),
             InferKind::Tuple(fields) => {
                 self.storage(fields.len())?;
@@ -276,6 +283,13 @@ impl CallInferenceState {
                     depth + 1,
                 )
             }
+            (InferKind::UnknownFloat, InferKind::Float | InferKind::UnknownFloat)
+            | (InferKind::Float, InferKind::UnknownFloat) => self.node(InferKind::UnknownFloat),
+            (InferKind::UnknownFloat, InferKind::Rigid(ir::Ty::Float(_))) => Ok(b.clone()),
+            (InferKind::Rigid(ir::Ty::Float(_)), InferKind::UnknownFloat) => Ok(a.clone()),
+            (InferKind::Float, InferKind::Float) => Ok(a.clone()),
+            (InferKind::Float, InferKind::Rigid(ir::Ty::Float(_))) => Ok(b.clone()),
+            (InferKind::Rigid(ir::Ty::Float(_)), InferKind::Float) => Ok(a.clone()),
             (InferKind::Integer, InferKind::Integer) => Ok(a.clone()),
             (InferKind::Integer, InferKind::Rigid(ir::Ty::Int(_))) => Ok(b.clone()),
             (InferKind::Rigid(ir::Ty::Int(_)), InferKind::Integer) => Ok(a.clone()),
@@ -852,7 +866,9 @@ fn terms_equal(
     Ok(match (left.as_ref(), right.as_ref()) {
         (InferKind::Slot(a), InferKind::Slot(b)) => a == b,
         (InferKind::Rigid(a), InferKind::Rigid(b)) => frontend::replay_type_equal(a, b, budget)?,
-        (InferKind::Integer, InferKind::Integer) => true,
+        (InferKind::Integer, InferKind::Integer)
+        | (InferKind::Float, InferKind::Float)
+        | (InferKind::UnknownFloat, InferKind::UnknownFloat) => true,
         (InferKind::Unknown(a), InferKind::Unknown(b)) => a == b,
         (InferKind::Ref(a, x), InferKind::Ref(b, y)) => {
             a == b && terms_equal(x, y, budget, at + 1)?
@@ -993,4 +1009,69 @@ pub(super) fn infer_shared_identity(
         after,
         actual,
     }))
+}
+
+#[cfg(test)]
+mod float_inference_tests {
+    use super::*;
+
+    #[test]
+    fn float_fallback_is_deferred_and_never_integer() {
+        let budget = ir::PlanBudget::default();
+        let state = CallInferenceState::new(None, &budget).unwrap();
+        let float = state.node(InferKind::Float).unwrap();
+        let mut materialize = |_, _: &[ir::Ty]| unreachable!();
+        assert!(
+            state
+                .resolve(&float, false, 0, &mut materialize)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            state.resolve(&float, true, 0, &mut materialize).unwrap(),
+            Some(ir::Ty::Float(ir::FloatTy::F64))
+        );
+        for ty in [ir::Ty::Int(ir::IntTy::I32), ir::Ty::Bool] {
+            let rigid = state.node(InferKind::Rigid(ty)).unwrap();
+            assert!(state.merge(&float, &rigid, 0).is_err());
+            assert!(state.merge(&rigid, &float, 0).is_err());
+        }
+        let concrete = state
+            .node(InferKind::Rigid(ir::Ty::Float(ir::FloatTy::F32)))
+            .unwrap();
+        let merged = state.merge(&float, &concrete, 0).unwrap();
+        assert_eq!(
+            state.resolve(&merged, true, 0, &mut materialize).unwrap(),
+            Some(ir::Ty::Float(ir::FloatTy::F32))
+        );
+    }
+
+    #[test]
+    fn unknown_float_evidence_never_forces_fallback_or_crosses_domains() {
+        let budget = ir::PlanBudget::default();
+        let state = CallInferenceState::new(None, &budget).unwrap();
+        let float = state.node(InferKind::Float).unwrap();
+        let unknown = state.node(InferKind::Unknown(false)).unwrap();
+        let integer = state.node(InferKind::Integer).unwrap();
+        let mut materialize = |_, _: &[ir::Ty]| unreachable!();
+        for (a, b) in [(&float, &unknown), (&unknown, &float)] {
+            let tainted = state.merge(a, b, 0).unwrap();
+            assert!(
+                state
+                    .resolve(&tainted, true, 0, &mut materialize)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(state.merge(&tainted, &integer, 0).is_err());
+            assert!(state.merge(&integer, &tainted, 0).is_err());
+            let concrete = state
+                .node(InferKind::Rigid(ir::Ty::Float(ir::FloatTy::F32)))
+                .unwrap();
+            let merged = state.merge(&tainted, &concrete, 0).unwrap();
+            assert_eq!(
+                state.resolve(&merged, true, 0, &mut materialize).unwrap(),
+                Some(ir::Ty::Float(ir::FloatTy::F32))
+            );
+        }
+    }
 }

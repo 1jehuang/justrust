@@ -141,9 +141,12 @@ fn indirect(ty: &ir::Ty) -> Result<bool, String> {
     match ty {
         ir::Ty::Tuple(_) | ir::Ty::Struct(_) | ir::Ty::Array { .. } => Ok(true),
         ir::Ty::Enum(ty) => Ok(ty.has_payload()),
-        ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Unit | ir::Ty::Never | ir::Ty::Ref { .. } => {
-            Ok(false)
-        }
+        ir::Ty::Int(_)
+        | ir::Ty::Float(_)
+        | ir::Ty::Bool
+        | ir::Ty::Unit
+        | ir::Ty::Never
+        | ir::Ty::Ref { .. } => Ok(false),
         ir::Ty::Param(_) => Err("type parameter has no native ABI".into()),
         ir::Ty::Slice { .. } => Err(SLICE_UNSUPPORTED.into()),
     }
@@ -203,9 +206,12 @@ fn value_size(ty: &ir::Ty) -> Result<i32, String> {
                 .ok_or_else(|| "aggregate exceeds private frame limit".to_string())
         }),
         None => match ty {
-            ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Unit | ir::Ty::Never | ir::Ty::Ref { .. } => {
-                Ok(8)
-            }
+            ir::Ty::Int(_)
+            | ir::Ty::Float(_)
+            | ir::Ty::Bool
+            | ir::Ty::Unit
+            | ir::Ty::Never
+            | ir::Ty::Ref { .. } => Ok(8),
             _ => Err("unknown concrete native layout shape".into()),
         },
     }
@@ -607,9 +613,13 @@ impl<'a> Emitter<'a> {
                 self.word(value.bits);
                 self.normalize_integer(value.ty);
             }
+            cfg::Operand::Constant(cfg::Constant::Float(value)) => {
+                value.validate()?;
+                self.word(value.bits);
+            }
             cfg::Operand::Constant(value) => self.immediate(match value {
-                cfg::Constant::Int(_) => {
-                    unreachable!("integer constants use typed full-width immediates")
+                cfg::Constant::Int(_) | cfg::Constant::Float(_) => {
+                    unreachable!("numeric constants use typed full-width immediates")
                 }
                 cfg::Constant::Bool(value) => i32::from(*value),
                 cfg::Constant::Unit => 0,
@@ -851,6 +861,192 @@ impl<'a> Emitter<'a> {
         }
         Ok(())
     }
+    // RAX = left raw IEEE bits, RCX = right. F32 lives in the low 32 bits with
+    // zero upper bits; every float producer below preserves that invariant.
+    fn float_operands(&mut self, ty: ir::FloatTy) {
+        match ty {
+            ir::FloatTy::F64 => self.bytes(&[
+                0x66, 0x48, 0x0f, 0x6e, 0xc0, // movq xmm0, rax
+                0x66, 0x48, 0x0f, 0x6e, 0xc9, // movq xmm1, rcx
+            ]),
+            ir::FloatTy::F32 => self.bytes(&[
+                0x66, 0x0f, 0x6e, 0xc0, // movd xmm0, eax
+                0x66, 0x0f, 0x6e, 0xc9, // movd xmm1, ecx
+            ]),
+        }
+    }
+    fn float_result(&mut self, ty: ir::FloatTy) {
+        match ty {
+            ir::FloatTy::F64 => self.bytes(&[0x66, 0x48, 0x0f, 0x7e, 0xc0]), // movq rax, xmm0
+            ir::FloatTy::F32 => self.bytes(&[0x66, 0x0f, 0x7e, 0xc0]),       // movd eax, xmm0
+        }
+    }
+    fn binary_float(&mut self, op: BinaryOp, ty: ir::FloatTy) -> Result<(), String> {
+        let prefix = match ty {
+            ir::FloatTy::F64 => 0xf2,
+            ir::FloatTy::F32 => 0xf3,
+        };
+        match op {
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+                self.float_operands(ty);
+                let opcode = match op {
+                    BinaryOp::Add => 0x58,
+                    BinaryOp::Sub => 0x5c,
+                    BinaryOp::Mul => 0x59,
+                    _ => 0x5e,
+                };
+                self.bytes(&[prefix, 0x0f, opcode, 0xc1]);
+                self.float_result(ty);
+            }
+            BinaryOp::Rem => {
+                // Rust float `%` is the exact truncated remainder (fmod).
+                // x87 FPREM computes it exactly, iterated until C2 clears.
+                // The two pushes sit below every frame slot and are popped here.
+                let memory = match ty {
+                    ir::FloatTy::F64 => 0xdd,
+                    ir::FloatTy::F32 => 0xd9,
+                };
+                self.bytes(&[0x50, 0x51]); // push rax (a); push rcx (b)
+                self.bytes(&[memory, 0x04, 0x24]); // fld [rsp] = b
+                self.bytes(&[memory, 0x44, 0x24, 0x08]); // fld [rsp+8] = a
+                // fprem; fnstsw ax; test ah, 4; jnz back to fprem
+                self.bytes(&[0xd9, 0xf8, 0xdf, 0xe0, 0xf6, 0xc4, 0x04, 0x75, 0xf7]);
+                self.bytes(&[0xdd, 0xd9]); // fstp st(1): drop divisor
+                self.bytes(&[memory, 0x5c, 0x24, 0x08]); // fstp [rsp+8]
+                self.bytes(&[0x59, 0x58]); // pop rcx; pop rax = remainder bits
+                if ty == ir::FloatTy::F32 {
+                    self.bytes(&[0x89, 0xc0]); // mov eax, eax: clear upper half
+                }
+            }
+            BinaryOp::Eq
+            | BinaryOp::Ne
+            | BinaryOp::Lt
+            | BinaryOp::Le
+            | BinaryOp::Gt
+            | BinaryOp::Ge => {
+                self.float_operands(ty);
+                if ty == ir::FloatTy::F64 {
+                    self.bytes(&[0x66]);
+                }
+                // ucomis xmm0,xmm1 (left vs right), or swapped for < and <=,
+                // so only CF/ZF "above" tests are needed: unordered is false.
+                let swapped = matches!(op, BinaryOp::Lt | BinaryOp::Le);
+                self.bytes(&[0x0f, 0x2e, if swapped { 0xc8 } else { 0xc1 }]);
+                match op {
+                    // Unordered (NaN) sets ZF, PF and CF: only != is then true.
+                    BinaryOp::Eq => self.bytes(&[0x0f, 0x94, 0xc0, 0x0f, 0x9b, 0xc1, 0x20, 0xc8]),
+                    BinaryOp::Ne => self.bytes(&[0x0f, 0x95, 0xc0, 0x0f, 0x9a, 0xc1, 0x08, 0xc8]),
+                    BinaryOp::Gt | BinaryOp::Lt => self.bytes(&[0x0f, 0x97, 0xc0]),
+                    _ => self.bytes(&[0x0f, 0x93, 0xc0]),
+                }
+                self.bytes(&[0x0f, 0xb6, 0xc0]);
+            }
+            _ => return Err("float operator is unsupported".into()),
+        }
+        Ok(())
+    }
+    fn float_cast(&mut self, from: ir::NumTy, to: ir::NumTy) -> Result<(), String> {
+        use ir::{FloatTy, NumTy};
+        match (from, to) {
+            (NumTy::Float(FloatTy::F32), NumTy::Float(FloatTy::F32))
+            | (NumTy::Float(FloatTy::F64), NumTy::Float(FloatTy::F64)) => {}
+            (NumTy::Float(FloatTy::F32), NumTy::Float(FloatTy::F64)) => {
+                self.bytes(&[0x66, 0x0f, 0x6e, 0xc0, 0xf3, 0x0f, 0x5a, 0xc0]);
+                self.float_result(FloatTy::F64);
+            }
+            (NumTy::Float(FloatTy::F64), NumTy::Float(FloatTy::F32)) => {
+                self.bytes(&[0x66, 0x48, 0x0f, 0x6e, 0xc0, 0xf2, 0x0f, 0x5a, 0xc0]);
+                self.float_result(FloatTy::F32);
+            }
+            (NumTy::Int(integer), NumTy::Float(float)) => {
+                // Transport already sign/zero-extended the source to 64 bits.
+                let prefix = if float == FloatTy::F64 { 0xf2 } else { 0xf3 };
+                if matches!(integer, ir::IntTy::U64 | ir::IntTy::Usize) {
+                    self.bytes(&[0x48, 0x85, 0xc0]); // test rax, rax
+                    let high = self.jump(&[0x0f, 0x88]); // js
+                    self.bytes(&[prefix, 0x48, 0x0f, 0x2a, 0xc0]); // cvtsi2s? xmm0, rax
+                    let done = self.jump(&[0xe9]);
+                    self.patch(high, self.position())?;
+                    // Halve with a sticky low bit so the single rounding is exact.
+                    self.bytes(&[0x48, 0x89, 0xc1, 0x48, 0xd1, 0xe9, 0x83, 0xe0, 0x01]);
+                    self.bytes(&[0x48, 0x09, 0xc1, prefix, 0x48, 0x0f, 0x2a, 0xc1]);
+                    self.bytes(&[prefix, 0x0f, 0x58, 0xc0]); // double it back
+                    self.patch(done, self.position())?;
+                } else {
+                    self.bytes(&[prefix, 0x48, 0x0f, 0x2a, 0xc0]);
+                }
+                self.float_result(float);
+            }
+            (NumTy::Float(float), NumTy::Int(integer)) => self.float_to_int(float, integer)?,
+            (NumTy::Int(_), NumTy::Int(_)) => {
+                return Err("float cast requires a float endpoint".into());
+            }
+        }
+        Ok(())
+    }
+    // Saturating truncation: NaN -> 0, at or below MIN -> MIN, at or above
+    // MAX+1 -> MAX. Bounds are exact powers of two compared in double
+    // precision after an exact f32 widening, so no bound is itself rounded.
+    fn float_to_int(&mut self, float: ir::FloatTy, integer: ir::IntTy) -> Result<(), String> {
+        match float {
+            ir::FloatTy::F64 => self.bytes(&[0x66, 0x48, 0x0f, 0x6e, 0xc0]),
+            ir::FloatTy::F32 => {
+                self.bytes(&[0x66, 0x0f, 0x6e, 0xc0, 0xf3, 0x0f, 0x5a, 0xc0]);
+            }
+        }
+        let bits = integer.bits() as i32;
+        let (minimum, maximum, lower, upper) = if integer.is_signed() {
+            (
+                u64::MAX << (bits - 1),
+                integer.mask() >> 1,
+                -(2f64.powi(bits - 1)),
+                2f64.powi(bits - 1),
+            )
+        } else {
+            // Unsigned lower saturation: anything <= -1.0 maps to zero, as does
+            // (-1, 0) via truncation. Use -1 as an exact bound.
+            (0, integer.mask(), -1.0, 2f64.powi(bits))
+        };
+        let mut exits = Vec::new();
+        self.bytes(&[0x66, 0x0f, 0x2e, 0xc0]); // ucomisd xmm0, xmm0
+        let nan = self.jump(&[0x0f, 0x8a]); // jp
+        let bound = |e: &mut Self, value: f64| {
+            e.bytes(&[0x48, 0xb9]);
+            e.bytes(&value.to_bits().to_le_bytes());
+            // movq xmm1, rcx; ucomisd xmm0, xmm1
+            e.bytes(&[0x66, 0x48, 0x0f, 0x6e, 0xc9, 0x66, 0x0f, 0x2e, 0xc1]);
+        };
+        bound(self, lower);
+        let low = self.jump(&[0x0f, 0x86]); // jbe: x <= lower bound
+        bound(self, upper);
+        let high = self.jump(&[0x0f, 0x83]); // jae: x >= upper bound
+        if matches!(integer, ir::IntTy::U64 | ir::IntTy::Usize) {
+            bound(self, 2f64.powi(63));
+            let big = self.jump(&[0x0f, 0x83]);
+            self.bytes(&[0xf2, 0x48, 0x0f, 0x2c, 0xc0]); // cvttsd2si rax, xmm0
+            exits.push(self.jump(&[0xe9]));
+            self.patch(big, self.position())?;
+            self.bytes(&[0xf2, 0x0f, 0x5c, 0xc1]); // subsd xmm0, xmm1 (2^63)
+            self.bytes(&[0xf2, 0x48, 0x0f, 0x2c, 0xc0]);
+            self.bytes(&[0x48, 0x0f, 0xba, 0xf8, 0x3f]); // btc rax, 63
+        } else {
+            self.bytes(&[0xf2, 0x48, 0x0f, 0x2c, 0xc0]);
+        }
+        exits.push(self.jump(&[0xe9]));
+        self.patch(nan, self.position())?;
+        self.word(0);
+        exits.push(self.jump(&[0xe9]));
+        self.patch(low, self.position())?;
+        self.word(minimum);
+        exits.push(self.jump(&[0xe9]));
+        self.patch(high, self.position())?;
+        self.word(maximum);
+        for exit in exits {
+            self.patch(exit, self.position())?;
+        }
+        self.normalize_integer(integer);
+        Ok(())
+    }
     fn binary_noninteger(&mut self, op: BinaryOp) -> Result<(), String> {
         if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor) {
             // Exact CFG validation limits this dispatch to canonical Booleans.
@@ -907,6 +1103,12 @@ impl<'a> Emitter<'a> {
                 self.operand(value)?;
                 self.normalize_integer(*to);
             }
+            cfg::Rvalue::FloatCast { value, to } => {
+                let from = ir::NumTy::of(&self.function().operand_ty(value)?)
+                    .ok_or("float cast requires numeric source")?;
+                self.operand(value)?;
+                self.float_cast(from, *to)?;
+            }
             cfg::Rvalue::Borrow(loan) => {
                 // Immediate and two-phase loans both materialize the genuine
                 // place address exactly once. Reservation/activation permission
@@ -956,6 +1158,12 @@ impl<'a> Emitter<'a> {
                         self.trap_if(0x80);
                         self.check_integer_range(integer);
                     }
+                    (UnaryOp::Neg, ir::Ty::Float(ir::FloatTy::F64)) => {
+                        self.bytes(&[0x48, 0x0f, 0xba, 0xf8, 0x3f]); // btc rax, 63
+                    }
+                    (UnaryOp::Neg, ir::Ty::Float(ir::FloatTy::F32)) => {
+                        self.bytes(&[0x0f, 0xba, 0xf8, 0x1f]); // btc eax, 31
+                    }
                     (UnaryOp::Not, ir::Ty::Int(integer)) => {
                         self.bytes(&[0x48, 0xf7, 0xd0]);
                         self.normalize_integer(integer);
@@ -977,6 +1185,8 @@ impl<'a> Emitter<'a> {
                 self.bytes(&[0x48, 0x89, 0xc1, 0x4c, 0x89, 0xc0]);
                 if let ir::Ty::Int(integer) = ty {
                     self.binary_integer(*op, integer)?;
+                } else if let ir::Ty::Float(float) = ty {
+                    self.binary_float(*op, float)?;
                 } else {
                     self.binary_noninteger(*op)?;
                 }
@@ -1077,6 +1287,7 @@ impl<'a> Emitter<'a> {
                         self.binary_integer(*op, *integer)?;
                     }
                     ir::Ty::Bool => self.binary_noninteger(*op)?,
+                    ir::Ty::Float(float) => self.binary_float(*op, *float)?,
                     _ => return Err("indexed compound update requires scalar operands".into()),
                 }
                 self.bytes(&[0x4c, 0x89, 0xcf]); // same checked destination
@@ -4320,6 +4531,7 @@ mod tests {
             ),
             equals(var("x"), 3),
             Stmt::While {
+                label: None,
                 condition: binary(BinaryOp::Lt, var("x"), Expr::i32(6)),
                 body: block(
                     vec![

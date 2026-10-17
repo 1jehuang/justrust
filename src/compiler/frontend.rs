@@ -665,6 +665,7 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
         }
         Type::SelfType => Type::SelfType,
         Type::Int(kind) => Type::Int(*kind),
+        Type::Float(kind) => Type::Float(*kind),
         Type::Bool => Type::Bool,
         Type::Unit => Type::Unit,
         Type::Never => Type::Never,
@@ -975,7 +976,9 @@ impl SourceInventory {
                     budget,
                     depth + 1,
                 )?,
-                Stmt::While { condition, body } => {
+                Stmt::While {
+                    condition, body, ..
+                } => {
                     self.expr(
                         condition,
                         &here.child(4, 0, budget)?,
@@ -1251,10 +1254,14 @@ impl SourceInventory {
                     depth + 1,
                 )?;
             }
-            Expr::Block(block) | Expr::Loop { body: block } => {
+            Expr::Block(block)
+            | Expr::Loop { body: block, .. }
+            | Expr::LabeledBlock { body: block, .. } => {
                 self.block(block, &node.child(19, 0, budget)?, false, budget, depth + 1)?
             }
-            Expr::Break { value: Some(value) } => self.expr(
+            Expr::Break {
+                value: Some(value), ..
+            } => self.expr(
                 value,
                 &node.child(20, 0, budget)?,
                 None,
@@ -1264,10 +1271,11 @@ impl SourceInventory {
             )?,
             Expr::Borrow { .. }
             | Expr::Integer(_)
+            | Expr::Float(_)
             | Expr::Bool(_)
             | Expr::Var(_)
-            | Expr::Continue
-            | Expr::Break { value: None }
+            | Expr::Continue { .. }
+            | Expr::Break { value: None, .. }
             | Expr::Println(_) => {}
         }
         Ok(())
@@ -2828,6 +2836,9 @@ pub struct TraitDecl {
 pub struct TraitItemDecl {
     pub signature: FunctionHead,
     pub receiver: ReceiverKind,
+    /// Provided (default) body. It is a separate callable declaration owned by
+    /// the trait, with the trait Self binder as its first scope.
+    pub default: Option<Function>,
 }
 #[derive(Clone, Debug)]
 pub struct FunctionHead {
@@ -2942,6 +2953,7 @@ pub enum Type {
     /// Unsized `[T]`. Only admitted behind a shared reference with `u8` elements.
     Slice(Box<Type>),
     Int(ir::IntTy),
+    Float(ir::FloatTy),
     Bool,
     Unit,
     Tuple(Vec<Type>),
@@ -3042,6 +3054,7 @@ pub enum Stmt {
     ImplicitExpr(Expr),
     Return(Option<Expr>),
     While {
+        label: Option<String>,
         condition: Expr,
         body: Block,
     },
@@ -3068,6 +3081,110 @@ fn integer_type(name: &str) -> Option<ir::IntTy> {
         "usize" => Usize,
         _ => return None,
     })
+}
+
+fn float_type(name: &str) -> Option<ir::FloatTy> {
+    match name {
+        "f32" => Some(ir::FloatTy::F32),
+        "f64" => Some(ir::FloatTy::F64),
+        _ => None,
+    }
+}
+
+/// A decimal float literal, or an integer-looking literal with a float suffix.
+/// The decimal text (underscores removed) is retained so rounding happens
+/// exactly once, directly to the resolved width. Rounding to f64 first and
+/// then to f32 would double-round some literals.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FloatLiteral {
+    pub digits: String,
+    pub suffix: Option<ir::FloatTy>,
+}
+
+impl FloatLiteral {
+    pub fn value(&self, ty: ir::FloatTy, negative: bool) -> Result<ir::FloatValue, String> {
+        let mut value = match ty {
+            ir::FloatTy::F64 => ir::FloatValue::f64(
+                self.digits
+                    .parse::<f64>()
+                    .map_err(|_| "invalid float literal")?,
+            ),
+            ir::FloatTy::F32 => ir::FloatValue::f32(
+                self.digits
+                    .parse::<f32>()
+                    .map_err(|_| "invalid float literal")?,
+            ),
+        };
+        let finite = match ty {
+            ir::FloatTy::F32 => f32::from_bits(value.bits as u32).is_finite(),
+            ir::FloatTy::F64 => f64::from_bits(value.bits).is_finite(),
+        };
+        if !finite {
+            return Err("float literal out of range for its type".into());
+        }
+        if negative {
+            value.bits ^= 1 << (ty.bits() - 1);
+        }
+        value.validate()?;
+        Ok(value)
+    }
+}
+
+/// `Ok(None)` means the token is an integer literal, not a float.
+fn parse_float_literal(text: &str) -> Result<Option<FloatLiteral>, String> {
+    if text.starts_with("0x") || text.starts_with("0o") || text.starts_with("0b") {
+        return Ok(None);
+    }
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    let mut digits = String::new();
+    let mut float = false;
+    let take_digits = |at: &mut usize, digits: &mut String| {
+        let start = digits.len();
+        while let Some(&b) = bytes.get(*at) {
+            if b == b'_' {
+            } else if b.is_ascii_digit() {
+                digits.push(b as char);
+            } else {
+                break;
+            }
+            *at += 1;
+        }
+        digits.len() > start
+    };
+    take_digits(&mut at, &mut digits);
+    if bytes.get(at) == Some(&b'.') {
+        float = true;
+        digits.push('.');
+        at += 1;
+        take_digits(&mut at, &mut digits);
+    }
+    if matches!(bytes.get(at), Some(b'e' | b'E')) {
+        float = true;
+        digits.push('e');
+        at += 1;
+        if let Some(&sign @ (b'+' | b'-')) = bytes.get(at) {
+            digits.push(sign as char);
+            at += 1;
+        }
+        if !take_digits(&mut at, &mut digits) {
+            return Err("float literal exponent requires a digit".into());
+        }
+    }
+    let suffix = &text[at..];
+    let suffix = if suffix.is_empty() {
+        None
+    } else if let Some(ty) = float_type(suffix) {
+        Some(ty)
+    } else if float {
+        return Err("unsupported or invalid float literal suffix".into());
+    } else {
+        return Ok(None);
+    };
+    if !float && suffix.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(FloatLiteral { digits, suffix }))
 }
 
 fn parse_integer_literal(text: &str) -> Result<IntegerLiteral, String> {
@@ -3202,6 +3319,7 @@ pub enum Expr {
         value: Box<Expr>,
     },
     Integer(IntegerLiteral),
+    Float(FloatLiteral),
     DynamicIndex {
         base: Box<Expr>,
         index: Box<Expr>,
@@ -3255,13 +3373,22 @@ pub enum Expr {
         else_block: Block,
     },
     Block(Block),
+    /// `'label: { ... }`. Only labeled breaks may target it (E0695/E0696).
+    LabeledBlock {
+        label: String,
+        body: Block,
+    },
     Loop {
+        label: Option<String>,
         body: Block,
     },
     Break {
+        label: Option<String>,
         value: Option<Box<Expr>>,
     },
-    Continue,
+    Continue {
+        label: Option<String>,
+    },
     Println(String),
 }
 #[derive(Clone, Debug)]
@@ -3483,6 +3610,44 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
             while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
                 text.push(chars[i]);
                 advance(&chars, &mut i, &mut line, &mut column);
+            }
+            // Decimal float literals: `1.5`, `1.`, `1e-3`, `2.5E+7f32`. A digit
+            // run directly after `.` is a tuple field (`t.0.1`), never a float.
+            let after_dot = tokens
+                .last()
+                .is_some_and(|t: &Token| !t.string && t.text == ".");
+            let decimal = c.is_ascii_digit()
+                && !after_dot
+                && !(text.len() > 1 && matches!(&text[..2], "0x" | "0o" | "0b"));
+            if decimal
+                && chars.get(i) == Some(&'.')
+                && !text.contains(['e', 'E'])
+                && text.bytes().all(|b| b.is_ascii_digit() || b == b'_')
+            {
+                let next = chars.get(i + 1).copied();
+                if next.is_some_and(|n| n.is_ascii_digit()) {
+                    text.push('.');
+                    advance(&chars, &mut i, &mut line, &mut column);
+                    while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                        text.push(chars[i]);
+                        advance(&chars, &mut i, &mut line, &mut column);
+                    }
+                } else if !next.is_some_and(|n| n == '.' || n == '_' || n.is_alphabetic()) {
+                    text.push('.');
+                    advance(&chars, &mut i, &mut line, &mut column);
+                }
+            }
+            if decimal
+                && text.ends_with(['e', 'E'])
+                && matches!(chars.get(i), Some('+' | '-'))
+                && chars.get(i + 1).is_some_and(|n| n.is_ascii_digit())
+            {
+                text.push(chars[i]);
+                advance(&chars, &mut i, &mut line, &mut column);
+                while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                    text.push(chars[i]);
+                    advance(&chars, &mut i, &mut line, &mut column);
+                }
             }
         } else {
             if !c.is_ascii() {
@@ -3709,6 +3874,9 @@ impl Parser {
         } else if let Some(ty) = integer_type(&self.token().text) {
             self.at += 1;
             Ok(Type::Int(ty))
+        } else if let Some(ty) = float_type(&self.token().text) {
+            self.at += 1;
+            Ok(Type::Float(ty))
         } else if self.eat("bool") {
             Ok(Type::Bool)
         } else if self.eat("(") {
@@ -3974,13 +4142,24 @@ impl Parser {
                     if !signature.type_params.is_empty() {
                         return Err(self.error("generic trait methods are unsupported"));
                     }
-                    if self.is("{") {
-                        return Err(self.error("default trait bodies are unsupported"));
-                    }
-                    self.expect(";")?;
+                    let default = if self.is("{") {
+                        Some(Function {
+                            bounds: signature.bounds.clone(),
+                            name: signature.name.clone(),
+                            regions: signature.regions.clone(),
+                            type_params: signature.type_params.clone(),
+                            params: signature.params.clone(),
+                            result: signature.result.clone(),
+                            body: self.block()?,
+                        })
+                    } else {
+                        self.expect(";")?;
+                        None
+                    };
                     items.push(TraitItemDecl {
                         signature,
                         receiver,
+                        default,
                     });
                 }
                 self.expect("}")?;
@@ -4702,10 +4881,30 @@ impl Parser {
                     return Err(self.error("expected semicolon or block end after return"));
                 }
                 statements.push(Stmt::Return(value));
-            } else if self.eat("while") {
+            } else if self.is("while")
+                || (self.token().text.starts_with('\'')
+                    && self.tokens.get(self.at + 1).is_some_and(|t| t.text == ":")
+                    && self
+                        .tokens
+                        .get(self.at + 2)
+                        .is_some_and(|t| t.text == "while"))
+            {
+                let label = if self.is("while") {
+                    None
+                } else {
+                    let label = self.token().text.trim_start_matches('\'').to_owned();
+                    self.at += 1;
+                    self.expect(":")?;
+                    Some(label)
+                };
+                self.expect("while")?;
                 let condition = self.condition()?;
                 let body = self.block()?;
-                statements.push(Stmt::While { condition, body });
+                statements.push(Stmt::While {
+                    label,
+                    condition,
+                    body,
+                });
             } else if self.is("for") {
                 return Err(self.error(
                     "unsupported: for loops and iterators (including slice iteration); use while with an index",
@@ -4755,7 +4954,11 @@ impl Parser {
                     break;
                 } else if matches!(
                     expr,
-                    Expr::If { .. } | Expr::Block(_) | Expr::Loop { .. } | Expr::Match { .. }
+                    Expr::If { .. }
+                        | Expr::Block(_)
+                        | Expr::LabeledBlock { .. }
+                        | Expr::Loop { .. }
+                        | Expr::Match { .. }
                 ) {
                     statements.push(Stmt::ImplicitExpr(expr));
                 } else {
@@ -4951,7 +5154,7 @@ impl Parser {
     }
     fn expr_inner_mode(&mut self, min: u8, statement: bool) -> Result<Expr, String> {
         if !self.token().string && self.token().text.starts_with('\'') {
-            return Err(self.error("labels and lifetime expressions are unsupported"));
+            return self.labeled_expression(min, statement);
         }
         let statement_blocklike =
             statement && matches!(self.token().text.as_str(), "if" | "match" | "loop" | "{");
@@ -4960,6 +5163,26 @@ impl Parser {
         }
         let left = self.expr_prefix(statement)?;
         self.expr_continuation(left, min, statement_blocklike)
+    }
+    #[inline(never)]
+    fn labeled_expression(&mut self, min: u8, statement: bool) -> Result<Expr, String> {
+        let label = self.token().text.trim_start_matches('\'').to_owned();
+        self.at += 1;
+        self.expect(":")?;
+        let left = if self.eat("loop") {
+            Expr::Loop {
+                label: Some(label),
+                body: self.block()?,
+            }
+        } else if self.is("{") {
+            Expr::LabeledBlock {
+                label,
+                body: self.block()?,
+            }
+        } else {
+            return Err(self.error("a label must precede a loop, while, or block"));
+        };
+        self.expr_continuation(left, min, statement)
     }
     fn trait_call_prefix(&mut self) -> Result<Expr, String> {
         let owner = self.ty()?;
@@ -5022,17 +5245,32 @@ impl Parser {
             Expr::Bool(false)
         } else if self.eat("loop") {
             Expr::Loop {
+                label: None,
                 body: self.block()?,
             }
         } else if self.eat("break") {
+            let label = if self.token().text.starts_with('\'') {
+                let label = self.token().text.trim_start_matches('\'').to_owned();
+                self.at += 1;
+                Some(label)
+            } else {
+                None
+            };
             let value = if matches!(self.token().text.as_str(), ";" | "}" | ")" | "]" | "," | "") {
                 None
             } else {
                 Some(Box::new(self.expr(0)?))
             };
-            Expr::Break { value }
+            Expr::Break { label, value }
         } else if self.eat("continue") {
-            Expr::Continue
+            let label = if self.token().text.starts_with('\'') {
+                let label = self.token().text.trim_start_matches('\'').to_owned();
+                self.at += 1;
+                Some(label)
+            } else {
+                None
+            };
+            Expr::Continue { label }
         } else if self.eat("match") {
             let scrutinee = Box::new(self.condition()?);
             self.expect("{")?;
@@ -5153,7 +5391,12 @@ impl Parser {
         } else if !self.token().string
             && self.token().text.starts_with(|c: char| c.is_ascii_digit())
         {
-            let literal = parse_integer_literal(&self.token().text).map_err(|e| self.error(&e))?;
+            let text = self.token().text.clone();
+            if let Some(literal) = parse_float_literal(&text).map_err(|e| self.error(&e))? {
+                self.at += 1;
+                return Ok(Expr::Float(literal));
+            }
+            let literal = parse_integer_literal(&text).map_err(|e| self.error(&e))?;
             self.at += 1;
             Expr::Integer(literal)
         } else {
@@ -5172,7 +5415,11 @@ impl Parser {
             if statement_blocklike
                 && matches!(
                     left,
-                    Expr::If { .. } | Expr::Match { .. } | Expr::Loop { .. } | Expr::Block(_)
+                    Expr::If { .. }
+                        | Expr::Match { .. }
+                        | Expr::Loop { .. }
+                        | Expr::LabeledBlock { .. }
+                        | Expr::Block(_)
                 )
                 && self.is("[")
             {
@@ -5224,7 +5471,11 @@ impl Parser {
             if statement_blocklike
                 && matches!(
                     left,
-                    Expr::If { .. } | Expr::Match { .. } | Expr::Loop { .. } | Expr::Block(_)
+                    Expr::If { .. }
+                        | Expr::Match { .. }
+                        | Expr::Loop { .. }
+                        | Expr::LabeledBlock { .. }
+                        | Expr::Block(_)
                 )
             {
                 break;
@@ -5890,7 +6141,9 @@ impl Resolver<'_> {
                 | Stmt::Return(Some(value)) => {
                     self.expr(value, module, locals)?;
                 }
-                Stmt::While { condition, body } => {
+                Stmt::While {
+                    condition, body, ..
+                } => {
                     self.expr(condition, module, locals)?;
                     self.block(body, module, locals)?;
                 }
@@ -6132,8 +6385,12 @@ impl Resolver<'_> {
                 self.block(then_block, module, locals)?;
                 self.block(else_block, module, locals)?;
             }
-            Expr::Block(block) | Expr::Loop { body: block } => self.block(block, module, locals)?,
-            Expr::Break { value: Some(value) } => self.expr(value, module, locals)?,
+            Expr::Block(block)
+            | Expr::Loop { body: block, .. }
+            | Expr::LabeledBlock { body: block, .. } => self.block(block, module, locals)?,
+            Expr::Break {
+                value: Some(value), ..
+            } => self.expr(value, module, locals)?,
             _ => {}
         }
         Ok(())
@@ -6444,8 +6701,12 @@ fn walk_depth(root: DepthNode<'_>, budget: Option<&ir::PlanBudget>) -> Result<()
                     push(DepthNode::Block(then_block));
                     push(DepthNode::Block(else_block));
                 }
-                Expr::Block(block) | Expr::Loop { body: block } => push(DepthNode::Block(block)),
-                Expr::Break { value: Some(value) } => push(DepthNode::Expr(value)),
+                Expr::Block(block)
+                | Expr::Loop { body: block, .. }
+                | Expr::LabeledBlock { body: block, .. } => push(DepthNode::Block(block)),
+                Expr::Break {
+                    value: Some(value), ..
+                } => push(DepthNode::Expr(value)),
                 _ => {}
             },
             DepthNode::Block(block) => {
@@ -6476,7 +6737,9 @@ fn walk_depth(root: DepthNode<'_>, budget: Option<&ir::PlanBudget>) -> Result<()
                         | Stmt::Expr(value)
                         | Stmt::ImplicitExpr(value)
                         | Stmt::Return(Some(value)) => push(DepthNode::Expr(value)),
-                        Stmt::While { condition, body } => {
+                        Stmt::While {
+                            condition, body, ..
+                        } => {
                             push(DepthNode::Expr(condition));
                             push(DepthNode::Block(body));
                         }
@@ -6621,6 +6884,13 @@ fn schema_fields_storage(fields: &[FieldDecl], budget: &ir::PlanBudget) -> Resul
 }
 impl PlanCtx {
     pub fn from_program(program: &Program, budget: &ir::PlanBudget) -> Result<Self, String> {
+        if program
+            .traits
+            .iter()
+            .any(|t| t.items.iter().any(|item| item.default.is_some()))
+        {
+            return Err("source trait default method bodies are unsupported".into());
+        }
         preflight_program_clone(program, budget)?;
         Self::from_shared_program(Arc::new(program.clone()), budget)
     }
@@ -6629,6 +6899,13 @@ impl PlanCtx {
         budget: &ir::PlanBudget,
     ) -> Result<Self, String> {
         let program = shared.as_ref();
+        if program
+            .traits
+            .iter()
+            .any(|t| t.items.iter().any(|item| item.default.is_some()))
+        {
+            return Err("source trait default method bodies are unsupported".into());
+        }
         let snapshot = ir::SnapshotId::allocate()?;
         let catalog_builder = tr::CoreCatalogBuilder::new(snapshot, budget)
             .map_err(|e| e.into_legacy_diagnostic(budget))?;
@@ -7366,6 +7643,9 @@ impl PlanCtx {
                     .into(),
             });
             for (ii, item) in t.items.iter().enumerate() {
+                if item.default.is_some() {
+                    return Err("source trait default method bodies are unsupported".into());
+                }
                 let declaration = self.registry.trait_items[ti][ii];
                 items.push(tr::TraitItemHeader {
                     declaration,
@@ -9269,6 +9549,7 @@ impl PlanState {
                 )
             }
             Type::Int(i) => ir::Ty::Int(*i),
+            Type::Float(f) => ir::Ty::Float(*f),
             Type::Bool => ir::Ty::Bool,
             Type::Unit => ir::Ty::Unit,
             Type::Never => ir::Ty::Never,
@@ -9511,9 +9792,12 @@ pub fn type_env(program: &Program) -> Result<TypeEnv, String> {
 }
 struct LoopFrame {
     id: ir::LoopId,
+    label: Option<String>,
+    is_block: bool,
     accepts_value: bool,
     checking_condition: bool,
     break_ty: Option<ir::Ty>,
+    expected: Option<ir::Ty>,
     can_exit: bool,
 }
 struct PatternLocal {
@@ -10007,6 +10291,10 @@ impl Checker<'_> {
                 Some(t) => InferKind::Rigid(ir::Ty::Int(t)),
                 None => InferKind::Integer,
             })?,
+            Expr::Float(literal) => self.infer_node(match literal.suffix {
+                Some(t) => InferKind::Rigid(ir::Ty::Float(t)),
+                None => InferKind::Float,
+            })?,
             Expr::Bool(_) => self.infer_node(InferKind::Rigid(ir::Ty::Bool))?,
             Expr::Var(name) => match self.lookup(name) {
                 Ok(local) => self.infer_type_term(&self.locals[local.0].ty, None, depth + 1)?,
@@ -10057,7 +10345,9 @@ impl Checker<'_> {
                 self.inference_evidence(value, depth + 1)?,
                 *len,
             ))?,
-            Expr::Unary { value, .. } if matches!(value.as_ref(), Expr::Integer(_)) => {
+            Expr::Unary { value, .. }
+                if matches!(value.as_ref(), Expr::Integer(_) | Expr::Float(_)) =>
+            {
                 self.inference_evidence(value, depth + 1)?
             }
             Expr::Block(block) if block.statements.is_empty() && block.tail.is_none() => {
@@ -10853,6 +11143,7 @@ fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result<ir::Ty, St
             })
         }
         Type::Int(ty) => Ok(ir::Ty::Int(*ty)),
+        Type::Float(ty) => Ok(ir::Ty::Float(*ty)),
         Type::Bool => Ok(ir::Ty::Bool),
         Type::Unit => Ok(ir::Ty::Unit),
         Type::Never => Ok(ir::Ty::Never),
@@ -11122,24 +11413,40 @@ impl<'a> Checker<'a> {
         self.next_loop += 1;
         self.loops.push(LoopFrame {
             id,
+            label: None,
+            is_block: false,
             accepts_value,
             checking_condition: !accepts_value,
             break_ty: None,
+            expected: None,
             can_exit: false,
         });
         id
     }
-    fn loop_target(&self, operation: &str) -> Result<ir::LoopId, String> {
-        let frame = self
-            .loops
-            .last()
-            .ok_or_else(|| format!("{operation} outside a loop"))?;
-        if frame.checking_condition {
+    fn loop_target(&self, operation: &str, label: Option<&str>) -> Result<usize, String> {
+        let index = if let Some(label) = label {
+            self.loops
+                .iter()
+                .rposition(|f| f.label.as_deref() == Some(label))
+                .ok_or_else(|| format!("undeclared label '{label}"))?
+        } else {
+            self.loops
+                .len()
+                .checked_sub(1)
+                .ok_or_else(|| format!("{operation} outside a loop"))?
+        };
+        let frame = &self.loops[index];
+        if frame.is_block && (label.is_none() || operation == "continue") {
+            return Err(format!(
+                "{operation} cannot target a labeled block without a matching break label"
+            ));
+        }
+        if self.loops[index..].iter().any(|f| f.checking_condition) {
             return Err(format!(
                 "{operation} in a while condition is unsupported (E0590)"
             ));
         }
-        Ok(frame.id)
+        Ok(index)
     }
     fn local(&mut self, name: &str, ty: ir::Ty, mutable: bool) -> Result<ir::LocalId, String> {
         admit_slice_value(&ty)?;
@@ -11488,6 +11795,7 @@ impl<'a> Checker<'a> {
                 _ => None,
             },
             Expr::Integer(literal) => literal.suffix.map(ir::Ty::Int),
+            Expr::Float(literal) => literal.suffix.map(ir::Ty::Float),
             Expr::Bool(_) => Some(ir::Ty::Bool),
             Expr::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
             Expr::Var(name) => self
@@ -11975,7 +12283,10 @@ impl<'a> Checker<'a> {
         ) {
             return Err("invalid compound assignment operator".into());
         }
-        if !matches!(ty, ir::Ty::Int(_)) && !(bitwise && *ty == ir::Ty::Bool) {
+        if !matches!(ty, ir::Ty::Int(_))
+            && !(matches!(ty, ir::Ty::Float(_)) && !shift && !bitwise)
+            && !(bitwise && *ty == ir::Ty::Bool)
+        {
             return Err(
                 "compound assignment requires primitive integer or bitwise Bool destination".into(),
             );
@@ -12218,7 +12529,10 @@ impl<'a> Checker<'a> {
                         // type here. Later uses never contribute inference evidence.
                         let scalar = if matches!(value, Expr::Deref { .. }) {
                             self.scalar_hint(value)?.filter(|ty| {
-                                matches!(ty, ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Unit)
+                                matches!(
+                                    ty,
+                                    ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool | ir::Ty::Unit
+                                )
                             })
                         } else {
                             None
@@ -12365,9 +12679,14 @@ impl<'a> Checker<'a> {
                     self.require(&f, &self.result)?;
                     (ir::Stmt::Return(value), false)
                 }
-                Stmt::While { condition, body } => {
+                Stmt::While {
+                    label,
+                    condition,
+                    body,
+                } => {
                     // Never skip a condition's target barrier to an outer loop.
                     let id = self.enter_loop(false);
+                    self.loops.last_mut().unwrap().label = label.clone();
                     let condition = self.expr(condition)?;
                     let f = self.flow(condition);
                     self.require(&f, &ir::Ty::Bool)?;
@@ -12916,7 +13235,10 @@ impl<'a> Checker<'a> {
         // Only primitive value temporaries have the approved lexical autoref extension.
         if selected.depth == 0
             && matches!(selected.adjustment, ReceiverAdjustment::SharedAutoref)
-            && matches!(ty, ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Unit)
+            && matches!(
+                ty,
+                ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool | ir::Ty::Unit
+            )
             && static_source_place(receiver).is_err()
         {
             let value = self.expr(receiver)?;
@@ -13170,22 +13492,24 @@ impl<'a> Checker<'a> {
     }
     fn cast_expression(&mut self, value: &Expr, target: &Type) -> Result<ir::ExprId, String> {
         let target = checked_local_ty(target, self.signatures)?;
-        let ir::Ty::Int(to) = target else {
-            return Err("noninteger cast endpoints are unsupported".into());
+        let numeric = ir::NumTy::of(&target).ok_or("unsupported cast target")?;
+        let value = match numeric {
+            ir::NumTy::Int(to) => {
+                self.expr_with_expectation(value, Expectation::CastableToInt(to))?
+            }
+            ir::NumTy::Float(_) => self.expr(value)?,
         };
-        let value = self.expr_with_expectation(value, Expectation::CastableToInt(to))?;
         let source = self.flow(value);
-        if source.ty == ir::Ty::Never {
-            return Err("casts from semantic Never are unsupported".into());
-        }
-        if !matches!(source.ty, ir::Ty::Int(_)) {
-            return Err("noninteger cast endpoints are unsupported".into());
-        }
+        let from = ir::NumTy::of(&source.ty).ok_or("unsupported cast source")?;
+        let kind = match (from, numeric) {
+            (ir::NumTy::Int(_), ir::NumTy::Int(to)) => ir::ExprKind::IntCast { value, to },
+            _ => ir::ExprKind::FloatCast { value, to: numeric },
+        };
         let id = ir::ExprId(self.exprs.len());
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         self.exprs.push(ir::TypedExpr {
-            kind: ir::ExprKind::IntCast { value, to },
-            ty: ir::Ty::Int(to),
+            kind,
+            ty: target,
             completion: if source.completes {
                 ir::Completion::Returns
             } else {
@@ -13818,6 +14142,15 @@ impl<'a> Checker<'a> {
                 let value = expectation.literal(literal, false)?;
                 (ir::ExprKind::Int(value), Flow::value(ir::Ty::Int(value.ty)))
             }
+            Expr::Float(literal) => {
+                let ty = match (literal.suffix, expected) {
+                    (Some(ty), _) => ty,
+                    (None, Some(ir::Ty::Float(ty))) => *ty,
+                    _ => ir::FloatTy::F64,
+                };
+                let value = literal.value(ty, false)?;
+                (ir::ExprKind::Float(value), Flow::value(ir::Ty::Float(ty)))
+            }
             Expr::Bool(value) => (ir::ExprKind::Bool(*value), Flow::value(ir::Ty::Bool)),
             Expr::Var(n) => {
                 let local = self.lookup(n)?;
@@ -13849,7 +14182,7 @@ impl<'a> Checker<'a> {
                     return Ok(id);
                 }
                 let mut hint = expected
-                    .filter(|t| matches!(t, ir::Ty::Int(_) | ir::Ty::Bool))
+                    .filter(|t| matches!(t, ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool))
                     .cloned();
                 if hint.is_none() {
                     hint = self.scalar_hint(value)?;
@@ -13863,6 +14196,7 @@ impl<'a> Checker<'a> {
                 let t = match op {
                     UnaryOp::Neg => match &f.ty {
                         ir::Ty::Int(ty) if ty.is_signed() => f.ty.clone(),
+                        ir::Ty::Float(_) => f.ty.clone(),
                         ir::Ty::Never => {
                             return Err("unary negation of never is unsupported".into());
                         }
@@ -13894,7 +14228,9 @@ impl<'a> Checker<'a> {
                 let hint = if logical {
                     Some(ir::Ty::Bool)
                 } else {
-                    let mut hint = expected.filter(|t| matches!(t, ir::Ty::Int(_))).cloned();
+                    let mut hint = expected
+                        .filter(|t| matches!(t, ir::Ty::Int(_) | ir::Ty::Float(_)))
+                        .cloned();
                     if hint.is_none() {
                         hint = self.scalar_hint(left)?;
                     }
@@ -13909,7 +14245,10 @@ impl<'a> Checker<'a> {
                     None
                 } else {
                     hint.or_else(|| {
-                        if matches!(left_flow.ty, ir::Ty::Int(_) | ir::Ty::Bool) {
+                        if matches!(
+                            left_flow.ty,
+                            ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool
+                        ) {
                             Some(left_flow.ty.clone())
                         } else {
                             None
@@ -13931,9 +14270,9 @@ impl<'a> Checker<'a> {
                 {
                     return Err("aggregate operators and comparisons are unsupported".into());
                 }
-                let numeric = if matches!(l.ty, ir::Ty::Int(_)) {
+                let numeric = if matches!(l.ty, ir::Ty::Int(_) | ir::Ty::Float(_)) {
                     l.ty.clone()
-                } else if matches!(r.ty, ir::Ty::Int(_)) {
+                } else if matches!(r.ty, ir::Ty::Int(_) | ir::Ty::Float(_)) {
                     r.ty.clone()
                 } else {
                     ir::Ty::Int(ir::IntTy::I32)
@@ -14096,8 +14435,10 @@ impl<'a> Checker<'a> {
                     Flow { ty, completes },
                 )
             }
-            Expr::Loop { body } => {
+            Expr::Loop { label, body } => {
                 let id = self.enter_loop(true);
+                self.loops.last_mut().unwrap().label = label.clone();
+                self.loops.last_mut().unwrap().expected = expected.cloned();
                 // A loop has its own intrinsic completion facts even when the
                 // enclosing expression is unreachable. Only its own body paths
                 // determine whether one of its breaks can complete.
@@ -14110,11 +14451,16 @@ impl<'a> Checker<'a> {
                 };
                 (ir::ExprKind::Loop { id, body }, flow)
             }
-            Expr::Break { value } => {
-                let target = self.loop_target("break")?;
-                let value = value.as_ref().map(|e| self.expr(e)).transpose()?;
+            Expr::Break { label, value } => {
+                let index = self.loop_target("break", label.as_deref())?;
+                let target = self.loops[index].id;
+                let expected = self.loops[index].expected.clone();
+                let value = value
+                    .as_ref()
+                    .map(|e| self.expr_expected(e, expected.as_ref()))
+                    .transpose()?;
                 let flow = value.map_or(Flow::value(ir::Ty::Unit), |e| self.flow(e));
-                let frame = self.loops.last().unwrap();
+                let frame = &self.loops[index];
                 let previous_break_ty = frame.break_ty.clone();
                 if !frame.accepts_value && value.is_some() {
                     return Err("break with a value is only allowed in loop, not while".into());
@@ -14122,18 +14468,40 @@ impl<'a> Checker<'a> {
                 // Check every lexical break and the operand before contributing.
                 // A typed but unreachable tail is not the never type.
                 if self.reachable && flow.completes {
-                    self.loops.last_mut().unwrap().can_exit = true;
+                    self.loops[index].can_exit = true;
                 }
                 if flow.ty != ir::Ty::Never {
                     let previous = previous_break_ty.unwrap_or(ir::Ty::Never);
                     let ty = self.join(&previous, &flow.ty, "break values")?;
-                    self.loops.last_mut().unwrap().break_ty = Some(ty);
+                    self.loops[index].break_ty = Some(ty);
                 }
                 (ir::ExprKind::Break { target, value }, Flow::never())
             }
-            Expr::Continue => {
-                let target = self.loop_target("continue")?;
+            Expr::Continue { label } => {
+                let index = self.loop_target("continue", label.as_deref())?;
+                let target = self.loops[index].id;
                 (ir::ExprKind::Continue { target }, Flow::never())
+            }
+            Expr::LabeledBlock { label, body } => {
+                let id = self.enter_loop(true);
+                let frame = self.loops.last_mut().unwrap();
+                frame.label = Some(label.clone());
+                frame.is_block = true;
+                frame.expected = expected.cloned();
+                let (body, body_flow) = self.block_expected_when(body, true, expected)?;
+                let frame = self.loops.pop().unwrap();
+                let ty = self.join(
+                    &body_flow.ty,
+                    &frame.break_ty.unwrap_or(ir::Ty::Never),
+                    "labeled block breaks",
+                )?;
+                (
+                    ir::ExprKind::LabeledBlock { id, body },
+                    Flow {
+                        ty,
+                        completes: body_flow.completes || frame.can_exit,
+                    },
+                )
             }
             Expr::Block(b) => {
                 let (block, flow) = self.block_with_expectation(b, expectation)?;
@@ -17285,11 +17653,14 @@ mod typed_tests {
         let nested_breaks = "break ".repeat(140);
         let source = format!("fn main(){{{nested_breaks}0;}}");
         assert!(parse(&source).unwrap_err().contains("nesting"));
-        assert!(
-            parse("fn main(){'outer: loop {break 'outer;}}")
-                .unwrap_err()
-                .contains("unsupported")
-        );
+        let labeled = typed("fn main(){'outer: loop {break 'outer;}}", 0);
+        assert!(labeled.exprs.iter().any(|e| matches!(
+            e.kind,
+            ir::ExprKind::Break {
+                target: ir::LoopId(0),
+                value: None
+            }
+        )));
     }
 
     #[test]

@@ -32,6 +32,9 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Bounded first-order omitted call/constructor arguments with deferred integer
       evidence, rigid caller parameters and fallible no-fallback peer hints.
 - [x] Hosted acceptance, stock differential cases and qualified benchmark receipts.
+- [x] Native f32/f64 arithmetic, IEEE comparisons, saturating numeric casts and
+      canonical Copy/Clone recipes, with bounded first-order float inference.
+- [x] Lexically resolved labeled loops/while/blocks and target-specific cleanup.
 
 ## Remaining implementation program
 
@@ -66,7 +69,20 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Active work and evidence limits
 
-The full requested outcome is not reached. Bounded generic inference passes 1,270
+The full requested outcome is not reached. The native float and labeled-control
+checkpoint passes all 1,576 hosted tests (`20261017-031332671-3543206`), all-target
+checking (`20261017-031201245-3527437`), strict all-target lint
+(`20261017-031343109-3542975`) and formatting. The executable float and label
+corpora compare stock and native output at workers 1 and 8. Five float and three
+label graph tests additionally check shared facts, malformed IR, contextual
+break values, moves, loans and unused invalid bodies. Normal-stack parser nesting
+acceptance passes after isolating labeled-expression parsing into a small frame
+(`20261017-031112594-3517995`). `FLOATS.md` and `LABELED-CONTROL-FLOW.md` define
+these bounded contracts. Source trait default bodies remain explicitly
+unsupported, including unused or overridden bodies, until universal checking and
+callable registration exist. No category-wide or full Rust completion is claimed.
+
+Earlier bounded generic inference passes 1,270
 hosted tests, strict all-target lint, its unchanged 28 exact source cases and four
 instance/trust graph tests. One historical generic-enum source is promoted only
 after unchanged stock/native runtime parity. The tracked 27-corpus campaign
@@ -82,7 +98,7 @@ four graph tests, with soft source inference grounded in primary semantics.
 The tracked22corpus native campaign verifies all816cases.
 Additional operators remain separate follow-through work.
 Full Rust completion remains the goal, not this bounded milestone.
-Integer128, floats, broader inference/traits/methods, Drop,
+Integer128, broader float library/ABI behavior, broader inference/traits/methods, Drop,
 reference-containing values, libraries and project integration remain open.
 
 ## Delivered milestones, newest first

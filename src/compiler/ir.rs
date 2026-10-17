@@ -398,7 +398,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                     }
                 }
             }
-            Ty::Param(_) | Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
+            Ty::Param(_) | Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
         }
         budget.retain_bytes(4 * std::mem::size_of::<(usize, (bool, usize))>())?;
         memo.try_reserve(1)
@@ -538,7 +538,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                             }
                         }
                     }
-                    Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
+                    Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
                     Ty::Ref { .. } | Ty::Param(_) => unreachable!(),
                 }
                 path.truncate(saved);
@@ -1069,6 +1069,7 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
         (Ty::Enum(a), Ty::Enum(b)) => Arc::ptr_eq(&a.0, &b.0),
         (Ty::Param(a), Ty::Param(b)) => a == b,
         (Ty::Int(a), Ty::Int(b)) => a == b,
+        (Ty::Float(a), Ty::Float(b)) => a == b,
         (Ty::Bool, Ty::Bool) | (Ty::Unit, Ty::Unit) | (Ty::Never, Ty::Never) => true,
         _ => false,
     })
@@ -1195,6 +1196,7 @@ fn identical_expr_types(a: &ExprKind, b: &ExprKind, budget: &PlanBudget) -> Resu
             identical_block_types(a, b, budget, 0)? && identical_block_types(aa, bb, budget, 0)?
         ),
         (ExprKind::Block(a), ExprKind::Block(b))
+        | (ExprKind::LabeledBlock { body: a, .. }, ExprKind::LabeledBlock { body: b, .. })
         | (ExprKind::Loop { body: a, .. }, ExprKind::Loop { body: b, .. }) => {
             identical_block_types(a, b, budget, 0)
         }
@@ -2162,7 +2164,7 @@ fn substitute_ty_walk(
                 budget,
             )?
         }
-        Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => ty.clone(),
+        Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => ty.clone(),
     })
 }
 
@@ -2275,10 +2277,12 @@ pub fn instantiate_checked(
                 visitor.block(then_block, 0)?;
                 visitor.block(else_block, 0)?;
             }
-            ExprKind::Block(block) | ExprKind::Loop { body: block, .. } => {
-                visitor.block(block, 0)?
-            }
+            ExprKind::Block(block)
+            | ExprKind::Loop { body: block, .. }
+            | ExprKind::LabeledBlock { body: block, .. } => visitor.block(block, 0)?,
             ExprKind::IntCast { .. }
+            | ExprKind::FloatCast { .. }
+            | ExprKind::Float(_)
             | ExprKind::Deref { .. }
             | ExprKind::DynamicIndex { .. }
             | ExprKind::ArrayToSlice { .. }
@@ -2644,7 +2648,7 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
                     }
                 }
             }
-            Ty::Param(_) | Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
+            Ty::Param(_) | Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
         }
         Ok(())
     }
@@ -2835,6 +2839,90 @@ impl IntValue {
         Self {
             ty: IntTy::Usize,
             bits: value,
+        }
+    }
+}
+
+/// Binary IEEE-754 primitives. See FLOATS.md for the bounded contract.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FloatTy {
+    F32,
+    F64,
+}
+
+impl FloatTy {
+    pub const fn bits(self) -> u32 {
+        match self {
+            Self::F32 => 32,
+            Self::F64 => 64,
+        }
+    }
+
+    pub const fn mask(self) -> u64 {
+        u64::MAX >> (64 - self.bits())
+    }
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::F32 => "f32",
+            Self::F64 => "f64",
+        }
+    }
+}
+
+/// Canonical raw IEEE bits. F32 occupies the low 32 bits, upper bits zero.
+/// Equality is bit identity (distinguishes -0.0 and NaN payloads), which is
+/// the correct notion for constants, never for runtime `==`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FloatValue {
+    pub ty: FloatTy,
+    pub bits: u64,
+}
+
+impl FloatValue {
+    pub fn validate(self) -> Result<(), String> {
+        if self.bits & !self.ty.mask() != 0 {
+            Err("float constant contains noncanonical high bits".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn f64(value: f64) -> Self {
+        Self {
+            ty: FloatTy::F64,
+            bits: value.to_bits(),
+        }
+    }
+
+    pub fn f32(value: f32) -> Self {
+        Self {
+            ty: FloatTy::F32,
+            bits: u64::from(value.to_bits()),
+        }
+    }
+}
+
+/// Endpoint of a numeric `as` conversion involving at least one float.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NumTy {
+    Int(IntTy),
+    Float(FloatTy),
+}
+
+impl NumTy {
+    pub fn of(ty: &Ty) -> Option<Self> {
+        match ty {
+            Ty::Int(t) => Some(Self::Int(*t)),
+            Ty::Float(t) => Some(Self::Float(*t)),
+            _ => None,
+        }
+    }
+
+    pub fn ty(self) -> Ty {
+        match self {
+            Self::Int(t) => Ty::Int(t),
+            Self::Float(t) => Ty::Float(t),
         }
     }
 }
@@ -3086,6 +3174,7 @@ pub struct LoopId(pub usize);
 pub enum Ty {
     Param(ParamId),
     Int(IntTy),
+    Float(FloatTy),
     Ref {
         kind: BorrowKind,
         referent: Arc<Ty>,
@@ -3181,7 +3270,12 @@ impl Ty {
                         }
                     }
                 }
-                Self::Param(_) | Self::Int(_) | Self::Bool | Self::Unit | Self::Never => {}
+                Self::Param(_)
+                | Self::Int(_)
+                | Self::Float(_)
+                | Self::Bool
+                | Self::Unit
+                | Self::Never => {}
             }
         }
         false
@@ -3206,7 +3300,7 @@ impl Ty {
     pub fn is_copy(&self) -> bool {
         match self {
             Self::Ref { kind, .. } => *kind == BorrowKind::Shared,
-            Self::Int(_) | Self::Bool | Self::Unit | Self::Never => true,
+            Self::Int(_) | Self::Float(_) | Self::Bool | Self::Unit | Self::Never => true,
             Self::Struct(_) | Self::Enum(_) | Self::Param(_) | Self::Slice { .. } => false,
             Self::Tuple(_) | Self::Array { .. } => {
                 let mut pending = vec![self];
@@ -3347,7 +3441,7 @@ impl<'f> FactsCtx<'f> {
                         }
                     }
                 }
-                Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
+                Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
             }
             Ok(())
         }
@@ -3941,7 +4035,7 @@ fn ref_type_walk(
                     }
                 }
             }
-            Ty::Param(_) | Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
+            Ty::Param(_) | Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
         }
         budget.retain_bytes(4 * std::mem::size_of::<((usize, bool), (bool, usize))>())?;
         memo.try_reserve(1)
@@ -4023,6 +4117,7 @@ fn ref_types_equal(
             (Ty::Enum(a), Ty::Enum(b)) => a.def().id == b.def().id,
             (Ty::Param(a), Ty::Param(b)) => a == b,
             (Ty::Int(a), Ty::Int(b)) => a == b,
+            (Ty::Float(a), Ty::Float(b)) => a == b,
             (Ty::Bool, Ty::Bool) | (Ty::Unit, Ty::Unit) | (Ty::Never, Ty::Never) => true,
             _ => false,
         };
@@ -4519,6 +4614,7 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
                 }
             }
             (Ty::Int(a), Ty::Int(b)) if a == b => {}
+            (Ty::Float(a), Ty::Float(b)) if a == b => {}
             (Ty::Param(a), Ty::Param(b)) if a == b => {}
             (Ty::Bool, Ty::Bool) | (Ty::Unit, Ty::Unit) | (Ty::Never, Ty::Never) => {}
             (Ty::Struct(a), Ty::Struct(b)) if a == b => {}
@@ -4610,7 +4706,7 @@ fn validate_compound_types(op: BinaryOp, target: &Ty, value: &TypedExpr) -> Resu
     let value_ty = &value.ty;
     let valid = match op {
         BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
-            matches!(target, Ty::Int(_)) && target == value_ty
+            matches!(target, Ty::Int(_) | Ty::Float(_)) && target == value_ty
         }
         BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
             matches!(target, Ty::Int(_) | Ty::Bool) && target == value_ty
@@ -4661,6 +4757,12 @@ pub enum ExprKind {
         value: ExprId,
         to: IntTy,
     },
+    /// `as` between numeric primitives where at least one endpoint is a float.
+    FloatCast {
+        value: ExprId,
+        to: NumTy,
+    },
+    Float(FloatValue),
     Borrow {
         kind: BorrowKind,
         place: Place,
@@ -4746,6 +4848,11 @@ pub enum ExprKind {
         else_block: Block,
     },
     Block(Block),
+    /// A single-evaluation block with a value-producing labeled break target.
+    LabeledBlock {
+        id: LoopId,
+        body: Block,
+    },
     /// Repeats the body until an associated break produces a value.
     Loop {
         id: LoopId,
@@ -4918,14 +5025,16 @@ impl CheckedFunction {
                     block(then_block, facts, budget, 0)?;
                     block(else_block, facts, budget, 0)?;
                 }
-                ExprKind::Block(value) | ExprKind::Loop { body: value, .. } => {
-                    block(value, facts, budget, 0)?
-                }
+                ExprKind::Block(value)
+                | ExprKind::Loop { body: value, .. }
+                | ExprKind::LabeledBlock { body: value, .. } => block(value, facts, budget, 0)?,
                 ExprKind::Tuple(values) | ExprKind::Array(values) => {
                     storage(budget, values.len(), std::mem::size_of::<ExprId>())?
                 }
                 ExprKind::Println(text) => storage(budget, text.len(), 1)?,
                 ExprKind::IntCast { .. }
+                | ExprKind::FloatCast { .. }
+                | ExprKind::Float(_)
                 | ExprKind::Deref { .. }
                 | ExprKind::DynamicIndex { .. }
                 | ExprKind::ArrayToSlice { .. }
@@ -5174,6 +5283,28 @@ impl CheckedFunction {
                         return Err("integer cast completion mismatch".into());
                     }
                 }
+                ExprKind::FloatCast { value: source, to } => {
+                    expr(*source)?;
+                    let source = &self.exprs[source.0];
+                    let Some(from) = NumTy::of(&source.ty) else {
+                        return Err("float cast requires numeric source".into());
+                    };
+                    if !matches!((from, to), (NumTy::Float(_), _) | (_, NumTy::Float(_))) {
+                        return Err("float cast requires a float endpoint".into());
+                    }
+                    if value.ty != to.ty() {
+                        return Err("float cast result type mismatch".into());
+                    }
+                    if value.completion != source.completion {
+                        return Err("float cast completion mismatch".into());
+                    }
+                }
+                ExprKind::Float(float) => {
+                    float.validate()?;
+                    if value.ty != Ty::Float(float.ty) || value.completion != Completion::Returns {
+                        return Err("float expression type or completion mismatch".into());
+                    }
+                }
                 ExprKind::Borrow {
                     kind,
                     place,
@@ -5415,10 +5546,56 @@ impl CheckedFunction {
                     }
                 }
                 ExprKind::Field { base, .. } => expr(*base)?,
-                ExprKind::Unary { value, .. } => expr(*value)?,
+                ExprKind::Unary { op, value: operand } => {
+                    expr(*operand)?;
+                    let operand = &self.exprs[operand.0];
+                    if matches!(operand.ty, Ty::Float(_))
+                        && (*op != UnaryOp::Neg
+                            || value.ty != operand.ty
+                            || value.completion != operand.completion)
+                    {
+                        return Err("invalid float unary type, operator or completion".into());
+                    }
+                }
                 ExprKind::Binary { op, left, right } => {
                     expr(*left)?;
                     expr(*right)?;
+                    let lhs = &self.exprs[left.0];
+                    let rhs = &self.exprs[right.0];
+                    if matches!(lhs.ty, Ty::Float(_)) || matches!(rhs.ty, Ty::Float(_)) {
+                        let comparison = matches!(
+                            op,
+                            BinaryOp::Eq
+                                | BinaryOp::Ne
+                                | BinaryOp::Lt
+                                | BinaryOp::Le
+                                | BinaryOp::Gt
+                                | BinaryOp::Ge
+                        );
+                        let arithmetic = matches!(
+                            op,
+                            BinaryOp::Add
+                                | BinaryOp::Sub
+                                | BinaryOp::Mul
+                                | BinaryOp::Div
+                                | BinaryOp::Rem
+                        );
+                        let expected = if comparison { Ty::Bool } else { lhs.ty.clone() };
+                        let completion = if lhs.completion == Completion::Returns
+                            && rhs.completion == Completion::Returns
+                        {
+                            Completion::Returns
+                        } else {
+                            Completion::Never
+                        };
+                        if !(comparison || arithmetic)
+                            || lhs.ty != rhs.ty
+                            || value.ty != expected
+                            || value.completion != completion
+                        {
+                            return Err("invalid float binary types, operator or completion".into());
+                        }
+                    }
                     if matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
                         let left = &self.exprs[left.0];
                         let right = &self.exprs[right.0];
@@ -5502,7 +5679,9 @@ impl CheckedFunction {
                     blocks.push(then_block);
                     blocks.push(else_block);
                 }
-                ExprKind::Block(block) | ExprKind::Loop { body: block, .. } => blocks.push(block),
+                ExprKind::Block(block)
+                | ExprKind::Loop { body: block, .. }
+                | ExprKind::LabeledBlock { body: block, .. } => blocks.push(block),
                 ExprKind::Break {
                     value: Some(value), ..
                 } => expr(*value)?,
@@ -7197,6 +7376,93 @@ mod tests {
             function.exprs[binary].ty = Ty::Int(IntTy::U8);
             assert!(function.validate().unwrap_err().contains("noncanonical"));
         }
+    }
+
+    #[test]
+    fn float_constants_and_operations_validate_exact_bits_types_and_completion() {
+        for float in [FloatValue::f32(-0.0), FloatValue::f64(f64::NAN)] {
+            let mut function = fixture();
+            function.exprs[0] = TypedExpr {
+                ty: Ty::Float(float.ty),
+                completion: Completion::Returns,
+                kind: ExprKind::Float(float),
+            };
+            function.validate().unwrap();
+            function.exprs.push(TypedExpr {
+                ty: Ty::Float(float.ty),
+                completion: Completion::Returns,
+                kind: ExprKind::Unary {
+                    op: UnaryOp::Neg,
+                    value: ExprId(0),
+                },
+            });
+            function.validate().unwrap();
+            for op in [
+                BinaryOp::Add,
+                BinaryOp::Sub,
+                BinaryOp::Mul,
+                BinaryOp::Div,
+                BinaryOp::Rem,
+                BinaryOp::Eq,
+                BinaryOp::Ne,
+                BinaryOp::Lt,
+                BinaryOp::Le,
+                BinaryOp::Gt,
+                BinaryOp::Ge,
+            ] {
+                let comparison = matches!(
+                    op,
+                    BinaryOp::Eq
+                        | BinaryOp::Ne
+                        | BinaryOp::Lt
+                        | BinaryOp::Le
+                        | BinaryOp::Gt
+                        | BinaryOp::Ge
+                );
+                let mut valid = function.clone();
+                valid.exprs.push(TypedExpr {
+                    ty: if comparison {
+                        Ty::Bool
+                    } else {
+                        Ty::Float(float.ty)
+                    },
+                    completion: Completion::Returns,
+                    kind: ExprKind::Binary {
+                        op,
+                        left: ExprId(0),
+                        right: ExprId(1),
+                    },
+                });
+                valid.validate().unwrap();
+                let mut invalid = valid.clone();
+                invalid.exprs[2].completion = Completion::Never;
+                assert!(invalid.validate().is_err());
+                invalid = valid.clone();
+                invalid.exprs[2].ty = Ty::Int(IntTy::I32);
+                assert!(invalid.validate().is_err());
+            }
+            function.exprs[1].kind = ExprKind::Unary {
+                op: UnaryOp::Not,
+                value: ExprId(0),
+            };
+            assert!(function.validate().is_err());
+            function.exprs[1].kind = ExprKind::Binary {
+                op: BinaryOp::BitAnd,
+                left: ExprId(0),
+                right: ExprId(0),
+            };
+            assert!(function.validate().is_err());
+        }
+        assert!(
+            FloatValue {
+                ty: FloatTy::F32,
+                bits: 1u64 << 32
+            }
+            .validate()
+            .is_err()
+        );
+        assert_ne!(FloatValue::f32(0.0), FloatValue::f32(-0.0));
+        assert_eq!(FloatValue::f64(f64::NAN), FloatValue::f64(f64::NAN));
     }
 
     #[test]

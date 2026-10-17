@@ -294,7 +294,7 @@ fn read_cell_cover(
                 Ok(true)
             }
             Ty::Param(_) => Ok(false),
-            Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => Ok(true),
+            Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => Ok(true),
             _ => {
                 if let Ty::Enum(value) = ty {
                     budget.spend(value.def().variants.len())?;
@@ -3878,7 +3878,8 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
         | Rvalue::Repeat { value: op, .. }
         | Rvalue::ArrayToSlice { reference: op }
         | Rvalue::SliceLen { slice: op }
-        | Rvalue::IntCast { value: op, .. } => visit_operand(op, &mut visit),
+        | Rvalue::IntCast { value: op, .. }
+        | Rvalue::FloatCast { value: op, .. } => visit_operand(op, &mut visit),
         Rvalue::SliceIndex { slice, index } => {
             visit_operand(slice, &mut visit);
             visit_operand(index, &mut visit);
@@ -4716,6 +4717,7 @@ impl Plan {
         };
         Ok(match (anchor, output) {
             (Ty::Int(a), Ty::Int(b)) => a == b,
+            (Ty::Float(a), Ty::Float(b)) => a == b,
             (Ty::Bool, Ty::Bool) => true,
             _ => false,
         })
