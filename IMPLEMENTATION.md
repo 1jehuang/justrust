@@ -248,8 +248,33 @@ iteration and suspended-state destruction each have executable oracle cases.
       track observed files/environment and conservatively disable reuse for
       uncontrolled effects. Enforce execution/resource/isolation policies.
 
-**Next:** freeze token/span/hygiene and target-aware const-value contracts, then
-classify a macro_rules and array-length const corpus independently. **Acceptance:**
+**Next, following the published native lexer:**
+
+- [ ] Migrate the actual root-context AST, resolver and retained source replay to
+      checked, store-owned semantic identifiers and structured paths. Preserve
+      the existing source corpus and resource fences. A name side table beside
+      authoritative string lookup does not close this gate.
+- [ ] Add checked owning token slices, logical macro cursors and opaque literal
+      fragment transport without flattening forwarding opacity or granting
+      semantic publication authority.
+- [ ] Validate a pure ordered `tt`/`ident`/`literal` matcher/transcriber, including
+      partial-literal commitment, repetition cardinality, lazy selected-arm
+      transcription failures and monotonic resource accounting. Utility output
+      alone is not native source macro acceptance.
+- [ ] Integrate namespace-specific mixed-site scope anchors, lexical expansion
+      discovery, generated cfg-before-child-IO and complete-unit publication,
+      then run actual worker-1/8 CHECK/BUILD/executable macro clients.
+
+The macro specification input is Rust Reference commit
+`f1e8ba23e46236877fe90c86e4cb7075ad37b776`,
+`src/macros-by-example.md` (27,548 bytes, SHA-256
+`32e55cf4b4f62b969d1348b15d30b6f807501e32cfa04133e2b0bc5e944dcc67`).
+This document pin is independent of the executable stock compiler revision,
+which each oracle run must record. No source-matched compiler claim follows.
+General target-aware const-value contracts and array-length const evaluation
+remain separate open work.
+
+**Acceptance:**
 expansion order/hygiene, const failures and generated diagnostics match pinned
 cases, invalid unused expanded items reject, and changed cfg or observed inputs
 cannot reuse stale expansions. Proc-macro acceptance executes a real native
