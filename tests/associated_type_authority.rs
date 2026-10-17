@@ -745,17 +745,18 @@ fn missing_duplicate_extra_and_unused_invalid_assignments_fail_semantically() {
     }
 }
 #[test]
-fn rigid_projection_and_projected_trait_method_positive_remain_explicitly_unsupported() {
-    for source in [
-        "trait Has<A>{type Out;}fn rigid<T:Has<i32>>(value:<T as Has<i32>>::Out)-><T as Has<i32>>::Out{value}fn main(){}",
-        "trait Has<A>{type Out;fn project(value:Self::Out)->Self::Out;}fn main(){}",
-    ] {
-        let error = frontend::parse(source)
-            .and_then(|program| frontend::check(&program))
-            .expect_err("first slice accidentally admitted symbolic associated projection");
-        assert!(
-            error.to_ascii_lowercase().contains("unsupported"),
-            "{error}"
-        );
-    }
+fn rigid_projection_remains_unsupported_and_required_method_schema_is_admitted() {
+    let source = "trait Has<A>{type Out;}fn rigid<T:Has<i32>>(value:<T as Has<i32>>::Out)-><T as Has<i32>>::Out{value}fn main(){}";
+    let error = frontend::parse(source)
+        .and_then(|program| frontend::check(&program))
+        .expect_err("rigid caller projection still requires symbolic equality authority");
+    assert!(
+        error.to_ascii_lowercase().contains("unsupported"),
+        "{error}"
+    );
+
+    let source = "trait Has<A>{type Out;fn project(value:Self::Out)->Self::Out;}fn main(){}";
+    let program = frontend::parse(source).unwrap();
+    frontend::check(&program).unwrap();
+    PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
 }

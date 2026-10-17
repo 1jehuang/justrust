@@ -8,7 +8,7 @@ Admit real trait-associated type declarations and impl assignments, with closed 
 
 Generic impl RHS parameters are substituted using the selected closed impl head. Nested closed projections require bounded dependency normalization. Validate every unused assignment, reject missing, duplicate and extra assignments before publication, and detect direct, mutual and growing cycles without raising resource caps.
 
-Projection-bearing required trait method signatures/default bodies and rigid generic caller projections remain explicitly unsupported in this first vertical. Implements membership alone establishes neither an associated equality nor Copy/layout/carrier facts. Projected method conformance and symbolic caller/carrier semantics are a subsequent milestone, not completed by this one. GATs, associated defaults/bounds/equalities, ambiguous short-name projections, inherited associated lookup, projection-bearing impl heads/trait actuals and reference-bearing normal forms remain closed.
+Projection-bearing required trait method signatures/default bodies and rigid generic caller projections were explicitly unsupported in this first vertical. The subsequent bounded PROJECTED-METHODS.md milestone adds required signatures, exact owning-impl conformance and closed calls, without admitting projected defaults or arbitrary rigid callers. Implements membership alone establishes neither an associated equality nor Copy/layout/carrier facts. GATs, associated defaults/bounds/equalities, ambiguous short-name projections, inherited associated lookup, projection-bearing impl heads/trait actuals and reference-bearing normal forms remain closed.
 
 ## Source and identity
 

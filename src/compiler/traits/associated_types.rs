@@ -123,7 +123,7 @@ struct NormalizationStack {
 }
 
 impl ValidatedTraitWorld {
-    fn check_normalization_budget(&self) -> Result<()> {
+    pub(super) fn check_normalization_budget(&self) -> Result<()> {
         if self.budget.has_resource_failure() {
             return Err(FactsError::resource(
                 &self.budget,
@@ -370,6 +370,12 @@ impl ValidatedTraitWorld {
     pub fn normalize_ty(&self, ty: &Ty, facts: &ValidatedFacts) -> Result<Ty> {
         self.check_normalization_budget()?;
         self.check_facts(facts, false)?;
+        self.validate_ty_metadata_in(ty, facts.env(), 0)?;
+        if self.type_contains_projection(ty, 0)?
+            && let Some(normal) = self.normalize_owner_annotation(ty, facts)?
+        {
+            return Ok(normal);
+        }
         let context = NormalizationContext {
             proof: ProofContext::from_facts(facts),
             staged: false,
@@ -385,7 +391,59 @@ impl ValidatedTraitWorld {
         Ok(normal)
     }
 
-    fn associated_header(&self, declaration: DeclId) -> Result<&AssociatedTypeHeader> {
+    pub(super) fn normalize_closed_projected_type(
+        &self,
+        ty: &Ty,
+        proof: ProofContext<'_>,
+        staged: bool,
+    ) -> Result<(Ty, Vec<NormalizedAssociatedType>)> {
+        self.check_normalization_budget()?;
+        self.check_context(proof)?;
+        let context = NormalizationContext { proof, staged };
+        let mut dependencies = Vec::new();
+        let normal = self.normalize_type_in(
+            ty,
+            context,
+            &mut NormalizationStack::default(),
+            &mut dependencies,
+            0,
+        )?;
+        let mut retained = Vec::new();
+        for dependency in dependencies {
+            self.validate_normalization_evidence(&dependency, context)?;
+            push(
+                &self.budget,
+                &mut retained,
+                NormalizedAssociatedType(dependency),
+            )?;
+        }
+        Ok((normal, retained))
+    }
+
+    pub(super) fn validate_projected_dependency(
+        &self,
+        evidence: &NormalizedAssociatedType,
+        proof: ProofContext<'_>,
+    ) -> Result<()> {
+        self.check_context(proof)?;
+        self.validate_normalization_evidence(
+            &evidence.0,
+            NormalizationContext {
+                proof,
+                staged: false,
+            },
+        )
+    }
+
+    pub(super) fn same_projected_dependency(
+        &self,
+        left: &NormalizedAssociatedType,
+        right: &NormalizedAssociatedType,
+    ) -> Result<bool> {
+        self.normalization_key_equal(&left.0.key, &right.0.key)
+    }
+
+    pub(super) fn associated_header(&self, declaration: DeclId) -> Result<&AssociatedTypeHeader> {
         for header in self.headers.associated_types.iter() {
             charged(&self.budget, self.budget.charge_work(1))?;
             if header.declaration == declaration {
@@ -398,7 +456,7 @@ impl ValidatedTraitWorld {
         ))
     }
 
-    fn associated_value(
+    pub(super) fn associated_value(
         &self,
         implementation: DeclId,
         associated: DeclId,
@@ -445,7 +503,7 @@ impl ValidatedTraitWorld {
         Ok(false)
     }
 
-    fn type_contains_projection(&self, ty: &Ty, depth: usize) -> Result<bool> {
+    pub(super) fn type_contains_projection(&self, ty: &Ty, depth: usize) -> Result<bool> {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(
             &self.budget,
@@ -648,7 +706,9 @@ impl ValidatedTraitWorld {
                         "associated type RHS disagrees with immutable source metadata",
                     ));
                 }
-                self.validate_raw_associated_ty(&value.rhs, &implementation.schema_env, 0)?;
+                // Formation is checked here. Exact owner reduction runs only
+                // after every assignment map and the coherence graph is checked.
+                self.validate_ty_metadata_in(&value.rhs, &implementation.schema_env, 0)?;
                 push(&self.budget, &mut seen, value.associated)?;
             }
             for item in owner.associated_types.iter() {
@@ -674,30 +734,24 @@ impl ValidatedTraitWorld {
             },
             staged: true,
         };
-        for implementation in self.headers.impls.iter() {
-            let env = self.predicate_env(implementation.declaration)?;
-            for value in implementation.associated_types.iter() {
-                let normal = self.normalize_type_in(
-                    &value.rhs,
-                    context,
-                    &mut NormalizationStack::default(),
-                    &mut Vec::new(),
-                    0,
-                )?;
-                self.validate_associated_normal_form(
-                    &normal,
-                    &env.env,
-                    ProofContext {
-                        predicates: &env,
-                        phase: FactsPhase::Universal,
-                    },
-                )?;
-            }
-        }
+        self.stage_owner_assignments()?;
         let mut normalized = Vec::new();
         for callable in self.headers.callables.iter() {
             let mut schema = clone_schema(&callable.schema, &self.budget)?;
             if self.schema_contains_projection(&schema)? {
+                if let Some(owned) =
+                    self.normalize_owner_callable_schema(callable.declaration, &schema)?
+                {
+                    push(
+                        &self.budget,
+                        &mut normalized,
+                        CallableHeader {
+                            declaration: callable.declaration,
+                            schema: owned,
+                        },
+                    )?;
+                    continue;
+                }
                 for ty in schema
                     .signature
                     .params
@@ -1048,7 +1102,7 @@ impl ValidatedTraitWorld {
         result
     }
 
-    fn validate_rhs_substitution(
+    pub(super) fn validate_rhs_substitution(
         &self,
         raw: &Ty,
         actual: &Ty,
@@ -1153,7 +1207,7 @@ impl ValidatedTraitWorld {
         Ok(())
     }
 
-    fn validate_associated_normal_form(
+    pub(super) fn validate_associated_normal_form(
         &self,
         normal: &Ty,
         env: &GenericEnv,

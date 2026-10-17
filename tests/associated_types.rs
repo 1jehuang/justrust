@@ -102,7 +102,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: None,
             stock_diagnostic: Some("error[E0053]"),
-            outcome: Outcome::InvalidUnsupported,
+            outcome: Outcome::Invalid,
         },
         // Source SHA256 0c7cbb11fbe5dec4f995b383d66bbf4af14a727ce732e9c3078c3ecf4d3a535f
         Case {
@@ -559,7 +559,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (28, 12));
-    assert_eq!(partition, (12, 10, 16, 2));
+    assert_eq!(partition, (12, 11, 16, 1));
 }
 #[test]
 fn stock_nested_associated_types_oracle_edition2024_actual_toolchain() {
@@ -711,8 +711,8 @@ fn native_associated_types_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 160);
-    assert_eq!(modes, (24, 24, 20, 20, 32, 32, 4, 4));
+    assert_eq!(modes, (24, 24, 22, 22, 32, 32, 2, 2));
     eprintln!(
-        "NATIVE ASSOCIATED TYPES:160 cells, modes{modes:?};24 nonempty-output main images;64 stock-valid Unsupported cells and8 stock-invalid/native-Unsupported cells are distinct boundaries, not ordinary-invalid parity or full Rust support"
+        "NATIVE ASSOCIATED TYPES:160 cells, modes{modes:?};24 nonempty-output main images;64 stock-valid Unsupported cells and4 stock-invalid/native-Unsupported cells are distinct boundaries, not ordinary-invalid parity or full Rust support"
     );
 }

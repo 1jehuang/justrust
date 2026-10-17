@@ -1789,6 +1789,18 @@ pub(super) fn canonical_ref_contract(
         outlives: edges.into(),
     };
     let normalized = ir::normalize_ref_contract(&raw, budget)?;
+    // These are raw declaration schemas, not executable signatures. Preserve
+    // the source's region metadata while an associated type is unresolved;
+    // the world must normalize the exact application before deriving return
+    // and carrier authority. In particular, do not feed a symbolic projection
+    // into the executable reference-contract walker or invent its topology.
+    let mut projected = ir::contains_associated_types(result, budget)?;
+    for param in params {
+        projected |= ir::contains_associated_types(param, budget)?;
+    }
+    if projected {
+        return Ok(normalized);
+    }
     let results = ir::derive_return_contracts(params, result, &normalized, budget)?;
     budget.retain_bytes(std::mem::size_of::<ir::RefContract>() + 64)?;
     Ok(Arc::new(ir::RefContract {
@@ -7806,9 +7818,39 @@ mod checked_identity_tests {
     }
 
     #[test]
-    fn projected_trait_methods_and_rigid_callers_remain_unsupported() {
+    fn required_projected_signature_is_a_nonexecuting_schema() {
+        let source = "trait Project{type Out;fn value(x:Self::Out)->Self::Out;}fn main(){}";
+        let program = parse(source).unwrap();
+        check(&program).unwrap();
+    }
+
+    #[test]
+    fn raw_projected_contract_is_retained_until_exact_owner_normalization() {
+        let program = parse("trait Project{type Out;fn value(x:Self::Out)->Self::Out;}struct S;impl Project for S{type Out=i128;fn value(x:Self::Out)->Self::Out{x}}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let implementation = world
+            .impl_headers()
+            .iter()
+            .find(|header| !header.associated_types.is_empty())
+            .unwrap();
+        let (required, provided) = implementation.items[0];
+        for declaration in [required, provided] {
+            let raw = plan.raw_schema(declaration).unwrap();
+            assert!(matches!(raw.signature.result, ir::Ty::AssociatedType(_)));
+            assert!(raw.signature.ref_contract.input_regions.is_empty());
+            assert!(raw.signature.ref_contract.results.is_empty());
+            assert!(ir::carrier_locations(&raw.signature.result, &budget).is_err());
+        }
+        let normalized = world.normalized_callable_schema(provided).unwrap();
+        assert_eq!(normalized.signature.result, ir::Ty::Int(ir::IntTy::I128));
+        assert!(normalized.signature.ref_contract.results.is_empty());
+    }
+
+    #[test]
+    fn projected_defaults_and_rigid_callers_remain_unsupported() {
         for source in [
-            "trait Project{type Out;fn value(x:Self::Out)->Self::Out;}fn main(){}",
             "trait Project{type Out;fn value(x:Self::Out)->Self::Out{x}}fn main(){}",
             "trait Project{type Out;}fn pass<T:Project>(x:<T as Project>::Out)-><T as Project>::Out{x}fn main(){}",
         ] {

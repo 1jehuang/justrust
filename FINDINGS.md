@@ -1,5 +1,52 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: projected required methods with exact owning-impl and closed-call authority
+
+- Delivered the bounded PROJECTED-METHODS.md vertical, not general associated
+  types or full Rust: value-oriented required projected signatures, universally
+  checked owning implementations and closed dot/UFCS calls. Normal forms include
+  non-Copy records, tuples, i128 and real generic impl parameters, without a
+  scalar whitelist, fabricated Copy permission or executable opaque projection.
+- Raw required schemas retain source-region metadata without global carrier or
+  origin derivation. Private owner normalization binds the exact world/stage,
+  implementation, complete trait application, real environment and immutable RHS.
+  Closed calls use separate implementation selection and per-application required
+  carrier evidence derived from the required declaration, not the target body.
+- Review found a direct-call escape after signature normalization erased the
+  projection. Direct owner calls now recheck every original associated assignment
+  after the same actual substitution, including body-local-only projections.
+  Closed selection must return the original impl and args. Unrelated identity
+  functions still accept reference actuals. Five focused controls cover the guard.
+- First gates exposed raw reference-contract derivation before normalization,
+  stale prior-stage expectations and one new fixture selecting a generic catalog
+  callable by arity instead of its real source identity. Fixed the production
+  staging and exact expectations/fixture selectors, not the source witnesses.
+- Preserved all 18 original stock snippets and their order (4,493 bytes, ordered
+  SHA256 56e51e20b9d6617fc35443a708d02b256ffe58f7b771fa2a88636258db03d785).
+  The originals use unsupported panic macros, Self-where predicates, associated
+  bounds or lifetime syntax in several cases. Those earlier boundaries are not
+  represented as projected-method semantic acceptance. Six independently measured
+  positive-check equivalents preserve all payload conditions and add 1,698 bytes.
+- The 24-source matrix is 6 Runtime / 3 Invalid / 12 stock-valid Unsupported /
+  3 stock-invalid Unsupported: 96 CLI cells plus 96 observed all-body graph cells
+  per debug/release profile, workers 1/8 CHECK/BUILD, and 12 real ELF executions
+  per profile. All tool discovery is disabled for native paths. Original generic
+  Wrap<T> and unused erroneous impl bodies remain universally checked.
+- Historical associated-type sources remain byte-for-byte unchanged. Only the
+  wrong projected method signature changes from Unsupported to ordinary Invalid;
+  the separate required-schema witness is now admitted while its rigid caller
+  remains Unsupported. No old source was weakened to obtain acceptance.
+- Final hosted full suite: 2,896 tests in 140 binaries, run
+  20261017-164744949-3449972. Strict all-target lint passes in
+  20261017-164807323-3451959; all-target check passes in
+  20261017-164654493-3445763. Release public matrix/authority: 24 tests,
+  20261017-164613605-3442027. Release internal projection filter: 35 tests,
+  20261017-164747969-3450426. Formatting and diff checks pass.
+- Actual failed and passing receipts are retained in
+  data/runs/xps14/2026-10-17-projected-methods.jsonl. No speed claim is made.
+  Arbitrary rigid caller projections, projected defaults, associated bounds,
+  equalities, GATs, reference-bearing normal forms and full Rust remain open.
+
 ## 2026-10-17: closed associated-type normalization with exact source and world authority
 
 - Delivered the bounded ASSOCIATED-TYPES.md first vertical, not general associated

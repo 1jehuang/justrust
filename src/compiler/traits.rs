@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 
 mod associated_types;
 mod catalog;
+mod projected_methods;
 pub use associated_types::NormalizedAssociatedType;
 pub use catalog::{
     CallableProvider, CatalogDecl, CatalogItem, CoreCatalog, CoreCatalogBuilder, DeclOrigin,
@@ -630,6 +631,18 @@ impl ValidatedFacts {
     pub fn source_region_env(&self, declaration: DeclId) -> Result<Arc<ir::SourceRegionEnv>> {
         self.world.check_facts(self, false)?;
         self.world.info(declaration)?;
+        if let Some(item) = self
+            .world
+            .headers
+            .items
+            .iter()
+            .find(|item| item.declaration == declaration)
+            && self.world.schema_contains_projection(&item.schema)?
+        {
+            return self
+                .world
+                .validate_source_regions(declaration, &item.schema.signature);
+        }
         Ok(self
             .world
             .declaration_carriers(declaration)?
@@ -870,6 +883,8 @@ pub struct CarrierContractView {
     source_regions: Arc<ir::SourceRegionEnv>,
     components: Arc<[ir::CarrierComponentMapping]>,
     nominals: Arc<[ir::NominalCarrierMapping]>,
+    projected: Option<Arc<projected_methods::ProjectedMethodEvidence>>,
+    projected_subject: Option<TraitRef>,
     budget: PlanBudget,
 }
 impl CarrierContractView {
@@ -928,6 +943,11 @@ impl CarrierContractView {
                 facts.budget(),
                 "carrier view has foreign context authority",
             ));
+        }
+        if let Some(evidence) = &self.projected {
+            facts
+                .world
+                .validate_projected_carrier(self, evidence, facts)?;
         }
         Ok(())
     }
@@ -1046,6 +1066,8 @@ pub struct ValidatedTraitWorld {
     carriers: Vec<DeclarationCarriers>,
     normalized_callables: Vec<CallableHeader>,
     projection_memo: Mutex<Vec<associated_types::NormalizationMemo>>,
+    owner_normalization_ready: bool,
+    owner_normalization_finalized: bool,
 }
 
 impl ValidatedTraitWorld {
@@ -1185,12 +1207,16 @@ impl ValidatedTraitWorld {
             carriers: Vec::new(),
             normalized_callables: Vec::new(),
             projection_memo: Mutex::new(Vec::new()),
+            owner_normalization_ready: false,
+            owner_normalization_finalized: false,
         };
         world.validate_header_type_metadata()?;
         world.validate_headers()?;
         world.validate_associated_headers()?;
         world.validate_supertrait_graph()?;
         world.build_declared_environments()?;
+        world.validate_projected_owner_metadata()?;
+        world.owner_normalization_ready = true;
         world.stage_associated_types()?;
         world.build_origin_schemas()?;
         for h in world.headers.impls.iter() {
@@ -1217,6 +1243,7 @@ impl ValidatedTraitWorld {
                 "unsupported: canonical Drop destructor execution",
             ));
         }
+        world.owner_normalization_finalized = true;
         Ok(Arc::new(world))
     }
     pub fn registry_snapshot(&self) -> SnapshotId {
@@ -2235,11 +2262,9 @@ impl ValidatedTraitWorld {
                 ));
             }
             self.validate_declaration_schema(item.declaration, &item.schema)?;
-            if self.schema_contains_projection(&item.schema)? {
-                return Err(FactsError::unsupported(
-                    &self.budget,
-                    "unsupported: projection-bearing required trait method signatures",
-                ));
+            let projected = self.schema_contains_projection(&item.schema)?;
+            if projected {
+                self.validate_projected_required_schema(item)?;
             }
             if let Some(canonical) = self
                 .catalog
@@ -2264,12 +2289,14 @@ impl ValidatedTraitWorld {
                 item.trait_decl,
                 &item.schema.predicates,
             )?;
-            self.validate_schema_signature(
-                item.declaration,
-                &item.schema.signature,
-                &item.schema.env,
-                maybe_unsized,
-            )?;
+            if !projected {
+                self.validate_schema_signature(
+                    item.declaration,
+                    &item.schema.signature,
+                    &item.schema.env,
+                    maybe_unsized,
+                )?;
+            }
             self.validate_predicates(&item.schema.predicates, &item.schema.env, maybe_unsized)?;
             if item.receiver == ReceiverMode::Value
                 && !matches!(item.schema.signature.params.first(), Some(Ty::Param(p)) if *p == trait_header.self_param)
@@ -2638,7 +2665,11 @@ impl ValidatedTraitWorld {
                 predicates: &env,
                 phase: FactsPhase::Universal,
             };
-            let (expected, _) = self.instantiate_item(item, &h.trait_ref, context)?;
+            let expected = if self.schema_contains_projection(&item.schema)? {
+                self.instantiate_owner_item(item, h, context)?
+            } else {
+                self.instantiate_item(item, &h.trait_ref, context)?.0
+            };
             self.validate_signature_shape(&expected.signature, &h.schema_env, None)?;
             self.validate_predicates(&expected.predicates, &h.schema_env, None)?;
             if !self.eq_types(
@@ -2657,6 +2688,9 @@ impl ValidatedTraitWorld {
                     &self.budget,
                     "trait implementation signature does not match required declaration",
                 ));
+            }
+            if self.schema_contains_projection(&item.schema)? {
+                self.validate_projected_carrier_refinement(item, &expected.signature, target)?;
             }
             let owner_membership = Predicate::Implements(h.trait_ref.clone());
             for predicate in target.schema.predicates.iter() {
@@ -2800,6 +2834,11 @@ impl ValidatedTraitWorld {
     ) -> Result<Arc<CarrierContractView>> {
         self.check_facts(facts, true)?;
         self.check_context(ProofContext::from_facts(facts))?;
+        if let SignatureSubject::Call(Callee::TraitItem(call)) = subject
+            && self.schema_contains_projection(&self.item_header(call.item)?.schema)?
+        {
+            return self.projected_carrier_contract(call, facts);
+        }
         let (declaration, arguments, signature) = match subject {
             SignatureSubject::Body => match &facts.subject {
                 FactsSubject::UniversalCallable(declaration) => {
@@ -2864,6 +2903,35 @@ impl ValidatedTraitWorld {
                     "carrier subject has no retained origin schema",
                 )
             })?;
+        self.transport_carrier_contract(
+            declaration,
+            arguments,
+            signature,
+            facts,
+            raw,
+            retained,
+            origin,
+            None,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn transport_carrier_contract(
+        &self,
+        declaration: DeclId,
+        arguments: Arc<[Ty]>,
+        signature: Signature,
+        facts: &ValidatedFacts,
+        raw: GenericSchema,
+        retained: &DeclarationCarriers,
+        origin: Arc<ir::SignatureOriginSchema>,
+        projected: Option<Arc<projected_methods::ProjectedMethodEvidence>>,
+    ) -> Result<Arc<CarrierContractView>> {
+        if arguments.len() != raw.env.total_arity() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "carrier transport argument arity mismatch",
+            ));
+        }
         let mut nominals = Vec::new();
         for (old, new) in raw
             .signature
@@ -3044,6 +3112,7 @@ impl ValidatedTraitWorld {
             normalized: normalized.into(),
         });
         retain::<CarrierContractView>(&self.budget, 1)?;
+        let projected_subject = projected.as_ref().map(|proof| proof.goal().clone());
         let view = Arc::new(CarrierContractView {
             world: self.id,
             registry: self.registry,
@@ -3066,6 +3135,8 @@ impl ValidatedTraitWorld {
             source_regions,
             components: components.into(),
             nominals: nominals.into(),
+            projected,
+            projected_subject,
             budget: self.budget.clone(),
         });
         view.validate_for(facts)?;
@@ -3802,6 +3873,18 @@ impl ValidatedTraitWorld {
         }
         for declaration in declarations {
             let raw = self.normalized_declaration_schema(declaration)?;
+            if self.schema_contains_projection(&raw)? {
+                // A projected required declaration is a nonexecuting schema.
+                // Its topology is retained only after an exact application.
+                if self.info(declaration)?.kind != DeclKind::TraitItem {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "executable callable retained an unnormalized projected schema",
+                    ));
+                }
+                self.validate_source_regions(declaration, &raw.signature)?;
+                continue;
+            }
             let schema = charged(
                 &self.budget,
                 ir::derive_signature_origin_schema(&raw.signature, &raw.env, &self.budget),
@@ -4697,6 +4780,10 @@ impl ValidatedTraitWorld {
             ));
         }
         self.validate_ty(actual, context.env(), None, true, 0)?;
+        if self.schema_contains_projection(&item.schema)? {
+            let application = self.instantiate_projected_item(item, goal, context)?;
+            return Ok((application.instantiated, None));
+        }
         charged(&self.budget, self.budget.charge_work(self.origins.len()))?;
         let origin = self
             .origins
@@ -5466,6 +5553,7 @@ impl ValidatedTraitWorld {
             context,
             Some(target.declaration),
         )?;
+        self.validate_owner_callable_instantiation(target, &instantiated.signature, context)?;
         let mut evidence = Vec::new();
         for predicate in instantiated.predicates.iter() {
             push(
