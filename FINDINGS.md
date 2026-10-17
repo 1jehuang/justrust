@@ -7627,6 +7627,15 @@ Its tests took 0.38s. These observations favor coordinated test scheduling and
 project-side narrower crate boundaries, not more test parallelism within a
 locked target directory. No architecture change or speedup is claimed.
 
+Account-status validation provides another measured example: hosted base run
+`20261017-035830007-3964345` passed one cache test in 31.8s runner wall,
+including 23.62s target lock wait and 7.98s compilation. Subsequent router run
+`20261017-035903607-3964344` passed seven tests in 18.6s, with 6.27s lock wait
+and 12.01s compilation (6.71s for the 234k-line TUI test unit). Multiple
+independent swarms were changing shared upstream crates. Cross-swarm test
+scheduling and smaller project test units remain candidate improvements,
+not measured speedups. No architecture change was made for this UI task.
+
 ## 2026-10-17: hosted tests see the builder's `CARGO_MANIFEST_DIR`
 
 jcode `server::debug_command_exec::tests::debug_tool_selfdev_reload_returns_promptly_for_direct_execution`
