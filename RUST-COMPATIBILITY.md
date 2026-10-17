@@ -238,7 +238,7 @@ Resolve forward declarations and imports, distinguish duplicate declaration
 names from legal same-name functions in separate modules, enforce privacy and
 local value shadowing, and retain a root-only entry function identity.
 
-For direct string-input library calls, reject external `mod name;` because no
+For direct string-input library calls, reject active external `mod name;` because no
 filesystem root is provided. Filesystem compilation now supports that form through
 source loading before parsing. `GROUPED-IMPORTS.md` now adds nested grouped
 imports, named aliases, type-only terminal self leaves and validated empty
@@ -255,7 +255,15 @@ alias bounds/where/default/lifetime/const forms and other unsupported declaratio
 remain separate work.
 Existing expression/type restrictions remain in COMPILER.md. Source loading is
 bounded and observable but currently expands into one coarse source snapshot;
-original per-file semantic/syntax spans remain a following source-map slice.
+it is not persistent per-file incremental reuse. `SOURCE-PREPARATION.md` adds
+uniform configured text/file preparation, bounded item/module cfg/cfg_attr and
+inert attribute policy, suppression before disabled-child filesystem observation,
+and original-file UTF-8 syntax spans. The CLI accepts repeated user `--cfg`
+predicates without overriding fixed native target/profile facts. Unknown active
+attributes reject, and valid forms beyond the explicit policy are unsupported.
+Inactive items skip semantic validation but still require admitted syntax;
+stock-valid disabled forms beyond that bounded grammar remain unsupported.
+Full semantic diagnostics and macro-expansion/hygiene provenance remain open.
 
 ### Graph representation, interim and intended
 

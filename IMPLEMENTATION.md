@@ -47,6 +47,11 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       unused validation, bounded hygienic expansion and fixed/explicit generic
       constructor/pattern arguments (TYPE-ALIASES.md). Inferred alias constructor
       and pattern arguments remain explicitly unsupported.
+- [x] Native i128/u128 arithmetic, exact numeric casts and scalar transport under
+      INTEGER128.md, without claiming platform ABI compatibility.
+- [x] Configured text/file SOURCE preparation, bounded cfg/cfg_attr and inert
+      attribute policy, cfg-before-child-IO discovery and original syntax spans
+      under SOURCE-PREPARATION.md. Full inactive syntax and expansion remain open.
 
 ## Remaining implementation program
 
@@ -119,7 +124,9 @@ cases. An empty discovery queue or a long checklist is not proof of exhaustivene
 ### G1. Source organization, syntax and edition behavior
 
 - [ ] Preserve original file/expansion spans, source maps and stable declaration
-      provenance instead of relying on concatenated source positions.
+      provenance instead of relying on concatenated source positions. Original
+      file syntax spans are delivered under SOURCE-PREPARATION.md; general
+      semantic and macro-expansion provenance remain open.
 - [ ] Complete glob imports, namespaces, block-local items/imports, cross-crate
       paths and edition-specific resolution. Bounded restricted visibility is
       delivered under VISIBILITY.md with stock/native scope acceptance. Bounded
@@ -128,9 +135,14 @@ cases. An empty discovery queue or a long checklist is not proof of exhaustivene
       identity acceptance.
 - [ ] Cover remaining lexical/literal/item forms, attributes, cfg removal,
       recursive module discovery and useful multi-file/expanded diagnostics.
+      The bounded source-envelope slice supports item/module configuration and
+      explicit attribute policy, not arbitrary cfg positions or full Rust syntax
+      in disabled items. The latter remains explicitly unsupported when outside
+      the admitted syntax-only grammar.
 
-**Next:** freeze a multi-file source-map and import/privacy corpus before changing
-lookup facts. **Acceptance:** forward/cyclic/ambiguous lookup and unused invalid
+**Next:** extend original provenance into semantic diagnostics and expansion,
+then token trees/hygiene and source-owned library roots without weakening the
+delivered source-map and import/privacy corpus. **Acceptance:** forward/cyclic/ambiguous lookup and unused invalid
 imports have pinned outcomes, real file spans survive loading, and edits or
 missing-file changes invalidate only justified consumers without stale lookup.
 
@@ -784,3 +796,12 @@ blocked by an ownership analysis resource limit (per-element move paths for
 large scalar arrays). Slice returns, `&mut [T]`, non-u8 elements,
 range indexing, `for` loops and slice patterns remain unsupported. This is not
 unchanged Adler2 acceptance or full Rust support.
+
+### Configured source preparation checkpoint
+
+`SOURCE-PREPARATION.md` records the delivered bounded source envelope: shared
+text/file SOURCE facts, cfg-before-child-IO, explicit attribute policy,
+original syntax locations and resource/ordinary-stack guards. Hosted all-target
+check, 1731 tests in 90 binaries and strict lint pass, alongside 86 stock
+fixtures and 344 native worker/mode cells. Full syntax/macros, semantic spans,
+library roots, core/alloc/std and full Rust acceptance remain open.

@@ -166,9 +166,10 @@ impl NativeFacts {
 }
 struct Snapshot {
     input: Input,
+    source_options: source::SourceOptions,
     budget: ir::PlanBudget,
     reservations: std::sync::Mutex<Vec<ir::PlanReservation>>,
-    source: OnceLock<source::LoadedSource>,
+    source: OnceLock<source::PreparedSource>,
     parsed: OnceLock<frontend::ParsedProgram>,
     program: OnceLock<Arc<frontend::Program>>,
     types: OnceLock<frontend::PlanCtx>,
@@ -301,29 +302,32 @@ impl Provider for CompilerProvider {
             let function = |kind, index: usize| Key::new(kind, vec![index as u64]);
             match key.kind {
                 SOURCE => {
-                    let Input::File(path) = &this.0.input else {
-                        return Err(Error::new("source loading requires file input"));
+                    let prepared = match &this.0.input {
+                        Input::File(path) => source::prepare_file(path, &this.0.source_options),
+                        Input::Text(text) => {
+                            source::prepare_text("<text>", text, &this.0.source_options)
+                        }
+                        Input::Program(_) => {
+                            return Err(Error::new("prepared program has no source input"));
+                        }
                     };
-                    publish(&this.0.source, source::load(path).map_err(Error::new)?)?;
+                    publish(
+                        &this.0.source,
+                        prepared.map_err(|error| Error::new(error.to_string()))?,
+                    )?;
                 }
                 PARSE => {
                     if !matches!(this.0.input, Input::Program(_)) {
-                        let text = match &this.0.input {
-                            Input::Text(text) => text,
-                            Input::File(_) => {
-                                cx.read(cx.request(root(SOURCE)).get(0)).await?;
-                                &this
-                                    .0
-                                    .source
-                                    .get()
-                                    .ok_or_else(|| Error::new("missing source snapshot"))?
-                                    .text
-                            }
-                            Input::Program(_) => unreachable!(),
-                        };
+                        cx.read(cx.request(root(SOURCE)).get(0)).await?;
+                        let prepared = this
+                            .0
+                            .source
+                            .get()
+                            .ok_or_else(|| Error::new("missing source snapshot"))?;
                         publish(
                             &this.0.parsed,
-                            frontend::parse_unresolved(text).map_err(Error::new)?,
+                            frontend::parse_prepared(prepared)
+                                .map_err(|error| Error::new(error.to_string()))?,
                         )?;
                     }
                 }
@@ -862,6 +866,16 @@ pub fn compile_observed(
     compile_input(Input::Text(source), workers, check_only)
 }
 
+/// Compile text with an explicit immutable native source configuration.
+pub fn compile_observed_with_options(
+    source: String,
+    workers: usize,
+    check_only: bool,
+    options: source::SourceOptions,
+) -> Result<Compilation, Failure> {
+    compile_input_with_options(Input::Text(source), workers, check_only, options)
+}
+
 /// Load a source tree through an observable graph operation before parsing.
 /// File loading currently uses one coarse snapshot node, not per-file nodes.
 pub fn compile_file_observed(
@@ -870,6 +884,16 @@ pub fn compile_file_observed(
     check_only: bool,
 ) -> Result<Compilation, Failure> {
     compile_input(Input::File(path), workers, check_only)
+}
+
+/// Prepare a configured file tree before parsing, without host-derived cfg.
+pub fn compile_file_observed_with_options(
+    path: PathBuf,
+    workers: usize,
+    check_only: bool,
+    options: source::SourceOptions,
+) -> Result<Compilation, Failure> {
+    compile_input_with_options(Input::File(path), workers, check_only, options)
 }
 
 fn retained_analyses(snapshot: &Snapshot) -> Vec<(usize, Arc<ownership::Analysis>)> {
@@ -895,14 +919,46 @@ fn compile_input(input: Input, workers: usize, check_only: bool) -> Result<Compi
     compile_input_with_budget(input, workers, check_only, ir::PlanBudget::default())
 }
 
+fn compile_input_with_options(
+    input: Input,
+    workers: usize,
+    check_only: bool,
+    options: source::SourceOptions,
+) -> Result<Compilation, Failure> {
+    compile_input_configured(
+        input,
+        workers,
+        check_only,
+        ir::PlanBudget::default(),
+        options,
+    )
+}
+
 fn compile_input_with_budget(
     input: Input,
     workers: usize,
     check_only: bool,
     budget: ir::PlanBudget,
 ) -> Result<Compilation, Failure> {
+    compile_input_configured(
+        input,
+        workers,
+        check_only,
+        budget,
+        source::SourceOptions::default(),
+    )
+}
+
+fn compile_input_configured(
+    input: Input,
+    workers: usize,
+    check_only: bool,
+    budget: ir::PlanBudget,
+    source_options: source::SourceOptions,
+) -> Result<Compilation, Failure> {
     let snapshot = Arc::new(Snapshot {
         input,
+        source_options,
         source: OnceLock::new(),
         parsed: OnceLock::new(),
         program: OnceLock::new(),
@@ -981,9 +1037,8 @@ fn compile_input_with_budget(
     })?;
     let executable = snapshot.executable.get().cloned();
     let (source_bytes, source_files) = match &snapshot.input {
-        Input::Text(text) => (text.len(), 1),
         Input::Program(_) => (0, 0),
-        Input::File(_) => {
+        Input::Text(_) | Input::File(_) => {
             let loaded = snapshot.source.get().ok_or_else(|| Failure {
                 error: Error::new("missing loaded source accounting"),
                 report: Some(Box::new(report.clone())),

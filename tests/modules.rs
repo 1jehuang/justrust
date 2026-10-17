@@ -514,6 +514,7 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                 assert_eq!(report.events_dropped, 0);
                 assert_eq!(report.failures, 0);
                 let mut expected = vec![
+                    Key::new(107, vec![]), // Shared configured text/file SOURCE.
                     Key::new(100, vec![]),
                     Key::new(106, vec![]),
                     Key::new(101, vec![]),

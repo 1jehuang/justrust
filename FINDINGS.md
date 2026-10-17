@@ -10060,3 +10060,26 @@ See `docs/hosted-intermediate-compiler-benchmarks-20261017.md` and hashed raw
 receipts/traces under `experiments/results/hosted-intermediate-20261017/`.
 Charged runs 0150/0151/0152/0154 under the compiler-intermediate-hosted-20261017
 prefix preserve a harness error, daemon interruption, and successful followups.
+
+## 2026-10-17: configured source preparation correctness checkpoint
+
+The final hosted check `20261017-052126826-212241`, full regression
+`20261017-052128570-212557` (1731 tests, 90 binaries), and strict lint
+`20261017-052144245-213435` pass. Stock-first source conformance
+`20261017-051709382-193986` covers 86 classified sources and 344 native
+CHECK/BUILD cells at workers 1 and 8, with no compiler subprocess fallback.
+Recording-reader tests establish absence of disabled-child filesystem calls.
+Independent review exposed malformed inactive attribute RHS, Unicode escape
+and diagnostic boundaries, keyword module/attribute syntax, raw CRLF and
+inactive visibility-resolution bugs. Each now has a regression or explicit
+bounded unsupported policy, rather than silently accepting unvalidated input.
+
+Earlier full run `20261017-051741486-196166` needed an isolated retry after
+OS26 ETXTBSY in the native float oracle. Its test harness now bounds only
+pre-spawn OS26 retries, never an already executed image. Final full regression
+has no isolated retry. This does not alter native cast arithmetic. The slowest
+wide-integer conformance test still takes about 12.2 seconds in the final run,
+and is a future test-scheduling diagnostic, not evidence of a compiler speedup.
+Receipts: `data/runs/xps14/2026-10-17-source-preparation.jsonl`. Source maps
+remain one coarse per-compilation snapshot, not persistent incremental facts.
+No unchanged core/alloc/std or full Rust claim follows from this milestone.

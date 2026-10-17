@@ -12,7 +12,7 @@ mod compiler_profile;
 static ALLOCATION_PROFILE: allocation_profile::ProfilingAllocator<std::alloc::System> =
     allocation_profile::ProfilingAllocator::new(std::alloc::System);
 
-const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--trace NEW_TRACE] [--profile NEW_JSON]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n--profile writes bounded task timings and exact first budget failure without CFG dumps.\nAllocator counters require a binary built with --features allocation-profile.\n";
+const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--cfg NAME_OR_KEY_VALUE] [--trace NEW_TRACE] [--profile NEW_JSON]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n--cfg may be repeated for user names or key=\"value\" predicates; native target/profile cfg is fixed.\n--profile writes bounded task timings and exact first budget failure without CFG dumps.\nAllocator counters require a binary built with --features allocation-profile.\n";
 
 fn allocator_json() -> String {
     #[cfg(feature = "allocation-profile")]
@@ -43,6 +43,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut profile: Option<PathBuf> = None;
     let mut workers = 1usize;
     let mut check = false;
+    let mut source_options = compiler::source::SourceOptions::default();
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {
@@ -51,6 +52,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
             Some("--check") => check = true,
+            Some("--cfg") => {
+                let specification = args.next().ok_or("missing cfg specification")?;
+                source_options.cfg.insert_user(
+                    specification
+                        .to_str()
+                        .ok_or("cfg specification must be UTF-8")?,
+                )?;
+            }
             Some("-o" | "--output") => {
                 output = Some(args.next().ok_or("missing output path")?.into())
             }
@@ -63,6 +72,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .to_str()
                     .ok_or("invalid worker count")?
                     .parse()?
+            }
+            Some(s) if s.starts_with("--cfg=") => {
+                source_options.cfg.insert_user(&s[6..])?;
             }
             Some(s) if s.starts_with('-') => return Err(format!("unknown option {s}").into()),
             _ => {
@@ -92,7 +104,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err(format!("output already exists: {}", path.display()).into());
     }
-    let compiled = compiler::compile_file_observed(source.clone(), workers, check);
+    let compiled = compiler::compile_file_observed_with_options(
+        source.clone(),
+        workers,
+        check,
+        source_options,
+    );
     let compiler_wall_ns = start.elapsed().as_nanos();
     // Snapshot before profile serialization so its own allocations are excluded.
     let allocation = profile.as_ref().map(|_| allocator_json());
@@ -120,7 +137,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     writeln!(file, "{report:#?}")?;
                 }
             }
-            return Err(format!("{}: {error}\nnote: filesystem modules use temporary inline expansion; frontend line/column positions refer to expanded source, not original module files", source.display()).into());
+            return Err(format!("{}: {error}\nnote: source preparation and syntax diagnostics use original file locations; semantic diagnostic source spans remain incomplete", source.display()).into());
         }
     };
     let source_bytes = compiled.source_bytes;

@@ -123,6 +123,7 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                     assert_eq!(report.events_dropped, 0);
                     assert_eq!(report.failures, 0);
                     let mut expected = vec![
+                        Key::new(107, vec![]), // Shared configured text/file SOURCE.
                         Key::new(100, vec![]),
                         Key::new(106, vec![]),
                         Key::new(101, vec![]),

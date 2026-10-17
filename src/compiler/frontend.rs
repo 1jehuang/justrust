@@ -3440,11 +3440,26 @@ pub enum BinaryOp {
 }
 
 #[derive(Clone, Debug)]
+pub(super) struct ParseError {
+    pub(super) kind: super::source::SourceErrorKind,
+    pub(super) has_location: bool,
+    pub(super) bytes: std::ops::Range<usize>,
+    line: usize,
+    column: usize,
+    pub(super) message: String,
+}
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}: {}", self.line, self.column, self.message)
+    }
+}
+#[derive(Clone, Debug)]
 struct Token {
     text: String,
     line: usize,
     column: usize,
     string: bool,
+    bytes: std::ops::Range<usize>,
 }
 fn compound_operator(token: &Token) -> Option<BinaryOp> {
     if token.string {
@@ -3464,8 +3479,26 @@ fn compound_operator(token: &Token) -> Option<BinaryOp> {
         _ => return None,
     })
 }
-fn lex(source: &str) -> Result<Vec<Token>, String> {
+fn lex(source: &str) -> Result<Vec<Token>, ParseError> {
     let chars: Vec<char> = source.chars().collect();
+    let offsets: Vec<usize> = source
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(source.len()))
+        .collect();
+    let error_at = |index: usize, line, column, message| ParseError {
+        kind: super::source::SourceErrorKind::Syntax,
+        has_location: true,
+        bytes: offsets[index]..offsets.get(index + 1).copied().unwrap_or(source.len()),
+        line,
+        column,
+        message,
+    };
+    let unsupported_at = |index, line, column, message| {
+        let mut error = error_at(index, line, column, message);
+        error.kind = super::source::SourceErrorKind::Unsupported;
+        error
+    };
     let (mut i, mut line, mut column) = (0, 1, 1);
     let mut tokens = Vec::new();
     fn advance(chars: &[char], i: &mut usize, line: &mut usize, column: &mut usize) {
@@ -3503,6 +3536,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
         }
         if c == '/' && chars.get(i + 1) == Some(&'*') {
             let start = (line, column);
+            let begin = i;
             let mut depth = 1;
             advance(&chars, &mut i, &mut line, &mut column);
             advance(&chars, &mut i, &mut line, &mut column);
@@ -3517,12 +3551,31 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 advance(&chars, &mut i, &mut line, &mut column);
             }
             if depth != 0 {
-                return Err(format!("{}:{}: unterminated comment", start.0, start.1));
+                return Err(error_at(
+                    begin,
+                    start.0,
+                    start.1,
+                    "unterminated comment".into(),
+                ));
             }
             continue;
         }
         let (sl, sc) = (line, column);
+        let begin = i;
         let mut text = String::new();
+        if (c == 'r' && matches!(chars.get(i + 1), Some('"' | '#')))
+            || (c == 'b' && matches!(chars.get(i + 1), Some('"' | '\'')))
+            || (c == 'b'
+                && chars.get(i + 1) == Some(&'r')
+                && matches!(chars.get(i + 2), Some('"' | '#')))
+        {
+            return Err(unsupported_at(
+                begin,
+                sl,
+                sc,
+                "raw and byte literals are unsupported".into(),
+            ));
+        }
         let string = c == '"';
         if string {
             advance(&chars, &mut i, &mut line, &mut column);
@@ -3530,7 +3583,12 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 let mut ch = chars[i];
                 if ch == '\r' {
                     if chars.get(i + 1) != Some(&'\n') {
-                        return Err(format!("{line}:{column}: bare carriage return in string"));
+                        return Err(error_at(
+                            i,
+                            line,
+                            column,
+                            "bare carriage return in string".into(),
+                        ));
                     }
                     advance(&chars, &mut i, &mut line, &mut column);
                     ch = '\n';
@@ -3549,17 +3607,20 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                             advance(&chars, &mut i, &mut line, &mut column);
                             let hi =
                                 chars.get(i).and_then(|c| c.to_digit(16)).ok_or_else(|| {
-                                    format!("{line}:{column}: expected two hex digits")
+                                    error_at(i, line, column, "expected two hex digits".into())
                                 })?;
                             advance(&chars, &mut i, &mut line, &mut column);
                             let lo =
                                 chars.get(i).and_then(|c| c.to_digit(16)).ok_or_else(|| {
-                                    format!("{line}:{column}: expected two hex digits")
+                                    error_at(i, line, column, "expected two hex digits".into())
                                 })?;
                             let value = hi * 16 + lo;
                             if value > 127 {
-                                return Err(format!(
-                                    "{line}:{column}: hex string escape must be ASCII"
+                                return Err(error_at(
+                                    i,
+                                    line,
+                                    column,
+                                    "hex string escape must be ASCII".into(),
                                 ));
                             }
                             char::from_u32(value).unwrap()
@@ -3567,8 +3628,11 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                         Some('u') => {
                             advance(&chars, &mut i, &mut line, &mut column);
                             if chars.get(i) != Some(&'{') {
-                                return Err(format!(
-                                    "{line}:{column}: expected unicode escape brace"
+                                return Err(error_at(
+                                    i,
+                                    line,
+                                    column,
+                                    "expected unicode escape brace".into(),
                                 ));
                             }
                             advance(&chars, &mut i, &mut line, &mut column);
@@ -3583,33 +3647,47 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                                     continue;
                                 }
                                 let digit = c.to_digit(16).ok_or_else(|| {
-                                    format!("{line}:{column}: invalid unicode escape")
+                                    error_at(i, line, column, "invalid unicode escape".into())
                                 })?;
                                 digits += 1;
                                 if digits > 6 {
-                                    return Err(format!(
-                                        "{line}:{column}: unicode escape exceeds six digits"
+                                    return Err(error_at(
+                                        i,
+                                        line,
+                                        column,
+                                        "unicode escape exceeds six digits".into(),
                                     ));
                                 }
                                 value = value * 16 + digit;
                                 advance(&chars, &mut i, &mut line, &mut column);
                             }
                             if digits == 0 || chars.get(i) != Some(&'}') {
-                                return Err(format!(
-                                    "{line}:{column}: unterminated unicode escape"
+                                return Err(error_at(
+                                    i,
+                                    line,
+                                    column,
+                                    "unterminated unicode escape".into(),
                                 ));
                             }
-                            char::from_u32(value)
-                                .ok_or_else(|| format!("{line}:{column}: invalid unicode scalar"))?
+                            char::from_u32(value).ok_or_else(|| {
+                                error_at(i, line, column, "invalid unicode scalar".into())
+                            })?
                         }
-                        _ => return Err(format!("{line}:{column}: unsupported string escape")),
+                        _ => {
+                            return Err(error_at(
+                                i,
+                                line,
+                                column,
+                                "unsupported string escape".into(),
+                            ));
+                        }
                     };
                 }
                 text.push(ch);
                 advance(&chars, &mut i, &mut line, &mut column);
             }
             if i == chars.len() {
-                return Err(format!("{sl}:{sc}: unterminated string"));
+                return Err(error_at(begin, sl, sc, "unterminated string".into()));
             }
             advance(&chars, &mut i, &mut line, &mut column);
         } else if c == '\'' {
@@ -3620,7 +3698,12 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                 advance(&chars, &mut i, &mut line, &mut column);
             }
             if text.len() == 1 || chars.get(i) == Some(&'\'') {
-                return Err(format!("{sl}:{sc}: character literals are unsupported"));
+                return Err(unsupported_at(
+                    begin,
+                    sl,
+                    sc,
+                    "character literals are unsupported".into(),
+                ));
             }
         } else if c.is_ascii_alphabetic() || c == '_' || c.is_ascii_digit() {
             while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
@@ -3667,8 +3750,11 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
             }
         } else {
             if !c.is_ascii() {
-                return Err(format!(
-                    "{line}:{column}: non-ASCII identifiers are unsupported"
+                return Err(unsupported_at(
+                    i,
+                    line,
+                    column,
+                    "non-ASCII identifiers are unsupported".into(),
                 ));
             }
             text.push(c);
@@ -3751,7 +3837,11 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
                     | "&&"
                     | "||"
             ) {
-                return Err(format!("{sl}:{sc}: unsupported token {text:?}"));
+                return Err(if matches!(text.as_str(), "#" | "@" | "?" | "$" | "~") {
+                    unsupported_at(begin, sl, sc, format!("unsupported token {text:?}"))
+                } else {
+                    error_at(begin, sl, sc, format!("invalid token {text:?}"))
+                });
             }
         }
         tokens.push(Token {
@@ -3759,6 +3849,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
             line: sl,
             column: sc,
             string,
+            bytes: offsets[begin]..offsets[i],
         });
     }
     tokens.push(Token {
@@ -3766,6 +3857,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
         line,
         column,
         string: false,
+        bytes: source.len()..source.len(),
     });
     Ok(tokens)
 }
@@ -3795,22 +3887,39 @@ impl Parser {
             false
         }
     }
-    fn error(&self, message: &str) -> String {
-        format!(
-            "{}:{}: {message}, found {:?}",
-            self.token().line,
-            self.token().column,
-            self.token().text
-        )
+    fn error(&self, message: &str) -> ParseError {
+        ParseError {
+            kind: super::source::SourceErrorKind::Syntax,
+            has_location: true,
+            bytes: self.token().bytes.clone(),
+            line: self.token().line,
+            column: self.token().column,
+            message: format!("{message}, found {:?}", self.token().text),
+        }
     }
-    fn expect(&mut self, s: &str) -> Result<(), String> {
+    fn limit(&self, message: &str) -> ParseError {
+        let mut error = self.error(message);
+        error.kind = super::source::SourceErrorKind::Limit;
+        error
+    }
+    fn depth_error(&self, message: &str) -> ParseError {
+        let mut error = self.limit(message);
+        error.has_location = false;
+        error
+    }
+    fn unsupported(&self, message: &str) -> ParseError {
+        let mut error = self.error(message);
+        error.kind = super::source::SourceErrorKind::Unsupported;
+        error
+    }
+    fn expect(&mut self, s: &str) -> Result<(), ParseError> {
         if self.eat(s) {
             Ok(())
         } else {
             Err(self.error(&format!("expected {s:?}")))
         }
     }
-    fn ident(&mut self) -> Result<String, String> {
+    fn ident(&mut self) -> Result<String, ParseError> {
         let t = self.token();
         let reserved = [
             "fn", "let", "mut", "if", "else", "while", "return", "true", "false", "pub", "const",
@@ -3835,22 +3944,23 @@ impl Parser {
             Err(self.error("expected ASCII identifier"))
         }
     }
-    fn ty(&mut self) -> Result<Type, String> {
+    fn ty(&mut self) -> Result<Type, ParseError> {
         if self.nesting >= 128 {
-            return Err(self.error("type nesting exceeds limit 128"));
+            return Err(self.limit("type nesting exceeds limit 128"));
         }
         self.nesting += 1;
         let result = self.ty_inner();
         self.nesting -= 1;
         result
     }
-    fn ty_inner(&mut self) -> Result<Type, String> {
+    fn ty_inner(&mut self) -> Result<Type, ParseError> {
         if self.token().string {
             return Err(self.error("quoted tokens are not types"));
         }
         if self.is("&&") {
             self.tokens[self.at].text = "&".into();
             self.tokens[self.at].column += 1;
+            self.tokens[self.at].bytes.start += 1;
             return Ok(Type::Ref {
                 kind: ir::BorrowKind::Shared,
                 region: None,
@@ -3861,7 +3971,9 @@ impl Parser {
             return Err(self.error("E0121: placeholder _ is not allowed in type alias signatures"));
         }
         if self.is("_") || self.is("!") {
-            return Err(self.error("inferred and never source type annotations are unsupported"));
+            return Err(
+                self.unsupported("inferred and never source type annotations are unsupported")
+            );
         }
         if self.eat("&") {
             let region = if self.token().text.starts_with('\'') {
@@ -3891,13 +4003,13 @@ impl Parser {
             Ok(Type::Array(Box::new(element), len))
         } else if self.eat("Self") {
             if self.is("::") {
-                return Err(self.error("associated type projections are unsupported"));
+                return Err(self.unsupported("associated type projections are unsupported"));
             }
             Ok(Type::SelfType)
         } else if self.type_params.contains(&self.token().text) {
             let name = self.ident()?;
             if self.is("::") {
-                return Err(self.error("associated type projections are unsupported"));
+                return Err(self.unsupported("associated type projections are unsupported"));
             }
             Ok(Type::Param(name))
         } else if let Some(ty) = integer_type(&self.token().text) {
@@ -3936,7 +4048,7 @@ impl Parser {
         }
     }
     /// Split closing angle tokens only while parsing types, never expressions.
-    fn close_angle(&mut self) -> Result<(), String> {
+    fn close_angle(&mut self) -> Result<(), ParseError> {
         if self.eat(">") {
             return Ok(());
         }
@@ -3948,14 +4060,15 @@ impl Parser {
         };
         self.tokens[self.at].text = remainder.into();
         self.tokens[self.at].column += 1;
+        self.tokens[self.at].bytes.start += 1;
         Ok(())
     }
-    fn type_arguments(&mut self) -> Result<Vec<Type>, String> {
+    fn type_arguments(&mut self) -> Result<Vec<Type>, ParseError> {
         self.expect("<")?;
         let mut args = Vec::new();
         loop {
             if args.len() >= 32 {
-                return Err(self.error("generic argument resource limit 32"));
+                return Err(self.limit("generic argument resource limit 32"));
             }
             args.push(self.ty()?);
             if !self.eat(",") || self.token().text.starts_with('>') {
@@ -3965,11 +4078,11 @@ impl Parser {
         self.close_angle()?;
         Ok(args)
     }
-    fn generic_path(&mut self, type_context: bool) -> Result<GenericPath, String> {
+    fn generic_path(&mut self, type_context: bool) -> Result<GenericPath, ParseError> {
         let mut segments = Vec::new();
         loop {
             if segments.len() >= 128 {
-                return Err(self.error("path depth resource limit 128"));
+                return Err(self.limit("path depth resource limit 128"));
             }
             let name = if matches!(
                 self.token().text.as_str(),
@@ -4004,7 +4117,7 @@ impl Parser {
         }
         Ok(GenericPath { segments })
     }
-    fn type_parameters(&mut self) -> Result<Vec<String>, String> {
+    fn type_parameters(&mut self) -> Result<Vec<String>, ParseError> {
         self.pending_bounds.clear();
         if !self.eat("<") {
             return Ok(Vec::new());
@@ -4013,10 +4126,10 @@ impl Parser {
         let mut params = Vec::new();
         loop {
             if params.len() >= 32 {
-                return Err(self.error("generic parameter resource limit 32"));
+                return Err(self.limit("generic parameter resource limit 32"));
             }
             if self.is("const") {
-                return Err(self.error("const generic parameters are unsupported"));
+                return Err(self.unsupported("const generic parameters are unsupported"));
             }
             if !self.token().string && self.token().text.starts_with('\'') {
                 self.lifetime()?;
@@ -4034,7 +4147,7 @@ impl Parser {
                 loop {
                     traits.push(self.path()?);
                     if traits.len() > 256 {
-                        return Err(self.error("predicate limit exceeded"));
+                        return Err(self.limit("predicate limit exceeded"));
                     }
                     if !self.eat("+") {
                         break;
@@ -4046,7 +4159,7 @@ impl Parser {
                 });
             }
             if self.is("=") {
-                return Err(self.error("generic defaults are unsupported"));
+                return Err(self.unsupported("generic defaults are unsupported"));
             }
             if !self.eat(",") || self.token().text.starts_with('>') {
                 break;
@@ -4055,7 +4168,7 @@ impl Parser {
         self.close_angle()?;
         Ok(params)
     }
-    fn path(&mut self) -> Result<String, String> {
+    fn path(&mut self) -> Result<String, ParseError> {
         let mut parts = Vec::new();
         if self.is("crate") || self.is("self") || self.is("super") {
             let first = self.token().text.clone();
@@ -4079,7 +4192,7 @@ impl Parser {
         }
         while self.eat("::") {
             if self.is("*") || self.is("{") {
-                return Err(self.error("glob and grouped paths are unsupported"));
+                return Err(self.unsupported("glob and grouped paths are unsupported"));
             }
             parts.push(self.ident()?);
         }
@@ -4094,24 +4207,24 @@ impl Parser {
         work: &mut usize,
         bytes: &mut usize,
         imports: &mut Vec<(Option<String>, String, bool)>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ParseError> {
         if depth >= 128 {
-            return Err(self.error("use tree nesting exceeds limit 128"));
+            return Err(self.limit("use tree nesting exceeds limit 128"));
         }
         *work += 1;
         if *work > 4096 {
-            return Err(self.error("use tree work exceeds limit 4096"));
+            return Err(self.limit("use tree work exceeds limit 4096"));
         }
         if self.is("::") {
-            return Err(self.error("absolute extern crate use paths are unsupported"));
+            return Err(self.unsupported("absolute extern crate use paths are unsupported"));
         }
         if self.is("*") {
-            return Err(self.error("glob imports are unsupported"));
+            return Err(self.unsupported("glob imports are unsupported"));
         }
         let prefix_bytes: usize = prefix.iter().map(|s| s.len() + 2).sum();
         *bytes += prefix_bytes;
         if *bytes > 1024 * 1024 {
-            return Err(self.error("use tree allocation exceeds limit 1048576"));
+            return Err(self.limit("use tree allocation exceeds limit 1048576"));
         }
         let mut path = prefix.to_vec();
         let mut grouped_self = false;
@@ -4120,7 +4233,7 @@ impl Parser {
             loop {
                 *work += 1;
                 if *work > 4096 {
-                    return Err(self.error("use tree work exceeds limit 4096"));
+                    return Err(self.limit("use tree work exceeds limit 4096"));
                 }
                 let keyword = self.is("self") || self.is("super") || self.is("crate");
                 let segment = if keyword {
@@ -4132,7 +4245,7 @@ impl Parser {
                 };
                 *bytes += segment.len() + 2;
                 if *bytes > 1024 * 1024 {
-                    return Err(self.error("use tree allocation exceeds limit 1048576"));
+                    return Err(self.limit("use tree allocation exceeds limit 1048576"));
                 }
                 // A terminal self within a group names the prefix itself,
                 // rather than an item literally named `self` inside it.
@@ -4151,7 +4264,7 @@ impl Parser {
                     break;
                 }
                 if self.is("*") {
-                    return Err(self.error("glob imports are unsupported"));
+                    return Err(self.unsupported("glob imports are unsupported"));
                 }
                 if self.is("{") {
                     group_allowed = true;
@@ -4177,7 +4290,7 @@ impl Parser {
         }
         let name = if self.eat("as") {
             if self.is("_") {
-                return Err(self.error("anonymous underscore imports are unsupported"));
+                return Err(self.unsupported("anonymous underscore imports are unsupported"));
             }
             self.ident()?
         } else {
@@ -4190,12 +4303,12 @@ impl Parser {
         let target = path.join("::");
         *bytes += target.len() + name.len();
         if *bytes > 1024 * 1024 {
-            return Err(self.error("use tree allocation exceeds limit 1048576"));
+            return Err(self.limit("use tree allocation exceeds limit 1048576"));
         }
         imports.push((Some(name), target, grouped_self));
         Ok(())
     }
-    fn array_number(&mut self, context: &str) -> Result<usize, String> {
+    fn array_number(&mut self, context: &str) -> Result<usize, ParseError> {
         let token = self.token();
         if token.string {
             return Err(self.error(&format!("{context} requires an integer literal")));
@@ -4204,7 +4317,7 @@ impl Parser {
         let value = resolve_integer(&literal, false, Some(&ir::Ty::Int(ir::IntTy::Usize)))
             .map_err(|e| self.error(&e))?;
         if value.bits > ir::MAX_ARRAY_LEN as u128 {
-            return Err(self.error("array length/index exceeds supported limit"));
+            return Err(self.limit("array length/index exceeds supported limit"));
         }
         let number = value.bits as usize;
         self.at += 1;
@@ -4218,7 +4331,7 @@ impl Parser {
     /// Visibility paths are lexical ancestors, never general name-resolution
     /// paths. Checking the canonical spelling here prevents aliases from
     /// masquerading as ancestor modules, even before those aliases resolve.
-    fn visibility(&mut self, module: &str) -> Result<(ir::Visibility, bool), String> {
+    fn visibility(&mut self, module: &str) -> Result<(ir::Visibility, bool), ParseError> {
         if !self.eat("pub") {
             return Ok((ir::Visibility::Restricted(module.into()), false));
         }
@@ -4229,7 +4342,7 @@ impl Parser {
             let path = self.path()?;
             let parts: Vec<_> = path.split("::").collect();
             if parts.len() > 129 {
-                return Err(self.error("visibility path nesting exceeds limit 129"));
+                return Err(self.limit("visibility path nesting exceeds limit 129"));
             }
             let (mut scope, mut at) = match parts[0] {
                 "crate" => (String::new(), 1),
@@ -4269,9 +4382,9 @@ impl Parser {
         self.expect(")")?;
         Ok((ir::Visibility::Restricted(scope), true))
     }
-    fn items(&mut self, module: &str, parsed: &mut ParsedProgram) -> Result<(), String> {
+    fn items(&mut self, module: &str, parsed: &mut ParsedProgram) -> Result<(), ParseError> {
         if self.nesting > 128 {
-            return Err(self.error("module nesting exceeds limit 128"));
+            return Err(self.limit("module nesting exceeds limit 128"));
         }
         self.nesting += 1;
         while !self.is("") && !self.is("}") {
@@ -4280,7 +4393,9 @@ impl Parser {
                 let name = self.ident()?;
                 let full = qualify(module, &name);
                 if self.eat(";") {
-                    return Err(self.error("external module files are unsupported; use inline mod"));
+                    return Err(
+                        self.unsupported("external module files are unsupported; use inline mod")
+                    );
                 }
                 self.expect("{")?;
                 // Register before parsing descendants, including empty modules.
@@ -4303,7 +4418,15 @@ impl Parser {
         parsed: &mut ParsedProgram,
         visibility: ir::Visibility,
         explicit_visibility: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), ParseError> {
+        if !self.token().string
+            && matches!(
+                self.token().text.as_str(),
+                "const" | "async" | "unsafe" | "extern" | "static" | "union" | "macro_rules"
+            )
+        {
+            return Err(self.unsupported("item syntax is unsupported"));
+        }
         let (name, kind) = if self.eat("use") {
             let mut imports = Vec::new();
             let mut work = 0;
@@ -4317,10 +4440,10 @@ impl Parser {
                 self.use_expansion_bytes +=
                     path.len() + module.len() + name.as_ref().map_or(0, String::len) + 2;
                 if self.use_expansions > 65536 {
-                    return Err(self.error("source use expansion count exceeds limit 65536"));
+                    return Err(self.limit("source use expansion count exceeds limit 65536"));
                 }
                 if self.use_expansion_bytes > 16 * 1024 * 1024 {
-                    return Err(self.error("source use logical expansion exceeds limit 16777216"));
+                    return Err(self.limit("source use logical expansion exceeds limit 16777216"));
                 }
                 let Some(name) = name else {
                     parsed.empty_use_prefixes.push((module.into(), path));
@@ -4337,13 +4460,13 @@ impl Parser {
         } else if self.eat("trait") {
             let name = self.ident()?;
             if self.is("<") {
-                return Err(self.error("trait generics are unsupported"));
+                return Err(self.unsupported("trait generics are unsupported"));
             }
             let mut supertraits = Vec::new();
             if self.eat(":") {
                 loop {
                     if supertraits.len() >= 256 {
-                        return Err(self.error("supertrait limit exceeded"));
+                        return Err(self.limit("supertrait limit exceeded"));
                     }
                     supertraits.push(self.path()?);
                     if !self.eat("+") {
@@ -4356,20 +4479,20 @@ impl Parser {
             let mut item_names = std::collections::HashSet::new();
             while !self.is("}") {
                 if items.len() >= 4096 {
-                    return Err(self.error("trait item limit exceeded"));
+                    return Err(self.limit("trait item limit exceeded"));
                 }
                 if self.is("pub") {
                     return Err(self.error("trait items cannot declare visibility"));
                 }
                 if self.is("type") {
-                    return Err(self.error("associated types are unsupported"));
+                    return Err(self.unsupported("associated types are unsupported"));
                 }
                 let (signature, receiver) = self.function_head(&[], true)?;
                 if !item_names.insert(signature.name.clone()) {
                     return Err(self.error("duplicate required trait item"));
                 }
                 if !signature.type_params.is_empty() {
-                    return Err(self.error("generic trait methods are unsupported"));
+                    return Err(self.unsupported("generic trait methods are unsupported"));
                 }
                 let default = if self.is("{") {
                     Some(Function {
@@ -4404,7 +4527,7 @@ impl Parser {
             let name = self.ident()?;
             let type_params = self.type_parameters()?;
             if !self.pending_bounds.is_empty() {
-                return Err(self.error("bounds on nominal declarations are unsupported"));
+                return Err(self.unsupported("bounds on nominal declarations are unsupported"));
             }
             self.type_params = type_params.clone();
             self.expect("{")?;
@@ -4416,7 +4539,7 @@ impl Parser {
                     if self.eat("(") {
                         while !self.is(")") {
                             if fields.len() >= 4096 {
-                                return Err(self.error("variant field count exceeds limit 4096"));
+                                return Err(self.limit("variant field count exceeds limit 4096"));
                             }
                             if self.is("pub") {
                                 return Err(self
@@ -4436,7 +4559,7 @@ impl Parser {
                     } else if self.eat("{") {
                         while !self.is("}") {
                             if fields.len() >= 4096 {
-                                return Err(self.error("variant field count exceeds limit 4096"));
+                                return Err(self.limit("variant field count exceeds limit 4096"));
                             }
                             if self.is("pub") {
                                 return Err(self
@@ -4459,13 +4582,13 @@ impl Parser {
                         ir::VariantShape::Unit
                     };
                 if self.is("=") {
-                    return Err(self.error("explicit enum discriminants are unsupported"));
+                    return Err(self.unsupported("explicit enum discriminants are unsupported"));
                 }
                 if variants.iter().any(|v| v.name == variant) {
                     return Err(self.error("duplicate enum variant"));
                 }
                 if variants.len() >= 4096 {
-                    return Err(self.error("enum variant count exceeds limit 4096"));
+                    return Err(self.limit("enum variant count exceeds limit 4096"));
                 }
                 self.insert_item(
                     parsed,
@@ -4484,7 +4607,7 @@ impl Parser {
             }
             self.expect("}")?;
             if variants.is_empty() {
-                return Err(self.error("empty enums are unsupported"));
+                return Err(self.unsupported("empty enums are unsupported"));
             }
             parsed.program.enums.push(EnumDecl {
                 type_params,
@@ -4497,7 +4620,7 @@ impl Parser {
             let name = self.ident()?;
             let type_params = self.type_parameters()?;
             if !self.pending_bounds.is_empty() {
-                return Err(self.error("bounds on nominal declarations are unsupported"));
+                return Err(self.unsupported("bounds on nominal declarations are unsupported"));
             }
             self.type_params = type_params.clone();
             self.expect("{")?;
@@ -4517,7 +4640,7 @@ impl Parser {
             }
             self.expect("}")?;
             if fields.is_empty() {
-                return Err(self.error("empty structs are unsupported"));
+                return Err(self.unsupported("empty structs are unsupported"));
             }
             parsed.program.structs.push(StructDecl {
                 type_params,
@@ -4536,7 +4659,7 @@ impl Parser {
             let first_ty = self.ty()?;
             let (trait_path, self_ty) = if self.eat("for") {
                 let Type::Named(name) = first_ty else {
-                    return Err(self.error("trait arguments are unsupported"));
+                    return Err(self.unsupported("trait arguments are unsupported"));
                 };
                 (Some(name), self.ty()?)
             } else {
@@ -4546,7 +4669,7 @@ impl Parser {
                 loop {
                     if !self.token().string && self.token().text.starts_with('\'') {
                         return Err(
-                            self.error("lifetime where predicates on impls are unsupported")
+                            self.unsupported("lifetime where predicates on impls are unsupported")
                         );
                     }
                     self.where_type_predicate(&mut bounds)?;
@@ -4559,14 +4682,14 @@ impl Parser {
             let mut items = Vec::new();
             while !self.is("}") {
                 if items.len() >= 4096 {
-                    return Err(self.error("associated item limit exceeded"));
+                    return Err(self.limit("associated item limit exceeded"));
                 }
                 let (visibility, explicit_visibility) = self.visibility(module)?;
                 if explicit_visibility && trait_path.is_some() {
                     return Err(self.error("trait impl items cannot declare pub"));
                 }
                 if self.is("type") {
-                    return Err(self.error("associated types are unsupported"));
+                    return Err(self.unsupported("associated types are unsupported"));
                 }
                 let (mut function, receiver) = self.function_scoped(&type_params, true)?;
                 function.visibility = visibility.clone();
@@ -4602,20 +4725,20 @@ impl Parser {
                     .get(self.at + 1)
                     .is_some_and(|t| t.text == "const")
             {
-                return Err(self.error("const type alias parameters are unsupported"));
+                return Err(self.unsupported("const type alias parameters are unsupported"));
             }
             let params = self.type_parameters()?;
             if !self.pending_bounds.is_empty() || self.is("where") || self.is(":") {
-                return Err(self.error("type alias bounds and where clauses are unsupported"));
+                return Err(self.unsupported("type alias bounds and where clauses are unsupported"));
             }
             self.type_params = params.clone();
             self.expect("=")?;
             self.alias_target = true;
             let target = self.ty()?;
             self.alias_target = false;
-            validate_depth(DepthNode::Type(&target))?;
+            validate_depth(DepthNode::Type(&target)).map_err(|e| self.depth_error(&e))?;
             if self.is("where") {
-                return Err(self.error("type alias where clauses are unsupported"));
+                return Err(self.unsupported("type alias where clauses are unsupported"));
             }
             self.expect(";")?;
             (name, ItemKind::TypeAlias(TypeAliasDecl { params, target }))
@@ -4632,7 +4755,7 @@ impl Parser {
         path: &str,
         visibility: ir::Visibility,
         kind: ItemKind,
-    ) -> Result<(), String> {
+    ) -> Result<(), ParseError> {
         let bindings = parsed.items.entry(path.to_owned()).or_default();
         if bindings.iter().any(|item| {
             if matches!(kind, ItemKind::Enum)
@@ -4659,7 +4782,7 @@ impl Parser {
         bindings.push(Item { visibility, kind });
         Ok(())
     }
-    fn lifetime(&mut self) -> Result<String, String> {
+    fn lifetime(&mut self) -> Result<String, ParseError> {
         if self.token().string {
             return Err(self.error("expected named lifetime, not a string"));
         }
@@ -4668,7 +4791,7 @@ impl Parser {
             .strip_prefix('\'')
             .ok_or_else(|| self.error("expected named lifetime"))?;
         if name == "static" || name == "_" {
-            return Err(self.error("static and inferred lifetimes are unsupported"));
+            return Err(self.unsupported("static and inferred lifetimes are unsupported"));
         }
         if [
             "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn",
@@ -4679,7 +4802,7 @@ impl Parser {
         ]
         .contains(&name)
         {
-            return Err(self.error("keyword lifetime names are unsupported"));
+            return Err(self.unsupported("keyword lifetime names are unsupported"));
         }
         if !name
             .as_bytes()
@@ -4691,12 +4814,12 @@ impl Parser {
         self.at += 1;
         Ok(text)
     }
-    fn region_bounds(&mut self, long: &str, regions: &mut RegionDecls) -> Result<(), String> {
+    fn region_bounds(&mut self, long: &str, regions: &mut RegionDecls) -> Result<(), ParseError> {
         if self.eat(":") {
             loop {
                 let short = self.lifetime()?;
                 if regions.outlives.len() >= 4096 {
-                    return Err(self.error("lifetime bounds exceed supported limit 4096"));
+                    return Err(self.limit("lifetime bounds exceed supported limit 4096"));
                 }
                 regions.outlives.push((long.to_owned(), short));
                 if !self.eat("+") {
@@ -4709,12 +4832,12 @@ impl Parser {
     /// One `T: Trait + Other` where predicate whose subject is a visible type
     /// parameter. Bounds join the same predicate rows as inline bounds, so
     /// the trait world sees one authoritative environment for both spellings.
-    fn where_type_predicate(&mut self, bounds: &mut Vec<TypeBound>) -> Result<(), String> {
+    fn where_type_predicate(&mut self, bounds: &mut Vec<TypeBound>) -> Result<(), ParseError> {
         if self.is("for") {
-            return Err(self.error("higher-ranked where predicates are unsupported"));
+            return Err(self.unsupported("higher-ranked where predicates are unsupported"));
         }
         if self.is("Self") {
-            return Err(self.error("Self where predicates are unsupported"));
+            return Err(self.unsupported("Self where predicates are unsupported"));
         }
         let parameter = self.ident()?;
         if !self.type_params.contains(&parameter) {
@@ -4731,13 +4854,13 @@ impl Parser {
         let mut traits = Vec::new();
         while !(self.is(",") || self.is("{") || self.is(";")) {
             if self.is("?") {
-                return Err(self.error("relaxed ?Sized bounds are unsupported"));
+                return Err(self.unsupported("relaxed ?Sized bounds are unsupported"));
             }
             if !self.token().string && self.token().text.starts_with('\'') {
-                return Err(self.error("type outlives bounds are unsupported"));
+                return Err(self.unsupported("type outlives bounds are unsupported"));
             }
             if traits.len() >= 256 {
-                return Err(self.error("predicate limit exceeded"));
+                return Err(self.limit("predicate limit exceeded"));
             }
             traits.push(self.path()?);
             if !self.eat("+") {
@@ -4745,19 +4868,19 @@ impl Parser {
             }
         }
         if bounds.len() >= 4096 {
-            return Err(self.error("predicate limit exceeded"));
+            return Err(self.limit("predicate limit exceeded"));
         }
         bounds.push(TypeBound { parameter, traits });
         Ok(())
     }
-    fn function(&mut self) -> Result<Function, String> {
+    fn function(&mut self) -> Result<Function, ParseError> {
         self.function_scoped(&[], false).map(|(f, _)| f)
     }
     fn function_scoped(
         &mut self,
         inherited: &[String],
         associated: bool,
-    ) -> Result<(Function, ReceiverKind), String> {
+    ) -> Result<(Function, ReceiverKind), ParseError> {
         let (head, receiver) = self.function_head(inherited, associated)?;
         Ok((
             Function {
@@ -4773,7 +4896,7 @@ impl Parser {
             receiver,
         ))
     }
-    fn callable_generics(&mut self, regions: &mut RegionDecls) -> Result<Vec<String>, String> {
+    fn callable_generics(&mut self, regions: &mut RegionDecls) -> Result<Vec<String>, ParseError> {
         self.pending_bounds.clear();
         let mut params = Vec::new();
         if !self.eat("<") {
@@ -4786,7 +4909,7 @@ impl Parser {
                     return Err(self.error("lifetime parameters must precede type parameters"));
                 }
                 if regions.params.len() >= 64 {
-                    return Err(self.error("declared lifetime limit64"));
+                    return Err(self.limit("declared lifetime limit64"));
                 }
                 let name = self.lifetime()?;
                 regions.params.push(name.clone());
@@ -4794,7 +4917,7 @@ impl Parser {
             } else {
                 seen_type = true;
                 if params.len() >= 32 {
-                    return Err(self.error("generic parameter resource limit32"));
+                    return Err(self.limit("generic parameter resource limit32"));
                 }
                 let name = self.ident()?;
                 if params.contains(&name) {
@@ -4805,7 +4928,7 @@ impl Parser {
                     let mut traits = Vec::new();
                     loop {
                         if traits.len() >= 256 {
-                            return Err(self.error("predicate limit exceeded"));
+                            return Err(self.limit("predicate limit exceeded"));
                         }
                         traits.push(self.path()?);
                         if !self.eat("+") {
@@ -4818,7 +4941,7 @@ impl Parser {
                     });
                 }
                 if self.is("=") {
-                    return Err(self.error("generic defaults are unsupported"));
+                    return Err(self.unsupported("generic defaults are unsupported"));
                 }
             }
             if !self.eat(",") || self.is(">") {
@@ -4832,7 +4955,7 @@ impl Parser {
         &mut self,
         inherited: &[String],
         associated: bool,
-    ) -> Result<(FunctionHead, ReceiverKind), String> {
+    ) -> Result<(FunctionHead, ReceiverKind), ParseError> {
         self.expect("fn")?;
         let name = self.ident()?;
         let mut regions = RegionDecls::default();
@@ -4868,7 +4991,7 @@ impl Parser {
             let mutable = self.eat("mut");
             self.expect("self")?;
             if self.is(":") {
-                return Err(self.error("typed receivers are unsupported"));
+                return Err(self.unsupported("typed receivers are unsupported"));
             }
             receiver = ReceiverKind::Value { mutable };
             if !self.is(")") {
@@ -4919,9 +5042,9 @@ impl Parser {
             receiver,
         ))
     }
-    fn block(&mut self) -> Result<Block, String> {
+    fn block(&mut self) -> Result<Block, ParseError> {
         if self.nesting >= 128 {
-            return Err(self.error("syntax nesting exceeds limit 128"));
+            return Err(self.limit("syntax nesting exceeds limit 128"));
         }
         self.nesting += 1;
         let previous = self.allow_struct;
@@ -4931,21 +5054,23 @@ impl Parser {
         self.nesting -= 1;
         result
     }
-    fn pattern(&mut self) -> Result<Pattern, String> {
+    fn pattern(&mut self) -> Result<Pattern, ParseError> {
         if self.nesting >= 128 {
-            return Err(self.error("pattern nesting exceeds limit 128"));
+            return Err(self.limit("pattern nesting exceeds limit 128"));
         }
         self.nesting += 1;
         let result = self.pattern_inner();
         self.nesting -= 1;
         result
     }
-    fn pattern_inner(&mut self) -> Result<Pattern, String> {
+    fn pattern_inner(&mut self) -> Result<Pattern, ParseError> {
         if self.token().string {
-            return Err(self.error("string literal patterns are unsupported"));
+            return Err(self.unsupported("string literal patterns are unsupported"));
         }
         if self.is("&") || self.is("&&") {
-            return Err(self.error("reference patterns and match ergonomics are unsupported in B1"));
+            return Err(
+                self.unsupported("reference patterns and match ergonomics are unsupported in B1")
+            );
         }
         if self.eat("true") {
             return Ok(Pattern::Bool(true));
@@ -4977,7 +5102,7 @@ impl Parser {
             let mut fields = vec![first];
             while !self.is(")") {
                 if self.is("..") {
-                    return Err(self.error("tuple rest patterns are unsupported"));
+                    return Err(self.unsupported("tuple rest patterns are unsupported"));
                 }
                 fields.push(self.pattern()?);
                 if !self.eat(",") {
@@ -5009,7 +5134,7 @@ impl Parser {
             let mut fields = Vec::new();
             while !self.is(")") {
                 if self.is("..") {
-                    return Err(self.error("tuple variant rest patterns are unsupported"));
+                    return Err(self.unsupported("tuple variant rest patterns are unsupported"));
                 }
                 fields.push((FieldSelector::Tuple(fields.len()), self.pattern()?));
                 if !self.eat(",") {
@@ -5064,7 +5189,7 @@ impl Parser {
         self.expect("}")?;
         Ok(wrap(Pattern::Struct { name, fields, rest }))
     }
-    fn compound_statement(&mut self, target: Expr, op: BinaryOp) -> Result<Stmt, String> {
+    fn compound_statement(&mut self, target: Expr, op: BinaryOp) -> Result<Stmt, ParseError> {
         let value = self.expr(0)?;
         self.expect(";")?;
         if let Expr::DynamicIndex { base, index } = target {
@@ -5081,7 +5206,7 @@ impl Parser {
             value,
         })
     }
-    fn block_inner(&mut self) -> Result<Block, String> {
+    fn block_inner(&mut self) -> Result<Block, ParseError> {
         self.expect("{")?;
         let mut statements = Vec::new();
         let mut tail = None;
@@ -5093,7 +5218,7 @@ impl Parser {
                 continue;
             }
             if self.is("mod") || self.is("use") || self.is("fn") || self.is("pub") {
-                return Err(self.error("block-local items are unsupported"));
+                return Err(self.unsupported("block-local items are unsupported"));
             }
             if self.eat("let") {
                 let pattern = self.pattern()?;
@@ -5108,7 +5233,9 @@ impl Parser {
                 };
                 if self.eat(";") {
                     let Pattern::Binding { name, mutable } = pattern else {
-                        return Err(self.error("deferred pattern declarations are unsupported"));
+                        return Err(
+                            self.unsupported("deferred pattern declarations are unsupported")
+                        );
                     };
                     let ty = annotation.unwrap_or(Type::Infer);
                     statements.push(Stmt::Declare { name, ty, mutable });
@@ -5226,7 +5353,7 @@ impl Parser {
         self.expect("}")?;
         Ok(Block { statements, tail })
     }
-    fn assignment_place(&self, mut expr: Expr) -> Result<Place, String> {
+    fn assignment_place(&self, mut expr: Expr) -> Result<Place, ParseError> {
         let mut fields = Vec::new();
         loop {
             match expr {
@@ -5234,46 +5361,46 @@ impl Parser {
                 Expr::Deref {value}=>{fields.push(FieldSelector::Deref);expr = *value;}
                 Expr::Field { base, field } => { fields.push(field); expr = *base; }
                 Expr::Index { base,index } => {fields.push(FieldSelector::ConstantIndex(index));expr = *base;}
-                _ => return Err(self.error("assignment requires a local-rooted place; destructuring and temporary assignment are unsupported")),
+                _ => return Err(self.unsupported("assignment requires a local-rooted place; destructuring and temporary assignment are unsupported")),
             }
         }
     }
-    fn nested_expr(&mut self) -> Result<Expr, String> {
+    fn nested_expr(&mut self) -> Result<Expr, ParseError> {
         let previous = self.allow_struct;
         self.allow_struct = true;
         let result = self.expr(0);
         self.allow_struct = previous;
         result
     }
-    fn condition(&mut self) -> Result<Expr, String> {
+    fn condition(&mut self) -> Result<Expr, ParseError> {
         let previous = self.allow_struct;
         self.allow_struct = false;
         let result = self.expr(0);
         self.allow_struct = previous;
         result
     }
-    fn expr(&mut self, min: u8) -> Result<Expr, String> {
+    fn expr(&mut self, min: u8) -> Result<Expr, ParseError> {
         if self.nesting >= 128 {
-            return Err(self.error("syntax nesting exceeds limit 128"));
+            return Err(self.limit("syntax nesting exceeds limit 128"));
         }
         self.nesting += 1;
         let result = self.expr_inner(min);
         self.nesting -= 1;
         result
     }
-    fn statement_expr(&mut self) -> Result<Expr, String> {
+    fn statement_expr(&mut self) -> Result<Expr, ParseError> {
         if self.nesting >= 128 {
-            return Err(self.error("syntax nesting exceeds limit128"));
+            return Err(self.limit("syntax nesting exceeds limit128"));
         }
         self.nesting += 1;
         let result = self.expr_inner_mode(0, true);
         self.nesting -= 1;
         result
     }
-    fn cast_after_as(&mut self, value: Expr) -> Result<Expr, String> {
+    fn cast_after_as(&mut self, value: Expr) -> Result<Expr, ParseError> {
         self.expect("as")?;
         if self.is("(") {
-            return Err(self.error("parenthesized cast target types are unsupported"));
+            return Err(self.unsupported("parenthesized cast target types are unsupported"));
         }
         let target = self.ty()?;
         if self.is("<") || self.is("<<") {
@@ -5288,10 +5415,10 @@ impl Parser {
             value: Box::new(value),
             target,
         };
-        validate_depth(DepthNode::Expr(&expr)).map_err(|e| self.error(&e))?;
+        validate_depth(DepthNode::Expr(&expr)).map_err(|e| self.depth_error(&e))?;
         Ok(expr)
     }
-    fn named_expr(&mut self) -> Result<Expr, String> {
+    fn named_expr(&mut self) -> Result<Expr, ParseError> {
         let generic_path = self.generic_path(false)?;
         let name = generic_path.spelling();
         let value = if self.eat("!") {
@@ -5350,7 +5477,7 @@ impl Parser {
             },
         )
     }
-    fn field_or_method_after_dot(&mut self, left: Expr) -> Result<Expr, String> {
+    fn field_or_method_after_dot(&mut self, left: Expr) -> Result<Expr, ParseError> {
         Ok({
             let field = if self.token().text.starts_with(|c: char| c.is_ascii_digit()) {
                 let token = self.token();
@@ -5406,23 +5533,23 @@ impl Parser {
             }
         })
     }
-    fn expr_inner(&mut self, min: u8) -> Result<Expr, String> {
+    fn expr_inner(&mut self, min: u8) -> Result<Expr, ParseError> {
         self.expr_inner_mode(min, false)
     }
-    fn expr_inner_mode(&mut self, min: u8, statement: bool) -> Result<Expr, String> {
+    fn expr_inner_mode(&mut self, min: u8, statement: bool) -> Result<Expr, ParseError> {
         if !self.token().string && self.token().text.starts_with('\'') {
             return self.labeled_expression(min, statement);
         }
         let statement_blocklike =
             statement && matches!(self.token().text.as_str(), "if" | "match" | "loop" | "{");
         if self.is("&&") {
-            return Err(self.error("nested reference borrows are unsupported in B1"));
+            return Err(self.unsupported("nested reference borrows are unsupported in B1"));
         }
         let left = self.expr_prefix(statement)?;
         self.expr_continuation(left, min, statement_blocklike)
     }
     #[inline(never)]
-    fn labeled_expression(&mut self, min: u8, statement: bool) -> Result<Expr, String> {
+    fn labeled_expression(&mut self, min: u8, statement: bool) -> Result<Expr, ParseError> {
         let label = self.token().text.trim_start_matches('\'').to_owned();
         self.at += 1;
         self.expect(":")?;
@@ -5441,7 +5568,7 @@ impl Parser {
         };
         self.expr_continuation(left, min, statement)
     }
-    fn trait_call_prefix(&mut self) -> Result<Expr, String> {
+    fn trait_call_prefix(&mut self) -> Result<Expr, ParseError> {
         let owner = self.ty()?;
         self.expect("as")?;
         let trait_path = self.path()?;
@@ -5449,13 +5576,13 @@ impl Parser {
         self.expect("::")?;
         let name = self.ident()?;
         if self.is("::") {
-            return Err(self.error("generic trait methods are unsupported"));
+            return Err(self.unsupported("generic trait methods are unsupported"));
         }
         self.expect("(")?;
         let mut args = Vec::new();
         while !self.is(")") {
             if args.len() >= 4096 {
-                return Err(self.error("call argument limit exceeded"));
+                return Err(self.limit("call argument limit exceeded"));
             }
             args.push(self.nested_expr()?);
             if !self.eat(",") {
@@ -5471,7 +5598,7 @@ impl Parser {
         })
     }
     #[inline(never)]
-    fn expr_prefix(&mut self, statement: bool) -> Result<Expr, String> {
+    fn expr_prefix(&mut self, statement: bool) -> Result<Expr, ParseError> {
         let left = if self.eat("<") {
             self.trait_call_prefix()?
         } else if self.eat("&") {
@@ -5481,7 +5608,7 @@ impl Parser {
                 ir::BorrowKind::Shared
             };
             let value = self.expr(11)?;
-            let place=self.assignment_place(value).map_err(|_|self.error("borrowing requires a local-root static place; rvalues and runtime indexed borrows are unsupported"))?;
+            let place=self.assignment_place(value).map_err(|_|self.unsupported("borrowing requires a local-root static place; rvalues and runtime indexed borrows are unsupported"))?;
             Expr::Borrow { kind, place }
         } else if self.eat("*") {
             Expr::Deref {
@@ -5552,7 +5679,7 @@ impl Parser {
     // In particular u128's alignment must not multiply match-arm and literal
     // scratch storage across all 128 admitted syntax levels.
     #[inline(never)]
-    fn number_prefix(&mut self) -> Result<Expr, String> {
+    fn number_prefix(&mut self) -> Result<Expr, ParseError> {
         let text = self.token().text.clone();
         let expression =
             if let Some(literal) = parse_float_literal(&text).map_err(|e| self.error(&e))? {
@@ -5564,7 +5691,7 @@ impl Parser {
         Ok(expression)
     }
     #[inline(never)]
-    fn group_prefix(&mut self) -> Result<Expr, String> {
+    fn group_prefix(&mut self) -> Result<Expr, ParseError> {
         if self.eat(")") {
             return Ok(Expr::Block(Block {
                 statements: Vec::new(),
@@ -5587,7 +5714,7 @@ impl Parser {
         Ok(Expr::Tuple(fields))
     }
     #[inline(never)]
-    fn array_prefix(&mut self) -> Result<Expr, String> {
+    fn array_prefix(&mut self) -> Result<Expr, ParseError> {
         if self.eat("]") {
             return Ok(Expr::Array(Vec::new()));
         }
@@ -5603,7 +5730,7 @@ impl Parser {
         let mut values = vec![first];
         while self.eat(",") && !self.is("]") {
             if values.len() >= ir::MAX_ARRAY_LEN {
-                return Err(self.error("array literal exceeds supported length"));
+                return Err(self.limit("array literal exceeds supported length"));
             }
             values.push(self.nested_expr()?);
         }
@@ -5611,7 +5738,7 @@ impl Parser {
         Ok(Expr::Array(values))
     }
     #[inline(never)]
-    fn if_prefix(&mut self, statement: bool) -> Result<Expr, String> {
+    fn if_prefix(&mut self, statement: bool) -> Result<Expr, ParseError> {
         let condition = Box::new(self.condition()?);
         let then_block = self.block()?;
         let else_block = if self.eat("else") {
@@ -5640,17 +5767,19 @@ impl Parser {
         })
     }
     #[inline(never)]
-    fn match_prefix(&mut self) -> Result<Expr, String> {
+    fn match_prefix(&mut self) -> Result<Expr, ParseError> {
         let scrutinee = Box::new(self.condition()?);
         self.expect("{")?;
         let mut arms = Vec::new();
         while !self.is("}") {
             if arms.len() >= 4096 {
-                return Err(self.error("match arm count exceeds limit 4096"));
+                return Err(self.limit("match arm count exceeds limit 4096"));
             }
             let pattern = self.pattern()?;
             if self.is("if") || self.is("|") || self.is("@") {
-                return Err(self.error("match guards, or-patterns and @ patterns are unsupported"));
+                return Err(
+                    self.unsupported("match guards, or-patterns and @ patterns are unsupported")
+                );
             }
             self.expect("=>")?;
             let direct_return = self.eat("return");
@@ -5685,7 +5814,7 @@ impl Parser {
         mut left: Expr,
         min: u8,
         statement_blocklike: bool,
-    ) -> Result<Expr, String> {
+    ) -> Result<Expr, ParseError> {
         let mut compared = false;
         loop {
             if statement_blocklike
@@ -5713,7 +5842,7 @@ impl Parser {
                         resolve_integer(&literal, false, Some(&ir::Ty::Int(ir::IntTy::Usize)))
                             .map_err(|e| self.error(&e))?;
                     if value.bits > ir::MAX_ARRAY_LEN as u128 {
-                        return Err(self.error("array index exceeds supported limit"));
+                        return Err(self.limit("array index exceeds supported limit"));
                     }
                     let index = value.bits as usize;
                     self.at += 1;
@@ -5724,11 +5853,11 @@ impl Parser {
                     };
                 } else {
                     if self.is("..") {
-                        return Err(self.error("unsupported: range indexing and subslicing"));
+                        return Err(self.unsupported("unsupported: range indexing and subslicing"));
                     }
                     let index = self.nested_expr()?;
                     if self.is("..") || self.is("..=") {
-                        return Err(self.error("unsupported: range indexing and subslicing"));
+                        return Err(self.unsupported("unsupported: range indexing and subslicing"));
                     }
                     self.expect("]")?;
                     left = Expr::DynamicIndex {
@@ -5736,12 +5865,12 @@ impl Parser {
                         index: Box::new(index),
                     };
                 }
-                validate_depth(DepthNode::Expr(&left)).map_err(|e| self.error(&e))?;
+                validate_depth(DepthNode::Expr(&left)).map_err(|e| self.depth_error(&e))?;
                 continue;
             }
             if self.eat(".") {
                 left = self.field_or_method_after_dot(left)?;
-                validate_depth(DepthNode::Expr(&left)).map_err(|e| self.error(&e))?;
+                validate_depth(DepthNode::Expr(&left)).map_err(|e| self.depth_error(&e))?;
                 continue;
             }
             if statement_blocklike
@@ -5799,7 +5928,7 @@ impl Parser {
                 .get(self.at + 1)
                 .is_some_and(|token| !token.string && token.text == "=")
             {
-                return Err(self.error("compound bitwise/shift assignments are unsupported"));
+                return Err(self.unsupported("compound bitwise/shift assignments are unsupported"));
             }
             if precedence == 3 {
                 if compared {
@@ -5816,7 +5945,7 @@ impl Parser {
                 left: Box::new(left),
                 right: Box::new(right),
             };
-            validate_depth(DepthNode::Expr(&left)).map_err(|e| self.error(&e))?;
+            validate_depth(DepthNode::Expr(&left)).map_err(|e| self.depth_error(&e))?;
         }
         Ok(left)
     }
@@ -5834,11 +5963,11 @@ fn literal_format(text: &str) -> Result<String, String> {
 }
 
 /// Parse syntax only, retaining imports and visibility for the signatures phase.
-pub fn parse_unresolved(source: &str) -> Result<ParsedProgram, String> {
+fn parse_syntax_tokens(tokens: Vec<Token>) -> Result<ParsedProgram, ParseError> {
     let mut parser = Parser {
         alias_target: false,
         pending_bounds: Vec::new(),
-        tokens: lex(source)?,
+        tokens,
         at: 0,
         nesting: 0,
         allow_struct: true,
@@ -5863,23 +5992,78 @@ pub fn parse_unresolved(source: &str) -> Result<ParsedProgram, String> {
         return Err(parser.error("unexpected module closing brace"));
     }
     for function in &parsed.program.functions {
-        validate_depth(DepthNode::Block(&function.body))
-            .map_err(|e| format!("1:1: in function {}: {e}", function.name))?;
+        validate_depth(DepthNode::Block(&function.body)).map_err(|e| ParseError {
+            kind: super::source::SourceErrorKind::Limit,
+            has_location: false,
+            bytes: 0..0,
+            line: 1,
+            column: 1,
+            message: format!("in function {}: {e}", function.name),
+        })?;
     }
     for declaration in &parsed.program.traits {
         for item in &declaration.items {
             if let Some(default) = &item.default {
-                validate_depth(DepthNode::Block(&default.body)).map_err(|e| {
-                    format!(
-                        "1:1: in trait default {}::{}: {e}",
+                validate_depth(DepthNode::Block(&default.body)).map_err(|e| ParseError {
+                    kind: super::source::SourceErrorKind::Limit,
+                    has_location: false,
+                    bytes: 0..0,
+                    line: 1,
+                    column: 1,
+                    message: format!(
+                        "in trait default {}::{}: {e}",
                         declaration.name, default.name
-                    )
+                    ),
                 })?;
             }
         }
     }
     Ok(parsed)
 }
+/// Syntax-only preparation seam. Does not process attributes, resolve names, or
+/// access files. The source preparation owner supplies attribute-masked text.
+pub(super) fn parse_syntax_unprepared(source: &str) -> Result<ParsedProgram, ParseError> {
+    parse_syntax_tokens(lex(source)?)
+}
+
+/// Parse mapped preparation output without reprocessing attributes or configuration.
+pub fn parse_prepared(
+    source: &super::source::PreparedSource,
+) -> Result<ParsedProgram, super::source::SourceError> {
+    let mapped = |error: ParseError| {
+        let mut diagnostic = super::source::SourceError::syntax(
+            if error.has_location {
+                source.map_range(error.bytes)
+            } else {
+                None
+            },
+            error.message,
+        );
+        diagnostic.kind = error.kind;
+        diagnostic.with_sources(&source.sources)
+    };
+    let tokens = lex(&source.text).map_err(mapped)?;
+    for token in &tokens {
+        if source.map_range(token.bytes.clone()).is_none() {
+            return Err(super::source::SourceError::syntax(
+                None,
+                "prepared token crosses or lacks an original source mapping",
+            )
+            .with_sources(&source.sources));
+        }
+    }
+    parse_syntax_tokens(tokens).map_err(mapped)
+}
+
+/// Parse syntax with the same preparation policy as file inputs, retaining the
+/// legacy line/column String diagnostic format for existing direct callers.
+pub fn parse_unresolved(source: &str) -> Result<ParsedProgram, String> {
+    let prepared =
+        super::source::prepare_text("<text>", source, &super::source::SourceOptions::default())
+            .map_err(|e| e.to_string())?;
+    parse_syntax_unprepared(&prepared.text).map_err(|e| e.to_string())
+}
+
 /// Convenience frontend for callers without separate parse/signatures phases.
 /// Performs name resolution, but not function body type checks.
 pub fn parse(source: &str) -> Result<Program, String> {
@@ -19167,6 +19351,161 @@ mod typed_tests {
                 lowered
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod prepared_location_tests {
+    use super::*;
+
+    fn parser(text: &str) -> Parser {
+        Parser {
+            alias_target: false,
+            pending_bounds: Vec::new(),
+            tokens: lex(text).unwrap(),
+            at: 0,
+            nesting: 0,
+            allow_struct: true,
+            type_params: Vec::new(),
+            use_expansions: 0,
+            use_expansion_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn token_bytes_preserve_unicode_comments_strings_and_crlf() {
+        let text = "/* λ */\r\n\"é\r\n水\" >>=";
+        let tokens = lex(text).unwrap();
+        let string_start = text.find('"').unwrap();
+        let angle_start = text.find(">>=").unwrap();
+        assert_eq!(tokens[0].bytes, string_start..angle_start - 1);
+        assert_eq!(tokens[0].text, "é\n水");
+        assert_eq!((tokens[0].line, tokens[0].column), (2, 1));
+        assert_eq!(tokens[1].bytes, angle_start..angle_start + 3);
+        assert_eq!((tokens[1].line, tokens[1].column), (3, 4));
+        assert_eq!(tokens[2].bytes, text.len()..text.len());
+    }
+
+    #[test]
+    fn typed_lexical_errors_cover_complete_utf8_scalars_and_eof() {
+        let text = "/* 水 */\r\né";
+        let error = lex(text).unwrap_err();
+        assert_eq!(error.bytes, text.len() - 2..text.len());
+        assert_eq!((error.line, error.column), (2, 1));
+        let text = "\"水\\";
+        let error = lex(text).unwrap_err();
+        assert_eq!(error.bytes, text.len()..text.len());
+        assert!(error.message.contains("unsupported string escape"));
+    }
+
+    #[test]
+    fn split_angles_and_shared_references_keep_exact_remaining_bytes() {
+        for (text, expected) in [(">>", ">"), (">=", "="), (">>=", ">=")] {
+            let mut parser = parser(text);
+            parser.close_angle().unwrap();
+            assert_eq!(parser.token().text, expected);
+            assert_eq!(parser.token().bytes, 1..text.len());
+            if text == ">>=" {
+                parser.close_angle().unwrap();
+                assert_eq!(parser.token().text, "=");
+                assert_eq!(parser.token().bytes, 2..3);
+            }
+        }
+        let mut parser = parser("&&&&");
+        let error = parser.ty().unwrap_err();
+        assert_eq!(parser.tokens[0].bytes, 1..2);
+        assert_eq!(parser.tokens[1].bytes, 3..4);
+        assert_eq!(error.bytes, 4..4);
+    }
+
+    #[test]
+    fn prepared_parser_rejects_a_token_crossing_origin_segments() {
+        let text = "fn main() {}";
+        let mut prepared = super::super::source::prepare_text(
+            "crossing.rs",
+            text,
+            &super::super::source::SourceOptions::default(),
+        )
+        .unwrap();
+        let mut first = prepared.origins[0].clone();
+        let mut second = first.clone();
+        first.prepared = 0..1;
+        first.origin.hi = first.origin.lo + 1;
+        second.prepared = 1..text.len();
+        second.origin.lo += 1;
+        prepared.origins = vec![first, second];
+        let error = parse_prepared(&prepared).err().unwrap();
+        assert!(error.primary.is_none());
+        assert!(error.message.contains("crosses or lacks"));
+    }
+
+    #[test]
+    fn syntax_only_seam_never_prepares_or_resolves() {
+        assert!(parse_syntax_unprepared("fn f() { unknown(); }").is_ok());
+        assert!(parse_syntax_unprepared("#[cfg(any())] fn f() {}").is_err());
+        let error = parse_syntax_unprepared("fn f() { let = 1; }")
+            .err()
+            .unwrap();
+        assert_eq!(error.bytes, 13..14);
+        assert_eq!(
+            error.to_string(),
+            "1:14: expected ASCII identifier, found \"=\""
+        );
+        assert_eq!(
+            parse_unresolved("fn f() { let = 1; }").err().unwrap(),
+            error.to_string(),
+        );
+    }
+
+    #[test]
+    fn prepared_diagnostics_preserve_syntax_unsupported_and_limit_categories() {
+        use super::super::source::{SourceErrorKind, SourceOptions, prepare_text};
+        let syntax = parse_syntax_unprepared("fn f() { let = 1; }")
+            .err()
+            .unwrap();
+        assert_eq!(syntax.kind, SourceErrorKind::Syntax);
+        let unsupported = parse_syntax_unprepared("fn f(x: !) {}").err().unwrap();
+        assert_eq!(unsupported.kind, SourceErrorKind::Unsupported);
+        for text in [
+            "const fn unused(value: i32) -> i32 { value }",
+            "async fn unused() {}",
+            "fn unused() { let value = 'x'; }",
+            "fn unused() { let value = r\"raw\"; }",
+        ] {
+            assert_eq!(
+                parse_syntax_unprepared(text).err().unwrap().kind,
+                SourceErrorKind::Unsupported,
+                "{text}",
+            );
+        }
+        let invalid = lex("`").unwrap_err();
+        assert_eq!(invalid.kind, SourceErrorKind::Syntax);
+        assert!(!invalid.message.contains("unsupported"));
+        let expression = std::iter::repeat_n("1", 140).collect::<Vec<_>>().join("+");
+        let text = format!("fn f() -> i64 {{ {expression} }}");
+        let prepared = prepare_text("depth.rs", &text, &SourceOptions::default()).unwrap();
+        let limit = parse_prepared(&prepared).err().unwrap();
+        assert_eq!(limit.kind, SourceErrorKind::Limit);
+        assert!(
+            limit.primary.is_none(),
+            "depth validation has no precise syntax location"
+        );
+    }
+
+    #[test]
+    fn prepared_syntax_errors_map_original_unicode_crlf_positions() {
+        let text = "/* 水 */\r\nfn bad() { let = 1; }";
+        let prepared = super::super::source::prepare_text(
+            "unicode.rs",
+            text,
+            &super::super::source::SourceOptions::default(),
+        )
+        .unwrap();
+        let error = parse_prepared(&prepared).err().unwrap();
+        let primary = error.primary.unwrap();
+        assert_eq!(primary.lo as usize, text.find('=').unwrap());
+        assert_eq!(primary.hi, primary.lo + 1);
+        assert!(error.message.contains("expected ASCII identifier"));
     }
 }
 

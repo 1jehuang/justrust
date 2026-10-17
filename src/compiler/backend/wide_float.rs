@@ -406,7 +406,18 @@ mod tests {
             .unwrap();
         file.write_all(&elf).unwrap();
         drop(file);
-        let output = std::process::Command::new(&path).output().unwrap();
+        // A concurrent fork can briefly inherit another test's writable image.
+        // Retry only ETXTBSY before spawn succeeds, never an executed child.
+        let output = (0..100)
+            .find_map(|attempt| match std::process::Command::new(&path).output() {
+                Err(error) if error.raw_os_error() == Some(26) && attempt < 99 => {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    None
+                }
+                result => Some(result),
+            })
+            .expect("bounded spawn loop returns on its final attempt")
+            .unwrap();
         std::fs::remove_file(path).unwrap();
         assert!(
             output.status.success(),
