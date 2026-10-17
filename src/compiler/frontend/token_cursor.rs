@@ -98,6 +98,11 @@ impl<'input> TokenCursor<'input> {
         }
     }
 
+    /// Compare exact logical positions without importing a foreign input mark.
+    pub(super) fn is_at(&self, mark: CursorMark<'input>) -> bool {
+        std::ptr::eq(self.input, mark.input) && self.at == mark.at && self.prefix == mark.prefix
+    }
+
     /// Foreign or invalid marks leave the current position unchanged. Marks can
     /// only be created by this private cursor, not by source-language programs.
     pub(super) fn restore(&mut self, mark: CursorMark<'input>) -> bool {
@@ -188,11 +193,14 @@ mod tests {
             let original = format!("{tokens:?}");
             let mut cursor = TokenCursor::new(&tokens);
             let start = cursor.checkpoint();
+            assert!(cursor.is_at(start));
             assert!(cursor.consume_type_gt());
+            assert!(!cursor.is_at(start));
             assert_eq!(cursor.current().text, suffix);
             assert_eq!(cursor.current().bytes, 1..text.len());
             assert_eq!(cursor.current().column, 2);
             let middle = cursor.checkpoint();
+            assert!(cursor.is_at(middle));
             let remaining = cursor.current();
             if text == ">>=" {
                 assert!(cursor.consume_type_gt());
@@ -204,8 +212,10 @@ mod tests {
                 cursor.bump();
             }
             assert!(cursor.restore(middle));
+            assert!(cursor.is_at(middle));
             assert_eq!(cursor.current(), remaining);
             assert!(cursor.restore(start));
+            assert!(cursor.is_at(start));
             assert_eq!(cursor.current().text, text);
             assert_eq!(cursor.current().bytes, 0..text.len());
             assert_eq!(format!("{tokens:?}"), original);
@@ -255,6 +265,8 @@ mod tests {
         let mut cursor = TokenCursor::new(&left);
         assert!(cursor.consume_type_gt());
         let position = cursor.current();
+        assert!(!cursor.is_at(TokenCursor::new(&right).checkpoint()));
+        assert!(!cursor.is_at(TokenCursor::new(&left[1..]).checkpoint()));
         assert!(!cursor.restore(TokenCursor::new(&right).checkpoint()));
         assert!(!cursor.restore(TokenCursor::new(&left[1..]).checkpoint()));
         for mark in [

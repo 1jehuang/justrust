@@ -7239,6 +7239,41 @@ mod tests {
     }
 
     #[test]
+    fn let_else_success_bindings_escape_only_to_the_enclosing_live_scope() {
+        for source in [
+            "struct Cell{n:i32}enum E{A(Cell,i32),B}fn f(p:E)->i32{let E::A(cell,n)=p else{return 0;};let next=n+1;cell.n+next}",
+            "struct Cell{n:i32}struct Record{selected:Cell,omitted:Cell}fn f(p:Record)->i32{let Record{selected,..}=p else{return 0;};selected.n+p.omitted.n}",
+            "struct Cell{n:i32}fn f(p:(Cell,i32))->i32{let (cell,..)=p else{return 0;};cell.n+p.1}",
+            "fn f(p:[i32;3])->[i32;3]{let [first,..,last]=p else{return p;};let n=first+last;p}",
+            "struct Cell{n:i32}fn f(p:[Cell;3])->[Cell;3]{let [..]=p else{return p;};p}",
+            "struct Cell{n:i32}enum E{A(Cell),B}fn f(p:E)->E{let mut state=p;loop{let E::A(cell)=state else{break;};let n=cell.n;state=E::B;}state}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+    }
+
+    #[test]
+    fn let_else_partial_moves_still_reject_parent_reuse_and_uninitialized_backedges() {
+        for source in [
+            "struct Cell{n:i32}enum E{A(Cell),B}fn f(p:E)->E{let E::A(cell)=p else{return p;};let n=cell.n;p}",
+            "struct Cell{n:i32}struct Record{selected:Cell,omitted:Cell}fn f(p:Record)->Record{let Record{selected,..}=p else{return p;};let n=selected.n;p}",
+            "struct Cell{n:i32}enum E{A(Cell),B}fn f(p:E){loop{let E::A(cell)=p else{break;};let n=cell.n;}}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.complete);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.kind == ErrorKind::ReadNotDefinitelyInitialized),
+                "{source}: {:?}",
+                result.diagnostics
+            );
+        }
+    }
+
+    #[test]
     fn while_let_moves_require_reinitialization_only_on_actual_backedges() {
         for source in [
             "struct Cell{n:i32} enum E{A(Cell),B} fn f(p:E)->E{let mut state=p;while let E::A(cell)=state{let n=cell.n;state=E::B;continue;}state}",

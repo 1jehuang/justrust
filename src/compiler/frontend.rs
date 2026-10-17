@@ -1223,6 +1223,31 @@ impl SourceInventory {
                         budget,
                     )?;
                 }
+                Stmt::LetElse {
+                    pattern,
+                    value,
+                    else_block,
+                    ..
+                } => {
+                    self.expr(
+                        value,
+                        &here.child(23, 0, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                    self.block(
+                        else_block,
+                        &here.child(23, 1, budget)?,
+                        false,
+                        budget,
+                        depth + 1,
+                    )?;
+                    // Successful bindings belong to the actual enclosing scope,
+                    // not an artificial match arm or recipe root statement.
+                    self.shadow_pattern(pattern, &here.child(23, 2, budget)?, budget, depth + 1)?;
+                }
                 Stmt::LetPattern { pattern, value, .. } => {
                     self.expr(
                         value,
@@ -4130,6 +4155,12 @@ pub enum Stmt {
         /// The actual optional token following the body, not inferred liveness.
         has_semicolon: bool,
     },
+    LetElse {
+        pattern: Box<Pattern>,
+        ty: Type,
+        value: Box<Expr>,
+        else_block: Block,
+    },
 }
 /// Source literal magnitude, before contextual signedness and range checking.
 #[derive(Clone, Debug)]
@@ -6130,20 +6161,23 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
     }
     fn error(&self, message: &str) -> ParseError {
-        let kind = if self.token().is_deferred_unsupported() {
+        self.error_at(&self.token(), message)
+    }
+    fn error_at(&self, token: &TokenView<'_>, message: &str) -> ParseError {
+        let kind = if token.is_deferred_unsupported() {
             super::source::SourceErrorKind::Unsupported
         } else {
             super::source::SourceErrorKind::Syntax
         };
-        if self.token().provenance == TokenProvenance::Expanded {
+        if token.provenance == TokenProvenance::Expanded {
             return native_adapter::expanded_error(
                 self.names.session(),
-                self.token().span,
+                token.span,
                 kind,
-                &format!("{message}, found {:?}", self.token().text),
+                &format!("{message}, found {:?}", token.text),
             );
         }
-        let primary = match native_adapter::original(self.names.session(), self.token().span) {
+        let primary = match native_adapter::original(self.names.session(), token.span) {
             Ok(primary) => Some(primary),
             Err(error) => return error,
         };
@@ -6152,10 +6186,10 @@ impl<'input, 'names> Parser<'input, 'names> {
             primary,
             kind,
             has_location: true,
-            bytes: self.token().bytes.clone(),
-            line: self.token().line,
-            column: self.token().column,
-            message: format!("{message}, found {:?}", self.token().text),
+            bytes: token.bytes.clone(),
+            line: token.line,
+            column: token.column,
+            message: format!("{message}, found {:?}", token.text),
         }
     }
     fn limit(&self, message: &str) -> ParseError {
@@ -7701,6 +7735,13 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         self.nesting += 1;
         let result = self.pattern_inner();
+        let result = result.and_then(|pattern| {
+            if self.is("|") || self.is("@") {
+                Err(self.unsupported("or-patterns and @ patterns are unsupported"))
+            } else {
+                Ok(pattern)
+            }
+        });
         self.nesting -= 1;
         result
     }
@@ -7976,6 +8017,60 @@ impl<'input, 'names> Parser<'input, 'names> {
             value,
         })
     }
+    #[inline(never)]
+    fn validate_let_else_initializer(
+        &self,
+        start: token_cursor::CursorMark<'input>,
+    ) -> Result<(), ParseError> {
+        let invalid_range = || {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidInput(
+                "invalid let-else initializer token range",
+            ))
+        };
+        let end = self.cursor.checkpoint();
+        let mut scan = TokenCursor::new(self.input);
+        if !scan.restore(start) {
+            return Err(invalid_range());
+        }
+        let mut depth = 0usize;
+        let mut last = None;
+        while !scan.is_at(end) {
+            self.names
+                .budget()
+                .charge(super::expansion_budget::Counter::Work, 1)
+                .map_err(|error| native_adapter::transport_error(error.into()))?;
+            let token = scan.bump();
+            if token.matches("") {
+                return Err(invalid_range());
+            }
+            // Parentheses and macro argument groups remain actual source
+            // tokens. Never infer these restrictions from an expanded Expr:
+            // m!() may legitimately expand to an unparenthesized lazy boolean.
+            if depth == 0 && (token.matches("&&") || token.matches("||")) {
+                return Err(self.error_at(
+                    &token,
+                    "let-else lazy boolean initializer requires parentheses",
+                ));
+            }
+            if token.matches("(") || token.matches("[") || token.matches("{") {
+                depth = depth.checked_add(1).ok_or_else(invalid_range)?;
+            } else if token.matches(")") || token.matches("]") || token.matches("}") {
+                depth = depth.checked_sub(1).ok_or_else(invalid_range)?;
+            }
+            last = Some(token);
+        }
+        let last = last.ok_or_else(invalid_range)?;
+        if depth != 0 {
+            return Err(invalid_range());
+        }
+        if last.matches("}") {
+            return Err(self.error_at(
+                &last,
+                "let-else initializer ending in a brace requires parentheses",
+            ));
+        }
+        Ok(())
+    }
     fn block_inner(&mut self) -> Result<Block, ParseError> {
         self.expect("{")?;
         let mut statements = Vec::new();
@@ -7997,9 +8092,6 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
             if self.eat("let") {
                 let pattern = self.pattern()?;
-                if matches!(pattern, Pattern::Bool(_) | Pattern::Int { .. }) {
-                    return Err(self.error("refutable literal pattern in let binding"));
-                }
                 // Local inference is performed by each independent function checker.
                 let annotation = if self.eat(":") {
                     Some(self.ty()?)
@@ -8007,6 +8099,9 @@ impl<'input, 'names> Parser<'input, 'names> {
                     None
                 };
                 if self.eat(";") {
+                    if matches!(pattern, Pattern::Bool(_) | Pattern::Int { .. }) {
+                        return Err(self.error("refutable literal pattern in let binding"));
+                    }
                     let Pattern::Binding { name, mutable } = pattern else {
                         return Err(
                             self.unsupported("deferred pattern declarations are unsupported")
@@ -8022,7 +8117,35 @@ impl<'input, 'names> Parser<'input, 'names> {
                     continue;
                 }
                 self.expect("=")?;
+                let initializer = self.cursor.checkpoint();
                 let value = self.expr(0)?;
+                if self.is("else") {
+                    self.validate_let_else_initializer(initializer)?;
+                    self.cursor.bump();
+                    // Neither this pattern nor its declarations exist in the
+                    // initializer or the genuine diverging else block.
+                    let else_block = self.block()?;
+                    self.expect(";")?;
+                    let pattern = self
+                        .names
+                        .try_parser_box(pattern)
+                        .map_err(native_adapter::name_error)?;
+                    let value = self
+                        .names
+                        .try_parser_box(value)
+                        .map_err(native_adapter::name_error)?;
+                    self.bind_pattern_lexical(&pattern)?;
+                    statements.push(Stmt::LetElse {
+                        pattern,
+                        ty: annotation.unwrap_or(Type::Infer),
+                        value,
+                        else_block,
+                    });
+                    continue;
+                }
+                if matches!(pattern, Pattern::Bool(_) | Pattern::Int { .. }) {
+                    return Err(self.error("refutable literal pattern in let binding"));
+                }
                 self.expect(";")?;
                 self.bind_pattern_lexical(&pattern)?;
                 let ty = annotation.unwrap_or(Type::Infer);
@@ -9672,6 +9795,124 @@ mod inactive_item_syntax_tests {
     }
 
     #[test]
+    fn let_else_keeps_actual_annotation_and_mandatory_semicolon() {
+        let parsed = parse_unresolved("fn main(){let x:i32=42 else{return;};let y=x;}").unwrap();
+        let Stmt::LetElse {
+            pattern,
+            ty,
+            value,
+            else_block,
+        } = &parsed.program.functions[0].body.statements[0]
+        else {
+            panic!("genuine let-else")
+        };
+        assert!(matches!(pattern.as_ref(), Pattern::Binding { .. }));
+        assert!(matches!(ty, Type::Int(ir::IntTy::I32)));
+        assert!(matches!(value.as_ref(), Expr::Integer(_)));
+        assert!(matches!(&else_block.statements[0], Stmt::Return(None)));
+        let source = "fn main(){let x=42 else{return;}}";
+        let error = parse_syntax_unprepared(source).unwrap_err();
+        assert_eq!(error.kind, super::super::source::SourceErrorKind::Syntax);
+        let at = source.rfind('}').unwrap();
+        assert_eq!(error.bytes, at..at + 1);
+        assert!(parse_syntax_unprepared("fn main(){let true=true;}").is_err());
+    }
+
+    #[test]
+    fn let_else_initializer_grammar_uses_actual_tokens_not_expanded_ast() {
+        for (source, token) in [
+            ("fn main(){let _={1}else{return;};}", "}else"),
+            ("fn main(){let true=true&&false else{return;};}", "&&"),
+            ("fn main(){let true=true||false else{return;};}", "||"),
+            (
+                "fn main(){macro_rules! v{()=>{true}}let true=v!{}else{return;};}",
+                "}else",
+            ),
+        ] {
+            let error = parse_syntax_unprepared(source).unwrap_err();
+            assert_eq!(error.kind, super::super::source::SourceErrorKind::Syntax);
+            let at = source.find(token).unwrap();
+            let len = if token == "}else" { 1 } else { token.len() };
+            assert_eq!(error.bytes, at..at + len);
+        }
+        for source in [
+            "fn main(){let _=({1})else{return;};}",
+            "fn main(){let true=(true&&false)else{return;};}",
+            "fn main(){let _=println!(\"}} && ||\")else{return;};}",
+            "fn main(){macro_rules! v{()=>{true}}let true=(v!{})else{return;};}",
+            "fn main(){macro_rules! v{()=>{true&&false}}let true=v!()else{return;};}",
+        ] {
+            parse_unresolved(source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+        let source = "enum E{A(i32),B(i32)}fn main(){let (E::A(x)|E::B(x))=E::A(42)else{return;};}";
+        let error = parse_syntax_unprepared(source).unwrap_err();
+        assert_eq!(
+            error.kind,
+            super::super::source::SourceErrorKind::Unsupported
+        );
+        let at = source.find('|').unwrap();
+        assert_eq!(error.bytes, at..at + 1);
+    }
+
+    #[test]
+    fn let_else_binding_escapes_only_after_old_frontier_else_and_initializer() {
+        let program = parse("fn probe()->bool{false}fn main(){macro_rules! marker{()=>{42}}let x=40;let x=x else{let y=x;return;};let z=x;let true=probe()else{return;};}").unwrap();
+        let function = &program.functions[1];
+        assert!(function.lexical_scope.is_some());
+        let scopes = program.scopes.as_ref().unwrap();
+        let Stmt::Let {
+            name: BindingName::Named(outer),
+            ..
+        } = &function.body.statements[0]
+        else {
+            panic!("outer")
+        };
+        let Stmt::LetElse {
+            pattern,
+            value,
+            else_block,
+            ..
+        } = &function.body.statements[1]
+        else {
+            panic!("let-else")
+        };
+        let Pattern::Binding { name: inner, .. } = pattern.as_ref() else {
+            panic!("pattern")
+        };
+        let outer_id = scopes
+            .declaration_for(program.names.as_ref(), *outer)
+            .unwrap();
+        let inner_id = scopes
+            .declaration_for(program.names.as_ref(), *inner)
+            .unwrap();
+        assert_ne!(outer_id, inner_id);
+        let reference = |value: &Expr| {
+            let Expr::Var(path) = value else {
+                panic!("reference")
+            };
+            scopes
+                .reference_for(program.names.as_ref(), path.single().unwrap())
+                .unwrap()
+        };
+        assert_eq!(reference(value), Some(outer_id));
+        let Stmt::Let { value, .. } = &else_block.statements[0] else {
+            panic!("else binding")
+        };
+        assert_eq!(reference(value), Some(outer_id));
+        let Stmt::Let { value, .. } = &function.body.statements[2] else {
+            panic!("after binding")
+        };
+        assert_eq!(reference(value), Some(inner_id));
+        let budget = ir::PlanBudget::default();
+        let identity = sr::OriginalBodyId::new(&budget).unwrap();
+        let inventory = SourceInventory::build(&program, function, identity, &budget).unwrap();
+        assert_eq!(inventory.bindings.len(), 4);
+        assert_eq!(inventory.calls.len(), 1);
+        assert!(inventory.calls[0].ordinary.is_some());
+        assert_ne!(inventory.bindings[0].node, inventory.bindings[2].node);
+    }
+
+    #[test]
     fn if_let_scrutinee_and_else_keep_outer_binding_and_inventory_identity() {
         let program = parse("fn main(){macro_rules! marker{()=>{42}}let x=40;if let x=x {let y=x;} else {let z=x;}let w=x;}").unwrap();
         let function = &program.functions[0];
@@ -10148,6 +10389,17 @@ fn walk_depth_checked(
                         Stmt::Let { value, ty, .. } => {
                             push(DepthNode::Expr(value))?;
                             push(DepthNode::Type(ty))?;
+                        }
+                        Stmt::LetElse {
+                            pattern,
+                            ty,
+                            value,
+                            else_block,
+                        } => {
+                            push(DepthNode::Pattern(pattern))?;
+                            push(DepthNode::Type(ty))?;
+                            push(DepthNode::Expr(value))?;
+                            push(DepthNode::Block(else_block))?;
                         }
                         Stmt::LetPattern { pattern, ty, value } => {
                             push(DepthNode::Pattern(pattern))?;

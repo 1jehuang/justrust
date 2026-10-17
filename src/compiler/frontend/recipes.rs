@@ -267,6 +267,16 @@ pub(super) fn inventory(
                     ty(t, ds, b, d + 1)?;
                     expr(value, ds, b, d + 1)?;
                 }
+                Stmt::LetElse {
+                    ty: t,
+                    value,
+                    else_block,
+                    ..
+                } => {
+                    ty(t, ds, b, d + 1)?;
+                    expr(value, ds, b, d + 1)?;
+                    block(else_block, ds, b, d + 1)?;
+                }
                 Stmt::AssignDeref { carrier, value } => {
                     expr(carrier, ds, b, d + 1)?;
                     expr(value, ds, b, d + 1)?;

@@ -611,6 +611,20 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Type(ty))?;
                     self.push(Visit::Expr(value))?;
                 }
+                Stmt::LetElse {
+                    pattern,
+                    ty,
+                    value,
+                    else_block,
+                } => {
+                    // The initializer and failure block see the old bindings.
+                    // Success declarations then belong to the enclosing block,
+                    // unlike conditional or match-arm pattern declarations.
+                    self.push(Visit::Pattern(pattern))?;
+                    self.push(Visit::Block(else_block))?;
+                    self.push(Visit::Type(ty))?;
+                    self.push(Visit::Expr(value))?;
+                }
                 Stmt::Assign { name, value } => {
                     self.push(Visit::LocalName(*name))?;
                     self.push(Visit::Expr(value))?;
@@ -1259,6 +1273,93 @@ mod tests {
                 .starts_with("contract:")
         );
     }
+    #[test]
+    fn unused_let_else_checks_all_actual_handles_before_semantic_admission() {
+        let mut foreign = builder();
+        let foreign_name = foreign.ident("foreign").unwrap();
+        let foreign_path = foreign.path("crate::Foreign").unwrap();
+        let _foreign = foreign.finish().unwrap();
+        let mut valid = program();
+        // This is handle admission only; divergence is checked separately by
+        // source typing and the checked IR/CFG boundary.
+        valid.functions[0].body.statements.push(Stmt::LetElse {
+            pattern: Box::new(Pattern::Wildcard),
+            ty: Type::Unit,
+            value: Box::new(Expr::Bool(true)),
+            else_block: Block {
+                statements: Vec::new(),
+                tail: None,
+            },
+        });
+        validate_program_names(&valid).unwrap();
+        for child in 0..4 {
+            let mut malformed = valid.clone();
+            let Stmt::LetElse {
+                pattern,
+                ty,
+                value,
+                else_block,
+            } = malformed.functions[0].body.statements.last_mut().unwrap()
+            else {
+                unreachable!()
+            };
+            match child {
+                0 => {
+                    **pattern = Pattern::Binding {
+                        name: foreign_name,
+                        mutable: false,
+                    }
+                }
+                1 => *ty = Type::Param(foreign_name),
+                2 => **value = Expr::Var(foreign_path.clone()),
+                3 => else_block.tail = Some(Box::new(Expr::Var(foreign_path.clone()))),
+                _ => unreachable!(),
+            }
+            assert!(validate_program_names(&malformed).is_err());
+            assert!(validate_function_names(&malformed, &malformed.functions[0], None).is_err());
+        }
+    }
+
+    #[test]
+    fn let_else_success_binding_persists_but_cannot_move_into_initializer_or_failure() {
+        let source = "enum E{A(i32),B}fn f(p:E)->i32{macro_rules! marker{()=>{0}}let n=9;let E::A(n)=p else{return n;};n}fn main(){}";
+        for target in 0..3 {
+            let mut input = parse(source).unwrap();
+            validate_program_names(&input).unwrap();
+            validate_function_names(&input, &input.functions[0], None).unwrap();
+            let donor = input.functions[0].body.tail.take().unwrap();
+            let Stmt::LetElse {
+                pattern,
+                value,
+                else_block,
+                ..
+            } = &mut input.functions[0].body.statements[1]
+            else {
+                unreachable!()
+            };
+            match target {
+                0 => *value = donor,
+                1 => else_block.statements.push(Stmt::Expr(*donor)),
+                2 => {
+                    **pattern = Pattern::Wildcard;
+                    input.functions[0].body.tail = Some(donor);
+                }
+                _ => unreachable!(),
+            }
+            let before = input.names.budget().snapshot();
+            assert!(
+                validate_program_names(&input)
+                    .unwrap_err()
+                    .starts_with("contract:")
+            );
+            assert!(validate_function_names(&input, &input.functions[0], None).is_err());
+            let after = input.names.budget().snapshot();
+            assert!(after.failure.is_none());
+            assert_eq!(after.temporary_bytes, before.temporary_bytes);
+            assert_eq!(after.retained_bytes, before.retained_bytes);
+        }
+    }
+
     #[test]
     fn unused_while_let_checks_every_actual_handle_even_in_dead_body() {
         let mut foreign = builder();

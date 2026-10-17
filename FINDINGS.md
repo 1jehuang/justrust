@@ -1,5 +1,39 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: genuine let-else with persistent success bindings and actual failure divergence
+
+- Accepted only LET-ELSE.md bounded native syntax. Real initializer/else source
+  nodes and enclosing BindingIds are retained, without synthetic Match syntax,
+  callable identities or arm-local lifetime promotion. Initializer and else
+  resolve under the old frontier; success bindings publish only afterward.
+- Dedicated IR LetElse validates explicit domain and genuine pattern plans. CFG
+  evaluates the initializer once, consumes selected payloads only on success,
+  and keeps successful StorageLive bindings in the enclosing cleanup scope.
+  A metered actual graph proof rejects failure fallthrough, including forged
+  empty Never blocks; Never metadata alone is never a divergence certificate.
+- Stock33 has23 valid/10 invalid sources. Native19 Runtime/10 Invalid/4 valid
+  Unsupported yields132 worker1/8 CHECK/BUILD cells per debug/release profile
+  and38 main-image executions per profile. Four empty-main executions cover
+  two exact Never-initializer compile controls, not divergent value functions.
+- Actual library failure20261017-123453310-2176068 preserved the historical
+  nondivergent else source and moved rejection from parser to actual checker.
+  Actual stock failure20261017-123536884-2179196 required only precise diagnostic
+  wording repair. Actual fixture compile failure20261017-123623825-2182795
+  required signature_table Result unwrap, not a production or oracle relaxation.
+- Pending rows/projections and scratch paths retain actual-capacity leases
+  through publication and free backing before budget release. The new scratch
+  owner drop-order repair was rereviewed before final complete gates. Existing
+  array indexed non-Copy move fences, source limits and native fallback gates
+  remain unchanged. No injected allocator-null execution claim is made.
+- Final debug89test gate20261017-123803698-2190285 and release89test gate
+  20261017-123810200-2190624 include26 public authority controls,6 corpus tests
+  and57 historical pattern tests, including the unchanged empty-output witness.
+- Strict lint20261017-123826007-2191780 and full hosted regression
+  20261017-123833686-2189766 pass:2546 tests/126 binaries, zero failures, ignored
+  or filtered tests, including1011 library tests. All16 successful/failing
+  receipts are retained in data/runs/xps14/2026-10-17-let-else.jsonl.
+  Full Rust remains open. No speedup or compatibility claim is made.
+
 ## 2026-10-17: genuine while-let with repeated checked condition and body-only bindings
 
 - Accepted only WHILE-LET.md bounded statement syntax. Actual boxed source

@@ -170,7 +170,6 @@ fn unsupported_patterns_and_pattern_nesting_are_explicit() {
         "fn main(){let x @ _=1;}",
         "fn main(){let 1=1;}",
         "fn main(){let(mut _)=1;}",
-        "fn main(){let(x,y)=(1,2) else {};}",
         "struct S{x:i32} fn main(){let S{..,x}=S{x:1};}",
         "struct S{x:i32} fn main(){let S{..,}=S{x:1};}",
         "struct S{x:i32} fn main(){let S{x,..,}=S{x:1};}",
@@ -179,6 +178,12 @@ fn unsupported_patterns_and_pattern_nesting_are_explicit() {
     ] {
         assert!(parse(source).is_err(), "accepted {source}");
     }
+    let program = parse("fn main(){let(x,y)=(1,2) else {};}").unwrap();
+    let error = check(&program).unwrap_err();
+    assert!(
+        error.contains("let-else else block must have type Never and never complete"),
+        "{error}"
+    );
     check(&parse("fn main(){let(x,..)=(1,2);}").unwrap()).unwrap();
     let source = format!(
         "fn main(){{let {}x{}=1;}}",

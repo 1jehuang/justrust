@@ -1,6 +1,6 @@
 # Genuine let-else and persistent binding authority
 
-Status: implementation pending acceptance. This milestone is not full Rust support.
+Status: accepted bounded milestone on 2026-10-17. This is not full Rust support.
 
 ## Frozen source contract
 
@@ -29,3 +29,13 @@ Require stock-first byte-preserved grammar and runtime witnesses, worker-1/8 nat
 Public authority controls must reject escaped bindings in initializer/else/earlier statements, foreign unused children, wrong actual nominal/downcast/payload/local metadata, nondivergent else, forged empty Never blocks and premature successful storage cleanup. Validate all children even for irrefutable, dead or Never-initializer cases.
 
 Complete debug and release corpus/authority gates, strict all-target lint, formatting, full unchanged regressions and retained successful and failing run receipts are required before acceptance. Refutable payload matrices, reference ergonomics, or-patterns and non-Copy array element moves remain outside this slice.
+
+## Observed acceptance
+
+- Stock33 sources: 23 valid and 10 invalid, with the original first16 source bytes/order preserved. Native partition: 19 Runtime, 10 Invalid, 4 stock-valid Unsupported. Worker1/8 CHECK/BUILD yields132 cells per debug/release bootstrap profile,264 total. Each profile executes38 main images, including4 deliberate empty-main executions for2 exact Never-initializer controls. Divergent value functions are not executed by those controls.
+- Public authority26 validates genuine continuation storage, oldscope binding identity, actual enum ownership and payload paths, failure Never metadata and forged empty Never blocks. Structural IR acceptance is not treated as a substitute for CFG/ownership validation.
+- The historical irrefutable tuple let-else witness retains identical source and empty output, with parsing, checked IR, actual ELF execution and exit status now required. The historical nondivergent else witness retains identical source and moves from parser rejection to its actual checker rejection.
+- Temporary pending rows, copied projections, scratch paths and CFG reachability backing retain actual-capacity leases until backing storage drops. New allocation failure is latched; no injected allocator-null execution claim is made.
+- Final all-target check20261017-123801483-2189937; debug89 tests20261017-123803698-2190285; release89 tests20261017-123810200-2190624; strict lint20261017-123826007-2191780. These89 include the new32 source/authority tests and57 historical pattern tests.
+- Full unchanged regression20261017-123833686-2189766:2546 passed across126 binaries, zero failed, ignored or filtered. This includes1011 library tests. Formatting and diff checks pass.
+- All16 cited successful and failing receipts are retained in data/runs/xps14/2026-10-17-let-else.jsonl. No compiler speedup or full-Rust compatibility claim follows from these tests.

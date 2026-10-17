@@ -2181,6 +2181,21 @@ struct PendingBlock {
     terminator: Option<Located<Terminator>>,
 }
 
+struct PatternTest {
+    selected: BlockId,
+    rejected: BlockId,
+    temporaries: Vec<LocalId>,
+}
+
+// Fields drop in declaration order: scratch allocations are released before
+// either reservation, including allocator-rounded excess capacity.
+struct DivergenceScratch {
+    seen: Vec<u8>,
+    pending: Vec<BlockId>,
+    _requested: Option<ir::PlanReservation>,
+    _rounded: Option<ir::PlanReservation>,
+}
+
 struct LoopTarget {
     id: LoopId,
     head: Option<BlockId>,
@@ -2254,6 +2269,122 @@ impl Lowerer<'_> {
         place(local)
     }
 
+    fn pattern_test(
+        &mut self,
+        id: ExprId,
+        source: &Place,
+        pattern: &ir::MatchPattern,
+        completes: bool,
+    ) -> Result<PatternTest, String> {
+        let selected = self.block();
+        let rejected = self.block();
+        self.scopes.push(Vec::new());
+        let comparison = match pattern {
+            ir::MatchPattern::Bool(value) => {
+                Some((Operand::Copy(source.clone()), Constant::Bool(*value)))
+            }
+            ir::MatchPattern::Int(value) => {
+                Some((Operand::Copy(source.clone()), Constant::Int(*value)))
+            }
+            _ => None,
+        };
+        if let ir::MatchPattern::EnumVariant { ty, variant, .. } = pattern
+            && completes
+            && ty.def().variants.len() > 1
+        {
+            self.terminate(
+                Terminator::SwitchVariant {
+                    place: source.clone(),
+                    variant: ir::VariantId {
+                        owner: ty.def().id,
+                        index: *variant,
+                    },
+                    then_block: selected,
+                    else_block: rejected,
+                },
+                Some(id),
+            )?;
+        } else if let Some((left, right)) = comparison.filter(|_| completes) {
+            let condition = self.temporary(Ty::Bool, Some(id));
+            self.assign(
+                condition.clone(),
+                Rvalue::Binary {
+                    op: BinaryOp::Eq,
+                    left,
+                    right: Operand::Constant(right),
+                },
+                Some(id),
+            );
+            self.terminate(
+                Terminator::Switch {
+                    condition: Operand::Copy(condition),
+                    then_block: selected,
+                    else_block: rejected,
+                },
+                Some(id),
+            )?;
+        } else {
+            // Keep dead syntax visible without a runtime tag or value read.
+            self.terminate(
+                Terminator::Switch {
+                    condition: Operand::Constant(Constant::Bool(true)),
+                    then_block: selected,
+                    else_block: rejected,
+                },
+                Some(id),
+            )?;
+        }
+        Ok(PatternTest {
+            selected,
+            rejected,
+            temporaries: self.scopes.pop().unwrap(),
+        })
+    }
+
+    /// Storage belongs to the caller's active scope. Match arms open a fresh
+    /// arm scope; let-else success deliberately keeps the enclosing scope.
+    fn initialize_pattern_bindings(
+        &mut self,
+        id: ExprId,
+        source: &Place,
+        pattern: &ir::MatchPattern,
+        completes: bool,
+    ) -> Result<(), String> {
+        if let ir::MatchPattern::Binding(local) = pattern {
+            if *local == source.local {
+                return Err("match binding aliases scrutinee storage".into());
+            }
+            self.live(*local, Some(id));
+            if completes {
+                self.assign(
+                    place(*local),
+                    Rvalue::Use(self.consume(source.clone())?),
+                    Some(id),
+                );
+            }
+        }
+        if let ir::MatchPattern::EnumVariant { bindings, .. }
+        | ir::MatchPattern::Aggregate { bindings, .. } = pattern
+        {
+            for binding in bindings {
+                if binding.local == source.local {
+                    return Err("match field binding aliases scrutinee storage".into());
+                }
+                self.live(binding.local, Some(id));
+                if completes {
+                    let mut selected = source.clone();
+                    selected.projection.extend_from_slice(&binding.projection);
+                    self.assign(
+                        place(binding.local),
+                        Rvalue::Use(self.consume(selected)?),
+                        Some(id),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn match_expression(
         &mut self,
         id: ExprId,
@@ -2274,103 +2405,17 @@ impl Lowerer<'_> {
         let completes = self.source.exprs[scrutinee.0].completion == ir::Completion::Returns;
         let join = self.block();
         for arm in arms {
-            let selected = self.block();
-            let next = self.block();
-            self.scopes.push(Vec::new());
-            let comparison = match &arm.pattern {
-                ir::MatchPattern::Bool(value) => {
-                    Some((Operand::Copy(source.clone()), Constant::Bool(*value)))
-                }
-                ir::MatchPattern::Int(value) => {
-                    Some((Operand::Copy(source.clone()), Constant::Int(*value)))
-                }
-                _ => None,
-            };
-            if let ir::MatchPattern::EnumVariant { ty, variant, .. } = &arm.pattern
-                && completes
-                && ty.def().variants.len() > 1
-            {
-                self.terminate(
-                    Terminator::SwitchVariant {
-                        place: source.clone(),
-                        variant: ir::VariantId {
-                            owner: ty.def().id,
-                            index: *variant,
-                        },
-                        then_block: selected,
-                        else_block: next,
-                    },
-                    Some(id),
-                )?;
-            } else if let Some((left, right)) = comparison.filter(|_| completes) {
-                let condition = self.temporary(Ty::Bool, Some(id));
-                self.assign(
-                    condition.clone(),
-                    Rvalue::Binary {
-                        op: BinaryOp::Eq,
-                        left,
-                        right: Operand::Constant(right),
-                    },
-                    Some(id),
-                );
-                self.terminate(
-                    Terminator::Switch {
-                        condition: Operand::Copy(condition),
-                        then_block: selected,
-                        else_block: next,
-                    },
-                    Some(id),
-                )?;
-            } else {
-                // Keep dead arm bodies visible to conservative ownership
-                // checking without introducing a runtime edge or tag read.
-                self.terminate(
-                    Terminator::Switch {
-                        condition: Operand::Constant(Constant::Bool(true)),
-                        then_block: selected,
-                        else_block: next,
-                    },
-                    Some(id),
-                )?;
-            }
-            let test_scope = self.scopes.pop().unwrap();
+            let PatternTest {
+                selected,
+                rejected: next,
+                temporaries: test_scope,
+            } = self.pattern_test(id, &source, &arm.pattern, completes)?;
             self.current = selected;
             for local in test_scope.iter().rev() {
                 self.statement(Statement::StorageDead(*local), Some(id));
             }
             self.scopes.push(Vec::new());
-            if let ir::MatchPattern::Binding(local) = arm.pattern {
-                if local == source.local {
-                    return Err("match binding aliases scrutinee storage".into());
-                }
-                self.live(local, Some(id));
-                if completes {
-                    self.assign(
-                        place(local),
-                        Rvalue::Use(self.consume(source.clone())?),
-                        Some(id),
-                    );
-                }
-            }
-            if let ir::MatchPattern::EnumVariant { bindings, .. }
-            | ir::MatchPattern::Aggregate { bindings, .. } = &arm.pattern
-            {
-                for binding in bindings {
-                    if binding.local == source.local {
-                        return Err("match field binding aliases scrutinee storage".into());
-                    }
-                    self.live(binding.local, Some(id));
-                    if completes {
-                        let mut selected = source.clone();
-                        selected.projection.extend_from_slice(&binding.projection);
-                        self.assign(
-                            place(binding.local),
-                            Rvalue::Use(self.consume(selected)?),
-                            Some(id),
-                        );
-                    }
-                }
-            }
+            self.initialize_pattern_bindings(id, &source, &arm.pattern, completes)?;
             let value = self.expression(arm.body)?;
             if completes {
                 self.assign(destination.clone(), Rvalue::Use(value), Some(id));
@@ -2386,6 +2431,175 @@ impl Lowerer<'_> {
         self.terminate(Terminator::Unreachable, Some(id))?;
         self.current = join;
         Ok(())
+    }
+
+    fn divergence_resource(&mut self, message: &str) -> String {
+        self.resource_error
+            .get_or_insert_with(|| message.to_owned())
+            .clone()
+    }
+
+    fn divergence_work(&mut self, amount: usize) -> Result<(), String> {
+        if let Some(error) = &self.resource_error {
+            return Err(error.clone());
+        }
+        let next = self
+            .lowering_work
+            .checked_add(amount)
+            .filter(|next| *next <= ir::MAX_PATTERN_PROJECTION_WORK)
+            .ok_or_else(|| self.divergence_resource("CFG lowering work resource limit exceeded"))?;
+        if let Some(budget) = self.budget {
+            budget
+                .charge_work(amount)
+                .map_err(|error| self.divergence_resource(&error))?;
+        }
+        self.lowering_work = next;
+        Ok(())
+    }
+
+    /// Never metadata alone cannot certify a divergent failure branch. Prove
+    /// that its actual pending CFG cannot reach the lexical continuation before
+    /// sealing that disconnected continuation with Unreachable.
+    fn prove_failure_diverges(
+        &mut self,
+        entry: BlockId,
+        continuation: BlockId,
+    ) -> Result<(), String> {
+        self.divergence_work(1)?;
+        let count = self.blocks.len();
+        if entry.0 >= count || continuation.0 >= count {
+            return Err("invalid let-else divergence block".into());
+        }
+        if entry == continuation {
+            return Err("let-else else branch can fall through".into());
+        }
+        self.divergence_work(count)?;
+        let requested = count
+            .checked_mul(std::mem::size_of::<BlockId>() + 1)
+            .ok_or_else(|| {
+                self.divergence_resource("let-else divergence storage resource overflow")
+            })?;
+        let reservation = self
+            .budget
+            .map(|budget| budget.reserve_bytes(requested))
+            .transpose()
+            .map_err(|error| self.divergence_resource(&error))?;
+        let mut seen = Vec::new();
+        seen.try_reserve_exact(count).map_err(|_| {
+            self.divergence_resource("let-else divergence allocation resource failure")
+        })?;
+        let mut pending = Vec::new();
+        pending.try_reserve_exact(count).map_err(|_| {
+            self.divergence_resource("let-else divergence allocation resource failure")
+        })?;
+        let actual = pending
+            .capacity()
+            .checked_mul(std::mem::size_of::<BlockId>())
+            .and_then(|bytes| bytes.checked_add(seen.capacity()))
+            .ok_or_else(|| {
+                self.divergence_resource("let-else divergence storage resource overflow")
+            })?;
+        let excess = actual.checked_sub(requested).ok_or_else(|| {
+            self.divergence_resource("let-else divergence storage resource overflow")
+        })?;
+        let rounded = self
+            .budget
+            .map(|budget| budget.reserve_bytes(excess))
+            .transpose()
+            .map_err(|error| self.divergence_resource(&error))?;
+        seen.resize(count, 0);
+        let mut scratch = DivergenceScratch {
+            seen,
+            pending,
+            _requested: reservation,
+            _rounded: rounded,
+        };
+        scratch.seen[entry.0] = 1;
+        scratch.pending.push(entry);
+        while let Some(current) = scratch.pending.pop() {
+            self.divergence_work(1)?;
+            if current == continuation {
+                return Err("let-else else branch can fall through".into());
+            }
+            let successors = match self.blocks[current.0]
+                .terminator
+                .as_ref()
+                .map(|term| &term.value)
+            {
+                Some(Terminator::Goto(next) | Terminator::Call { next, .. }) => [Some(*next), None],
+                Some(Terminator::Switch {
+                    condition: Operand::Constant(Constant::Bool(value)),
+                    then_block,
+                    else_block,
+                }) => [Some(if *value { *then_block } else { *else_block }), None],
+                Some(
+                    Terminator::Switch {
+                        then_block,
+                        else_block,
+                        ..
+                    }
+                    | Terminator::SwitchVariant {
+                        then_block,
+                        else_block,
+                        ..
+                    },
+                ) => [Some(*then_block), Some(*else_block)],
+                // An open outer break/continue target is a sink in this finite
+                // snapshot, not a proof that the local continuation diverges.
+                None | Some(Terminator::Return | Terminator::Unreachable) => [None, None],
+            };
+            for next in successors.into_iter().flatten() {
+                self.divergence_work(1)?;
+                let visited = scratch
+                    .seen
+                    .get_mut(next.0)
+                    .ok_or("invalid let-else divergence successor")?;
+                if *visited == 0 {
+                    *visited = 1;
+                    // Mark-on-enqueue bounds pending storage by block count.
+                    scratch.pending.push(next);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn let_else(
+        &mut self,
+        value: ExprId,
+        ty: &Ty,
+        pattern: &ir::MatchPattern,
+        else_branch: ExprId,
+    ) -> Result<(), String> {
+        self.source
+            .validate_let_else(value, ty, pattern, else_branch, &self.parameters)?;
+        let source = self.pattern_source(value)?;
+        if source.projection.contains(&Projection::Deref)
+            && matches!(pattern, ir::MatchPattern::EnumVariant { .. })
+        {
+            return Err("unsupported: enum variant matching through dereference".into());
+        }
+        let completes = self.source.exprs[value.0].completion == ir::Completion::Returns;
+        let PatternTest {
+            selected,
+            rejected,
+            temporaries,
+        } = self.pattern_test(value, &source, pattern, completes)?;
+        self.current = rejected;
+        for local in temporaries.iter().rev() {
+            self.statement(Statement::StorageDead(*local), Some(value));
+        }
+        self.scopes.push(Vec::new());
+        self.expression(else_branch)?;
+        self.cleanup(self.scopes.len() - 1, Some(else_branch));
+        self.scopes.pop();
+        self.prove_failure_diverges(rejected, self.current)?;
+        self.terminate(Terminator::Unreachable, Some(else_branch))?;
+        self.current = selected;
+        for local in temporaries.iter().rev() {
+            self.statement(Statement::StorageDead(*local), Some(value));
+        }
+        self.initialize_pattern_bindings(value, &source, pattern, completes)
     }
 
     fn block(&mut self) -> BlockId {
@@ -2674,6 +2888,14 @@ impl Lowerer<'_> {
                     // Wildcard/rest have no bindings, loads, moves or storage
                     // markers. A non-place initializer has still run once.
                     // Divergent initializers never produce projection loads.
+                }
+                ir::Stmt::LetElse {
+                    value,
+                    ty,
+                    pattern,
+                    else_branch,
+                } => {
+                    self.let_else(*value, ty, pattern, *else_branch)?;
                 }
                 ir::Stmt::Assign { local, value } => {
                     let operand = self.expression(*value)?;
@@ -6826,6 +7048,231 @@ mod tests {
             assert!(source.validate().is_err());
             assert!(lower(&source).is_err());
         }
+    }
+
+    #[test]
+    fn let_else_success_binding_lives_through_following_statements_without_arm_cleanup() {
+        let function = nominal_lowered(&checked(
+            "struct Cell{n:i32} enum E{A(Cell,i32),B}fn f(p:E)->i32{let E::A(cell,..)=p else{return 0;};let n=1;cell.n+n}fn main(){}",
+            0,
+        ));
+        let root = function.params[0];
+        let (selected, rejected) = function
+            .blocks
+            .iter()
+            .find_map(|block| match block.terminator.value {
+                Terminator::SwitchVariant {
+                    then_block,
+                    else_block,
+                    ..
+                } => Some((then_block, else_block)),
+                _ => None,
+            })
+            .unwrap();
+        let statements = &function.blocks[selected.0].statements;
+        let (initialize, binding) = statements
+            .iter()
+            .enumerate()
+            .find_map(|(index, statement)| match &statement.value {
+                Statement::Assign {
+                    destination,
+                    value: Rvalue::Use(Operand::Move(place)),
+                } if place.local == root
+                    && matches!(
+                        place.projection.as_slice(),
+                        [Projection::Downcast(_), Projection::Field(0)]
+                    ) =>
+                {
+                    Some((index, destination.local))
+                }
+                _ => None,
+            })
+            .unwrap();
+        let read = statements.iter().position(|statement| matches!(&statement.value, Statement::Assign { value: Rvalue::Use(Operand::Copy(place)), .. } if place.local == binding && place.projection == [Projection::Field(0)])).unwrap();
+        let dead = statements.iter().position(|statement| matches!(statement.value, Statement::StorageDead(local) if local == binding)).unwrap();
+        assert!(initialize < read && read < dead);
+        assert!(!function.blocks[rejected.0].statements.iter().any(
+            |statement| matches!(statement.value, Statement::StorageLive(local) if local == binding)
+        ));
+        assert!(super::super::ownership::analyze(&function).passed());
+    }
+
+    #[test]
+    fn let_else_initializer_runs_once_and_real_outer_control_exits_remain_divergent() {
+        let function = nominal_lowered(&checked(
+            "enum E{A(i32),B}fn make()->E{E::A(7)}fn f()->i32{let E::A(n)=make() else{return 0;};n}fn main(){}",
+            1,
+        ));
+        assert_eq!(
+            function
+                .blocks
+                .iter()
+                .filter(|block| matches!(block.terminator.value, Terminator::Call { .. }))
+                .count(),
+            1
+        );
+        assert!(super::super::ownership::analyze(&function).passed());
+        for text in [
+            "fn f(p:bool)->i32{let true=p else{return 0;};1}fn main(){}",
+            "fn f(p:i32)->i32{let 7=p else{return 0;};1}fn main(){}",
+            "enum E{A(i32),B}fn f(p:E)->i32{loop{let E::A(n)=p else{break 0;};break n;}}fn main(){}",
+            "enum E{A(i32),B}fn f(p:E){loop{let E::A(n)=p else{continue;};break;}}fn main(){}",
+        ] {
+            let function = nominal_lowered(&checked(text, 0));
+            assert!(
+                super::super::ownership::analyze(&function).passed(),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn let_else_rejects_empty_block_with_forged_never_metadata() {
+        let mut source = checked(
+            "fn f(p:bool)->i32{let true=p else{return 0;};1}fn main(){}",
+            0,
+        );
+        nominal_lowered(&source);
+        let otherwise = source
+            .body
+            .statements
+            .iter()
+            .find_map(|statement| match statement {
+                ir::Stmt::LetElse { else_branch, .. } => Some(*else_branch),
+                _ => None,
+            })
+            .unwrap();
+        // Preserve both claimed Never fields. They cannot replace evidence of
+        // an actual abrupt edge or loop in the lowered failure branch.
+        assert_eq!(source.exprs[otherwise.0].ty, Ty::Never);
+        assert_eq!(source.exprs[otherwise.0].completion, ir::Completion::Never);
+        source.exprs[otherwise.0].kind = ir::ExprKind::Block(ir::Block {
+            statements: Vec::new(),
+            tail: None,
+        });
+        assert!(lower(&source).is_err());
+        let abrupt = ExprId(source.exprs.len());
+        source.exprs.push(ir::TypedExpr {
+            ty: Ty::Never,
+            completion: ir::Completion::Never,
+            kind: ir::ExprKind::Break {
+                target: LoopId(0),
+                value: None,
+            },
+        });
+        source.exprs[otherwise.0].kind = ir::ExprKind::Loop {
+            id: LoopId(0),
+            body: ir::Block {
+                statements: vec![ir::Stmt::Expr(abrupt)],
+                tail: None,
+            },
+        };
+        assert!(lower(&source).is_err());
+    }
+
+    fn divergence_probe<'a>(
+        source: &'a ir::CheckedFunction,
+        budget: &'a ir::PlanBudget,
+        terminators: Vec<Option<Terminator>>,
+    ) -> Lowerer<'a> {
+        Lowerer {
+            facts: ir::FactsCtx::Concrete,
+            budget: Some(budget),
+            resource_error: None,
+            lowering_depth: 0,
+            lowering_work: 0,
+            origins: 0,
+            loans: Vec::new(),
+            call_blocks: Vec::new(),
+            used_loans: Default::default(),
+            source,
+            result: nominal_lowered(source),
+            expressions: Vec::new(),
+            parameters: source.params.iter().copied().collect(),
+            blocks: terminators
+                .into_iter()
+                .map(|terminator| PendingBlock {
+                    statements: Vec::new(),
+                    terminator: terminator.map(|value| Located {
+                        value,
+                        origin: None,
+                    }),
+                })
+                .collect(),
+            current: BlockId(1),
+            scopes: Vec::new(),
+            loops: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn let_else_divergence_proof_uses_real_edges_and_releases_scratch_on_all_outcomes() {
+        let source = with_root(Ty::Unit, Vec::new(), Vec::new());
+        for (terminators, accepts) in [
+            (vec![Some(Terminator::Goto(BlockId(1))), None], false),
+            (vec![Some(Terminator::Goto(BlockId(0))), None], true),
+            (vec![Some(Terminator::Return), None], true),
+            (vec![Some(Terminator::Goto(BlockId(2))), None, None], true),
+            (
+                vec![
+                    Some(Terminator::Switch {
+                        condition: Operand::Constant(Constant::Bool(true)),
+                        then_block: BlockId(0),
+                        else_block: BlockId(1),
+                    }),
+                    None,
+                ],
+                true,
+            ),
+            (
+                vec![
+                    Some(Terminator::Switch {
+                        condition: Operand::Constant(Constant::Bool(false)),
+                        then_block: BlockId(0),
+                        else_block: BlockId(1),
+                    }),
+                    None,
+                ],
+                false,
+            ),
+        ] {
+            let budget = ir::PlanBudget::default();
+            let mut probe = divergence_probe(&source, &budget, terminators);
+            let before = budget.usage_snapshot().bytes;
+            assert_eq!(
+                probe.prove_failure_diverges(BlockId(0), BlockId(1)).is_ok(),
+                accepts
+            );
+            let after = budget.usage_snapshot();
+            assert_eq!(after.bytes, before);
+            assert_eq!(after.reservations.current_reservations, 0);
+            assert!(after.reservations.peak_bytes >= 2 * (std::mem::size_of::<BlockId>() + 1));
+            assert!(after.first_failure.is_none());
+        }
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            work: 4,
+            ..Default::default()
+        });
+        let mut probe = divergence_probe(
+            &source,
+            &budget,
+            vec![Some(Terminator::Goto(BlockId(0))), None],
+        );
+        let error = probe
+            .prove_failure_diverges(BlockId(0), BlockId(1))
+            .unwrap_err();
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Work);
+        assert_eq!(budget.usage_snapshot().bytes, 0);
+        assert_eq!(budget.usage_snapshot().reservations.current_reservations, 0);
+        assert!(budget.usage_snapshot().reservations.peak_bytes > 0);
+        assert_eq!(
+            probe
+                .prove_failure_diverges(BlockId(0), BlockId(1))
+                .unwrap_err(),
+            error
+        );
+        assert_eq!(budget.first_resource_failure(), Some(failure));
     }
 
     #[test]

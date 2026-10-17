@@ -61,6 +61,12 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       124-binary hosted gate. Actual trailing semicolon syntax preserves source
       Unit obligations separately from intrinsic runtime loop divergence.
       Expression-position while-let, chains and refutable payload matrices remain open.
+- [x] Genuine let-else with old-frontier initializer/else validation, dedicated
+      persistent-binding IR and checked failure divergence. LET-ELSE.md records
+      stock33/native132 cells per bootstrap profile,26 public authority controls
+      and the complete2,546-test/126-binary hosted gate. Successful bindings live
+      in the enclosing block, not a synthetic match arm. General pattern forms
+      and other unsupported boundaries remain open.
 - [x] Fieldless nominal enums and scalar/enum match with exhaustive coverage.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
 - [x] Payload enums, typed downcasts, bounded selection proofs and native tagged values.
@@ -224,7 +230,8 @@ missing-file changes invalidate only justified consumers without stale lookup.
 - [ ] Generalize slices/DST metadata, array/slice coercions and indexing beyond
       delivered shared `&[u8]`; retain bounds/evaluation order and size limits.
 - [ ] Complete nested/or/range/ref/@/slice patterns, guards, match ergonomics,
-      exhaustiveness/usefulness, if-let/let-else forms and destructuring assignment.
+      exhaustiveness/usefulness, conditional pattern forms beyond delivered
+      IF-LET.md/WHILE-LET.md/LET-ELSE.md slices and destructuring assignment.
 - [ ] Extend bidirectional/local inference, coercion sites, partial type holes,
       omitted method arguments and control-flow joins, preserving rigid universal
       parameters and diagnostics for unresolved constraints.

@@ -625,12 +625,23 @@ fn rejects_legal_unsupported_destructuring_assignment() {
 }
 
 #[test]
-fn rejects_legal_unsupported_let_else_pattern() {
-    // Legal stock Rust, deliberately outside this let-pattern milestone.
-    rejects(
-        "let_else_pattern",
-        r#"fn run() -> i32 { let (a, b) = (1, 2) else { return 0; }; a + b } fn main() { run(); }"#,
-    );
+fn accepts_let_else_pattern_with_original_empty_output() {
+    // The original source and empty main output are retained exactly.
+    // This now requires genuine parsing, checked IR, ELF output and successful execution.
+    let source =
+        r#"fn run() -> i32 { let (a, b) = (1, 2) else { return 0; }; a + b } fn main() { run(); }"#;
+    let program = justrust_engine::compiler::frontend::parse(source).unwrap();
+    let signatures = justrust_engine::compiler::frontend::signature_table(&program).unwrap();
+    for index in 0..program.functions.len() {
+        let function = justrust_engine::compiler::frontend::type_function_with_signatures(
+            &program,
+            index,
+            &signatures,
+        )
+        .unwrap();
+        function.validate().unwrap();
+    }
+    runs(source, "");
 }
 
 #[test]

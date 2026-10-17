@@ -1737,6 +1737,7 @@ impl Resolver<'_> {
                         self.local_insert(locals.last_mut().ok_or("missing local scope")?, *name)?;
                     }
                 }
+                Stmt::LetElse { .. } => self.let_else(stmt, module, locals)?,
                 Stmt::LetPattern { pattern, ty, value } => {
                     self.ty(ty, module)?;
                     self.expr(value, module, locals)?;
@@ -1780,6 +1781,48 @@ impl Resolver<'_> {
         locals.pop();
         Ok(())
     }
+    #[inline(never)]
+    fn let_else(
+        &mut self,
+        statement: &mut Stmt,
+        module: ModuleId,
+        locals: &mut Vec<std::collections::HashSet<LocalKey>>,
+    ) -> Result<(), String> {
+        let Stmt::LetElse {
+            pattern,
+            ty,
+            value,
+            else_block,
+        } = statement
+        else {
+            return Err("let-else bypassed resolver statement dispatcher".into());
+        };
+        self.ty(ty, module)?;
+        let previous_depth = locals.len();
+        let result = self.expr(value, module, locals);
+        locals.truncate(previous_depth);
+        result?;
+        // Resolve actual pattern occurrences and certificates without making
+        // the pending success bindings visible to the failure branch.
+        let mut names = std::collections::HashSet::new();
+        self.pattern(pattern, module, &mut names)?;
+        let result = self.block(else_block, module, locals);
+        locals.truncate(previous_depth);
+        result?;
+        // These are enclosing-scope declarations, not temporary match-arm
+        // bindings. Divergence and dynamic initialization remain checker/IR
+        // responsibilities, never inferred from a resolver scope insertion.
+        self.charge_entries::<LocalKey>(names.len())?;
+        let scope = locals
+            .last_mut()
+            .ok_or("missing let-else enclosing scope")?;
+        scope
+            .try_reserve(names.len())
+            .map_err(|_| "let-else pattern scope allocation failed")?;
+        scope.extend(names);
+        Ok(())
+    }
+
     #[inline(never)]
     fn while_let(
         &mut self,
@@ -2730,6 +2773,69 @@ mod tuple_shape_tests {
             resolve(&parsed).unwrap_err(),
             "in function crate::main: unsupported: first-class tuple struct constructors are unsupported"
         );
+    }
+}
+
+#[cfg(test)]
+mod let_else_tests {
+    use super::*;
+
+    #[test]
+    fn let_else_retains_actual_source_statement_and_full_constructor_certificate() {
+        let source =
+            "enum E{V(i32),Other}use E::V as P;fn main(){let P(x)=P(1)else{return;};let after=x;}";
+        let program = resolve(&parse_unresolved(source).unwrap()).unwrap();
+        let Stmt::LetElse {
+            pattern,
+            value,
+            else_block,
+            ..
+        } = &program.functions[0].body.statements[0]
+        else {
+            panic!("let-else became fabricated match or let-pattern source syntax");
+        };
+        let Pattern::Variant { name, fields, .. } = pattern.as_ref() else {
+            panic!("let-else lost actual constructor pattern syntax");
+        };
+        assert_eq!(fields.len(), 1);
+        assert!(matches!(value.as_ref(), Expr::EnumVariant { .. }));
+        assert!(matches!(else_block.statements[0], Stmt::Return(None)));
+        let target = program.enums[0]
+            .name
+            .push(program.names.as_ref(), program.enums[0].variants[0].name)
+            .unwrap();
+        assert_eq!(
+            name_scope::path_key(program.names.as_ref(), name, Namespace::Type).unwrap(),
+            name_scope::path_key(program.names.as_ref(), &target, Namespace::Type).unwrap()
+        );
+        assert!(
+            !name
+                .source_occurrences(program.names.as_ref())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn let_else_rhs_and_failure_see_old_bindings_before_success_publication() {
+        for source in [
+            "enum E{V(i32),Other}fn x()->i32{7}fn y()->i32{8}fn main(){let E::V(x)=E::V(x())else{let y=2;let z=x()+y;return;};let after=x+y();}",
+            "enum E{V(i32),Other}fn x()->i32{7}fn main(){macro_rules! n{()=>{1};}let E::V(x)=E::V(x()+n!())else{let z=x();return;};let after=x+n!();}",
+        ] {
+            resolve(&parse_unresolved(source).unwrap())
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+        let source = "enum E{V(i32),Other}fn x()->i32{7}fn main(){let E::V(x)=E::V(x())else{let z=x();return;};let after=x();}";
+        let error = resolve(&parse_unresolved(source).unwrap()).unwrap_err();
+        assert!(error.contains("local binding is not callable"), "{error}");
+    }
+
+    #[test]
+    fn let_else_failure_cannot_see_pending_success_binding() {
+        let source = "enum E{V(i32),Other}fn main(){let E::V(x)=E::V(1)else{let y=x();return;};let after=x;}";
+        let error = resolve(&parse_unresolved(source).unwrap()).unwrap_err();
+        assert!(error.contains("unresolved function"), "{error}");
+        assert!(!error.contains("local binding is not callable"), "{error}");
     }
 }
 

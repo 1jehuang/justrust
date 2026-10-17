@@ -1130,6 +1130,18 @@ fn identical_block_types(
             {
                 return Ok(false);
             }
+            (
+                Stmt::LetElse {
+                    ty: a, pattern: pa, ..
+                },
+                Stmt::LetElse {
+                    ty: b, pattern: pb, ..
+                },
+            ) => {
+                if !identical_type(a, b, budget)? || !identical_pattern_types(pa, pb, budget)? {
+                    return Ok(false);
+                }
+            }
             (Stmt::While { body: a, .. }, Stmt::While { body: b, .. })
                 if !identical_block_types(a, b, budget, depth + 1)? =>
             {
@@ -1139,6 +1151,22 @@ fn identical_block_types(
         }
     }
     Ok(true)
+}
+fn identical_pattern_types(
+    a: &MatchPattern,
+    b: &MatchPattern,
+    budget: &PlanBudget,
+) -> Result<bool, String> {
+    budget.charge_work(1)?;
+    match (a, b) {
+        (MatchPattern::EnumVariant { ty: a, .. }, MatchPattern::EnumVariant { ty: b, .. }) => {
+            identical_type(&Ty::Enum(a.clone()), &Ty::Enum(b.clone()), budget)
+        }
+        (MatchPattern::Aggregate { ty: a, .. }, MatchPattern::Aggregate { ty: b, .. }) => {
+            identical_type(a, b, budget)
+        }
+        _ => Ok(std::mem::discriminant(a) == std::mem::discriminant(b)),
+    }
 }
 fn identical_expr_types(a: &ExprKind, b: &ExprKind, budget: &PlanBudget) -> Result<bool, String> {
     budget.charge_work(1)?;
@@ -2184,21 +2212,7 @@ pub fn instantiate_checked(
             ExprKind::EnumVariant { ty, .. } => visitor.enum_ty(ty)?,
             ExprKind::Match { arms, .. } => {
                 for arm in arms {
-                    match &mut arm.pattern {
-                        MatchPattern::EnumVariant { ty, bindings, .. } => {
-                            visitor.enum_ty(ty)?;
-                            visitor.bindings(bindings)?;
-                        }
-                        MatchPattern::Aggregate { ty, bindings } => {
-                            *ty = visitor.ty(ty)?;
-                            visitor.bindings(bindings)?;
-                        }
-                        MatchPattern::Wildcard
-                        | MatchPattern::Binding(_)
-                        | MatchPattern::Bool(_)
-                        | MatchPattern::Int(_)
-                        | MatchPattern::Unit => {}
-                    }
+                    visitor.pattern(&mut arm.pattern)?;
                 }
             }
             ExprKind::Call {
@@ -2681,6 +2695,20 @@ impl<C: SubstitutionCx> Instantiate<'_, C> {
         }
         Ok(())
     }
+    fn pattern(&mut self, pattern: &mut MatchPattern) -> Result<(), String> {
+        match pattern {
+            MatchPattern::EnumVariant { ty, bindings, .. } => {
+                self.enum_ty(ty)?;
+                self.bindings(bindings)?;
+            }
+            MatchPattern::Aggregate { ty, bindings } => {
+                *ty = self.ty(ty)?;
+                self.bindings(bindings)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
     fn block(&mut self, block: &mut Block, depth: usize) -> Result<(), String> {
         self.budget.check_depth(depth)?;
         self.budget.charge_work(block.statements.len())?;
@@ -2695,6 +2723,10 @@ impl<C: SubstitutionCx> Instantiate<'_, C> {
                 Stmt::LetPattern { ty, bindings, .. } => {
                     *ty = self.ty(ty)?;
                     self.bindings(bindings)?;
+                }
+                Stmt::LetElse { ty, pattern, .. } => {
+                    *ty = self.ty(ty)?;
+                    self.pattern(pattern)?;
                 }
                 Stmt::While { body, .. } => self.block(body, depth + 1)?,
                 Stmt::Declare { .. }
@@ -4748,6 +4780,12 @@ pub enum Stmt {
         ty: Ty,
         bindings: Vec<PatternBinding>,
     },
+    LetElse {
+        value: ExprId,
+        ty: Ty,
+        pattern: MatchPattern,
+        else_branch: ExprId,
+    },
     Assign {
         local: LocalId,
         value: ExprId,
@@ -4990,6 +5028,27 @@ impl CheckedFunction {
                         facts.validate_ty_with_budget(ty, budget)?;
                         bindings(values, budget)?;
                     }
+                    Stmt::LetElse { ty, pattern, .. } => {
+                        facts.validate_value_ty_with_budget(ty, budget)?;
+                        match pattern {
+                            MatchPattern::EnumVariant {
+                                ty,
+                                bindings: values,
+                                ..
+                            } => {
+                                facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?;
+                                bindings(values, budget)?;
+                            }
+                            MatchPattern::Aggregate {
+                                ty,
+                                bindings: values,
+                            } => {
+                                facts.validate_value_ty_with_budget(ty, budget)?;
+                                bindings(values, budget)?;
+                            }
+                            _ => {}
+                        }
+                    }
                     Stmt::While { body, .. } => block(body, facts, budget, depth + 1)?,
                     Stmt::Declare { .. }
                     | Stmt::Let { .. }
@@ -5154,97 +5213,135 @@ impl CheckedFunction {
         let mut bindings = std::collections::HashSet::new();
         for arm in arms {
             self.exprs.get(arm.body.0).ok_or("invalid match arm body")?;
-            let valid = match &arm.pattern {
-                MatchPattern::Wildcard => true,
-                MatchPattern::Binding(local) => {
-                    let decl = self
-                        .locals
-                        .get(local.0)
-                        .ok_or("invalid match binding local")?;
-                    if parameters.contains(local) || !bindings.insert(*local) {
-                        return Err("match bindings must be distinct fresh locals".into());
-                    }
-                    let mut work = 0;
-                    *ty == Ty::Never || pattern_types_equal(ty, &decl.ty, &mut work)?
+            self.validate_pattern(ty, &arm.pattern, parameters, &mut bindings)?;
+        }
+        Ok(())
+    }
+
+    fn validate_pattern(
+        &self,
+        ty: &Ty,
+        pattern: &MatchPattern,
+        parameters: &std::collections::HashSet<LocalId>,
+        bindings: &mut std::collections::HashSet<LocalId>,
+    ) -> Result<(), String> {
+        let valid = match pattern {
+            MatchPattern::Wildcard => true,
+            MatchPattern::Binding(local) => {
+                let decl = self
+                    .locals
+                    .get(local.0)
+                    .ok_or("invalid match binding local")?;
+                if parameters.contains(local) || !bindings.insert(*local) {
+                    return Err("match bindings must be distinct fresh locals".into());
                 }
-                MatchPattern::Bool(_) => matches!(ty, Ty::Bool | Ty::Never),
-                MatchPattern::Int(value) => {
-                    value.validate()?;
-                    *ty == Ty::Int(value.ty) || *ty == Ty::Never
-                }
-                MatchPattern::Aggregate {
-                    ty: domain,
-                    bindings: aggregate_bindings,
-                } => {
-                    let aggregate = match domain {
-                        Ty::Struct(_) => true,
-                        Ty::Tuple(fields) => !fields.is_empty(),
-                        Ty::Array { len, .. } => *len > 0 && *len <= MAX_ARRAY_LEN,
-                        _ => false,
-                    };
-                    if !aggregate {
-                        return Err(
+                let mut work = 0;
+                *ty == Ty::Never || pattern_types_equal(ty, &decl.ty, &mut work)?
+            }
+            MatchPattern::Bool(_) => matches!(ty, Ty::Bool | Ty::Never),
+            MatchPattern::Int(value) => {
+                value.validate()?;
+                *ty == Ty::Int(value.ty) || *ty == Ty::Never
+            }
+            MatchPattern::Aggregate {
+                ty: domain,
+                bindings: aggregate_bindings,
+            } => {
+                let aggregate = match domain {
+                    Ty::Struct(_) => true,
+                    Ty::Tuple(fields) => !fields.is_empty(),
+                    Ty::Array { len, .. } => *len > 0 && *len <= MAX_ARRAY_LEN,
+                    _ => false,
+                };
+                if !aggregate {
+                    return Err(
                             "aggregate match requires a nominal struct, nonempty tuple or fixed array domain"
                                 .into(),
                         );
-                    }
-                    self.validate_pattern_bindings_with_params(
-                        domain,
-                        aggregate_bindings,
-                        parameters,
-                    )?;
-                    for binding in aggregate_bindings {
-                        if binding.projection.is_empty()
-                            || binding.projection.iter().any(|step| {
-                                !matches!(step, Projection::Field(_) | Projection::ConstantIndex(_))
-                            })
-                        {
-                            return Err(
+                }
+                self.validate_pattern_bindings_with_params(domain, aggregate_bindings, parameters)?;
+                for binding in aggregate_bindings {
+                    if binding.projection.is_empty()
+                        || binding.projection.iter().any(|step| {
+                            !matches!(step, Projection::Field(_) | Projection::ConstantIndex(_))
+                        })
+                    {
+                        return Err(
                                 "aggregate match bindings require nonempty typed field or constant-index projections"
                                     .into(),
                             );
-                        }
                     }
-                    for binding in aggregate_bindings {
-                        if !bindings.insert(binding.local) {
-                            return Err("match bindings must be distinct fresh locals".into());
-                        }
-                    }
-                    let mut work = 0;
-                    *ty == Ty::Never || pattern_types_equal(ty, domain, &mut work)?
                 }
-                MatchPattern::Unit => matches!(ty, Ty::Unit | Ty::Never),
-                MatchPattern::EnumVariant {
-                    ty: pattern_ty,
-                    variant,
-                    bindings: payload_bindings,
-                } => {
-                    pattern_ty.validate()?;
-                    self.validate_pattern_bindings_with_params(
-                        &Ty::Enum(pattern_ty.clone()),
-                        payload_bindings,
-                        parameters,
-                    )?;
-                    let expected = Projection::Downcast(VariantId {
-                        owner: pattern_ty.def().id,
-                        index: *variant,
-                    });
-                    for binding in payload_bindings {
-                        if binding.projection.first() != Some(&expected)
-                            || !bindings.insert(binding.local)
-                        {
-                            return Err("invalid or repeated enum payload binding".into());
-                        }
+                for binding in aggregate_bindings {
+                    if !bindings.insert(binding.local) {
+                        return Err("match bindings must be distinct fresh locals".into());
                     }
-                    *variant < pattern_ty.def().variants.len()
-                        && (*ty == Ty::Never || *ty == Ty::Enum(pattern_ty.clone()))
                 }
-            };
-            if !valid {
-                return Err("match pattern type or variant mismatch".into());
+                let mut work = 0;
+                *ty == Ty::Never || pattern_types_equal(ty, domain, &mut work)?
             }
+            MatchPattern::Unit => matches!(ty, Ty::Unit | Ty::Never),
+            MatchPattern::EnumVariant {
+                ty: pattern_ty,
+                variant,
+                bindings: payload_bindings,
+            } => {
+                pattern_ty.validate()?;
+                self.validate_pattern_bindings_with_params(
+                    &Ty::Enum(pattern_ty.clone()),
+                    payload_bindings,
+                    parameters,
+                )?;
+                let expected = Projection::Downcast(VariantId {
+                    owner: pattern_ty.def().id,
+                    index: *variant,
+                });
+                for binding in payload_bindings {
+                    if binding.projection.first() != Some(&expected)
+                        || !bindings.insert(binding.local)
+                    {
+                        return Err("invalid or repeated enum payload binding".into());
+                    }
+                }
+                *variant < pattern_ty.def().variants.len()
+                    && (*ty == Ty::Never || *ty == Ty::Enum(pattern_ty.clone()))
+            }
+        };
+        if !valid {
+            return Err("match pattern type or variant mismatch".into());
         }
         Ok(())
+    }
+
+    pub(super) fn validate_let_else(
+        &self,
+        value: ExprId,
+        ty: &Ty,
+        pattern: &MatchPattern,
+        else_branch: ExprId,
+        parameters: &std::collections::HashSet<LocalId>,
+    ) -> Result<(), String> {
+        let value = self
+            .exprs
+            .get(value.0)
+            .ok_or("invalid let-else initializer")?;
+        let otherwise = self
+            .exprs
+            .get(else_branch.0)
+            .ok_or("invalid let-else branch")?;
+        let mut work = 0;
+        if value.ty != Ty::Never && !pattern_types_equal(&value.ty, ty, &mut work)? {
+            return Err("let-else initializer domain mismatch".into());
+        }
+        if otherwise.ty != Ty::Never || otherwise.completion != Completion::Never {
+            return Err("let-else branch must have never type and completion".into());
+        }
+        self.validate_pattern(
+            ty,
+            pattern,
+            parameters,
+            &mut std::collections::HashSet::new(),
+        )
     }
 
     /// Bound and check the flattened plan without revisiting source patterns,
@@ -5892,6 +5989,24 @@ impl CheckedFunction {
                     } => {
                         expr(*value)?;
                         self.validate_pattern_bindings_with_params(ty, bindings, &parameters)?;
+                    }
+                    Stmt::LetElse {
+                        value,
+                        ty,
+                        pattern,
+                        else_branch,
+                    } => {
+                        expr(*value)?;
+                        expr(*else_branch)?;
+                        facts.validate_value_ty(ty)?;
+                        match pattern {
+                            MatchPattern::EnumVariant { ty, .. } => {
+                                facts.validate_value_ty(&Ty::Enum(ty.clone()))?
+                            }
+                            MatchPattern::Aggregate { ty, .. } => facts.validate_value_ty(ty)?,
+                            _ => {}
+                        }
+                        self.validate_let_else(*value, ty, pattern, *else_branch, &parameters)?;
                     }
                     Stmt::AssignPlace { place, value } => {
                         local(place.local)?;
