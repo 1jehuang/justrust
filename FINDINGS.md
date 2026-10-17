@@ -1,5 +1,27 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: named record-rest matches preserve omitted fields
+
+Only the checked named-record irrefutability gate changed: exact source Record
+shape permits `..`, selected members retain privacy and recursive checks, and
+only actual selected bindings reach the existing Aggregate plan. No synthetic
+omitted wildcards, new IR, ABI or replay authority was added. Omitted private
+fields and non-Copy siblings remain usable; selected private fields and moved
+parent/selected reuse reject. Existing enum record-rest behavior is retained,
+not misreported as a new capability or forced into an Unsupported boundary.
+
+Stock27 (19 valid/eight invalid), native108 workers1/8 CHECK/BUILD cells and twelve
+public selector/owner/nominal controls passed debug/release focused sixteen-test
+gates (20261017-110843334-1785842, 20261017-110856112-1786785). Full hosted gate
+20261017-110911577-1787841 passed 2,268 tests in 114 binaries; strict lint
+20261017-110928920-1789008, formatting and diff checks passed. Nine exact receipts
+include the initial new-test Enum/EnumVariant API spelling error, not hidden or
+reclassified failures. Source27 bytes/order and previous corpora remain unchanged.
+
+Full-suite compile was 3.97s, tests 12.46s and wide-integer stock oracle 12.28s.
+These are diagnostic observations, not a before/after speed claim. Full Rust,
+positional rest and general refutable/reference patterns remain open.
+
 ## 2026-10-17: Nominal tuple structs with exact source shape and positional privacy
 
 Nonempty nongeneric tuple structs now use actual indexed source fields and a

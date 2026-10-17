@@ -6740,6 +6740,65 @@ mod tests {
     }
 
     #[test]
+    fn record_rest_match_emits_only_selected_field_move_and_no_tag() {
+        let source = checked(
+            "struct Cell{n:i32} struct Record{selected:Cell,omitted:Cell} fn f(p:Record)->Cell{match p{Record{selected,..}=>selected}} fn main(){}",
+            0,
+        );
+        let function = nominal_lowered(&source);
+        let root = function.params[0];
+        let reads: Vec<_> = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| match &statement.value {
+                Statement::Assign {
+                    value: Rvalue::Use(operand @ (Operand::Copy(place) | Operand::Move(place))),
+                    ..
+                } if place.local == root => Some(operand),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reads.len(), 1);
+        assert!(
+            matches!(reads[0], Operand::Move(place) if place.projection == [Projection::Field(0)])
+        );
+        assert!(
+            !function
+                .blocks
+                .iter()
+                .any(|block| matches!(block.terminator.value, Terminator::SwitchVariant { .. }))
+        );
+        assert!(super::super::ownership::analyze(&function).passed());
+    }
+
+    #[test]
+    fn bindingless_record_rest_match_keeps_whole_nominal_available() {
+        for pattern in ["Record{..}", "Record{selected:_,..}"] {
+            let text = format!(
+                "struct Cell{{n:i32}} struct Record{{selected:Cell,omitted:Cell}} fn f(p:Record)->Record{{match p{{{pattern}=>()}};p}} fn main(){{}}"
+            );
+            let function = nominal_lowered(&checked(&text, 0));
+            let root = function.params[0];
+            let moves: Vec<_> = function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .filter_map(|statement| match &statement.value {
+                    Statement::Assign {
+                        value: Rvalue::Use(Operand::Move(place)),
+                        ..
+                    } if place.local == root => Some(place),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(moves.len(), 1);
+            assert!(moves[0].projection.is_empty());
+            assert!(super::super::ownership::analyze(&function).passed());
+        }
+    }
+
+    #[test]
     fn aggregate_match_binding_moves_only_selected_field_without_tag_test() {
         let (_module_names, modules) = fixture_modules();
         let child = Ty::Struct(nominal(&modules, vec![]));

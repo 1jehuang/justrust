@@ -7239,6 +7239,34 @@ mod tests {
     }
 
     #[test]
+    fn record_rest_match_omitted_noncopy_fields_remain_owned() {
+        for source in [
+            "struct Cell{n:i32} struct Record{selected:Cell,omitted:Cell} fn f(p:Record)->Cell{let n=match p{Record{selected,..}=>selected.n};p.omitted}",
+            "struct Cell{n:i32} struct Record{selected:Cell,omitted:Cell} fn f(p:Record)->Record{match p{Record{..}=>()};p}",
+            "struct Cell{n:i32} struct Record{selected:Cell,omitted:Cell} fn f(p:Record)->Record{match p{Record{selected:_,..}=>()};p}",
+            "struct Cell{n:i32} struct Record{selected:Cell,omitted:Cell} fn f(p:Record)->Record{let n=match p{Record{selected:Cell{n},..}=>n};p}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+        for source in [
+            "struct Cell{n:i32} struct Record{selected:Cell,omitted:Cell} fn f(p:Record)->Record{match p{Record{selected,..}=>selected.n};p}",
+            "struct Cell{n:i32} struct Record{selected:Cell,omitted:Cell} fn f(p:Record)->Cell{match p{Record{selected,..}=>selected.n};p.selected}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.complete);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.kind == ErrorKind::ReadNotDefinitelyInitialized),
+                "{source}: {:?}",
+                result.diagnostics
+            );
+        }
+    }
+
+    #[test]
     fn aggregate_match_sources_preserve_ignored_fields_and_reject_parent_reuse_after_move() {
         for source in [
             "struct Cell{i:i32} struct Pair(Cell,i32); fn f(p:Pair)->i32{let n=match p{Pair(cell,_)=>cell.i};n+p.1}",

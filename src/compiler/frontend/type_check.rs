@@ -1813,16 +1813,16 @@ impl<'a> Checker<'a> {
                 Ok(())
             }
             Pattern::Struct { fields, rest, .. } => {
-                if *rest {
-                    return Err("unsupported: aggregate match rest patterns".into());
-                }
                 if self.pattern_ty(pattern, ty)? != *ty {
                     return Err("aggregate nominal pattern mismatch".into());
                 }
                 let ir::Ty::Struct(structure) = ty else {
                     return Err("expected aggregate struct pattern".into());
                 };
-                if fields.len() != structure.def().fields.len() {
+                if *rest && self.checked_struct_shape(structure)? != StructShape::Record {
+                    return Err("unsupported: aggregate match rest requires a record struct".into());
+                }
+                if !rest && fields.len() != structure.def().fields.len() {
                     return Err("aggregate record pattern missing fields".into());
                 }
                 for (field, pattern) in fields {
@@ -6159,11 +6159,25 @@ mod checked_identity_tests {
                 .contains("refutable aggregate match leaf")
         );
         let program = parse("struct Wrap{x:i32,y:i32}fn value()->i32{let wrapped=Wrap{x:1,y:2};match wrapped{Wrap{x,..}=>x}}fn main(){}").unwrap();
-        assert!(
-            check(&program)
-                .unwrap_err()
-                .contains("aggregate match rest patterns")
-        );
+        check(&program).unwrap();
+    }
+
+    #[test]
+    fn record_rest_matches_omit_private_fields_but_check_selected_privacy() {
+        let program = parse("mod m{pub struct Data{pub x:i32,hidden:i32}pub fn make()->Data{Data{x:7,hidden:2}}}fn value()->i32{match m::make(){m::Data{x,..}=>x}}fn main(){}").unwrap();
+        check(&program).unwrap();
+        let program = parse("mod m{pub struct Data{pub x:i32,hidden:i32}pub fn make()->Data{Data{x:7,hidden:2}}}fn value()->i32{match m::make(){m::Data{hidden,..}=>hidden}}fn main(){}").unwrap();
+        assert!(check(&program).unwrap_err().contains("private field"));
+    }
+
+    #[test]
+    fn record_rest_moves_only_selected_noncopy_fields() {
+        let program = parse("struct Token;struct Wrap{selected:Token,other:Token}fn consume(x:Token){}fn value(){let wrapped=Wrap{selected:Token,other:Token};match wrapped{Wrap{selected,..}=>consume(selected)};consume(wrapped.other);}fn main(){}").unwrap();
+        check(&program).unwrap();
+        let program = parse("struct Token;struct Wrap{selected:Token,other:Token}fn consume(x:Token){}fn value(){let wrapped=Wrap{selected:Token,other:Token};match wrapped{Wrap{selected,..}=>consume(selected)};consume(wrapped.selected);}fn main(){}").unwrap();
+        assert!(check(&program).is_err());
+        let program = parse("struct Token;struct Wrap{selected:Token,other:Token}fn consume(x:Wrap){}fn value(){let wrapped=Wrap{selected:Token,other:Token};match wrapped{Wrap{..}=>{}}consume(wrapped);}fn main(){}").unwrap();
+        check(&program).unwrap();
     }
 
     #[test]

@@ -34,8 +34,12 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       aggregate domains, genuine arm locals, plain Field projections and selective
       moves. AGGREGATE-MATCHES.md records stock26/native104 debug/release cells,
       28 public malformed-IR controls and complete 2,247-test / 112-binary gates.
-      Refutable aggregate leaves, rest, guards, or-patterns and implicit reference
-      ergonomics remain unsupported.
+      Refutable aggregate leaves, positional rest, guards, or-patterns and implicit
+      reference ergonomics remain unsupported.
+- [x] Named record-rest match patterns with selected-member privacy, omitted-field
+      nonconsumption and unchanged genuine binding/replay identities.
+      RECORD-REST-MATCHES.md records stock27/native108 debug/release cells, twelve
+      public selector controls and complete 2,268-test / 114-binary hosted gates.
 - [x] Irrefutable tuple/struct let patterns with selective moves and wildcards.
 - [x] Fieldless nominal enums and scalar/enum match with exhaustive coverage.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
