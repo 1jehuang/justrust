@@ -25,9 +25,90 @@ use super::ownership;
 use std::collections::HashMap;
 
 const MAX_ARGS: usize = 4096;
+/// Expanded stack-word limit per call: every logical argument may occupy at
+/// most two words (shared byte slice: data, len) plus one sret word.
+const MAX_ARG_WORDS: usize = 2 * MAX_ARGS + 1;
 const MAX_FRAME_BYTES: i32 = 1024 * 1024;
 const BASE: u64 = 0x400000;
 const PAGE: usize = 4096;
+
+/// Shape-only physical descriptor of a shared slice carrier. It deliberately
+/// has no source root, origin, lifetime, local, array identity or static
+/// extent: the length is a runtime word copied from validated construction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SliceLayout {
+    pub data_offset: u8,
+    pub len_offset: u8,
+    pub word_bytes: u8,
+    /// Private element stride. Current private u8 arrays use eight-byte
+    /// leaves, so this is 8, NOT Rust's packed 1.
+    pub element_stride: u8,
+}
+
+/// `&[u8]` on this private x86-64 backend: 16-byte carrier storage, true
+/// two-word argument transport (data pushed first, then len).
+pub const SHARED_BYTE_SLICE_LAYOUT: SliceLayout = SliceLayout {
+    data_offset: 0,
+    len_offset: 8,
+    word_bytes: 8,
+    element_stride: 8,
+};
+
+/// Expanded stack words a parameter of `ty` occupies in the private call ABI.
+/// Every currently admitted shape is one word (scalars, thin references and
+/// aggregate snapshot pointers). Unsupported shapes error exactly as their
+/// transport classification does.
+// TODO(slice): once `ir::Ty::Slice` lands, return Ok(2) when
+// `ty.shared_byte_slice()` holds for a shared `Ref<Slice<u8>>`, checked
+// BEFORE `indirect`, and reject bare `Slice` (no by-value ABI).
+fn argument_words(ty: &ir::Ty) -> Result<usize, String> {
+    indirect(ty)?;
+    Ok(1)
+}
+
+/// Expanded words of a signature's parameters, checked against both the
+/// logical MAX_ARGS limit and the expanded MAX_ARG_WORDS limit.
+fn parameter_words(params: &[ir::Ty]) -> Result<Vec<usize>, String> {
+    if params.len() > MAX_ARGS {
+        return Err(format!("at most {MAX_ARGS} parameters are supported"));
+    }
+    params.iter().map(argument_words).collect()
+}
+
+fn total_argument_words(words: &[usize], sret: bool) -> Result<usize, String> {
+    words
+        .iter()
+        .try_fold(usize::from(sret), |total, words| total.checked_add(*words))
+        .filter(|total| *total <= MAX_ARG_WORDS)
+        .ok_or_else(|| format!("at most {MAX_ARG_WORDS} argument words are supported"))
+}
+
+/// Caller cleanup: 8 * (sum of expanded argument words + sret word).
+fn call_cleanup_bytes(words: &[usize], sret: bool) -> Result<i32, String> {
+    total_argument_words(words, sret)?
+        .checked_mul(8)
+        .and_then(|bytes| i32::try_from(bytes).ok())
+        .ok_or_else(|| "call cleanup exceeds private stack limit".into())
+}
+
+/// Callee rbp offsets of each parameter's lowest pushed word:
+/// `16 + sret*8 + 8 * sum(words of later params)`. For a two-word slice this
+/// addresses len, with data at offset+8.
+fn argument_slot_offsets(words: &[usize], sret: bool) -> Result<Vec<i32>, String> {
+    total_argument_words(words, sret)?;
+    let mut offsets = vec![0; words.len()];
+    let mut later = 0_usize;
+    for (index, words) in words.iter().enumerate().rev() {
+        offsets[index] = later
+            .checked_add(usize::from(sret))
+            .and_then(|slots| slots.checked_mul(8))
+            .and_then(|bytes| bytes.checked_add(16))
+            .and_then(|bytes| i32::try_from(bytes).ok())
+            .ok_or("argument offset exceeds private stack limit")?;
+        later = later.checked_add(*words).ok_or("argument words overflow")?;
+    }
+    Ok(offsets)
+}
 
 const SLICE_UNSUPPORTED: &str =
     "unsupported: shared byte slices not yet supported by native backend (two-word ABI pending)";
@@ -349,6 +430,139 @@ impl<'a> Emitter<'a> {
                 self.normalize_integer(*integer);
             }
             self.bytes(&[0x48, 0x89, 0x07]);
+        }
+        Ok(())
+    }
+    // Shared byte slice carrier helpers. Convention: a slice operand leaves
+    // the ADDRESS of a two-word carrier snapshot in rax (like aggregates), but
+    // unlike aggregates that address never crosses a call boundary: calls push
+    // both words. Every store/load/call site must test the shared-byte-slice
+    // shape BEFORE the existing `indirect`/scalar branches.
+    // TODO(slice): wire these once `ir::Ty::Slice` and
+    // `ExprKind::{ArrayToSlice, SliceLen, SliceIndex}` reach cfg::Rvalue.
+    fn load_word(&mut self, register: u8, base: u8, displacement: u8) {
+        // mov reg64, [base + disp8]
+        self.bytes(&[0x48, 0x8b, 0x40 | (register << 3) | base, displacement]);
+    }
+    /// ArrayToSlice: rax holds the array reference's data pointer (the
+    /// existing dummy address for empty arrays). Write data and the validated
+    /// constant length into the frame carrier, leaving its address in rax.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn array_to_slice(
+        &mut self,
+        layout: SliceLayout,
+        offset: i32,
+        len: usize,
+    ) -> Result<(), String> {
+        let data = offset
+            .checked_add(i32::from(layout.data_offset))
+            .ok_or("slice carrier offset too large")?;
+        let len_at = offset
+            .checked_add(i32::from(layout.len_offset))
+            .ok_or("slice carrier offset too large")?;
+        self.bytes(&[0x48, 0x89, 0x85]);
+        self.i32(data);
+        self.word(u64::try_from(len).map_err(|_| "slice length exceeds usize word")?);
+        self.bytes(&[0x48, 0x89, 0x85]);
+        self.i32(len_at);
+        self.address(offset);
+        Ok(())
+    }
+    /// rax = source carrier address. Copy both words into the frame carrier
+    /// at `offset` and leave its address in rax. Clobbers rcx.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn copy_slice_to_frame(&mut self, layout: SliceLayout, offset: i32) -> Result<(), String> {
+        for field in [layout.data_offset, layout.len_offset] {
+            self.load_word(1, 0, field);
+            self.bytes(&[0x48, 0x89, 0x8d]);
+            self.i32(
+                offset
+                    .checked_add(i32::from(field))
+                    .ok_or("slice carrier offset too large")?,
+            );
+        }
+        self.address(offset);
+        Ok(())
+    }
+    /// rax = source carrier address, rdi = destination carrier address.
+    /// Copy both words and leave the destination in rax. Clobbers rcx.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn copy_slice_to_address(&mut self, layout: SliceLayout) {
+        for field in [layout.data_offset, layout.len_offset] {
+            self.load_word(1, 0, field);
+            self.bytes(&[0x48, 0x89, 0x4f, field]); // mov [rdi+disp8], rcx
+        }
+        self.bytes(&[0x48, 0x89, 0xf8]);
+    }
+    /// rax = carrier address. Push data then len, so the callee slot offset
+    /// from `argument_slot_offsets` addresses len and data is at offset+8.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn push_slice_argument(&mut self, layout: SliceLayout) {
+        self.bytes(&[0xff, 0x70, layout.data_offset]);
+        self.bytes(&[0xff, 0x70, layout.len_offset]);
+    }
+    /// Callee prologue: copy a two-word argument at rbp+`argument` (len) and
+    /// rbp+`argument`+8 (data) into the local carrier at rbp+`local`.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn store_slice_parameter(
+        &mut self,
+        layout: SliceLayout,
+        argument: i32,
+        local: i32,
+    ) -> Result<(), String> {
+        let word = i32::from(layout.word_bytes);
+        let pushed_data = argument
+            .checked_add(word)
+            .ok_or("argument offset too large")?;
+        for (from, field) in [
+            (pushed_data, layout.data_offset),
+            (argument, layout.len_offset),
+        ] {
+            self.bytes(&[0x48, 0x8b, 0x8d]);
+            self.i32(from);
+            self.bytes(&[0x48, 0x89, 0x8d]);
+            self.i32(
+                local
+                    .checked_add(i32::from(field))
+                    .ok_or("slice carrier offset too large")?,
+            );
+        }
+        Ok(())
+    }
+    /// SliceLen: rax = carrier address, result rax = runtime len word. Never
+    /// derived from the data pointer or an origin table.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn slice_len(&mut self, layout: SliceLayout) {
+        self.load_word(0, 0, layout.len_offset);
+    }
+    /// SliceIndex step 1: rax = carrier address. Snapshot rsi = data and
+    /// rdx = len before the index is evaluated. The index evaluation must
+    /// preserve rsi and rdx (current operand/place loads clobber only rax).
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn snapshot_slice(&mut self, layout: SliceLayout) {
+        self.load_word(6, 0, layout.data_offset);
+        self.load_word(2, 0, layout.len_offset);
+    }
+    /// SliceIndex step 2: rax = full 64-bit unsigned index, rsi = data,
+    /// rdx = len. Trap (exit 101) on index >= len BEFORE scaling, address
+    /// formation or load. Then load the eight-byte element and normalize u8.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn checked_slice_index_load(&mut self, layout: SliceLayout) {
+        self.bytes(&[0x48, 0x39, 0xd0]); // cmp rax, rdx
+        self.trap_if(0x83); // jae: unsigned, so high-bit indices trap
+        self.bytes(&[0x48, 0x69, 0xc0]); // rax *= private element stride
+        self.i32(i32::from(layout.element_stride));
+        self.bytes(&[0x48, 0x01, 0xf0]); // rax += data
+        self.bytes(&[0x48, 0x8b, 0x00]);
+        self.normalize_integer(ir::IntTy::U8);
+    }
+    fn trap_block(&mut self) -> Result<(), String> {
+        let trap = self.position();
+        self.bytes(&[
+            0xbf, 101, 0, 0, 0, 0xb8, 60, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
+        ]);
+        for at in std::mem::take(&mut self.traps) {
+            self.patch(at, trap)?;
         }
         Ok(())
     }
@@ -880,21 +1094,32 @@ impl<'a> Emitter<'a> {
                 if args.len() > MAX_ARGS {
                     return Err(format!("at most {MAX_ARGS} arguments are supported"));
                 }
-                for operand in args {
+                if args.len() != signature.params.len() {
+                    return Err("call argument count does not match signature".into());
+                }
+                let words = parameter_words(&signature.params)?;
+                let aggregate = indirect(&signature.result)?;
+                let cleanup = call_cleanup_bytes(&words, aggregate)?;
+                // Left-to-right evaluation. Every admitted argument is one
+                // word today. TODO(slice): a two-word shared byte slice
+                // operand leaves its carrier address in rax and must use
+                // `push_slice_argument` (data, then len) instead of push rax.
+                for (operand, words) in args.iter().zip(&words) {
+                    if *words != 1 {
+                        return Err("multi-word argument transport is not yet wired".into());
+                    }
                     self.operand(operand)?;
                     self.bytes(&[0x50]);
                 }
-                let aggregate = indirect(&signature.result)?;
                 if aggregate {
                     self.place_address(destination)?;
                     self.bytes(&[0x50]);
                 }
                 let at = self.jump(&[0xe8]);
                 self.object.calls.push((at, (self.resolve)(target)?));
-                let words = args.len() + usize::from(aggregate);
-                if words != 0 {
+                if cleanup != 0 {
                     self.bytes(&[0x48, 0x81, 0xc4]);
-                    self.i32((words * 8) as i32);
+                    self.i32(cleanup);
                 }
                 if !aggregate {
                     self.store_place(destination)?;
@@ -940,6 +1165,18 @@ pub fn emit_cfg_function(
     if function.params.len() > MAX_ARGS {
         return Err(format!("at most {MAX_ARGS} parameters are supported"));
     }
+    let param_tys = function
+        .params
+        .iter()
+        .map(|local| {
+            function
+                .locals
+                .get(local.0)
+                .map(|local| local.ty.clone())
+                .ok_or_else(|| "invalid CFG parameter local".to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let param_words = parameter_words(&param_tys)?;
     let mut frame_bytes = 0;
     let locals = function
         .locals
@@ -968,6 +1205,7 @@ pub fn emit_cfg_function(
     let aggregate_scratch = -frame_bytes;
     let aggregate_result = indirect(&function.result)?;
     let result_size = value_size(&function.result)?;
+    let param_offsets = argument_slot_offsets(&param_words, aggregate_result)?;
     let mut emitter = Emitter {
         object: Object {
             code: Vec::new(),
@@ -984,11 +1222,14 @@ pub fn emit_cfg_function(
     };
     emitter.bytes(&[0x55, 0x48, 0x89, 0xe5, 0x48, 0x81, 0xec]);
     emitter.i32(frame_bytes);
-    for (index, local) in function.params.iter().enumerate() {
-        let offset =
-            16 + usize::from(aggregate_result) * 8 + (function.params.len() - index - 1) * 8;
+    for ((local, offset), words) in function.params.iter().zip(&param_offsets).zip(&param_words) {
+        // TODO(slice): a two-word parameter calls `store_slice_parameter`
+        // (len at offset, data at offset+8) instead of this scalar load.
+        if *words != 1 {
+            return Err("multi-word parameter transport is not yet wired".into());
+        }
         emitter.bytes(&[0x48, 0x8b, 0x85]);
-        emitter.i32(offset as i32);
+        emitter.i32(*offset);
         emitter.store_value(emitter.local_offset(*local)?, &function.locals[local.0].ty)?;
     }
     emitter.edge(&[0xe9], function.entry);
@@ -1014,13 +1255,7 @@ pub fn emit_cfg_function(
     for at in std::mem::take(&mut emitter.returns) {
         emitter.patch(at, epilogue)?;
     }
-    let trap = emitter.position();
-    emitter.bytes(&[
-        0xbf, 101, 0, 0, 0, 0xb8, 60, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
-    ]);
-    for at in std::mem::take(&mut emitter.traps) {
-        emitter.patch(at, trap)?;
-    }
+    emitter.trap_block()?;
     Ok(emitter.object)
 }
 
@@ -1411,6 +1646,134 @@ mod tests {
             }
         }
         panic!("native executable remained busy after bounded retries");
+    }
+
+    #[test]
+    fn expanded_argument_words_preserve_single_word_abi_and_reserve_two_word_slots() {
+        assert_eq!(
+            SHARED_BYTE_SLICE_LAYOUT,
+            SliceLayout {
+                data_offset: 0,
+                len_offset: 8,
+                word_bytes: 8,
+                element_stride: 8
+            }
+        );
+        let u8_array = ir::Ty::Array {
+            element: std::sync::Arc::new(ir::Ty::Int(ir::IntTy::U8)),
+            len: 3,
+        };
+        for ty in [
+            ir::Ty::Int(ir::IntTy::I32),
+            ir::Ty::Int(ir::IntTy::Usize),
+            ir::Ty::Bool,
+            ir::Ty::Unit,
+            ir::Ty::Never,
+            u8_array.clone(),
+            ir::Ty::Tuple(vec![ir::Ty::Bool, ir::Ty::Unit].into()),
+        ] {
+            assert_eq!(argument_words(&ty), Ok(1), "{ty:?}");
+        }
+        // Exactly the legacy one-word-per-parameter formula for every arity.
+        for sret in [false, true] {
+            for count in [0, 1, 2, 7, MAX_ARGS] {
+                let words = vec![1; count];
+                let offsets = argument_slot_offsets(&words, sret).unwrap();
+                for (index, offset) in offsets.iter().enumerate() {
+                    let legacy = 16 + usize::from(sret) * 8 + (count - index - 1) * 8;
+                    assert_eq!(*offset as usize, legacy);
+                }
+                assert_eq!(
+                    call_cleanup_bytes(&words, sret).unwrap() as usize,
+                    (count + usize::from(sret)) * 8
+                );
+            }
+        }
+        // Frozen two-word contract: slot offset addresses len, data at +8.
+        assert_eq!(
+            argument_slot_offsets(&[1, 2, 1], true),
+            Ok(vec![48, 32, 24])
+        );
+        assert_eq!(argument_slot_offsets(&[2], false), Ok(vec![16]));
+        assert_eq!(call_cleanup_bytes(&[1, 2, 1], true), Ok(40));
+        assert_eq!(
+            call_cleanup_bytes(&[2; MAX_ARGS], true),
+            Ok(8 * MAX_ARG_WORDS as i32)
+        );
+        assert!(call_cleanup_bytes(&[2; MAX_ARGS + 1], false).is_err());
+        assert!(argument_slot_offsets(&[usize::MAX, 1], false).is_err());
+        assert!(parameter_words(&vec![ir::Ty::Bool; MAX_ARGS + 1]).is_err());
+        assert_eq!(parameter_words(&[ir::Ty::Bool, u8_array]), Ok(vec![1, 1]));
+    }
+
+    /// Run hand-emitted helper code as `main`, exiting with eax.
+    fn run_slice_helpers(index: u64, len: usize) -> Option<i32> {
+        let concrete = unit_concrete_fixture();
+        let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
+        let mut e = Emitter {
+            object: Object {
+                code: Vec::new(),
+                calls: Vec::new(),
+                strings: Vec::new(),
+            },
+            concrete: &concrete,
+            resolve: &resolve,
+            locals: Vec::new(),
+            aggregate_scratch: 0,
+            returns: Vec::new(),
+            traps: Vec::new(),
+            edges: Vec::new(),
+        };
+        let layout = SHARED_BYTE_SLICE_LAYOUT;
+        e.bytes(&[0x55, 0x48, 0x89, 0xe5, 0x48, 0x81, 0xec]);
+        e.i32(128);
+        // Private u8 array leaves at rbp-128, -120, -112. 300 checks that the
+        // loaded element is normalized to u8.
+        for (offset, value) in [(-128, 7_u64), (-120, 300), (-112, 9)] {
+            e.word(value);
+            e.bytes(&[0x48, 0x89, 0x85]);
+            e.i32(offset);
+        }
+        e.address(-128);
+        e.array_to_slice(layout, -32, len).unwrap(); // carrier A
+        e.copy_slice_to_frame(layout, -16).unwrap(); // A -> B
+        // Two-word argument transport: after `sub rsp,128` two pushes land
+        // len at rbp-144 and data at rbp-136, the callee's slot convention.
+        e.push_slice_argument(layout);
+        e.store_slice_parameter(layout, -144, -48).unwrap(); // -> C
+        e.bytes(&[0x48, 0x83, 0xc4, 0x10]);
+        e.bytes(&[0x48, 0x8d, 0xbd]);
+        e.i32(-64);
+        e.address(-48);
+        e.copy_slice_to_address(layout); // C -> D, rax = &D
+        e.bytes(&[0x50]);
+        e.slice_len(layout);
+        e.bytes(&[0x49, 0x89, 0xc2]); // r10 = len
+        e.bytes(&[0x58]);
+        e.snapshot_slice(layout);
+        e.word(index);
+        e.checked_slice_index_load(layout);
+        e.bytes(&[0x4c, 0x01, 0xd0]); // rax += len
+        e.bytes(&[0x89, 0xc7, 0xb8, 60, 0, 0, 0, 0x0f, 0x05]);
+        e.trap_block().unwrap();
+        let elf = link(&[("main".into(), e.object)]).unwrap();
+        let path = executable_bytes(&elf);
+        let output = execute(&mut Command::new(&path));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        output.status.code()
+    }
+
+    #[test]
+    fn shared_byte_slice_helpers_preserve_both_words_and_trap_before_addressing() {
+        assert_eq!(run_slice_helpers(0, 3), Some(7 + 3));
+        assert_eq!(run_slice_helpers(1, 3), Some(44 + 3));
+        assert_eq!(run_slice_helpers(2, 3), Some(9 + 3));
+        // Length is the runtime carrier word, preserved across every copy.
+        assert_eq!(run_slice_helpers(1, 2), Some(44 + 2));
+        for (index, len) in [(3, 3), (2, 2), (0, 0), (u64::MAX, 3), (1 << 63, 3)] {
+            assert_eq!(run_slice_helpers(index, len), Some(101), "{index} {len}");
+        }
     }
 
     #[test]
