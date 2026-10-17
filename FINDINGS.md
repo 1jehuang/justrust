@@ -9754,3 +9754,25 @@ The source-provenance review identifies canonical plan-owned input, exact parent
 context including authoritative None, and checked binding origin as prerequisites.
 The replay proposal remains under independent review. No source admission,
 frozen fixture, capability, budget limit or installed toolchain changed.
+
+### Eligible shared-local inference escape: frozen stock negative, 2026-10-17
+
+After freezing the reviewed replay authority contract in a73e50664, separately
+froze one new lifetime-escape source before any stock or native execution. Its
+omitted-actual identity call receives an earlier explicitly annotated shared
+local in an unannotated direct let initializer, so the call itself has the
+proposed first-slice form. Returning its result would escape a frame-local
+referent. Source SHA256 is
+`0c1c85af6814018293a65dd608bc05af7c9042ae36a6021ec40116d19571668a`.
+The first stock BUILD and genuine metadata-only CHECK both exited 1 with the
+same primary E0515 for returning a value referencing local variable `value`,
+and neither produced an artifact. No source or expectation was repaired.
+
+Exact raw receipt:
+`experiments/results/20261017-reference-inference-eligible-escape-stock.jsonl`,
+SHA256 `50ffb72880a4474f903e7184ec320ab0907f013719fb9e763073d639d22a4f3c`.
+Verified the source hash, all six raw stream hashes, and no timeout/truncation.
+This is stock-only evidence for a required future semantic rejection, not a
+native pass. The candidate must reject this unchanged source semantically,
+not as Unsupported, after its narrow identity call is admitted. The new case
+is separate from frozen32 and all previous source-order witnesses.
