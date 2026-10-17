@@ -1456,7 +1456,14 @@ fn preflight_with_plan(
                         preflight_ty(&Ty::Int(*to), 0, &mut budget)?;
                         operand(value, &mut budget)?;
                     }
-                    Rvalue::Use(op) | Rvalue::Unary { value: op, .. } => operand(op, &mut budget)?,
+                    Rvalue::Use(op)
+                    | Rvalue::Unary { value: op, .. }
+                    | Rvalue::ArrayToSlice { reference: op }
+                    | Rvalue::SliceLen { slice: op } => operand(op, &mut budget)?,
+                    Rvalue::SliceIndex { slice, index } => {
+                        operand(slice, &mut budget)?;
+                        operand(index, &mut budget)?;
+                    }
                     Rvalue::Repeat { ty, value } => {
                         preflight_ty(ty, 0, &mut budget)?;
                         operand(value, &mut budget)?;
@@ -1643,7 +1650,11 @@ impl<'a> MoveShape<'a> {
             },
             Ty::Array { element, len } => Self::Array { element, len: *len },
             Ty::Enum(definition) => Self::Sum(definition.def()),
-            // No ownership model for unsized slices or slice carriers yet.
+            // Exactly shared `&[u8]` is a Copy reference carrier. Its referent
+            // is one opaque unsized leaf: u8 elements carry no references and
+            // no slice place, move or mutable element access exists.
+            Ty::Slice { element } if **element == Ty::Int(super::ir::IntTy::U8) => Self::Scalar,
+            Ty::Ref { .. } if ty.shared_byte_slice() => Self::Scalar,
             Ty::Slice { .. } => return Err(Exhausted),
             Ty::Ref { referent, .. } if referent.contains_slice() => return Err(Exhausted),
             Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Ref { .. } => Self::Scalar,
@@ -2500,6 +2511,31 @@ impl Transfer<'_> {
             Rvalue::Use(op)
             | Rvalue::Unary { value: op, .. }
             | Rvalue::IntCast { value: op, .. } => self.operand(state, op)?,
+            // Unsizing copies the shared reference once. Its loan and origins
+            // are the operand's; length metadata grants no storage authority.
+            Rvalue::ArrayToSlice { reference } => self.operand(state, reference)?,
+            // Length reads only the slice handle, never the referent storage.
+            Rvalue::SliceLen { slice } => self.operand(state, slice)?,
+            // Receiver snapshot, index snapshot, then a live shared read of the
+            // referent through the handle's issued origins.
+            Rvalue::SliceIndex { slice, index } => {
+                self.operand(state, slice)?;
+                self.operand(state, index)?;
+                match slice {
+                    Operand::Copy(handle) if handle.projection.is_empty() => {
+                        let mut referent = handle.clone();
+                        referent.projection.push(Projection::Deref);
+                        self.read(state, &referent)?;
+                    }
+                    _ => self.problem(
+                        Problem::Invalid("slice index requires a whole-local shared handle".into()),
+                        match slice {
+                            Operand::Copy(place) | Operand::Move(place) => place.clone(),
+                            Operand::Constant(_) => root_place(self.f.return_local),
+                        },
+                    ),
+                }
+            }
             // Repetition evaluates once even for a zero-length destination.
             Rvalue::Repeat { value, .. } => self.operand(state, value)?,
             Rvalue::Binary { left, right, .. } => {

@@ -2233,6 +2233,10 @@ impl CarrierBuilder<'_, '_> {
     ) -> Result<Vec<(CarrierLocation, CarrierOrigins)>, Exhausted> {
         match value {
             Rvalue::Use(operand) => self.operand_value(state, operand),
+            // The slice handle carries exactly the input reference's origins
+            // and loan set at the same fixed carrier position. Length metadata
+            // contributes no provenance.
+            Rvalue::ArrayToSlice { reference } => self.operand_value(state, reference),
             Rvalue::Borrow(id) => {
                 let site = &self.f.loan_sites[id.0];
                 let (targets, trace, failure) = self.lens(state, &site.place)?;
@@ -3872,7 +3876,13 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
         Rvalue::Use(op)
         | Rvalue::Unary { value: op, .. }
         | Rvalue::Repeat { value: op, .. }
+        | Rvalue::ArrayToSlice { reference: op }
+        | Rvalue::SliceLen { slice: op }
         | Rvalue::IntCast { value: op, .. } => visit_operand(op, &mut visit),
+        Rvalue::SliceIndex { slice, index } => {
+            visit_operand(slice, &mut visit);
+            visit_operand(index, &mut visit);
+        }
         Rvalue::Binary { left, right, .. } => {
             visit_operand(left, &mut visit);
             visit_operand(right, &mut visit);

@@ -289,6 +289,8 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
                 && same_operand_list(aa, bb, budget)?,
         ),
         (Rvalue::Use(a), Rvalue::Use(b))
+        | (Rvalue::ArrayToSlice { reference: a }, Rvalue::ArrayToSlice { reference: b })
+        | (Rvalue::SliceLen { slice: a }, Rvalue::SliceLen { slice: b })
         | (Rvalue::IntCast { value: a, .. }, Rvalue::IntCast { value: b, .. })
         | (Rvalue::Unary { value: a, .. }, Rvalue::Unary { value: b, .. })
         | (Rvalue::IndexCopy { index: a, .. }, Rvalue::IndexCopy { index: b, .. }) => {
@@ -300,6 +302,16 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
             },
             Rvalue::Binary {
                 left: b, right: bb, ..
+            },
+        )
+        | (
+            Rvalue::SliceIndex {
+                slice: a,
+                index: aa,
+            },
+            Rvalue::SliceIndex {
+                slice: b,
+                index: bb,
             },
         ) => Ok(same_operand_types(a, b, budget)? && same_operand_types(aa, bb, budget)?),
         _ => Ok(true),
@@ -518,7 +530,13 @@ impl Rvalue {
             Self::Use(value)
             | Self::IntCast { value, .. }
             | Self::Unary { value, .. }
-            | Self::Repeat { value, .. } => visit(value)?,
+            | Self::Repeat { value, .. }
+            | Self::ArrayToSlice { reference: value }
+            | Self::SliceLen { slice: value } => visit(value)?,
+            Self::SliceIndex { slice, index } => {
+                visit(slice)?;
+                visit(index)?;
+            }
             Self::Binary { left, right, .. } => {
                 visit(left)?;
                 visit(right)?;
@@ -1462,7 +1480,13 @@ impl Function {
                         match value {
                             Rvalue::Use(value)
                             | Rvalue::IntCast { value, .. }
-                            | Rvalue::Unary { value, .. } => operand(value, budget, facts)?,
+                            | Rvalue::Unary { value, .. }
+                            | Rvalue::ArrayToSlice { reference: value }
+                            | Rvalue::SliceLen { slice: value } => operand(value, budget, facts)?,
+                            Rvalue::SliceIndex { slice, index } => {
+                                operand(slice, budget, facts)?;
+                                operand(index, budget, facts)?;
+                            }
                             Rvalue::Repeat { ty, value } => {
                                 facts.validate_ty_with_budget(ty, budget)?;
                                 operand(value, budget, facts)?;
@@ -1600,6 +1624,18 @@ impl Function {
         } else {
             Err("CFG operand type mismatch".into())
         }
+    }
+
+    /// Slice operations take a whole-local Copy of a shared reference. No slice
+    /// place projection, move, constant or never-typed operand is admitted.
+    fn slice_operand_ty(&self, value: &Operand, facts: ir::FactsCtx<'_>) -> Result<Ty, String> {
+        let Operand::Copy(place) = value else {
+            return Err("CFG slice operand must copy a whole local".into());
+        };
+        if !place.projection.is_empty() {
+            return Err("CFG slice operand must copy a whole local".into());
+        }
+        self.operand_ty_with_facts(value, facts)
     }
 
     fn indexed_element_ty(
@@ -1769,6 +1805,26 @@ impl Function {
                 Ok(Ty::Int(IntTy::I32))
             }
             Rvalue::Use(operand) => self.operand_ty_with_facts(operand, facts),
+            Rvalue::ArrayToSlice { reference } => {
+                let source = self.slice_operand_ty(reference, facts)?;
+                if source.shared_byte_array_len().is_none() {
+                    return Err("CFG array-to-slice requires shared byte array reference".into());
+                }
+                Ok(Ty::shared_byte_slice_ty())
+            }
+            Rvalue::SliceLen { slice } => {
+                if !self.slice_operand_ty(slice, facts)?.shared_byte_slice() {
+                    return Err("CFG slice length requires shared byte slice".into());
+                }
+                Ok(Ty::Int(IntTy::Usize))
+            }
+            Rvalue::SliceIndex { slice, index } => {
+                if !self.slice_operand_ty(slice, facts)?.shared_byte_slice() {
+                    return Err("CFG slice index requires shared byte slice".into());
+                }
+                self.require_operand_with_facts(index, &Ty::Int(IntTy::Usize), facts)?;
+                Ok(Ty::Int(IntTy::U8))
+            }
             Rvalue::Println(_) => Ok(Ty::Unit),
             Rvalue::Unary { op, value } => {
                 let ty = self.operand_ty_with_facts(value, facts)?;
@@ -2722,10 +2778,29 @@ impl Lowerer<'_> {
         self.live(destination.local, Some(id));
         let origin = Some(id);
         match &expression.kind {
-            ir::ExprKind::ArrayToSlice { .. }
-            | ir::ExprKind::SliceLen { .. }
-            | ir::ExprKind::SliceIndex { .. } => {
-                return Err(SLICE_UNSUPPORTED.into());
+            // The operand is evaluated exactly once into its own snapshot. The
+            // slice result is a Copy of that shared reference plus metadata.
+            ir::ExprKind::ArrayToSlice { reference } => {
+                let reference = self.expression(*reference)?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::ArrayToSlice { reference },
+                    origin,
+                );
+            }
+            ir::ExprKind::SliceLen { slice } => {
+                let slice = self.expression(*slice)?;
+                self.assign(destination.clone(), Rvalue::SliceLen { slice }, origin);
+            }
+            // Receiver first, then index, each once into a distinct snapshot.
+            ir::ExprKind::SliceIndex { slice, index } => {
+                let slice = self.expression(*slice)?;
+                let index = self.expression(*index)?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::SliceIndex { slice, index },
+                    origin,
+                );
             }
             ir::ExprKind::IntCast { value, to } => {
                 let value = self.expression(*value)?;
@@ -3137,24 +3212,19 @@ enum SourceLowering<'a> {
     Original(&'a std::sync::Arc<super::source_replay::CanonicalSourcePublication>),
 }
 
-/// Explicit fence until CFG/ownership/borrow lowering for shared byte slices
-/// exists: no slice-typed value or slice operation is lowered or published.
+/// Shared byte slices outside the admitted domain (only whole nongeneric
+/// `&[u8]` locals/temporaries; never results, aggregates or nested positions).
 pub(super) const SLICE_UNSUPPORTED: &str =
-    "unsupported: shared byte slices not yet supported by CFG lowering";
+    "unsupported: slice type outside shared &[u8] locals is not supported by CFG lowering";
 
 fn reject_slices(source: &ir::CheckedFunction) -> Result<(), String> {
-    let slice_expr = source.exprs.iter().any(|expression| {
-        expression.ty.contains_slice()
-            || matches!(
-                expression.kind,
-                ir::ExprKind::ArrayToSlice { .. }
-                    | ir::ExprKind::SliceLen { .. }
-                    | ir::ExprKind::SliceIndex { .. }
-            )
-    });
-    if slice_expr
-        || source.result.contains_slice()
-        || source.locals.iter().any(|local| local.ty.contains_slice())
+    let outside = |ty: &Ty| ty.contains_slice() && !ty.shared_byte_slice();
+    if source.result.contains_slice()
+        || source
+            .exprs
+            .iter()
+            .any(|expression| outside(&expression.ty))
+        || source.locals.iter().any(|local| outside(&local.ty))
     {
         return Err(SLICE_UNSUPPORTED.into());
     }
@@ -7060,8 +7130,14 @@ mod tests {
                             Rvalue::Use(value)
                             | Rvalue::IntCast { value, .. }
                             | Rvalue::Unary { value, .. }
-                            | Rvalue::Repeat { value, .. } => live_operand(value, &live),
-                            Rvalue::Binary { left, right, .. } => {
+                            | Rvalue::Repeat { value, .. }
+                            | Rvalue::ArrayToSlice { reference: value }
+                            | Rvalue::SliceLen { slice: value } => live_operand(value, &live),
+                            Rvalue::Binary { left, right, .. }
+                            | Rvalue::SliceIndex {
+                                slice: left,
+                                index: right,
+                            } => {
                                 live_operand(left, &live);
                                 live_operand(right, &live);
                             }
@@ -7143,3 +7219,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "cfg/slice_ownership_tests.rs"]
+mod slice_ownership_tests;

@@ -505,18 +505,11 @@ fn ordinary_calls_around_len_keep_full_inventory() {
 }
 
 #[test]
-fn downstream_passes_fence_slices() {
+fn downstream_passes_lower_and_check_slices() {
     let (_, f) = published(ADLER, 0);
-    let Err(error) = super::super::cfg::lower(f.source()) else {
-        panic!("CFG lowering must fence slices");
-    };
-    assert!(
-        error.contains("shared byte slices not yet supported by CFG lowering"),
-        "{error}"
-    );
-    let error = match super::super::compile(ADLER.into(), 1, true) {
-        Ok(_) => panic!("slice program compiled before downstream support"),
-        Err(error) => error.to_string(),
-    };
-    assert!(error.contains("not yet supported"), "{error}");
+    let lowered = super::super::cfg::lower(f.source()).expect("CFG lowers admitted slices");
+    lowered.validate().unwrap();
+    if let Err(error) = super::super::compile(ADLER.into(), 1, true) {
+        panic!("adler slice program must pass check: {error}");
+    }
 }

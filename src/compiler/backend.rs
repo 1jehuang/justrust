@@ -58,10 +58,12 @@ pub const SHARED_BYTE_SLICE_LAYOUT: SliceLayout = SliceLayout {
 /// Every currently admitted shape is one word (scalars, thin references and
 /// aggregate snapshot pointers). Unsupported shapes error exactly as their
 /// transport classification does.
-// TODO(slice): once `ir::Ty::Slice` lands, return Ok(2) when
-// `ty.shared_byte_slice()` holds for a shared `Ref<Slice<u8>>`, checked
-// BEFORE `indirect`, and reject bare `Slice` (no by-value ABI).
+/// Exactly shared `&[u8]` is true two-word transport (data, len); it is
+/// checked BEFORE `indirect`. Bare `Slice` has no by-value ABI and errors.
 fn argument_words(ty: &ir::Ty) -> Result<usize, String> {
+    if ty.shared_byte_slice() {
+        return Ok(2);
+    }
     indirect(ty)?;
     Ok(1)
 }
@@ -110,10 +112,29 @@ fn argument_slot_offsets(words: &[usize], sret: bool) -> Result<Vec<i32>, String
     Ok(offsets)
 }
 
+/// Every slice shape other than exactly shared `&[u8]` (bare `[T]`, other
+/// elements, mutable slices, slices nested in aggregates) has no native layout.
 const SLICE_UNSUPPORTED: &str =
-    "unsupported: shared byte slices not yet supported by native backend (two-word ABI pending)";
+    "unsupported: only shared &[u8] parameters and locals have a native slice layout";
+const SLICE_RESULT_UNSUPPORTED: &str = "unsupported: shared byte slice returns have no native ABI";
 
+/// Transport class of a function or call result. Slice results are rejected
+/// here, before `indirect` would classify the carrier as snapshot storage.
+fn result_indirect(ty: &ir::Ty) -> Result<bool, String> {
+    if ty.contains_slice() {
+        return Err(SLICE_RESULT_UNSUPPORTED.into());
+    }
+    indirect(ty)
+}
+
+/// Storage transport class. Exactly shared `&[u8]` is a 16-byte frame carrier
+/// whose operand convention is its snapshot ADDRESS in rax, exactly like
+/// aggregates, so local copies move both words. It never crosses a call
+/// boundary as a pointer: calls use `argument_words` == 2 and push both words.
 fn indirect(ty: &ir::Ty) -> Result<bool, String> {
+    if ty.shared_byte_slice() {
+        return Ok(true);
+    }
     if ty.contains_slice() {
         return Err(SLICE_UNSUPPORTED.into());
     }
@@ -131,6 +152,9 @@ fn indirect(ty: &ir::Ty) -> Result<bool, String> {
 fn value_size(ty: &ir::Ty) -> Result<i32, String> {
     if matches!(ty, ir::Ty::Param(_)) {
         return Err("type parameter has no native layout".into());
+    }
+    if ty.shared_byte_slice() {
+        return Ok(2 * i32::from(SHARED_BYTE_SLICE_LAYOUT.word_bytes));
     }
     if ty.contains_slice() {
         return Err(SLICE_UNSUPPORTED.into());
@@ -438,8 +462,6 @@ impl<'a> Emitter<'a> {
     // unlike aggregates that address never crosses a call boundary: calls push
     // both words. Every store/load/call site must test the shared-byte-slice
     // shape BEFORE the existing `indirect`/scalar branches.
-    // TODO(slice): wire these once `ir::Ty::Slice` and
-    // `ExprKind::{ArrayToSlice, SliceLen, SliceIndex}` reach cfg::Rvalue.
     fn load_word(&mut self, register: u8, base: u8, displacement: u8) {
         // mov reg64, [base + disp8]
         self.bytes(&[0x48, 0x8b, 0x40 | (register << 3) | base, displacement]);
@@ -447,7 +469,6 @@ impl<'a> Emitter<'a> {
     /// ArrayToSlice: rax holds the array reference's data pointer (the
     /// existing dummy address for empty arrays). Write data and the validated
     /// constant length into the frame carrier, leaving its address in rax.
-    #[cfg_attr(not(test), allow(dead_code))]
     fn array_to_slice(
         &mut self,
         layout: SliceLayout,
@@ -496,14 +517,12 @@ impl<'a> Emitter<'a> {
     }
     /// rax = carrier address. Push data then len, so the callee slot offset
     /// from `argument_slot_offsets` addresses len and data is at offset+8.
-    #[cfg_attr(not(test), allow(dead_code))]
     fn push_slice_argument(&mut self, layout: SliceLayout) {
         self.bytes(&[0xff, 0x70, layout.data_offset]);
         self.bytes(&[0xff, 0x70, layout.len_offset]);
     }
     /// Callee prologue: copy a two-word argument at rbp+`argument` (len) and
     /// rbp+`argument`+8 (data) into the local carrier at rbp+`local`.
-    #[cfg_attr(not(test), allow(dead_code))]
     fn store_slice_parameter(
         &mut self,
         layout: SliceLayout,
@@ -531,14 +550,12 @@ impl<'a> Emitter<'a> {
     }
     /// SliceLen: rax = carrier address, result rax = runtime len word. Never
     /// derived from the data pointer or an origin table.
-    #[cfg_attr(not(test), allow(dead_code))]
     fn slice_len(&mut self, layout: SliceLayout) {
         self.load_word(0, 0, layout.len_offset);
     }
     /// SliceIndex step 1: rax = carrier address. Snapshot rsi = data and
     /// rdx = len before the index is evaluated. The index evaluation must
     /// preserve rsi and rdx (current operand/place loads clobber only rax).
-    #[cfg_attr(not(test), allow(dead_code))]
     fn snapshot_slice(&mut self, layout: SliceLayout) {
         self.load_word(6, 0, layout.data_offset);
         self.load_word(2, 0, layout.len_offset);
@@ -546,7 +563,6 @@ impl<'a> Emitter<'a> {
     /// SliceIndex step 2: rax = full 64-bit unsigned index, rsi = data,
     /// rdx = len. Trap (exit 101) on index >= len BEFORE scaling, address
     /// formation or load. Then load the eight-byte element and normalize u8.
-    #[cfg_attr(not(test), allow(dead_code))]
     fn checked_slice_index_load(&mut self, layout: SliceLayout) {
         self.bytes(&[0x48, 0x39, 0xd0]); // cmp rax, rdx
         self.trap_if(0x83); // jae: unsigned, so high-bit indices trap
@@ -565,6 +581,16 @@ impl<'a> Emitter<'a> {
             self.patch(at, trap)?;
         }
         Ok(())
+    }
+    /// rax = address of an exactly shared `&[u8]` whole-local carrier.
+    fn slice_operand(&mut self, operand: &cfg::Operand) -> Result<(), String> {
+        let (cfg::Operand::Copy(place) | cfg::Operand::Move(place)) = operand else {
+            return Err("slice operand requires a local carrier".into());
+        };
+        if !place.projection.is_empty() || !self.function().place_ty(place)?.shared_byte_slice() {
+            return Err("slice operand requires a whole shared &[u8] local".into());
+        }
+        self.load_place(place)
     }
     fn store_place(&mut self, place: &ir::Place) -> Result<(), String> {
         // Rust assignment evaluates the complete owning RHS first. Resolve a
@@ -978,6 +1004,37 @@ impl<'a> Emitter<'a> {
                 self.address(self.aggregate_scratch);
             }
             cfg::Rvalue::Println(text) => self.println(text)?,
+            cfg::Rvalue::ArrayToSlice { reference } => {
+                // N comes only from the validated operand type. The operand is
+                // the thin array pointer (the dummy word address for N == 0).
+                let len = self
+                    .function()
+                    .operand_ty(reference)?
+                    .shared_byte_array_len()
+                    .ok_or("array-to-slice requires exactly shared &[u8; N]")?;
+                self.operand(reference)?;
+                self.array_to_slice(SHARED_BYTE_SLICE_LAYOUT, self.aggregate_scratch, len)?;
+            }
+            cfg::Rvalue::SliceLen { slice } => {
+                self.slice_operand(slice)?;
+                self.slice_len(SHARED_BYTE_SLICE_LAYOUT);
+            }
+            cfg::Rvalue::SliceIndex { slice, index } => {
+                if self.function().operand_ty(index)? != ir::Ty::Int(ir::IntTy::Usize) {
+                    return Err("slice index requires genuine usize operand".into());
+                }
+                self.slice_operand(slice)?;
+                self.snapshot_slice(SHARED_BYTE_SLICE_LAYOUT);
+                // Index transport clobbers only rax: a constant immediate or a
+                // whole-local usize load, preserving the rsi/rdx snapshot.
+                match index {
+                    cfg::Operand::Constant(_) => {}
+                    cfg::Operand::Copy(place) if place.projection.is_empty() => {}
+                    _ => return Err("slice index requires a whole-local or constant usize".into()),
+                }
+                self.operand(index)?;
+                self.checked_slice_index_load(SHARED_BYTE_SLICE_LAYOUT);
+            }
         }
         Ok(())
     }
@@ -1098,18 +1155,25 @@ impl<'a> Emitter<'a> {
                     return Err("call argument count does not match signature".into());
                 }
                 let words = parameter_words(&signature.params)?;
-                let aggregate = indirect(&signature.result)?;
+                let aggregate = result_indirect(&signature.result)?;
                 let cleanup = call_cleanup_bytes(&words, aggregate)?;
-                // Left-to-right evaluation. Every admitted argument is one
-                // word today. TODO(slice): a two-word shared byte slice
-                // operand leaves its carrier address in rax and must use
-                // `push_slice_argument` (data, then len) instead of push rax.
-                for (operand, words) in args.iter().zip(&words) {
-                    if *words != 1 {
-                        return Err("multi-word argument transport is not yet wired".into());
+                // Left-to-right evaluation. A two-word shared byte slice
+                // operand leaves its carrier address in rax; both words are
+                // pushed (data, then len), never the carrier pointer itself.
+                for ((operand, words), param) in args.iter().zip(&words).zip(&signature.params) {
+                    match words {
+                        1 => {
+                            self.operand(operand)?;
+                            self.bytes(&[0x50]);
+                        }
+                        2 if param.shared_byte_slice()
+                            && self.function().operand_ty(operand)?.shared_byte_slice() =>
+                        {
+                            self.slice_operand(operand)?;
+                            self.push_slice_argument(SHARED_BYTE_SLICE_LAYOUT);
+                        }
+                        _ => return Err("invalid multi-word argument transport".into()),
                     }
-                    self.operand(operand)?;
-                    self.bytes(&[0x50]);
                 }
                 if aggregate {
                     self.place_address(destination)?;
@@ -1192,6 +1256,9 @@ pub fn emit_cfg_function(
                         value_size(ty)?
                     }
                     cfg::Rvalue::EnumVariant { ty, .. } => value_size(&ir::Ty::Enum(ty.clone()))?,
+                    cfg::Rvalue::ArrayToSlice { .. } => {
+                        value_size(&ir::Ty::shared_byte_slice_ty())?
+                    }
                     _ => 0,
                 };
                 scratch_size = scratch_size.max(size);
@@ -1203,7 +1270,7 @@ pub fn emit_cfg_function(
         .filter(|size| *size <= MAX_FRAME_BYTES)
         .ok_or("function exceeds private frame limit")?;
     let aggregate_scratch = -frame_bytes;
-    let aggregate_result = indirect(&function.result)?;
+    let aggregate_result = result_indirect(&function.result)?;
     let result_size = value_size(&function.result)?;
     let param_offsets = argument_slot_offsets(&param_words, aggregate_result)?;
     let mut emitter = Emitter {
@@ -1223,10 +1290,18 @@ pub fn emit_cfg_function(
     emitter.bytes(&[0x55, 0x48, 0x89, 0xe5, 0x48, 0x81, 0xec]);
     emitter.i32(frame_bytes);
     for ((local, offset), words) in function.params.iter().zip(&param_offsets).zip(&param_words) {
-        // TODO(slice): a two-word parameter calls `store_slice_parameter`
-        // (len at offset, data at offset+8) instead of this scalar load.
+        let local_ty = &function.locals[local.0].ty;
+        if *words == 2 && local_ty.shared_byte_slice() {
+            // len at offset, data at offset+8, into the local carrier.
+            emitter.store_slice_parameter(
+                SHARED_BYTE_SLICE_LAYOUT,
+                *offset,
+                emitter.local_offset(*local)?,
+            )?;
+            continue;
+        }
         if *words != 1 {
-            return Err("multi-word parameter transport is not yet wired".into());
+            return Err("invalid multi-word parameter transport".into());
         }
         emitter.bytes(&[0x48, 0x8b, 0x85]);
         emitter.i32(*offset);
