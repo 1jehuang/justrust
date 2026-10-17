@@ -7646,3 +7646,16 @@ any test that walks up from the compile-time manifest dir to find the checkout
 breaks. Fix direction: remap the builder path back to the client workspace
 path for compile-time env (or `--remap-path-prefix` plus rewriting
 `CARGO_MANIFEST_DIR`), so hosted test behavior matches local.
+
+## 2026-10-17: concurrent quota-refresh validation lock contention
+
+Jcode hosted check `20261017-035643921-3954930` passed in 54.2s wall,
+with 43.31s waiting for the shared target lock and 8.20s compilation.
+Focused quota tests `20261017-035843112-3965467` passed five tests in 29.5s
+wall, including 17.55s lock wait and 8.95s compilation. The remote snapshot
+mirror test `20261017-035935829-3969952` passed in 26.0s wall, with 15.27s
+lock wait and 7.38s compilation. Concurrent swarms serializing on the same
+hosted target dominate these small validation requests. Coordinate related
+checks rather than adding competing requests. Large base/app-core test units
+also account for 6.9s/8.1s compilation here. No project restructuring or
+unmeasured speedup is claimed.
