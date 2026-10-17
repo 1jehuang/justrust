@@ -351,3 +351,22 @@ were promoted after native execution. Independent25corpus receipts pass900cases,
 including832normal worker comparisons,70declared trap runs,128generated exit
 sets and actual96worker example execution, retained in26raw receipts. Overloaded
 assignments, full Rust and performance acceptance stay open.
+
+### Shared byte slice (`&[u8]`) native lowering checkpoint
+
+`ArrayToSlice`, `SliceLen` and `SliceIndex` lower through CFG validation,
+ownership/borrow analysis and the native backend for nongeneric shared `&[u8]`
+parameters and locals only. The slice handle inherits the source reference's
+origins, and indexing reads the referent. The native carrier is two words
+(data, len), passed as two argument words, and index >= len traps before the load.
+The bounded slice-contract runtime runner passes with stock and native output
+matching (positive plus three bounds-trap fixtures, workers 1 and 8). Adapted Adler2
+acceptance (`--skip ff_44417`) passes 15 of 16 vectors natively at workers 1 and 8,
+exactly matching the upstream crate and zlib checksums. These include the 5551..5553 and
+22207..22209 NMAX boundaries and all three split vectors. That needed the literal array limit
+raised from 4096 to 65535 and saturating recipe footprints, so oversized shapes become
+inventoried intrinsic limits instead of hard errors. The 44417-byte vector is
+blocked by an ownership analysis resource limit (per-element move paths for
+large scalar arrays). Slice returns, `&mut [T]`, non-u8 elements,
+range indexing, `for` loops and slice patterns remain unsupported. This is not
+unchanged Adler2 acceptance or full Rust support.

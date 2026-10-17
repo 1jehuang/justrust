@@ -227,3 +227,20 @@ fn unused_and_unreachable_slice_bodies_still_validate() {
     rejected("fn main() { return; let s: [u8; 1] = [1]; let b: &[u8] = &s; let x: bool = b[0]; }");
     rejected("fn unused(b: &[u8]) { let n: u8 = b.len(); } fn main() {}");
 }
+
+#[test]
+fn large_byte_arrays_unsize_to_slices_past_the_old_4096_limit() {
+    // Adler2 NMAX-boundary inputs (5552 and 22208 bytes) must check; the
+    // literal array limit stays finite and is enforced exactly.
+    accepted(&with_main(
+        "fn main() { let p: [u8; 5552] = [255; 5552]; let s = adler2_adapted_update(&p, 1);
+         let q: [u8; 22208] = [255; 22208]; let t = adler2_adapted_update(&q, s); }",
+    ));
+    let limit = super::super::ir::MAX_ARRAY_LEN;
+    let error = rejected(&format!(
+        "fn main() {{ let p: [u8; {}] = [0; {}]; }}",
+        limit + 1,
+        limit + 1
+    ));
+    assert!(error.contains("limit"), "{error}");
+}

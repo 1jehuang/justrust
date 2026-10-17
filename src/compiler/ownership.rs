@@ -7416,8 +7416,9 @@ mod tests {
     #[test]
     fn array_preflight_bounds_expansion_and_checks_zero_element_types() {
         let ty = array(Ty::Int(IntTy::I32), super::super::ir::MAX_ARRAY_LEN);
-        assert!(preflight_ty(&ty, 0, &mut Budget::new(8192)).is_err());
-        assert!(preflight_ty(&ty, 0, &mut Budget::new(8193)).is_ok());
+        let exact = 2 * super::super::ir::MAX_ARRAY_LEN + 1;
+        assert!(preflight_ty(&ty, 0, &mut Budget::new(exact - 1)).is_err());
+        assert!(preflight_ty(&ty, 0, &mut Budget::new(exact)).is_ok());
         assert!(
             preflight_ty(
                 &array(Ty::Int(IntTy::I32), super::super::ir::MAX_ARRAY_LEN + 1),

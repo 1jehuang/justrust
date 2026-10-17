@@ -16738,7 +16738,7 @@ mod typed_tests {
             "fn main(){let a:[i32;1]=[];}",
             "struct S{x:i32}fn main(){let a=[S{x:1};2];}",
             "struct S{x:i32}fn main(){let a=[S{x:1}];let s=a[0];}",
-            "fn main(){let a=[1;4097];}",
+            "fn main(){let a=[1;65536];}",
             "fn main(){let a=[];}",
             "fn main(){let a=[1];let i=0;let n=a[i];}",
         ] {

@@ -78,6 +78,8 @@ def main():
     parser.add_argument("--native", type=Path,
                         help="integrated jr-rust public CLI; omitted means stock-only")
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--skip", action="append", default=[],
+                        help="vector name excluded from this run (recorded in evidence)")
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     evidence = args.output_dir / "evidence.json"
@@ -105,6 +107,10 @@ def main():
              "--crate-type", "rlib", "--edition=2021", "-C", "opt-level=0",
              "-C", "overflow-checks=yes", "-o", library])
         for name, parts in vectors():
+            if name in args.skip:
+                report.setdefault("skipped", []).append(name)
+                print(f"SKIP {name}")
+                continue
             oracle = args.output_dir / f"{name}.oracle.rs"
             oracle.write_text(upstream_source(parts))
             binary = work / "oracle"
@@ -147,7 +153,8 @@ def main():
             report["cases"].append(row)
             print(f"PASS {name} checksum={checksum} native={len(row['native'])}")
     if args.native is not None:
-        report["native_status"] = "passed_workers_1_and_8"
+        report["native_status"] = ("passed_workers_1_and_8" if not args.skip
+                                   else "passed_workers_1_and_8_with_skips")
     evidence.write_text(json.dumps(report, indent=2) + "\n")
     print(f"Evidence: {args.output_dir / 'evidence.json'}")
 

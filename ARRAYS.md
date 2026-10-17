@@ -2,7 +2,7 @@
 
 Status: implemented bounded native slice, validated by 591 hosted tests and strict all-target lint.
 
-The shared maximum literal length is 4096. Independent depth (128), expanded
+The shared maximum literal length is 65535 (raised from 4096 for slice inputs). Independent depth (128), expanded
 move-path (131072), preflight-work and one-MiB backend-frame limits still apply.
 
 This bounded data slice adds fixed array values, repeated initializers and

@@ -2756,7 +2756,7 @@ impl<C: SubstitutionCx> Instantiate<'_, C> {
 
 pub const MAX_ENUM_VARIANTS: usize = 4096;
 pub const MAX_MATCH_ARMS: usize = 4096;
-pub const MAX_ARRAY_LEN: usize = 4096;
+pub const MAX_ARRAY_LEN: usize = 65535;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IntTy {

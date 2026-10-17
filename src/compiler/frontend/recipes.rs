@@ -119,62 +119,36 @@ pub(super) fn counts(
         }
         Ok(())
     })?;
+    // Derived footprints saturate: an oversized shape is an inventoried
+    // intrinsic limit (reported only if that Clone recipe is ever demanded),
+    // never a hard error for programs that merely mention the array type.
     c.points = c
         .expressions
-        .checked_mul(5)
-        .and_then(|n| n.checked_add(c.blocks * 3 + 8))
-        .ok_or("recipe point count overflow")?;
-    let origins = c
-        .loan_sites
-        .checked_add(c.formal_origins)
-        .ok_or("recipe origin count overflow")?;
+        .saturating_mul(5)
+        .saturating_add(c.blocks.saturating_mul(3).saturating_add(8));
+    let origins = c.loan_sites.saturating_add(c.formal_origins);
     c.origin_memberships = c
         .points
-        .checked_mul(c.carrier_slots)
-        .and_then(|n| n.checked_mul(origins))
-        .ok_or("recipe membership count overflow")?;
-    c.parent_memberships = origins
-        .checked_mul(origins)
-        .ok_or("recipe parent count overflow")?;
+        .saturating_mul(c.carrier_slots)
+        .saturating_mul(origins);
+    c.parent_memberships = origins.saturating_mul(origins);
     c.lifetime_dependency_memberships = c.parent_memberships;
     c.target_memberships = c.origin_memberships;
     c.target_allocations = c.origin_memberships;
-    c.target_projection_steps = c
-        .target_allocations
-        .checked_mul(2)
-        .ok_or("recipe target projection count overflow")?;
-    c.target_authority_entries = c
-        .target_allocations
-        .checked_mul(origins)
-        .ok_or("recipe target authority count overflow")?;
-    c.target_overhead_words = c
-        .origin_memberships
-        .checked_mul(3)
-        .ok_or("recipe target count overflow")?;
-    c.operations = c
-        .expressions
-        .checked_mul(32)
-        .and_then(|n| n.checked_add(64))
-        .ok_or("recipe operation count overflow")?;
+    c.target_projection_steps = c.target_allocations.saturating_mul(2);
+    c.target_authority_entries = c.target_allocations.saturating_mul(origins);
+    c.target_overhead_words = c.origin_memberships.saturating_mul(3);
+    c.operations = c.expressions.saturating_mul(32).saturating_add(64);
     c.ir_retained_bytes = c
         .expressions
-        .checked_mul(1024)
-        .and_then(|n| n.checked_add(c.locals * 512 + 4096))
-        .ok_or("recipe IR bytes overflow")?;
-    c.cfg_retained_bytes = c
-        .points
-        .checked_mul(1024)
-        .ok_or("recipe CFG bytes overflow")?;
+        .saturating_mul(1024)
+        .saturating_add(c.locals.saturating_mul(512).saturating_add(4096));
+    c.cfg_retained_bytes = c.points.saturating_mul(1024);
     c.construction_peak_bytes = c.ir_retained_bytes;
     c.verification_scratch_bytes = c.cfg_retained_bytes;
     c.work_upper_bound = c
         .operations
-        .checked_add(
-            c.origin_memberships
-                .checked_mul(8)
-                .ok_or("recipe work overflow")?,
-        )
-        .ok_or("recipe work overflow")?;
+        .saturating_add(c.origin_memberships.saturating_mul(8));
     Ok(c)
 }
 
