@@ -261,6 +261,18 @@ iteration and suspended-state destruction each have executable oracle cases.
       with checked module identities retained by the source program/catalog.
       Source modules predate fresh declaration snapshots, so a DeclId or a
       rendered path is not a substitute for a checked module owner.
+  - [ ] Complete the extracted root resolver using checked path/name keys,
+        canonical module identities and typed catalog trait bindings. Preserve
+        namespace separation, alias cycles, lexical shadowing and reexport privacy.
+  - [ ] Universally validate every name/path/type/binder and module restriction,
+        including unused bodies and public metadata, with charged iterative
+        traversal before declaration or body authority is published.
+  - [ ] Retain the same immutable name/module owners through Program, catalog,
+        planning and replay. Reject foreign owners even for empty programs,
+        public declarations and same-spelling unused metadata.
+  - [ ] Serialize persistent instance identities from checked structural crate,
+        module and item descriptors, never snapshot-local numeric handles or
+        diagnostic paths. Preserve source-order and alpha-renaming invariance.
 - [x] Add checked owning token slices, logical macro cursors and opaque literal
       fragment transport without flattening forwarding opacity or granting
       semantic publication authority. The actual checked utility and signed
