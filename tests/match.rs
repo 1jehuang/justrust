@@ -1,6 +1,7 @@
 //! Fieldless enum and match native acceptance for the bounded milestone.
 //! All 59 exact source fixtures were classified with stock rustc 1.98.1, edition 2024.
-//! Stock is an external scratch oracle only and is never invoked by these tests.
+//! The promoted historical alias fixture also reruns its executable stock oracle.
+//! Stock is an external scratch oracle only, never a native compiler dependency.
 //! Payloads and other legal-unsupported cases are boundaries, not invalid Rust.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
@@ -552,14 +553,29 @@ fn main() { if run() == 2 { println!("match oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_type_alias() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "type_alias",
-        r#"enum E { A, B, C } type Alias=E; fn run()->i32{match Alias::B{Alias::A=>1,Alias::B=>2,Alias::C=>3}}
+fn accepts_historical_type_alias() {
+    // Preserve this exact historical source and rerun its executable stock oracle.
+    let source = r#"enum E { A, B, C } type Alias=E; fn run()->i32{match Alias::B{Alias::A=>1,Alias::B=>2,Alias::C=>3}}
 fn main() { if run() == 2 { println!("match oracle ok"); } }
-"#,
+"#;
+    let scratch = Scratch::new();
+    let input = scratch.source(source);
+    let output = scratch.path("stock-alias");
+    let result = capture(
+        Command::new("rustc")
+            .arg("--edition=2024")
+            .arg(&input)
+            .arg("-o")
+            .arg(&output),
+        &scratch,
+        20,
     );
+    assert!(result.status.success(), "stock alias: {result:?}");
+    let runtime = capture(&mut Command::new(output), &scratch, 5);
+    assert!(runtime.status.success(), "stock runtime: {runtime:?}");
+    assert_eq!(runtime.stdout, b"match oracle ok\n");
+    assert!(runtime.stderr.is_empty());
+    runs(source, "match oracle ok\n");
 }
 
 #[test]

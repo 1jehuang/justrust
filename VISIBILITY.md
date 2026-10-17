@@ -32,8 +32,9 @@ Independent executable stock-Rust fixtures precede native CHECK/BUILD at workers
 owner scopes and unused invalid declarations. Real filesystem tests compare
 stock/native behavior through nested external module, type and field scopes.
 
-This is not full Rust support. Type aliases remain a separately identified
-legal-but-unsupported declaration form, even when their visibility is valid.
+This is not full Rust support. The subsequent TYPE-ALIASES.md milestone extends
+the supported declarations with bounded source type aliases and promotes the
+unchanged historical restricted-alias fixture after stock/native execution.
 Globs, block-local items, full cross-crate/edition resolution and source maps
 remain separate open work. Existing type, ownership and runtime restrictions
 continue to apply.

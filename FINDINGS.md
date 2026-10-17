@@ -1,5 +1,31 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Type aliases erase canonically, with iterative bounded expansion
+
+Source mono/generic aliases resolve in their definition context and substitute
+caller arguments simultaneously. Fixed/explicit constructors and patterns retain
+target generic constraints. Same-spelled values/functions remain independent,
+private originals cannot leak, and alias names are not import modules or tuple
+constructor functions. Unused unknown targets, arity errors, unused parameters,
+inference holes and cycles are validated before codegen. Omitted generic alias
+constructor/pattern inference and other listed boundaries stay unsupported.
+
+The first full gate exposed a newly added 128 KiB alias-chain stack regression.
+An iterative cache-first dependency schedule fixes it without larger stacks:
+40 links now succeed and growing cycles reject on that same stack. Vector/path,
+cache and substituted-type copies share resource charges. This is scoped safety
+evidence, not universal minimal-stack support for all deeply nested types.
+
+Final hosted full test run `20261017-043356389-4183342` passes 1,649 tests in
+86 binaries, with 5.64 s test execution and 5.19 s slowest sequential oracle.
+All-target check `20261017-043354163-4183206`, strict all-target lint
+`20261017-043405146-4184072`, formatting and diff checks pass. The stock-first
+62-source corpus has 31 supported valid, 21 invalid and 10 legal unsupported
+programs, followed by 248 native worker/mode cells. Graph equality, external
+files and unchanged historical match/visibility fixtures pass. Receipts are in
+`data/runs/xps14/2026-10-17-type-aliases.jsonl`. No speedup, complete generic
+inference, library compatibility or full Rust claim follows from these tests.
+
 ## 2026-10-17: Restricted visibility is lexical scope authority, not a boolean
 
 Supported declarations now carry Public or a canonical Restricted module scope

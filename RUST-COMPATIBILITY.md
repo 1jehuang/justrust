@@ -242,7 +242,11 @@ visibility, canonical identity and eager unused-import validation. Continue to
 reject glob imports, anonymous `as _` imports, block-local imports/items and
 unsupported namespaces. `VISIBILITY.md` adds normalized lexical `pub(crate)`,
 `pub(super)`, `pub(self)` and `pub(in ancestor)` scopes for supported declaration
-kinds. Type aliases and other unsupported declarations remain separate work.
+kinds. `TYPE-ALIASES.md` adds canonical source type aliases over supported types,
+with definition-context substitution, unused-declaration validation and explicit
+alias arguments in constructors/patterns. Omitted generic alias argument inference,
+alias bounds/where/default/lifetime/const forms and other unsupported declarations
+remain separate work.
 Existing expression/type restrictions remain in COMPILER.md. Source loading is
 bounded and observable but currently expands into one coarse source snapshot;
 original per-file semantic/syntax spans remain a following source-map slice.

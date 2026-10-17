@@ -625,6 +625,38 @@ fn restricted_visibility_preserves_external_lexical_scopes() {
 }
 
 #[test]
+fn generic_type_aliases_preserve_external_definition_context() {
+    let files = [
+        (
+            "src/input.rs",
+            "mod model;mod api;use api::Value as External;fn main(){let s=External::<i32>{x:7};if s.x==7{println!(\"external aliases ok\");}}",
+        ),
+        ("src/model.rs", "pub(crate) struct S<T>{pub(crate) x:T}"),
+        (
+            "src/api.rs",
+            "pub(crate) use crate::model::S as Base;pub(crate) type Value<T>=Base<T>;",
+        ),
+    ];
+    let scratch = fixture(&files);
+    let stock = scratch.path("stock");
+    capture(
+        Command::new("rustc")
+            .arg("--edition=2021")
+            .arg(scratch.path("src/input.rs"))
+            .arg("-o")
+            .arg(&stock),
+        &scratch,
+        COMPILE_TIMEOUT,
+    )
+    .success();
+    let result = capture(&mut Command::new(&stock), &scratch, RUN_TIMEOUT);
+    result.success();
+    assert_eq!(result.stdout, b"external aliases ok\n");
+    assert!(result.stderr.is_empty());
+    runs(&files, "external aliases ok\n");
+}
+
+#[test]
 fn external_missing_module_cannot_be_created_by_trace_publication() {
     for workers in [1, 8] {
         for check in [false, true] {

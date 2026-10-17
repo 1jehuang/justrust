@@ -2777,6 +2777,7 @@ struct Item {
 }
 #[derive(Clone, Debug)]
 enum ItemKind {
+    TypeAlias(TypeAliasDecl),
     Module,
     Function,
     Struct,
@@ -2784,6 +2785,12 @@ enum ItemKind {
     Trait,
     Variant(ir::VariantShape),
     Import(String, bool), // target path, type-namespace-only (`prefix::{self}`)
+}
+
+#[derive(Clone, Debug)]
+struct TypeAliasDecl {
+    params: Vec<String>,
+    target: Type,
 }
 
 fn qualify(module: &str, name: &str) -> String {
@@ -3756,6 +3763,7 @@ fn lex(source: &str) -> Result<Vec<Token>, String> {
     Ok(tokens)
 }
 struct Parser {
+    alias_target: bool,
     pending_bounds: Vec<TypeBound>,
     tokens: Vec<Token>,
     at: usize,
@@ -3842,6 +3850,9 @@ impl Parser {
                 referent: Box::new(self.ty()?),
             });
         }
+        if self.alias_target && self.is("_") {
+            return Err(self.error("E0121: placeholder _ is not allowed in type alias signatures"));
+        }
         if self.is("_") || self.is("!") {
             return Err(self.error("inferred and never source type annotations are unsupported"));
         }
@@ -3872,9 +3883,16 @@ impl Parser {
             self.expect("]")?;
             Ok(Type::Array(Box::new(element), len))
         } else if self.eat("Self") {
+            if self.is("::") {
+                return Err(self.error("associated type projections are unsupported"));
+            }
             Ok(Type::SelfType)
         } else if self.type_params.contains(&self.token().text) {
-            Ok(Type::Param(self.ident()?))
+            let name = self.ident()?;
+            if self.is("::") {
+                return Err(self.error("associated type projections are unsupported"));
+            }
+            Ok(Type::Param(name))
         } else if let Some(ty) = integer_type(&self.token().text) {
             self.at += 1;
             Ok(Type::Int(ty))
@@ -3989,6 +4007,9 @@ impl Parser {
         loop {
             if params.len() >= 32 {
                 return Err(self.error("generic parameter resource limit 32"));
+            }
+            if self.is("const") {
+                return Err(self.error("const generic parameters are unsupported"));
             }
             if !self.token().string && self.token().text.starts_with('\'') {
                 self.lifetime()?;
@@ -4333,6 +4354,9 @@ impl Parser {
                 if self.is("pub") {
                     return Err(self.error("trait items cannot declare visibility"));
                 }
+                if self.is("type") {
+                    return Err(self.error("associated types are unsupported"));
+                }
                 let (signature, receiver) = self.function_head(&[], true)?;
                 if !item_names.insert(signature.name.clone()) {
                     return Err(self.error("duplicate required trait item"));
@@ -4534,6 +4558,9 @@ impl Parser {
                 if explicit_visibility && trait_path.is_some() {
                     return Err(self.error("trait impl items cannot declare pub"));
                 }
+                if self.is("type") {
+                    return Err(self.error("associated types are unsupported"));
+                }
                 let (mut function, receiver) = self.function_scoped(&type_params, true)?;
                 function.visibility = visibility.clone();
                 items.push(AssociatedFunction {
@@ -4560,8 +4587,31 @@ impl Parser {
             function.name = qualify(module, &name);
             parsed.program.functions.push(function);
             (name, ItemKind::Function)
-        } else if self.is("type") {
-            return Err(self.error("type aliases are unsupported"));
+        } else if self.eat("type") {
+            let name = self.ident()?;
+            if self.is("<")
+                && self
+                    .tokens
+                    .get(self.at + 1)
+                    .is_some_and(|t| t.text == "const")
+            {
+                return Err(self.error("const type alias parameters are unsupported"));
+            }
+            let params = self.type_parameters()?;
+            if !self.pending_bounds.is_empty() || self.is("where") || self.is(":") {
+                return Err(self.error("type alias bounds and where clauses are unsupported"));
+            }
+            self.type_params = params.clone();
+            self.expect("=")?;
+            self.alias_target = true;
+            let target = self.ty()?;
+            self.alias_target = false;
+            validate_depth(DepthNode::Type(&target))?;
+            if self.is("where") {
+                return Err(self.error("type alias where clauses are unsupported"));
+            }
+            self.expect(";")?;
+            (name, ItemKind::TypeAlias(TypeAliasDecl { params, target }))
         } else {
             return Err(self.error("expected fn, inline mod or simple use item"));
         };
@@ -5760,6 +5810,7 @@ fn literal_format(text: &str) -> Result<String, String> {
 /// Parse syntax only, retaining imports and visibility for the signatures phase.
 pub fn parse_unresolved(source: &str) -> Result<ParsedProgram, String> {
     let mut parser = Parser {
+        alias_target: false,
         pending_bounds: Vec::new(),
         tokens: lex(source)?,
         at: 0,
@@ -5821,6 +5872,7 @@ struct ResolvedItem {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResolvedKind {
+    TypeAlias,
     Trait,
     Module,
     Function,
@@ -5829,6 +5881,11 @@ enum ResolvedKind {
     Variant,
 }
 struct Resolver<'a> {
+    type_depth: usize,
+    alias_cache: HashMap<String, Type>,
+    alias_active: std::collections::HashSet<String>,
+    alias_budget: ir::PlanBudget,
+    nominal_arity: HashMap<String, usize>,
     self_nominal: Option<String>,
     items: &'a HashMap<String, Vec<Item>>,
     imports: HashMap<(String, usize, bool), Option<ResolvedItem>>,
@@ -5836,6 +5893,328 @@ struct Resolver<'a> {
     type_params: Vec<String>,
 }
 impl Resolver<'_> {
+    fn alias_source_path(&self, name: &str) -> Result<GenericPath, String> {
+        clone_text(name, &self.alias_budget)?;
+        self.alias_budget.retain_bytes(
+            name.len()
+                .checked_add(1)
+                .and_then(|n| n.checked_mul(std::mem::size_of::<PathSegment>()))
+                .ok_or("alias source path storage overflow")?,
+        )?;
+        Ok(GenericPath {
+            segments: name
+                .split("::")
+                .map(|name| PathSegment {
+                    name: name.into(),
+                    args: Vec::new(),
+                })
+                .collect(),
+        })
+    }
+    fn alias_decl(&self, name: &str) -> Result<&TypeAliasDecl, String> {
+        self.items
+            .get(name)
+            .and_then(|items| {
+                items.iter().find_map(|item| {
+                    if let ItemKind::TypeAlias(alias) = &item.kind {
+                        Some(alias)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .ok_or_else(|| format!("missing type alias {name}"))
+    }
+    fn resolve_aliases(&mut self) -> Result<(), String> {
+        self.alias_budget.retain_bytes(
+            self.items
+                .len()
+                .checked_mul(2 * std::mem::size_of::<&str>())
+                .and_then(|n| n.checked_add(128))
+                .ok_or("alias root storage overflow")?,
+        )?;
+        let mut roots = self
+            .items
+            .iter()
+            .filter(|(_, items)| {
+                items
+                    .iter()
+                    .any(|item| matches!(item.kind, ItemKind::TypeAlias(_)))
+            })
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>();
+        roots.sort();
+        let mut active = std::collections::HashSet::new();
+        for root in roots {
+            clone_text(root, &self.alias_budget)?;
+            self.alias_budget.retain_bytes(128)?;
+            let mut stack = vec![(root.to_owned(), false)];
+            while let Some((name, finish)) = stack.pop() {
+                self.alias_budget.charge_work(1)?;
+                if self.alias_cache.contains_key(&name) {
+                    continue;
+                }
+                if finish {
+                    self.alias_template(&name)?;
+                    active.remove(&name);
+                    continue;
+                }
+                clone_text(&name, &self.alias_budget)?;
+                self.alias_budget.retain_bytes(128)?;
+                if !active.insert(name.clone()) {
+                    return Err(format!("E0391: cycle in type alias {name}"));
+                }
+                walk_depth(
+                    DepthNode::Type(&self.alias_decl(&name)?.target),
+                    Some(&self.alias_budget),
+                )?;
+                let mut spellings = Vec::new();
+                self.alias_budget.retain_bytes(128)?;
+                let mut pending = vec![&self.alias_decl(&name)?.target];
+                while let Some(ty) = pending.pop() {
+                    self.alias_budget.charge_work(1)?;
+                    let children = match ty {
+                        Type::Tuple(fields) => fields.len(),
+                        Type::Apply(path) => path
+                            .segments
+                            .iter()
+                            .try_fold(0usize, |n, s| n.checked_add(s.args.len()))
+                            .ok_or("alias dependency child count overflow")?,
+                        Type::Ref { .. } | Type::Array(..) | Type::Slice(_) => 1,
+                        _ => 0,
+                    };
+                    self.alias_budget.retain_bytes(
+                        children
+                            .checked_mul(2 * std::mem::size_of::<&Type>())
+                            .and_then(|n| n.checked_add(128))
+                            .ok_or("alias dependency worklist storage overflow")?,
+                    )?;
+                    match ty {
+                        Type::Named(path) => {
+                            clone_text(path, &self.alias_budget)?;
+                            spellings.push(path.clone());
+                        }
+                        Type::Apply(path) => {
+                            clone_path(path, &self.alias_budget)?;
+                            spellings.push(path.spelling());
+                            for segment in &path.segments {
+                                pending.extend(&segment.args);
+                            }
+                        }
+                        Type::Tuple(fields) => pending.extend(fields),
+                        Type::Ref { referent, .. }
+                        | Type::Array(referent, _)
+                        | Type::Slice(referent) => pending.push(referent),
+                        _ => {}
+                    }
+                }
+                let mut dependencies = Vec::new();
+                for spelling in spellings {
+                    if let Some(item) = self.path(&spelling, parent(&name), true, false)?
+                        && item.kind == ResolvedKind::TypeAlias
+                    {
+                        self.alias_budget.retain_bytes(128)?;
+                        dependencies.push(item.path);
+                    }
+                }
+                self.alias_budget.retain_bytes(
+                    (dependencies.len() + 1)
+                        .checked_mul(std::mem::size_of::<(String, bool)>() + 64)
+                        .ok_or("alias dependency storage overflow")?,
+                )?;
+                stack.push((name, true));
+                for dependency in dependencies.into_iter().rev() {
+                    stack.push((dependency, false));
+                }
+            }
+        }
+        Ok(())
+    }
+    /// Resolve in the definition's binder before substituting caller arguments.
+    /// Templates contain canonical nominal paths, never caller-relative names.
+    fn alias_template(&mut self, name: &str) -> Result<Type, String> {
+        self.alias_budget.charge_work(1)?;
+        if let Some(target) = self.alias_cache.get(name) {
+            walk_depth(DepthNode::Type(target), Some(&self.alias_budget))?;
+            return Ok(target.clone());
+        }
+        if self.alias_active.contains(name) {
+            return Err(format!("E0391: cycle in type alias {name}"));
+        }
+        if self.alias_active.len() >= 8 {
+            return Err("type alias resolution nesting exceeds resource limit 8".into());
+        }
+        let alias = self.alias_decl(name)?;
+        clone_names(&alias.params, &self.alias_budget)?;
+        walk_depth(DepthNode::Type(&alias.target), Some(&self.alias_budget))?;
+        let params = alias.params.clone();
+        let mut target = alias.target.clone();
+        fn check_target(ty: &Type) -> Result<(), String> {
+            match ty {
+                Type::SelfType => return Err("Self outside impl in type alias".into()),
+                Type::Ref { region: None, .. } => {
+                    return Err("E0106: missing lifetime specifier in type alias".into());
+                }
+                Type::Ref { .. } => {
+                    return Err("explicit lifetime type aliases are unsupported".into());
+                }
+                Type::Slice(_) => return Err("unsized type aliases are unsupported".into()),
+                Type::Array(t, _) => check_target(t)?,
+                Type::Tuple(fields) => {
+                    for field in fields {
+                        check_target(field)?;
+                    }
+                }
+                Type::Apply(path) => {
+                    for segment in &path.segments {
+                        for arg in &segment.args {
+                            check_target(arg)?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+        check_target(&target)?;
+        clone_text(name, &self.alias_budget)?;
+        self.alias_active.insert(name.into());
+        let saved_params = std::mem::replace(&mut self.type_params, params);
+        let saved_self = self.self_nominal.take();
+        let result = self.ty(&mut target, parent(name));
+        let params = std::mem::replace(&mut self.type_params, saved_params);
+        self.self_nominal = saved_self;
+        self.alias_active.remove(name);
+        result?;
+        validate_depth(DepthNode::Type(&target))?;
+        let mut used = std::collections::HashSet::new();
+        collect_source_params(&target, &mut used, &self.alias_budget, 0)?;
+        for param in params {
+            if !used.contains(&param) {
+                return Err(format!(
+                    "E0091: type parameter {param} is never used in type alias {name}"
+                ));
+            }
+        }
+        walk_depth(DepthNode::Type(&target), Some(&self.alias_budget))?;
+        clone_text(name, &self.alias_budget)?;
+        self.alias_cache.insert(name.into(), target.clone());
+        Ok(target)
+    }
+    fn expand_alias(&mut self, name: &str, args: &[Type]) -> Result<Type, String> {
+        let params = &self.alias_decl(name)?.params;
+        if params.len() != args.len() {
+            return Err(format!(
+                "E0107: type alias {name} expects {} type arguments, got {}",
+                params.len(),
+                args.len()
+            ));
+        }
+        clone_names(params, &self.alias_budget)?;
+        let params = params.clone();
+        let mut target = self.alias_template(name)?;
+        fn substitute(
+            ty: &mut Type,
+            params: &[String],
+            args: &[Type],
+            budget: &ir::PlanBudget,
+            depth: usize,
+        ) -> Result<(), String> {
+            budget.check_depth(depth)?;
+            budget.charge_work(1)?;
+            match ty {
+                Type::Param(name) => {
+                    if let Some(index) = params.iter().position(|p| p == name) {
+                        walk_depth(DepthNode::Type(&args[index]), Some(budget))?;
+                        *ty = args[index].clone();
+                    }
+                }
+                Type::Apply(path) => {
+                    for segment in &mut path.segments {
+                        for arg in &mut segment.args {
+                            substitute(arg, params, args, budget, depth + 1)?;
+                        }
+                    }
+                }
+                Type::Tuple(fields) => {
+                    for field in fields {
+                        substitute(field, params, args, budget, depth + 1)?;
+                    }
+                }
+                Type::Ref { referent, .. } | Type::Array(referent, _) | Type::Slice(referent) => {
+                    substitute(referent, params, args, budget, depth + 1)?
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+        substitute(&mut target, &params, args, &self.alias_budget, 0)?;
+        validate_depth(DepthNode::Type(&target))?;
+        Ok(target)
+    }
+    /// A source alias can qualify enum variants and named-field constructors,
+    /// but is not itself a value constructor or a traversable import module.
+    fn alias_constructor_path(
+        &mut self,
+        path: &GenericPath,
+        module: &str,
+        named_constructor: bool,
+    ) -> Result<Option<GenericPath>, String> {
+        for end in 1..=path.segments.len() {
+            if end == path.segments.len() && !named_constructor {
+                return Ok(None);
+            }
+            let spelling = path.segments[..end]
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>()
+                .join("::");
+            let Some(item) = self.path(&spelling, module, true, false)? else {
+                continue;
+            };
+            if item.kind != ResolvedKind::TypeAlias {
+                if item.kind == ResolvedKind::Module && !path.segments[end - 1].args.is_empty() {
+                    return Err("generic arguments are not allowed on modules".into());
+                }
+                if item.kind != ResolvedKind::Module {
+                    return Ok(None);
+                }
+                continue;
+            }
+            if end == path.segments.len() && !named_constructor {
+                return Ok(None);
+            }
+            if path.segments[end - 1].args.is_empty()
+                && !self.alias_decl(&item.path)?.params.is_empty()
+            {
+                return Err("inferred generic type alias constructors and patterns are unsupported; supply explicit type arguments".into());
+            }
+            clone_vector(&path.segments[end - 1].args, &self.alias_budget)?;
+            for arg in &path.segments[end - 1].args {
+                walk_depth(DepthNode::Type(arg), Some(&self.alias_budget))?;
+            }
+            let mut args = path.segments[end - 1].args.clone();
+            for arg in &mut args {
+                self.ty(arg, module)?;
+            }
+            let target = self.expand_alias(&item.path, &args)?;
+            let mut expanded = match target {
+                Type::Named(name) => self.alias_source_path(&name)?,
+                Type::Apply(path) => path,
+                _ => return Ok(None),
+            };
+            for segment in &path.segments[end..] {
+                clone_text(&segment.name, &self.alias_budget)?;
+                clone_vector(&segment.args, &self.alias_budget)?;
+                for arg in &segment.args {
+                    walk_depth(DepthNode::Type(arg), Some(&self.alias_budget))?;
+                }
+            }
+            expanded.segments.extend_from_slice(&path.segments[end..]);
+            return Ok(Some(expanded));
+        }
+        Ok(None)
+    }
     fn trait_path(&mut self, path: &mut String, module: &str) -> Result<(), String> {
         let item = match self.path(path, module, true, false)? {
             Some(item) => item,
@@ -5907,6 +6286,12 @@ impl Resolver<'_> {
         let mut result = None;
         for (index, item) in bindings.iter().enumerate() {
             let resolved = match &item.kind {
+                ItemKind::TypeAlias(_) if module => Some(ResolvedItem {
+                    visibility: ir::Visibility::Public,
+                    path: path.into(),
+                    module: true,
+                    kind: ResolvedKind::TypeAlias,
+                }),
                 ItemKind::Module if module => Some(ResolvedItem {
                     visibility: ir::Visibility::Public,
                     path: path.into(),
@@ -6149,6 +6534,9 @@ impl Resolver<'_> {
             .path(&spelling, module, true, false)?
             .or(self.path(&spelling, module, false, false)?)
             .ok_or_else(|| format!("unresolved generic declaration {spelling}"))?;
+        if item.kind == ResolvedKind::Module {
+            return Err("generic arguments are not allowed on modules".into());
+        }
         let mut args = std::mem::take(&mut path.segments[at].args);
         for arg in &mut args {
             self.ty(arg, module)?;
@@ -6222,8 +6610,37 @@ impl Resolver<'_> {
         Ok(Some((owner, item.name.clone(), args)))
     }
     fn ty(&mut self, ty: &mut Type, module: &str) -> Result<(), String> {
+        if self.type_depth >= 128 {
+            return Err("type resolution nesting exceeds resource limit 128".into());
+        }
+        self.type_depth += 1;
+        let result = self.ty_inner(ty, module);
+        self.type_depth -= 1;
+        result
+    }
+    fn ty_inner(&mut self, ty: &mut Type, module: &str) -> Result<(), String> {
         match ty {
-            Type::Apply(path) => self.generic_path(path, module)?,
+            Type::Apply(path) => {
+                self.generic_path(path, module)?;
+                let name = path.spelling();
+                let (_, args) = path.application()?;
+                if self.items.get(&name).is_some_and(|items| {
+                    items
+                        .iter()
+                        .any(|item| matches!(item.kind, ItemKind::TypeAlias(_)))
+                }) {
+                    *ty = self.expand_alias(&name, args)?;
+                } else if let Some(expected) = self.nominal_arity.get(&name)
+                    && *expected != args.len()
+                {
+                    return Err(format!(
+                        "E0107: {name} expects {expected} type arguments, got {}",
+                        args.len()
+                    ));
+                } else if !self.nominal_arity.contains_key(&name) && name != "Self" {
+                    return Err(format!("{name} is not a nominal type"));
+                }
+            }
             Type::Param(name) => {
                 if !self.type_params.contains(name) {
                     return Err(format!("unknown type parameter {name}"));
@@ -6235,10 +6652,21 @@ impl Resolver<'_> {
                 let item = self
                     .path(name, module, true, false)?
                     .ok_or_else(|| format!("unresolved type {name}"))?;
+                if item.kind == ResolvedKind::TypeAlias {
+                    *ty = self.expand_alias(&item.path, &[])?;
+                    return Ok(());
+                }
                 if !matches!(item.kind, ResolvedKind::Struct | ResolvedKind::Enum) {
                     return Err(format!("{} is a module, not a nominal type", item.path));
                 }
                 *name = item.path;
+                if self
+                    .nominal_arity
+                    .get(name)
+                    .is_some_and(|arity| *arity != 0)
+                {
+                    return Err(format!("E0107: missing type arguments for {name}"));
+                }
             }
             Type::Tuple(fields) => {
                 for ty in fields {
@@ -6255,6 +6683,46 @@ impl Resolver<'_> {
         module: &str,
         names: &mut std::collections::HashSet<String>,
     ) -> Result<(), String> {
+        let source_path = match pattern {
+            Pattern::Apply { path, .. } => {
+                clone_path(path, &self.alias_budget)?;
+                for segment in &path.segments {
+                    for arg in &segment.args {
+                        walk_depth(DepthNode::Type(arg), Some(&self.alias_budget))?;
+                    }
+                }
+                Some(path.clone())
+            }
+            Pattern::Struct { name, .. } | Pattern::Variant { name, .. } | Pattern::Path(name) => {
+                Some(self.alias_source_path(name)?)
+            }
+            _ => None,
+        };
+        if let Some(source_path) = source_path
+            && let Some(expanded) = self.alias_constructor_path(&source_path, module, matches!(pattern, Pattern::Struct { .. }) || matches!(pattern, Pattern::Apply { pattern, .. } if matches!(pattern.as_ref(), Pattern::Struct { .. })))?
+        {
+            let canonical = expanded.spelling();
+            let inner = if let Pattern::Apply { pattern, .. } = pattern { pattern.as_mut() } else { &mut *pattern };
+            let variant = self.items.get(&canonical).and_then(|items| items.iter().find_map(|item| if let ItemKind::Variant(shape) = item.kind { Some(shape) } else { None }));
+            match inner {
+                Pattern::Struct { name, fields, rest } if variant.is_some() => {
+                    let fields = std::mem::take(fields).into_iter().map(|(name,p)| (FieldSelector::Named(name),p)).collect();
+                    *inner = Pattern::Variant { name: canonical, shape: variant.unwrap(), fields, rest: *rest };
+                }
+                Pattern::Struct { name, .. } | Pattern::Variant { name, .. } | Pattern::Path(name) => *name = canonical,
+                _ => return Err("unsupported alias constructor pattern".into()),
+            }
+            match inner {
+                Pattern::Struct { fields, .. } => for (_, field) in fields { self.pattern(field, module, names)?; },
+                Pattern::Variant { fields, .. } => for (_, field) in fields { self.pattern(field, module, names)?; },
+                _ => {}
+            }
+            if expanded.segments.iter().any(|s| !s.args.is_empty()) {
+                if let Pattern::Apply { path, .. } = pattern { *path = expanded; }
+                else { let inner = std::mem::replace(pattern, Pattern::Wildcard); *pattern = Pattern::Apply { path: expanded, pattern: Box::new(inner) }; }
+            } else if let Pattern::Apply { pattern: inner, .. } = pattern { *pattern = *std::mem::replace(inner, Box::new(Pattern::Wildcard)); }
+            return Ok(());
+        }
         match pattern {
             Pattern::Apply { path, pattern } => {
                 self.generic_path(path, module)?;
@@ -6433,6 +6901,85 @@ impl Resolver<'_> {
         module: &str,
         locals: &mut Vec<std::collections::HashSet<String>>,
     ) -> Result<(), String> {
+        if let Expr::Var(name) | Expr::Call { name, .. } = expr
+            && !name.contains("::")
+            && locals.iter().rev().any(|scope| scope.contains(name))
+        {
+            return if matches!(expr, Expr::Call { .. }) {
+                Err("local binding is not callable".into())
+            } else {
+                Ok(())
+            };
+        }
+        // Retain explicit applications on the erased nominal owner, not the
+        // alias binder. Inner constructor lookup uses a root-qualified path so
+        // canonical definition-context names cannot be captured at the use site.
+        let source_path = match expr {
+            Expr::Apply { path, .. } => {
+                clone_path(path, &self.alias_budget)?;
+                for segment in &path.segments {
+                    for arg in &segment.args {
+                        walk_depth(DepthNode::Type(arg), Some(&self.alias_budget))?;
+                    }
+                }
+                Some(path.clone())
+            }
+            Expr::Struct { name, .. } | Expr::Call { name, .. } | Expr::Var(name) => {
+                Some(self.alias_source_path(name)?)
+            }
+            _ => None,
+        };
+        if let Some(source_path) = source_path
+            && let Some(expanded) = self.alias_constructor_path(&source_path, module, matches!(expr, Expr::Struct { .. }) || matches!(expr, Expr::Apply { value, .. } if matches!(value.as_ref(), Expr::Struct { .. })))?
+        {
+            let canonical = expanded.spelling();
+            let value = if let Expr::Apply { value, .. } = expr {
+                value.as_mut()
+            } else {
+                &mut *expr
+            };
+            let variant = self.items.get(&canonical).and_then(|items| items.iter().find_map(|item| if let ItemKind::Variant(shape) = item.kind { Some(shape) } else { None }));
+            if let Some(shape) = variant {
+                let fields = match value {
+                    Expr::Var(_) if shape == ir::VariantShape::Unit => Vec::new(),
+                    Expr::Call { args, .. } if shape == ir::VariantShape::Tuple => std::mem::take(args).into_iter().enumerate().map(|(i,e)| (FieldSelector::Tuple(i),e)).collect(),
+                    Expr::Struct { fields, .. } if shape == ir::VariantShape::Struct => std::mem::take(fields).into_iter().map(|(n,e)| (FieldSelector::Named(n),e)).collect(),
+                    _ => return Err("enum alias variant constructor shape mismatch".into()),
+                };
+                *value = Expr::EnumVariant { name: canonical, shape, fields };
+                if let Expr::EnumVariant { fields, .. } = value { for (_, field) in fields { self.expr(field, module, locals)?; } }
+            } else if self.items.get(&canonical).is_some_and(|items| items.iter().any(|i| matches!(i.kind, ItemKind::Struct))) {
+                let Expr::Struct { name, fields } = value else { return Err("type alias is not a value constructor".into()); };
+                *name = canonical;
+                for (_, field) in fields { self.expr(field, module, locals)?; }
+            } else {
+                // Methods use the erased owner, with arguments in caller scope.
+                let Expr::Call { args, .. } = value else { return Err("unresolved alias associated item".into()); };
+                let mut owner_path = expanded;
+                let method = owner_path.segments.pop().ok_or("missing associated item")?;
+                let owner = if owner_path.segments.iter().any(|s| !s.args.is_empty()) { Type::Apply(owner_path) } else { Type::Named(owner_path.spelling()) };
+                let mut type_args = method.args;
+                for ty in &mut type_args { self.ty(ty, module)?; }
+                for arg in args.iter_mut() { self.expr(arg, module, locals)?; }
+                let args = std::mem::take(args);
+                *expr = Expr::AssociatedCall { owner, name: method.name, type_args, args };
+                return Ok(());
+            }
+            if expanded.segments.iter().any(|s| !s.args.is_empty()) {
+                if let Expr::Apply { path, .. } = expr {
+                    *path = expanded;
+                } else {
+                    let value = std::mem::replace(expr, Expr::Var(String::new()));
+                    *expr = Expr::Apply {
+                        path: expanded,
+                        value: Box::new(value),
+                    };
+                }
+            } else if let Expr::Apply { value, .. } = expr {
+                *expr = *std::mem::replace(value, Box::new(Expr::Var(String::new())));
+            }
+            return Ok(());
+        }
         match expr {
             Expr::Apply { path, value } => {
                 if matches!(value.as_ref(), Expr::Call { .. })
@@ -6675,6 +7222,23 @@ impl Resolver<'_> {
 /// Unqualified names belong to the current module only, not parent modules.
 pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     let mut resolver = Resolver {
+        type_depth: 0,
+        alias_cache: HashMap::new(),
+        alias_active: std::collections::HashSet::new(),
+        alias_budget: ir::PlanBudget::default(),
+        nominal_arity: parsed
+            .program
+            .structs
+            .iter()
+            .map(|d| (d.name.clone(), d.type_params.len()))
+            .chain(
+                parsed
+                    .program
+                    .enums
+                    .iter()
+                    .map(|d| (d.name.clone(), d.type_params.len())),
+            )
+            .collect(),
         items: &parsed.items,
         self_nominal: None,
         imports: HashMap::new(),
@@ -6725,6 +7289,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         resolver.item(&path, parent(&path), true, false)?;
         resolver.item(&path, parent(&path), false, false)?;
     }
+    resolver.resolve_aliases()?;
     if !parsed.program.functions.iter().any(|f| f.name == "main")
         && let Some(target) = resolver.item("main", "", false, false)?
         && target.kind == ResolvedKind::Function
@@ -9780,6 +10345,7 @@ fn collect_source_params(
     budget.charge_work(1)?;
     match ty {
         Type::Param(p) => {
+            clone_text(p, budget)?;
             used.insert(p.clone());
         }
         Type::Apply(path) => {
@@ -18974,7 +19540,10 @@ mod tests {
     fn unsupported_module_forms_are_rejected_explicitly() {
         for (source, message) in [
             ("mod a; fn main(){}", "external module"),
-            ("type Alias=i32;fn main(){}", "type aliases are unsupported"),
+            (
+                "type Alias<T> where T:Copy=T;fn main(){}",
+                "type alias bounds and where clauses are unsupported",
+            ),
             ("use crate::a::*; fn main(){}", "glob imports"),
             ("pub use crate::a::*; fn main(){}", "glob imports"),
             ("mod a{} mod a{} fn main(){}", "duplicate item"),
@@ -18986,6 +19555,64 @@ mod tests {
         bad("fn main(){use crate::a;}");
         let nested = format!("{}{}fn main(){{}}", "mod a{".repeat(300), "}".repeat(300));
         assert!(parse(&nested).unwrap_err().contains("nesting"));
+    }
+    #[test]
+    fn source_aliases_erase_binders_without_nominal_or_value_declarations() {
+        for source in [
+            "type A<T>=B<(T,T)>;type B<T>=T;fn f<U>(x:A<U>)->(U,U){x}fn main(){let p=f::<i32>((2,3));}",
+            "type T=A<i32>;type A<T>=T;fn main(){let n:T=7;}",
+            "mod a{mod hidden{pub struct S{pub x:i32}}pub type A=hidden::S;}fn main(){let a=a::A{x:7};let a::A{x}=a;}",
+            "struct S<T>{x:T}type A=S<i32>;fn main(){let a=A{x:7};let A{x}=a;}",
+            "enum E<T>{V(T),N}type A<T>=E<T>;fn main(){let a=A::<i32>::V(7);match a{A::<i32>::V(x)=>{let n=x;},A::<i32>::N=>{}}}",
+            "struct S{x:i32}type A=S;fn A()->i32{7}fn main(){let n=A();let A=8;let n=A;let s=crate::A{x:n};}",
+        ] {
+            let program = parse(source).unwrap_or_else(|e| panic!("{source}: {e}"));
+            check(&program).unwrap_or_else(|e| panic!("{source}: {e}"));
+        }
+    }
+    #[test]
+    fn unused_aliases_validate_targets_arity_parameters_and_cycles() {
+        for (source, expected) in [
+            ("type A=Missing;fn main(){}", "unresolved type"),
+            ("struct S<T>{x:T}type A=S;fn main(){}", "E0107"),
+            ("type A<T>=i32;fn main(){}", "E0091"),
+            ("type A<T>=A<(T,T)>;fn main(){}", "E0391"),
+            ("type A=B;type B=A;fn main(){}", "E0391"),
+            ("type A=(_,(i32,_));fn main(){}", "E0121"),
+            (
+                "struct S{x:i32}type A=S;use A::{self as B};fn main(){}",
+                "not a module",
+            ),
+        ] {
+            let error = parse(source).unwrap_err();
+            assert!(error.contains(expected), "{source}: {error}");
+        }
+    }
+    #[test]
+    fn alias_resolution_is_bounded_on_a_normal_128k_stack() {
+        let source = (0..40)
+            .map(|i| format!("type A{i}=A{};", i + 1))
+            .collect::<String>()
+            + "type A40=i32;fn main(){}";
+        let parsed = parse_unresolved(&source).unwrap();
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                resolve(&parsed).unwrap();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        let source = "type A<T>=B<(T,T)>;type B<T>=A<(T,T)>;fn main(){}";
+        let parsed = parse_unresolved(source).unwrap();
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                assert!(resolve(&parsed).unwrap_err().contains("E0391"));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
     fn good(s: &str) {
         let p = parse(s).unwrap();

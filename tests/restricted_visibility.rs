@@ -445,8 +445,8 @@ const FIXTURES: &[Fixture] = &[
         "mod a{}mod b{pub(in crate::a) struct S{pub x:i32}}fn main(){}"
     ),
 ];
-// Legal Rust, outside this milestone: keep distinct from negative conformance.
-const LEGAL_UNSUPPORTED: Fixture = fixture!(
+// Promoted unchanged by the subsequent native type-alias milestone.
+const PROMOTED_ALIAS: Fixture = fixture!(
     restricted_type_alias,
     true,
     "mod a{pub(crate) struct S{pub x:i32}pub(crate) type Alias=S;}fn main(){let s=a::Alias{x:7};if s.x==7{println!(\"visibility ok\");}}"
@@ -496,7 +496,7 @@ fn stock(f: &Fixture) {
     }
 }
 fn oracle_all() {
-    for f in FIXTURES.iter().chain(std::iter::once(&LEGAL_UNSUPPORTED)) {
+    for f in FIXTURES.iter().chain(std::iter::once(&PROMOTED_ALIAS)) {
         stock(f);
     }
 }
@@ -504,16 +504,15 @@ fn oracle_all() {
 fn stock_oracle() {
     oracle_all();
     eprintln!(
-        "stock restricted visibility: {} supported valid, {} invalid, 1 legal unsupported",
-        FIXTURES.iter().filter(|f| f.valid).count(),
+        "stock restricted visibility: {} supported valid, {} invalid",
+        FIXTURES.iter().filter(|f| f.valid).count() + 1,
         FIXTURES.iter().filter(|f| !f.valid).count()
     );
 }
 #[test]
 fn native_after_complete_stock_oracle() {
     oracle_all();
-    for f in FIXTURES.iter().chain(std::iter::once(&LEGAL_UNSUPPORTED)) {
-        let unsupported = f.name == LEGAL_UNSUPPORTED.name;
+    for f in FIXTURES.iter().chain(std::iter::once(&PROMOTED_ALIAS)) {
         let s = Scratch::new();
         let input = s.path("input.rs");
         file(&input).write_all(f.source.as_bytes()).unwrap();
@@ -532,7 +531,7 @@ fn native_after_complete_stock_oracle() {
                 }
                 let result = capture(&mut command, &s);
                 let diagnostic = String::from_utf8_lossy(&result.2);
-                if !f.valid || unsupported {
+                if !f.valid {
                     assert!(
                         result.1.is_empty(),
                         "invalid compiler stdout {}: {:?}",
@@ -542,25 +541,20 @@ fn native_after_complete_stock_oracle() {
                 }
                 assert_eq!(
                     result.0,
-                    if f.valid && !unsupported { 0 } else { 1 },
+                    if f.valid { 0 } else { 1 },
                     "{} workers={workers} check={check}: {diagnostic}\n{}",
                     f.name,
                     f.source
                 );
                 assert!(!diagnostic.contains("panicked at"), "{diagnostic}");
-                if unsupported {
-                    assert!(
-                        diagnostic.contains("type aliases are unsupported"),
-                        "legal unsupported alias: {diagnostic}"
-                    );
-                } else if !f.valid {
+                if !f.valid {
                     assert!(
                         !diagnostic.is_empty() && !diagnostic.contains("unsupported"),
                         "invalid fixture not validated {}: {diagnostic}",
                         f.name
                     );
                 }
-                if check || !f.valid || unsupported {
+                if check || !f.valid {
                     for path in [output, s.path("input"), s.path("a.out")] {
                         assert!(
                             !path.exists(),

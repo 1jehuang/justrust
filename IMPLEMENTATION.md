@@ -43,6 +43,10 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       eligibility and namespace-specific original/intermediary visibility.
 - [x] Normalized lexical restricted visibility for supported declarations,
       nominal/field/method access and non-widening named reexports (VISIBILITY.md).
+- [x] Canonical monomorphic/first-order generic source type aliases with eager
+      unused validation, bounded hygienic expansion and fixed/explicit generic
+      constructor/pattern arguments (TYPE-ALIASES.md). Inferred alias constructor
+      and pattern arguments remain explicitly unsupported.
 
 ## Remaining implementation program
 
@@ -372,6 +376,22 @@ compiler implementations. Reassess staffing against ready tasks, blocked APIs
 and measured integration throughput after each accepted slice.
 
 ## Active work and evidence limits
+
+The source-type-alias checkpoint passes all 1,649 hosted tests in 86 binaries
+(`20261017-043356389-4183342`), all-target checking
+(`20261017-043354163-4183206`), strict all-target lint
+(`20261017-043405146-4184072`) and formatting. Its independent executable stock
+corpus classifies 31 supported valid, 21 invalid and 10 legal unsupported sources
+before 248 native CHECK/BUILD cells at workers 1 and 8. Fixed/explicit constructor
+and pattern arguments retain canonical target constraints, while omitted generic
+alias argument inference remains unsupported. Two graph tests check native image
+identity and unused invalid aliases, and an external-file test exercises generic
+alias definition context through imports. The unchanged historical visibility and
+match alias sources are promoted after exact executable stock/native acceptance.
+An iterative dependency schedule fixes the discovered stack overflow without
+increasing thread stacks: a 40-link alias chain succeeds on 128 KiB and growing
+cycles fail diagnostically. TYPE-ALIASES.md defines the bounded contract. Full
+source organization, abstraction, libraries, projects and full Rust remain open.
 
 The restricted-visibility checkpoint passes all 1,641 hosted tests in 84 binaries
 (`20261017-041943076-4105659`), all-target checking
