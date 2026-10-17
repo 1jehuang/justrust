@@ -1,5 +1,39 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Jcode client usage audit focused validation
+
+Hosted OpenRouter check `20261017-031745643-3580854` spent 6.59 s waiting
+for the shared build-directory lock out of 6.8 s build wall time. Its full
+43-test package run `20261017-031755286-3580853` then took 0.55 s with no
+detected waste. Sidecar run `20261017-031822442-3591182` passed 19 tests in
+15.64 s build wall time, compiling the base test crate for 7.78 s and the
+ordinary base library for 5.62 s after upstream provider/usage changes.
+The report estimates 6.1 s avoidable other-target work by using `--lib` for
+this filter. Future focused sidecar validation should use that flag and
+coordinate hosted jobs. No restructuring or measured speedup is claimed.
+
+## 2026-10-17: Jcode cache-affinity trait change fans out into large test crates
+
+Hosted check `20261017-031242547-3533067` passed in 11.8 s total, including
+9.31 s compiling 11 units after the provider-core trait changed. Focused TUI
+run `20261017-031306424-3536032` passed 21 tests but compiled the 233k-line TUI
+test crate for 10.71 s and 167k-line app-core for 6.09 s. Router regression run
+`20261017-031558018-3562866` passed 3 tests, with 9.26 s compiling the 143k-line
+base test crate and 3.53 s of build-directory lock wait. Smaller boundary tests
+or coordinated validation could reduce this cost. No project restructuring or
+speedup is claimed during the cache correctness fix.
+
+## 2026-10-16: Jcode hibernation configuration fan-out and parallel test lock
+
+Hosted run `20261016-184204525-2857383` passed its targeted config test in
+22.1 s build wall time, with 19.1 s compiling the oversized base crate after a
+config-types change. Justrust reported 20.8 s of overlapping upstream rebuild
+cost. Using `--lib` avoids the reported 7.3 s of unnecessary other-target work.
+Later `20261016-184315762-2869994` passed two tests with zero compilation but
+waited 4.27 s for another worker's build-directory lock. Coordinate validation
+commands when practical. These are measurements, not a speedup claim or a reason
+to restructure Jcode during the hibernation feature.
+
 ## 2026-10-16: hosted selfdev artifact retrieval stalls after successful compilation
 
 Jcode acceptance required a runnable binary. Explicit hosted build
@@ -7553,3 +7587,53 @@ invalidated 32 local units, so this run is not an isolated script benchmark.
 Potential project-side follow-up: narrow the build script's tracked inputs
 or move embedded script data into a leaf crate. No crate restructuring or
 speedup is claimed for the Windows release validation task.
+
+## 2026-10-16: Jcode documentation edits rebuild app-core and TUI
+
+During tier-switch validation, hosted run `20261016-182521076-2649361`
+(`justrust check -p jcode-tui`) took 4.2s: app-core 2.12s and TUI 1.84s.
+The trigger was `edited crates/jcode-app-core/../../docs`, consumed by the
+app-core build script. Follow-up test build `20261016-182527652-2650946`
+spent 6.5s before failing on a test assertion type error, including 3.15s
+app-core and 3.03s TUI compilation with the same docs dependency trigger.
+This is a project architecture opportunity: narrow the build-script input or
+move embedded docs into a small leaf crate. No restructuring was attempted
+while finishing the user's tier-switch task, and no speedup is claimed.
+
+## 2026-10-17: Jcode cache-monitor test build and concurrent lock cost
+
+Hosted run `20261017-032644449-3692707` (`justrust test -p jcode-base
+kv_cache_monitor --lib`) passed 12 tests in 13.04s runner wall time. Compilation
+took 12.77s, including 8.05s for the 1,815-test base binary and 4.36s for the
+base library, after an upstream compaction-core change. The report attributed
+12.4s to the 143k-line base crate and its test unit. A project-side leaf test
+crate or narrower cache-monitor module boundary could reduce this edit loop,
+but no unrequested restructuring was attempted.
+
+Hosted agent regression run `20261017-032743310-3698493` passed its selected
+test in 0.16s but spent 11.10s of 11.38s runner wall waiting for the shared
+target-directory lock during concurrent swarm tests. It compiled no units.
+Coordinate related test requests to reduce queueing where practical. This is
+measurement evidence only, not a demonstrated speedup or a billing workaround.
+
+Cache-boundary and cancellation validation also measured hosted check run
+`20261017-032709332-3695295` at 27.94s runner wall, of which 20.85s was the
+shared target lock and 6.85s compilation. TUI cache-accounting run
+`20261017-032758080-3699930` spent 21.64s of 27.85s waiting for that lock.
+Final hosted `--lib` cache regression run `20261017-033420733-3765844` passed
+97 tests in 12.43s, with 0.39s lock wait, 4.46s app-core compilation, and
+6.91s for the 233k-line TUI test unit after an upstream turn_execution edit.
+Its tests took 0.38s. These observations favor coordinated test scheduling and
+project-side narrower crate boundaries, not more test parallelism within a
+locked target directory. No architecture change or speedup is claimed.
+
+## 2026-10-17: hosted tests see the builder's `CARGO_MANIFEST_DIR`
+
+jcode `server::debug_command_exec::tests::debug_tool_selfdev_reload_returns_promptly_for_direct_execution`
+fails on hosted (`justrust test`, "Could not find jcode repository directory")
+and passes with `--local`. The code resolves its repo via
+`env!("CARGO_MANIFEST_DIR")`, which on hosted is the remote builder's path, so
+any test that walks up from the compile-time manifest dir to find the checkout
+breaks. Fix direction: remap the builder path back to the client workspace
+path for compile-time env (or `--remap-path-prefix` plus rewriting
+`CARGO_MANIFEST_DIR`), so hosted test behavior matches local.
