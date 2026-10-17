@@ -1,5 +1,32 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Publication proof events must precede visible slot results
+
+During the next coordinated compiler checkpoint,
+`20261017-072145534-757889` first failed the mandatory-body/effect-table ordering
+assertion in `generic_carriers_graph`. The stable client reran that test alone
+and returned success. That retry was not treated as clean acceptance.
+
+`Context::publish` installed the slot result, unlocked it, then recorded the
+publication event. An already-running reader could therefore observe success
+before its proof event appeared, even though the underlying dependency was
+satisfied. Publication accounting and its event now execute while the slot and
+producer-state guards still prevent successful observation. Wakers still run
+outside those guards. Accounting remains a leaf lock, with no graph-lock
+acquisition while holding it.
+
+A deterministic barrier regression stops immediately before event recording and
+checks that the successful slot is still guarded, then exercises the actual
+reader and dependent publication. It releases barriers and joins before asserting.
+A second regression preserves duplicate/out-of-range/failed-publication behavior.
+The four engine unit tests passed in `20261017-072521962-773708`; the unchanged
+carrier graph target passed ten consecutive invocations, ending at
+`20261017-072535207-775047`, with its worker-1/8 CHECK/BUILD cases intact.
+The subsequent complete coordinated suite passed without retry output in
+`20261017-072549738-775993`. Exact records, including the original automatically
+retried run, are retained in
+`data/runs/xps14/2026-10-17-publication-order.jsonl`. No speed claim follows.
+
 ## 2026-10-17: Native lexical transport replaces the production scanner
 
 NATIVE-LEXER.md records the native scanner, literal validation, sealed prepared

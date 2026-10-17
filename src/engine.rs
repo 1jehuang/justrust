@@ -184,9 +184,17 @@ struct Shared {
     accounting: Mutex<Accounting>,
     epoch: Instant,
     #[cfg(test)]
+    publication_gate: Mutex<Option<Arc<PublicationGate>>>,
+    #[cfg(test)]
     worker_fault_on_pending_restore: AtomicBool,
     #[cfg(test)]
     worker_abort_instead: AtomicBool,
+}
+
+#[cfg(test)]
+struct PublicationGate {
+    reached: std::sync::Barrier,
+    release: std::sync::Barrier,
 }
 
 struct Node {
@@ -343,6 +351,8 @@ impl Engine {
                     capacity,
                 }),
                 epoch: Instant::now(),
+                #[cfg(test)]
+                publication_gate: Mutex::new(None),
                 #[cfg(test)]
                 worker_fault_on_pending_restore: AtomicBool::new(false),
                 #[cfg(test)]
@@ -646,8 +656,18 @@ impl Context {
         }
         slot.result = Some(Ok(value));
         let waiters: Vec<_> = slot.waiters.drain().map(|(_, waker)| waker).collect();
-        drop(slot);
-        drop(state);
+        // The slot guard is the visibility boundary for both read() and
+        // Demand::result(). Record the proof before either can observe success.
+        // Accounting is a leaf lock: never acquire state/slot/scheduler locks
+        // while holding it. Wakes remain outside all publication locks.
+        #[cfg(test)]
+        {
+            let gate = lock(&self.shared.publication_gate).take();
+            if let Some(gate) = gate {
+                gate.reached.wait();
+                gate.release.wait();
+            }
+        }
         lock(&self.shared.accounting).report.publications += 1;
         self.shared.event(
             "publish",
@@ -656,6 +676,8 @@ impl Context {
             None,
             format!("slot {index} = {value}"),
         );
+        drop(slot);
+        drop(state);
         for waker in waiters {
             waker.wake();
         }
@@ -1313,6 +1335,154 @@ impl Shared {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct PublicationOrderProvider {
+        observer_ready: Arc<std::sync::Barrier>,
+        observer_read: Arc<std::sync::Barrier>,
+    }
+
+    impl Provider for PublicationOrderProvider {
+        fn outputs(&self, _: &Key) -> usize {
+            1
+        }
+
+        fn start(&self, cx: Context, key: Key) -> TaskFuture {
+            let ready = self.observer_ready.clone();
+            let read = self.observer_read.clone();
+            Box::pin(async move {
+                if key.kind == 1 {
+                    ready.wait();
+                    cx.publish(0, 41)
+                } else {
+                    let source = cx.request(Key::new(1, vec![])).get(0);
+                    // Stay in the first poll: no dependency wake can be
+                    // responsible for making this already-running reader see it.
+                    ready.wait();
+                    read.wait();
+                    let source_node = source.node.id;
+                    let value = cx.read(source).await?;
+                    assert!(
+                        lock(&cx.shared.accounting)
+                            .report
+                            .events
+                            .iter()
+                            .any(|event| {
+                                event.kind == "publish" && event.node == Some(source_node)
+                            }),
+                        "read returned success before its publication proof"
+                    );
+                    cx.publish(0, value + 1)
+                }
+            })
+        }
+    }
+
+    #[test]
+    fn publication_trace_precedes_already_running_observer() {
+        let observer_ready = Arc::new(std::sync::Barrier::new(2));
+        let observer_read = Arc::new(std::sync::Barrier::new(2));
+        let gate = Arc::new(PublicationGate {
+            reached: std::sync::Barrier::new(2),
+            release: std::sync::Barrier::new(2),
+        });
+        let engine = Engine::new(PublicationOrderProvider {
+            observer_ready,
+            observer_read: observer_read.clone(),
+        });
+        let source = engine.request(Key::new(1, vec![]));
+        let dependent = engine.request(Key::new(2, vec![]));
+        *lock(&engine.shared.publication_gate) = Some(gate.clone());
+        let (report, guarded, unrecorded) = std::thread::scope(|scope| {
+            let run = scope.spawn(|| engine.run(2));
+            gate.reached.wait();
+            // The hook stops immediately before accounting/event recording.
+            // try_lock is a deterministic control for the original bug: if
+            // publication unlocks first, the successful value is exposed here.
+            let guarded = matches!(
+                source.outputs.node.slots[0].try_lock(),
+                Err(std::sync::TryLockError::WouldBlock)
+            );
+            let unrecorded = !lock(&engine.shared.accounting)
+                .report
+                .events
+                .iter()
+                .any(|event| event.kind == "publish");
+            observer_read.wait();
+            gate.release.wait();
+            // Join before asserting, so a regression cannot strand barriers.
+            (run.join().unwrap().unwrap(), guarded, unrecorded)
+        });
+        assert!(unrecorded, "control must stop before the publication proof");
+        assert!(
+            guarded,
+            "successful output exposed before its publish event"
+        );
+        assert_eq!(source.result(0), Ok(41));
+        assert_eq!(dependent.result(0), Ok(42));
+        assert_eq!(source.completion(), Ok(()));
+        assert_eq!(dependent.completion(), Ok(()));
+        assert!(report.capture_complete);
+        assert_eq!(report.publications, 2);
+        let publications: Vec<_> = report
+            .events
+            .iter()
+            .filter(|event| event.kind == "publish")
+            .map(|event| (event.node, event.detail.as_str()))
+            .collect();
+        assert_eq!(
+            publications,
+            vec![
+                (Some(source.outputs().node_id()), "slot 0 = 41"),
+                (Some(dependent.outputs().node_id()), "slot 0 = 42"),
+            ]
+        );
+        assert_eq!(report.node_errors, vec![]);
+    }
+
+    struct InvalidPublicationProvider;
+
+    impl Provider for InvalidPublicationProvider {
+        fn outputs(&self, _: &Key) -> usize {
+            2
+        }
+
+        fn start(&self, cx: Context, _: Key) -> TaskFuture {
+            Box::pin(async move {
+                assert_eq!(
+                    cx.publish(2, 99),
+                    Err(Error::new("output index 2 out of range"))
+                );
+                cx.publish(0, 41)?;
+                assert_eq!(
+                    cx.publish(0, 99),
+                    Err(Error::new("output 0 already finalized"))
+                );
+                cx.fail(Error::new("intentional failure"));
+                assert_eq!(cx.publish(1, 99), Err(Error::new("intentional failure")));
+                Ok(())
+            })
+        }
+    }
+
+    #[test]
+    fn rejected_publications_do_not_record_or_replace_valid_facts() {
+        let engine = Engine::new(InvalidPublicationProvider);
+        let demand = engine.request(Key::new(1, vec![]));
+        let report = engine.run(2).unwrap();
+        assert_eq!(demand.result(0), Ok(41));
+        assert_eq!(demand.result(1), Err(Error::new("intentional failure")));
+        assert_eq!(demand.completion(), Err(Error::new("intentional failure")));
+        assert_eq!(report.publications, 1);
+        assert_eq!(report.failures, 1);
+        assert!(report.capture_complete);
+        let publications: Vec<_> = report
+            .events
+            .iter()
+            .filter(|event| event.kind == "publish")
+            .map(|event| event.detail.as_str())
+            .collect();
+        assert_eq!(publications, vec!["slot 0 = 41"]);
+    }
 
     struct PendingProvider(Arc<AtomicU64>);
 
