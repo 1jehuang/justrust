@@ -4125,7 +4125,7 @@ impl Parser {
                 }
                 let type_params = self.type_parameters()?;
                 self.type_params = type_params.clone();
-                let bounds = std::mem::take(&mut self.pending_bounds);
+                let mut bounds = std::mem::take(&mut self.pending_bounds);
                 let first_ty = self.ty()?;
                 let (trait_path, self_ty) = if self.eat("for") {
                     let Type::Named(name) = first_ty else {
@@ -4135,6 +4135,19 @@ impl Parser {
                 } else {
                     (None, first_ty)
                 };
+                if self.eat("where") {
+                    loop {
+                        if !self.token().string && self.token().text.starts_with('\'') {
+                            return Err(
+                                self.error("lifetime where predicates on impls are unsupported")
+                            );
+                        }
+                        self.where_type_predicate(&mut bounds)?;
+                        if !self.eat(",") || self.is("{") {
+                            break;
+                        }
+                    }
+                }
                 self.expect("{")?;
                 let mut items = Vec::new();
                 while !self.is("}") {
@@ -4258,6 +4271,50 @@ impl Parser {
         }
         Ok(())
     }
+    /// One `T: Trait + Other` where predicate whose subject is a visible type
+    /// parameter. Bounds join the same predicate rows as inline bounds, so
+    /// the trait world sees one authoritative environment for both spellings.
+    fn where_type_predicate(&mut self, bounds: &mut Vec<TypeBound>) -> Result<(), String> {
+        if self.is("for") {
+            return Err(self.error("higher-ranked where predicates are unsupported"));
+        }
+        if self.is("Self") {
+            return Err(self.error("Self where predicates are unsupported"));
+        }
+        let parameter = self.ident()?;
+        if !self.type_params.contains(&parameter) {
+            return Err(
+                self.error("where predicates are supported only on visible type parameters")
+            );
+        }
+        if !self.is(":") {
+            return Err(
+                self.error("where predicates are supported only on visible type parameters")
+            );
+        }
+        self.expect(":")?;
+        let mut traits = Vec::new();
+        while !(self.is(",") || self.is("{") || self.is(";")) {
+            if self.is("?") {
+                return Err(self.error("relaxed ?Sized bounds are unsupported"));
+            }
+            if !self.token().string && self.token().text.starts_with('\'') {
+                return Err(self.error("type outlives bounds are unsupported"));
+            }
+            if traits.len() >= 256 {
+                return Err(self.error("predicate limit exceeded"));
+            }
+            traits.push(self.path()?);
+            if !self.eat("+") {
+                break;
+            }
+        }
+        if bounds.len() >= 4096 {
+            return Err(self.error("predicate limit exceeded"));
+        }
+        bounds.push(TypeBound { parameter, traits });
+        Ok(())
+    }
     fn function(&mut self) -> Result<Function, String> {
         self.function_scoped(&[], false).map(|(f, _)| f)
     }
@@ -4344,7 +4401,7 @@ impl Parser {
         let name = self.ident()?;
         let mut regions = RegionDecls::default();
         let type_params = self.callable_generics(&mut regions)?;
-        let bounds = std::mem::take(&mut self.pending_bounds);
+        let mut bounds = std::mem::take(&mut self.pending_bounds);
         self.type_params = inherited.to_vec();
         for name in &type_params {
             if self.type_params.contains(name) {
@@ -4400,12 +4457,16 @@ impl Parser {
         };
         if self.eat("where") {
             loop {
-                let long = self.lifetime()?;
-                if !self.is(":") {
-                    return Err(self.error("only lifetime outlives where bounds are supported"));
+                if !self.token().string && self.token().text.starts_with('\'') {
+                    let long = self.lifetime()?;
+                    if !self.is(":") {
+                        return Err(self.error("only lifetime outlives where bounds are supported"));
+                    }
+                    self.region_bounds(&long, &mut regions)?;
+                } else {
+                    self.where_type_predicate(&mut bounds)?;
                 }
-                self.region_bounds(&long, &mut regions)?;
-                if !self.eat(",") || self.is("{") {
+                if !self.eat(",") || self.is("{") || self.is(";") {
                     break;
                 }
             }
