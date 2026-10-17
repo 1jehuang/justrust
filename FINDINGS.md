@@ -9776,3 +9776,32 @@ This is stock-only evidence for a required future semantic rejection, not a
 native pass. The candidate must reject this unchanged source semantically,
 not as Unsupported, after its narrow identity call is admitted. The new case
 is separate from frozen32 and all previous source-order witnesses.
+
+### Original-call shared-local inference delivered, 2026-10-17
+
+The first bounded slice now passes actual native CLI CHECK and BUILD at workers
+1 and 8 for both frozen shared-parameter and annotated-local witnesses, including
+real ELF execution and exact `inference local ok\n` output. The independently
+frozen local-escape witness is rejected as InvalidReference in both modes at
+both worker counts, with no artifact. The frozen32 corpus remains unchanged:
+16 accepted, 12 invalid, four Unsupported. All six earlier source-order witnesses
+retain their expected explicit-pass or bounded-Unsupported behavior.
+
+Central hosted run `20261016-182614825-2662754` passed all 1,480 tests across
+72 binaries; strict all-target lint `20261016-182619651-2662419` passed with
+`-D warnings`. Exact source/hash/process receipts and requirement-to-observation
+mapping are in `docs/reference-inference-replay-acceptance.md`. This is a bounded
+source inference implementation, not full Rust or general mutable/result-context
+inference, and no compile-time speedup is claimed.
+
+Execution caught two real compatibility issues: repeated source replay and
+structural validation of an already sealed immutable source exceeded the unchanged
+128MiB allowance on the existing 4096-argument test. Diagnostic runs
+`20261016-181110392-2483090` and `20261016-181452119-2514494` identify the allocation
+paths. Exact private publication reuse now avoids those repeated allocations
+while preserving complete validation before mint, exact source/facts/owner/ledger
+checks, mutable CFG snapshot checks and raw legacy validation. The unchanged
+4096-argument workflow passes without raising caps. A primitive-rvalue Clone
+wrapper also required mapping its original method occurrence to its actual tail
+call while retaining the single-evaluation wrapper. Public typed errors now
+retain their Unsupported/ResourceLimit category through bounded rendering.
