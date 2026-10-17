@@ -821,3 +821,13 @@ recorded separately from installed-core behavioral references. The first native
 repaired without demoting valid clients or existing nested-reference fixtures.
 Constness does not imply CTFE. Full library crates, macro expansion and full
 Rust remain open.
+
+### Next source-expansion contract, not implemented support
+
+`MACRO-EXPANSION.md` decomposes the next G1/G5 work into an immutable frontend
+cursor migration, session-qualified tokens/trees/provenance/hygiene, bounded pure
+macro matching/transcription and graph-visible ordered discovery. The design
+preserves configured-source/no-child-IO and semantic publication boundaries.
+Its proposed APIs, caps and stock matrix are a work contract, not macro, core,
+CTFE or full Rust acceptance. Freeze each implementation lane before editing
+shared files and close the actual native gates, not only token fixture tests.
