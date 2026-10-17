@@ -945,6 +945,7 @@ pub(super) fn preflight_recipe_counts(
 pub(super) struct Exhausted;
 pub(super) struct Budget {
     remaining: usize,
+    work_limit: usize,
     plan: Option<super::ir::PlanBudget>,
     reservations: Vec<super::ir::PlanReservation>,
     peak_scratch: usize,
@@ -956,6 +957,7 @@ impl Budget {
     fn new(remaining: usize) -> Self {
         Self {
             remaining,
+            work_limit: remaining,
             plan: None,
             reservations: Vec::new(),
             peak_scratch: 0,
@@ -966,6 +968,7 @@ impl Budget {
     fn for_plan(remaining: usize, plan: Option<&super::ir::PlanBudget>) -> Self {
         Self {
             remaining,
+            work_limit: remaining,
             plan: plan.cloned(),
             reservations: Vec::new(),
             peak_scratch: 0,
@@ -973,8 +976,31 @@ impl Budget {
             state_limit: 128 * 1024 * 1024,
         }
     }
+    #[track_caller]
+    fn exhausted(
+        &self,
+        kind: super::ir::ResourceBudgetKind,
+        requested: usize,
+        used: usize,
+        limit: usize,
+    ) -> Exhausted {
+        if let Some(plan) = &self.plan {
+            plan.record_resource_failure(super::ir::ResourceBudgetFailure::new(
+                kind, requested, used, limit,
+            ));
+        }
+        Exhausted
+    }
+    #[track_caller]
     pub(super) fn spend(&mut self, amount: usize) -> Result<(), Exhausted> {
-        let remaining = self.remaining.checked_sub(amount).ok_or(Exhausted)?;
+        let Some(remaining) = self.remaining.checked_sub(amount) else {
+            return Err(self.exhausted(
+                super::ir::ResourceBudgetKind::OwnershipWork,
+                amount,
+                self.work_limit - self.remaining,
+                self.work_limit,
+            ));
+        };
         if let Some(plan) = &self.plan {
             plan.charge_work(amount).map_err(|_| Exhausted)?;
         }
@@ -987,6 +1013,7 @@ impl Budget {
     pub(super) fn reserved_bytes(&self) -> usize {
         self.reserved_bytes
     }
+    #[track_caller]
     pub(super) fn reserve_bytes(&mut self, amount: usize) -> Result<(), Exhausted> {
         let growth =
             if self.plan.is_some() && self.reservations.len() == self.reservations.capacity() {
@@ -1009,10 +1036,29 @@ impl Budget {
                 .ok_or(Exhausted)?,
             None => 0,
         };
-        let amount = amount.checked_add(overhead).ok_or(Exhausted)?;
-        let next = self.reserved_bytes.checked_add(amount).ok_or(Exhausted)?;
+        let Some(amount) = amount.checked_add(overhead) else {
+            return Err(self.exhausted(
+                super::ir::ResourceBudgetKind::OwnershipReservationStorage,
+                overhead,
+                amount,
+                self.state_limit,
+            ));
+        };
+        let Some(next) = self.reserved_bytes.checked_add(amount) else {
+            return Err(self.exhausted(
+                super::ir::ResourceBudgetKind::OwnershipStateBytes,
+                amount,
+                self.reserved_bytes,
+                self.state_limit,
+            ));
+        };
         if next > self.state_limit {
-            return Err(Exhausted);
+            return Err(self.exhausted(
+                super::ir::ResourceBudgetKind::OwnershipStateBytes,
+                amount,
+                self.reserved_bytes,
+                self.state_limit,
+            ));
         }
         if growth.is_some() {
             self.spend(self.reservations.len().checked_add(1).ok_or(Exhausted)?)?;
@@ -1034,12 +1080,14 @@ impl Budget {
         self.reserved_bytes = next;
         Ok(())
     }
+    #[track_caller]
     pub(super) fn nodes(&mut self, count: usize) -> Result<(), Exhausted> {
         if let Some(plan) = &self.plan {
             plan.charge_nodes(count).map_err(|_| Exhausted)?;
         }
         Ok(())
     }
+    #[track_caller]
     fn scratch(&mut self, amount: usize) -> Result<Option<super::ir::PlanReservation>, Exhausted> {
         // Retain scratch accounting conservatively for this analysis. This also
         // covers overlapping reservations without a second untracked allocator.
@@ -2973,6 +3021,106 @@ fn analyze_with_context(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn budget_telemetry_local_work_rejection_preserves_plan_and_callsite() {
+        use super::super::ir::{PlanBudget, ResourceBudgetKind};
+        let plan = PlanBudget::default();
+        let mut budget = Budget::for_plan(3, Some(&plan));
+        budget.spend(2).unwrap();
+        let line = line!() + 1;
+        assert!(budget.spend(2).is_err());
+        let first = plan.first_resource_failure().unwrap();
+        assert_eq!(first.kind, ResourceBudgetKind::OwnershipWork);
+        assert_eq!((first.requested, first.used, first.limit), (2, 2, 3));
+        assert_eq!((first.file, first.line), (file!(), line));
+        assert_eq!(budget.remaining, 1);
+        assert_eq!(plan.usage_snapshot().work, 2);
+        assert!(budget.spend(usize::MAX).is_err());
+        assert_eq!(plan.first_resource_failure(), Some(first));
+    }
+
+    #[test]
+    fn budget_telemetry_local_storage_rejection_counts_and_releases_reservations() {
+        use super::super::ir::{PlanBudget, PlanReservation, ResourceBudgetKind};
+        let plan = PlanBudget::default();
+        let mut budget = Budget::for_plan(100, Some(&plan));
+        let overhead = 4 * std::mem::size_of::<PlanReservation>();
+        budget.state_limit = overhead + 9;
+        budget.reserve_bytes(1).unwrap();
+        let before = plan.usage_snapshot();
+        assert_eq!(before.reservations.reservations, 1);
+        assert_eq!(before.reservations.current_bytes, overhead + 1);
+        let line = line!() + 1;
+        assert!(budget.scratch(10).is_err());
+        let failure = plan.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ResourceBudgetKind::OwnershipStateBytes);
+        assert_eq!(
+            (failure.requested, failure.used, failure.limit),
+            (10, overhead + 1, overhead + 9)
+        );
+        assert_eq!((failure.file, failure.line), (file!(), line));
+        assert_eq!(plan.usage_snapshot().reservations, before.reservations);
+        assert_eq!(budget.reserved_bytes(), overhead + 1);
+        drop(budget);
+        let after = plan.usage_snapshot();
+        assert_eq!(after.reservations.current_bytes, 0);
+        assert_eq!(after.reservations.current_reservations, 0);
+        assert_eq!(after.reservations.cumulative_bytes, overhead + 1);
+        assert_eq!(after.first_failure, Some(failure));
+    }
+
+    #[test]
+    fn budget_telemetry_delegated_plan_rejection_keeps_original_kind_and_site() {
+        use super::super::ir::{PlanBudget, PlanLimits, ResourceBudgetKind};
+        let plan = PlanBudget::new(PlanLimits {
+            work: 1,
+            ..PlanLimits::default()
+        });
+        let mut budget = Budget::for_plan(10, Some(&plan));
+        let line = line!() + 1;
+        assert!(budget.spend(2).is_err());
+        let failure = plan.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ResourceBudgetKind::Work);
+        assert_eq!((failure.requested, failure.used, failure.limit), (2, 0, 1));
+        assert_eq!((failure.file, failure.line), (file!(), line));
+        assert_eq!(budget.remaining, 10);
+
+        let plan = PlanBudget::new(PlanLimits {
+            nodes: 0,
+            ..PlanLimits::default()
+        });
+        let mut budget = Budget::for_plan(10, Some(&plan));
+        let line = line!() + 1;
+        assert!(budget.nodes(1).is_err());
+        let failure = plan.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ResourceBudgetKind::Nodes);
+        assert_eq!((failure.file, failure.line), (file!(), line));
+    }
+
+    #[test]
+    fn budget_telemetry_storage_arithmetic_overflow_has_exact_operands() {
+        use super::super::ir::{PlanBudget, PlanReservation, ResourceBudgetKind};
+        let plan = PlanBudget::default();
+        let mut budget = Budget::for_plan(10, Some(&plan));
+        let line = line!() + 1;
+        assert!(budget.reserve_bytes(usize::MAX).is_err());
+        let failure = plan.first_resource_failure().unwrap();
+        assert_eq!(
+            failure.kind,
+            ResourceBudgetKind::OwnershipReservationStorage
+        );
+        assert_eq!(
+            failure.requested,
+            4 * std::mem::size_of::<PlanReservation>()
+        );
+        assert_eq!(failure.used, usize::MAX);
+        assert_eq!(failure.limit, budget.state_limit);
+        assert!(failure.arithmetic_overflow);
+        assert_eq!((failure.file, failure.line), (file!(), line));
+        assert_eq!(budget.reserved_bytes(), 0);
+        assert_eq!(plan.usage_snapshot().reservations.reservations, 0);
+    }
+
     fn input_reference(param: usize) -> super::super::ir::InputReference {
         super::super::ir::InputReference {
             param,

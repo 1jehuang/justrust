@@ -172,6 +172,87 @@ fn runs(source: &str, stdout: &str, workers: usize) {
 }
 
 #[test]
+fn lightweight_profiles_preserve_native_output_and_report_failures() {
+    let scratch = Scratch::new();
+    let source = scratch.write("profile.rs", "fn main(){println!(\"profile\");}");
+    let ordinary = scratch.path("ordinary");
+    capture(&mut compiler(&source, &ordinary), &scratch, COMPILE_TIMEOUT).success();
+    for workers in [1, 4] {
+        let output = scratch.path(&format!("profiled-{workers}"));
+        let profile = scratch.path(&format!("profile-{workers}.json"));
+        capture(
+            compiler(&source, &output)
+                .args(["--workers", &workers.to_string(), "--profile"])
+                .arg(&profile),
+            &scratch,
+            COMPILE_TIMEOUT,
+        )
+        .success();
+        assert_eq!(fs::read(&ordinary).unwrap(), fs::read(&output).unwrap());
+        let contents = fs::read_to_string(&profile).unwrap();
+        assert!(contents.contains("\"success\":true"), "{contents}");
+        assert!(contents.contains("\"first_failure\":null"), "{contents}");
+        assert!(contents.contains("\"top_nodes\":["), "{contents}");
+        assert!(contents.contains("\"unmatched_intervals\":0"), "{contents}");
+        assert!(contents.len() < 100_000, "profile must omit CFG payloads");
+        let before = fs::read(&profile).unwrap();
+        let collision = capture(
+            Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+                .arg(&source)
+                .args(["--check", "--profile"])
+                .arg(&profile),
+            &scratch,
+            COMPILE_TIMEOUT,
+        );
+        assert!(!collision.status.success());
+        assert_eq!(before, fs::read(&profile).unwrap());
+    }
+    let bad_source = scratch.write("invalid-profile.rs", "fn main(){let x:i32=true;}");
+    let output = scratch.path("invalid-program");
+    let profile = scratch.path("failure-profile.json");
+    let failure = capture(
+        compiler(&bad_source, &output)
+            .arg("--profile")
+            .arg(&profile),
+        &scratch,
+        COMPILE_TIMEOUT,
+    );
+    assert!(!failure.status.success());
+    assert!(!output.exists());
+    let contents = fs::read_to_string(profile).unwrap();
+    assert!(contents.contains("\"success\":false"), "{contents}");
+    assert!(contents.contains("\"planning_budget\":{"), "{contents}");
+    assert!(contents.contains("\"graph\":{"), "{contents}");
+
+    let growing = scratch.write(
+        "resource-profile.rs",
+        "fn grow<T>(x:T,n:i32)->i32{if n==0{7}else{grow::<(T,)>((x,),n-1)}}fn main(){let x=grow::<u8>(1u8,1);}",
+    );
+    for workers in [1, 4] {
+        let profile = scratch.path(&format!("resource-profile-{workers}.json"));
+        let failure = capture(
+            Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+                .arg(&growing)
+                .args(["--check", "--workers", &workers.to_string(), "--profile"])
+                .arg(&profile),
+            &scratch,
+            COMPILE_TIMEOUT,
+        );
+        assert!(!failure.status.success());
+        let contents = fs::read_to_string(profile).unwrap();
+        assert!(contents.contains("\"success\":false"), "{contents}");
+        assert!(contents.contains("\"kind\":\"depth\""), "{contents}");
+        assert!(contents.contains("\"requested\":129"), "{contents}");
+        assert!(contents.contains("\"limit\":128"), "{contents}");
+        assert!(
+            contents.contains("\"first_failure_task\":{\"node\":"),
+            "{contents}"
+        );
+        assert!(contents.contains("\"phase\":\"mono_plan\""), "{contents}");
+    }
+}
+
+#[test]
 fn representative_examples_are_real_executables_with_multiple_worker_counts() {
     for workers in [1, 2, 4] {
         runs(

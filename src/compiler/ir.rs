@@ -1432,6 +1432,232 @@ impl Default for PlanLimits {
         }
     }
 }
+/// The rejected ledger operation, not a classification inferred from text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResourceBudgetKind {
+    Work,
+    Nodes,
+    Applications,
+    Obligations,
+    DiagnosticBytes,
+    Bytes,
+    Depth,
+    OwnershipWork,
+    OwnershipStateBytes,
+    OwnershipReservationStorage,
+}
+impl ResourceBudgetKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Work => "work",
+            Self::Nodes => "nodes",
+            Self::Applications => "applications",
+            Self::Obligations => "obligations",
+            Self::DiagnosticBytes => "diagnostic_bytes",
+            Self::Bytes => "bytes",
+            Self::Depth => "depth",
+            Self::OwnershipWork => "ownership_work",
+            Self::OwnershipStateBytes => "ownership_state_bytes",
+            Self::OwnershipReservationStorage => "ownership_reservation_storage",
+        }
+    }
+}
+
+/// Allocation-free evidence captured at the rejection, before diagnostic text.
+/// `requested` is the increment and `used` the pre-operation usage. Depth checks
+/// instead use the observed depth as `requested` and zero as `used`.
+/// Reservation-sizing overflow reports the two rejected addition operands.
+/// This records instrumented ledger operations, not arbitrary semantic guards,
+/// allocator failures, or process OOM. An absent event does not prove success.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResourceBudgetFailure {
+    pub kind: ResourceBudgetKind,
+    pub requested: usize,
+    pub used: usize,
+    pub limit: usize,
+    pub arithmetic_overflow: bool,
+    pub file: &'static str,
+    pub line: u32,
+    pub column: u32,
+    pub graph_id: Option<u64>,
+    pub task_id: Option<u64>,
+}
+impl ResourceBudgetFailure {
+    #[track_caller]
+    pub(super) fn new(
+        kind: ResourceBudgetKind,
+        requested: usize,
+        used: usize,
+        limit: usize,
+    ) -> Self {
+        let caller = std::panic::Location::caller();
+        let identity = crate::engine::current_task_identity();
+        Self {
+            kind,
+            requested,
+            used,
+            limit,
+            arithmetic_overflow: used.checked_add(requested).is_none(),
+            file: caller.file(),
+            line: caller.line(),
+            column: caller.column(),
+            graph_id: identity.map(|(graph, _)| graph),
+            task_id: identity.map(|(_, task)| task),
+        }
+    }
+
+    /// Bounded JSON with no source text or backtrace. File names are capped at
+    /// 256 Unicode scalars, escaped, and explicitly marked when truncated.
+    /// The writer is caller-owned so recording a failure never allocates.
+    pub fn write_json(&self, out: &mut impl std::fmt::Write) -> std::fmt::Result {
+        out.write_str("{\"graph_id\":")?;
+        match self.graph_id {
+            Some(id) => write!(out, "{id}")?,
+            None => out.write_str("null")?,
+        }
+        out.write_str(",\"task_id\":")?;
+        match self.task_id {
+            Some(id) => write!(out, "{id}")?,
+            None => out.write_str("null")?,
+        }
+        out.write_char(',')?;
+        write!(
+            out,
+            "\"kind\":\"{}\",\"requested\":{},\"used\":{},\"limit\":{},\"arithmetic_overflow\":{},\"call_site\":{{\"file\":\"",
+            self.kind.as_str(),
+            self.requested,
+            self.used,
+            self.limit,
+            self.arithmetic_overflow
+        )?;
+        for character in self.file.chars().take(256) {
+            match character {
+                '"' => out.write_str("\\\"")?,
+                '\\' => out.write_str("\\\\")?,
+                '\u{0}'..='\u{1f}' => write!(out, "\\u{:04x}", character as u32)?,
+                other => out.write_char(other)?,
+            }
+        }
+        write!(
+            out,
+            "\",\"file_truncated\":{},\"line\":{},\"column\":{}}}}}",
+            self.file.chars().nth(256).is_some(),
+            self.line,
+            self.column
+        )
+    }
+    pub fn to_json(&self) -> String {
+        let mut output = String::new();
+        self.write_json(&mut output).expect("writing to a String");
+        output
+    }
+}
+
+/// Logical budget reservations, not allocator instrumentation or process RSS.
+/// Bytes include conservative estimates and retained storage. Telemetry counters
+/// saturate independently of admission arithmetic and never change admission.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReservationAccounting {
+    pub reservations: usize,
+    pub current_reservations: usize,
+    pub peak_reservations: usize,
+    pub retentions: usize,
+    pub current_bytes: usize,
+    pub peak_bytes: usize,
+    pub cumulative_bytes: usize,
+    pub counters_saturated: bool,
+}
+impl ReservationAccounting {
+    fn add(counter: &mut usize, amount: usize, saturated: &mut bool) {
+        if let Some(next) = counter.checked_add(amount) {
+            *counter = next;
+        } else {
+            *counter = usize::MAX;
+            *saturated = true;
+        }
+    }
+    pub(super) fn record(&mut self, bytes: usize, retained: bool) {
+        if retained {
+            Self::add(&mut self.retentions, 1, &mut self.counters_saturated);
+        } else {
+            Self::add(&mut self.reservations, 1, &mut self.counters_saturated);
+            Self::add(
+                &mut self.current_reservations,
+                1,
+                &mut self.counters_saturated,
+            );
+            self.peak_reservations = self.peak_reservations.max(self.current_reservations);
+        }
+        Self::add(&mut self.current_bytes, bytes, &mut self.counters_saturated);
+        Self::add(
+            &mut self.cumulative_bytes,
+            bytes,
+            &mut self.counters_saturated,
+        );
+        self.peak_bytes = self.peak_bytes.max(self.current_bytes);
+    }
+    fn release(&mut self, bytes: usize) {
+        self.current_reservations = self.current_reservations.saturating_sub(1);
+        self.current_bytes = self.current_bytes.saturating_sub(bytes);
+    }
+    pub fn write_json(&self, out: &mut impl std::fmt::Write) -> std::fmt::Result {
+        write!(
+            out,
+            "{{\"reservations\":{},\"current_reservations\":{},\"peak_reservations\":{},\"retentions\":{},\"current_bytes\":{},\"peak_bytes\":{},\"cumulative_bytes\":{},\"counters_saturated\":{}}}",
+            self.reservations,
+            self.current_reservations,
+            self.peak_reservations,
+            self.retentions,
+            self.current_bytes,
+            self.peak_bytes,
+            self.cumulative_bytes,
+            self.counters_saturated
+        )
+    }
+}
+
+/// Shared-plan counters sampled atomically under the existing budget lock.
+/// `bytes` equals `reservations.current_bytes` for an unpoisoned ledger.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlanUsageSnapshot {
+    pub applications: usize,
+    pub nodes: usize,
+    pub work: usize,
+    pub bytes: usize,
+    pub obligations: usize,
+    pub diagnostic_bytes: usize,
+    pub reservations: ReservationAccounting,
+    pub first_failure: Option<ResourceBudgetFailure>,
+    pub poisoned: bool,
+}
+impl PlanUsageSnapshot {
+    pub fn write_json(&self, out: &mut impl std::fmt::Write) -> std::fmt::Result {
+        write!(
+            out,
+            "{{\"applications\":{},\"nodes\":{},\"work\":{},\"bytes\":{},\"obligations\":{},\"diagnostic_bytes\":{},\"poisoned\":{},\"reservations\":",
+            self.applications,
+            self.nodes,
+            self.work,
+            self.bytes,
+            self.obligations,
+            self.diagnostic_bytes,
+            self.poisoned
+        )?;
+        self.reservations.write_json(out)?;
+        out.write_str(",\"first_failure\":")?;
+        match self.first_failure {
+            Some(failure) => failure.write_json(out)?,
+            None => out.write_str("null")?,
+        }
+        out.write_char('}')
+    }
+    pub fn to_json(&self) -> String {
+        let mut output = String::new();
+        self.write_json(&mut output).expect("writing to a String");
+        output
+    }
+}
+
 #[derive(Debug, Default)]
 struct PlanUsage {
     applications: usize,
@@ -1441,6 +1667,8 @@ struct PlanUsage {
     obligations: usize,
     diagnostic_bytes: usize,
     resource_failed: bool,
+    reservations: ReservationAccounting,
+    first_failure: Option<ResourceBudgetFailure>,
 }
 #[derive(Clone, Debug)]
 pub struct PlanBudget {
@@ -1456,6 +1684,7 @@ impl Drop for PlanReservation {
     fn drop(&mut self) {
         if let Ok(mut usage) = self.usage.lock() {
             usage.bytes -= self.bytes;
+            usage.reservations.release(self.bytes);
         }
     }
 }
@@ -1486,6 +1715,36 @@ impl PlanBudget {
     pub fn same_authority(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.usage, &other.usage)
     }
+    /// A fixed-size snapshot. A poisoned ledger is readable for reporting only,
+    /// while all existing budget operations retain their poison error behavior.
+    pub fn usage_snapshot(&self) -> PlanUsageSnapshot {
+        let (usage, poisoned) = match self.usage.lock() {
+            Ok(usage) => (usage, false),
+            Err(error) => (error.into_inner(), true),
+        };
+        PlanUsageSnapshot {
+            applications: usage.applications,
+            nodes: usage.nodes,
+            work: usage.work,
+            bytes: usage.bytes,
+            obligations: usage.obligations,
+            diagnostic_bytes: usage.diagnostic_bytes,
+            reservations: usage.reservations,
+            first_failure: usage.first_failure,
+            poisoned,
+        }
+    }
+    pub fn first_resource_failure(&self) -> Option<ResourceBudgetFailure> {
+        self.usage_snapshot().first_failure
+    }
+    /// Attach an exact rejection from a subordinate budget to the same ledger.
+    /// It cannot replace a failure already observed by another worker.
+    pub(super) fn record_resource_failure(&self, failure: ResourceBudgetFailure) {
+        if let Ok(mut usage) = self.usage.lock() {
+            usage.resource_failed = true;
+            usage.first_failure.get_or_insert(failure);
+        }
+    }
     /// Resource classification evidence from this exact shared planning ledger.
     /// Reservations may release storage, but never clear a failed operation.
     pub(super) fn has_resource_failure(&self) -> bool {
@@ -1493,56 +1752,122 @@ impl PlanBudget {
             .lock()
             .map_or(true, |usage| usage.resource_failed)
     }
+    #[track_caller]
     fn charge(
         &self,
         amount: usize,
         select: fn(&mut PlanUsage) -> &mut usize,
         limit: usize,
+        kind: ResourceBudgetKind,
+        reservation: Option<bool>,
     ) -> Result<(), String> {
         let mut usage = self
             .usage
             .lock()
             .map_err(|_| "generic planning budget poisoned")?;
-        let next = match select(&mut usage).checked_add(amount) {
+        let used = *select(&mut usage);
+        let next = match used.checked_add(amount) {
             Some(next) if next <= limit => next,
             _ => {
                 usage.resource_failed = true;
+                let failure = ResourceBudgetFailure::new(kind, amount, used, limit);
+                usage.first_failure.get_or_insert(failure);
                 return Err("generic planning resource limit exceeded".into());
             }
         };
         *select(&mut usage) = next;
+        if let Some(retained) = reservation {
+            usage.reservations.record(amount, retained);
+        }
         Ok(())
     }
+    #[track_caller]
     pub fn charge_work(&self, amount: usize) -> Result<(), String> {
-        self.charge(amount, |u| &mut u.work, self.limits.work)
+        self.charge(
+            amount,
+            |u| &mut u.work,
+            self.limits.work,
+            ResourceBudgetKind::Work,
+            None,
+        )
     }
+    #[track_caller]
     pub fn charge_nodes(&self, amount: usize) -> Result<(), String> {
-        self.charge(amount, |u| &mut u.nodes, self.limits.nodes)
+        self.charge(
+            amount,
+            |u| &mut u.nodes,
+            self.limits.nodes,
+            ResourceBudgetKind::Nodes,
+            None,
+        )
     }
+    #[track_caller]
     pub fn charge_application(&self) -> Result<(), String> {
-        self.charge(1, |u| &mut u.applications, self.limits.applications)
+        self.charge(
+            1,
+            |u| &mut u.applications,
+            self.limits.applications,
+            ResourceBudgetKind::Applications,
+            None,
+        )
     }
+    #[track_caller]
     pub fn charge_obligation(&self) -> Result<(), String> {
-        self.charge(1, |u| &mut u.obligations, 4096)
+        self.charge(
+            1,
+            |u| &mut u.obligations,
+            4096,
+            ResourceBudgetKind::Obligations,
+            None,
+        )
     }
+    #[track_caller]
     pub fn charge_diagnostic_bytes(&self, bytes: usize) -> Result<(), String> {
-        self.charge(bytes, |u| &mut u.diagnostic_bytes, 64 * 1024)
+        self.charge(
+            bytes,
+            |u| &mut u.diagnostic_bytes,
+            64 * 1024,
+            ResourceBudgetKind::DiagnosticBytes,
+            None,
+        )
     }
+    #[track_caller]
     pub fn reserve_bytes(&self, bytes: usize) -> Result<PlanReservation, String> {
-        self.charge(bytes, |u| &mut u.bytes, self.limits.bytes)?;
+        self.charge(
+            bytes,
+            |u| &mut u.bytes,
+            self.limits.bytes,
+            ResourceBudgetKind::Bytes,
+            Some(false),
+        )?;
         Ok(PlanReservation {
             usage: self.usage.clone(),
             bytes,
         })
     }
     /// Conservatively retain generated semantic storage until this plan ends.
+    #[track_caller]
     pub fn retain_bytes(&self, bytes: usize) -> Result<(), String> {
-        self.charge(bytes, |u| &mut u.bytes, self.limits.bytes)
+        self.charge(
+            bytes,
+            |u| &mut u.bytes,
+            self.limits.bytes,
+            ResourceBudgetKind::Bytes,
+            Some(true),
+        )
     }
+    #[track_caller]
     pub fn check_depth(&self, depth: usize) -> Result<(), String> {
         if depth > self.limits.depth {
             if let Ok(mut usage) = self.usage.lock() {
                 usage.resource_failed = true;
+                let failure = ResourceBudgetFailure::new(
+                    ResourceBudgetKind::Depth,
+                    depth,
+                    0,
+                    self.limits.depth,
+                );
+                usage.first_failure.get_or_insert(failure);
             }
             Err("generic planning depth limit exceeded".into())
         } else {
@@ -5291,6 +5616,234 @@ mod original_replay_transport_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn budget_telemetry_preserves_first_failure_and_external_callsite() {
+        let budget = PlanBudget::new(PlanLimits {
+            work: 2,
+            ..PlanLimits::default()
+        });
+        budget.charge_work(1).unwrap();
+        let line = line!() + 1;
+        assert!(budget.charge_work(2).is_err());
+        let first = budget.first_resource_failure().unwrap();
+        assert_eq!(first.kind, ResourceBudgetKind::Work);
+        assert_eq!((first.requested, first.used, first.limit), (2, 1, 2));
+        assert_eq!((first.file, first.line), (file!(), line));
+        assert!(!first.arithmetic_overflow);
+        assert_eq!(budget.usage_snapshot().work, 1);
+        // Diagnostic construction and other shared users cannot replace it.
+        assert!(budget.clone().charge_diagnostic_bytes(usize::MAX).is_err());
+        assert!(budget.check_depth(usize::MAX).is_err());
+        assert_eq!(budget.first_resource_failure(), Some(first));
+    }
+
+    #[test]
+    fn budget_telemetry_shared_workers_preserve_one_first_failure() {
+        let budget = PlanBudget::new(PlanLimits {
+            work: 0,
+            ..PlanLimits::default()
+        });
+        std::thread::scope(|scope| {
+            for requested in 1..=4 {
+                let budget = &budget;
+                scope.spawn(move || {
+                    assert!(budget.charge_work(requested).is_err());
+                    let first = budget.first_resource_failure().unwrap();
+                    assert!((1..=4).contains(&first.requested));
+                    assert_eq!(first.kind, ResourceBudgetKind::Work);
+                });
+            }
+        });
+        let first = budget.first_resource_failure().unwrap();
+        assert_eq!((first.used, first.limit), (0, 0));
+        assert_eq!(budget.usage_snapshot().work, 0);
+        assert!(budget.charge_nodes(usize::MAX).is_err());
+        assert_eq!(budget.first_resource_failure(), Some(first));
+    }
+
+    #[test]
+    fn budget_telemetry_classifies_every_plan_counter_and_overflow() {
+        let budget = PlanBudget::new(PlanLimits {
+            nodes: 1,
+            ..PlanLimits::default()
+        });
+        budget.charge_nodes(1).unwrap();
+        assert!(budget.charge_nodes(usize::MAX).is_err());
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ResourceBudgetKind::Nodes);
+        assert_eq!(
+            (failure.requested, failure.used, failure.limit),
+            (usize::MAX, 1, 1)
+        );
+        assert!(failure.arithmetic_overflow);
+        assert_eq!(budget.usage_snapshot().nodes, 1);
+
+        let budget = PlanBudget::new(PlanLimits {
+            applications: 0,
+            ..PlanLimits::default()
+        });
+        assert!(budget.charge_application().is_err());
+        assert_eq!(
+            budget.first_resource_failure().unwrap().kind,
+            ResourceBudgetKind::Applications
+        );
+        let budget = PlanBudget::default();
+        for _ in 0..4096 {
+            budget.charge_obligation().unwrap();
+        }
+        assert!(budget.charge_obligation().is_err());
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ResourceBudgetKind::Obligations);
+        assert_eq!(
+            (failure.requested, failure.used, failure.limit),
+            (1, 4096, 4096)
+        );
+        let budget = PlanBudget::default();
+        assert!(budget.charge_diagnostic_bytes(65537).is_err());
+        assert_eq!(
+            budget.first_resource_failure().unwrap().kind,
+            ResourceBudgetKind::DiagnosticBytes
+        );
+        let budget = PlanBudget::new(PlanLimits {
+            depth: 3,
+            ..PlanLimits::default()
+        });
+        budget.check_depth(3).unwrap();
+        let line = line!() + 1;
+        assert!(budget.check_depth(4).is_err());
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ResourceBudgetKind::Depth);
+        assert_eq!((failure.requested, failure.used, failure.limit), (4, 0, 3));
+        assert_eq!(failure.line, line);
+    }
+
+    #[test]
+    fn budget_telemetry_tracks_reservations_release_and_retention() {
+        let budget = PlanBudget::new(PlanLimits {
+            bytes: 10,
+            ..PlanLimits::default()
+        });
+        let first = budget.reserve_bytes(4).unwrap();
+        let second = budget.clone().reserve_bytes(3).unwrap();
+        budget.retain_bytes(2).unwrap();
+        let usage = budget.usage_snapshot();
+        assert_eq!(usage.bytes, 9);
+        assert_eq!(
+            usage.reservations,
+            ReservationAccounting {
+                reservations: 2,
+                current_reservations: 2,
+                peak_reservations: 2,
+                retentions: 1,
+                current_bytes: 9,
+                peak_bytes: 9,
+                cumulative_bytes: 9,
+                counters_saturated: false,
+            }
+        );
+        assert!(budget.reserve_bytes(2).is_err());
+        assert_eq!(budget.usage_snapshot().reservations, usage.reservations);
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ResourceBudgetKind::Bytes);
+        assert_eq!((failure.requested, failure.used, failure.limit), (2, 9, 10));
+        drop(first);
+        drop(second);
+        let usage = budget.usage_snapshot();
+        assert_eq!((usage.bytes, usage.reservations.current_bytes), (2, 2));
+        assert_eq!(usage.reservations.current_reservations, 0);
+        assert_eq!(
+            (
+                usage.reservations.peak_bytes,
+                usage.reservations.cumulative_bytes
+            ),
+            (9, 9)
+        );
+        assert_eq!(usage.first_failure, Some(failure));
+    }
+
+    #[test]
+    fn budget_telemetry_zero_reservations_and_counter_saturation_are_explicit() {
+        let budget = PlanBudget::new(PlanLimits {
+            bytes: 0,
+            ..PlanLimits::default()
+        });
+        let reservation = budget.reserve_bytes(0).unwrap();
+        assert_eq!(budget.usage_snapshot().reservations.current_reservations, 1);
+        drop(reservation);
+        assert_eq!(budget.usage_snapshot().reservations.current_reservations, 0);
+        assert!(budget.first_resource_failure().is_none());
+
+        let mut accounting = ReservationAccounting {
+            cumulative_bytes: usize::MAX,
+            ..ReservationAccounting::default()
+        };
+        accounting.record(1, false);
+        assert!(accounting.counters_saturated);
+        assert_eq!(accounting.cumulative_bytes, usize::MAX);
+        assert_eq!(accounting.current_bytes, 1);
+    }
+
+    #[test]
+    fn budget_telemetry_json_is_bounded_escaped_and_non_mutating() {
+        let budget = PlanBudget::new(PlanLimits {
+            work: 0,
+            ..PlanLimits::default()
+        });
+        assert!(budget.charge_work(1).is_err());
+        let snapshot = budget.usage_snapshot();
+        assert!(snapshot.to_json().contains("\"kind\":\"work\""));
+        assert_eq!(snapshot, budget.usage_snapshot());
+        let mut failure = snapshot.first_failure.unwrap();
+        failure.file = "a\"b\\c\n\u{0}\u{1f}é.rs";
+        let json = failure.to_json();
+        assert!(json.contains("a\\\"b\\\\c\\u000a\\u0000\\u001fé.rs"));
+        assert!(json.contains("\"file_truncated\":false"));
+        failure.file = concat!(
+            "012345678901234567890123456789012345678901234567890123456789012345",
+            "012345678901234567890123456789012345678901234567890123456789012345",
+            "012345678901234567890123456789012345678901234567890123456789012345",
+            "012345678901234567890123456789012345678901234567890123456789012345",
+            "DO_NOT_SERIALIZE"
+        );
+        let json = failure.to_json();
+        assert!(json.contains("\"file_truncated\":true"));
+        assert!(!json.contains("DO_NOT_SERIALIZE"));
+        assert!(json.len() < 2048);
+        struct Reject;
+        impl std::fmt::Write for Reject {
+            fn write_str(&mut self, _: &str) -> std::fmt::Result {
+                Err(std::fmt::Error)
+            }
+        }
+        assert!(snapshot.write_json(&mut Reject).is_err());
+        assert_eq!(budget.first_resource_failure(), snapshot.first_failure);
+    }
+
+    #[test]
+    fn budget_telemetry_poisoned_ledger_retains_available_failure_evidence() {
+        let budget = PlanBudget::new(PlanLimits {
+            work: 0,
+            ..PlanLimits::default()
+        });
+        assert!(budget.charge_work(1).is_err());
+        let first = budget.first_resource_failure();
+        let ledger = budget.clone();
+        assert!(
+            std::thread::spawn(move || {
+                let _guard = ledger.usage.lock().unwrap();
+                panic!("deliberately poison the test ledger");
+            })
+            .join()
+            .is_err()
+        );
+        assert!(budget.usage_snapshot().poisoned);
+        assert_eq!(budget.first_resource_failure(), first);
+        assert_eq!(
+            budget.charge_work(0).unwrap_err(),
+            "generic planning budget poisoned"
+        );
+    }
+
     #[test]
     fn generic_carrier_layouts_preserve_component_identity_and_shape_limits() {
         let budget = PlanBudget::default();

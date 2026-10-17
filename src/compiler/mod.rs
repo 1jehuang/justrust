@@ -826,6 +826,8 @@ pub struct Compilation {
     /// Bytes read from all source files, before external-module expansion.
     pub source_bytes: usize,
     pub source_files: usize,
+    /// Shared planning-budget accounting, distinct from allocator/RSS measurements.
+    pub resource_usage: ir::PlanUsageSnapshot,
 }
 
 /// Compile an immutable source snapshot. Executable publication is gated on all
@@ -837,6 +839,8 @@ pub struct Failure {
     pub report: Option<Box<Report>>,
     /// Completed analysis facts paired with their original function indices.
     pub analyses: Vec<(usize, Arc<ownership::Analysis>)>,
+    /// Captured after failure rendering; the first failure remains immutable.
+    pub resource_usage: Box<ir::PlanUsageSnapshot>,
 }
 impl std::fmt::Display for Failure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -918,6 +922,7 @@ fn compile_input_with_budget(
         error,
         report: None,
         analyses: Vec::new(),
+        resource_usage: Box::new(snapshot.budget.usage_snapshot()),
     })?;
     let outcome = (|| -> Result<(), Error> {
         check.completion()?;
@@ -939,6 +944,7 @@ fn compile_input_with_budget(
             error,
             report: Some(Box::new(report)),
             analyses: retained_analyses(&snapshot),
+            resource_usage: Box::new(snapshot.budget.usage_snapshot()),
         });
     }
     // Public source telemetry remains source-only. Registered recipe bodies are
@@ -971,6 +977,7 @@ fn compile_input_with_budget(
         error: Error::new(message),
         report: Some(Box::new(report.clone())),
         analyses: retained_analyses(&snapshot),
+        resource_usage: Box::new(snapshot.budget.usage_snapshot()),
     })?;
     let executable = snapshot.executable.get().cloned();
     let (source_bytes, source_files) = match &snapshot.input {
@@ -981,6 +988,7 @@ fn compile_input_with_budget(
                 error: Error::new("missing loaded source accounting"),
                 report: Some(Box::new(report.clone())),
                 analyses: retained_analyses(&snapshot),
+                resource_usage: Box::new(snapshot.budget.usage_snapshot()),
             })?;
             (loaded.source_bytes, loaded.files)
         }
@@ -1035,6 +1043,7 @@ fn compile_input_with_budget(
         control_flow,
         source_bytes,
         source_files,
+        resource_usage: snapshot.budget.usage_snapshot(),
     })
 }
 
@@ -1050,6 +1059,7 @@ pub(super) fn compile_program_observed(
             error: Error::new(message),
             report: None,
             analyses: Vec::new(),
+            resource_usage: Box::new(budget.usage_snapshot()),
         })?;
     compile_input_with_budget(
         Input::Program(Arc::new(program)),

@@ -35,6 +35,12 @@ thread_local! {
     static CURRENT_TASK: Cell<Option<(u64, u64)>> = const { Cell::new(None) };
 }
 
+/// The poll owning the current thread, for diagnostic attribution only.
+/// Identity never grants graph access and is absent outside provider polling.
+pub(crate) fn current_task_identity() -> Option<(u64, u64)> {
+    CURRENT_TASK.with(Cell::get)
+}
+
 /// Canonical identity inside one graph's immutable input snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Key {
@@ -107,6 +113,9 @@ pub struct Report {
     pub workers: usize,
     pub capture_complete: bool,
     pub node_evaluations: Vec<(Key, usize)>,
+    /// Node IDs in exactly the same order as `node_evaluations`.
+    /// Allows profiling to join events to typed keys without parsing Debug text.
+    pub node_ids: Vec<u64>,
     pub events: Vec<Event>,
     /// `(consumer branch/task, producer node, output slot)`.
     pub dependency_edges: Vec<(u64, u64, usize)>,
@@ -468,6 +477,7 @@ impl Engine {
                 )
             })
             .collect();
+        accounting.report.node_ids = nodes.iter().map(|node| node.id).collect();
         accounting.report.retained_outputs = retained_outputs;
         accounting.report.node_errors = node_errors;
         let report = accounting.report.clone();

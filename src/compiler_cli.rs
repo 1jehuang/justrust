@@ -4,7 +4,26 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--trace NEW_TRACE]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n";
+#[cfg(feature = "allocation-profile")]
+mod allocation_profile;
+mod compiler_profile;
+#[cfg(feature = "allocation-profile")]
+#[global_allocator]
+static ALLOCATION_PROFILE: allocation_profile::ProfilingAllocator<std::alloc::System> =
+    allocation_profile::ProfilingAllocator::new(std::alloc::System);
+
+const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--trace NEW_TRACE] [--profile NEW_JSON]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n--profile writes bounded task timings and exact first budget failure without CFG dumps.\nAllocator counters require a binary built with --features allocation-profile.\n";
+
+fn allocator_json() -> String {
+    #[cfg(feature = "allocation-profile")]
+    {
+        ALLOCATION_PROFILE.snapshot().to_json()
+    }
+    #[cfg(not(feature = "allocation-profile"))]
+    {
+        "null".into()
+    }
+}
 
 fn main() {
     if let Err(error) = run() {
@@ -21,6 +40,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut source = None;
     let mut output: Option<PathBuf> = None;
     let mut trace: Option<PathBuf> = None;
+    let mut profile: Option<PathBuf> = None;
     let mut workers = 1usize;
     let mut check = false;
     let mut args = std::env::args_os().skip(1);
@@ -35,6 +55,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 output = Some(args.next().ok_or("missing output path")?.into())
             }
             Some("--trace") => trace = Some(args.next().ok_or("missing trace path")?.into()),
+            Some("--profile") => profile = Some(args.next().ok_or("missing profile path")?.into()),
             Some("--workers") => {
                 workers = args
                     .next()
@@ -72,11 +93,26 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("output already exists: {}", path.display()).into());
     }
     let compiled = compiler::compile_file_observed(source.clone(), workers, check);
+    let compiler_wall_ns = start.elapsed().as_nanos();
+    // Snapshot before profile serialization so its own allocations are excluded.
+    let allocation = profile.as_ref().map(|_| allocator_json());
     // Never create a trace before loading: it might alias a missing module.
     let mut trace_file = trace.as_deref().map(new_file).transpose()?;
     let compiled = match compiled {
         Ok(compiled) => compiled,
         Err(error) => {
+            if let Some(path) = &profile {
+                compiler_profile::Profile {
+                    mode: if check { "check" } else { "build" },
+                    workers,
+                    compiler_wall_ns,
+                    report: error.report.as_deref(),
+                    resource_usage: &error.resource_usage,
+                    allocator_json: allocation.as_deref().unwrap_or("null"),
+                    error: Some(&error.to_string()),
+                }
+                .write_json(&mut new_file(path)?)?;
+            }
             if let Some(file) = &mut trace_file {
                 writeln!(file, "compilation failed: {error}")?;
                 writeln!(file, "initialization/move analyses: {:#?}", error.analyses)?;
@@ -108,6 +144,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let report = &compiled.report;
+    if let Some(path) = &profile {
+        compiler_profile::Profile {
+            mode: if check { "check" } else { "build" },
+            workers,
+            compiler_wall_ns,
+            report: Some(report),
+            resource_usage: &compiled.resource_usage,
+            allocator_json: allocation.as_deref().unwrap_or("null"),
+            error: None,
+        }
+        .write_json(&mut new_file(path)?)?;
+    }
     if let Some(file) = &mut trace_file {
         writeln!(file, "{report:#?}")?;
         writeln!(file, "control-flow graphs: {:#?}", compiled.control_flow)?;
