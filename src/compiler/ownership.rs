@@ -3462,6 +3462,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn decision_failure_paths_preserve_unmoved_values_across_all_pattern_clients() {
+        for source in [
+            "struct Cell{n:i32}enum E{A(bool,i32,Cell),B}fn f(p:E)->i32{if let E::A(true,7,cell)=p{cell.n}else{let untouched=p;0}}",
+            "struct Cell{n:i32}enum E{A(bool,Cell),B}fn f(p:E)->E{match p{E::A(true,cell)=>{let n=cell.n;E::B},E::A(..)=>p,E::B=>p}}",
+            "struct Cell{n:i32}enum E{A(bool,Cell),B}fn f(p:E)->E{let E::A(true,cell)=p else{return p;};let n=cell.n;E::B}",
+            "struct Cell{n:i32}enum E{A(bool,Cell),B}fn f(p:E)->E{let mut state=p;while let E::A(true,cell)=state{let n=cell.n;state=E::B;continue;}state}",
+            "enum Inner{A(bool),B}enum Outer{A(Inner,i32),B}fn f(p:Outer)->i32{if let Outer::A(Inner::A(true),n)=p{n}else{0}}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+    }
+
+    #[test]
+    fn decision_success_moves_still_forbid_parent_reuse_and_uninitialized_backedges() {
+        for source in [
+            "struct Cell{n:i32}enum E{A(bool,Cell),B}fn f(p:E)->E{if let E::A(true,cell)=p{let n=cell.n;p}else{p}}",
+            "struct Cell{n:i32}enum E{A(bool,Cell),B}fn f(p:E){while let E::A(true,cell)=p{let n=cell.n;}}",
+            "struct Cell{n:i32}enum E{A(bool,Cell),B}fn f(p:E)->E{let E::A(true,cell)=p else{return p;};let n=cell.n;p}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.complete);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.kind == ErrorKind::ReadNotDefinitelyInitialized),
+                "{source}: {:?}",
+                result.diagnostics
+            );
+        }
+    }
+
     fn borrowed_source(source: &str) -> cfg::Function {
         let program = super::super::frontend::parse(&format!("{source} fn main(){{}}")).unwrap();
         let signatures = super::super::frontend::signature_table(&program).unwrap();

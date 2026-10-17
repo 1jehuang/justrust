@@ -41,8 +41,9 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       aggregate domains, genuine arm locals, plain Field projections and selective
       moves. AGGREGATE-MATCHES.md records stock26/native104 debug/release cells,
       28 public malformed-IR controls and complete 2,247-test / 112-binary gates.
-      Refutable aggregate leaves, guards, or-patterns and implicit reference
-      ergonomics remain unsupported. Positional rest is admitted below.
+      Nested refutable leaves are extended by the Decision milestone below.
+      Guards, or-patterns and implicit reference ergonomics remain unsupported.
+      Positional rest is admitted below.
 - [x] Enum tuple-payload positional rest with genuine variant coverage,
   exact-owner Downcast/physical Field plans and single-variant irrefutable lets.
   See `ENUM-REST-PATTERNS.md` for stock24/native96, public authority27 and
@@ -74,6 +75,13 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       and the complete2,546-test/126-binary hosted gate. Successful bindings live
       in the enclosing block, not a synthetic match arm. General pattern forms
       and other unsupported boundaries remain open.
+- [x] Ordered nested Bool/Int/enum pattern decisions across match, if-let,
+      while-let and let-else, with exact prior-tag proofs and all tests before
+      successful binding moves. PATTERN-DECISIONS.md records stock30/native120
+      cells per bootstrap profile, 26 public authority controls, nine unchanged
+      historical witness promotions and complete 2,636-test / 130-binary hosted
+      acceptance. Full product usefulness/exhaustiveness, ordinary refutable
+      lets, guards and reference ergonomics remain open.
 - [x] Fieldless nominal enums and scalar/enum match with exhaustive coverage.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
 - [x] Payload enums, typed downcasts, bounded selection proofs and native tagged values.
@@ -82,8 +90,9 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       syntax, typed ConstantIndex plans and facts-checked Copy-only selected
       bindings. ARRAY-PATTERNS.md records stock27/native108 debug/release cells,
       33 public authority controls and the complete 2,400-test / 120-binary gate.
-      Non-Copy extraction, empty/slice/reference patterns and refutable children
-      remain explicit unsupported boundaries, with existing index fences intact.
+      Non-Copy extraction and empty/slice/reference patterns remain explicit
+      unsupported boundaries, with existing index fences intact. Nested
+      refutable children are extended by PATTERN-DECISIONS.md.
 - [x] Genuine 64-bit usize and ordered, bounds-checked runtime array operations.
 - [x] Nonescaping local references, canonical provenance and last-use loan analysis.
 - [x] Noescape reference parameters and genuine expected-site carrier reborrows.

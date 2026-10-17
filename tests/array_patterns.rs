@@ -178,7 +178,7 @@ fn cases() -> Vec<Case> {
             source: r#"fn main(){let answer=match [40,2]{[40,b]=>40+b,_=>0};if answer==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "guard_boundary",
@@ -381,7 +381,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (22, 5));
-    assert_eq!(partition, (13, 5, 9));
+    assert_eq!(partition, (14, 5, 8));
 }
 #[test]
 fn stock_array_patterns_mapping_ownership_and_valid_unsupported_oracle_edition2024() {
@@ -415,7 +415,7 @@ fn source_array_patterns_publish_exact_constant_indexes_without_omitted_bindings
     let mut counts = (0, 0);
     for case in cases()
         .into_iter()
-        .filter(|c| c.outcome == Outcome::Runtime)
+        .filter(|c| c.outcome == Outcome::Runtime && !matches!(c.name, "refutable_child_boundary"))
     {
         let program = frontend::parse(case.source)
             .unwrap_or_else(|e| panic!("{} parse/resolve:{e}", case.name));
@@ -532,7 +532,7 @@ fn array_pattern_closed_boundaries_reject_at_their_actual_frontend_phase() {
             counts.1 += 1;
         }
     }
-    assert_eq!(counts, (5, 4));
+    assert_eq!(counts, (5, 3));
 }
 #[test]
 fn native_array_patterns_workers1_8_check_build_no_compiler_fallback() {
@@ -619,8 +619,102 @@ fn native_array_patterns_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 108);
-    assert_eq!(modes, (26, 26, 10, 10, 18, 18));
+    assert_eq!(modes, (28, 28, 10, 10, 16, 16));
     eprintln!(
-        "NATIVE ARRAY PATTERNS:108 cells, modes{modes:?};26 executed native images;36 stock-valid Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
+        "NATIVE ARRAY PATTERNS:108 cells, modes{modes:?};28 executed native images;32 stock-valid Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
     );
+}
+
+#[test]
+fn retained_newly_supported_decision_witnesses_publish_real_checked_predicates() {
+    let mut sources = 0;
+    for case in cases()
+        .into_iter()
+        .filter(|case| matches!(case.name, "refutable_child_boundary"))
+    {
+        assert_eq!(case.outcome, Outcome::Runtime);
+        assert!(case.stdout.is_some());
+        let program = frontend::parse(case.source).unwrap();
+        let signatures = frontend::signature_table(&program).unwrap();
+        let mut found = 0;
+        for index in 0..program.functions.len() {
+            frontend::check_function_with_signatures(&program, index, &signatures).unwrap();
+            let function =
+                frontend::type_function_with_signatures(&program, index, &signatures).unwrap();
+            function.validate().unwrap();
+            let mut patterns = Vec::new();
+            for expression in &function.exprs {
+                if let ir::ExprKind::Match { arms, .. } = &expression.kind {
+                    for arm in arms {
+                        if matches!(arm.pattern, ir::MatchPattern::Decision { .. }) {
+                            patterns.push(&arm.pattern);
+                        }
+                    }
+                }
+            }
+            for statement in &function.body.statements {
+                if let ir::Stmt::LetElse {
+                    pattern: pattern @ ir::MatchPattern::Decision { .. },
+                    ..
+                } = statement
+                {
+                    patterns.push(pattern);
+                }
+            }
+            for pattern in patterns {
+                let ir::MatchPattern::Decision {
+                    ty,
+                    tests,
+                    bindings,
+                } = pattern
+                else {
+                    unreachable!()
+                };
+                assert!(matches!(ty, ir::Ty::Array { .. }));
+                assert!(!tests.is_empty());
+                if case.name == "nested_enum_child_boundary" {
+                    assert_eq!(tests.len(), 1);
+                    assert_eq!(tests[0].projection, vec![ir::Projection::Field(0)]);
+                    let ir::PatternTestKind::EnumVariant { ty: inner, variant } = &tests[0].kind
+                    else {
+                        panic!("nested original enum requires a genuine tag test")
+                    };
+                    assert_eq!(inner.def().variants.len(), 1);
+                    assert_eq!(*variant, 0);
+                    assert_eq!(bindings.len(), 1);
+                    assert_eq!(
+                        bindings[0].projection,
+                        vec![
+                            ir::Projection::Field(0),
+                            ir::Projection::Downcast(ir::VariantId {
+                                owner: inner.def().id,
+                                index: 0
+                            }),
+                            ir::Projection::Field(0)
+                        ]
+                    );
+                } else {
+                    assert_eq!(bindings.len(), 1);
+                    assert_eq!(tests.len(), 1);
+                    assert_eq!(tests[0].projection, vec![ir::Projection::ConstantIndex(0)]);
+                    assert!(
+                        matches!(tests[0].kind,ir::PatternTestKind::Int(value) if value==ir::IntValue::i32(40))
+                    );
+                    assert_eq!(
+                        bindings[0].projection,
+                        vec![ir::Projection::ConstantIndex(1)]
+                    );
+                }
+                let mut locals = std::collections::HashSet::new();
+                for binding in bindings {
+                    assert!(!function.params.contains(&binding.local));
+                    assert!(locals.insert(binding.local));
+                }
+                found += 1;
+            }
+        }
+        assert_eq!(found, 1, "{} one genuine decision plan", case.name);
+        sources += 1;
+    }
+    assert_eq!(sources, 1);
 }

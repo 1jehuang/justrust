@@ -195,6 +195,38 @@ struct PatternScratch {
 struct PendingPatternBindings {
     rows: super::super::token_session::BudgetVec<PendingPatternBinding>,
 }
+struct PendingDecisionTest {
+    projection: Vec<ir::Projection>,
+    kind: ir::PatternTestKind,
+    _projection_lease: super::super::expansion_budget::ByteLease,
+}
+struct PendingDecision {
+    tests: super::super::token_session::BudgetVec<PendingDecisionTest>,
+    bindings: PendingPatternBindings,
+    work: usize,
+    refutable_payload: bool,
+}
+#[derive(Clone, Copy)]
+enum PatternCoverage {
+    CatchAll,
+    Scalar(u128),
+    Variant(usize),
+    Predicate { root_variant: Option<usize> },
+}
+impl PatternCoverage {
+    fn full_key(self) -> Option<u128> {
+        match self {
+            Self::Scalar(key) => Some(key),
+            Self::Variant(index) => Some(index as u128),
+            _ => None,
+        }
+    }
+    fn is_total(self, domain: &ir::Ty) -> bool {
+        matches!(self, Self::CatchAll)
+            || matches!((self, domain), (Self::Scalar(_), ir::Ty::Unit))
+            || matches!((self, domain), (Self::Variant(_), ir::Ty::Enum(ty)) if ty.def().variants.len() == 1)
+    }
+}
 enum PatternTest {
     Wildcard,
     Binding,
@@ -202,20 +234,29 @@ enum PatternTest {
     Int(ir::IntValue),
     Unit,
     Aggregate(ir::Ty),
-    EnumVariant { ty: ir::EnumTy, variant: usize },
+    EnumVariant {
+        ty: ir::EnumTy,
+        variant: usize,
+    },
+    Decision {
+        ty: ir::Ty,
+        tests: super::super::token_session::BudgetVec<PendingDecisionTest>,
+        coverage: PatternCoverage,
+    },
 }
 struct PendingPatternPlan {
     test: PatternTest,
     bindings: PendingPatternBindings,
 }
 impl PendingPatternPlan {
-    fn coverage_key(&self) -> Option<u128> {
+    fn coverage(&self) -> PatternCoverage {
         match &self.test {
-            PatternTest::Bool(value) => Some(u128::from(*value)),
-            PatternTest::Int(value) => Some(value.bits),
-            PatternTest::Unit => Some(0),
-            PatternTest::EnumVariant { variant, .. } => Some(*variant as u128),
-            _ => None,
+            PatternTest::Bool(value) => PatternCoverage::Scalar(u128::from(*value)),
+            PatternTest::Int(value) => PatternCoverage::Scalar(value.bits),
+            PatternTest::Unit => PatternCoverage::Scalar(0),
+            PatternTest::EnumVariant { variant, .. } => PatternCoverage::Variant(*variant),
+            PatternTest::Decision { coverage, .. } => *coverage,
+            _ => PatternCoverage::CatchAll,
         }
     }
 }
@@ -2385,47 +2426,334 @@ impl<'a> Checker<'a> {
             _lease: lease,
         })
     }
+    fn decision_work(&self, pending: &mut PendingDecision, amount: usize) -> Result<(), String> {
+        pending.work = pending
+            .work
+            .checked_add(amount)
+            .ok_or("decision pattern work overflow")?;
+        if pending.work > ir::MAX_PATTERN_PROJECTION_WORK {
+            return Err("decision pattern work exceeds limit".into());
+        }
+        self.signatures.plan()?.budget.charge_work(amount)
+    }
+    fn decision_test(
+        &self,
+        pending: &mut PendingDecision,
+        path: &[ir::Projection],
+        kind: ir::PatternTestKind,
+    ) -> Result<(), String> {
+        if pending.tests.len() >= ir::MAX_PATTERN_BINDINGS {
+            return Err("pattern test count exceeds limit".into());
+        }
+        for index in 0..pending.tests.len() {
+            let previous = &pending.tests.as_slice()[index].projection;
+            let cost = previous
+                .len()
+                .max(path.len())
+                .checked_add(1)
+                .ok_or("decision path cost overflow")?;
+            self.decision_work(pending, cost)?;
+            let same = pending.tests.as_slice()[index].projection == path;
+            if same {
+                return Err("duplicate decision pattern test path".into());
+            }
+        }
+        let (projection, lease) = self.metered_pattern_projection(path)?;
+        pending
+            .tests
+            .push(PendingDecisionTest {
+                projection,
+                kind,
+                _projection_lease: lease,
+            })
+            .map_err(pattern_token_error)
+    }
     #[inline(never)]
-    fn collect_aggregate_pattern(
+    fn collect_decision(
+        &self,
+        pattern: &Pattern,
+        ty: &ir::Ty,
+        path: &mut Vec<ir::Projection>,
+        pending: &mut PendingDecision,
+        depth: usize,
+    ) -> Result<(), String> {
+        if depth > ir::MAX_PATTERN_PROJECTION_DEPTH || path.len() > ir::MAX_PATTERN_PROJECTION_DEPTH
+        {
+            return Err("decision pattern depth exceeds limit".into());
+        }
+        self.decision_work(
+            pending,
+            path.len().checked_add(1).ok_or("decision path overflow")?,
+        )?;
+        self.accessible(ty)?;
+        if matches!(ty, ir::Ty::Ref { .. })
+            && !matches!(pattern, Pattern::Wildcard | Pattern::Binding { .. })
+        {
+            return Err(self.reference_pattern_unsupported());
+        }
+        let pattern = self.pattern_source(pattern, ty)?;
+        match pattern {
+            Pattern::Wildcard => {}
+            Pattern::Binding { .. } => self.pattern_locals(
+                pattern,
+                ty,
+                path,
+                &mut std::collections::HashSet::new(),
+                &mut pending.bindings,
+                &mut pending.work,
+            )?,
+            Pattern::Bool(value) => {
+                if *ty != ir::Ty::Bool {
+                    return Err("bool decision pattern type mismatch".into());
+                }
+                pending.refutable_payload = true;
+                self.decision_test(pending, path, ir::PatternTestKind::Bool(*value))?;
+            }
+            Pattern::Int { literal, negative } => {
+                if !matches!(ty, ir::Ty::Int(_)) {
+                    return Err("integer decision pattern type mismatch".into());
+                }
+                pending.refutable_payload = true;
+                self.decision_test(
+                    pending,
+                    path,
+                    ir::PatternTestKind::Int(resolve_integer(literal, *negative, Some(ty))?),
+                )?;
+            }
+            Pattern::Tuple(fields) => {
+                if fields.is_empty() && *ty == ir::Ty::Unit {
+                    return Ok(());
+                }
+                let ir::Ty::Tuple(types) = ty else {
+                    return Err("decision tuple pattern type mismatch".into());
+                };
+                if fields.len() != types.len() {
+                    return Err("decision tuple pattern arity mismatch".into());
+                }
+                for (index, (pattern, ty)) in fields.iter().zip(types.iter()).enumerate() {
+                    path.push(ir::Projection::Field(index));
+                    self.collect_decision(pattern, ty, path, pending, depth + 1)?;
+                    path.pop();
+                }
+            }
+            Pattern::TupleRest(fields) => {
+                let actual = self.positional_pattern_type(pattern, ty)?;
+                let ir::Ty::Tuple(types) = &actual else {
+                    return Err("decision positional tuple type mismatch".into());
+                };
+                let projection = fields.project(types.len())?;
+                self.decision_work(
+                    pending,
+                    fields
+                        .prefix
+                        .len()
+                        .checked_add(fields.suffix.len())
+                        .ok_or("positional selection count overflow")?,
+                )?;
+                for (index, pattern) in projection.iter() {
+                    path.push(ir::Projection::Field(index));
+                    self.collect_decision(pattern, &types[index], path, pending, depth + 1)?;
+                    path.pop();
+                }
+            }
+            Pattern::Array(fields) => {
+                let (element, _) = self.array_pattern_type(pattern, ty)?;
+                for (index, pattern) in fields.iter().enumerate() {
+                    path.push(ir::Projection::ConstantIndex(index));
+                    self.collect_decision(pattern, element, path, pending, depth + 1)?;
+                    path.pop();
+                }
+            }
+            Pattern::ArrayRest(fields) => {
+                let (element, len) = self.array_pattern_type(pattern, ty)?;
+                self.decision_work(
+                    pending,
+                    fields
+                        .prefix
+                        .len()
+                        .checked_add(fields.suffix.len())
+                        .ok_or("array selection count overflow")?,
+                )?;
+                for (index, pattern) in fields.project(len)?.iter() {
+                    path.push(ir::Projection::ConstantIndex(index));
+                    self.collect_decision(pattern, element, path, pending, depth + 1)?;
+                    path.pop();
+                }
+            }
+            Pattern::Struct { name, fields, rest } => {
+                let actual = self.nominal(name, Some(ty))?;
+                if &actual != ty {
+                    return Err("decision record nominal mismatch".into());
+                }
+                let ir::Ty::Struct(structure) = &actual else {
+                    return Err("expected decision struct pattern".into());
+                };
+                let shape = self.checked_struct_shape(structure)?;
+                if shape == StructShape::Tuple {
+                    return Err("unsupported: braced tuple struct patterns".into());
+                }
+                if shape == StructShape::Unit && (!fields.is_empty() || *rest) {
+                    return Err("unsupported: unit struct pattern fields or rest".into());
+                }
+                if !rest && fields.len() != structure.def().fields.len() {
+                    return Err("decision record pattern missing fields".into());
+                }
+                let mut selected = super::super::token_session::BudgetVec::new(
+                    self.names()?.budget(),
+                    super::super::expansion_budget::Storage::Temporary,
+                )
+                .map_err(pattern_token_error)?;
+                for (field, pattern) in fields {
+                    let (index, field_ty) =
+                        self.field_type(&actual, &FieldSelector::Named(*field))?;
+                    for old in selected.as_slice() {
+                        self.decision_work(pending, 1)?;
+                        if *old == index {
+                            return Err("duplicate decision record field".into());
+                        }
+                    }
+                    selected.push(index).map_err(pattern_token_error)?;
+                    path.push(ir::Projection::Field(index));
+                    self.collect_decision(pattern, &field_ty, path, pending, depth + 1)?;
+                    path.pop();
+                }
+            }
+            Pattern::Path(_) | Pattern::Variant { .. } | Pattern::VariantRest { .. } => {
+                if let Some(tuple) = self.tuple_pattern_type(pattern, ty)? {
+                    let actual = ir::Ty::Struct(tuple.clone());
+                    match pattern {
+                        Pattern::Variant { fields, .. } => {
+                            for (index, (_, pattern)) in fields.iter().enumerate() {
+                                let (_, field_ty) =
+                                    self.field_type(&actual, &FieldSelector::Tuple(index))?;
+                                path.push(ir::Projection::Field(index));
+                                self.collect_decision(
+                                    pattern,
+                                    &field_ty,
+                                    path,
+                                    pending,
+                                    depth + 1,
+                                )?;
+                                path.pop();
+                            }
+                        }
+                        Pattern::VariantRest { fields, .. } => {
+                            self.decision_work(
+                                pending,
+                                fields
+                                    .prefix
+                                    .len()
+                                    .checked_add(fields.suffix.len())
+                                    .ok_or("tuple selection count overflow")?,
+                            )?;
+                            for (index, pattern) in fields.project(tuple.def().fields.len())?.iter()
+                            {
+                                let (_, field_ty) =
+                                    self.field_type(&actual, &FieldSelector::Tuple(index))?;
+                                path.push(ir::Projection::Field(index));
+                                self.collect_decision(
+                                    pattern,
+                                    &field_ty,
+                                    path,
+                                    pending,
+                                    depth + 1,
+                                )?;
+                                path.pop();
+                            }
+                        }
+                        _ => return Err("tuple decision pattern normalization invariant".into()),
+                    }
+                } else {
+                    let (enumeration, variant, fields) = self.variant_pattern(pattern, ty)?;
+                    if !path.is_empty() && enumeration.def().variants.len() > 1 {
+                        pending.refutable_payload = true;
+                    }
+                    self.decision_test(
+                        pending,
+                        path,
+                        ir::PatternTestKind::EnumVariant {
+                            ty: enumeration.clone(),
+                            variant,
+                        },
+                    )?;
+                    let owner = enumeration.def().id;
+                    path.push(ir::Projection::Downcast(ir::VariantId {
+                        owner,
+                        index: variant,
+                    }));
+                    for &(index, pattern) in fields.as_slice() {
+                        path.push(ir::Projection::Field(index));
+                        self.collect_decision(
+                            pattern,
+                            &enumeration.def().variants[variant].fields[index].ty,
+                            path,
+                            pending,
+                            depth + 1,
+                        )?;
+                        path.pop();
+                    }
+                    path.pop();
+                }
+            }
+            Pattern::Apply { .. } => {
+                return Err("decision application normalization invariant".into());
+            }
+        }
+        Ok(())
+    }
+    #[inline(never)]
+    fn collect_complex_pattern(
         &self,
         pattern: &Pattern,
         ty: &ir::Ty,
     ) -> Result<PendingPatternPlan, String> {
-        if !matches!(ty, ir::Ty::Struct(_))
-            && !matches!(ty, ir::Ty::Tuple(fields) if !fields.is_empty())
-            && !matches!(ty, ir::Ty::Array { len, .. } if *len > 0)
-        {
-            return Err("expected aggregate match domain".into());
-        }
-        let mut work = 0;
-        let mut count = 0;
-        self.validate_aggregate_pattern(pattern, ty, 0, &mut work, &mut count)?;
-        self.infer_storage(count)?;
-        let mut bindings = self.pending_pattern_bindings()?;
+        let tests = super::super::token_session::BudgetVec::new(
+            self.names()?.budget(),
+            super::super::expansion_budget::Storage::Temporary,
+        )
+        .map_err(pattern_token_error)?;
+        let mut pending = PendingDecision {
+            tests,
+            bindings: self.pending_pattern_bindings()?,
+            work: 0,
+            refutable_payload: false,
+        };
         let mut scratch = self.pattern_scratch()?;
-        self.pattern_locals(
-            pattern,
-            ty,
-            &mut scratch.path,
-            &mut std::collections::HashSet::new(),
-            &mut bindings,
-            &mut 0usize,
-        )?;
-        for binding in bindings.rows.as_slice() {
-            if binding.local.projection.is_empty()
-                || binding.local.projection.iter().any(|step| {
-                    !matches!(
-                        step,
-                        ir::Projection::Field(_) | ir::Projection::ConstantIndex(_)
-                    )
-                })
-            {
-                return Err("contract: aggregate match binding is not a plain field path".into());
+        self.collect_decision(pattern, ty, &mut scratch.path, &mut pending, 0)?;
+        let root = pending
+            .tests
+            .as_slice()
+            .first()
+            .and_then(|test| match &test.kind {
+                ir::PatternTestKind::EnumVariant { ty, variant } if test.projection.is_empty() => {
+                    Some((ty.clone(), *variant))
+                }
+                _ => None,
+            });
+        let coverage = if pending.refutable_payload {
+            PatternCoverage::Predicate {
+                root_variant: root.as_ref().map(|(_, variant)| *variant),
             }
-        }
+        } else if let Some((_, variant)) = &root {
+            PatternCoverage::Variant(*variant)
+        } else {
+            PatternCoverage::CatchAll
+        };
+        let test = if pending.tests.as_slice().is_empty() {
+            PatternTest::Aggregate(ty.clone())
+        } else if pending.tests.len() == 1 && !pending.refutable_payload && root.is_some() {
+            let (ty, variant) = root.ok_or("missing root variant proof")?;
+            PatternTest::EnumVariant { ty, variant }
+        } else {
+            PatternTest::Decision {
+                ty: ty.clone(),
+                tests: pending.tests,
+                coverage,
+            }
+        };
         Ok(PendingPatternPlan {
-            test: PatternTest::Aggregate(ty.clone()),
-            bindings,
+            test,
+            bindings: pending.bindings,
         })
     }
     #[inline(never)]
@@ -2472,47 +2800,13 @@ impl<'a> Checker<'a> {
                 }
                 PatternTest::Unit
             }
-            Pattern::Variant { .. } | Pattern::VariantRest { .. }
-                if self.tuple_pattern_type(pattern, domain)?.is_some() =>
-            {
-                return self.collect_aggregate_pattern(pattern, domain);
-            }
-            Pattern::Path(_) | Pattern::Variant { .. } | Pattern::VariantRest { .. } => {
-                let (ty, variant, fields) = self.variant_pattern(pattern, domain)?;
-                let mut scratch = self.pattern_scratch()?;
-                let mut names = std::collections::HashSet::new();
-                let mut work = 0;
-                for &(index, pattern) in fields.as_slice() {
-                    scratch.path.push(ir::Projection::Downcast(ir::VariantId {
-                        owner: ty.def().id,
-                        index: variant,
-                    }));
-                    scratch.path.push(ir::Projection::Field(index));
-                    self.pattern_locals(
-                        pattern,
-                        &ty.def().variants[variant].fields[index].ty,
-                        &mut scratch.path,
-                        &mut names,
-                        &mut bindings,
-                        &mut work,
-                    )?;
-                    scratch.path.clear();
-                }
-                PatternTest::EnumVariant { ty, variant }
+            Pattern::TupleRest(_) if *domain == ir::Ty::Unit => {
+                return Err(Self::empty_tuple_rest_unsupported());
             }
             Pattern::Apply { .. } => {
                 return Err("pattern application normalization invariant".into());
             }
-            Pattern::TupleRest(_) if *domain == ir::Ty::Unit => {
-                return Err(Self::empty_tuple_rest_unsupported());
-            }
-            Pattern::Array(_) | Pattern::ArrayRest(_) => {
-                self.array_pattern_type(pattern, domain)?;
-                return self.collect_aggregate_pattern(pattern, domain);
-            }
-            Pattern::Struct { .. } | Pattern::Tuple(_) | Pattern::TupleRest(_) => {
-                return self.collect_aggregate_pattern(pattern, domain);
-            }
+            _ => return self.collect_complex_pattern(pattern, domain),
         };
         Ok(PendingPatternPlan { test, bindings })
     }
@@ -2527,6 +2821,24 @@ impl<'a> Checker<'a> {
                 .local(binding.name, binding.ty.clone(), binding.mutable)
                 .map(ir::MatchPattern::Binding);
         }
+        let decision_tests = if let PatternTest::Decision { tests, .. } = &plan.test {
+            let mut output = self.retained_pattern_vec(tests.len())?;
+            for test in tests.as_slice() {
+                self.signatures
+                    .plan()?
+                    .budget
+                    .charge_work(test.projection.len() + 1)?;
+                let mut projection = self.retained_pattern_vec(test.projection.len())?;
+                projection.extend_from_slice(&test.projection);
+                output.push(ir::PatternTest {
+                    projection,
+                    kind: test.kind.clone(),
+                });
+            }
+            Some(output)
+        } else {
+            None
+        };
         let mut bindings = self.retained_pattern_vec(plan.bindings.rows.len())?;
         for pending in plan.bindings.rows.as_slice() {
             let binding = &pending.local;
@@ -2548,6 +2860,11 @@ impl<'a> Checker<'a> {
             PatternTest::EnumVariant { ty, variant } => ir::MatchPattern::EnumVariant {
                 ty,
                 variant,
+                bindings,
+            },
+            PatternTest::Decision { ty, .. } => ir::MatchPattern::Decision {
+                ty,
+                tests: decision_tests.ok_or("missing published decision tests")?,
                 bindings,
             },
             PatternTest::Binding => return Err("contract: whole binding publication".into()),
@@ -5699,9 +6016,7 @@ impl<'a> Checker<'a> {
         self.accessible(&ty)?;
         self.require(&flow, &ty)?;
         let plan = self.collect_pattern(pattern, &ty)?;
-        let total = plan.coverage_key().is_none()
-            || matches!(ty, ir::Ty::Unit)
-            || matches!(&ty, ir::Ty::Enum(t) if t.def().variants.len() == 1);
+        let total = plan.coverage().is_total(&ty);
         let depth = self.scopes.len();
         let checked_else = self.match_arm_body(
             MatchBody::Block(else_block),
@@ -5801,6 +6116,12 @@ impl<'a> Checker<'a> {
             return Err(self.reference_pattern_unsupported());
         }
         let mut catchall = false;
+        let mut has_predicate = false;
+        let mut seen_variants = super::super::token_session::BudgetVec::new(
+            self.names()?.budget(),
+            super::super::expansion_budget::Storage::Temporary,
+        )
+        .map_err(pattern_token_error)?;
         let mut covered = std::collections::HashSet::<u128>::new();
         let mut checked = Vec::with_capacity(arms.len());
         let mut result = ir::Ty::Never;
@@ -5809,12 +6130,12 @@ impl<'a> Checker<'a> {
             let scope_depth = self.scopes.len();
             self.scopes.push(HashMap::new());
             let arm_result = (|| {
-                let (pattern, key) = if let Some(source_pattern) = arm.pattern {
+                let (pattern, coverage) = if let Some(source_pattern) = arm.pattern {
                     let plan = self.collect_pattern(source_pattern, &domain)?;
-                    let key = plan.coverage_key();
-                    (self.publish_pattern(plan)?, key)
+                    let coverage = plan.coverage();
+                    (self.publish_pattern(plan)?, coverage)
                 } else {
-                    (ir::MatchPattern::Wildcard, None)
+                    (ir::MatchPattern::Wildcard, PatternCoverage::CatchAll)
                 };
                 let fully_covered = match &domain {
                     ir::Ty::Bool => covered.len() == 2,
@@ -5825,6 +6146,12 @@ impl<'a> Checker<'a> {
                     }
                     _ => false,
                 };
+                let key = match coverage {
+                    PatternCoverage::Predicate { root_variant } => {
+                        root_variant.map(|index| index as u128)
+                    }
+                    _ => coverage.full_key(),
+                };
                 let useful =
                     !catchall && !fully_covered && key.is_none_or(|key| !covered.contains(&key));
                 let body = self.match_arm_body(
@@ -5832,18 +6159,29 @@ impl<'a> Checker<'a> {
                     self.reachable && source.completes && useful,
                     expected,
                 )?;
-                Ok::<_, String>((pattern, key, body, useful))
+                Ok::<_, String>((pattern, coverage, body, useful))
             })();
             self.scopes.truncate(scope_depth);
-            let (pattern, key, body, useful) = arm_result?;
+            let (pattern, coverage, body, useful) = arm_result?;
             let arm_flow = self.flow(body);
             // Even unreachable arms impose their source type obligation.
             result = self.join(&result, &arm_flow.ty, "match arms")?;
             completes |= useful && arm_flow.completes;
-            if let Some(key) = key {
+            if let Some(key) = coverage.full_key() {
                 covered.insert(key);
-            } else {
-                catchall = true;
+            }
+            match coverage {
+                PatternCoverage::CatchAll => catchall = true,
+                PatternCoverage::Variant(index) => {
+                    seen_variants.push(index).map_err(pattern_token_error)?
+                }
+                PatternCoverage::Predicate { root_variant } => {
+                    has_predicate = true;
+                    if let Some(index) = root_variant {
+                        seen_variants.push(index).map_err(pattern_token_error)?;
+                    }
+                }
+                PatternCoverage::Scalar(_) => {}
             }
             checked.push(ir::MatchArm { pattern, body });
         }
@@ -5857,6 +6195,30 @@ impl<'a> Checker<'a> {
                 _ => false,
             };
         if !exhaustive {
+            let all_variants_seen = if let ir::Ty::Enum(ty) = &domain {
+                let mut all = true;
+                for index in 0..ty.def().variants.len() {
+                    self.signatures
+                        .plan()?
+                        .budget
+                        .charge_work(seen_variants.len() + 1)?;
+                    if !seen_variants.as_slice().contains(&index) {
+                        all = false;
+                        break;
+                    }
+                }
+                all
+            } else {
+                true
+            };
+            if has_predicate && all_variants_seen {
+                return Err(super::super::source::SourceError {
+                    kind: super::super::source::SourceErrorKind::Unsupported,
+                    primary: None,
+                    message: "nested pattern exhaustiveness requires an irrefutable variant or catch-all fallback".into(),
+                    _diagnostic_lease: None, location: None,
+                }.to_string());
+            }
             return Err(format!("non-exhaustive match on {domain:?}"));
         }
         Ok((
@@ -7158,6 +7520,138 @@ mod checked_identity_tests {
     use super::*;
 
     #[test]
+    fn decision_patterns_preserve_ordered_tags_and_failed_arm_moves() {
+        for source in [
+            "enum Inner{A(bool,i32),B}enum Outer{Some(Inner),None}fn value(v:Outer)->i32{match v{Outer::Some(Inner::A(true,x))=>x,Outer::Some(_)=>0,Outer::None=>0}}fn main(){}",
+            "struct Token;enum E{A(Token,bool),B}fn take(t:Token){}fn value(v:E){match v{E::A(t,true)=>take(t),E::A(t,_)=>take(t),E::B=>{}}}fn main(){}",
+            "struct Token;struct Item{tag:bool,token:Token}fn value()->i32{let items=[Item{tag:true,token:Token}];match items{[Item{tag:true,..}]=>42,_=>0}}fn main(){}",
+            "enum E{A(bool,i32),B}fn value(v:E)->i32{let E::A(true,x)=v else{return 0;};x}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            check(&program).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+
+    #[test]
+    fn decision_patterns_require_proven_coverage_without_weakening_plain_let() {
+        let program = parse("enum E{A(bool),B}fn value(v:E)->i32{match v{E::A(true)=>1,E::A(false)=>2,E::B=>0}}fn main(){}").unwrap();
+        assert!(
+            check(&program)
+                .unwrap_err()
+                .contains("unsupported: nested pattern exhaustiveness")
+        );
+        let program =
+            parse("enum E{A(bool),B}fn value(v:E)->i32{match v{E::A(true)=>1}}fn main(){}")
+                .unwrap();
+        let error = check(&program).unwrap_err();
+        assert!(error.contains("non-exhaustive"));
+        assert!(!error.contains("unsupported:"));
+        let program =
+            parse("enum E{A(bool),B}fn value(v:E){let E::A(true)=v;}fn main(){}").unwrap();
+        assert!(
+            check(&program)
+                .unwrap_err()
+                .contains("unsupported: refutable enum patterns")
+        );
+        let program = parse("enum E{Only(i32)}struct Packet(E);fn value(v:Packet)->i32{match v{Packet(E::Only(x))=>x}}fn main(){}").unwrap();
+        check(&program).unwrap();
+    }
+
+    #[test]
+    fn pending_decision_tests_hold_payload_leases_and_do_not_publish_early() {
+        let program = parse(
+            "enum E{A(bool,i32),B}fn value(v:E)->i32{match v{E::A(true,x)=>x,_=>0}}fn main(){}",
+        )
+        .unwrap();
+        let function = &program.functions[0];
+        let Expr::Match { arms, .. } = function.body.tail.as_deref().unwrap() else {
+            panic!("expected match");
+        };
+        let pattern = &arms[0].pattern;
+        let Pattern::Variant { name, .. } = pattern else {
+            panic!("expected enum pattern");
+        };
+        let signatures = signature_table(&program).unwrap();
+        let checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+        let (enumeration, _) = checker.enum_variant(name).unwrap();
+        let budget = program.names.budget();
+        let before = budget.snapshot().temporary_bytes;
+        let plan = checker
+            .collect_pattern(pattern, &ir::Ty::Enum(enumeration))
+            .unwrap();
+        let PatternTest::Decision { tests, .. } = &plan.test else {
+            panic!("expected decision plan");
+        };
+        assert_eq!(tests.len(), 2);
+        assert!(tests.as_slice()[0].projection.is_empty());
+        assert!(matches!(
+            tests.as_slice()[0].kind,
+            ir::PatternTestKind::EnumVariant { .. }
+        ));
+        assert!(matches!(
+            tests.as_slice()[1].projection.as_slice(),
+            [ir::Projection::Downcast(_), ir::Projection::Field(0)]
+        ));
+        assert_eq!(plan.bindings.rows.len(), 1);
+        assert!(checker.locals.is_empty());
+        assert!(budget.snapshot().temporary_bytes > before);
+        drop(plan);
+        assert_eq!(budget.snapshot().temporary_bytes, before);
+    }
+
+    #[test]
+    fn pending_decision_test_denies_real_row_growth_before_allocation_or_publication() {
+        use super::super::super::expansion_budget::{BudgetFailureKind, BudgetResource, Storage};
+        let program =
+            parse("enum E{A(bool),B}fn value(v:E)->i32{match v{E::A(true)=>1,_=>0}}fn main(){}")
+                .unwrap();
+        let function = &program.functions[0];
+        let Expr::Match { arms, .. } = function.body.tail.as_deref().unwrap() else {
+            panic!("expected match");
+        };
+        let Pattern::Variant { name, .. } = &arms[0].pattern else {
+            panic!("expected enum pattern");
+        };
+        let signatures = signature_table(&program).unwrap();
+        let checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+        let (ty, variant) = checker.enum_variant(name).unwrap();
+        let budget = program.names.budget();
+        let mut pending = PendingDecision {
+            tests: super::super::super::token_session::BudgetVec::new(budget, Storage::Temporary)
+                .unwrap(),
+            bindings: checker.pending_pattern_bindings().unwrap(),
+            work: 0,
+            refutable_payload: false,
+        };
+        let before = budget.snapshot();
+        let remaining = budget.limits().bytes - before.retained_bytes - before.temporary_bytes;
+        let saturation = budget.reserve(Storage::Temporary, remaining).unwrap();
+        assert!(
+            checker
+                .decision_test(
+                    &mut pending,
+                    &[],
+                    ir::PatternTestKind::EnumVariant { ty, variant }
+                )
+                .is_err()
+        );
+        let failed = budget.snapshot();
+        let failure = failed.failure.as_ref().unwrap();
+        assert_eq!(failure.kind, BudgetFailureKind::Limit);
+        assert_eq!(failure.resource, BudgetResource::Bytes);
+        assert_eq!(
+            failure.requested,
+            (4 * std::mem::size_of::<PendingDecisionTest>()) as u64
+        );
+        assert!(pending.tests.as_slice().is_empty());
+        assert!(checker.locals.is_empty());
+        assert_eq!(failed.temporary_bytes, before.temporary_bytes + remaining);
+        drop(saturation);
+        drop(pending);
+        assert_eq!(budget.snapshot().temporary_bytes, before.temporary_bytes);
+    }
+
+    #[test]
     fn pending_pattern_plan_holds_metered_rows_without_publishing_locals() {
         let program = parse("fn value(){let x=1 else{return;};}fn main(){}").unwrap();
         let function = &program.functions[0];
@@ -7488,11 +7982,12 @@ mod checked_identity_tests {
 
     #[test]
     fn array_patterns_preserve_noncopy_and_shape_boundaries() {
+        let program = parse("fn value()->i32{match [1,2]{[1,_]=>42,_=>0}}fn main(){}").unwrap();
+        check(&program).unwrap();
         for source in [
             "struct Token;fn value(){let [item]=[Token];}fn main(){}",
             "struct Token;fn value(){match [Token]{[item]=>()};}fn main(){}",
             "fn value(){let [..]:[i32;0]=[];}fn main(){}",
-            "fn value()->i32{match [1,2]{[1,_]=>42,_=>0}}fn main(){}",
         ] {
             let program = parse(source).unwrap();
             let error = check(&program).unwrap_err();
@@ -7660,11 +8155,7 @@ mod checked_identity_tests {
         let program = parse("struct Pair(i32,bool);struct Wrap{pair:Pair,tag:i32}fn value()->i32{let wrapped=Wrap{pair:Pair(7,true),tag:2};match wrapped{Wrap{pair:Pair(x,_),tag:n}=>x+n}}fn main(){}").unwrap();
         check(&program).unwrap();
         let program = parse("struct Pair(i32,bool);fn value()->i32{match Pair(7,true){Pair(7,_)=>1,_=>2}}fn main(){}").unwrap();
-        assert!(
-            check(&program)
-                .unwrap_err()
-                .contains("refutable aggregate match leaf")
-        );
+        check(&program).unwrap();
         let program = parse("struct Wrap{x:i32,y:i32}fn value()->i32{let wrapped=Wrap{x:1,y:2};match wrapped{Wrap{x,..}=>x}}fn main(){}").unwrap();
         check(&program).unwrap();
     }

@@ -1,5 +1,39 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: ordered nested pattern decisions with tests before moves
+
+- Accepted scoped PATTERN-DECISIONS.md implementation, not full Rust or full
+  product-pattern usefulness/exhaustiveness. Actual Bool/Int/nested-enum source
+  patterns share one typed decision across match, if-let, while-let and let-else.
+  Ordinary let remains irrefutable; guards/or/ranges/references remain closed.
+- Each typed Downcast requires an earlier exact-prefix enum tag observation.
+  Domain, every test path/tag owner and selected binding are validated even in
+  dead/Never rows. Canonical identity, substitution and preflight visit all tests.
+  Tests and binding validation share one existing bounded work counter.
+- CFG evaluates the source once, pre-lives scalar inspection storage before
+  branching, executes all predicates before any binding initialization/move and
+  retains genuine mismatch edges. Persistent let-else bindings still belong to
+  the enclosing block. Array indexed non-Copy move fences are unchanged.
+- Coverage explicitly distinguishes predicates from complete variant/catch-all
+  rows. Potential payload matrices remain Unsupported, including one stock-E0004
+  case, rather than being falsely accepted or presented as semantic parity.
+- Exact stock30 evidence:23 valid/seven invalid. Native:18 runtime/five ordinary
+  invalid/five valid Unsupported/two stock-invalid native Unsupported. Workers
+  1/8 CHECK/BUILD cover120 cells and36 real ELF executions per bootstrap profile.
+  New30 source bytes/order and all221 historical source literals were independently
+  compared with stock/HEAD. Nine exact historical witnesses are promoted only.
+- Actual public26 authority controls and all targeted debug/release76 tests pass.
+  Library1,033 and full2,636 tests/130 binaries pass with zero ignored/filtered.
+  All-target CHECK, strict Clippy -D warnings, format and diff checks pass.
+  Full hosted run:20261017-130739966-2329609; final release:
+  20261017-130803963-2333282. Fifteen failed/passing receipts are retained in
+  data/runs/xps14/2026-10-17-pattern-decisions.jsonl.
+- Failures retained include in-flight checker API/exhaustiveness errors, two
+  obsolete exact Unsupported expectations, a new private fixture incorrectly
+  treating legal empty enums as invalid, and clone-on-Copy lint. The preflight
+  control now violates the real nominal type-argument bound; production facts
+  were not weakened. No measured speedup or public ABI claim follows.
+
 ## 2026-10-17: generic tuple structs with exact applications and deferred constructor evidence
 
 - Accepted bounded GENERIC-TUPLE-STRUCTS.md coverage, not full Rust. Original

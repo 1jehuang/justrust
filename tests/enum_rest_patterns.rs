@@ -172,7 +172,7 @@ fn cases() -> Vec<Case> {
             source: r#"enum Item{Only(i32,i32,i32)}fn main(){let answer=match Item::Only(40,7,2){Item::Only(40,..,b)=>40+b,_=>0};if answer==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "guard",
@@ -362,7 +362,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (19, 5));
-    assert_eq!(partition, (16, 4, 3, 1));
+    assert_eq!(partition, (17, 4, 2, 1));
 }
 #[test]
 fn stock_enum_rest_payload_mapping_coverage_ownership_oracle_edition2024() {
@@ -398,7 +398,7 @@ fn enum_rest_ir_retains_variant_authority_actual_downcasts_and_payload_indexes()
     let mut counts = (0, 0);
     for case in cases()
         .into_iter()
-        .filter(|c| c.outcome == Outcome::Runtime)
+        .filter(|c| c.outcome == Outcome::Runtime && !matches!(c.name, "refutable_child"))
     {
         let program = frontend::parse(case.source)
             .unwrap_or_else(|e| panic!("{} parse/resolve:{e}", case.name));
@@ -532,7 +532,7 @@ fn enum_rest_closed_patterns_reject_at_their_actual_frontend_phase() {
             }
         }
     }
-    assert_eq!(counts, (2, 1, 1));
+    assert_eq!(counts, (2, 0, 1));
 }
 #[test]
 fn native_enum_rest_workers1_8_check_build_no_compiler_fallback() {
@@ -624,8 +624,118 @@ fn native_enum_rest_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 96);
-    assert_eq!(modes, (32, 32, 8, 8, 6, 6, 2, 2));
+    assert_eq!(modes, (34, 34, 8, 8, 4, 4, 2, 2));
     eprintln!(
-        "NATIVE ENUM REST:96 cells, modes{modes:?};32 executed native images;12 stock-valid Unsupported cells plus4 stock-invalid/native-Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
+        "NATIVE ENUM REST:96 cells, modes{modes:?};34 executed native images;8 stock-valid Unsupported cells plus4 stock-invalid/native-Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
     );
+}
+
+#[test]
+fn retained_newly_supported_decision_witnesses_publish_real_checked_predicates() {
+    let mut sources = 0;
+    for case in cases()
+        .into_iter()
+        .filter(|case| matches!(case.name, "refutable_child"))
+    {
+        assert_eq!(case.outcome, Outcome::Runtime);
+        assert!(case.stdout.is_some());
+        let program = frontend::parse(case.source).unwrap();
+        let signatures = frontend::signature_table(&program).unwrap();
+        let mut found = 0;
+        for index in 0..program.functions.len() {
+            frontend::check_function_with_signatures(&program, index, &signatures).unwrap();
+            let function =
+                frontend::type_function_with_signatures(&program, index, &signatures).unwrap();
+            function.validate().unwrap();
+            let mut patterns = Vec::new();
+            for expression in &function.exprs {
+                if let ir::ExprKind::Match { arms, .. } = &expression.kind {
+                    for arm in arms {
+                        if matches!(arm.pattern, ir::MatchPattern::Decision { .. }) {
+                            patterns.push(&arm.pattern);
+                        }
+                    }
+                }
+            }
+            for statement in &function.body.statements {
+                if let ir::Stmt::LetElse {
+                    pattern: pattern @ ir::MatchPattern::Decision { .. },
+                    ..
+                } = statement
+                {
+                    patterns.push(pattern);
+                }
+            }
+            for pattern in patterns {
+                let ir::MatchPattern::Decision {
+                    ty,
+                    tests,
+                    bindings,
+                } = pattern
+                else {
+                    unreachable!()
+                };
+                assert!(matches!(ty, ir::Ty::Enum(_)));
+                assert!(!tests.is_empty());
+                if case.name == "nested_enum_child_boundary" {
+                    assert_eq!(tests.len(), 1);
+                    assert_eq!(tests[0].projection, vec![ir::Projection::Field(0)]);
+                    let ir::PatternTestKind::EnumVariant { ty: inner, variant } = &tests[0].kind
+                    else {
+                        panic!("nested original enum requires a genuine tag test")
+                    };
+                    assert_eq!(inner.def().variants.len(), 1);
+                    assert_eq!(*variant, 0);
+                    assert_eq!(bindings.len(), 1);
+                    assert_eq!(
+                        bindings[0].projection,
+                        vec![
+                            ir::Projection::Field(0),
+                            ir::Projection::Downcast(ir::VariantId {
+                                owner: inner.def().id,
+                                index: 0
+                            }),
+                            ir::Projection::Field(0)
+                        ]
+                    );
+                } else {
+                    assert_eq!(bindings.len(), 1);
+                    assert_eq!(tests.len(), 2);
+                    assert!(tests[0].projection.is_empty());
+                    let ir::PatternTestKind::EnumVariant {
+                        ty: enumeration,
+                        variant,
+                    } = &tests[0].kind
+                    else {
+                        panic!("root tag test missing")
+                    };
+                    assert_eq!(ty, &ir::Ty::Enum(enumeration.clone()));
+                    let downcast = ir::Projection::Downcast(ir::VariantId {
+                        owner: enumeration.def().id,
+                        index: *variant,
+                    });
+                    assert_eq!(
+                        tests[1].projection,
+                        vec![downcast, ir::Projection::Field(0)]
+                    );
+                    assert!(
+                        matches!(tests[1].kind,ir::PatternTestKind::Int(value) if value==ir::IntValue::i32(40))
+                    );
+                    assert_eq!(
+                        bindings[0].projection,
+                        vec![downcast, ir::Projection::Field(2)]
+                    );
+                }
+                let mut locals = std::collections::HashSet::new();
+                for binding in bindings {
+                    assert!(!function.params.contains(&binding.local));
+                    assert!(locals.insert(binding.local));
+                }
+                found += 1;
+            }
+        }
+        assert_eq!(found, 1, "{} one genuine decision plan", case.name);
+        sources += 1;
+    }
+    assert_eq!(sources, 1);
 }

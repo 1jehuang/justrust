@@ -1,6 +1,7 @@
 # Nested pattern decisions: ordered tests before moves
 
-Status: pending implementation acceptance. Full Rust compatibility remains open.
+Status: accepted scoped native implementation on October 17, 2026. Full Rust
+compatibility and full product-pattern usefulness/exhaustiveness remain open.
 
 ## Frozen scope
 
@@ -55,3 +56,41 @@ malformed rows at the actual IR/CFG/ownership boundary.
 Native workers 1/8 CHECK/BUILD and executable output, debug/release bootstrap,
 strict lint/formatting, unchanged full regressions and retained failed/passing
 receipts are mandatory. No speedup, public ABI or full Rust claim follows.
+
+## Observed acceptance
+
+The exact 30-source stock corpus was measured with rustc 1.98.1, edition 2024,
+panic=abort and no bootstrap escape. Stock accepts 23 and rejects seven. Native
+classifies 18 runtime controls, five ordinary invalid controls, five valid
+Unsupported controls and two stock-invalid/native-Unsupported capability
+boundaries. The latter are refutable ordinary let and an unproven payload
+coverage matrix, not false claims of semantic parity. Source bytes and order
+match stock evidence SHA-256
+`04860b9744e16be425b8c3ed626e90098cfbeb4a07aa765dcf0e10931b8070b2`.
+
+Workers 1/8 CHECK/BUILD cover 120 cells and 36 actual ELF executions per bootstrap
+profile. CHECK emits no executable; native BUILD runs with compiler fallback
+disabled and exact stdout/stderr/status oracles. The corpus includes late
+predicate failure after a syntactically earlier non-Copy binding, nested tag
+proofs, scalar widths, all four clients and failure-edge source reuse.
+
+Twenty-six public authority controls start from actual parsed/checked plans and
+canonical facts. They test missing/reordered/foreign tag prerequisites, wrong
+paths/scalars/owners/locals, duplicate/dead tests and real CFG ingress. Private
+controls exercise canonical nested tag identity, substitution of every test and
+binding owner, dead-test preflight, allocation denial and test-before-move CFG
+ordering. Decision tests and binding checks share the existing cumulative work
+cap; no limits were raised.
+
+Nine exact retained witnesses in eight earlier corpora are promoted without
+changing any source bytes, order or output oracle. Original shape-specific
+controls remain intact, with separate Decision-positive controls. The nested
+single-variant tag-only witness is genuinely irrefutable; this does not prove
+product matrices. Combined targeted debug/release gates pass 76 tests.
+
+Final hosted gates pass 1,033 library tests and the complete 2,636 tests across
+130 binaries, with zero failures, ignored or filtered tests. All-target CHECK,
+strict Clippy `-D warnings`, formatting and diff checks pass. Failed and passing
+receipts are retained in
+`data/runs/xps14/2026-10-17-pattern-decisions.jsonl`; the full-suite run is
+`20261017-130739966-2329609`. Synthetic graph fixtures imply no compiler speedup.

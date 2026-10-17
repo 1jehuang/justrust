@@ -2276,6 +2276,9 @@ impl Lowerer<'_> {
         pattern: &ir::MatchPattern,
         completes: bool,
     ) -> Result<PatternTest, String> {
+        if let ir::MatchPattern::Decision { tests, .. } = pattern {
+            return self.decision_pattern_test(id, source, tests, completes);
+        }
         let selected = self.block();
         let rejected = self.block();
         self.scopes.push(Vec::new());
@@ -2341,6 +2344,138 @@ impl Lowerer<'_> {
         })
     }
 
+    /// All comparison storage is live at entry, even on an early rejection.
+    /// The shared success/failure cleanup therefore never ends storage that
+    /// was only conditionally created by a later predicate.
+    #[inline(never)]
+    fn decision_pattern_test(
+        &mut self,
+        id: ExprId,
+        source: &Place,
+        tests: &[ir::PatternTest],
+        completes: bool,
+    ) -> Result<PatternTest, String> {
+        self.divergence_work(tests.len())?;
+        let selected = self.block();
+        let rejected = self.block();
+        self.scopes.push(Vec::new());
+        if !completes {
+            // IR validation still checks every dead predicate and binding.
+            // No runtime read or fabricated value is needed for a Never input.
+            self.terminate(
+                Terminator::Switch {
+                    condition: Operand::Constant(Constant::Bool(true)),
+                    then_block: selected,
+                    else_block: rejected,
+                },
+                Some(id),
+            )?;
+        } else {
+            for test in tests {
+                if matches!(
+                    test.kind,
+                    ir::PatternTestKind::Bool(_) | ir::PatternTestKind::Int(_)
+                ) {
+                    self.temporary(Ty::Bool, Some(id));
+                }
+            }
+            let mut scalar = 0;
+            for (index, test) in tests.iter().enumerate() {
+                let target = if index + 1 == tests.len() {
+                    selected
+                } else {
+                    self.block()
+                };
+                let inspected = self.decision_place(source, &test.projection)?;
+                let right = match &test.kind {
+                    ir::PatternTestKind::Bool(value) => Constant::Bool(*value),
+                    ir::PatternTestKind::Int(value) => Constant::Int(*value),
+                    ir::PatternTestKind::EnumVariant { ty, variant } => {
+                        // Retain singleton tag edges too: the true edge proves
+                        // the exact downcast prerequisite for subsequent tests.
+                        self.terminate(
+                            Terminator::SwitchVariant {
+                                place: inspected,
+                                variant: ir::VariantId {
+                                    owner: ty.def().id,
+                                    index: *variant,
+                                },
+                                then_block: target,
+                                else_block: rejected,
+                            },
+                            Some(id),
+                        )?;
+                        self.current = target;
+                        continue;
+                    }
+                };
+                let local = self.scopes.last().unwrap()[scalar];
+                scalar += 1;
+                self.assign(
+                    place(local),
+                    Rvalue::Binary {
+                        op: BinaryOp::Eq,
+                        left: Operand::Copy(inspected),
+                        right: Operand::Constant(right),
+                    },
+                    Some(id),
+                );
+                self.terminate(
+                    Terminator::Switch {
+                        condition: Operand::Copy(place(local)),
+                        then_block: target,
+                        else_block: rejected,
+                    },
+                    Some(id),
+                )?;
+                self.current = target;
+            }
+        }
+        Ok(PatternTest {
+            selected,
+            rejected,
+            temporaries: self.scopes.pop().unwrap(),
+        })
+    }
+
+    fn decision_place(&mut self, source: &Place, suffix: &[Projection]) -> Result<Place, String> {
+        let count = source
+            .projection
+            .len()
+            .checked_add(suffix.len())
+            .ok_or_else(|| self.divergence_resource("CFG predicate projection overflow"))?;
+        let work = count
+            .checked_add(1)
+            .ok_or_else(|| self.divergence_resource("CFG predicate work overflow"))?;
+        self.divergence_work(work)?;
+        let requested = count
+            .checked_mul(std::mem::size_of::<Projection>())
+            .ok_or_else(|| self.divergence_resource("CFG predicate allocation overflow"))?;
+        if !self.allocate(0, requested) {
+            return Err(self.resource_error.clone().unwrap());
+        }
+        let mut projection = Vec::new();
+        projection
+            .try_reserve_exact(count)
+            .map_err(|_| self.divergence_resource("CFG predicate allocation failure"))?;
+        let actual = projection
+            .capacity()
+            .checked_mul(std::mem::size_of::<Projection>())
+            .ok_or_else(|| self.divergence_resource("CFG predicate allocation overflow"))?;
+        let excess = actual
+            .checked_sub(requested)
+            .ok_or_else(|| self.divergence_resource("CFG predicate allocation underflow"))?;
+        if !self.allocate(0, excess) {
+            return Err(self.resource_error.clone().unwrap());
+        }
+        projection.extend_from_slice(&source.projection);
+        projection.extend_from_slice(suffix);
+        Ok(Place {
+            local: source.local,
+            projection,
+        })
+    }
+
     /// Storage belongs to the caller's active scope. Match arms open a fresh
     /// arm scope; let-else success deliberately keeps the enclosing scope.
     fn initialize_pattern_bindings(
@@ -2364,7 +2499,8 @@ impl Lowerer<'_> {
             }
         }
         if let ir::MatchPattern::EnumVariant { bindings, .. }
-        | ir::MatchPattern::Aggregate { bindings, .. } = pattern
+        | ir::MatchPattern::Aggregate { bindings, .. }
+        | ir::MatchPattern::Decision { bindings, .. } = pattern
         {
             for binding in bindings {
                 if binding.local == source.local {
@@ -2372,8 +2508,13 @@ impl Lowerer<'_> {
                 }
                 self.live(binding.local, Some(id));
                 if completes {
-                    let mut selected = source.clone();
-                    selected.projection.extend_from_slice(&binding.projection);
+                    let selected = if matches!(pattern, ir::MatchPattern::Decision { .. }) {
+                        self.decision_place(source, &binding.projection)?
+                    } else {
+                        let mut selected = source.clone();
+                        selected.projection.extend_from_slice(&binding.projection);
+                        selected
+                    };
                     self.assign(
                         place(binding.local),
                         Rvalue::Use(self.consume(selected)?),
@@ -2396,9 +2537,12 @@ impl Lowerer<'_> {
             .validate_match(scrutinee, arms, &self.parameters)?;
         let source = self.pattern_source(scrutinee)?;
         if source.projection.contains(&Projection::Deref)
-            && arms
-                .iter()
-                .any(|arm| matches!(arm.pattern, ir::MatchPattern::EnumVariant { .. }))
+            && arms.iter().any(|arm| {
+                matches!(
+                    arm.pattern,
+                    ir::MatchPattern::EnumVariant { .. } | ir::MatchPattern::Decision { .. }
+                )
+            })
         {
             return Err("unsupported: enum variant matching through dereference".into());
         }
@@ -2575,7 +2719,10 @@ impl Lowerer<'_> {
             .validate_let_else(value, ty, pattern, else_branch, &self.parameters)?;
         let source = self.pattern_source(value)?;
         if source.projection.contains(&Projection::Deref)
-            && matches!(pattern, ir::MatchPattern::EnumVariant { .. })
+            && matches!(
+                pattern,
+                ir::MatchPattern::EnumVariant { .. } | ir::MatchPattern::Decision { .. }
+            )
         {
             return Err("unsupported: enum variant matching through dereference".into());
         }
@@ -8446,6 +8593,93 @@ mod tests {
                     .passed()
             );
         }
+    }
+
+    #[test]
+    fn decision_predicates_test_nested_tags_and_scalars_before_any_selected_move() {
+        let source = checked(
+            "struct Cell{n:i32}enum Inner{A(bool,i32),B}enum Outer{A(Inner,Cell),B}fn f(p:Outer)->i32{if let Outer::A(Inner::A(true,7),cell)=p{cell.n}else{0}}fn main(){}",
+            0,
+        );
+        let function = nominal_lowered(&source);
+        let root = function.params[0];
+        let (entry, first) = function
+            .blocks
+            .iter()
+            .enumerate()
+            .find(|(_, block)| {
+                matches!(
+                    &block.terminator.value, Terminator::SwitchVariant { place, .. }
+                        if place.local == root && place.projection.is_empty()
+                )
+            })
+            .unwrap();
+        let comparisons: Vec<_> = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| match &statement.value {
+                Statement::Assign {
+                    destination,
+                    value:
+                        Rvalue::Binary {
+                            op: BinaryOp::Eq,
+                            left: Operand::Copy(inspected),
+                            ..
+                        },
+                } if inspected.local == root => Some(destination.local),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(comparisons.len(), 2);
+        for comparison in comparisons {
+            assert!(first.statements.iter().any(|statement| matches!(statement.value, Statement::StorageLive(local) if local == comparison)));
+        }
+        let mut current = BlockId(entry);
+        for index in 0..4 {
+            let block = &function.blocks[current.0];
+            assert!(!block.statements.iter().any(|statement| matches!(
+                &statement.value, Statement::Assign { value: Rvalue::Use(Operand::Move(selected)), .. } if selected.local == root
+            )), "predicate {index} moved a binding before all tests succeeded");
+            current = match &block.terminator.value {
+                Terminator::SwitchVariant { then_block, .. } if index < 2 => *then_block,
+                Terminator::Switch { then_block, .. } if index >= 2 => *then_block,
+                other => panic!("unexpected predicate {index}: {other:?}"),
+            };
+        }
+        assert!(function.blocks[current.0].statements.iter().any(|statement| matches!(
+            &statement.value, Statement::Assign { value: Rvalue::Use(Operand::Move(selected)), .. }
+                if selected.local == root && matches!(selected.projection.as_slice(), [Projection::Downcast(_), Projection::Field(1)])
+        )));
+        assert!(super::super::ownership::analyze(&function).passed());
+    }
+
+    #[test]
+    fn decision_singleton_refinement_is_real_and_never_inputs_do_not_read_storage() {
+        let source = checked(
+            "enum E{A(bool)}fn f(p:E)->i32{if let E::A(true)=p{1}else{2}}fn main(){}",
+            0,
+        );
+        let function = nominal_lowered(&source);
+        assert!(
+            function
+                .blocks
+                .iter()
+                .any(|block| matches!(block.terminator.value, Terminator::SwitchVariant { .. }))
+        );
+        assert!(super::super::ownership::analyze(&function).passed());
+        let source = checked(
+            "enum E{A(bool),B}fn f()->i32{if let E::A(true)={return 7;}{1}else{2}}fn main(){}",
+            0,
+        );
+        let function = nominal_lowered(&source);
+        assert!(
+            !function
+                .blocks
+                .iter()
+                .any(|block| matches!(block.terminator.value, Terminator::SwitchVariant { .. }))
+        );
+        assert!(super::super::ownership::analyze(&function).passed());
     }
 
     fn checked(source: &str, index: usize) -> ir::CheckedFunction {

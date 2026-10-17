@@ -1165,6 +1165,40 @@ fn identical_pattern_types(
         (MatchPattern::Aggregate { ty: a, .. }, MatchPattern::Aggregate { ty: b, .. }) => {
             identical_type(a, b, budget)
         }
+        (
+            MatchPattern::Decision {
+                ty: a, tests: at, ..
+            },
+            MatchPattern::Decision {
+                ty: b, tests: bt, ..
+            },
+        ) => {
+            budget.charge_work(
+                at.len()
+                    .checked_add(bt.len())
+                    .ok_or("decision identity work overflow")?,
+            )?;
+            if !identical_type(a, b, budget)? || at.len() != bt.len() {
+                return Ok(false);
+            }
+            for (a, b) in at.iter().zip(bt) {
+                match (&a.kind, &b.kind) {
+                    (
+                        PatternTestKind::EnumVariant { ty: a, .. },
+                        PatternTestKind::EnumVariant { ty: b, .. },
+                    ) => {
+                        if !identical_type(&Ty::Enum(a.clone()), &Ty::Enum(b.clone()), budget)? {
+                            return Ok(false);
+                        }
+                    }
+                    (a, b) if std::mem::discriminant(a) != std::mem::discriminant(b) => {
+                        return Ok(false);
+                    }
+                    _ => {}
+                }
+            }
+            Ok(true)
+        }
         _ => Ok(std::mem::discriminant(a) == std::mem::discriminant(b)),
     }
 }
@@ -1198,20 +1232,8 @@ fn identical_expr_types(a: &ExprKind, b: &ExprKind, budget: &PlanBudget) -> Resu
                 return Ok(false);
             }
             for (a, b) in a.iter().zip(b) {
-                match (&a.pattern, &b.pattern) {
-                    (
-                        MatchPattern::EnumVariant { ty: a, .. },
-                        MatchPattern::EnumVariant { ty: b, .. },
-                    ) => {
-                        if !identical_type(&Ty::Enum(a.clone()), &Ty::Enum(b.clone()), budget)? {
-                            return Ok(false);
-                        }
-                    }
-                    (
-                        MatchPattern::Aggregate { ty: a, .. },
-                        MatchPattern::Aggregate { ty: b, .. },
-                    ) if !identical_type(a, b, budget)? => return Ok(false),
-                    _ => {}
+                if !identical_pattern_types(&a.pattern, &b.pattern, budget)? {
+                    return Ok(false);
                 }
             }
             Ok(true)
@@ -2703,6 +2725,21 @@ impl<C: SubstitutionCx> Instantiate<'_, C> {
             }
             MatchPattern::Aggregate { ty, bindings } => {
                 *ty = self.ty(ty)?;
+                self.bindings(bindings)?;
+            }
+            MatchPattern::Decision {
+                ty,
+                tests,
+                bindings,
+            } => {
+                *ty = self.ty(ty)?;
+                self.budget.charge_work(tests.len())?;
+                for test in tests {
+                    self.path(&mut test.projection)?;
+                    if let PatternTestKind::EnumVariant { ty, .. } = &mut test.kind {
+                        self.enum_ty(ty)?;
+                    }
+                }
                 self.bindings(bindings)?;
             }
             _ => {}
@@ -4832,6 +4869,21 @@ fn validate_compound_types(op: BinaryOp, target: &Ty, value: &TypedExpr) -> Resu
     }
 }
 
+/// A pure observation in an ordered conjunctive pattern decision. Every
+/// downcast in this path requires an earlier matching tag observation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PatternTest {
+    pub projection: Vec<Projection>,
+    pub kind: PatternTestKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PatternTestKind {
+    Bool(bool),
+    Int(IntValue),
+    EnumVariant { ty: EnumTy, variant: usize },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MatchPattern {
     Wildcard,
@@ -4848,6 +4900,13 @@ pub enum MatchPattern {
     EnumVariant {
         ty: EnumTy,
         variant: usize,
+        bindings: Vec<PatternBinding>,
+    },
+    /// Tests inspect the source in order. Bindings may be initialized only
+    /// after every test succeeds, never on a partially successful row.
+    Decision {
+        ty: Ty,
+        tests: Vec<PatternTest>,
         bindings: Vec<PatternBinding>,
     },
 }
@@ -5003,6 +5062,46 @@ impl CheckedFunction {
             }
             Ok(())
         }
+        fn pattern_storage(
+            pattern: &MatchPattern,
+            facts: FactsCtx<'_>,
+            budget: &PlanBudget,
+        ) -> Result<(), String> {
+            match pattern {
+                MatchPattern::EnumVariant {
+                    ty,
+                    bindings: values,
+                    ..
+                } => {
+                    facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?;
+                    bindings(values, budget)?;
+                }
+                MatchPattern::Aggregate {
+                    ty,
+                    bindings: values,
+                } => {
+                    facts.validate_value_ty_with_budget(ty, budget)?;
+                    bindings(values, budget)?;
+                }
+                MatchPattern::Decision {
+                    ty,
+                    tests,
+                    bindings: values,
+                } => {
+                    storage(budget, tests.len(), std::mem::size_of::<PatternTest>())?;
+                    facts.validate_value_ty_with_budget(ty, budget)?;
+                    for test in tests {
+                        path(&test.projection, budget)?;
+                        if let PatternTestKind::EnumVariant { ty, .. } = &test.kind {
+                            facts.validate_value_ty_with_budget(&Ty::Enum(ty.clone()), budget)?;
+                        }
+                    }
+                    bindings(values, budget)?;
+                }
+                _ => {}
+            }
+            Ok(())
+        }
         fn block(
             value: &Block,
             facts: FactsCtx<'_>,
@@ -5030,24 +5129,7 @@ impl CheckedFunction {
                     }
                     Stmt::LetElse { ty, pattern, .. } => {
                         facts.validate_value_ty_with_budget(ty, budget)?;
-                        match pattern {
-                            MatchPattern::EnumVariant {
-                                ty,
-                                bindings: values,
-                                ..
-                            } => {
-                                facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?;
-                                bindings(values, budget)?;
-                            }
-                            MatchPattern::Aggregate {
-                                ty,
-                                bindings: values,
-                            } => {
-                                facts.validate_value_ty_with_budget(ty, budget)?;
-                                bindings(values, budget)?;
-                            }
-                            _ => {}
-                        }
+                        pattern_storage(pattern, facts, budget)?;
                     }
                     Stmt::While { body, .. } => block(body, facts, budget, depth + 1)?,
                     Stmt::Declare { .. }
@@ -5114,24 +5196,7 @@ impl CheckedFunction {
                 ExprKind::Match { arms, .. } => {
                     storage(budget, arms.len(), std::mem::size_of::<MatchArm>())?;
                     for arm in arms {
-                        match &arm.pattern {
-                            MatchPattern::EnumVariant {
-                                ty,
-                                bindings: values,
-                                ..
-                            } => {
-                                facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?;
-                                bindings(values, budget)?;
-                            }
-                            MatchPattern::Aggregate {
-                                ty,
-                                bindings: values,
-                            } => {
-                                facts.validate_value_ty_with_budget(ty, budget)?;
-                                bindings(values, budget)?;
-                            }
-                            _ => {}
-                        }
+                        pattern_storage(&arm.pattern, facts, budget)?;
                     }
                 }
                 ExprKind::Call {
@@ -5306,9 +5371,136 @@ impl CheckedFunction {
                 *variant < pattern_ty.def().variants.len()
                     && (*ty == Ty::Never || *ty == Ty::Enum(pattern_ty.clone()))
             }
+            MatchPattern::Decision {
+                ty: domain,
+                tests,
+                bindings: decision_bindings,
+            } => {
+                self.validate_decision(domain, tests, decision_bindings, parameters)?;
+                for binding in decision_bindings {
+                    if !bindings.insert(binding.local) {
+                        return Err("match bindings must be distinct fresh locals".into());
+                    }
+                }
+                let mut work = 0;
+                *ty == Ty::Never || pattern_types_equal(ty, domain, &mut work)?
+            }
         };
         if !valid {
             return Err("match pattern type or variant mismatch".into());
+        }
+        Ok(())
+    }
+
+    fn decision_work(work: &mut usize, count: usize) -> Result<(), String> {
+        *work = work
+            .checked_add(count)
+            .ok_or("pattern decision work limit exceeded")?;
+        if *work > MAX_PATTERN_PROJECTION_WORK {
+            return Err("pattern decision work limit exceeded".into());
+        }
+        Ok(())
+    }
+
+    /// Only earlier successful tag tests authorize a downcast. A path's own
+    /// nominal metadata cannot grant the runtime refinement it needs to read.
+    fn validate_decision_path(
+        domain: &Ty,
+        path: &[Projection],
+        earlier: &[PatternTest],
+        work: &mut usize,
+    ) -> Result<(), String> {
+        if path.len() > MAX_PATTERN_PROJECTION_DEPTH {
+            return Err("pattern decision projection depth exceeds limit 128".into());
+        }
+        Self::decision_work(work, path.len())?;
+        for (index, step) in path.iter().enumerate() {
+            match step {
+                Projection::Field(_) | Projection::ConstantIndex(_) => {}
+                Projection::Downcast(variant) => {
+                    let mut authorized = false;
+                    for test in earlier {
+                        Self::decision_work(work, 1 + test.projection.len() + index)?;
+                        if test.projection == path[..index]
+                            && let PatternTestKind::EnumVariant {
+                                ty,
+                                variant: selected,
+                            } = &test.kind
+                            && ty.def().id == variant.owner
+                            && *selected == variant.index
+                        {
+                            authorized = true;
+                            break;
+                        }
+                    }
+                    if !authorized {
+                        return Err("pattern decision downcast lacks earlier exact tag test".into());
+                    }
+                }
+                _ => {
+                    return Err(
+                        "pattern decision requires typed field, index or downcast paths".into(),
+                    );
+                }
+            }
+        }
+        // This independently checks owner, shape and physical bounds at every
+        // step, including paths that will never execute at runtime.
+        projected_ty(domain, path)?;
+        Ok(())
+    }
+
+    fn validate_decision(
+        &self,
+        domain: &Ty,
+        tests: &[PatternTest],
+        bindings: &[PatternBinding],
+        parameters: &std::collections::HashSet<LocalId>,
+    ) -> Result<(), String> {
+        let admitted = match domain {
+            Ty::Bool | Ty::Int(_) | Ty::Unit | Ty::Struct(_) | Ty::Enum(_) => true,
+            Ty::Tuple(fields) => !fields.is_empty(),
+            Ty::Array { len, .. } => *len > 0 && *len <= MAX_ARRAY_LEN,
+            _ => false,
+        };
+        if !admitted || tests.is_empty() || tests.len() > MAX_PATTERN_BINDINGS {
+            return Err(
+                "pattern decision requires a known domain and bounded nonempty tests".into(),
+            );
+        }
+        let mut work = tests.len();
+        Self::decision_work(&mut work, bindings.len())?;
+        for (index, test) in tests.iter().enumerate() {
+            Self::validate_decision_path(domain, &test.projection, &tests[..index], &mut work)?;
+            for previous in &tests[..index] {
+                Self::decision_work(
+                    &mut work,
+                    1 + previous.projection.len() + test.projection.len(),
+                )?;
+                if previous.projection == test.projection {
+                    return Err("pattern decision repeats a tested source path".into());
+                }
+            }
+            let actual = projected_ty(domain, &test.projection)?;
+            let valid = match &test.kind {
+                PatternTestKind::Bool(_) => *actual == Ty::Bool,
+                PatternTestKind::Int(value) => {
+                    value.validate()?;
+                    *actual == Ty::Int(value.ty)
+                }
+                PatternTestKind::EnumVariant { ty, variant } => {
+                    ty.validate()?;
+                    *variant < ty.def().variants.len()
+                        && pattern_types_equal(actual, &Ty::Enum(ty.clone()), &mut work)?
+                }
+            };
+            if !valid {
+                return Err("pattern decision test type or variant mismatch".into());
+            }
+        }
+        self.validate_pattern_bindings_with_work(domain, bindings, parameters, &mut work)?;
+        for binding in bindings {
+            Self::validate_decision_path(domain, &binding.projection, tests, &mut work)?;
         }
         Ok(())
     }
@@ -5369,17 +5561,30 @@ impl CheckedFunction {
         if bindings.len() > MAX_PATTERN_BINDINGS {
             return Err("pattern binding limit exceeded".into());
         }
-        let mut work = bindings.len();
+        self.validate_pattern_bindings_with_work(ty, bindings, parameters, &mut 0)
+    }
+
+    fn validate_pattern_bindings_with_work(
+        &self,
+        ty: &Ty,
+        bindings: &[PatternBinding],
+        parameters: &std::collections::HashSet<LocalId>,
+        work: &mut usize,
+    ) -> Result<(), String> {
+        if bindings.len() > MAX_PATTERN_BINDINGS {
+            return Err("pattern binding limit exceeded".into());
+        }
+        Self::decision_work(work, bindings.len())?;
         let mut locals = std::collections::HashSet::new();
         let mut paths = Vec::with_capacity(bindings.len());
         for binding in bindings {
             if binding.projection.len() > MAX_PATTERN_PROJECTION_DEPTH {
                 return Err("pattern projection depth exceeds limit 128".into());
             }
-            work = work
+            *work = work
                 .checked_add(binding.projection.len())
                 .ok_or("pattern projection work limit exceeded")?;
-            if work > MAX_PATTERN_PROJECTION_WORK {
+            if *work > MAX_PATTERN_PROJECTION_WORK {
                 return Err("pattern projection work limit exceeded".into());
             }
             let local = self
@@ -5390,7 +5595,7 @@ impl CheckedFunction {
                 return Err("pattern binding locals must be distinct fresh locals".into());
             }
             let projected = projected_ty(ty, &binding.projection)?;
-            if !pattern_types_equal(&local.ty, projected, &mut work)? {
+            if !pattern_types_equal(&local.ty, projected, work)? {
                 return Err("pattern binding local type mismatch".into());
             }
             paths.push(binding.projection.as_slice());
@@ -5742,8 +5947,17 @@ impl CheckedFunction {
                 ExprKind::Match { scrutinee, arms } => {
                     expr(*scrutinee)?;
                     for arm in arms {
-                        if let MatchPattern::Aggregate { ty, .. } = &arm.pattern {
-                            facts.validate_value_ty(ty)?;
+                        match &arm.pattern {
+                            MatchPattern::Aggregate { ty, .. } => facts.validate_value_ty(ty)?,
+                            MatchPattern::Decision { ty, tests, .. } => {
+                                facts.validate_value_ty(ty)?;
+                                for test in tests {
+                                    if let PatternTestKind::EnumVariant { ty, .. } = &test.kind {
+                                        facts.validate_value_ty(&Ty::Enum(ty.clone()))?;
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                     }
                     self.validate_match(*scrutinee, arms, &parameters)?;
@@ -6004,6 +6218,14 @@ impl CheckedFunction {
                                 facts.validate_value_ty(&Ty::Enum(ty.clone()))?
                             }
                             MatchPattern::Aggregate { ty, .. } => facts.validate_value_ty(ty)?,
+                            MatchPattern::Decision { ty, tests, .. } => {
+                                facts.validate_value_ty(ty)?;
+                                for test in tests {
+                                    if let PatternTestKind::EnumVariant { ty, .. } = &test.kind {
+                                        facts.validate_value_ty(&Ty::Enum(ty.clone()))?;
+                                    }
+                                }
+                            }
                             _ => {}
                         }
                         self.validate_let_else(*value, ty, pattern, *else_branch, &parameters)?;
@@ -9691,6 +9913,265 @@ mod tests {
         value.exprs[1].kind = ExprKind::Continue { target: LoopId(0) };
         assert_eq!(value.exprs[1].flow(), None);
         value.validate().unwrap();
+    }
+
+    #[test]
+    fn decision_identity_checks_nested_tag_allocation_not_only_nominal_id() {
+        let modules = fixture_modules();
+        let tag = EnumTy::new(EnumDef {
+            source_decl: test_decl(),
+            type_args: Arc::from([]),
+            id: NominalAppId {
+                snapshot: SnapshotId::allocate().unwrap(),
+                index: 0,
+            },
+            name: "Tag".into(),
+            module: modules.core_root(),
+            visibility: Visibility::Public,
+            variants: vec![unit_variant("A")].into(),
+        });
+        let pattern = MatchPattern::Decision {
+            ty: Ty::Enum(tag.clone()),
+            tests: vec![PatternTest {
+                projection: vec![],
+                kind: PatternTestKind::EnumVariant {
+                    ty: tag.clone(),
+                    variant: 0,
+                },
+            }],
+            bindings: vec![],
+        };
+        let budget = PlanBudget::default();
+        assert!(identical_pattern_types(&pattern, &pattern.clone(), &budget).unwrap());
+        let mut replaced = pattern.clone();
+        let MatchPattern::Decision { tests, .. } = &mut replaced else {
+            unreachable!()
+        };
+        let PatternTestKind::EnumVariant { ty, .. } = &mut tests[0].kind else {
+            unreachable!()
+        };
+        *ty = EnumTy::new(tag.def().clone());
+        assert_eq!(
+            pattern, replaced,
+            "ordinary nominal equality only compares the application ID"
+        );
+        assert!(!identical_pattern_types(&pattern, &replaced, &budget).unwrap());
+        assert!(
+            !identical_expr_types(
+                &ExprKind::Match {
+                    scrutinee: ExprId(0),
+                    arms: vec![MatchArm {
+                        pattern,
+                        body: ExprId(1)
+                    }]
+                },
+                &ExprKind::Match {
+                    scrutinee: ExprId(0),
+                    arms: vec![MatchArm {
+                        pattern: replaced,
+                        body: ExprId(1)
+                    }]
+                },
+                &budget,
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn decision_preflight_visits_dead_test_paths_and_nested_tag_facts() {
+        let mut function = fixture();
+        function.exprs[0] = TypedExpr {
+            ty: Ty::Never,
+            completion: Completion::Never,
+            kind: ExprKind::Block(Block {
+                statements: vec![Stmt::Return(None)],
+                tail: None,
+            }),
+        };
+        function.exprs.push(TypedExpr {
+            ty: Ty::Unit,
+            completion: Completion::Never,
+            kind: ExprKind::Match {
+                scrutinee: ExprId(0),
+                arms: vec![MatchArm {
+                    pattern: MatchPattern::Decision {
+                        ty: Ty::Bool,
+                        tests: vec![PatternTest {
+                            projection: vec![Projection::Field(0), Projection::Field(0)],
+                            kind: PatternTestKind::Bool(true),
+                        }],
+                        bindings: vec![],
+                    },
+                    body: ExprId(0),
+                }],
+            },
+        });
+        let budget = PlanBudget::new(PlanLimits {
+            depth: 1,
+            ..PlanLimits::default()
+        });
+        assert!(
+            function
+                .preflight_plan(FactsCtx::Concrete, &budget)
+                .is_err()
+        );
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ResourceBudgetKind::Depth);
+        assert_eq!(failure.requested, 2);
+        let ExprKind::Match { arms, .. } = &mut function.exprs[1].kind else {
+            unreachable!()
+        };
+        let MatchPattern::Decision { tests, .. } = &mut arms[0].pattern else {
+            unreachable!()
+        };
+        tests[0].projection.clear();
+        let modules = fixture_modules();
+        tests[0].kind = PatternTestKind::EnumVariant {
+            ty: EnumTy::new(EnumDef {
+                source_decl: test_decl(),
+                // Empty enums are valid. Exceed the actual nominal-argument facts
+                // bound so this test isolates traversal of nested tag metadata.
+                type_args: vec![Ty::Bool; 33].into(),
+                id: NominalAppId {
+                    snapshot: SnapshotId::allocate().unwrap(),
+                    index: 0,
+                },
+                name: "InvalidArguments".into(),
+                module: modules.core_root(),
+                visibility: Visibility::Public,
+                variants: Arc::from([]),
+            }),
+            variant: 0,
+        };
+        assert!(
+            function
+                .preflight_plan(FactsCtx::Concrete, &PlanBudget::default())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn decision_substitution_remaps_test_and_binding_downcasts() {
+        struct Remap {
+            original: EnumTy,
+            replacement: EnumTy,
+        }
+        impl SubstitutionCx for Remap {
+            fn nominal_application(&self, id: NominalAppId) -> Result<NominalAppInfo, String> {
+                if id != self.original.def().id {
+                    return Err("unexpected nominal application".into());
+                }
+                Ok(NominalAppInfo {
+                    source_decl: self.original.def().source_decl,
+                    type_args: self.original.def().type_args.clone(),
+                })
+            }
+            fn intern_nominal(
+                &mut self,
+                declaration: DeclId,
+                args: &[Ty],
+                _: FactsCtx<'_>,
+                _: &PlanBudget,
+            ) -> Result<Ty, String> {
+                if declaration != self.original.def().source_decl || !args.is_empty() {
+                    return Err("unexpected nominal substitution".into());
+                }
+                Ok(Ty::Enum(self.replacement.clone()))
+            }
+            fn instantiate_signature(
+                &mut self,
+                _: &CallTarget,
+                _: FactsCtx<'_>,
+                _: &PlanBudget,
+            ) -> Result<Signature, String> {
+                Err("unexpected callable substitution".into())
+            }
+        }
+        let modules = fixture_modules();
+        let original = EnumTy::new(EnumDef {
+            source_decl: test_decl(),
+            type_args: Arc::from([]),
+            id: NominalAppId {
+                snapshot: SnapshotId::allocate().unwrap(),
+                index: 0,
+            },
+            name: "Tag".into(),
+            module: modules.core_root(),
+            visibility: Visibility::Public,
+            variants: vec![VariantDef {
+                name: "A".into(),
+                shape: VariantShape::Tuple,
+                fields: vec![FieldDef {
+                    name: "0".into(),
+                    ty: Ty::Bool,
+                    visibility: Visibility::Public,
+                }]
+                .into(),
+            }]
+            .into(),
+        });
+        let mut definition = original.def().clone();
+        definition.id.index = 1;
+        let replacement = EnumTy::new(definition);
+        let old = Projection::Downcast(VariantId {
+            owner: original.def().id,
+            index: 0,
+        });
+        let mut pattern = MatchPattern::Decision {
+            ty: Ty::Enum(original.clone()),
+            tests: vec![
+                PatternTest {
+                    projection: vec![],
+                    kind: PatternTestKind::EnumVariant {
+                        ty: original.clone(),
+                        variant: 0,
+                    },
+                },
+                PatternTest {
+                    projection: vec![old, Projection::Field(0)],
+                    kind: PatternTestKind::Bool(true),
+                },
+            ],
+            bindings: vec![PatternBinding {
+                local: LocalId(1),
+                projection: vec![old, Projection::Field(0)],
+            }],
+        };
+        let budget = PlanBudget::default();
+        let env = GenericEnv::new(&[], &budget).unwrap();
+        let mut context = Remap {
+            original,
+            replacement: replacement.clone(),
+        };
+        Instantiate {
+            env: &env,
+            args: &[],
+            facts: FactsCtx::Concrete,
+            cx: &mut context,
+            budget: &budget,
+        }
+        .pattern(&mut pattern)
+        .unwrap();
+        let MatchPattern::Decision {
+            ty,
+            tests,
+            bindings,
+        } = pattern
+        else {
+            unreachable!()
+        };
+        assert_eq!(ty, Ty::Enum(replacement.clone()));
+        let PatternTestKind::EnumVariant { ty, .. } = &tests[0].kind else {
+            unreachable!()
+        };
+        assert_eq!(ty.def().id, replacement.def().id);
+        let new = Projection::Downcast(VariantId {
+            owner: replacement.def().id,
+            index: 0,
+        });
+        assert_eq!(tests[1].projection, [new, Projection::Field(0)]);
+        assert_eq!(bindings[0].projection, [new, Projection::Field(0)]);
     }
 
     #[test]
