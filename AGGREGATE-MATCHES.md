@@ -1,6 +1,6 @@
 # Irrefutable aggregate match contract
 
-Status: **implementation in progress, not accepted**. Full Rust remains open.
+Status: **accepted bounded native milestone (2026-10-17)**. Full Rust remains open.
 This extends the checked unit and tuple-struct milestones, not general pattern
 matrices, guards, match ergonomics or enum payload matching.
 
@@ -54,3 +54,25 @@ scope cleanup, dead-arm checking and private aggregate transport remain intact.
   with exact failed and successful redacted receipts retained.
 
 No full-Rust, ABI/layout or speed claim follows from this bounded milestone.
+
+## Observed acceptance
+
+The independent stock26 corpus has 19 accepted and seven rejected sources. Native
+104 cells cover 12 runtime positives, seven ordinary invalid sources and seven
+explicit capability boundaries across workers 1/8 and CHECK/BUILD. Both bootstrap
+debug and release profiles passed with unavailable compiler fallback, actual
+executables and exact output. The prior tuple corpus retains all 36 source bytes,
+order and 144 cells, promoting only its now-supported tuple-match case.
+
+Public malformed checked-IR tests passed 28 controls; private controls also reject
+equal-shaped but distinct nominal domains and forged enum downcasts. Debug and
+release focused suites passed 35 tests each. Final hosted all-target check, full
+2,247 tests in 112 binaries, strict warning-free lint, formatting and diff checks
+passed. Full-suite receipt: `20261017-110141414-1752924`; strict lint:
+`20261017-110158770-1754166`. Twelve exact failed and successful redacted summaries
+are retained in `data/runs/xps14/2026-10-17-aggregate-matches.jsonl`.
+
+Observed repairs were typed Unsupported transport for reference ergonomics,
+genuine valid record-scrutinee fixture syntax, exact selected-field CFG fixture
+assertions, a typed test VariantId and a mechanical strict-lint guard. No source
+limits, stack sizes, old regression witnesses or fallback policy were relaxed.

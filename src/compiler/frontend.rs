@@ -7535,6 +7535,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.token().string {
             return Err(self.unsupported("string literal patterns are unsupported"));
         }
+        if self.is("ref") {
+            return Err(self.unsupported("reference binding patterns are unsupported"));
+        }
         if self.is("&") || self.is("&&") {
             return Err(
                 self.unsupported("reference patterns and match ergonomics are unsupported in B1")
@@ -8866,6 +8869,27 @@ mod inactive_item_syntax_tests {
         let primary = error.primary.unwrap();
         assert_eq!(primary.lo as usize, error.bytes.start);
         assert_eq!(primary.hi as usize, error.bytes.end);
+    }
+
+    #[test]
+    fn aggregate_ref_binding_is_typed_unsupported_at_the_original_keyword() {
+        let source = "struct Pair(i32,i32);fn main(){match Pair(40,2){Pair(ref a,b)=>*a+b};}";
+        let error = parse_syntax_unprepared(source).unwrap_err();
+        assert_eq!(
+            error.kind,
+            super::super::source::SourceErrorKind::Unsupported
+        );
+        let at = source.find("ref").unwrap();
+        assert_eq!(error.bytes, at..at + 3);
+        assert_eq!(&source[error.bytes.clone()], "ref");
+        let primary = error.primary.unwrap();
+        assert_eq!(primary.lo as usize, at);
+        assert_eq!(primary.hi as usize, at + 3);
+        assert!(
+            error
+                .message
+                .starts_with("reference binding patterns are unsupported")
+        );
     }
 
     #[test]

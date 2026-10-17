@@ -1,7 +1,7 @@
 //! Nonempty nongeneric tuple structs with checked nominal field identities.
-//! Not first-class constructors, tuple aggregate match, generics, or Rust ABI/layout.
+//! Not first-class constructors, refutable aggregate matches, generics, or Rust ABI/layout.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
-use justrust_engine::compiler::{self, frontend, source};
+use justrust_engine::compiler::{frontend, source};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -227,7 +227,8 @@ fn cases() -> Vec<Case> {
             source: r#"struct Pair(i32,i32);fn main(){let value=Pair(40,2);let result=match value{Pair(a,b)=>a+b};if result==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            // Promoted by aggregate-match v1, preserving the original witness.
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "tuple_numeric_braced_constructor_boundary",
@@ -444,7 +445,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (19, 17));
-    assert_eq!(partition, (11, 17, 8));
+    assert_eq!(partition, (12, 17, 7));
 }
 #[test]
 fn stock_tuple_struct_constructor_pattern_move_privacy_oracle_edition2024() {
@@ -452,7 +453,7 @@ fn stock_tuple_struct_constructor_pattern_move_privacy_oracle_edition2024() {
 }
 #[test]
 fn tuple_source_shapes_use_numeric_fields_and_boundaries_keep_their_actual_phase() {
-    let mut counts = (0, 0, 0, 0);
+    let mut counts = (0, 0, 0);
     for case in cases() {
         if case.outcome == Outcome::Invalid {
             continue;
@@ -502,23 +503,6 @@ fn tuple_source_shapes_use_numeric_fields_and_boundaries_keep_their_actual_phase
                 "{error}"
             );
             counts.2 += 1;
-        } else if case.name == "tuple_match_boundary" {
-            let parsed =
-                parsed.unwrap_or_else(|error| panic!("tuple aggregate match must parse:{error}"));
-            frontend::resolve(&parsed).unwrap_or_else(|error| {
-                panic!("tuple aggregate match must resolve before checker boundary:{error}")
-            });
-            let error = match compiler::compile_observed(case.source.to_owned(), 1, true) {
-                Err(error) => error,
-                Ok(_) => panic!("tuple aggregate match must reject before executable publication"),
-            };
-            assert!(
-                error
-                    .to_string()
-                    .contains("unsupported: tuple struct match patterns"),
-                "{error}"
-            );
-            counts.3 += 1;
         } else {
             let error = match parsed {
                 Err(error) => error,
@@ -536,7 +520,7 @@ fn tuple_source_shapes_use_numeric_fields_and_boundaries_keep_their_actual_phase
             counts.1 += 1;
         }
     }
-    assert_eq!(counts, (11, 6, 1, 1));
+    assert_eq!(counts, (12, 6, 1));
 }
 #[test]
 fn native_tuple_structs_workers1_8_check_build_no_compiler_fallback() {
@@ -623,8 +607,8 @@ fn native_tuple_structs_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 144);
-    assert_eq!(modes, (22, 22, 34, 34, 16, 16));
+    assert_eq!(modes, (24, 24, 34, 34, 14, 14));
     eprintln!(
-        "NATIVE TUPLE STRUCTS:144 cells, modes{modes:?};22 executed native images;32 Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
+        "NATIVE TUPLE STRUCTS:144 cells, modes{modes:?};24 executed native images;28 Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
     );
 }

@@ -10500,3 +10500,25 @@ The final full run is still dominated by the wide-integer oracle at about 12.2
 seconds. Strict lint recorded about 5.1 seconds of compilation for the enlarged
 single engine crate. These are future scheduling/crate-boundary diagnostics, not
 before/after speedup measurements or justification to restructure without gates.
+
+## 2026-10-17: checked irrefutable aggregate matches
+
+Admitted recursively irrefutable record, tuple and tuple-struct match patterns
+with an explicit checked Aggregate domain and plain Field-only selection plans.
+Full tree schema/privacy/arity checks precede catchall admission; arm locals
+retain actual source binding identities. CFG evaluates the scrutinee once and
+consumes selected non-Copy fields only. No enum tags, callable identity, root
+borrow replay capability or ABI changes are fabricated.
+
+Stock26 (19 valid/seven invalid), native104 workers1/8 CHECK/BUILD cells, 28 public
+malformed-IR controls and retained tuple144 cells passed debug/release focused
+35-test gates (20261017-110027611-1747457, 20261017-110042810-1748617). Final hosted
+gate passed 2,247 tests in 112 binaries (20261017-110141414-1752924); strict lint
+passed 20261017-110158770-1754166. Twelve exact failed and passing receipts are
+retained in data/runs/xps14/2026-10-17-aggregate-matches.jsonl.
+
+Final full suite compile was 4.19s and test wall 12.45s; the wide integer stock
+oracle alone took 12.24s. Diagnostic timing only, not a before/after speed claim.
+Full Rust, guards/or-patterns, refutable aggregate leaves, rest and implicit
+reference ergonomics remain open. No limits, stack environment or existing
+witnesses were weakened.

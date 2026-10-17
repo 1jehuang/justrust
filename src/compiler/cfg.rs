@@ -2352,10 +2352,12 @@ impl Lowerer<'_> {
                     );
                 }
             }
-            if let ir::MatchPattern::EnumVariant { bindings, .. } = &arm.pattern {
+            if let ir::MatchPattern::EnumVariant { bindings, .. }
+            | ir::MatchPattern::Aggregate { bindings, .. } = &arm.pattern
+            {
                 for binding in bindings {
                     if binding.local == source.local {
-                        return Err("enum binding aliases scrutinee storage".into());
+                        return Err("match field binding aliases scrutinee storage".into());
                     }
                     self.live(binding.local, Some(id));
                     if completes {
@@ -6735,6 +6737,120 @@ mod tests {
         );
         assert!(super::super::ownership::analyze(&function).passed());
         assert_storage_paths(&function);
+    }
+
+    #[test]
+    fn aggregate_match_binding_moves_only_selected_field_without_tag_test() {
+        let (_module_names, modules) = fixture_modules();
+        let child = Ty::Struct(nominal(&modules, vec![]));
+        for structural in [false, true] {
+            let fields = vec![child.clone(), Ty::Int(IntTy::I32)];
+            let ty = if structural {
+                Ty::Tuple(fields.into())
+            } else {
+                Ty::Struct(nominal(&modules, fields))
+            };
+            let mut source = with_root(
+                ty.clone(),
+                vec![
+                    expr(ty.clone(), ir::ExprKind::Local(LocalId(0))),
+                    expr(child.clone(), ir::ExprKind::Local(LocalId(1))),
+                    expr(
+                        child.clone(),
+                        ir::ExprKind::Match {
+                            scrutinee: ExprId(0),
+                            arms: vec![ir::MatchArm {
+                                pattern: ir::MatchPattern::Aggregate {
+                                    ty: ty.clone(),
+                                    bindings: vec![ir::PatternBinding {
+                                        local: LocalId(1),
+                                        projection: vec![Projection::Field(0)],
+                                    }],
+                                },
+                                body: ExprId(1),
+                            }],
+                        },
+                    ),
+                    expr(
+                        Ty::Int(IntTy::I32),
+                        ir::ExprKind::Field {
+                            base: ExprId(0),
+                            index: 1,
+                        },
+                    ),
+                ],
+                vec![ir::Stmt::Expr(ExprId(2)), ir::Stmt::Expr(ExprId(3))],
+            );
+            source.locals.push(ir::LocalDecl {
+                name: "selected".into(),
+                ty: child.clone(),
+                mutable: false,
+            });
+            let function = nominal_lowered(&source);
+            let reads = root_reads(&function);
+            assert_eq!(reads.len(), 2);
+            // The join block is allocated before the selected arm, so flat
+            // block storage order is not execution order. Require each exact
+            // projection once, without pretending this iterator is a trace.
+            assert_eq!(
+                reads.iter().filter(|operand| matches!(operand, Operand::Move(place) if place.projection == [Projection::Field(0)])).count(),
+                1,
+            );
+            assert_eq!(
+                reads.iter().filter(|operand| matches!(operand, Operand::Copy(place) if place.projection == [Projection::Field(1)])).count(),
+                1,
+            );
+            assert!(function.blocks.iter().flat_map(|block| &block.statements).any(|statement| matches!(
+                &statement.value,
+                Statement::Assign { destination, value: Rvalue::Use(Operand::Move(selected)) }
+                    if destination.local == LocalId(1)
+                        && destination.projection.is_empty()
+                        && selected.local == LocalId(0)
+                        && selected.projection == [Projection::Field(0)]
+            )));
+            assert!(
+                !function.blocks.iter().any(|block| matches!(
+                    block.terminator.value,
+                    Terminator::SwitchVariant { .. }
+                ))
+            );
+            assert!(super::super::ownership::analyze(&function).passed());
+            source.body.statements.push(ir::Stmt::Expr(ExprId(0)));
+            assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
+        }
+    }
+
+    #[test]
+    fn aggregate_match_without_bindings_does_not_consume_scrutinee() {
+        let (_module_names, modules) = fixture_modules();
+        let ty = Ty::Struct(nominal(&modules, vec![Ty::Int(IntTy::I32)]));
+        let source = with_root(
+            ty.clone(),
+            vec![
+                expr(ty.clone(), ir::ExprKind::Local(LocalId(0))),
+                expr(Ty::Bool, ir::ExprKind::Bool(true)),
+                expr(
+                    Ty::Bool,
+                    ir::ExprKind::Match {
+                        scrutinee: ExprId(0),
+                        arms: vec![ir::MatchArm {
+                            pattern: ir::MatchPattern::Aggregate {
+                                ty,
+                                bindings: vec![],
+                            },
+                            body: ExprId(1),
+                        }],
+                    },
+                ),
+            ],
+            vec![ir::Stmt::Expr(ExprId(2)), ir::Stmt::Expr(ExprId(0))],
+        );
+        let function = nominal_lowered(&source);
+        assert_eq!(root_reads(&function).len(), 1);
+        assert!(
+            matches!(root_reads(&function)[0], Operand::Move(place) if place.projection.is_empty())
+        );
+        assert!(super::super::ownership::analyze(&function).passed());
     }
 
     #[test]

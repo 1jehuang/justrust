@@ -1170,13 +1170,20 @@ fn identical_expr_types(a: &ExprKind, b: &ExprKind, budget: &PlanBudget) -> Resu
                 return Ok(false);
             }
             for (a, b) in a.iter().zip(b) {
-                if let (
-                    MatchPattern::EnumVariant { ty: a, .. },
-                    MatchPattern::EnumVariant { ty: b, .. },
-                ) = (&a.pattern, &b.pattern)
-                    && !identical_type(&Ty::Enum(a.clone()), &Ty::Enum(b.clone()), budget)?
-                {
-                    return Ok(false);
+                match (&a.pattern, &b.pattern) {
+                    (
+                        MatchPattern::EnumVariant { ty: a, .. },
+                        MatchPattern::EnumVariant { ty: b, .. },
+                    ) => {
+                        if !identical_type(&Ty::Enum(a.clone()), &Ty::Enum(b.clone()), budget)? {
+                            return Ok(false);
+                        }
+                    }
+                    (
+                        MatchPattern::Aggregate { ty: a, .. },
+                        MatchPattern::Aggregate { ty: b, .. },
+                    ) if !identical_type(a, b, budget)? => return Ok(false),
+                    _ => {}
                 }
             }
             Ok(true)
@@ -2180,6 +2187,10 @@ pub fn instantiate_checked(
                     match &mut arm.pattern {
                         MatchPattern::EnumVariant { ty, bindings, .. } => {
                             visitor.enum_ty(ty)?;
+                            visitor.bindings(bindings)?;
+                        }
+                        MatchPattern::Aggregate { ty, bindings } => {
+                            *ty = visitor.ty(ty)?;
                             visitor.bindings(bindings)?;
                         }
                         MatchPattern::Wildcard
@@ -4790,6 +4801,12 @@ pub enum MatchPattern {
     Bool(bool),
     Int(IntValue),
     Unit,
+    /// Irrefutable aggregate selection with no tag test or whole-value move.
+    /// The explicit domain also types projections when the scrutinee is Never.
+    Aggregate {
+        ty: Ty,
+        bindings: Vec<PatternBinding>,
+    },
     EnumVariant {
         ty: EnumTy,
         variant: usize,
@@ -5038,14 +5055,23 @@ impl CheckedFunction {
                 ExprKind::Match { arms, .. } => {
                     storage(budget, arms.len(), std::mem::size_of::<MatchArm>())?;
                     for arm in arms {
-                        if let MatchPattern::EnumVariant {
-                            ty,
-                            bindings: values,
-                            ..
-                        } = &arm.pattern
-                        {
-                            facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?;
-                            bindings(values, budget)?;
+                        match &arm.pattern {
+                            MatchPattern::EnumVariant {
+                                ty,
+                                bindings: values,
+                                ..
+                            } => {
+                                facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?;
+                                bindings(values, budget)?;
+                            }
+                            MatchPattern::Aggregate {
+                                ty,
+                                bindings: values,
+                            } => {
+                                facts.validate_value_ty_with_budget(ty, budget)?;
+                                bindings(values, budget)?;
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -5145,6 +5171,47 @@ impl CheckedFunction {
                 MatchPattern::Int(value) => {
                     value.validate()?;
                     *ty == Ty::Int(value.ty) || *ty == Ty::Never
+                }
+                MatchPattern::Aggregate {
+                    ty: domain,
+                    bindings: aggregate_bindings,
+                } => {
+                    let aggregate = match domain {
+                        Ty::Struct(_) => true,
+                        Ty::Tuple(fields) => !fields.is_empty(),
+                        _ => false,
+                    };
+                    if !aggregate {
+                        return Err(
+                            "aggregate match requires a nominal struct or nonempty tuple domain"
+                                .into(),
+                        );
+                    }
+                    self.validate_pattern_bindings_with_params(
+                        domain,
+                        aggregate_bindings,
+                        parameters,
+                    )?;
+                    for binding in aggregate_bindings {
+                        if binding.projection.is_empty()
+                            || binding
+                                .projection
+                                .iter()
+                                .any(|step| !matches!(step, Projection::Field(_)))
+                        {
+                            return Err(
+                                "aggregate match bindings require nonempty plain field projections"
+                                    .into(),
+                            );
+                        }
+                    }
+                    for binding in aggregate_bindings {
+                        if !bindings.insert(binding.local) {
+                            return Err("match bindings must be distinct fresh locals".into());
+                        }
+                    }
+                    let mut work = 0;
+                    *ty == Ty::Never || pattern_types_equal(ty, domain, &mut work)?
                 }
                 MatchPattern::Unit => matches!(ty, Ty::Unit | Ty::Never),
                 MatchPattern::EnumVariant {
@@ -5577,6 +5644,11 @@ impl CheckedFunction {
                 }
                 ExprKind::Match { scrutinee, arms } => {
                     expr(*scrutinee)?;
+                    for arm in arms {
+                        if let MatchPattern::Aggregate { ty, .. } = &arm.pattern {
+                            facts.validate_value_ty(ty)?;
+                        }
+                    }
                     self.validate_match(*scrutinee, arms, &parameters)?;
                     for arm in arms {
                         expr(arm.body)?;
@@ -9247,6 +9319,83 @@ mod tests {
             value: ExprId(2),
         });
         assert!(value.validate().unwrap_err().contains("invalid local 99"));
+    }
+
+    #[test]
+    fn aggregate_match_retains_exact_nominal_domain_and_plain_field_authority() {
+        let modules = fixture_modules();
+        let snapshot = SnapshotId::allocate().unwrap();
+        let domain = Ty::Struct(nominal(
+            &modules,
+            NominalAppId { snapshot, index: 0 },
+            "Same",
+            vec![Ty::Bool],
+        ));
+        let other = Ty::Struct(nominal(
+            &modules,
+            NominalAppId { snapshot, index: 1 },
+            "Same",
+            vec![Ty::Bool],
+        ));
+        let mut function = fixture();
+        function.locals[0].ty = domain.clone();
+        function.exprs[0].ty = domain.clone();
+        function.exprs.push(TypedExpr {
+            ty: Ty::Unit,
+            completion: Completion::Returns,
+            kind: ExprKind::Block(Block {
+                statements: vec![],
+                tail: None,
+            }),
+        });
+        function.exprs.push(TypedExpr {
+            ty: Ty::Unit,
+            completion: Completion::Returns,
+            kind: ExprKind::Match {
+                scrutinee: ExprId(0),
+                arms: vec![MatchArm {
+                    pattern: MatchPattern::Aggregate {
+                        ty: domain,
+                        bindings: vec![PatternBinding {
+                            local: LocalId(1),
+                            projection: vec![Projection::Field(0)],
+                        }],
+                    },
+                    body: ExprId(1),
+                }],
+            },
+        });
+        function.body.statements = vec![Stmt::Expr(ExprId(2))];
+        function.validate().unwrap();
+        let mut wrong_domain = function.clone();
+        let ExprKind::Match { arms, .. } = &mut wrong_domain.exprs[2].kind else {
+            unreachable!()
+        };
+        let MatchPattern::Aggregate { ty, .. } = &mut arms[0].pattern else {
+            unreachable!()
+        };
+        *ty = other;
+        assert!(
+            wrong_domain.validate().is_err(),
+            "equal spelling and fields cannot replace nominal identity"
+        );
+        let ExprKind::Match { arms, .. } = &mut function.exprs[2].kind else {
+            unreachable!()
+        };
+        let MatchPattern::Aggregate { bindings, .. } = &mut arms[0].pattern else {
+            unreachable!()
+        };
+        bindings[0].projection.insert(
+            0,
+            Projection::Downcast(VariantId {
+                owner: NominalAppId { snapshot, index: 0 },
+                index: 0,
+            }),
+        );
+        assert!(
+            function.validate().is_err(),
+            "aggregate bindings cannot acquire enum downcast authority"
+        );
     }
 
     fn fixture() -> CheckedFunction {

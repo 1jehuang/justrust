@@ -1768,21 +1768,137 @@ impl<'a> Checker<'a> {
         }
         Ok(Some(ty.clone()))
     }
-    fn unit_pattern(&self, pattern: &Pattern, ty: &ir::Ty) -> Result<ir::Ty, String> {
-        let Pattern::Struct { fields, rest, .. } = pattern else {
-            return Err("contract: expected normalized unit pattern".into());
-        };
-        let expected = self.pattern_ty(pattern, ty)?;
-        let ir::Ty::Struct(structure) = &expected else {
-            return Err("expected unit struct pattern".into());
-        };
-        if self.checked_struct_shape(structure)? != StructShape::Unit {
-            return Err("aggregate destructuring match patterns are unsupported".into());
+    fn validate_aggregate_pattern(
+        &self,
+        pattern: &Pattern,
+        ty: &ir::Ty,
+        depth: usize,
+        work: &mut usize,
+        binders: &mut usize,
+    ) -> Result<(), String> {
+        *work = work
+            .checked_add(1)
+            .ok_or("aggregate pattern work overflow")?;
+        if *work > ir::MAX_PATTERN_PROJECTION_WORK || depth > ir::MAX_PATTERN_PROJECTION_DEPTH {
+            return Err("aggregate pattern work or depth exceeds limit".into());
         }
-        if !fields.is_empty() || *rest {
-            return Err("unsupported: unit struct pattern fields or rest".into());
+        self.infer_work(0)?;
+        self.accessible(ty)?;
+        let pattern = self.pattern_source(pattern, ty)?;
+        match pattern {
+            Pattern::Wildcard => Ok(()),
+            Pattern::Binding { .. } => {
+                self.infer_storage(depth + 1)?;
+                *binders = binders
+                    .checked_add(1)
+                    .ok_or("aggregate binder count overflow")?;
+                if *binders > ir::MAX_PATTERN_BINDINGS {
+                    return Err("pattern binding count exceeds limit".into());
+                }
+                Ok(())
+            }
+            Pattern::Tuple(patterns) => {
+                if patterns.is_empty() && *ty == ir::Ty::Unit {
+                    return Ok(());
+                }
+                let ir::Ty::Tuple(fields) = ty else {
+                    return Err("aggregate tuple pattern type mismatch".into());
+                };
+                if patterns.len() != fields.len() {
+                    return Err("aggregate tuple pattern arity mismatch".into());
+                }
+                for (pattern, ty) in patterns.iter().zip(fields.iter()) {
+                    self.validate_aggregate_pattern(pattern, ty, depth + 1, work, binders)?;
+                }
+                Ok(())
+            }
+            Pattern::Struct { fields, rest, .. } => {
+                if *rest {
+                    return Err("unsupported: aggregate match rest patterns".into());
+                }
+                if self.pattern_ty(pattern, ty)? != *ty {
+                    return Err("aggregate nominal pattern mismatch".into());
+                }
+                let ir::Ty::Struct(structure) = ty else {
+                    return Err("expected aggregate struct pattern".into());
+                };
+                if fields.len() != structure.def().fields.len() {
+                    return Err("aggregate record pattern missing fields".into());
+                }
+                for (field, pattern) in fields {
+                    let (_, field_ty) = self.field_type(ty, &FieldSelector::Named(*field))?;
+                    self.validate_aggregate_pattern(pattern, &field_ty, depth + 1, work, binders)?;
+                }
+                Ok(())
+            }
+            Pattern::Variant { fields, .. } => {
+                let Some(tuple) = self.tuple_pattern_type(pattern, ty)? else {
+                    return Err("unsupported: enum children in aggregate match patterns".into());
+                };
+                for (index, (_, pattern)) in fields.iter().enumerate() {
+                    self.validate_aggregate_pattern(
+                        pattern,
+                        &tuple.def().fields[index].ty,
+                        depth + 1,
+                        work,
+                        binders,
+                    )?;
+                }
+                Ok(())
+            }
+            Pattern::Path(_) | Pattern::Bool(_) | Pattern::Int { .. } => {
+                Err("unsupported: refutable aggregate match leaf".into())
+            }
+            Pattern::Apply { .. } => Err("pattern application normalization invariant".into()),
         }
-        Ok(expected)
+    }
+    #[inline(never)]
+    fn aggregate_match_pattern(
+        &mut self,
+        pattern: &Pattern,
+        ty: &ir::Ty,
+    ) -> Result<ir::MatchPattern, String> {
+        if !matches!(ty, ir::Ty::Struct(_))
+            && !matches!(ty, ir::Ty::Tuple(fields) if !fields.is_empty())
+        {
+            return Err("expected aggregate match domain".into());
+        }
+        let mut work = 0;
+        let mut count = 0;
+        self.validate_aggregate_pattern(pattern, ty, 0, &mut work, &mut count)?;
+        self.infer_storage(count)?;
+        let mut names = std::collections::HashSet::new();
+        let mut pending = Vec::with_capacity(count);
+        let mut paths = Vec::new();
+        let mut projection_work = 0;
+        self.pattern_locals(
+            pattern,
+            ty,
+            &mut paths,
+            &mut names,
+            &mut pending,
+            &mut projection_work,
+        )?;
+        let mut bindings = Vec::with_capacity(count);
+        for binding in pending {
+            if binding.projection.is_empty()
+                || binding
+                    .projection
+                    .iter()
+                    .any(|step| !matches!(step, ir::Projection::Field(_)))
+            {
+                return Err("contract: aggregate match binding is not a plain field path".into());
+            }
+            let local = self.local(binding.name, binding.ty, binding.mutable)?;
+            bindings.push(ir::PatternBinding {
+                local,
+                projection: binding.projection,
+            });
+        }
+        Ok(ir::MatchPattern::Aggregate {
+            ty: ty.clone(),
+            bindings,
+        })
     }
     fn source_fields(
         &self,
@@ -2881,14 +2997,23 @@ impl<'a> Checker<'a> {
         self.accessible(&projected)?;
         Ok((index, projected))
     }
+    fn reference_pattern_unsupported(&self) -> String {
+        super::super::source::SourceError {
+            kind: super::super::source::SourceErrorKind::Unsupported,
+            primary: None,
+            message: "reference patterns and implicit match ergonomics are unsupported in B1"
+                .into(),
+            _diagnostic_lease: None,
+            location: None,
+        }
+        .to_string()
+    }
     /// Recover only concrete pattern shape, without a general inference engine.
     pub(super) fn pattern_ty(&self, pattern: &Pattern, ty: &ir::Ty) -> Result<ir::Ty, String> {
         if matches!(ty, ir::Ty::Ref { .. })
             && !matches!(pattern, Pattern::Wildcard | Pattern::Binding { .. })
         {
-            return Err(
-                "reference patterns and implicit match ergonomics are unsupported in B1".into(),
-            );
+            return Err(self.reference_pattern_unsupported());
         }
         match pattern {
             Pattern::Path(name) | Pattern::Variant { name,.. } => {
@@ -4858,7 +4983,17 @@ impl<'a> Checker<'a> {
                         matches!(arm.pattern, Pattern::Path(_) | Pattern::Variant { .. })
                     })
                 {
-                    return Err("enum downcasts after a dereference are unsupported in B1".into());
+                    for arm in arms {
+                        if matches!(arm.pattern, Pattern::Path(_) | Pattern::Variant { .. })
+                            && self
+                                .tuple_pattern_type(&arm.pattern, &self.flow(scrutinee).ty)?
+                                .is_none()
+                        {
+                            return Err(
+                                "enum downcasts after a dereference are unsupported in B1".into()
+                            );
+                        }
+                    }
                 }
                 let source = self.flow(scrutinee);
                 let mut domain = source.ty.clone();
@@ -4868,21 +5003,21 @@ impl<'a> Checker<'a> {
                     for arm in arms {
                         let hint = match &arm.pattern {
                             Pattern::Path(name) | Pattern::Variant { name, .. } => {
-                                if self
-                                    .tuple_pattern_type(&arm.pattern, &ir::Ty::Never)?
-                                    .is_some()
+                                if let Some(tuple) =
+                                    self.tuple_pattern_type(&arm.pattern, &ir::Ty::Never)?
                                 {
-                                    return Err("unsupported: tuple struct match patterns".into());
+                                    Some(ir::Ty::Struct(tuple))
+                                } else {
+                                    Some(ir::Ty::Enum(self.enum_variant(name)?.0))
                                 }
-                                Some(ir::Ty::Enum(self.enum_variant(name)?.0))
                             }
                             Pattern::Bool(_) => Some(ir::Ty::Bool),
                             Pattern::Int { literal, .. } => {
                                 Some(ir::Ty::Int(literal.suffix.unwrap_or(ir::IntTy::I32)))
                             }
                             Pattern::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
-                            Pattern::Struct { .. } => {
-                                Some(self.unit_pattern(&arm.pattern, &ir::Ty::Never)?)
+                            Pattern::Struct { .. } | Pattern::Tuple(_) => {
+                                Some(self.pattern_ty(&arm.pattern, &ir::Ty::Never)?)
                             }
                             _ => None,
                         };
@@ -4898,10 +5033,7 @@ impl<'a> Checker<'a> {
                         !matches!(arm.pattern, Pattern::Wildcard | Pattern::Binding { .. })
                     })
                 {
-                    return Err(
-                        "reference patterns and implicit match ergonomics are unsupported in B1"
-                            .into(),
-                    );
+                    return Err(self.reference_pattern_unsupported());
                 }
                 let mut catchall = false;
                 let mut covered = std::collections::HashSet::<u128>::new();
@@ -4942,10 +5074,12 @@ impl<'a> Checker<'a> {
                             }
                             (ir::MatchPattern::Unit, Some(0))
                         }
+                        Pattern::Variant { .. }
+                            if self.tuple_pattern_type(arm_pattern, &domain)?.is_some() =>
+                        {
+                            (self.aggregate_match_pattern(arm_pattern, &domain)?, None)
+                        }
                         Pattern::Path(_) | Pattern::Variant { .. } => {
-                            if self.tuple_pattern_type(arm_pattern, &domain)?.is_some() {
-                                return Err("unsupported: tuple struct match patterns".into());
-                            }
                             let (ty, variant, fields) =
                                 self.variant_pattern(arm_pattern, &domain)?;
                             let mut names = std::collections::HashSet::new();
@@ -4989,14 +5123,8 @@ impl<'a> Checker<'a> {
                         Pattern::Apply { .. } => {
                             return Err("pattern application normalization invariant".into());
                         }
-                        Pattern::Struct { .. } => {
-                            self.unit_pattern(arm_pattern, &domain)?;
-                            (ir::MatchPattern::Wildcard, None)
-                        }
-                        Pattern::Tuple(_) => {
-                            return Err(
-                                "aggregate destructuring match patterns are unsupported".into()
-                            );
+                        Pattern::Struct { .. } | Pattern::Tuple(_) => {
+                            (self.aggregate_match_pattern(arm_pattern, &domain)?, None)
                         }
                     };
                     let fully_covered = match &domain {
@@ -6012,15 +6140,29 @@ mod checked_identity_tests {
     }
 
     #[test]
-    fn tuple_struct_match_destructuring_stays_unsupported() {
+    fn tuple_struct_match_destructuring_is_irrefutable() {
         let program = parse(
             "struct Pair(i32,bool);fn value()->i32{match Pair(7,true){Pair(x,_)=>x}}fn main(){}",
         )
         .unwrap();
+        check(&program).unwrap();
+    }
+
+    #[test]
+    fn aggregate_match_patterns_validate_nested_shapes_and_reject_refutable_leaves() {
+        let program = parse("struct Pair(i32,bool);struct Wrap{pair:Pair,tag:i32}fn value()->i32{let wrapped=Wrap{pair:Pair(7,true),tag:2};match wrapped{Wrap{pair:Pair(x,_),tag:n}=>x+n}}fn main(){}").unwrap();
+        check(&program).unwrap();
+        let program = parse("struct Pair(i32,bool);fn value()->i32{match Pair(7,true){Pair(7,_)=>1,_=>2}}fn main(){}").unwrap();
         assert!(
             check(&program)
                 .unwrap_err()
-                .contains("tuple struct match patterns")
+                .contains("refutable aggregate match leaf")
+        );
+        let program = parse("struct Wrap{x:i32,y:i32}fn value()->i32{let wrapped=Wrap{x:1,y:2};match wrapped{Wrap{x,..}=>x}}fn main(){}").unwrap();
+        assert!(
+            check(&program)
+                .unwrap_err()
+                .contains("aggregate match rest patterns")
         );
     }
 

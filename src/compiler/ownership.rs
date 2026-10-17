@@ -7239,6 +7239,28 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_match_sources_preserve_ignored_fields_and_reject_parent_reuse_after_move() {
+        for source in [
+            "struct Cell{i:i32} struct Pair(Cell,i32); fn f(p:Pair)->i32{let n=match p{Pair(cell,_)=>cell.i};n+p.1}",
+            "struct Cell{i:i32} struct Record{cell:Cell,n:i32} fn f(p:Record)->i32{let n=match p{Record{cell,n:_}=>cell.i};n+p.n}",
+            "struct Cell{i:i32} fn f(p:(Cell,i32))->i32{let n=match p{(cell,_)=>cell.i};n+p.1}",
+            "struct Pair(i32,i32); fn f(p:Pair)->Pair{match p{Pair(_,_)=>()};p}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+        let source = "struct Cell{i:i32} struct Pair(Cell,i32); fn f(p:Pair)->Pair{match p{Pair(cell,_)=>cell.i};p}";
+        let result = analyze(&borrowed_source(source));
+        assert!(result.complete);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.kind == ErrorKind::ReadNotDefinitelyInitialized)
+        );
+    }
+
+    #[test]
     fn tuple_struct_carrier_partial_move_preserves_only_unmoved_sibling() {
         let (_module_names, modules) = fixture_modules();
         let child = nominal(&modules, vec![]);
