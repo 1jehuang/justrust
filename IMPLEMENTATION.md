@@ -52,8 +52,15 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       actual source identity and shared genuine match-IR lowering. IF-LET.md
       records stock27/native108 debug/release cells, twenty public authority
       controls and the complete 2,447-test / 122-binary hosted gate. Universal
-      source admission checks live sealed BindingIds before planning; chains,
-      while-let and refutable payload matrices remain explicit open boundaries.
+      source admission checks live sealed BindingIds before planning; chains
+      and refutable payload matrices remain explicit open boundaries.
+- [x] Genuine statement-position while-let with body-only checked source bindings,
+      actual repeated scrutinee calls, real loop/match IR, success-edge moves and
+      backedge reinitialization. WHILE-LET.md records stock33/native132 cells per
+      bootstrap profile, 23 public authority controls and the complete 2,495-test /
+      124-binary hosted gate. Actual trailing semicolon syntax preserves source
+      Unit obligations separately from intrinsic runtime loop divergence.
+      Expression-position while-let, chains and refutable payload matrices remain open.
 - [x] Fieldless nominal enums and scalar/enum match with exhaustive coverage.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
 - [x] Payload enums, typed downcasts, bounded selection proofs and native tagged values.

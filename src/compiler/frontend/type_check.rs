@@ -7,6 +7,7 @@ enum MatchBody<'a> {
     Expr(&'a Expr),
     Block(&'a Block),
     ImplicitUnit,
+    LoopExit(ir::LoopId),
 }
 #[derive(Clone, Copy)]
 struct BorrowedMatchArm<'a> {
@@ -3826,6 +3827,9 @@ impl<'a> Checker<'a> {
         let pending_start = self.pending_references.len();
         self.scopes.push(HashMap::new());
         let mut live = true;
+        // While-let remains a source Unit obligation even when its genuine
+        // scrutinee cannot complete; keep runtime reachability separate.
+        let mut source_live = true;
         let mut statements = Vec::with_capacity(b.statements.len());
         for s in &b.statements {
             self.reachable = entered_reachable && live;
@@ -4159,12 +4163,22 @@ impl<'a> Checker<'a> {
                         f.completes,
                     )
                 }
+                Stmt::WhileLet {
+                    label,
+                    pattern,
+                    scrutinee,
+                    body,
+                    ..
+                } => self.while_let_statement(*label, pattern, scrutinee, body)?,
             };
             if let Some(cap) = self.canonical {
                 cap.record_emission(s, statements.len())?;
             }
             statements.push(statement);
             live &= completes;
+            if !matches!(s, Stmt::WhileLet { .. }) {
+                source_live &= completes;
+            }
         }
         self.reachable = entered_reachable && live;
         let tail = b
@@ -4175,7 +4189,17 @@ impl<'a> Checker<'a> {
         self.reachable = entered_reachable;
         let mut flow = tail.map_or_else(
             || {
-                if live {
+                // An undiscarded genuine final while-let is a Unit-valued
+                // source tail even after a preceding divergent statement.
+                if source_live
+                    || matches!(
+                        b.statements.last(),
+                        Some(Stmt::WhileLet {
+                            has_semicolon: false,
+                            ..
+                        })
+                    )
+                {
                     Flow::value(ir::Ty::Unit)
                 } else {
                     Flow::never()
@@ -5038,6 +5062,107 @@ impl<'a> Checker<'a> {
         ))
     }
     #[inline(never)]
+    fn while_let_statement(
+        &mut self,
+        label: Option<AstIdent>,
+        pattern: &Pattern,
+        scrutinee: &Expr,
+        body: &Block,
+    ) -> Result<(ir::Stmt, bool), String> {
+        let loop_depth = self.loops.len();
+        let scope_depth = self.scopes.len();
+        let outer_reachable = self.reachable;
+        // Intrinsic loop completion must not inherit an outer dead path.
+        self.reachable = true;
+        let result = (|| {
+            let id = self.enter_loop(false);
+            let key = self.label_key(label)?;
+            self.loops.last_mut().unwrap().label = key;
+            // The genuine source scrutinee is checked under the same target
+            // barrier as an ordinary while condition, before any binders.
+            let scrutinee = self.expr(scrutinee)?;
+            let condition_flow = self.flow(scrutinee);
+            self.loops.last_mut().unwrap().checking_condition = false;
+            let (kind, flow) = self.lower_match_value(
+                scrutinee,
+                [
+                    BorrowedMatchArm {
+                        pattern: Some(pattern),
+                        body: MatchBody::Block(body),
+                    },
+                    BorrowedMatchArm {
+                        pattern: None,
+                        body: MatchBody::LoopExit(id),
+                    },
+                ]
+                .into_iter(),
+                Some(&ir::Ty::Unit),
+            )?;
+            self.require(&flow, &ir::Ty::Unit)?;
+            let match_id = ir::ExprId(self.exprs.len());
+            self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+            self.exprs.push(ir::TypedExpr {
+                ty: flow.ty,
+                completion: if flow.completes {
+                    ir::Completion::Returns
+                } else {
+                    ir::Completion::Never
+                },
+                kind,
+            });
+            let frame = self
+                .loops
+                .last()
+                .ok_or("contract: missing while-let frame")?;
+            let can_exit = frame.can_exit;
+            // This is checked IR storage, not a fabricated source block.
+            self.charge_node(std::mem::size_of::<ir::Stmt>())?;
+            let mut statements = Vec::new();
+            let allocation_budget = self.names()?.budget().clone();
+            statements.try_reserve_exact(1).map_err(|_| {
+                super::super::source::SourceError::from_token(
+                    super::super::token_session::TokenError::Budget(
+                        allocation_budget.poison_allocation(),
+                    ),
+                )
+                .to_string()
+            })?;
+            if statements.capacity() > 1 {
+                self.charge_node(
+                    (statements.capacity() - 1)
+                        .checked_mul(std::mem::size_of::<ir::Stmt>())
+                        .ok_or("while-let body capacity overflow")?,
+                )?;
+            }
+            statements.push(ir::Stmt::Expr(match_id));
+            let loop_id = ir::ExprId(self.exprs.len());
+            self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+            self.exprs.push(ir::TypedExpr {
+                ty: ir::Ty::Unit,
+                completion: if can_exit {
+                    ir::Completion::Returns
+                } else {
+                    ir::Completion::Never
+                },
+                kind: ir::ExprKind::Loop {
+                    id,
+                    body: ir::Block {
+                        statements,
+                        tail: None,
+                    },
+                },
+            });
+            // Runtime completion remains the genuine condition's completion.
+            // The enclosing block separately retains this statement's source
+            // Unit obligation rather than inventing runtime reachability.
+            Ok((ir::Stmt::Expr(loop_id), condition_flow.completes))
+        })();
+        self.loops.truncate(loop_depth);
+        self.scopes.truncate(scope_depth);
+        self.reachable = outer_reachable;
+        result
+    }
+    #[inline(never)]
     fn match_arm_body(
         &mut self,
         body: MatchBody<'_>,
@@ -5057,6 +5182,25 @@ impl<'a> Checker<'a> {
                 }),
                 Flow::value(ir::Ty::Unit),
             ),
+            MatchBody::LoopExit(target) => {
+                let frame = self
+                    .loops
+                    .iter_mut()
+                    .rev()
+                    .find(|frame| frame.id == target)
+                    .ok_or("contract: missing while-let loop target")?;
+                if frame.accepts_value || frame.checking_condition {
+                    return Err("contract: invalid while-let exit target".into());
+                }
+                frame.can_exit |= reachable;
+                (
+                    ir::ExprKind::Break {
+                        target,
+                        value: None,
+                    },
+                    Flow::never(),
+                )
+            }
         };
         self.accessible(&flow.ty)?;
         admit_slice_value(&flow.ty)?;
@@ -5087,6 +5231,18 @@ impl<'a> Checker<'a> {
             return Err("match arm count exceeds limit 4096".into());
         }
         let scrutinee = self.expr(scrutinee)?;
+        self.lower_match_value(scrutinee, arms, expected)
+    }
+    #[inline(never)]
+    fn lower_match_value<'source>(
+        &mut self,
+        scrutinee: ir::ExprId,
+        arms: impl ExactSizeIterator<Item = BorrowedMatchArm<'source>> + Clone,
+        expected: Option<&ir::Ty>,
+    ) -> Result<(ir::ExprKind, Flow), String> {
+        if arms.len() > 4096 {
+            return Err("match arm count exceeds limit 4096".into());
+        }
         if self.deref_source(scrutinee) {
             for arm in arms.clone() {
                 if let Some(pattern) = arm.pattern
@@ -6735,6 +6891,89 @@ mod checked_identity_tests {
         ] {
             let program = parse(source).unwrap();
             check(&program).unwrap();
+        }
+    }
+
+    #[test]
+    fn while_let_preserves_unit_obligation_and_actual_loop_completion() {
+        let program = parse("fn value()->i32{while let _=1{};42}fn main(){}").unwrap();
+        check(&program).unwrap();
+        let signatures = signature_table(&program).unwrap();
+        let checked = type_function_with_signatures(&program, 0, &signatures).unwrap();
+        let loops = checked
+            .exprs
+            .iter()
+            .filter(|expr| matches!(expr.kind, ir::ExprKind::Loop { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(loops.len(), 1);
+        assert_eq!(loops[0].ty, ir::Ty::Unit);
+        assert_eq!(loops[0].completion, ir::Completion::Never);
+        let program = parse("fn value()->i32{while let _=1{}}fn main(){}").unwrap();
+        assert!(check(&program).is_err());
+        let program =
+            parse("fn value()->i32{while let true={return 7;}{let x=1;}8}fn main(){}").unwrap();
+        check(&program).unwrap();
+    }
+
+    #[test]
+    fn while_let_never_condition_keeps_source_unit_and_intrinsic_exit_facts() {
+        let program =
+            parse("fn value()->i32{return 7;while let true=(loop{}){}}fn main(){}").unwrap();
+        assert!(check(&program).is_err());
+        let program =
+            parse("fn value()->i32{return 7;while let true=(loop{}){};}fn main(){}").unwrap();
+        check(&program).unwrap();
+        let program = parse("fn value()->i32{while let true=(loop{}){}}fn main(){}").unwrap();
+        assert!(check(&program).is_err());
+        let program = parse("fn value(){while let true=(loop{}){}}fn main(){}").unwrap();
+        check(&program).unwrap();
+        let signatures = signature_table(&program).unwrap();
+        let checked = type_function_with_signatures(&program, 0, &signatures).unwrap();
+        let loops = checked
+            .exprs
+            .iter()
+            .filter(|expr| matches!(expr.kind, ir::ExprKind::Loop { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(loops.len(), 2);
+        let lowered = loops.last().unwrap();
+        assert_eq!(lowered.ty, ir::Ty::Unit);
+        assert_eq!(lowered.completion, ir::Completion::Never);
+
+        let program = parse("fn value(){return;while let true=false{break;}}fn main(){}").unwrap();
+        check(&program).unwrap();
+        let signatures = signature_table(&program).unwrap();
+        let checked = type_function_with_signatures(&program, 0, &signatures).unwrap();
+        let loops = checked
+            .exprs
+            .iter()
+            .filter(|expr| matches!(expr.kind, ir::ExprKind::Loop { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(loops.len(), 1);
+        assert_eq!(loops[0].ty, ir::Ty::Unit);
+        assert_eq!(loops[0].completion, ir::Completion::Returns);
+    }
+
+    #[test]
+    fn while_let_reinitializes_selected_noncopy_values_before_continue() {
+        let program = parse("struct Token;enum Item{Some(Token),None}fn take(t:Token){}fn value(){let mut item=Item::Some(Token);while let Item::Some(t)=item{take(t);item=Item::None;continue;}}fn main(){}").unwrap();
+        check(&program).unwrap();
+        let program = parse("struct Token;enum Item{Some(Token),None}fn take(t:Token){}fn value(){let item=Item::Some(Token);while let Item::Some(t)=item{take(t);continue;}}fn main(){}").unwrap();
+        assert!(check(&program).is_err());
+        let program = parse("enum Item{Some(i32),None}fn value(item:Item)->i32{let x=7;while let Item::Some(x)=item{break;}x}fn main(){}").unwrap();
+        check(&program).unwrap();
+    }
+
+    #[test]
+    fn while_let_keeps_condition_barrier_dead_body_and_binding_boundaries() {
+        for source in [
+            "fn value(){while let _=1{break 42;}}fn main(){}",
+            "fn value(){loop{while let true={continue;}{}}}fn main(){}",
+            "fn value(){while let true=false{42}}fn main(){}",
+            "fn value(){while let true=(loop{}){missing;}}fn main(){}",
+            "enum Item{Some(i32),None}fn value(item:Item)->i32{while let Item::Some(x)=item{break;}x}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            assert!(check(&program).is_err(), "accepted {source}");
         }
     }
 

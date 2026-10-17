@@ -1284,6 +1284,37 @@ impl SourceInventory {
                     budget,
                     depth + 1,
                 )?,
+                Stmt::WhileLet {
+                    pattern,
+                    scrutinee,
+                    body,
+                    ..
+                } => {
+                    self.expr(
+                        scrutinee,
+                        &here.child(22, 0, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                    sr::retain(budget, 128)?;
+                    self.scopes.try_reserve(1).map_err(|_| {
+                        FactsError::resource(budget, "source while-let scope allocation")
+                    })?;
+                    self.scopes.push(HashMap::new());
+                    let body_result = (|| {
+                        self.shadow_pattern(
+                            pattern,
+                            &here.child(22, 1, budget)?,
+                            budget,
+                            depth + 1,
+                        )?;
+                        self.block(body, &here.child(22, 2, budget)?, false, budget, depth + 1)
+                    })();
+                    self.scopes.pop();
+                    body_result?;
+                }
                 Stmt::While {
                     condition, body, ..
                 } => {
@@ -4091,6 +4122,14 @@ pub enum Stmt {
         condition: Expr,
         body: Block,
     },
+    WhileLet {
+        label: Option<AstIdent>,
+        pattern: Box<Pattern>,
+        scrutinee: Box<Expr>,
+        body: Block,
+        /// The actual optional token following the body, not inferred liveness.
+        has_semicolon: bool,
+    },
 }
 /// Source literal magnitude, before contextual signedness and range checking.
 #[derive(Clone, Debug)]
@@ -5065,7 +5104,7 @@ fn scope_parse_error(error: super::semantic_scope::ScopeError) -> ParseError {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ConditionPurpose {
     Ordinary,
-    IfCondition,
+    Conditional,
 }
 
 struct Parser<'input, 'names> {
@@ -8021,10 +8060,11 @@ impl<'input, 'names> Parser<'input, 'names> {
                     Some(label)
                 };
                 self.expect("while")?;
-                if self.is("let") {
-                    return Err(self.unsupported("while let is unsupported"));
+                if self.eat("let") {
+                    statements.push(self.while_let_statement(label)?);
+                    continue;
                 }
-                let condition = self.condition()?;
+                let condition = self.condition_with(0, ConditionPurpose::Conditional)?;
                 let body = self.block()?;
                 statements.push(Stmt::While {
                     label,
@@ -8337,6 +8377,13 @@ impl<'input, 'names> Parser<'input, 'names> {
                 label,
                 body: self.block()?,
             }
+        } else if self.is("while")
+            && self
+                .cursor
+                .peek(1)
+                .is_some_and(|token| token.matches("let"))
+        {
+            return Err(self.unsupported("while let expressions are unsupported"));
         } else {
             return Err(self.error("a label must precede a loop, while, or block"));
         };
@@ -8395,6 +8442,14 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     #[inline(never)]
     fn ordinary_expr_prefix(&mut self, statement: bool) -> Result<Expr, ParseError> {
+        if self.is("while")
+            && self
+                .cursor
+                .peek(1)
+                .is_some_and(|token| token.matches("let"))
+        {
+            return Err(self.unsupported("while let expressions are unsupported"));
+        }
         if self.is("const") {
             return Err(
                 self.unsupported("const expressions and constant evaluation are unsupported")
@@ -8539,7 +8594,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.eat("let") {
             return self.if_let_prefix(statement);
         }
-        let condition = Box::new(self.condition_with(0, ConditionPurpose::IfCondition)?);
+        let condition = Box::new(self.condition_with(0, ConditionPurpose::Conditional)?);
         let then_block = self.block()?;
         let else_block = if self.eat("else") {
             if self.is("if") {
@@ -8576,7 +8631,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         self.expect("=")?;
         // Do not consume a let-chain into the scrutinee or publish its bindings.
-        let scrutinee = self.condition_with(3, ConditionPurpose::IfCondition)?;
+        let scrutinee = self.condition_with(3, ConditionPurpose::Conditional)?;
         if self.is("&&") || self.is("||") {
             return Err(self.unsupported("if let chains are unsupported"));
         }
@@ -8619,6 +8674,43 @@ impl<'input, 'names> Parser<'input, 'names> {
             scrutinee,
             then_block,
             else_branch,
+        })
+    }
+    #[inline(never)]
+    fn while_let_statement(&mut self, label: Option<AstIdent>) -> Result<Stmt, ParseError> {
+        let pattern = self.pattern()?;
+        if self.is("|") || self.is("@") || self.is("if") {
+            return Err(
+                self.unsupported("while let guards, or-patterns and @ patterns are unsupported")
+            );
+        }
+        self.expect("=")?;
+        let scrutinee = self.condition_with(3, ConditionPurpose::Conditional)?;
+        if self.is("&&") || self.is("||") {
+            return Err(self.unsupported("while let chains are unsupported"));
+        }
+        let pattern = self
+            .names
+            .try_parser_box(pattern)
+            .map_err(native_adapter::name_error)?;
+        let scrutinee = self
+            .names
+            .try_parser_box(scrutinee)
+            .map_err(native_adapter::name_error)?;
+        let frontier = self.enter_lexical()?;
+        let body_result = (|| {
+            self.bind_pattern_lexical(&pattern)?;
+            self.block()
+        })();
+        self.restore_frontier(frontier);
+        let body = body_result?;
+        let has_semicolon = self.eat(";");
+        Ok(Stmt::WhileLet {
+            label,
+            pattern,
+            scrutinee,
+            body,
+            has_semicolon,
         })
     }
     #[inline(never)]
@@ -8780,7 +8872,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             if self.token().string || precedence < min {
                 break;
             }
-            if self.condition_purpose == ConditionPurpose::IfCondition
+            if self.condition_purpose == ConditionPurpose::Conditional
                 && self.is("&&")
                 && self
                     .cursor
@@ -9445,12 +9537,11 @@ mod inactive_item_syntax_tests {
     }
 
     #[test]
-    fn if_let_chain_and_while_boundaries_are_typed_at_written_tokens() {
+    fn if_let_chain_boundaries_are_typed_at_written_tokens() {
         for (source, token) in [
             ("fn main(){if let true=true && true {}}", "&&"),
             ("fn main(){if true && let true=true {}}", "&&"),
             ("fn main(){if let true=true || false {}}", "||"),
-            ("fn main(){while let true=true {}}", "let"),
         ] {
             let error = parse_syntax_unprepared(source).unwrap_err();
             assert_eq!(
@@ -9462,6 +9553,122 @@ mod inactive_item_syntax_tests {
         }
         parse_unresolved("fn main(){if let true=(true && false) {} else {} if true && false {}}")
             .unwrap();
+    }
+
+    #[test]
+    fn while_let_preserves_real_statement_label_and_promoted_source() {
+        // Exact source promoted from the former explicit unsupported boundary.
+        let parsed = parse_unresolved("fn main(){while let true=true {}}").unwrap();
+        assert!(matches!(&parsed.program.functions[0].body.statements[0],
+            Stmt::WhileLet { label: None, pattern, .. } if matches!(pattern.as_ref(), Pattern::Bool(true))));
+        let parsed =
+            parse_unresolved("fn main(){'outer: while let true=false {continue 'outer;}}").unwrap();
+        let Stmt::WhileLet {
+            label: Some(label),
+            body,
+            ..
+        } = &parsed.program.functions[0].body.statements[0]
+        else {
+            panic!("real labeled while-let")
+        };
+        let Stmt::Expr(Expr::Continue {
+            label: Some(target),
+        }) = &body.statements[0]
+        else {
+            panic!("real continue")
+        };
+        assert_eq!(
+            parsed
+                .program
+                .names
+                .key(*label, LookupClass::Label)
+                .unwrap(),
+            parsed
+                .program
+                .names
+                .key(*target, LookupClass::Label)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn while_let_chains_and_expression_positions_remain_explicit() {
+        for (source, token) in [
+            ("fn main(){while let true=true && true {}}", "&&"),
+            ("fn main(){while true && let true=true {}}", "&&"),
+            ("fn main(){while let true=true || false {}}", "||"),
+            ("fn main(){let value=while let true=false {};}", "while"),
+            (
+                "fn main(){let value='outer: while let true=false {};}",
+                "while",
+            ),
+        ] {
+            let error = parse_syntax_unprepared(source).unwrap_err();
+            assert_eq!(
+                error.kind,
+                super::super::source::SourceErrorKind::Unsupported
+            );
+            let at = source.find(token).unwrap();
+            assert_eq!(error.bytes, at..at + token.len());
+        }
+        parse_unresolved("fn main(){while let true=(true && false) {break;}}").unwrap();
+    }
+
+    #[test]
+    fn while_let_scope_inventory_keeps_outer_scrutinee_and_one_real_callsite() {
+        let program = parse("fn probe()->bool{false}fn main(){macro_rules! marker{()=>{42}}let x=40;while let x=x{let y=x;break;}let z=x;while let true=probe(){break;}}").unwrap();
+        let function = &program.functions[1];
+        let scopes = program.scopes.as_ref().unwrap();
+        let Stmt::Let {
+            name: BindingName::Named(outer),
+            ..
+        } = &function.body.statements[0]
+        else {
+            panic!("outer")
+        };
+        let Stmt::WhileLet {
+            pattern,
+            scrutinee,
+            body,
+            ..
+        } = &function.body.statements[1]
+        else {
+            panic!("while-let")
+        };
+        let Pattern::Binding { name: inner, .. } = pattern.as_ref() else {
+            panic!("pattern")
+        };
+        let outer_id = scopes
+            .declaration_for(program.names.as_ref(), *outer)
+            .unwrap();
+        let inner_id = scopes
+            .declaration_for(program.names.as_ref(), *inner)
+            .unwrap();
+        assert_ne!(outer_id, inner_id);
+        let reference = |value: &Expr| {
+            let Expr::Var(path) = value else {
+                panic!("reference")
+            };
+            scopes
+                .reference_for(program.names.as_ref(), path.single().unwrap())
+                .unwrap()
+        };
+        assert_eq!(reference(scrutinee), Some(outer_id));
+        let Stmt::Let { value, .. } = &body.statements[0] else {
+            panic!("body binding")
+        };
+        assert_eq!(reference(value), Some(inner_id));
+        let Stmt::Let { value, .. } = &function.body.statements[2] else {
+            panic!("after binding")
+        };
+        assert_eq!(reference(value), Some(outer_id));
+        let budget = ir::PlanBudget::default();
+        let identity = sr::OriginalBodyId::new(&budget).unwrap();
+        let inventory = SourceInventory::build(&program, function, identity, &budget).unwrap();
+        assert_eq!(inventory.bindings.len(), 4);
+        assert_eq!(inventory.calls.len(), 1);
+        assert!(inventory.calls[0].ordinary.is_some());
+        assert_ne!(inventory.bindings[0].node, inventory.bindings[1].node);
     }
 
     #[test]
@@ -9926,6 +10133,9 @@ fn walk_depth_checked(
                         Some(names),
                         Stmt::While {
                             label: Some(label), ..
+                        }
+                        | Stmt::WhileLet {
+                            label: Some(label), ..
                         },
                     ) = (names, stmt)
                     {
@@ -9959,6 +10169,16 @@ fn walk_depth_checked(
                         | Stmt::Expr(value)
                         | Stmt::ImplicitExpr(value)
                         | Stmt::Return(Some(value)) => push(DepthNode::Expr(value))?,
+                        Stmt::WhileLet {
+                            pattern,
+                            scrutinee,
+                            body,
+                            ..
+                        } => {
+                            push(DepthNode::Pattern(pattern))?;
+                            push(DepthNode::Expr(scrutinee))?;
+                            push(DepthNode::Block(body))?;
+                        }
                         Stmt::While {
                             condition, body, ..
                         } => {

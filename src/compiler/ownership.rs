@@ -7239,6 +7239,41 @@ mod tests {
     }
 
     #[test]
+    fn while_let_moves_require_reinitialization_only_on_actual_backedges() {
+        for source in [
+            "struct Cell{n:i32} enum E{A(Cell),B} fn f(p:E)->E{let mut state=p;while let E::A(cell)=state{let n=cell.n;state=E::B;continue;}state}",
+            "struct Cell{n:i32} enum E{A(Cell),B} fn f(p:E)->E{while let E::A(cell)=p{return E::B;}p}",
+            "struct Cell{n:i32} enum E{A(Cell),B} fn f(p:E)->E{while let E::A(..)=p{break;}p}",
+            "enum E{A(i32),B} fn f(p:E)->E{while let E::A(n)=p{if n>0{continue;}break;}p}",
+            "fn f(p:[i32;3])->[i32;3]{while let [first,..,last]=p{let n=first+last;break;}p}",
+            "struct Cell{n:i32} fn f(p:[Cell;3])->[Cell;3]{while let [..]=p{break;}p}",
+            "fn f(flag:bool)->i32{let mut state=flag;let mut n=0;'again:while let true=state{state=false;n=n+1;continue 'again;}n}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+    }
+
+    #[test]
+    fn while_let_noncopy_payload_cannot_be_reused_on_uninitialized_backedge() {
+        for source in [
+            "struct Cell{n:i32} enum E{A(Cell),B} fn f(p:E){while let E::A(cell)=p{let n=cell.n;}}",
+            "struct Cell{n:i32} enum E{A(Cell),B} fn f(p:E){let mut state=p;while let E::A(cell)=state{if cell.n>0{continue;}state=E::B;}}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.complete);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.kind == ErrorKind::ReadNotDefinitelyInitialized),
+                "{source}: {:?}",
+                result.diagnostics
+            );
+        }
+    }
+
+    #[test]
     fn if_let_selected_moves_preserve_failed_edges_omitted_fields_and_divergent_joins() {
         for source in [
             "struct Cell{n:i32} enum E{A(Cell,i32),B} fn f(p:E)->i32{if let E::A(cell,..)=p{return cell.n;}else{match p{E::A(..)=>0,E::B=>1}}}",

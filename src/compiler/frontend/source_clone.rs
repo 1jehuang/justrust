@@ -209,6 +209,13 @@ pub(super) fn preflight_clone_node(
             for statement in &block.statements {
                 budget.charge_work(1)?;
                 match statement {
+                    Stmt::WhileLet { .. } => {
+                        budget.retain_bytes(
+                            std::mem::size_of::<Pattern>()
+                                .checked_add(std::mem::size_of::<Expr>())
+                                .ok_or("while-let source box bytes overflow")?,
+                        )?;
+                    }
                     Stmt::AssignPlace { place, .. } | Stmt::AssignOp { place, .. } => {
                         clone_place(place, budget)?
                     }
@@ -454,6 +461,40 @@ mod tests {
         assert_eq!(failure.requested, boxes);
         let Pattern::ArrayRest(fields) = pattern.as_ref() else {
             panic!("expected actual written prefix and suffix");
+        };
+        let prefix = std::mem::size_of_val(fields.prefix.as_slice()) * 2 + 128;
+        let suffix = std::mem::size_of_val(fields.suffix.as_slice()) * 2 + 128;
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: 1024 + prefix + suffix - 1,
+            ..Default::default()
+        });
+        assert!(preflight_clone_node(&DepthNode::Pattern(pattern), &budget).is_err());
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.used, 1024 + prefix);
+        assert_eq!(failure.requested, suffix);
+    }
+
+    #[test]
+    fn while_let_clone_admits_both_boxes_before_written_pattern_vectors() {
+        let program =
+            super::super::parse("fn main(){while let [a,..,z]=[1,2,3]{let _=a+z;break;}}").unwrap();
+        let block = &program.functions[0].body;
+        let Stmt::WhileLet { pattern, .. } = &block.statements[0] else {
+            panic!("expected genuine while-let statement");
+        };
+        let boxes = std::mem::size_of::<Pattern>() + std::mem::size_of::<Expr>();
+        let statements = std::mem::size_of_val(block.statements.as_slice()) * 2 + 128;
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: 1024 + statements + boxes - 1,
+            ..Default::default()
+        });
+        assert!(preflight_clone_node(&DepthNode::Block(block), &budget).is_err());
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
+        assert_eq!(failure.used, 1024 + statements);
+        assert_eq!(failure.requested, boxes);
+        let Pattern::ArrayRest(fields) = pattern.as_ref() else {
+            panic!("expected only actual written prefix and suffix");
         };
         let prefix = std::mem::size_of_val(fields.prefix.as_slice()) * 2 + 128;
         let suffix = std::mem::size_of_val(fields.suffix.as_slice()) * 2 + 128;

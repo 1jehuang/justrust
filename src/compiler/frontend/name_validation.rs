@@ -646,6 +646,19 @@ impl<'a> Validator<'a> {
                         self.push(Visit::Expr(value))?;
                     }
                 }
+                Stmt::WhileLet {
+                    label,
+                    pattern,
+                    scrutinee,
+                    body,
+                    ..
+                } => {
+                    if let Some(label) = label {
+                        self.push(Visit::Ident(*label, LookupClass::Label))?;
+                    }
+                    self.push(Visit::IfLetThen(pattern, body))?;
+                    self.push(Visit::Expr(scrutinee))?;
+                }
                 Stmt::While {
                     label,
                     condition,
@@ -1246,6 +1259,94 @@ mod tests {
                 .starts_with("contract:")
         );
     }
+    #[test]
+    fn unused_while_let_checks_every_actual_handle_even_in_dead_body() {
+        let mut foreign = builder();
+        let foreign_name = foreign.ident("foreign").unwrap();
+        let foreign_path = foreign.path("crate::Foreign").unwrap();
+        let _foreign = foreign.finish().unwrap();
+        let mut valid = program();
+        valid.functions[0].body.statements.push(Stmt::WhileLet {
+            label: None,
+            pattern: Box::new(Pattern::Bool(true)),
+            scrutinee: Box::new(Expr::Bool(false)),
+            has_semicolon: false,
+            body: Block {
+                statements: Vec::new(),
+                tail: None,
+            },
+        });
+        validate_program_names(&valid).unwrap();
+        for child in 0..4 {
+            let mut malformed = valid.clone();
+            let Stmt::WhileLet {
+                label,
+                pattern,
+                scrutinee,
+                body,
+                ..
+            } = malformed.functions[0].body.statements.last_mut().unwrap()
+            else {
+                unreachable!()
+            };
+            match child {
+                0 => *label = Some(foreign_name),
+                1 => {
+                    **pattern = Pattern::Binding {
+                        name: foreign_name,
+                        mutable: false,
+                    }
+                }
+                2 => **scrutinee = Expr::Var(foreign_path.clone()),
+                3 => body.tail = Some(Box::new(Expr::Var(foreign_path.clone()))),
+                _ => unreachable!(),
+            }
+            assert!(validate_program_names(&malformed).is_err());
+            assert!(validate_function_names(&malformed, &malformed.functions[0], None).is_err());
+        }
+    }
+
+    #[test]
+    fn while_let_body_binding_cannot_move_to_scrutinee_or_after_iteration_scope() {
+        let source = "enum E{A(i32),B}fn f(p:E)->i32{macro_rules! marker{()=>{0}}let mut state=p;let n=9;while let E::A(n)=state{let x=n;state=E::B;}n}fn main(){}";
+        for target in 0..3 {
+            let mut input = parse(source).unwrap();
+            validate_program_names(&input).unwrap();
+            let Stmt::WhileLet {
+                pattern,
+                scrutinee,
+                body,
+                ..
+            } = &mut input.functions[0].body.statements[2]
+            else {
+                unreachable!()
+            };
+            if target == 2 {
+                **pattern = Pattern::Wildcard;
+            } else {
+                let Stmt::Let { value, .. } = &mut body.statements[0] else {
+                    unreachable!()
+                };
+                let donor = Box::new(std::mem::replace(value, Expr::Bool(false)));
+                if target == 0 {
+                    *scrutinee = donor;
+                } else {
+                    input.functions[0].body.tail = Some(donor);
+                }
+            }
+            let budget = input.names.budget();
+            let before = budget.snapshot().temporary_bytes;
+            assert!(
+                validate_program_names(&input)
+                    .unwrap_err()
+                    .starts_with("contract:")
+            );
+            assert!(validate_function_names(&input, &input.functions[0], None).is_err());
+            assert!(budget.snapshot().failure.is_none());
+            assert_eq!(budget.snapshot().temporary_bytes, before);
+        }
+    }
+
     #[test]
     fn lexical_liveness_keeps_outer_hygienic_ids_and_source_order_bindings() {
         for source in [

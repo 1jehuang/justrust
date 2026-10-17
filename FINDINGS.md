@@ -1,5 +1,37 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: genuine while-let with repeated checked condition and body-only bindings
+
+- Accepted only WHILE-LET.md bounded statement syntax. Actual boxed source
+  pattern/scrutinee, checked labels, body frontiers and inventory tag22 remain
+  genuine source identities, without synthetic Match/Break syntax or BodyIds.
+- Existing typed Loop/Match implements repeated header evaluation, real variant
+  tests/downcasts, selected-edge initialization/moves and continue reevaluation.
+  Failure edges do not move selected payloads; loop backedges require genuine
+  replenishment. Ordinary array indexed non-Copy move fences remain intact.
+- Stock33 has 23 valid/10 invalid sources. Native partition18 Runtime/10 Invalid/
+  5 valid Unsupported produces132 CHECK/BUILD cells per debug/release bootstrap
+  profile and36 actual main-image executions per profile. Six deliberately
+  empty-main executions cover three exact compile-completion controls, not
+  execution of divergent value functions. Initial29 source bytes/order remain.
+- Actual first library receipt20261017-121351810-2080055 found three new
+  mutable-parameter fixture grammar errors. Immutable parameters plus genuine
+  local mutable state preserve the intended stock-checked backedge witnesses.
+- Actual receipt20261017-121835617-2101988 exposed accepted stock-invalid
+  trailing while-let after return. The source parser had discarded whether a
+  semicolon followed the loop. Recording has_semicolon and separating source
+  Unit obligations from runtime divergence fixes the unchanged negative in
+  20261017-121949871-2107998, while exact semicolon/following-statement positives
+  remain accepted. Intrinsic loop exits are checked even in outer dead source.
+- New IR body storage precharges capacity, reconciles actual allocation and
+  latches allocator failure. No injected allocator-null execution claim.
+- Final debug29test gate20261017-122031682-2110919, release29test gate
+  20261017-122040822-2111523 and strictlint20261017-122056912-2112724 pass.
+  Public authority23 includes real loop-target/enum/scope/foreign-handle controls.
+- Complete gate20261017-122101838-2110918:2,495 passed/124 binaries,992 library,
+  zero failed/ignored/filtered. Exact failed/passing receipts retained in
+  data/runs/xps14/2026-10-17-while-let.jsonl. No full-Rust or speedup claim.
+
 ## 2026-10-17: genuine if-let with checked then-only binding visibility
 
 - Accepted only the bounded IF-LET.md slice: honest boxed source pattern and

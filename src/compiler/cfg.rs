@@ -6829,6 +6829,142 @@ mod tests {
     }
 
     #[test]
+    fn while_let_continue_returns_to_the_single_scrutinee_call_site() {
+        let function = nominal_lowered(&checked(
+            "fn step()->bool{false} fn f(){while let true=step(){continue;}} fn main(){}",
+            1,
+        ));
+        let calls: Vec<_> = function
+            .blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, block)| {
+                matches!(block.terminator.value, Terminator::Call { .. }).then_some(BlockId(index))
+            })
+            .collect();
+        assert_eq!(calls.len(), 1);
+        // Entry and a real continue backedge both reach the code containing
+        // the call. The scrutinee is not snapshotted before entering the loop.
+        assert!(function.blocks.iter().filter(|block| matches!(block.terminator.value, Terminator::Goto(target) if target == calls[0])).count() >= 2);
+        assert!(super::super::ownership::analyze(&function).passed());
+    }
+
+    #[test]
+    fn while_let_payload_bindings_move_only_on_success_and_die_before_continue() {
+        let function = nominal_lowered(&checked(
+            "struct Cell{n:i32} enum E{A(Cell,i32),B} fn f(p:E){let mut state=p;while let E::A(cell,..)=state{let n=cell.n;state=E::B;continue;}} fn main(){}",
+            0,
+        ));
+        let root = LocalId(
+            function
+                .locals
+                .iter()
+                .position(|local| local.name == "state")
+                .unwrap(),
+        );
+        let Ty::Enum(ty) = &function.locals[root.0].ty else {
+            unreachable!()
+        };
+        let variant = ir::VariantId {
+            owner: ty.def().id,
+            index: 0,
+        };
+        let (header, selected) = function
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(|(index, block)| match &block.terminator.value {
+                Terminator::SwitchVariant {
+                    place,
+                    variant: actual,
+                    then_block,
+                    ..
+                } if place.local == root && *actual == variant => {
+                    Some((BlockId(index), *then_block))
+                }
+                _ => None,
+            })
+            .unwrap();
+        let moves: Vec<_> = function
+            .blocks
+            .iter()
+            .enumerate()
+            .flat_map(|(index, block)| {
+                block
+                    .statements
+                    .iter()
+                    .filter_map(move |statement| match &statement.value {
+                        Statement::Assign {
+                            destination,
+                            value: Rvalue::Use(Operand::Move(place)),
+                        } if place.local == root => {
+                            Some((BlockId(index), destination.local, place))
+                        }
+                        _ => None,
+                    })
+            })
+            .collect();
+        assert_eq!(moves.len(), 1);
+        let (block, binding, projection) = moves[0];
+        assert_eq!(block, selected);
+        assert_eq!(
+            projection.projection,
+            [Projection::Downcast(variant), Projection::Field(0)]
+        );
+        assert!(function.blocks[selected.0].statements.iter().any(
+            |statement| matches!(statement.value, Statement::StorageLive(local) if local == binding)
+        ));
+        assert!(function.blocks.iter().any(|block| matches!(block.terminator.value, Terminator::Goto(target) if target == header) && block.statements.iter().any(|statement| matches!(statement.value, Statement::StorageDead(local) if local == binding))));
+        assert!(super::super::ownership::analyze(&function).passed());
+    }
+
+    #[test]
+    fn while_let_never_scrutinee_keeps_dead_body_without_fabricating_never_values() {
+        let source = checked(
+            "fn f()->i32{while let true={return 7;}{let x=1;}8} fn main(){}",
+            0,
+        );
+        assert!(source.exprs.iter().any(|expression| matches!(
+            expression.kind,
+            ir::ExprKind::Loop { .. }
+        ) && expression.ty == Ty::Unit
+            && expression.completion == ir::Completion::Never));
+        assert!(source.exprs.iter().any(|expression| matches!(
+            expression.kind,
+            ir::ExprKind::Match { .. }
+        ) && expression.ty == Ty::Unit
+            && expression.completion == ir::Completion::Never));
+        let function = nominal_lowered(&source);
+        assert!(function.blocks.iter().flat_map(|block| &block.statements).any(|statement| matches!(&statement.value, Statement::Assign { value: Rvalue::Use(Operand::Constant(Constant::Int(value))), .. } if *value == IntValue::i32(1))));
+        assert!(super::super::ownership::analyze(&function).passed());
+    }
+
+    #[test]
+    fn while_let_dead_body_retains_exact_payload_projection_checks() {
+        let mut source = checked(
+            "enum E{A(i32),B} fn f(){while let E::A(n)=E::B{let x=n;}} fn main(){}",
+            0,
+        );
+        nominal_lowered(&source);
+        let binding = source
+            .exprs
+            .iter_mut()
+            .find_map(|expression| match &mut expression.kind {
+                ir::ExprKind::Match { arms, .. } => {
+                    arms.iter_mut().find_map(|arm| match &mut arm.pattern {
+                        ir::MatchPattern::EnumVariant { bindings, .. } => bindings.first_mut(),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .unwrap();
+        binding.projection[1] = Projection::Field(usize::MAX);
+        assert!(source.validate().is_err());
+        assert!(lower(&source).is_err());
+    }
+
+    #[test]
     fn if_let_payload_move_is_confined_to_the_actual_selected_variant_edge() {
         let function = nominal_lowered(&checked(
             "struct Cell{n:i32} enum E{A(Cell,i32,Cell),B} fn f(p:E)->i32{if let E::A(first,..)=p{first.n}else{0}} fn main(){}",

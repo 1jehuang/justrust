@@ -1764,6 +1764,7 @@ impl Resolver<'_> {
                 | Stmt::Expr(value)
                 | Stmt::ImplicitExpr(value)
                 | Stmt::Return(Some(value)) => self.expr(value, module, locals)?,
+                Stmt::WhileLet { .. } => self.while_let(stmt, module, locals)?,
                 Stmt::While {
                     condition, body, ..
                 } => {
@@ -1779,6 +1780,42 @@ impl Resolver<'_> {
         locals.pop();
         Ok(())
     }
+    #[inline(never)]
+    fn while_let(
+        &mut self,
+        statement: &mut Stmt,
+        module: ModuleId,
+        locals: &mut Vec<std::collections::HashSet<LocalKey>>,
+    ) -> Result<(), String> {
+        let Stmt::WhileLet {
+            pattern,
+            scrutinee,
+            body,
+            ..
+        } = statement
+        else {
+            return Err("while-let bypassed resolver statement dispatcher".into());
+        };
+        // The source binding occurrence is fixed, but it belongs only to the
+        // successful iteration's body, never the next scrutinee or exit scope.
+        let previous_depth = locals.len();
+        let result = self.expr(scrutinee, module, locals);
+        locals.truncate(previous_depth);
+        result?;
+        let mut names = std::collections::HashSet::new();
+        self.pattern(pattern, module, &mut names)?;
+        self.charge_entries::<std::collections::HashSet<LocalKey>>(1)?;
+        locals
+            .try_reserve(1)
+            .map_err(|_| "while-let scope stack allocation failed")?;
+        locals.push(names);
+        let result = self.block(body, module, locals);
+        // Nested failures can retain more than one scope, so restore depth
+        // rather than popping only the most recently entered block.
+        locals.truncate(previous_depth);
+        result
+    }
+
     fn expr(
         &mut self,
         expr: &mut Expr,
@@ -2692,6 +2729,83 @@ mod tuple_shape_tests {
         assert_eq!(
             resolve(&parsed).unwrap_err(),
             "in function crate::main: unsupported: first-class tuple struct constructors are unsupported"
+        );
+    }
+}
+
+#[cfg(test)]
+mod while_let_tests {
+    use super::*;
+
+    #[test]
+    fn while_let_retains_actual_source_pattern_scrutinee_and_constructor_certificate() {
+        let source = "mod a{pub struct Pair(pub i32);}use a::Pair as P;fn main(){while let P(x)=P(1){let z=x;break;}let after=1;}";
+        let program = resolve(&parse_unresolved(source).unwrap()).unwrap();
+        let Stmt::WhileLet {
+            pattern,
+            scrutinee,
+            body,
+            ..
+        } = &program.functions[0].body.statements[0]
+        else {
+            panic!("while-let became a fabricated source loop or match");
+        };
+        let Pattern::Variant { name, fields, .. } = pattern.as_ref() else {
+            panic!("while-let lost actual constructor pattern syntax");
+        };
+        assert_eq!(fields.len(), 1);
+        assert!(matches!(scrutinee.as_ref(), Expr::TupleStruct { .. }));
+        assert_eq!(body.statements.len(), 2);
+        assert_eq!(
+            name_scope::path_key(program.names.as_ref(), name, Namespace::Type).unwrap(),
+            name_scope::path_key(
+                program.names.as_ref(),
+                &program.structs[0].name,
+                Namespace::Type
+            )
+            .unwrap()
+        );
+        assert!(
+            !name
+                .source_occurrences(program.names.as_ref())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn while_let_scrutinee_and_exit_see_outer_callable_not_iteration_binder() {
+        for source in [
+            "struct P(i32);fn x()->i32{7}fn main(){while let P(x)=P(x()){let z=x;break;}let after=x();}",
+            "struct P(i32);fn x()->i32{7}fn main(){macro_rules! n{()=>{1};}while let P(x)=P(x()){let z=x+n!();break;}let after=x();}",
+        ] {
+            resolve(&parse_unresolved(source).unwrap())
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+        let source =
+            "struct P(i32);fn x()->i32{7}fn main(){while let P(x)=P(x()){let z=x();break;}}";
+        let error = resolve(&parse_unresolved(source).unwrap()).unwrap_err();
+        assert!(error.contains("local binding is not callable"), "{error}");
+    }
+
+    #[test]
+    fn labeled_while_let_keeps_real_enum_rest_children_and_label() {
+        let source = "enum E{V(i32,i32)}fn main(){'again:while let E::V(x,..)=E::V(1,2){let z=x;continue 'again;}}";
+        let program = resolve(&parse_unresolved(source).unwrap()).unwrap();
+        let Stmt::WhileLet { label, pattern, .. } = &program.functions[0].body.statements[0] else {
+            panic!("labeled while-let lost source statement identity");
+        };
+        assert!(label.is_some());
+        let Pattern::VariantRest { name, fields } = pattern.as_ref() else {
+            panic!("while-let payload rest was expanded into omitted syntax");
+        };
+        assert_eq!(fields.prefix.len(), 1);
+        assert!(fields.suffix.is_empty());
+        assert!(
+            !name
+                .source_occurrences(program.names.as_ref())
+                .unwrap()
+                .is_empty()
         );
     }
 }

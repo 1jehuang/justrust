@@ -31,7 +31,7 @@ validated.
 The first slice reuses already-supported enum variant, scalar and irrefutable
 aggregate pattern semantics, without general refutable payload matrices.
 Existing array Copy-only restrictions and all nominal/privacy gates remain.
-Chains, guards, or-patterns, while-let, refutable nested leaves and reference
+Chains, guards, or-patterns, refutable nested leaves and reference
 pattern ergonomics stay explicitly unsupported.
 
 The checker may lower a genuine source conditional pattern to existing typed

@@ -288,6 +288,12 @@ pub(super) fn inventory(
                     expr(condition, ds, b, d + 1)?;
                     block(body, ds, b, d + 1)?;
                 }
+                Stmt::WhileLet {
+                    scrutinee, body, ..
+                } => {
+                    expr(scrutinee, ds, b, d + 1)?;
+                    block(body, ds, b, d + 1)?;
+                }
                 Stmt::Return(None) => {}
             }
         }
