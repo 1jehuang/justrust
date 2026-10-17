@@ -1643,6 +1643,7 @@ impl<'a> MoveShape<'a> {
                 }
                 Self::OpaqueParam
             }
+            Ty::AssociatedType(_) => return Err(Exhausted),
             Ty::Never => Self::Never,
             Ty::Tuple(fields) => Self::Product {
                 ty,

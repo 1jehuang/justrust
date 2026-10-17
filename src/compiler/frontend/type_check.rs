@@ -1879,6 +1879,9 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
             .self_ty
             .clone()
             .ok_or_else(|| "Self outside impl".into()),
+        Type::Projection(_) => {
+            Err("unsupported: associated type projections require authoritative planning and normalization".into())
+        }
         Type::Apply(_) | Type::Param(_) => {
             Err("generic types require authoritative declaration environment".into())
         }
@@ -7789,6 +7792,67 @@ pub fn check(program: &Program) -> Result<(), String> {
 
 #[cfg(test)]
 mod checked_identity_tests {
+    #[test]
+    fn closed_associated_types_reach_checker_as_normalized_source_types() {
+        for source in [
+            "trait Project{type Out;}struct ProjectionOwner;struct ProjectionOther;impl Project for ProjectionOwner{type Out=i128;}fn pass(x:<ProjectionOwner as Project>::Out)-><ProjectionOwner as Project>::Out{x}fn main(){let value:<ProjectionOwner as Project>::Out=42i128;let result=pass(value);}",
+            "trait Project{type Out;}struct ProjectionOwner;struct ProjectionOther;struct Cell{value:i32}impl Project for ProjectionOwner{type Out=Cell;}fn pass(x:<ProjectionOwner as Project>::Out)-><ProjectionOwner as Project>::Out{x}fn main(){let value:<ProjectionOwner as Project>::Out=Cell{value:42};let result=pass(value);}",
+            "trait Project{type Out;}struct ProjectionOwner;struct ProjectionOther;impl Project for ProjectionOwner{type Out=(i128,bool);}type Output=<ProjectionOwner as Project>::Out;fn pass(x:Output)->Output{x}fn main(){let value:Output=(42i128,true);let result=pass(value);}",
+            "trait Project{type Out;}struct ProjectionOwner;struct ProjectionOther;impl Project for ProjectionOwner{type Out=<ProjectionOther as Project>::Out;}impl Project for ProjectionOther{type Out=i128;}fn value()-><ProjectionOwner as Project>::Out{42i128}fn identity<T>(x:T)->T{x}fn main(){let result=identity(value());}",
+        ] {
+            let program = parse(source).unwrap();
+            check(&program).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+
+    #[test]
+    fn projected_trait_methods_and_rigid_callers_remain_unsupported() {
+        for source in [
+            "trait Project{type Out;fn value(x:Self::Out)->Self::Out;}fn main(){}",
+            "trait Project{type Out;fn value(x:Self::Out)->Self::Out{x}}fn main(){}",
+            "trait Project{type Out;}fn pass<T:Project>(x:<T as Project>::Out)-><T as Project>::Out{x}fn main(){}",
+        ] {
+            let error = match parse(source) {
+                Ok(program) => check(&program).unwrap_err(),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_ascii_lowercase().contains("unsupported"),
+                "{source}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalized_projection_does_not_invent_copy_or_accept_wrong_values() {
+        for source in [
+            "trait Project{type Out;}struct ProjectionOwner;struct ProjectionOther;struct Cell{value:i32}impl Project for ProjectionOwner{type Out=Cell;}fn copy_only<T:Copy>(x:T){}fn pass(x:<ProjectionOwner as Project>::Out){copy_only(x)}fn main(){}",
+            "trait Project{type Out;}struct ProjectionOwner;struct ProjectionOther;impl Project for ProjectionOwner{type Out=i128;}fn pass(x:<ProjectionOwner as Project>::Out){}fn main(){pass(true);}",
+        ] {
+            let program = parse(source).unwrap();
+            assert!(check(&program).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn unused_associated_assignment_is_not_hidden_by_checker_normalization() {
+        let source = "trait Project{type Out;}struct ProjectionOwner;struct ProjectionOther;impl Project for ProjectionOwner{type Out=<ProjectionOther as Project>::Out;}fn main(){}";
+        let program = parse(source).unwrap();
+        assert!(check(&program).is_err());
+    }
+
+    #[test]
+    fn projection_source_head_cannot_be_replaced_by_its_equal_normal_form() {
+        let source = "trait Project{type Out;}struct ProjectionOwner;struct ProjectionOther;impl Project for ProjectionOwner{type Out=i128;}fn value()-><ProjectionOwner as Project>::Out{42i128}fn main(){}";
+        let original = parse(source).unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&original, &budget).unwrap();
+        let mut supplied = original.clone();
+        supplied.functions[0].result = Type::Int(ir::IntTy::I128);
+        let error = type_function_with_plan(&supplied, 0, &plan, &budget).unwrap_err();
+        assert!(error.contains("immutable planning declaration"), "{error}");
+    }
+
     #[test]
     fn typed_slices_check_exact_wide_and_aggregate_elements() {
         for source in [

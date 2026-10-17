@@ -155,6 +155,7 @@ fn result_indirect(ty: &ir::Ty) -> Result<bool, String> {
 /// aggregates, so local copies move both words. It never crosses a call
 /// boundary as a pointer: calls use `argument_words` == 2 and push both words.
 fn indirect(ty: &ir::Ty) -> Result<bool, String> {
+    ir::reject_associated_types(ty, None)?;
     if let Some(element) = ty.shared_slice_element() {
         shared_slice_layout(element)?;
         return Ok(true);
@@ -175,17 +176,19 @@ fn indirect(ty: &ir::Ty) -> Result<bool, String> {
         | ir::Ty::Never
         | ir::Ty::Ref { .. } => Ok(false),
         ir::Ty::Param(_) => Err("type parameter has no native ABI".into()),
+        ir::Ty::AssociatedType(_) => Err("unresolved associated type has no native ABI".into()),
         ir::Ty::Slice { .. } => Err(SLICE_UNSUPPORTED.into()),
     }
 }
 
 fn value_size(ty: &ir::Ty) -> Result<i32, String> {
+    ir::reject_associated_types(ty, None)?;
     if wide_integer(ty) {
         // PRIVATE layout: low limb at 0, high limb at 8, eight-byte alignment.
         return Ok(16);
     }
-    if matches!(ty, ir::Ty::Param(_)) {
-        return Err("type parameter has no native layout".into());
+    if matches!(ty, ir::Ty::Param(_) | ir::Ty::AssociatedType(_)) {
+        return Err("unresolved type has no native layout".into());
     }
     if let Some(element) = ty.shared_slice_element() {
         shared_slice_layout(element)?;
@@ -3295,6 +3298,33 @@ mod tests {
             b"receiver\nargument\ncallee\nassociated-stable\n"
         );
         assert!(output.stderr.is_empty(), "{output:?}");
+    }
+
+    #[test]
+    fn unresolved_associated_types_never_acquire_native_layout() {
+        // Structural layout helpers do not mint semantic projection authority.
+        // Even dead zero-length storage must not hide an unresolved term.
+        let snapshot = ir::SnapshotId::allocate().unwrap();
+        let projection =
+            ir::Ty::AssociatedType(std::sync::Arc::new(ir::AssociatedTypeProjection {
+                trait_ref: ir::TraitRef {
+                    declaration: ir::DeclId { snapshot, index: 0 },
+                    self_ty: ir::Ty::Unit,
+                    args: std::sync::Arc::from([]),
+                },
+                item: ir::DeclId { snapshot, index: 1 },
+            }));
+        for ty in [
+            projection.clone(),
+            ir::Ty::Array {
+                element: std::sync::Arc::new(projection.clone()),
+                len: 0,
+            },
+            ir::Ty::Tuple(std::sync::Arc::from([ir::Ty::Bool, projection])),
+        ] {
+            assert!(indirect(&ty).unwrap_err().contains("associated type"));
+            assert!(value_size(&ty).unwrap_err().contains("associated type"));
+        }
     }
 
     #[test]

@@ -56,6 +56,7 @@ pub enum DeclKind {
     AssociatedFunction,
     Trait,
     TraitItem,
+    AssociatedType,
     TraitImpl,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -198,6 +199,11 @@ pub struct TraitRef {
     pub declaration: DeclId,
     pub self_ty: Ty,
     pub args: Arc<[Ty]>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AssociatedTypeProjection {
+    pub trait_ref: TraitRef,
+    pub item: DeclId,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Predicate {
@@ -354,6 +360,7 @@ pub struct CarrierLocation {
 /// One canonical typed component walk for world contracts and the SAME Plan.
 /// Presence memoization avoids expanding reference-free shared type DAGs.
 pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLocation]>, String> {
+    reject_associated_types(ty, Some(budget))?;
     fn present(
         ty: &Ty,
         budget: &PlanBudget,
@@ -376,6 +383,9 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
             Ok(())
         };
         match ty {
+            Ty::AssociatedType(_) => {
+                return Err("unsupported: residual associated type projection in carrier".into());
+            }
             Ty::Ref { referent, .. }
             | Ty::Array {
                 element: referent, ..
@@ -507,6 +517,11 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                     result
                 };
                 match ty {
+                    Ty::AssociatedType(_) => {
+                        return Err(
+                            "unsupported: residual associated type projection in carrier".into(),
+                        );
+                    }
                     Ty::Tuple(fields) => {
                         for (index, ty) in fields.iter().enumerate() {
                             child(CarrierStep::Field(index), ty)?;
@@ -569,6 +584,7 @@ pub fn carrier_at<'a>(
     location: &CarrierLocation,
     budget: &PlanBudget,
 ) -> Result<&'a Ty, String> {
+    reject_associated_types(ty, Some(budget))?;
     for step in location.path.0.iter() {
         budget.charge_work(1)?;
         ty = match (step, ty) {
@@ -1071,6 +1087,7 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
                 len: bn,
             },
         ) => an == bn && Arc::ptr_eq(a, b),
+        (Ty::AssociatedType(a), Ty::AssociatedType(b)) => Arc::ptr_eq(a, b),
         (Ty::Tuple(a), Ty::Tuple(b)) => Arc::ptr_eq(a, b),
         (Ty::Struct(a), Ty::Struct(b)) => Arc::ptr_eq(&a.0, &b.0),
         (Ty::Enum(a), Ty::Enum(b)) => Arc::ptr_eq(&a.0, &b.0),
@@ -2044,10 +2061,68 @@ fn substitute_ty_walk(
     budget: &PlanBudget,
     depth: usize,
 ) -> Result<Ty, String> {
+    if budget.has_resource_failure() {
+        return Err("planning resource budget already exhausted".into());
+    }
     budget.check_depth(depth)?;
     budget.charge_work(1)?;
     budget.charge_nodes(1)?;
     Ok(match ty {
+        Ty::AssociatedType(projection) => {
+            if projection.trait_ref.args.len() > 32 {
+                return Err("trait argument limit exceeded".into());
+            }
+            budget.charge_work(projection.trait_ref.args.len())?;
+            budget.retain_bytes(
+                std::mem::size_of::<AssociatedTypeProjection>() + 2 * std::mem::size_of::<usize>(),
+            )?;
+            let bytes = projection
+                .trait_ref
+                .args
+                .len()
+                .checked_mul(std::mem::size_of::<Ty>())
+                .ok_or("substitution size overflow")?;
+            budget.retain_bytes(bytes)?;
+            let mut arguments = Vec::new();
+            arguments
+                .try_reserve_exact(projection.trait_ref.args.len())
+                .map_err(|_| "projection substitution allocation resource failure")?;
+            budget.retain_bytes(
+                arguments
+                    .capacity()
+                    .checked_sub(projection.trait_ref.args.len())
+                    .and_then(|n| n.checked_mul(std::mem::size_of::<Ty>()))
+                    .ok_or("substitution capacity overflow")?,
+            )?;
+            let self_ty = substitute_ty_walk(
+                &projection.trait_ref.self_ty,
+                env,
+                args,
+                caller,
+                cx,
+                budget,
+                depth + 1,
+            )?;
+            for argument in projection.trait_ref.args.iter() {
+                arguments.push(substitute_ty_walk(
+                    argument,
+                    env,
+                    args,
+                    caller,
+                    cx,
+                    budget,
+                    depth + 1,
+                )?);
+            }
+            Ty::AssociatedType(Arc::new(AssociatedTypeProjection {
+                trait_ref: TraitRef {
+                    declaration: projection.trait_ref.declaration,
+                    self_ty,
+                    args: arguments.into(),
+                },
+                item: projection.item,
+            }))
+        }
         Ty::Param(param) => {
             budget.charge_work(env.scopes().len())?;
             if let Some(index) = env.argument_index(*param) {
@@ -2610,10 +2685,16 @@ pub fn close_checked_calls(
 }
 
 pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), String> {
+    reject_associated_types(root, Some(budget))?;
     fn walk(ty: &Ty, budget: &PlanBudget, depth: usize) -> Result<(), String> {
         budget.check_depth(depth)?;
         budget.charge_work(1)?;
         match ty {
+            Ty::AssociatedType(_) => {
+                return Err(
+                    "unsupported: residual associated type projection in generic argument".into(),
+                );
+            }
             Ty::Ref { .. } => return Err("reference generic arguments are unsupported".into()),
             Ty::Slice { .. } => return Err("slice generic arguments are unsupported".into()),
             Ty::Tuple(fields) => {
@@ -3151,6 +3232,7 @@ fn projected_ty_inner<'a>(
     path: &[Projection],
     mutable: bool,
 ) -> Result<&'a Ty, String> {
+    reject_associated_types(root, None)?;
     if path.len() > MAX_PATTERN_PROJECTION_DEPTH {
         return Err("projection depth exceeds limit 128".into());
     }
@@ -3290,6 +3372,7 @@ pub struct LoopId(pub usize);
 /// Tuple structure is immutable and shared cheaply across checked facts.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
+    AssociatedType(Arc<AssociatedTypeProjection>),
     Param(ParamId),
     Int(IntTy),
     Float(FloatTy),
@@ -3316,6 +3399,243 @@ pub enum Ty {
     Enum(EnumTy),
     /// The semantic never type, distinct from runtime completion information.
     Never,
+}
+
+/// Structural residual guard only. This does not establish declaration ownership,
+/// trait membership, normalization, Sized, Copy, or a layout. Every metadata child
+/// is visited, including nominal actuals and zero-length array elements.
+pub fn reject_associated_types(root: &Ty, budget: Option<&PlanBudget>) -> Result<(), String> {
+    if type_metadata_walk(root, budget, None)? {
+        return Err(
+            "unsupported: residual associated type projection in executable metadata".into(),
+        );
+    }
+    Ok(())
+}
+
+pub(super) fn contains_associated_types(root: &Ty, budget: &PlanBudget) -> Result<bool, String> {
+    type_metadata_walk(root, Some(budget), None)
+}
+
+fn type_metadata_walk(
+    root: &Ty,
+    budget: Option<&PlanBudget>,
+    facts: Option<FactsCtx<'_>>,
+) -> Result<bool, String> {
+    type Key = (u8, usize);
+    type Entry = (Key, Option<(bool, usize)>);
+    #[derive(Default)]
+    struct Memo {
+        entries: Vec<Entry>,
+        _base: Option<PlanReservation>,
+        extra: Option<PlanReservation>,
+    }
+    impl Memo {
+        fn insert(
+            &mut self,
+            key: Key,
+            budget: Option<&PlanBudget>,
+            work: &mut usize,
+        ) -> Result<usize, String> {
+            if self.entries.len() == self.entries.capacity() {
+                let target = self
+                    .entries
+                    .capacity()
+                    .checked_mul(2)
+                    .ok_or("projection memo capacity overflow")?
+                    .max(4);
+                let bytes = target
+                    .checked_mul(std::mem::size_of::<Entry>())
+                    .ok_or("projection memo byte overflow")?;
+                let mut staged = Self {
+                    _base: budget.map(|b| b.reserve_bytes(bytes)).transpose()?,
+                    ..Self::default()
+                };
+                for _ in &self.entries {
+                    charge(budget, work)?;
+                }
+                staged
+                    .entries
+                    .try_reserve_exact(target)
+                    .map_err(|_| "projection memo allocation resource failure")?;
+                let excess = staged
+                    .entries
+                    .capacity()
+                    .checked_sub(target)
+                    .and_then(|n| n.checked_mul(std::mem::size_of::<Entry>()))
+                    .ok_or("projection memo capacity overflow")?;
+                staged.extra = budget.map(|b| b.reserve_bytes(excess)).transpose()?;
+                staged.entries.append(&mut self.entries);
+                *self = staged;
+            }
+            let index = self.entries.len();
+            self.entries.push((key, None));
+            Ok(index)
+        }
+    }
+    fn charge(budget: Option<&PlanBudget>, work: &mut usize) -> Result<(), String> {
+        if budget.is_some_and(PlanBudget::has_resource_failure) {
+            return Err("planning resource budget already exhausted".into());
+        }
+        *work = work
+            .checked_add(1)
+            .ok_or("associated type traversal work overflow")?;
+        if *work > MAX_PATTERN_PROJECTION_WORK {
+            return Err("associated type traversal resource limit exceeded".into());
+        }
+        if let Some(budget) = budget {
+            budget.charge_work(1)?;
+        }
+        Ok(())
+    }
+    fn walk(
+        ty: &Ty,
+        budget: Option<&PlanBudget>,
+        depth: usize,
+        work: &mut usize,
+        memo: &mut Memo,
+        facts: Option<FactsCtx<'_>>,
+    ) -> Result<(bool, usize), String> {
+        charge(budget, work)?;
+        if depth > MAX_PATTERN_PROJECTION_DEPTH {
+            return Err("associated type traversal depth limit exceeded".into());
+        }
+        if let Some(budget) = budget {
+            budget.check_depth(depth)?;
+        }
+        let key = match ty {
+            Ty::AssociatedType(value) => {
+                if value.trait_ref.args.len() > 32 {
+                    return Err("trait argument limit exceeded".into());
+                }
+                (0, Arc::as_ptr(value) as usize)
+            }
+            Ty::Ref { referent, .. } => (1, Arc::as_ptr(referent) as usize),
+            Ty::Array { element, len } => {
+                if *len > MAX_ARRAY_LEN {
+                    return Err("array length limit exceeded".into());
+                }
+                (2, Arc::as_ptr(element) as usize)
+            }
+            Ty::Slice { element } => (3, Arc::as_ptr(element) as usize),
+            Ty::Tuple(fields) => (4, fields.as_ptr() as usize),
+            Ty::Struct(value) => {
+                if value.def().type_args.len() > 32 {
+                    return Err("nominal argument limit exceeded".into());
+                }
+                (5, std::ptr::from_ref(value.def()) as usize)
+            }
+            Ty::Enum(value) => {
+                if value.def().type_args.len() > 32
+                    || value.def().variants.len() > MAX_ENUM_VARIANTS
+                {
+                    return Err("nominal metadata limit exceeded".into());
+                }
+                (6, std::ptr::from_ref(value.def()) as usize)
+            }
+            Ty::Param(parameter) => {
+                if let Some(facts) = facts {
+                    let FactsCtx::Universal(env) = facts else {
+                        return Err("type parameter is outside its authoritative binder".into());
+                    };
+                    for _ in env.scopes() {
+                        charge(budget, work)?;
+                    }
+                    if !env.contains(*parameter) {
+                        return Err("type parameter is outside its authoritative binder".into());
+                    }
+                }
+                return Ok((false, 0));
+            }
+            Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => return Ok((false, 0)),
+        };
+        for (candidate, result) in &memo.entries {
+            charge(budget, work)?;
+            if *candidate == key {
+                let (found, height) = result.ok_or("associated type metadata cycle")?;
+                let deepest = depth
+                    .checked_add(height)
+                    .ok_or("associated type traversal depth overflow")?;
+                if deepest > MAX_PATTERN_PROJECTION_DEPTH {
+                    return Err("associated type traversal depth limit exceeded".into());
+                }
+                if let Some(budget) = budget {
+                    budget.check_depth(deepest)?;
+                }
+                return Ok((found, height));
+            }
+        }
+        let index = memo.insert(key, budget, work)?;
+        if let Ty::Enum(value) = ty {
+            for _ in value.def().variants.iter() {
+                charge(budget, work)?;
+            }
+        }
+        let mut found = false;
+        let mut height = 0usize;
+        let mut child = |ty: &Ty| -> Result<(), String> {
+            let (has, child_height) = walk(ty, budget, depth + 1, work, memo, facts)?;
+            found |= has;
+            height = height.max(
+                child_height
+                    .checked_add(1)
+                    .ok_or("associated type traversal depth overflow")?,
+            );
+            Ok(())
+        };
+        match ty {
+            Ty::AssociatedType(projection) => {
+                if projection.trait_ref.args.len() > 32 {
+                    return Err("trait argument limit exceeded".into());
+                }
+                child(&projection.trait_ref.self_ty)?;
+                for argument in projection.trait_ref.args.iter() {
+                    child(argument)?;
+                }
+                found = true;
+            }
+            Ty::Ref { referent, .. }
+            | Ty::Array {
+                element: referent, ..
+            }
+            | Ty::Slice { element: referent } => child(referent)?,
+            Ty::Tuple(fields) => {
+                for field in fields.iter() {
+                    child(field)?;
+                }
+            }
+            Ty::Struct(value) => {
+                if value.def().type_args.len() > 32 {
+                    return Err("nominal argument limit exceeded".into());
+                }
+                for argument in value.def().type_args.iter() {
+                    child(argument)?;
+                }
+                for field in value.def().fields.iter() {
+                    child(&field.ty)?;
+                }
+            }
+            Ty::Enum(value) => {
+                if value.def().type_args.len() > 32
+                    || value.def().variants.len() > MAX_ENUM_VARIANTS
+                {
+                    return Err("nominal metadata limit exceeded".into());
+                }
+                for argument in value.def().type_args.iter() {
+                    child(argument)?;
+                }
+                for variant in value.def().variants.iter() {
+                    for field in variant.fields.iter() {
+                        child(&field.ty)?;
+                    }
+                }
+            }
+            Ty::Param(_) | Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
+        }
+        memo.entries[index].1 = Some((found, height));
+        Ok((found, height))
+    }
+    walk(root, budget, 0, &mut 0, &mut Memo::default(), facts).map(|(found, _)| found)
 }
 
 impl Ty {
@@ -3389,6 +3709,12 @@ impl Ty {
         let mut seen = std::collections::HashSet::new();
         while let Some(ty) = pending.pop() {
             match ty {
+                Self::AssociatedType(projection) => {
+                    if seen.insert(Arc::as_ptr(projection) as usize) {
+                        pending.push(&projection.trait_ref.self_ty);
+                        pending.extend(projection.trait_ref.args.iter());
+                    }
+                }
                 Self::Slice { .. } => return true,
                 Self::Ref {
                     referent: inner, ..
@@ -3448,7 +3774,11 @@ impl Ty {
         match self {
             Self::Ref { kind, .. } => *kind == BorrowKind::Shared,
             Self::Int(_) | Self::Float(_) | Self::Bool | Self::Unit | Self::Never => true,
-            Self::Struct(_) | Self::Enum(_) | Self::Param(_) | Self::Slice { .. } => false,
+            Self::AssociatedType(_)
+            | Self::Struct(_)
+            | Self::Enum(_)
+            | Self::Param(_)
+            | Self::Slice { .. } => false,
             Self::Tuple(_) | Self::Array { .. } => {
                 let mut pending = vec![self];
                 let mut seen = std::collections::HashSet::new();
@@ -3459,7 +3789,11 @@ impl Ty {
                             kind: BorrowKind::Mut,
                             ..
                         } => return false,
-                        Self::Struct(_) | Self::Enum(_) | Self::Param(_) | Self::Slice { .. } => {
+                        Self::AssociatedType(_)
+                        | Self::Struct(_)
+                        | Self::Enum(_)
+                        | Self::Param(_)
+                        | Self::Slice { .. } => {
                             return false;
                         }
                         Self::Tuple(fields) if seen.insert(fields.as_ptr()) => {
@@ -3596,6 +3930,7 @@ fn slice_boundary_walk(
                     b.check_depth(at)?;
                 }
                 let key = match node {
+                    Ty::AssociatedType(_) => return Err("unsupported: residual associated type projection at slice boundary".into()),
                     Ty::Ref { .. } if !allow_references => return Err("unsupported: slice elements containing references or slices, or nested slice carriers".into()),
                     Ty::Slice { .. } => return Err("unsupported: slice elements containing references or slices, or nested slice carriers".into()),
                     Ty::Ref { referent, .. } => Some(Key(0, Arc::as_ptr(referent) as usize)),
@@ -3640,6 +3975,11 @@ fn slice_boundary_walk(
                     | Ty::Array {
                         element: referent, ..
                     } => child(referent)?,
+                    Ty::AssociatedType(_) => {
+                        return Err(
+                            "unsupported: residual associated type projection in carrier".into(),
+                        );
+                    }
                     Ty::Tuple(fields) => {
                         for field in fields.iter() {
                             child(field)?;
@@ -3728,6 +4068,29 @@ impl<'f> FactsCtx<'f> {
             _ => None,
         }
     }
+    /// Raw structural metadata validation only. No normalization or executable
+    /// Sized, carrier, reference, or Copy permission follows from success.
+    pub fn validate_ty_metadata(self, root: &Ty) -> Result<(), String> {
+        if let Self::Validated(facts) = self {
+            return facts
+                .validate_ty_metadata(root)
+                .map_err(|e| e.into_legacy_diagnostic(facts.budget()));
+        }
+        self.validate_ty_metadata_inner(root, None).map(|_| ())
+    }
+    pub fn validate_ty_metadata_with_budget(
+        self,
+        root: &Ty,
+        budget: &PlanBudget,
+    ) -> Result<(), String> {
+        if let Self::Validated(facts) = self {
+            return facts
+                .validate_ty_metadata_with_budget(root, budget)
+                .map_err(|e| e.into_legacy_diagnostic(budget));
+        }
+        self.validate_ty_metadata_inner(root, Some(budget))
+            .map(|_| ())
+    }
     pub fn validate_ty(self, root: &Ty) -> Result<(), String> {
         if let Self::Validated(facts) = self {
             return facts
@@ -3766,94 +4129,17 @@ impl<'f> FactsCtx<'f> {
         Ok(())
     }
     fn validate_ty_inner(self, root: &Ty, budget: Option<&PlanBudget>) -> Result<(), String> {
-        fn walk(
-            facts: FactsCtx<'_>,
-            ty: &Ty,
-            depth: usize,
-            work: &mut usize,
-            budget: Option<&PlanBudget>,
-        ) -> Result<(), String> {
-            *work += 1;
-            if *work > MAX_PATTERN_PROJECTION_WORK || depth > 128 {
-                return Err("type facts resource limit exceeded".into());
-            }
-            if let Some(budget) = budget {
-                budget.check_depth(depth)?;
-                budget.charge_work(1)?;
-            }
-            match ty {
-                Ty::Param(param) => {
-                    let FactsCtx::Universal(env) = facts else {
-                        return Err("type parameter is outside its authoritative binder".into());
-                    };
-                    *work += env.scopes().len();
-                    if *work > MAX_PATTERN_PROJECTION_WORK {
-                        return Err("type facts resource limit exceeded".into());
-                    }
-                    if let Some(budget) = budget {
-                        budget.charge_work(env.scopes().len())?;
-                    }
-                    if !env.contains(*param) {
-                        return Err("type parameter is outside its authoritative binder".into());
-                    }
-                }
-                Ty::Ref { referent, .. } => {
-                    // Structural shape validation does not grant source actual admission.
-                    walk(facts, referent, depth + 1, work, budget)?;
-                }
-                Ty::Tuple(fields) => {
-                    for child in fields.iter() {
-                        walk(facts, child, depth + 1, work, budget)?;
-                    }
-                }
-                Ty::Array { element, len } => {
-                    if *len > MAX_ARRAY_LEN {
-                        return Err("array length limit exceeded".into());
-                    }
-                    walk(facts, element, depth + 1, work, budget)?;
-                }
-                Ty::Slice { element } => {
-                    // Structural only: admission of `&[u8]` is a frontend decision.
-                    walk(facts, element, depth + 1, work, budget)?;
-                }
-                Ty::Struct(value) => {
-                    if value.def().type_args.len() > 32 {
-                        return Err("nominal argument limit exceeded".into());
-                    }
-                    for child in value.def().type_args.iter() {
-                        walk(facts, child, depth + 1, work, budget)?;
-                    }
-                    for field in value.def().fields.iter() {
-                        walk(facts, &field.ty, depth + 1, work, budget)?;
-                    }
-                }
-                Ty::Enum(value) => {
-                    if value.def().type_args.len() > 32
-                        || value.def().variants.len() > MAX_ENUM_VARIANTS
-                    {
-                        return Err("nominal metadata limit exceeded".into());
-                    }
-                    for child in value.def().type_args.iter() {
-                        walk(facts, child, depth + 1, work, budget)?;
-                    }
-                    for variant in value.def().variants.iter() {
-                        *work += 1;
-                        if *work > MAX_PATTERN_PROJECTION_WORK {
-                            return Err("type facts resource limit exceeded".into());
-                        }
-                        if let Some(budget) = budget {
-                            budget.charge_work(1)?;
-                        }
-                        for field in variant.fields.iter() {
-                            walk(facts, &field.ty, depth + 1, work, budget)?;
-                        }
-                    }
-                }
-                Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
-            }
-            Ok(())
+        if self.validate_ty_metadata_inner(root, budget)? {
+            return Err("unsupported: associated type projection requires authoritative world normalization".into());
         }
-        walk(self, root, 0, &mut 0, budget)
+        Ok(())
+    }
+    fn validate_ty_metadata_inner(
+        self,
+        root: &Ty,
+        budget: Option<&PlanBudget>,
+    ) -> Result<bool, String> {
+        type_metadata_walk(root, budget, Some(self))
     }
     pub fn must_copy(self, ty: &Ty) -> Result<bool, String> {
         if let Self::Validated(facts) = self {
@@ -4054,6 +4340,7 @@ pub fn derive_signature_origin_schema(
 /// Number of root reference-value layers, not memory projections.
 /// The legacy structural helper below retains its prior restricted domain.
 pub fn root_reference_layers(ty: &Ty) -> Result<usize, String> {
+    reject_associated_types(ty, None)?;
     let mut current = ty;
     let mut count = 0usize;
     while let Ty::Ref { referent, .. } = current {
@@ -4068,6 +4355,7 @@ pub fn root_reference_layers(ty: &Ty) -> Result<usize, String> {
 
 /// Legacy unsealed structural fixture policy, not generic carrier admission.
 pub fn reference_layers(ty: &Ty) -> Result<usize, String> {
+    reject_associated_types(ty, None)?;
     let mut current = ty;
     let mut count = 0;
     let mut mutable = false;
@@ -4405,6 +4693,11 @@ fn ref_type_walk(
             Ok(())
         };
         match ty {
+            Ty::AssociatedType(_) => {
+                return Err(
+                    "unsupported: residual associated type projection in reference contract".into(),
+                );
+            }
             Ty::Ref { referent, .. } => {
                 root_reference_layers(ty)?;
                 let (is_opaque, child_height) =
@@ -4496,6 +4789,19 @@ fn ref_types_equal(
             Ok(equal)
         };
         let equal = match (left, right) {
+            (Ty::AssociatedType(a), Ty::AssociatedType(b)) => {
+                if a.trait_ref.args.len() > 32 || b.trait_ref.args.len() > 32 {
+                    return Err("trait argument limit exceeded".into());
+                }
+                let mut equal = a.item == b.item
+                    && a.trait_ref.declaration == b.trait_ref.declaration
+                    && a.trait_ref.args.len() == b.trait_ref.args.len();
+                equal &= child(&a.trait_ref.self_ty, &b.trait_ref.self_ty)?;
+                for (a, b) in a.trait_ref.args.iter().zip(b.trait_ref.args.iter()) {
+                    equal &= child(a, b)?;
+                }
+                equal
+            }
             (Ty::Tuple(a), Ty::Tuple(b)) => {
                 if a.len() != b.len() {
                     false
@@ -5007,6 +5313,11 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
             return Err("pattern type comparison depth exceeds limit 128".into());
         }
         match (a, b) {
+            (Ty::AssociatedType(_), _) | (_, Ty::AssociatedType(_)) => {
+                return Err(
+                    "unsupported: residual associated type projection in executable pattern".into(),
+                );
+            }
             (
                 Ty::Ref {
                     kind: ak,
@@ -5314,7 +5625,162 @@ pub enum ExprKind {
 }
 
 impl CheckedFunction {
+    /// Validate all retained type metadata before any executable admission check.
+    /// Arena rows and statement annotations are authoritative even when dead.
+    fn validate_all_type_metadata(
+        &self,
+        facts: FactsCtx<'_>,
+        budget: Option<&PlanBudget>,
+    ) -> Result<(), String> {
+        fn rows(count: usize, budget: Option<&PlanBudget>, work: &mut usize) -> Result<(), String> {
+            *work = work.checked_add(count).ok_or("metadata work overflow")?;
+            if *work > MAX_PATTERN_PROJECTION_WORK {
+                return Err("metadata work resource limit exceeded".into());
+            }
+            if let Some(budget) = budget {
+                budget.charge_work(count)?;
+            }
+            Ok(())
+        }
+        fn pattern(
+            pattern: &MatchPattern,
+            visit: &mut impl FnMut(&Ty) -> Result<(), String>,
+            budget: Option<&PlanBudget>,
+            work: &mut usize,
+        ) -> Result<(), String> {
+            rows(1, budget, work)?;
+            match pattern {
+                MatchPattern::Aggregate { ty, .. } => visit(ty)?,
+                MatchPattern::EnumVariant { ty, .. } => visit(&Ty::Enum(ty.clone()))?,
+                MatchPattern::Decision { ty, tests, .. } => {
+                    rows(tests.len(), budget, work)?;
+                    visit(ty)?;
+                    for test in tests {
+                        if let PatternTestKind::EnumVariant { ty, .. } = &test.kind {
+                            visit(&Ty::Enum(ty.clone()))?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            Ok(())
+        }
+        fn block(
+            value: &Block,
+            visit: &mut impl FnMut(&Ty) -> Result<(), String>,
+            budget: Option<&PlanBudget>,
+            depth: usize,
+            work: &mut usize,
+        ) -> Result<(), String> {
+            if depth > MAX_PATTERN_PROJECTION_DEPTH {
+                return Err("metadata block depth resource limit exceeded".into());
+            }
+            if let Some(budget) = budget {
+                budget.check_depth(depth)?;
+            }
+            for statement in &value.statements {
+                *work = work.checked_add(1).ok_or("metadata work overflow")?;
+                if *work > MAX_PATTERN_PROJECTION_WORK {
+                    return Err("metadata work resource limit exceeded".into());
+                }
+                if let Some(budget) = budget {
+                    budget.charge_work(1)?;
+                }
+                match statement {
+                    Stmt::LetPattern { ty, .. } => visit(ty)?,
+                    Stmt::LetElse {
+                        ty, pattern: row, ..
+                    } => {
+                        visit(ty)?;
+                        pattern(row, visit, budget, work)?;
+                    }
+                    Stmt::While { body, .. } => block(body, visit, budget, depth + 1, work)?,
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        let budget = budget.or_else(|| facts.validated().map(|f| f.budget()));
+        if budget.is_some_and(PlanBudget::has_resource_failure) {
+            return Err("planning resource budget already exhausted".into());
+        }
+        let mut residual = false;
+        let mut visits = 0usize;
+        let mut visit = |ty: &Ty| -> Result<(), String> {
+            visits = visits.checked_add(1).ok_or("metadata work overflow")?;
+            if visits > MAX_PATTERN_PROJECTION_WORK {
+                return Err("metadata work resource limit exceeded".into());
+            }
+            if let Some(authority) = facts.validated() {
+                let ledger = budget.unwrap_or(authority.budget());
+                authority
+                    .validate_ty_metadata_with_budget(ty, ledger)
+                    .map_err(|e| e.into_legacy_diagnostic(ledger))?;
+                residual |= type_metadata_walk(ty, Some(ledger), None)?;
+            } else {
+                residual |= facts.validate_ty_metadata_inner(ty, budget)?;
+            }
+            Ok(())
+        };
+        visit(&self.result)?;
+        for local in &self.locals {
+            visit(&local.ty)?;
+        }
+        let mut work = 0;
+        for expression in &self.exprs {
+            visit(&expression.ty)?;
+            match &expression.kind {
+                ExprKind::Struct { ty, .. } => visit(&Ty::Struct(ty.clone()))?,
+                ExprKind::EnumVariant { ty, .. } => visit(&Ty::Enum(ty.clone()))?,
+                ExprKind::Call {
+                    target, signature, ..
+                } => {
+                    if let Some(authority) = facts.validated() {
+                        authority
+                            .validate_callee_metadata(target)
+                            .map_err(|error| {
+                                error.into_legacy_diagnostic(budget.unwrap_or(authority.budget()))
+                            })?;
+                    }
+                    for ty in target
+                        .metadata_types()
+                        .chain(signature.params.iter())
+                        .chain(std::iter::once(&signature.result))
+                    {
+                        visit(ty)?;
+                    }
+                }
+                ExprKind::Match { arms, .. } => {
+                    for arm in arms {
+                        pattern(&arm.pattern, &mut visit, budget, &mut work)?;
+                    }
+                }
+                ExprKind::If {
+                    then_block,
+                    else_block,
+                    ..
+                } => {
+                    block(then_block, &mut visit, budget, 0, &mut work)?;
+                    block(else_block, &mut visit, budget, 0, &mut work)?;
+                }
+                ExprKind::Block(value)
+                | ExprKind::Loop { body: value, .. }
+                | ExprKind::LabeledBlock { body: value, .. } => {
+                    block(value, &mut visit, budget, 0, &mut work)?
+                }
+                _ => {}
+            }
+        }
+        block(&self.body, &mut visit, budget, 0, &mut work)?;
+        if residual {
+            return Err(
+                "unsupported: residual associated type projection in executable metadata".into(),
+            );
+        }
+        Ok(())
+    }
     pub fn preflight_plan(&self, facts: FactsCtx<'_>, budget: &PlanBudget) -> Result<(), String> {
+        self.validate_all_type_metadata(facts, Some(budget))?;
         fn storage(budget: &PlanBudget, count: usize, width: usize) -> Result<(), String> {
             budget.charge_work(count)?;
             budget.retain_bytes(
@@ -5903,6 +6369,7 @@ impl CheckedFunction {
         facts: FactsCtx<'_>,
         policy: CallEvidencePolicy<'_>,
     ) -> Result<(), String> {
+        self.validate_all_type_metadata(facts, facts.validated().map(|f| f.budget()))?;
         if let Some(authority) = facts.validated() {
             if let Some(proof) = &self.body_substitution {
                 proof.validate(self, authority, authority.budget())?;
@@ -7939,6 +8406,217 @@ mod tests {
         )
         .unwrap();
         assert!(FactsCtx::Concrete.validate_ty(&concrete).is_ok());
+
+        let projection = AssociatedTypeProjection {
+            trait_ref: TraitRef {
+                declaration: test_decl(),
+                self_ty: params[0].clone(),
+                args: Arc::from([params[1].clone(), params[0].clone()]),
+            },
+            item: test_decl(),
+        };
+        let substituted = substitute_ty(
+            &Ty::AssociatedType(Arc::new(projection.clone())),
+            &env,
+            &actuals,
+            FactsCtx::Universal(&env),
+            &mut NoNominals,
+            &budget,
+        )
+        .unwrap();
+        let Ty::AssociatedType(actual) = substituted else {
+            panic!("raw projection was erased");
+        };
+        assert_eq!(actual.item, projection.item);
+        assert_eq!(
+            actual.trait_ref.declaration,
+            projection.trait_ref.declaration
+        );
+        assert_eq!(actual.trait_ref.self_ty, params[1]);
+        assert_eq!(
+            &*actual.trait_ref.args,
+            &[params[0].clone(), params[1].clone()]
+        );
+    }
+
+    fn projection_fixture() -> Ty {
+        Ty::AssociatedType(Arc::new(AssociatedTypeProjection {
+            trait_ref: TraitRef {
+                declaration: test_decl(),
+                self_ty: Ty::Bool,
+                args: Arc::from([Ty::Int(IntTy::U128)]),
+            },
+            item: test_decl(),
+        }))
+    }
+
+    #[test]
+    fn projection_identity_is_not_structural_schema_equality() {
+        let budget = PlanBudget::default();
+        let original = projection_fixture();
+        let Ty::AssociatedType(value) = &original else {
+            unreachable!()
+        };
+        let copied = Ty::AssociatedType(Arc::new((**value).clone()));
+        assert!(identical_type(&original, &original.clone(), &budget).unwrap());
+        assert!(!identical_type(&original, &copied, &budget).unwrap());
+        assert!(ref_types_equal(&original, &copied, &budget, 0).unwrap());
+        let mut different = (**value).clone();
+        different.trait_ref.args = Arc::from([Ty::Int(IntTy::I128)]);
+        assert!(
+            !ref_types_equal(
+                &original,
+                &Ty::AssociatedType(Arc::new(different)),
+                &budget,
+                0
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn residual_projection_has_no_copy_carrier_place_or_reference_shape() {
+        let projection = projection_fixture();
+        let zero = Ty::Array {
+            element: Arc::new(projection.clone()),
+            len: 0,
+        };
+        for ty in [
+            projection.clone(),
+            zero.clone(),
+            Ty::Tuple(Arc::from([zero])),
+        ] {
+            let budget = PlanBudget::default();
+            assert!(!ty.is_copy());
+            assert!(
+                FactsCtx::Concrete
+                    .validate_ty_metadata_with_budget(&ty, &budget)
+                    .is_ok()
+            );
+            assert!(
+                FactsCtx::Concrete
+                    .validate_ty_with_budget(&ty, &budget)
+                    .is_err()
+            );
+            assert!(carrier_locations(&ty, &budget).is_err());
+            assert!(reject_references(&ty, &budget).is_err());
+            assert!(projected_ty(&ty, &[]).is_err());
+            assert!(root_reference_layers(&ty).is_err());
+            assert!(reference_layers(&ty).is_err());
+            assert!(slice_boundary_walk(&ty, true, Some(&budget), 0, &mut 0).is_err());
+        }
+        let budget = PlanBudget::default();
+        assert!(
+            carrier_at(
+                &projection,
+                &CarrierLocation {
+                    path: CarrierPath::default(),
+                    channel: CarrierChannel::ParamTail {
+                        prefix: 0,
+                        parameter: ParamId {
+                            owner: BinderId {
+                                declaration: test_decl()
+                            },
+                            index: 0
+                        }
+                    },
+                },
+                &budget
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn residual_guard_memoizes_shared_dags_and_replays_depth_and_ledger() {
+        let mut shared = Ty::Bool;
+        for _ in 0..40 {
+            shared = Ty::Tuple(Arc::from([shared.clone(), shared]));
+        }
+        let budget = PlanBudget::default();
+        reject_associated_types(&shared, Some(&budget)).unwrap();
+        FactsCtx::Concrete
+            .validate_ty_metadata_with_budget(&shared, &budget)
+            .unwrap();
+        assert_eq!(budget.usage_snapshot().bytes, 0);
+        let tiny = PlanBudget::new(PlanLimits {
+            work: 0,
+            ..PlanLimits::default()
+        });
+        assert!(reject_associated_types(&shared, Some(&tiny)).is_err());
+        assert!(tiny.has_resource_failure());
+        let poisoned = PlanBudget::default();
+        assert!(poisoned.check_depth(poisoned.limits().depth + 1).is_err());
+        assert!(reject_associated_types(&Ty::Bool, Some(&poisoned)).is_err());
+        assert!(
+            fixture()
+                .preflight_plan(FactsCtx::Concrete, &poisoned)
+                .is_err()
+        );
+
+        let mut deep = Ty::Bool;
+        for _ in 0..100 {
+            deep = Ty::Tuple(Arc::from([deep]));
+        }
+        let mut later = deep.clone();
+        for _ in 0..30 {
+            later = Ty::Tuple(Arc::from([later]));
+        }
+        let root = Ty::Tuple(Arc::from([deep, later]));
+        assert!(reject_associated_types(&root, None).is_err());
+    }
+
+    #[test]
+    fn executable_projection_rejection_waits_for_later_dead_metadata() {
+        let mut function = fixture();
+        function.result = projection_fixture();
+        function.locals[1].ty = Ty::Param(ParamId {
+            owner: BinderId {
+                declaration: test_decl(),
+            },
+            index: 0,
+        });
+        for error in [
+            function.validate().unwrap_err(),
+            function
+                .preflight_plan(FactsCtx::Concrete, &PlanBudget::default())
+                .unwrap_err(),
+        ] {
+            assert!(
+                error.contains("outside its authoritative binder"),
+                "{error}"
+            );
+            assert!(!error.contains("unsupported"), "{error}");
+        }
+        function.locals[1].ty = Ty::Bool;
+        function.exprs.push(TypedExpr {
+            ty: Ty::Unit,
+            completion: Completion::Returns,
+            kind: ExprKind::Call {
+                target: Callee::Direct(CallTarget {
+                    declaration: test_decl(),
+                    type_args: Arc::from([Ty::Param(ParamId {
+                        owner: BinderId {
+                            declaration: test_decl(),
+                        },
+                        index: 0,
+                    })]),
+                }),
+                name: "dead".into(),
+                args: vec![],
+                signature: Signature {
+                    params: vec![],
+                    result: Ty::Unit,
+                    ref_contract: Default::default(),
+                },
+            },
+        });
+        assert!(
+            function
+                .validate()
+                .unwrap_err()
+                .contains("outside its authoritative binder")
+        );
     }
 
     #[test]

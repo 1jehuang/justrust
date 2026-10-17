@@ -90,6 +90,36 @@ fn validate_type_names(ty: &Type, names: &impl NameAccess) -> Result<(), String>
     while let Some(ty) = pending.pop() {
         work(names, 1)?;
         match ty {
+            Type::Projection(projection) => {
+                let item = match projection.as_ref() {
+                    SourceProjection::Qualified {
+                        self_ty,
+                        trait_path,
+                        item,
+                    } => {
+                        work(names, 1)?;
+                        pending.push(self_ty).map_err(transport)?;
+                        if let TraitPath::Source(path) = trait_path {
+                            path.path(names)?;
+                            work(names, path.segments.len())?;
+                            for segment in &path.segments {
+                                names
+                                    .key(segment.name, LookupClass::Item(Namespace::Type))
+                                    .map_err(native_adapter::name_diagnostic)?;
+                                work(names, segment.args.len())?;
+                                for actual in &segment.args {
+                                    pending.push(actual).map_err(transport)?;
+                                }
+                            }
+                        }
+                        item
+                    }
+                    SourceProjection::SelfItem { item } => item,
+                };
+                names
+                    .key(*item, LookupClass::Member)
+                    .map_err(native_adapter::name_diagnostic)?;
+            }
             Type::Param(name) => {
                 names
                     .key(*name, LookupClass::TypeParameter)
@@ -158,6 +188,52 @@ impl Type {
         while let Some((left, right)) = pending.pop() {
             work(names, 1)?;
             match (left, right) {
+                (Type::Projection(a), Type::Projection(b)) => match (a.as_ref(), b.as_ref()) {
+                    (
+                        SourceProjection::Qualified {
+                            self_ty: a,
+                            trait_path: at,
+                            item: ai,
+                        },
+                        SourceProjection::Qualified {
+                            self_ty: b,
+                            trait_path: bt,
+                            item: bi,
+                        },
+                    ) => {
+                        equal &= ident_eq(names, *ai, *bi, LookupClass::Member)?;
+                        work(names, 1)?;
+                        pending.push((a, b)).map_err(transport)?;
+                        match (at, bt) {
+                            (TraitPath::Builtin(a), TraitPath::Builtin(b)) => equal &= a == b,
+                            (TraitPath::Source(a), TraitPath::Source(b)) => {
+                                equal &=
+                                    a.anchor == b.anchor && a.segments.len() == b.segments.len();
+                                for (a, b) in a.segments.iter().zip(&b.segments) {
+                                    equal &= ident_eq(
+                                        names,
+                                        a.name,
+                                        b.name,
+                                        LookupClass::Item(Namespace::Type),
+                                    )?;
+                                    equal &= a.args.len() == b.args.len();
+                                    for (a, b) in a.args.iter().zip(&b.args) {
+                                        work(names, 1)?;
+                                        pending.push((a, b)).map_err(transport)?;
+                                    }
+                                }
+                            }
+                            _ => equal = false,
+                        }
+                    }
+                    (
+                        SourceProjection::SelfItem { item: a },
+                        SourceProjection::SelfItem { item: b },
+                    ) => {
+                        equal &= ident_eq(names, *a, *b, LookupClass::Member)?;
+                    }
+                    _ => equal = false,
+                },
                 (Type::Param(a), Type::Param(b)) => {
                     equal &= ident_eq(names, *a, *b, LookupClass::TypeParameter)?
                 }
@@ -285,6 +361,58 @@ mod tests {
                 args: arguments,
             }],
         })
+    }
+
+    #[test]
+    fn projections_compare_all_semantic_children_but_do_not_conflate_source_forms() {
+        let budget = ExpansionBudget::default();
+        let (names, ids) = names("Trait Trait Out Out T U", &budget);
+        let projection = |trait_name, item, argument| {
+            Type::Projection(Box::new(SourceProjection::Qualified {
+                self_ty: Type::Bool,
+                trait_path: TraitPath::Source(GenericPath {
+                    anchor: PathAnchor::Relative,
+                    segments: vec![PathSegment {
+                        name: trait_name,
+                        args: vec![argument],
+                    }],
+                    resolved_use: None,
+                }),
+                item,
+            }))
+        };
+        let a = projection(ids[0], ids[2], Type::Param(ids[4]));
+        let b = projection(ids[1], ids[3], Type::Param(ids[4]));
+        assert!(a.semantic_eq(&b, names.as_ref()).unwrap());
+        assert!(
+            !a.semantic_eq(
+                &projection(ids[1], ids[3], Type::Param(ids[5])),
+                names.as_ref()
+            )
+            .unwrap()
+        );
+        assert!(
+            !a.semantic_eq(
+                &Type::Projection(Box::new(SourceProjection::SelfItem { item: ids[2] })),
+                names.as_ref()
+            )
+            .unwrap()
+        );
+        let (_, foreign) = self::names("Out", &ExpansionBudget::default());
+        assert!(
+            Type::Unit
+                .semantic_eq(&projection(ids[0], foreign[0], Type::Bool), names.as_ref())
+                .is_err()
+        );
+        assert!(
+            Type::Unit
+                .semantic_eq(
+                    &projection(ids[0], ids[2], Type::Param(foreign[0])),
+                    names.as_ref()
+                )
+                .is_err()
+        );
+        assert_eq!(budget.snapshot().temporary_bytes, 0);
     }
 
     #[test]

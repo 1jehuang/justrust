@@ -238,6 +238,17 @@ pub(super) fn inventory(
                 ty(t, ds, b, depth + 1)?;
             }
             Type::Ref { referent, .. } => ty(referent, ds, b, depth + 1)?,
+            Type::Projection(projection) => match projection.as_ref() {
+                SourceProjection::Qualified {
+                    self_ty,
+                    trait_path: path,
+                    ..
+                } => {
+                    ty(self_ty, ds, b, depth + 1)?;
+                    trait_path(path, ds, b, depth + 1)?;
+                }
+                SourceProjection::SelfItem { .. } => {}
+            },
             // `[T]` is unsized and not Clone: no recipe descriptor. Admission of
             // slice types is decided by the typed frontend, not recipe discovery.
             Type::Slice(_) => {}
@@ -530,6 +541,10 @@ pub(super) fn inventory(
             trait_path(path, &mut descriptors, budget, 0)?;
         }
         ty(&i.self_ty, &mut descriptors, budget, 0)?;
+        budget.charge_work(i.associated_types.len())?;
+        for associated in &i.associated_types {
+            ty(&associated.value, &mut descriptors, budget, 0)?;
+        }
         for m in &i.items {
             function(&m.function, &mut descriptors, budget)?;
         }
@@ -764,6 +779,59 @@ pub(super) fn checked_body(
 #[cfg(test)]
 mod wide_tests {
     use super::*;
+
+    #[test]
+    fn unused_associated_rhs_inventory_includes_projection_self_actuals_and_siblings() {
+        let parsed = super::super::parse_unresolved(
+            "trait Family<T>{type Out;}struct S;\
+             impl Family<bool> for S{type Out=(<([bool;2],bool) as Family<[bool;3]>>::Out,[bool;4]);}\
+             fn main(){}",
+        )
+        .unwrap();
+        let budget = ir::PlanBudget::default();
+        let shapes = inventory(&parsed.program, &budget).unwrap();
+        let builder = tr::CoreCatalogBuilder::new(
+            ir::SnapshotId::allocate().unwrap(),
+            parsed.program.modules.clone(),
+            &budget,
+        )
+        .unwrap();
+        let source_start = builder.source_start();
+        let catalog = builder.finish(source_start, shapes, &budget).unwrap();
+        for descriptor in [
+            tr::RecipeDescriptor::CloneTuple { arity: 2 },
+            tr::RecipeDescriptor::CloneArray { len: 2 },
+            tr::RecipeDescriptor::CloneArray { len: 3 },
+            tr::RecipeDescriptor::CloneArray { len: 4 },
+        ] {
+            if let Err(error) = catalog.recipe(descriptor) {
+                let footprint = counts(descriptor, &budget).unwrap();
+                let admission =
+                    crate::compiler::ownership::preflight_recipe_counts(&footprint, &budget)
+                        .unwrap();
+                let crate::compiler::ownership::RecipeAdmission::IntrinsicLimit(reason) = admission
+                else {
+                    panic!("written associated RHS recipe is missing: {error}");
+                };
+                assert_eq!(error.kind(), tr::FactsErrorKind::Resource);
+                assert_eq!(error.to_string(), reason.message());
+            }
+        }
+        let absent = catalog
+            .recipe(tr::RecipeDescriptor::CloneArray { len: 5 })
+            .unwrap_err();
+        assert_eq!(absent.kind(), tr::FactsErrorKind::InvalidMetadata);
+        assert!(!budget.has_resource_failure());
+
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            depth: 1,
+            ..Default::default()
+        });
+        assert!(inventory(&parsed.program, &budget).is_err());
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Depth);
+        assert_eq!(failure.requested, 2);
+    }
 
     #[test]
     fn trait_actual_recipes_include_unused_bounds_supertraits_impls_and_default_ufcs() {

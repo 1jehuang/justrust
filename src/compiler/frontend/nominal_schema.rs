@@ -135,6 +135,108 @@ impl PlanState {
         budget.charge_work(1)?;
         budget.charge_nodes(1)?;
         Ok(match ty {
+            Type::Projection(projection) => {
+                let context = self
+                    .source_context
+                    .ok_or("projection without retained source declaration context")?;
+                registry.validate_source_projection(context, projection, budget)?;
+                let (trait_ref, item) = match projection.as_ref() {
+                    SourceProjection::Qualified {
+                        self_ty,
+                        trait_path,
+                        item,
+                    } => {
+                        registry
+                            .names
+                            .check(*item)
+                            .map_err(native_adapter::name_diagnostic)?;
+                        let self_ty = self.source_ty_with_transport(
+                            registry,
+                            self_ty,
+                            bindings,
+                            caller,
+                            budget,
+                            depth + 1,
+                            false,
+                            transport,
+                        )?;
+                        (
+                            self.source_trait_ref(
+                                registry, trait_path, &self_ty, bindings, caller, budget,
+                            )?,
+                            *item,
+                        )
+                    }
+                    SourceProjection::SelfItem { item } => {
+                        registry
+                            .names
+                            .check(*item)
+                            .map_err(native_adapter::name_diagnostic)?;
+                        let context = self
+                            .source_context
+                            .ok_or("Self associated type without retained source owner")?;
+                        registry
+                            .modules
+                            .check(context.module)
+                            .map_err(module_diagnostic)?;
+                        let owner = registry.declaration(
+                            context
+                                .owner
+                                .ok_or("Self associated type outside trait owner")?,
+                        )?;
+                        if owner.path.module != context.module {
+                            return Err("source associated owner module changed".into());
+                        }
+                        let self_ty = bindings
+                            .get(&GenericBindingKey::SelfType)
+                            .cloned()
+                            .ok_or("Self projection has no source Self type")?;
+                        let trait_ref = match owner.kind {
+                            ir::DeclKind::Trait => {
+                                let mut args = symbolic_args(&owner.param_env, budget)?;
+                                if args.is_empty() {
+                                    return Err("trait Self environment is empty".into());
+                                }
+                                args.remove(0);
+                                ir::TraitRef {
+                                    declaration: owner.id,
+                                    self_ty,
+                                    args: args.into(),
+                                }
+                            }
+                            ir::DeclKind::TraitImpl => {
+                                let block = registry
+                                    .program
+                                    .impls
+                                    .get(owner.source_index)
+                                    .ok_or("missing retained projection impl")?;
+                                if block.module != context.module {
+                                    return Err("retained impl module changed".into());
+                                }
+                                self.source_trait_ref(
+                                    registry,
+                                    block
+                                        .trait_path
+                                        .as_ref()
+                                        .ok_or("Self projection requires trait impl")?,
+                                    &self_ty,
+                                    bindings,
+                                    caller,
+                                    budget,
+                                )?
+                            }
+                            _ => return Err("Self projection requires retained trait owner".into()),
+                        };
+                        (trait_ref, *item)
+                    }
+                };
+                let item = registry.associated_type_item(trait_ref.declaration, item, budget)?;
+                budget.retain_bytes(
+                    std::mem::size_of::<ir::AssociatedTypeProjection>()
+                        + 2 * std::mem::size_of::<usize>(),
+                )?;
+                ir::Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection { trait_ref, item }))
+            }
             Type::Param(p) => bindings
                 .get(&registry.parameter_key(*p)?)
                 .cloned()
@@ -351,8 +453,10 @@ impl PlanState {
                     ir::FactsCtx::Validated(facts) => ir::FactsCtx::Universal(facts.env()),
                     facts => facts,
                 };
-                structural.validate_ty_with_budget(arg, budget)?;
-                ir::carrier_locations(arg, budget)?;
+                structural.validate_ty_metadata_with_budget(arg, budget)?;
+                if !raw_type_has_projection(arg, budget, 0)? {
+                    ir::carrier_locations(arg, budget)?;
+                }
             } else {
                 validate_argument(arg, caller, budget, depth + 1)?;
             }
@@ -585,7 +689,9 @@ impl PlanState {
                 }
             };
             if transport.is_some() {
-                ir::carrier_locations(&ty, budget)?;
+                if !raw_type_has_projection(&ty, budget, 0)? {
+                    ir::carrier_locations(&ty, budget)?;
+                }
             } else {
                 validate_argument(&ty, caller, budget, 0)?;
             }

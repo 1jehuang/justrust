@@ -18,6 +18,7 @@ pub enum PersistentModule<'a> {
 #[derive(Clone, Copy, Debug)]
 pub enum PersistentDeclItem<'a> {
     Name(&'a str),
+    AssociatedType { trait_name: &'a str, name: &'a str },
     Impl,
     Catalog(tr::CatalogItem),
 }
@@ -95,11 +96,30 @@ impl PlanCtx {
                     return Err("contract error: source item in catalog crate".into());
                 }
                 let data = names.data(ident).map_err(native_adapter::name_diagnostic)?;
-                PersistentDeclItem::Name(
-                    names
-                        .atom_text(data.atom)
-                        .map_err(native_adapter::name_diagnostic)?,
-                )
+                let name = names
+                    .atom_text(data.atom)
+                    .map_err(native_adapter::name_diagnostic)?;
+                if info.kind == ir::DeclKind::AssociatedType {
+                    let owner = self.declaration(
+                        info.owner
+                            .ok_or("associated member has no persistent owner")?,
+                    )?;
+                    if owner.kind != ir::DeclKind::Trait || owner.path.module != info.path.module {
+                        return Err("associated member persistent owner mismatch".into());
+                    }
+                    let DeclItemName::Source(trait_name) = owner.path.item else {
+                        return Err("source associated member has non-source owner".into());
+                    };
+                    let owner_data = names
+                        .data(trait_name)
+                        .map_err(native_adapter::name_diagnostic)?;
+                    let trait_name = names
+                        .atom_text(owner_data.atom)
+                        .map_err(native_adapter::name_diagnostic)?;
+                    PersistentDeclItem::AssociatedType { trait_name, name }
+                } else {
+                    PersistentDeclItem::Name(name)
+                }
             }
             DeclItemName::Impl => {
                 if root_kind != PersistentCrate::Source

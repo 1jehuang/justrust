@@ -1,5 +1,44 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: closed associated-type normalization with exact source and world authority
+
+- Delivered the bounded ASSOCIATED-TYPES.md first vertical, not general associated
+  types or full Rust. Real trait-owned type declarations and impl assignment pairs
+  normalize closed qualified types in ordinary signatures, aliases and locals.
+  Full Self/trait arguments select the implementation; raw source schemas stay
+  immutable and a separate normalized map feeds callable/carrier validation.
+- Normal forms cover existing Sized reference-free tuples, non-Copy records,
+  explicit Clone/Copy records, wide integers and generic impl RHS substitution.
+  Nested closed Self projections retain exact dependency evidence. Required trait
+  projection methods/defaults, rigid caller projections, associated bounds/GATs,
+  equality constraints and reference-bearing normal forms remain explicit boundaries.
+- Checked source member occurrences include the original composite self/path and
+  declaration owner, not just spelling. Local normalization uses the sealed
+  facts subject even for nongeneric main with a shared empty predicate environment.
+  Source locks are released before normalization and callback re-entry.
+- Executable metadata preflight visits all dead/type/callee metadata before
+  residual rejection. Exact tagged DAG memoization preserves expanded-height
+  checks and the unchanged 40-level shared-nominal regression. No caps increased.
+  Sticky failure, implementation-only selection, raw RHS correspondence and
+  world/environment/phase replay are checked independently of executable layout.
+- Stock40 source bytes match retained measurements. The original39 are unchanged;
+  source40 separately measures manual Clone/Copy because derive is still closed.
+  Both debug and release pass160 native workers1/8 CHECK/BUILD cells, including
+  24 ELF executions per profile. Partition12 runtime/10 ordinary invalid/16 valid
+  unsupported/2 invalid unsupported honestly retains earlier formatting, derive
+  and parser boundaries. The historical62 alias sources are unchanged; only the
+  now-supported closed associated alias outcome is promoted.
+- Public authority22 controls pass. Release native/public25 tests plus private
+  associated32 and projection34 filters pass. Final full hosted suite passes
+  2851 tests across138 binaries; library1128, all-target check, strict all-target
+  clippy, cargo fmt and diff checks pass. No speedup claim.
+- Failed and passing receipts are retained as29 exact exported rows in
+  data/runs/xps14/2026-10-17-associated-types.jsonl. Final full test receipt:
+  20261017-163054096-3347355; strict lint:20261017-163116516-3346921;
+  release public:20261017-163009252-3343101. Earlier failures include the
+  shared-DAG metadata walk, local source-context omission, overly broad raw
+  primitive foreign-facts test and newly supported historical alias.
+
 ## 2026-10-17: typed shared slices with exact generic elements and native stride
 
 - Accepted bounded TYPED-SLICES.md, not general DSTs or full Rust. Shared params

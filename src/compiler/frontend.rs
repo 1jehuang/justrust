@@ -709,6 +709,20 @@ fn compare_source_type_work(
     sr::work(budget, 1)?;
     match ty {
         Type::Apply(path) => compare_source_path_work(path, budget, at + 1)?,
+        Type::Projection(projection) => {
+            sr::work(budget, 1)?;
+            if let SourceProjection::Qualified {
+                self_ty,
+                trait_path,
+                ..
+            } = projection.as_ref()
+            {
+                compare_source_type_work(self_ty, budget, at + 1)?;
+                if let TraitPath::Source(path) = trait_path {
+                    compare_source_path_work(path, budget, at + 1)?;
+                }
+            }
+        }
         Type::Param(_) | Type::Named(_) => sr::work(budget, 1)?,
         Type::Ref {
             region, referent, ..
@@ -842,6 +856,26 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
     sr::work(budget, 1)?;
     Ok(match ty {
         Type::Apply(path) => Type::Apply(copy_source_path(path, budget, at + 1)?),
+        Type::Projection(projection) => {
+            let projection = match projection.as_ref() {
+                SourceProjection::Qualified {
+                    self_ty,
+                    trait_path,
+                    item,
+                } => SourceProjection::Qualified {
+                    self_ty: copy_source_type(self_ty, budget, at + 1)?,
+                    trait_path: match trait_path {
+                        TraitPath::Source(path) => {
+                            TraitPath::Source(copy_source_path(path, budget, at + 1)?)
+                        }
+                        TraitPath::Builtin(kind) => TraitPath::Builtin(*kind),
+                    },
+                    item: *item,
+                },
+                SourceProjection::SelfItem { item } => SourceProjection::SelfItem { item: *item },
+            };
+            Type::Projection(Box::new(projection))
+        }
         Type::Param(name) => Type::Param(*name),
         Type::Named(name) => Type::Named(name.clone()),
         Type::Ref {
@@ -906,6 +940,20 @@ fn retain_source_type(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resul
     sr::retain(budget, 2 * std::mem::size_of::<Type>() + 32)?;
     match ty {
         Type::Apply(path) => retain_source_path(path, budget, depth + 1)?,
+        Type::Projection(projection) => {
+            sr::retain(budget, 2 * std::mem::size_of::<SourceProjection>() + 32)?;
+            if let SourceProjection::Qualified {
+                self_ty,
+                trait_path,
+                ..
+            } = projection.as_ref()
+            {
+                retain_source_type(self_ty, budget, depth + 1)?;
+                if let TraitPath::Source(path) = trait_path {
+                    retain_source_path(path, budget, depth + 1)?;
+                }
+            }
+        }
         Type::Param(_) | Type::Named(_) => {
             sr::work(budget, 1)?;
         }
@@ -3816,6 +3864,13 @@ pub struct ImplDecl {
     pub type_params: Vec<AstIdent>,
     pub self_ty: Type,
     pub items: Vec<AssociatedFunction>,
+    pub associated_types: Vec<AssociatedTypeValue>,
+}
+/// A written trait-impl assignment, not a callable or a new generic binder.
+#[derive(Clone, Debug)]
+pub struct AssociatedTypeValue {
+    pub name: AstIdent,
+    pub value: Type,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BuiltinTrait {
@@ -3843,6 +3898,12 @@ pub struct TraitDecl {
     pub name: AstPath,
     pub visibility: ir::Visibility,
     pub items: Vec<TraitItemDecl>,
+    pub associated_types: Vec<AssociatedTypeDecl>,
+}
+/// A genuine type member owned by its declaring trait.
+#[derive(Clone, Debug)]
+pub struct AssociatedTypeDecl {
+    pub name: AstIdent,
 }
 #[derive(Clone, Debug)]
 pub struct TraitItemDecl {
@@ -3985,6 +4046,8 @@ impl GenericPath {
 pub enum Type {
     SelfType,
     Apply(GenericPath),
+    /// Exact written projection syntax, never a fabricated parameter or alias.
+    Projection(Box<SourceProjection>),
     Param(AstIdent),
     Ref {
         kind: ir::BorrowKind,
@@ -4004,6 +4067,18 @@ pub enum Type {
     Never,
     /// Unannotated locals only, resolved independently during function checking.
     Infer,
+}
+/// Boxed as a whole by `Type`, keeping ordinary expression stack frames small.
+#[derive(Clone, Debug)]
+pub enum SourceProjection {
+    Qualified {
+        self_ty: Type,
+        trait_path: TraitPath,
+        item: AstIdent,
+    },
+    /// The exact owning trait comes from the retained declaration context.
+    /// No source trait path is fabricated for this syntax.
+    SelfItem { item: AstIdent },
 }
 #[derive(Clone, Debug)]
 pub struct Block {
@@ -6335,6 +6410,9 @@ impl<'input, 'names> Parser<'input, 'names> {
                 referent: Box::new(self.ty()?),
             });
         }
+        if self.is("<") || self.is("<<") || self.is("<<=") {
+            return self.qualified_type_projection();
+        }
         if self.eat("[") {
             let element = self.ty()?;
             if self.eat("]") {
@@ -6345,8 +6423,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.expect("]")?;
             Ok(Type::Array(Box::new(element), len))
         } else if self.eat("Self") {
-            if self.is("::") {
-                return Err(self.unsupported("associated type projections are unsupported"));
+            if self.eat("::") {
+                let item = self.ident()?;
+                return self.self_type_projection(item);
             }
             Ok(Type::SelfType)
         } else if let Some(name) = self.current_type_parameter()? {
@@ -6392,6 +6471,34 @@ impl<'input, 'names> Parser<'input, 'names> {
                 ))
             }
         }
+    }
+    #[inline(never)]
+    fn self_type_projection(&mut self, item: AstIdent) -> Result<Type, ParseError> {
+        self.box_type_projection(SourceProjection::SelfItem { item })
+    }
+    #[inline(never)]
+    fn box_type_projection(&mut self, projection: SourceProjection) -> Result<Type, ParseError> {
+        self.names
+            .retain_parser_storage(std::mem::size_of::<SourceProjection>())
+            .map_err(native_adapter::name_error)?;
+        Ok(Type::Projection(Box::new(projection)))
+    }
+    #[inline(never)]
+    fn qualified_type_projection(&mut self) -> Result<Type, ParseError> {
+        if !self.cursor.consume_type_lt() {
+            return Err(self.error("expected qualified type opening <"));
+        }
+        let self_ty = self.ty()?;
+        self.expect("as")?;
+        let trait_path = self.trait_path()?;
+        self.close_angle()?;
+        self.expect("::")?;
+        let item = self.ident()?;
+        self.box_type_projection(SourceProjection::Qualified {
+            self_ty,
+            trait_path,
+            item,
+        })
     }
     /// Split closing angle tokens only while parsing types, never expressions.
     fn close_angle(&mut self) -> Result<(), ParseError> {
@@ -7176,16 +7283,29 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
             self.expect("{")?;
             let mut items = Vec::new();
+            let mut associated_types = Vec::new();
             let mut item_names = std::collections::HashSet::new();
             while !self.is("}") {
-                if items.len() >= 4096 {
+                if items.len().saturating_add(associated_types.len()) >= 4096 {
                     return Err(self.limit("trait item limit exceeded"));
                 }
                 if self.is("pub") {
                     return Err(self.error("trait items cannot declare visibility"));
                 }
-                if self.is("type") {
-                    return Err(self.unsupported("associated types are unsupported"));
+                if self.eat("type") {
+                    let name = self.ident()?;
+                    if self.is("<") || self.is("where") {
+                        return Err(self.unsupported("generic associated types are unsupported"));
+                    }
+                    if self.is(":") || self.is("=") {
+                        return Err(
+                            self.unsupported("associated type bounds and defaults are unsupported")
+                        );
+                    }
+                    self.expect(";")?;
+                    self.reserve_parser_items(&mut associated_types, 1)?;
+                    associated_types.push(AssociatedTypeDecl { name });
+                    continue;
                 }
                 let (signature, receiver) = self.function_head(&type_params, true)?;
                 if !item_names.insert(self.name_key(signature.name, LookupClass::Member)?) {
@@ -7214,6 +7334,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     self.expect(";")?;
                     None
                 };
+                self.reserve_parser_items(&mut items, 1)?;
                 items.push(TraitItemDecl {
                     signature,
                     receiver,
@@ -7231,6 +7352,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     .map_err(native_adapter::name_error)?,
                 visibility: visibility.clone(),
                 items,
+                associated_types,
             });
             (name, ItemKind::Trait)
         } else if self.eat("enum") {
@@ -7432,19 +7554,42 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
             self.expect("{")?;
             let mut items = Vec::new();
+            let mut associated_types = Vec::new();
             while !self.is("}") {
-                if items.len() >= 4096 {
+                if items.len().saturating_add(associated_types.len()) >= 4096 {
                     return Err(self.limit("associated item limit exceeded"));
                 }
                 let (visibility, explicit_visibility) = self.visibility(module)?;
                 if explicit_visibility && trait_path.is_some() {
                     return Err(self.error("trait impl items cannot declare pub"));
                 }
-                if self.is("type") {
-                    return Err(self.unsupported("associated types are unsupported"));
+                if self.eat("type") {
+                    if trait_path.is_none() {
+                        return Err(self.unsupported("inherent associated types are unsupported"));
+                    }
+                    let name = self.ident()?;
+                    if self.is("<") || self.is("where") || self.is(":") {
+                        return Err(self.unsupported(
+                            "generic associated types and associated bounds are unsupported",
+                        ));
+                    }
+                    self.expect("=")?;
+                    // A preceding generic method must not leak its binder into
+                    // this assignment's exact impl-only environment.
+                    let mut visible = std::mem::take(&mut self.type_params);
+                    visible.clear();
+                    self.reserve_parser_items(&mut visible, type_params.len())?;
+                    visible.extend_from_slice(&type_params);
+                    self.type_params = visible;
+                    let value = self.ty()?;
+                    self.expect(";")?;
+                    self.reserve_parser_items(&mut associated_types, 1)?;
+                    associated_types.push(AssociatedTypeValue { name, value });
+                    continue;
                 }
                 let (mut function, receiver) = self.function_scoped(&type_params, true)?;
                 function.visibility = visibility.clone();
+                self.reserve_parser_items(&mut items, 1)?;
                 items.push(AssociatedFunction {
                     function,
                     receiver,
@@ -7459,6 +7604,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 type_params,
                 self_ty,
                 items,
+                associated_types,
             });
             self.type_params.clear();
             return Ok(());
@@ -10519,6 +10665,15 @@ fn walk_depth_checked(
     budget: Option<&ir::PlanBudget>,
     names: Option<&NameStore>,
 ) -> Result<(), String> {
+    walk_depth_inspecting(root, budget, names, None)
+}
+type SourceNodeInspector<'a> = dyn FnMut(&DepthNode<'_>, usize) -> Result<(), String> + 'a;
+fn walk_depth_inspecting(
+    root: DepthNode<'_>,
+    budget: Option<&ir::PlanBudget>,
+    names: Option<&NameStore>,
+    mut inspect: Option<&mut SourceNodeInspector<'_>>,
+) -> Result<(), String> {
     let mut stack = Vec::new();
     let mut checked_stack = names
         .map(|names| {
@@ -10543,6 +10698,9 @@ fn walk_depth_checked(
     } else {
         stack.pop()
     } {
+        if let Some(inspect) = inspect.as_deref_mut() {
+            inspect(&node, depth)?;
+        }
         if let Some(names) = names {
             name_walk_work(Some(names), 1)?;
             let check =
@@ -10577,6 +10735,31 @@ fn walk_depth_checked(
             Ok(())
         };
         match node {
+            DepthNode::Type(Type::Projection(projection)) => {
+                if let Some(names) = names {
+                    let item = match projection.as_ref() {
+                        SourceProjection::Qualified { item, .. }
+                        | SourceProjection::SelfItem { item } => *item,
+                    };
+                    names.check(item).map_err(native_adapter::name_diagnostic)?;
+                }
+                if let SourceProjection::Qualified {
+                    self_ty,
+                    trait_path,
+                    ..
+                } = projection.as_ref()
+                {
+                    push(DepthNode::Type(self_ty))?;
+                    if let TraitPath::Source(path) = trait_path {
+                        for segment in &path.segments {
+                            name_walk_work(names, 1)?;
+                            for actual in &segment.args {
+                                push(DepthNode::Type(actual))?;
+                            }
+                        }
+                    }
+                }
+            }
             DepthNode::Type(Type::Ref { referent, .. }) => push(DepthNode::Type(referent))?,
             DepthNode::Type(Type::Array(element, _) | Type::Slice(element)) => {
                 push(DepthNode::Type(element))?
@@ -10852,6 +11035,227 @@ fn walk_depth_checked(
     }
     Ok(())
 }
+fn exact_source_ident(names: &NameStore, a: AstIdent, b: AstIdent) -> Result<bool, String> {
+    use super::semantic_name::occurrence_index;
+    Ok(
+        occurrence_index(names, a).map_err(native_adapter::name_diagnostic)?
+            == occurrence_index(names, b).map_err(native_adapter::name_diagnostic)?,
+    )
+}
+fn exact_source_path(
+    names: &NameStore,
+    a: &AstPath,
+    b: &AstPath,
+    budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    let mut equal = true;
+    for (a, b) in [
+        (a.clone(), b.clone()),
+        (
+            a.original_use(names)
+                .map_err(native_adapter::name_diagnostic)?,
+            b.original_use(names)
+                .map_err(native_adapter::name_diagnostic)?,
+        ),
+    ] {
+        a.check(names).map_err(native_adapter::name_diagnostic)?;
+        b.check(names).map_err(native_adapter::name_diagnostic)?;
+        budget.charge_work(
+            a.len()
+                .checked_add(b.len())
+                .ok_or("source path work overflow")?,
+        )?;
+        equal &= a.anchor() == b.anchor() && a.len() == b.len();
+        for (a, b) in a.segments().iter().zip(b.segments()) {
+            equal &= exact_source_ident(names, *a, *b)?;
+        }
+    }
+    Ok(equal)
+}
+fn exact_source_generic_path(
+    names: &NameStore,
+    a: &GenericPath,
+    b: &GenericPath,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(
+        a.segments
+            .len()
+            .checked_add(b.segments.len())
+            .ok_or("source generic path work overflow")?,
+    )?;
+    let mut equal = exact_source_path(names, &a.path(names)?, &b.path(names)?, budget)?;
+    equal &= a.anchor == b.anchor && a.segments.len() == b.segments.len();
+    for (a, b) in a.segments.iter().zip(&b.segments) {
+        equal &= exact_source_ident(names, a.name, b.name)?;
+        equal &= a.args.len() == b.args.len();
+        for (a, b) in a.args.iter().zip(&b.args) {
+            equal &= exact_source_type(names, a, b, budget, depth + 1)?;
+        }
+    }
+    Ok(equal)
+}
+fn exact_source_type(
+    names: &NameStore,
+    a: &Type,
+    b: &Type,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    Ok(match (a, b) {
+        (Type::Projection(a), Type::Projection(b)) => {
+            exact_source_projection(names, a, b, budget, depth + 1)?
+        }
+        (Type::Param(a), Type::Param(b)) => exact_source_ident(names, *a, *b)?,
+        (Type::Named(a), Type::Named(b)) => exact_source_path(names, a, b, budget)?,
+        (Type::Apply(a), Type::Apply(b)) => {
+            exact_source_generic_path(names, a, b, budget, depth + 1)?
+        }
+        (
+            Type::Ref {
+                kind: ak,
+                region: ar,
+                referent: a,
+            },
+            Type::Ref {
+                kind: bk,
+                region: br,
+                referent: b,
+            },
+        ) => {
+            let region = match (ar, br) {
+                (None, None)
+                | (Some(RegionName::Static), Some(RegionName::Static))
+                | (Some(RegionName::Infer), Some(RegionName::Infer)) => true,
+                (Some(RegionName::Named(a)), Some(RegionName::Named(b))) => {
+                    exact_source_ident(names, *a, *b)?
+                }
+                _ => false,
+            };
+            let referent = exact_source_type(names, a, b, budget, depth + 1)?;
+            ak == bk && region && referent
+        }
+        (Type::Array(a, al), Type::Array(b, bl)) => {
+            exact_source_type(names, a, b, budget, depth + 1)? && al == bl
+        }
+        (Type::Slice(a), Type::Slice(b)) => exact_source_type(names, a, b, budget, depth + 1)?,
+        (Type::Tuple(a), Type::Tuple(b)) => {
+            let mut equal = a.len() == b.len();
+            for (a, b) in a.iter().zip(b) {
+                equal &= exact_source_type(names, a, b, budget, depth + 1)?;
+            }
+            equal
+        }
+        (Type::Int(a), Type::Int(b)) => a == b,
+        (Type::Float(a), Type::Float(b)) => a == b,
+        (Type::SelfType, Type::SelfType)
+        | (Type::Bool, Type::Bool)
+        | (Type::Unit, Type::Unit)
+        | (Type::Never, Type::Never)
+        | (Type::Infer, Type::Infer) => true,
+        _ => false,
+    })
+}
+fn exact_source_projection(
+    names: &NameStore,
+    a: &SourceProjection,
+    b: &SourceProjection,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    Ok(match (a, b) {
+        (SourceProjection::SelfItem { item: a }, SourceProjection::SelfItem { item: b }) => {
+            exact_source_ident(names, *a, *b)?
+        }
+        (
+            SourceProjection::Qualified {
+                self_ty: a,
+                trait_path: at,
+                item: ai,
+            },
+            SourceProjection::Qualified {
+                self_ty: b,
+                trait_path: bt,
+                item: bi,
+            },
+        ) => {
+            let mut equal = exact_source_ident(names, *ai, *bi)?;
+            equal &= exact_source_type(names, a, b, budget, depth + 1)?;
+            equal &= match (at, bt) {
+                (TraitPath::Source(a), TraitPath::Source(b)) => {
+                    exact_source_generic_path(names, a, b, budget, depth + 1)?
+                }
+                (TraitPath::Builtin(a), TraitPath::Builtin(b)) => a == b,
+                _ => false,
+            };
+            equal
+        }
+        _ => false,
+    })
+}
+fn retained_node_projection(
+    names: &NameStore,
+    root: DepthNode<'_>,
+    projection: &SourceProjection,
+    budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    // Check the complete candidate before an unequal retained site can discard
+    // any child. Equality here is exact source occurrence, not NameKey equality.
+    exact_source_projection(names, projection, projection, budget, 0)?;
+    let mut found = false;
+    let mut inspect = |node: &DepthNode<'_>, depth| {
+        budget.check_depth(depth)?;
+        budget.charge_work(1)?;
+        if let DepthNode::Type(Type::Projection(retained)) = node {
+            found |= exact_source_projection(names, retained, projection, budget, 0)?;
+        }
+        Ok(())
+    };
+    // The checked worklist owns temporary storage. This is inspection, not a
+    // clone, so it must not retain clone reservations for every visited node.
+    walk_depth_inspecting(root, None, Some(names), Some(&mut inspect))?;
+    Ok(found)
+}
+fn retained_type_projection(
+    names: &NameStore,
+    ty: &Type,
+    projection: &SourceProjection,
+    budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    retained_node_projection(names, DepthNode::Type(ty), projection, budget)
+}
+fn retained_function_projection(
+    names: &NameStore,
+    function: &Function,
+    projection: &SourceProjection,
+    budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    let mut found = retained_type_projection(names, &function.result, projection, budget)?;
+    for (_, ty) in &function.params {
+        budget.charge_work(1)?;
+        found |= retained_type_projection(names, ty, projection, budget)?;
+    }
+    for bound in &function.bounds {
+        for path in &bound.traits {
+            budget.charge_work(1)?;
+            if let TraitPath::Source(path) = path {
+                for segment in &path.segments {
+                    for actual in &segment.args {
+                        found |= retained_type_projection(names, actual, projection, budget)?;
+                    }
+                }
+            }
+        }
+    }
+    found |= retained_node_projection(names, DepthNode::Block(&function.body), projection, budget)?;
+    Ok(found)
+}
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Copy, Debug)]
@@ -10883,6 +11287,7 @@ pub struct DeclInfo {
 }
 #[derive(Debug)]
 pub struct DeclRegistry {
+    program: Arc<Program>,
     names: Arc<NameStore>,
     modules: Arc<ModuleArena>,
     symbols: Arc<ProgramSymbols>,
@@ -10896,6 +11301,7 @@ pub struct DeclRegistry {
     traits: HashMap<TraitLookupKey, ir::DeclId>,
     trait_ids: Vec<ir::DeclId>,
     trait_items: Vec<Vec<ir::DeclId>>,
+    trait_associated_types: Vec<Vec<ir::DeclId>>,
     trait_imports: Vec<(ModuleId, TraitPath)>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -10915,6 +11321,164 @@ enum CallableSource {
     TraitDefault { trait_index: usize, item: usize },
 }
 impl DeclRegistry {
+    fn source_type_context(&self, declaration: ir::DeclId) -> Result<SourceTypeContext, String> {
+        let info = self.declaration(declaration)?;
+        self.modules
+            .check(info.path.module)
+            .map_err(module_diagnostic)?;
+        let owner = match info.kind {
+            ir::DeclKind::Trait | ir::DeclKind::TraitImpl => Some(info.id),
+            ir::DeclKind::TraitItem | ir::DeclKind::AssociatedType => info.owner,
+            ir::DeclKind::AssociatedFunction => info
+                .owner
+                .or_else(|| info.path.associated.as_ref().map(|owner| owner.impl_decl)),
+            _ => None,
+        };
+        if let Some(owner) = owner {
+            let retained = self.declaration(owner)?;
+            let module = match retained.kind {
+                ir::DeclKind::Trait => self
+                    .program
+                    .traits
+                    .get(retained.source_index)
+                    .map(|item| item.module),
+                ir::DeclKind::TraitImpl => self
+                    .program
+                    .impls
+                    .get(retained.source_index)
+                    .map(|item| item.module),
+                ir::DeclKind::Impl => {
+                    return Ok(SourceTypeContext {
+                        declaration,
+                        module: info.path.module,
+                        owner: None,
+                    });
+                }
+                _ => return Err("invalid retained source projection owner".into()),
+            }
+            .ok_or("missing retained source projection owner")?;
+            if module != info.path.module || module != retained.path.module {
+                return Err("source projection owner module mismatch".into());
+            }
+        }
+        Ok(SourceTypeContext {
+            declaration,
+            module: info.path.module,
+            owner,
+        })
+    }
+    fn validate_source_projection(
+        &self,
+        context: SourceTypeContext,
+        projection: &SourceProjection,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        let expected = self.source_type_context(context.declaration)?;
+        if context.module != expected.module || context.owner != expected.owner {
+            return Err("source projection changed retained declaration owner or module".into());
+        }
+        let info = self.declaration(context.declaration)?;
+        let names = self.names.as_ref();
+        let found = match info.kind {
+            ir::DeclKind::TraitImpl => {
+                let block = self
+                    .program
+                    .impls
+                    .get(info.source_index)
+                    .ok_or("missing retained projection impl")?;
+                let mut found = false;
+                for row in &block.associated_types {
+                    budget.charge_work(1)?;
+                    found |= retained_type_projection(names, &row.value, projection, budget)?;
+                }
+                found
+            }
+            ir::DeclKind::TraitItem => {
+                let owner =
+                    self.declaration(info.owner.ok_or("trait source item missing owner")?)?;
+                let head = &self
+                    .program
+                    .traits
+                    .get(owner.source_index)
+                    .ok_or("missing retained trait projection source")?
+                    .items
+                    .get(info.source_index)
+                    .ok_or("missing retained trait projection item")?
+                    .signature;
+                let mut found = retained_type_projection(names, &head.result, projection, budget)?;
+                for (_, ty) in &head.params {
+                    budget.charge_work(1)?;
+                    found |= retained_type_projection(names, ty, projection, budget)?;
+                }
+                found
+            }
+            ir::DeclKind::Function | ir::DeclKind::AssociatedFunction => {
+                let mut source = None;
+                for (index, id) in self.function_ids.iter().enumerate() {
+                    budget.charge_work(1)?;
+                    if *id == info.id {
+                        source = self.callable_sources.get(index).copied();
+                        break;
+                    }
+                }
+                let function = match source.ok_or("missing retained projection callable")? {
+                    CallableSource::Free(index) => self.program.functions.get(index),
+                    CallableSource::Associated {
+                        implementation,
+                        item,
+                    } => self
+                        .program
+                        .impls
+                        .get(implementation)
+                        .and_then(|block| block.items.get(item))
+                        .map(|item| &item.function),
+                    CallableSource::TraitDefault { trait_index, item } => self
+                        .program
+                        .traits
+                        .get(trait_index)
+                        .and_then(|owner| owner.items.get(item))
+                        .and_then(|item| item.default.as_ref()),
+                }
+                .ok_or("missing retained projection function")?;
+                if function.module != context.module {
+                    return Err("projection callable retained module changed".into());
+                }
+                retained_function_projection(names, function, projection, budget)?
+            }
+            _ => false,
+        };
+        if !found {
+            return Err(
+                "projection member does not match its original retained source occurrence".into(),
+            );
+        }
+        Ok(())
+    }
+    fn associated_type_item(
+        &self,
+        owner: ir::DeclId,
+        name: AstIdent,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::DeclId, String> {
+        self.names
+            .check(name)
+            .map_err(native_adapter::name_diagnostic)?;
+        let index = self
+            .trait_ids
+            .iter()
+            .position(|id| *id == owner)
+            .ok_or("unknown associated type trait owner")?;
+        let mut found = None;
+        for item in &self.trait_associated_types[index] {
+            budget.charge_work(1)?;
+            if self.source_member_equal(self.declaration(*item)?.path.item, name)?
+                && found.replace(*item).is_some()
+            {
+                return Err("duplicate trait associated type declaration".into());
+            }
+        }
+        found.ok_or_else(|| "extra or unknown associated type item".into())
+    }
     fn source_member_equal(&self, left: DeclItemName, right: AstIdent) -> Result<bool, String> {
         self.names
             .check(right)
@@ -10995,8 +11559,17 @@ pub struct NominalInterner {
     ordered: Vec<ir::Ty>,
     active: Vec<ir::DeclId>,
 }
+#[derive(Clone, Copy, Debug)]
+struct SourceTypeContext {
+    declaration: ir::DeclId,
+    module: ModuleId,
+    owner: Option<ir::DeclId>,
+}
 #[derive(Debug)]
 struct PlanState {
+    source_context: Option<SourceTypeContext>,
+    associated_type_rows: Vec<tr::AssociatedTypeValue>,
+    associated_type_rhs: HashMap<(ir::DeclId, ir::DeclId), ir::Ty>,
     schemas: HashMap<ir::DeclId, Arc<NominalSchema>>,
     functions: HashMap<ir::DeclId, tr::GenericSchema>,
     region_modes: HashMap<ir::DeclId, tr::RegionContractMode>,
@@ -11026,6 +11599,28 @@ fn source_type_storage(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resu
         Ok(())
     };
     match ty {
+        Type::Projection(projection) => {
+            add(std::mem::size_of::<SourceProjection>())?;
+            match projection.as_ref() {
+                SourceProjection::Qualified {
+                    self_ty,
+                    trait_path,
+                    ..
+                } => {
+                    add(source_type_storage(self_ty, budget, depth + 1)?)?;
+                    if let TraitPath::Source(path) = trait_path {
+                        for segment in &path.segments {
+                            budget.charge_work(1)?;
+                            add(std::mem::size_of::<PathSegment>())?;
+                            for argument in &segment.args {
+                                add(source_type_storage(argument, budget, depth + 1)?)?;
+                            }
+                        }
+                    }
+                }
+                SourceProjection::SelfItem { .. } => {}
+            }
+        }
         Type::Named(_) | Type::Param(_) => {}
         Type::Apply(path) => {
             budget.charge_work(path.segments.len())?;
@@ -11267,6 +11862,7 @@ impl PlanCtx {
         }
         budget.retain_bytes(import_bytes)?;
         let mut registry = DeclRegistry {
+            program: shared.clone(),
             names: program.names.clone(),
             modules: program.modules.clone(),
             symbols: program.symbols.clone(),
@@ -11280,6 +11876,7 @@ impl PlanCtx {
             traits: HashMap::new(),
             trait_ids: Vec::new(),
             trait_items: Vec::new(),
+            trait_associated_types: Vec::new(),
             trait_imports: program.trait_imports.clone(),
         };
         reserve_registry_map(&mut registry.functions, program.functions.len(), budget)?;
@@ -11299,6 +11896,9 @@ impl PlanCtx {
             budget,
         )?;
         let mut state = PlanState {
+            source_context: None,
+            associated_type_rows: Vec::new(),
+            associated_type_rhs: HashMap::new(),
             schemas: HashMap::new(),
             region_modes: HashMap::new(),
             source_regions: HashMap::new(),
@@ -11307,6 +11907,11 @@ impl PlanCtx {
             contexts: HashMap::new(),
             reservations: Vec::new(),
         };
+        let assignment_count = program.impls.iter().try_fold(0usize, |n, block| {
+            n.checked_add(block.associated_types.len())
+                .ok_or("associated assignment inventory overflow")
+        })?;
+        reserve_registry_map(&mut state.associated_type_rhs, assignment_count, budget)?;
         for entry in catalog_builder.base_declarations() {
             let info = &entry.info;
             budget.charge_work(1)?;
@@ -11356,7 +11961,9 @@ impl PlanCtx {
             .and_then(|n| {
                 program.traits.iter().try_fold(n, |n, t| {
                     n.checked_add(
-                        1 + t.items.len() + t.items.iter().filter(|i| i.default.is_some()).count(),
+                        1 + t.items.len()
+                            + t.associated_types.len()
+                            + t.items.iter().filter(|i| i.default.is_some()).count(),
                     )
                 })
             })
@@ -11612,6 +12219,40 @@ impl PlanCtx {
                         });
                 }
             }
+            let mut associated_types = Vec::new();
+            budget.charge_work(declaration.associated_types.len())?;
+            budget.retain_bytes(
+                declaration
+                    .associated_types
+                    .len()
+                    .checked_mul(std::mem::size_of::<ir::DeclId>())
+                    .ok_or("associated declaration storage overflow")?,
+            )?;
+            associated_types
+                .try_reserve_exact(declaration.associated_types.len())
+                .map_err(|_| "associated declaration allocation failed")?;
+            for (item, associated) in declaration.associated_types.iter().enumerate() {
+                for previous in &declaration.associated_types[..item] {
+                    budget.charge_work(1)?;
+                    if name_scope::ident_eq(
+                        program.names.as_ref(),
+                        previous.name,
+                        associated.name,
+                        LookupClass::Member,
+                    )? {
+                        return Err("duplicate trait associated type declaration".into());
+                    }
+                }
+                associated_types.push(insert(
+                    None,
+                    declaration.module,
+                    DeclItemName::Source(associated.name),
+                    &[],
+                    ir::DeclKind::AssociatedType,
+                    item,
+                )?);
+            }
+            registry.trait_associated_types.push(associated_types);
             registry.trait_items.push(items);
         }
         for (implementation, block) in program.impls.iter().enumerate() {
@@ -11658,6 +12299,7 @@ impl PlanCtx {
                 continue;
             }
             registry.trait_ids.push(entry.declaration);
+            registry.trait_associated_types.push(Vec::new());
             registry.trait_items.push(
                 catalog_builder
                     .base_declarations()
@@ -11698,6 +12340,14 @@ impl PlanCtx {
             clone_visibility(&declaration.visibility, budget)?;
             registry.declarations[id.index as usize].visibility = declaration.visibility.clone();
             let trait_env = registry.declarations[id.index as usize].param_env.clone();
+            let inherited_env = registry.declarations[id.index as usize].env.clone();
+            for item in &registry.trait_associated_types[index] {
+                clone_visibility(&declaration.visibility, budget)?;
+                let info = &mut registry.declarations[item.index as usize];
+                info.owner = Some(id);
+                info.visibility = declaration.visibility.clone();
+                info.env = inherited_env.clone();
+            }
             for (ii, item) in registry.trait_items[index].iter().enumerate() {
                 clone_visibility(&declaration.visibility, budget)?;
                 let info = &mut registry.declarations[item.index as usize];
@@ -11826,6 +12476,9 @@ impl PlanCtx {
                 0,
                 false,
             )?;
+            if raw_type_has_projection(&self_ty, budget, 0)? {
+                return Err("unsupported: projection-bearing impl heads".into());
+            }
             let nominal = match &self_ty {
                 ir::Ty::Struct(t) => t.def().source_decl,
                 ir::Ty::Enum(t) => t.def().source_decl,
@@ -11865,6 +12518,43 @@ impl PlanCtx {
             {
                 return Err("unconstrained impl parameter".into());
             }
+            state.source_context = Some(registry.source_type_context(impl_id)?);
+            bindings.insert(GenericBindingKey::SelfType, self_ty.clone());
+            for assignment in &block.associated_types {
+                budget.charge_work(source_type_storage(&assignment.value, budget, 0)?)?;
+                let rhs = state.source_ty(
+                    &registry,
+                    &assignment.value,
+                    &bindings,
+                    caller,
+                    budget,
+                    0,
+                    false,
+                )?;
+                let trait_decl = block
+                    .trait_path
+                    .as_ref()
+                    .ok_or_else(|| "unsupported: inherent associated types".to_owned())
+                    .and_then(|path| registry.resolve_trait_path(path))?;
+                let associated =
+                    registry.associated_type_item(trait_decl, assignment.name, budget)?;
+                budget.retain_bytes(std::mem::size_of::<tr::AssociatedTypeValue>() + 256)?;
+                state
+                    .associated_type_rows
+                    .try_reserve_exact(1)
+                    .map_err(|_| "associated assignment allocation failed")?;
+                state.associated_type_rows.push(tr::AssociatedTypeValue {
+                    implementation: impl_id,
+                    associated,
+                    rhs: rhs.clone(),
+                });
+                // Keep every source row. A duplicate must never overwrite the raw callback authority.
+                state
+                    .associated_type_rhs
+                    .entry((impl_id, associated))
+                    .or_insert(rhs);
+            }
+            state.source_context = None;
             let ids = registry.associated_ids[implementation].clone();
             for (item, id) in ids.iter().enumerate() {
                 let method = &block.items[item];
@@ -11937,6 +12627,7 @@ impl PlanCtx {
                     .ok_or("missing source default body")?,
             };
             let info = registry.declaration(id)?;
+            state.source_context = Some(registry.source_type_context(id)?);
             let mut bindings = generic_bindings(&registry, &info.env, budget)?;
             let context = state
                 .contexts
@@ -11986,7 +12677,9 @@ impl PlanCtx {
             reject_slice_result(&result)?;
             if info.env.is_generic() {
                 for ty in params.iter().chain(std::iter::once(&result)) {
-                    validate_root_carrier(ty, caller, budget)?;
+                    if !raw_type_has_projection(ty, budget, 0)? {
+                        validate_root_carrier(ty, caller, budget)?;
+                    }
                 }
             }
             let region_mode = source_region_mode(
@@ -12116,6 +12809,7 @@ impl PlanCtx {
             for (ii, item) in t.items.iter().enumerate() {
                 let id = registry.trait_items[ti][ii];
                 let info = registry.declaration(id)?;
+                state.source_context = Some(registry.source_type_context(id)?);
                 let mut bindings = generic_bindings(&registry, &info.env, budget)?;
                 bindings.insert(GenericBindingKey::SelfType, ir::Ty::Param(self_param));
                 let caller = ir::FactsCtx::Universal(&info.env);
@@ -12191,6 +12885,7 @@ impl PlanCtx {
                 );
             }
         }
+        state.source_context = None;
         let root = program.modules.source_root().map_err(module_diagnostic)?;
         let mut has_main = false;
         for f in &program.functions {
@@ -12268,6 +12963,7 @@ impl PlanCtx {
         let mut headers = tr::HeaderSet::default();
         let mut traits = self.catalog.headers().traits.to_vec();
         let mut items = self.catalog.headers().items.to_vec();
+        let mut associated_types = self.catalog.headers().associated_types.to_vec();
         let mut impls = self.catalog.headers().impls.to_vec();
         let mut callables = self.catalog.headers().callables.to_vec();
         for (ti, t) in program.traits.iter().enumerate() {
@@ -12354,8 +13050,17 @@ impl PlanCtx {
                 },
                 env: info.env.clone(),
                 items: self.registry.trait_items[ti].clone().into(),
+                associated_types: self.registry.trait_associated_types[ti].clone().into(),
                 supertraits: supertraits.into(),
             });
+            for declaration in &self.registry.trait_associated_types[ti] {
+                let info = self.declaration(*declaration)?;
+                associated_types.push(tr::AssociatedTypeHeader {
+                    declaration: *declaration,
+                    trait_decl: id,
+                    env: info.env.clone(),
+                });
+            }
             for (ii, item) in t.items.iter().enumerate() {
                 let declaration = self.registry.trait_items[ti][ii];
                 budget.charge_work(self.registry.callable_sources.len())?;
@@ -12426,6 +13131,23 @@ impl PlanCtx {
                 schema_env: info.env.clone(),
                 predicates: predicates.into(),
                 items: pairs.into(),
+                associated_types: {
+                    let state = self
+                        .state
+                        .lock()
+                        .map_err(|_| "generic plan context poisoned")?;
+                    let mut rows = Vec::new();
+                    for row in &state.associated_type_rows {
+                        budget.charge_work(1)?;
+                        if row.implementation == declaration {
+                            budget.retain_bytes(std::mem::size_of::<tr::AssociatedTypeValue>())?;
+                            rows.try_reserve_exact(1)
+                                .map_err(|_| "associated header allocation failed")?;
+                            rows.push(row.clone());
+                        }
+                    }
+                    rows.into()
+                },
             });
         }
         for id in &self.registry.function_ids {
@@ -12440,6 +13162,7 @@ impl PlanCtx {
         }
         headers.traits = traits.into();
         headers.items = items.into();
+        headers.associated_types = associated_types.into();
         headers.impls = impls.into();
         headers.callables = callables.into();
         let adapter = Arc::new(SchemaAdapter {
@@ -12454,7 +13177,9 @@ impl PlanCtx {
         let mut validated = HashMap::new();
         for id in &self.registry.function_ids {
             budget.charge_work(1)?;
-            let raw = self.raw_schema(*id)?;
+            let raw = world
+                .normalized_callable_schema(*id)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?;
             let facts = world
                 .callable_facts(*id)
                 .map_err(|e| e.into_legacy_diagnostic(budget))?;
@@ -12751,7 +13476,25 @@ impl PlanCtx {
                 .state
                 .lock()
                 .map_err(|_| "generic plan context poisoned")?;
-            state.source_ty(&self.registry, ty, bindings, structural, budget, 0, true)?
+            let context = match caller {
+                ir::FactsCtx::Validated(facts) => {
+                    Some(self.registry.source_type_context(facts.declaration())?)
+                }
+                _ => None,
+            };
+            let previous = state.source_context;
+            state.source_context = context;
+            let result = state.source_ty(&self.registry, ty, bindings, structural, budget, 0, true);
+            state.source_context = previous;
+            result?
+        };
+        let out = if let ir::FactsCtx::Validated(facts) = caller {
+            facts
+                .world()
+                .normalize_ty(&out, facts)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?
+        } else {
+            out
         };
         caller.validate_ty_with_budget(&out, budget)?;
         if let Some(element) = out.shared_slice_element() {
@@ -12834,7 +13577,13 @@ impl PlanCtx {
             return Ok(signature.clone());
         }
         let info = self.declaration(target.declaration)?;
-        let schema = self.raw_schema(target.declaration)?;
+        let schema = if let Some(world) = &self.world {
+            world
+                .normalized_callable_schema(target.declaration)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?
+        } else {
+            self.raw_schema(target.declaration)?
+        };
         if info.env.total_arity() != target.type_args.len() {
             return Err("wrong callable generic arity".into());
         }
@@ -12903,10 +13652,9 @@ impl PlanCtx {
             self.budget.charge_work(1)?;
             env.functions.insert(
                 key.clone(),
-                state
-                    .functions
+                self.validated
                     .get(id)
-                    .ok_or("missing function schema")?
+                    .ok_or("missing validated function schema")?
                     .signature
                     .clone(),
             );
@@ -13040,7 +13788,7 @@ impl PlanState {
         budget: &ir::PlanBudget,
     ) -> Result<ir::TraitRef, String> {
         budget.charge_work(1)?;
-        caller.validate_ty_with_budget(owner, budget)?;
+        caller.validate_ty_metadata_with_budget(owner, budget)?;
         let mut args = Vec::new();
         if let TraitPath::Source(path) = path {
             // Check the exact original-use certificate, never synthesize a new
@@ -13074,7 +13822,7 @@ impl PlanState {
                     let ty =
                         self.source_ty(registry, actual, bindings, caller, budget, 0, false)?;
                     ir::reject_references(&ty, budget)?;
-                    caller.validate_ty_with_budget(&ty, budget)?;
+                    caller.validate_ty_metadata_with_budget(&ty, budget)?;
                     args.push(ty);
                 }
             }
@@ -13207,6 +13955,50 @@ impl tr::SchemaCx for SchemaAdapter {
             .and_then(|plan| plan.raw_schema(id))
             .map_err(|e| self.error(e))
     }
+    fn associated_type_rhs(
+        &self,
+        implementation: ir::DeclId,
+        associated: ir::DeclId,
+    ) -> Result<ir::Ty, tr::FactsError> {
+        self.budget.charge_work(1).map_err(|e| self.error(e))?;
+        let implementation_info = self
+            .registry
+            .declaration(implementation)
+            .map_err(|e| self.error(e))?;
+        let associated_info = self
+            .registry
+            .declaration(associated)
+            .map_err(|e| self.error(e))?;
+        if implementation_info.kind != ir::DeclKind::TraitImpl
+            || associated_info.kind != ir::DeclKind::AssociatedType
+        {
+            return Err(self.error("invalid associated assignment pair kinds".into()));
+        }
+        let block = self
+            .program
+            .impls
+            .get(implementation_info.source_index)
+            .ok_or_else(|| self.error("missing associated implementation source".into()))?;
+        let trait_decl = block
+            .trait_path
+            .as_ref()
+            .ok_or_else(|| self.error("associated assignment has no trait".into()))
+            .and_then(|path| {
+                self.registry
+                    .resolve_trait_path(path)
+                    .map_err(|e| self.error(e))
+            })?;
+        if associated_info.owner != Some(trait_decl) {
+            return Err(self.error("associated assignment pair owner mismatch".into()));
+        }
+        self.state
+            .lock()
+            .map_err(|_| self.error("schema state lock poisoned".into()))?
+            .associated_type_rhs
+            .get(&(implementation, associated))
+            .cloned()
+            .ok_or_else(|| self.error("missing authoritative associated assignment".into()))
+    }
     fn source_region_env(
         &self,
         id: ir::DeclId,
@@ -13329,6 +14121,21 @@ impl tr::SchemaCx for SchemaAdapter {
                 Ok(())
             };
             match ty {
+                ir::Ty::AssociatedType(projection) => {
+                    let trait_info = cx.registry.declaration(projection.trait_ref.declaration)?;
+                    let item_info = cx.registry.declaration(projection.item)?;
+                    if trait_info.kind != ir::DeclKind::Trait
+                        || item_info.kind != ir::DeclKind::AssociatedType
+                        || item_info.owner != Some(trait_info.id)
+                        || projection.trait_ref.args.len() != trait_info.type_params.len()
+                    {
+                        return Err("invalid raw associated projection owner or arity".into());
+                    }
+                    child(&projection.trait_ref.self_ty)?;
+                    for argument in projection.trait_ref.args.iter() {
+                        child(argument)?;
+                    }
+                }
                 ir::Ty::Param(p) => {
                     b.charge_work(env.scopes().len())?;
                     if !env.contains(*p) {
@@ -13389,6 +14196,57 @@ impl tr::SchemaCx for SchemaAdapter {
             .map_err(|e| self.error(e))
     }
 }
+fn raw_type_has_projection(
+    ty: &ir::Ty,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    match ty {
+        ir::Ty::AssociatedType(_) => Ok(true),
+        ir::Ty::Tuple(fields) => {
+            for field in fields.iter() {
+                if raw_type_has_projection(field, budget, depth + 1)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        ir::Ty::Array { element, .. }
+        | ir::Ty::Slice { element }
+        | ir::Ty::Ref {
+            referent: element, ..
+        } => raw_type_has_projection(element, budget, depth + 1),
+        ir::Ty::Struct(ty) => {
+            for argument in ty
+                .def()
+                .type_args
+                .iter()
+                .chain(ty.def().fields.iter().map(|field| &field.ty))
+            {
+                if raw_type_has_projection(argument, budget, depth + 1)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        ir::Ty::Enum(ty) => {
+            for argument in ty.def().type_args.iter().chain(
+                ty.def()
+                    .variants
+                    .iter()
+                    .flat_map(|variant| variant.fields.iter().map(|field| &field.ty)),
+            ) {
+                if raw_type_has_projection(argument, budget, depth + 1)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        _ => Ok(false),
+    }
+}
 fn nominal_parts(ty: &ir::Ty) -> Option<(ir::DeclId, &[ir::Ty])> {
     match ty {
         ir::Ty::Struct(t) => Some((t.def().source_decl, &t.def().type_args)),
@@ -13405,6 +14263,29 @@ fn metered_type_equal(
     budget.check_depth(depth)?;
     budget.charge_work(1)?;
     match (a, b) {
+        (ir::Ty::AssociatedType(a), ir::Ty::AssociatedType(b)) => {
+            if a.item != b.item
+                || a.trait_ref.declaration != b.trait_ref.declaration
+                || a.trait_ref.args.len() != b.trait_ref.args.len()
+            {
+                return Ok(false);
+            }
+            if !metered_type_equal(
+                &a.trait_ref.self_ty,
+                &b.trait_ref.self_ty,
+                budget,
+                depth + 1,
+            )? {
+                return Ok(false);
+            }
+            for (a, b) in a.trait_ref.args.iter().zip(b.trait_ref.args.iter()) {
+                if !metered_type_equal(a, b, budget, depth + 1)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+        (ir::Ty::AssociatedType(_), _) | (_, ir::Ty::AssociatedType(_)) => Ok(false),
         (ir::Ty::Tuple(a), ir::Ty::Tuple(b)) => {
             if a.len() != b.len() {
                 return Ok(false);
@@ -13465,6 +14346,11 @@ fn match_impl_type(
 ) -> Result<bool, String> {
     budget.check_depth(depth)?;
     budget.charge_work(1)?;
+    if raw_type_has_projection(pattern, budget, depth)?
+        || raw_type_has_projection(actual, budget, depth)?
+    {
+        return Err("unsupported: residual projection in impl matching".into());
+    }
     if let ir::Ty::Param(param) = pattern
         && env.contains(*param)
     {
@@ -13531,6 +14417,9 @@ fn overlap_occurs(
     budget.charge_work(1)?;
     let ty = overlap_resolve(ty, bindings, budget, depth)?;
     match &ty {
+        ir::Ty::AssociatedType(_) => {
+            Err("unsupported: residual projection in overlap checking".into())
+        }
         ir::Ty::Param(p) => Ok(*p == param),
         ir::Ty::Tuple(fields) => {
             for field in fields.iter() {
@@ -13566,6 +14455,9 @@ fn overlap_types(
     budget.charge_work(1)?;
     let a = overlap_resolve(a, bindings, budget, depth)?;
     let b = overlap_resolve(b, bindings, budget, depth)?;
+    if raw_type_has_projection(&a, budget, depth)? || raw_type_has_projection(&b, budget, depth)? {
+        return Err("unsupported: residual projection in overlap checking".into());
+    }
     if metered_type_equal(&a, &b, budget, depth + 1)? {
         return Ok(true);
     }
@@ -13947,6 +14839,12 @@ fn argument_height(
         Ok(())
     };
     match ty {
+        ir::Ty::AssociatedType(projection) => {
+            child(&projection.trait_ref.self_ty)?;
+            for argument in projection.trait_ref.args.iter() {
+                child(argument)?;
+            }
+        }
         ir::Ty::Param(p) => match caller {
             ir::FactsCtx::Universal(env) if env.contains(*p) => {}
             ir::FactsCtx::Validated(facts) if facts.env().contains(*p) => {}
@@ -14002,6 +14900,24 @@ fn collect_source_params(
     budget.check_depth(depth)?;
     budget.charge_work(1)?;
     match ty {
+        Type::Projection(projection) => match projection.as_ref() {
+            SourceProjection::Qualified {
+                self_ty,
+                trait_path,
+                ..
+            } => {
+                collect_source_params(names, self_ty, used, budget, depth + 1)?;
+                if let TraitPath::Source(path) = trait_path {
+                    for segment in &path.segments {
+                        budget.charge_work(1)?;
+                        for argument in &segment.args {
+                            collect_source_params(names, argument, used, budget, depth + 1)?;
+                        }
+                    }
+                }
+            }
+            SourceProjection::SelfItem { .. } => {}
+        },
         Type::Param(p) => {
             used.insert(
                 names
@@ -14109,6 +15025,202 @@ mod registry_resource_tests {
         let text = registry_diagnostic_copy("unchanged", &budget).unwrap();
         assert_eq!(text, "unchanged");
         assert_eq!(budget.usage_snapshot().bytes, text.capacity());
+    }
+}
+
+#[cfg(test)]
+mod associated_registry_tests {
+    use super::*;
+
+    fn source_plan() -> PlanCtx {
+        let program = parse("trait A { type Out; } trait B { type Out; } struct S; impl A for S { type Out = u64; } impl B for S { type Out = u8; } fn use_a(x:<S as A>::Out)-><S as A>::Out{x} fn main(){}").unwrap();
+        PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap()
+    }
+
+    #[test]
+    fn associated_members_have_distinct_owned_persistent_identities_and_raw_schemas() {
+        let plan = source_plan();
+        let a = plan.registry.trait_associated_types[0][0];
+        let b = plan.registry.trait_associated_types[1][0];
+        assert_ne!(a, b);
+        for (member, owner) in [
+            (a, plan.registry.trait_ids[0]),
+            (b, plan.registry.trait_ids[1]),
+        ] {
+            let info = plan.declaration(member).unwrap();
+            assert_eq!(info.kind, ir::DeclKind::AssociatedType);
+            assert_eq!(info.owner, Some(owner));
+            assert!(Arc::ptr_eq(
+                &info.env,
+                &plan.declaration(owner).unwrap().env
+            ));
+            assert_eq!(info.param_env.arity(), 0);
+        }
+        match (
+            plan.persistent_decl_path(a).unwrap().item(),
+            plan.persistent_decl_path(b).unwrap().item(),
+        ) {
+            (
+                PersistentDeclItem::AssociatedType {
+                    trait_name: a,
+                    name: x,
+                },
+                PersistentDeclItem::AssociatedType {
+                    trait_name: b,
+                    name: y,
+                },
+            ) => {
+                assert_ne!(a, b);
+                assert_eq!(x, y);
+            }
+            _ => panic!("missing associated persistent owner component"),
+        }
+        let function = plan.function_decl(0).unwrap();
+        assert!(matches!(
+            plan.raw_schema(function).unwrap().signature.result,
+            ir::Ty::AssociatedType(_)
+        ));
+        assert_eq!(
+            plan.function_schema(function).unwrap().signature.result,
+            ir::Ty::Int(ir::IntTy::U64)
+        );
+    }
+
+    #[test]
+    fn associated_rhs_callback_is_raw_pair_owned_and_foreign_safe() {
+        use tr::SchemaCx;
+        let plan = source_plan();
+        let adapter = SchemaAdapter {
+            program: plan.program.clone(),
+            catalog: plan.catalog.clone(),
+            registry: plan.registry.clone(),
+            state: plan.state.clone(),
+            budget: plan.budget.clone(),
+        };
+        let implementation = plan.registry.impl_ids[0];
+        let a = plan.registry.trait_associated_types[0][0];
+        let b = plan.registry.trait_associated_types[1][0];
+        assert_eq!(
+            adapter.associated_type_rhs(implementation, a).unwrap(),
+            ir::Ty::Int(ir::IntTy::U64)
+        );
+        assert!(adapter.associated_type_rhs(implementation, b).is_err());
+        let foreign = source_plan();
+        assert!(
+            adapter
+                .associated_type_rhs(foreign.registry.impl_ids[0], a)
+                .is_err()
+        );
+        assert_eq!(plan.state.lock().unwrap().associated_type_rows.len(), 2);
+    }
+
+    #[test]
+    fn normalized_publication_never_rewrites_authoritative_raw_assignment_rhs() {
+        use tr::SchemaCx;
+        let program = parse("trait A{type Out;}trait B{type Out;}struct S;impl A for S{type Out=<S as B>::Out;}impl B for S{type Out=u64;}fn f(x:<S as A>::Out)-><S as A>::Out{x}fn main(){}").unwrap();
+        let plan = PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
+        let adapter = SchemaAdapter {
+            program: plan.program.clone(),
+            catalog: plan.catalog.clone(),
+            registry: plan.registry.clone(),
+            state: plan.state.clone(),
+            budget: plan.budget.clone(),
+        };
+        let raw = adapter
+            .associated_type_rhs(
+                plan.registry.impl_ids[0],
+                plan.registry.trait_associated_types[0][0],
+            )
+            .unwrap();
+        assert!(matches!(raw, ir::Ty::AssociatedType(_)));
+        assert_eq!(
+            plan.function_schema(plan.function_decl(0).unwrap())
+                .unwrap()
+                .signature
+                .result,
+            ir::Ty::Int(ir::IntTy::U64)
+        );
+        let after = adapter
+            .associated_type_rhs(
+                plan.registry.impl_ids[0],
+                plan.registry.trait_associated_types[0][0],
+            )
+            .unwrap();
+        assert!(metered_type_equal(&raw, &after, &plan.budget, 0).unwrap());
+    }
+
+    #[test]
+    fn same_world_same_owner_member_transplant_is_not_original_source_authority() {
+        let plan = source_plan();
+        let function = plan.function_decl(0).unwrap();
+        let original = &plan.program.functions[0];
+        let Type::Projection(parameter) = &original.params[0].1 else {
+            panic!("missing parameter projection")
+        };
+        let SourceProjection::Qualified {
+            item: other_item, ..
+        } = parameter.as_ref()
+        else {
+            panic!("missing qualified parameter projection")
+        };
+        let mut transplanted = original.result.clone();
+        let Type::Projection(projection) = &mut transplanted else {
+            panic!("missing result projection")
+        };
+        let SourceProjection::Qualified { item, .. } = projection.as_mut() else {
+            panic!("missing qualified result projection")
+        };
+        *item = *other_item;
+        let context = plan.registry.source_type_context(function).unwrap();
+        assert!(
+            plan.registry
+                .validate_source_projection(context, projection, &plan.budget)
+                .is_err()
+        );
+        let facts = plan.callable_facts(function).unwrap();
+        assert!(
+            plan.source_ty(
+                &transplanted,
+                &HashMap::new(),
+                ir::FactsCtx::Validated(&facts),
+                &plan.budget
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn projection_alias_retains_definition_site_occurrence_in_signature_and_local() {
+        let program = parse("trait A{type Out;}struct S;impl A for S{type Out=u64;}type Alias=<S as A>::Out;fn f(x:Alias)->Alias{let y:Alias=x;y}fn main(){}").unwrap();
+        let plan = PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
+        let function = plan.function_decl(0).unwrap();
+        assert_eq!(
+            plan.function_schema(function).unwrap().signature.result,
+            ir::Ty::Int(ir::IntTy::U64)
+        );
+        let Type::Projection(projection) = &plan.program.functions[0].result else {
+            panic!("alias did not retain projection")
+        };
+        let context = plan.registry.source_type_context(function).unwrap();
+        plan.registry
+            .validate_source_projection(context, projection, &plan.budget)
+            .unwrap();
+    }
+
+    #[test]
+    fn unused_source_assignments_and_duplicate_declarations_cannot_disappear() {
+        for source in [
+            "trait A{type Out;type Out;}fn main(){}",
+            "trait A{type Out;}struct S;impl A for S{type Out=u64;type Out=u8;}fn main(){}",
+            "trait A{type Out;}struct S;impl A for S{}fn main(){}",
+            "trait A{type Out;}struct S;impl A for S{type Out=u64;type Extra=u8;}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            assert!(
+                PlanCtx::from_program(&program, &ir::PlanBudget::default()).is_err(),
+                "{source}"
+            );
+        }
     }
 }
 

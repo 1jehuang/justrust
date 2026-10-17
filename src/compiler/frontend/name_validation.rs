@@ -511,6 +511,11 @@ impl<'a> Validator<'a> {
                 self.identifiers(&implementation.type_params, LookupClass::TypeParameter)?;
                 self.many(&implementation.bounds, Visit::Bound)?;
                 self.push(Visit::Type(&implementation.self_ty))?;
+                self.work(implementation.associated_types.len())?;
+                for associated in &implementation.associated_types {
+                    self.push(Visit::Ident(associated.name, LookupClass::Member))?;
+                    self.push(Visit::Type(&associated.value))?;
+                }
                 self.many(&implementation.items, |item| {
                     Visit::Associated(item, implementation.module)
                 })?;
@@ -526,6 +531,10 @@ impl<'a> Validator<'a> {
                 self.identifiers(&declaration.type_params, LookupClass::TypeParameter)?;
                 self.many(&declaration.bounds, Visit::Bound)?;
                 self.many(&declaration.supertraits, Visit::TraitPath)?;
+                self.work(declaration.associated_types.len())?;
+                for associated in &declaration.associated_types {
+                    self.push(Visit::Ident(associated.name, LookupClass::Member))?;
+                }
                 self.many(&declaration.items, |item| {
                     Visit::TraitItem(item, declaration.module)
                 })?;
@@ -555,6 +564,20 @@ impl<'a> Validator<'a> {
                 Type::Param(name) => self.push(Visit::Ident(*name, LookupClass::TypeParameter))?,
                 Type::Named(path) => self.push(Visit::Path(path))?,
                 Type::Apply(path) => self.push(Visit::GenericPath(path))?,
+                Type::Projection(projection) => match projection.as_ref() {
+                    SourceProjection::Qualified {
+                        self_ty,
+                        trait_path,
+                        item,
+                    } => {
+                        self.push(Visit::Type(self_ty))?;
+                        self.push(Visit::TraitPath(trait_path))?;
+                        self.push(Visit::Ident(*item, LookupClass::Member))?;
+                    }
+                    SourceProjection::SelfItem { item } => {
+                        self.push(Visit::Ident(*item, LookupClass::Member))?;
+                    }
+                },
                 Type::Ref {
                     region, referent, ..
                 } => {
@@ -1003,6 +1026,87 @@ mod tests {
     use super::*;
     use crate::compiler::expansion_budget::ExpansionBudget;
 
+    #[test]
+    fn unused_associated_sources_validate_every_name_owner_and_projection_child() {
+        let parsed = super::super::parse_unresolved(
+            "mod inner{trait Family<T>{type Out;fn unused()->Self::Out;}\
+             struct S;impl Family<bool> for S{type Out=<S as Family<(bool,[i32;7])>>::Out;}}\
+             fn main(){}",
+        )
+        .unwrap();
+        let valid = parsed.program;
+        validate_program_names(&valid).unwrap();
+        let mut foreign = builder();
+        let foreign_name = foreign.ident("Out").unwrap();
+        let foreign_path = foreign.path("crate::Family").unwrap();
+        let foreign = foreign.finish().unwrap();
+        let baseline = valid.names.budget().snapshot().temporary_bytes;
+        for site in 0..10 {
+            let mut malformed = valid.clone();
+            match site {
+                0 => malformed.traits[0].associated_types[0].name = foreign_name,
+                1 => malformed.impls[0].associated_types[0].name = foreign_name,
+                2 => malformed.impls[0].module = foreign.modules.source_root().unwrap(),
+                3 => malformed.traits[0].module = foreign.modules.source_root().unwrap(),
+                4 => {
+                    let Type::Projection(projection) =
+                        &mut malformed.traits[0].items[0].signature.result
+                    else {
+                        panic!("expected written Self::Out");
+                    };
+                    let SourceProjection::SelfItem { item } = projection.as_mut() else {
+                        panic!("expected owner-relative projection");
+                    };
+                    *item = foreign_name;
+                }
+                _ => {
+                    let Type::Projection(projection) =
+                        &mut malformed.impls[0].associated_types[0].value
+                    else {
+                        panic!("expected written qualified RHS");
+                    };
+                    let SourceProjection::Qualified {
+                        self_ty,
+                        trait_path,
+                        item,
+                    } = projection.as_mut()
+                    else {
+                        panic!("expected qualified projection");
+                    };
+                    match site {
+                        5 => *item = foreign_name,
+                        6 => *self_ty = Type::Param(foreign_name),
+                        _ => {
+                            let TraitPath::Source(path) = trait_path else {
+                                unreachable!()
+                            };
+                            if site == 7 {
+                                path.segments.last_mut().unwrap().args[0] = Type::Tuple(vec![
+                                    Type::Bool,
+                                    Type::Array(Box::new(Type::Param(foreign_name)), 7),
+                                ]);
+                            } else if site == 8 {
+                                path.resolved_use = Some(foreign_path.clone());
+                            } else {
+                                // Original spelling is a separate admission site
+                                // from the resolved-use certificate above.
+                                path.segments[0].name = foreign_name;
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(
+                validate_program_names(&malformed)
+                    .unwrap_err()
+                    .starts_with("contract:"),
+                "site {site}"
+            );
+            assert_eq!(valid.names.budget().snapshot().temporary_bytes, baseline);
+        }
+        assert!(valid.names.budget().snapshot().failure.is_none());
+    }
+
     fn builder() -> ProgramBuilder {
         ProgramBuilder::new(
             std::path::Path::new("name-validation.rs"),
@@ -1083,6 +1187,7 @@ mod tests {
             supertraits: vec![parent],
             name,
             visibility: ir::Visibility::Public,
+            associated_types: Vec::new(),
             items: Vec::new(),
         });
         let valid = input.finish().unwrap();

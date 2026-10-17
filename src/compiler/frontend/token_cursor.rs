@@ -136,6 +136,23 @@ impl<'input> TokenCursor<'input> {
         true
     }
 
+    pub(super) fn consume_type_lt(&mut self) -> bool {
+        let token = self.current();
+        if token.kind != ParserTokenKind::Punct {
+            return false;
+        }
+        match token.text {
+            "<" => {
+                self.bump();
+            }
+            "<<" | "<<=" => {
+                self.prefix += 1;
+            }
+            _ => return false,
+        }
+        true
+    }
+
     pub(super) fn consume_type_amp_prefix(&mut self) -> bool {
         let token = self.current();
         if token.kind != ParserTokenKind::Punct || token.text != "&&" {
@@ -151,7 +168,7 @@ impl<'input> TokenCursor<'input> {
             && token.suffixes.get(prefix - 1).is_some_and(Option::is_some)
             && matches!(
                 (token.text.as_str(), prefix),
-                ("&&" | ">>" | ">=", 1) | (">>=", 1 | 2)
+                ("&&" | ">>" | ">=" | "<<", 1) | (">>=" | "<<=", 1 | 2)
             )
     }
 
@@ -185,6 +202,26 @@ impl<'input> TokenCursor<'input> {
 mod tests {
     use super::super::lex;
     use super::*;
+
+    #[test]
+    fn leading_angle_split_keeps_actual_suffix_and_normal_shift_consumption() {
+        for text in ["<<", "<<="] {
+            let tokens = lex(text).unwrap();
+            let mut cursor = TokenCursor::new(&tokens);
+            let start = cursor.checkpoint();
+            assert!(cursor.consume_type_lt());
+            assert_eq!(cursor.current().text, &text[1..]);
+            assert_eq!(cursor.current().bytes, 1..text.len());
+            assert_eq!(
+                cursor.current().span,
+                tokens[0].suffixes[0].as_ref().unwrap().span
+            );
+            assert!(cursor.restore(start));
+            assert_eq!(cursor.bump().text, text);
+        }
+        let tokens = lex("\"<<\"").unwrap();
+        assert!(!TokenCursor::new(&tokens).consume_type_lt());
+    }
 
     #[test]
     fn angle_suffix_checkpoints_restore_exact_views_without_mutating_input() {

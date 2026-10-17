@@ -43,6 +43,15 @@ enum LocalKey {
     Receiver,
 }
 
+/// Resolver-only source ownership. These indices refer to the retained parsed
+/// program, never to a printable trait name or an unchecked caller certificate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourceOwnerContext {
+    None,
+    Trait { source_index: usize },
+    TraitImpl { source_index: usize },
+}
+
 struct Resolver<'a> {
     program: &'a Program,
     type_depth: usize,
@@ -52,6 +61,7 @@ struct Resolver<'a> {
     nominal_arity: HashMap<PathKey, usize>,
     self_nominal: Option<AstPath>,
     self_allowed: bool,
+    source_owner: SourceOwnerContext,
     items: &'a HashMap<PathKey, Vec<Item>>,
     imports: HashMap<(PathKey, usize, bool), Option<ResolvedItem>>,
     active: std::collections::HashSet<(PathKey, usize, bool)>,
@@ -59,6 +69,135 @@ struct Resolver<'a> {
     lexical_function: Option<ScopeId>,
 }
 impl Resolver<'_> {
+    fn with_source_owner<T>(
+        &mut self,
+        owner: SourceOwnerContext,
+        run: impl FnOnce(&mut Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let previous = std::mem::replace(&mut self.source_owner, owner);
+        let allowed = self.self_allowed;
+        let nominal = self.self_nominal.clone();
+        let lexical = self.lexical_function;
+        if owner == SourceOwnerContext::None {
+            self.self_allowed = false;
+            self.self_nominal = None;
+        }
+        let result = run(self);
+        self.source_owner = previous;
+        self.self_allowed = allowed;
+        self.self_nominal = nominal;
+        self.lexical_function = lexical;
+        result
+    }
+
+    fn contains_projection(&self, ty: &Type, depth: usize) -> Result<bool, String> {
+        self.alias_budget.check_depth(depth)?;
+        self.alias_budget.charge_work(1)?;
+        let mut found = false;
+        match ty {
+            Type::Projection(_) => found = true,
+            Type::Apply(path) => {
+                self.alias_budget.charge_work(path.segments.len())?;
+                for segment in &path.segments {
+                    for actual in &segment.args {
+                        found |= self.contains_projection(actual, depth + 1)?;
+                    }
+                }
+            }
+            Type::Tuple(fields) => {
+                for field in fields {
+                    found |= self.contains_projection(field, depth + 1)?;
+                }
+            }
+            Type::Ref { referent, .. } | Type::Array(referent, _) | Type::Slice(referent) => {
+                found |= self.contains_projection(referent, depth + 1)?;
+            }
+            _ => {}
+        }
+        Ok(found)
+    }
+
+    #[inline(never)]
+    fn source_trait_index(&mut self, path: &TraitPath, module: ModuleId) -> Result<usize, String> {
+        let TraitPath::Source(path) = path else {
+            return Err("builtin trait has no associated type declaration".into());
+        };
+        let original = path.path(self.names())?;
+        let target = self
+            .path(&original, module, true, false)?
+            .ok_or("unresolved projection trait")?;
+        if target.kind != ResolvedKind::Trait {
+            return Err("associated projection target is not a trait".into());
+        }
+        let target = self.key(target.source()?)?;
+        for (index, declaration) in self.program.traits.iter().enumerate() {
+            self.alias_budget.charge_work(1)?;
+            if self.key(&declaration.name)? == target {
+                return Ok(index);
+            }
+        }
+        Err("projection trait is not a retained source declaration".into())
+    }
+
+    fn check_associated_member(&self, trait_index: usize, item: AstIdent) -> Result<(), String> {
+        let key = self.ident_key(item, LookupClass::Member)?;
+        let declaration = self
+            .program
+            .traits
+            .get(trait_index)
+            .ok_or("foreign source trait owner")?;
+        for associated in &declaration.associated_types {
+            self.alias_budget.charge_work(1)?;
+            if self.ident_key(associated.name, LookupClass::Member)? == key {
+                return Ok(());
+            }
+        }
+        Err("no associated type in the exact owning trait".into())
+    }
+
+    #[inline(never)]
+    fn projection(
+        &mut self,
+        projection: &mut SourceProjection,
+        module: ModuleId,
+    ) -> Result<(), String> {
+        let (trait_index, item) = match projection {
+            SourceProjection::Qualified {
+                self_ty,
+                trait_path,
+                item,
+            } => {
+                self.ty(self_ty, module)?;
+                self.trait_path(trait_path, module)?;
+                (self.source_trait_index(trait_path, module)?, *item)
+            }
+            SourceProjection::SelfItem { item } => {
+                let index = match self.source_owner {
+                    SourceOwnerContext::Trait { source_index } => source_index,
+                    SourceOwnerContext::TraitImpl { source_index } => {
+                        let implementation = self
+                            .program
+                            .impls
+                            .get(source_index)
+                            .ok_or("foreign source impl owner")?;
+                        let path = implementation
+                            .trait_path
+                            .as_ref()
+                            .ok_or("Self associated type outside trait impl")?;
+                        self.source_trait_index(path, implementation.module)?
+                    }
+                    SourceOwnerContext::None => {
+                        return Err(
+                            "Self associated type outside an owning trait or trait impl".into()
+                        );
+                    }
+                };
+                (index, *item)
+            }
+        };
+        self.check_associated_member(trait_index, item)
+    }
+
     fn names(&self) -> &NameStore {
         self.program.names.as_ref()
     }
@@ -258,6 +397,23 @@ impl Resolver<'_> {
                     self.alias_budget.charge_work(1)?;
                     self.charge_entries::<&Type>(1)?;
                     match ty {
+                        Type::Projection(projection) => {
+                            if let SourceProjection::Qualified {
+                                self_ty,
+                                trait_path,
+                                ..
+                            } = projection.as_ref()
+                            {
+                                self.charge_entries::<&Type>(1)?;
+                                pending.push(self_ty);
+                                if let TraitPath::Source(path) = trait_path {
+                                    for segment in &path.segments {
+                                        self.charge_entries::<&Type>(segment.args.len())?;
+                                        pending.extend(&segment.args);
+                                    }
+                                }
+                            }
+                        }
                         Type::Named(path) => spellings.push(path.clone()),
                         Type::Apply(path) => {
                             spellings.push(path.path(self.names())?);
@@ -312,6 +468,25 @@ impl Resolver<'_> {
         let mut target = alias.target.clone();
         fn check_target(ty: &Type) -> Result<(), String> {
             match ty {
+                Type::Projection(projection) => match projection.as_ref() {
+                    SourceProjection::SelfItem { .. } => {
+                        return Err("Self associated type outside impl in type alias".into());
+                    }
+                    SourceProjection::Qualified {
+                        self_ty,
+                        trait_path,
+                        ..
+                    } => {
+                        check_target(self_ty)?;
+                        if let TraitPath::Source(path) = trait_path {
+                            for segment in &path.segments {
+                                for actual in &segment.args {
+                                    check_target(actual)?;
+                                }
+                            }
+                        }
+                    }
+                },
                 Type::SelfType => return Err("Self outside impl in type alias".into()),
                 Type::Ref { region: None, .. } => {
                     return Err("E0106: missing lifetime specifier in type alias".into());
@@ -346,10 +521,12 @@ impl Resolver<'_> {
         let saved_params = std::mem::replace(&mut self.type_params, params);
         let saved_self = self.self_nominal.take();
         let saved_allowed = std::mem::replace(&mut self.self_allowed, false);
+        let saved_owner = std::mem::replace(&mut self.source_owner, SourceOwnerContext::None);
         let result = self.ty(&mut target, module);
         let params = std::mem::replace(&mut self.type_params, saved_params);
         self.self_nominal = saved_self;
         self.self_allowed = saved_allowed;
+        self.source_owner = saved_owner;
         self.alias_active.remove(&key);
         result?;
         validate_depth(DepthNode::Type(&target))?;
@@ -381,6 +558,23 @@ impl Resolver<'_> {
         self.alias_budget.check_depth(depth)?;
         self.alias_budget.charge_work(1)?;
         match ty {
+            Type::Projection(projection) => {
+                if let SourceProjection::Qualified {
+                    self_ty,
+                    trait_path,
+                    ..
+                } = projection.as_ref()
+                {
+                    self.collect_params(self_ty, used, depth + 1)?;
+                    if let TraitPath::Source(path) = trait_path {
+                        for segment in &path.segments {
+                            for actual in &segment.args {
+                                self.collect_params(actual, used, depth + 1)?;
+                            }
+                        }
+                    }
+                }
+            }
             Type::Param(name) => {
                 self.charge_entries::<NameKey>(1)?;
                 used.try_reserve(1)
@@ -438,6 +632,26 @@ impl Resolver<'_> {
         self.alias_budget.check_depth(depth)?;
         self.alias_budget.charge_work(1)?;
         match ty {
+            Type::Projection(projection) => {
+                if let SourceProjection::Qualified {
+                    self_ty,
+                    trait_path,
+                    ..
+                } = projection.as_mut()
+                {
+                    self.alias_use(self_ty, source, depth + 1)?;
+                    // The trait and member keep their genuine definition-site
+                    // occurrences. An alias invocation is not written trait
+                    // syntax and must not be used to fabricate that authority.
+                    if let TraitPath::Source(path) = trait_path {
+                        for segment in &mut path.segments {
+                            for actual in &mut segment.args {
+                                self.alias_use(actual, source, depth + 1)?;
+                            }
+                        }
+                    }
+                }
+            }
             Type::Named(path) => *path = self.resolved_use(path, source)?,
             Type::Apply(path) => {
                 self.certify_generic(path, source)?;
@@ -469,6 +683,23 @@ impl Resolver<'_> {
         self.alias_budget.check_depth(depth)?;
         self.alias_budget.charge_work(1)?;
         match ty {
+            Type::Projection(projection) => {
+                if let SourceProjection::Qualified {
+                    self_ty,
+                    trait_path,
+                    ..
+                } = projection.as_mut()
+                {
+                    self.substitute(self_ty, params, args, depth + 1)?;
+                    if let TraitPath::Source(path) = trait_path {
+                        for segment in &mut path.segments {
+                            for actual in &mut segment.args {
+                                self.substitute(actual, params, args, depth + 1)?;
+                            }
+                        }
+                    }
+                }
+            }
             Type::Param(name) => {
                 let key = self.ident_key(*name, LookupClass::TypeParameter)?;
                 for (index, param) in params.iter().enumerate() {
@@ -623,6 +854,15 @@ impl Resolver<'_> {
             for argument in &mut segment.args {
                 self.ty(argument, module)?;
             }
+        }
+        let mut projected = false;
+        for segment in &source.segments {
+            for argument in &segment.args {
+                projected |= self.contains_projection(argument, 0)?;
+            }
+        }
+        if projected {
+            return Err("unsupported: projection-bearing trait actuals are unsupported".into());
         }
         if source.segments.is_empty() {
             return Err("empty trait application path".into());
@@ -1155,12 +1395,22 @@ impl Resolver<'_> {
             return Err("type resolution nesting exceeds resource limit 128".into());
         }
         self.type_depth += 1;
-        let result = self.ty_inner(ty, module);
+        let result = self.ty_inner(ty, module).and_then(|()| {
+            // This check also sees projections revealed by alias expansion,
+            // rather than just a directly written projection node.
+            if matches!(self.source_owner, SourceOwnerContext::Trait { .. })
+                && self.contains_projection(ty, 0)?
+            {
+                return Err("unsupported: projection-bearing trait methods and default bodies are unsupported".into());
+            }
+            Ok(())
+        });
         self.type_depth -= 1;
         result
     }
     fn ty_inner(&mut self, ty: &mut Type, module: ModuleId) -> Result<(), String> {
         match ty {
+            Type::Projection(projection) => self.projection(projection, module)?,
             Type::Apply(path) => {
                 self.generic_path(path, module)?;
                 let name = path.path(self.names())?;
@@ -2448,6 +2698,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         nominal_arity: HashMap::new(),
         self_nominal: None,
         self_allowed: false,
+        source_owner: SourceOwnerContext::None,
         items: &parsed.items,
         imports: HashMap::new(),
         active: std::collections::HashSet::new(),
@@ -2605,53 +2856,55 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
             }
         }
     }
-    for declaration in &mut program.traits {
-        clone_vector(&declaration.type_params, &resolver.alias_budget)?;
-        resolver.type_params = declaration.type_params.clone();
-        resolver.self_nominal = None;
-        resolver.self_allowed = true;
-        resolver.bounds(&mut declaration.bounds, declaration.module)?;
-        for path in &mut declaration.supertraits {
-            resolver.trait_path(path, declaration.module)?;
-        }
-        for item in &mut declaration.items {
+    for (source_index, declaration) in program.traits.iter_mut().enumerate() {
+        resolver.with_source_owner(SourceOwnerContext::Trait { source_index }, |resolver| {
             clone_vector(&declaration.type_params, &resolver.alias_budget)?;
             resolver.type_params = declaration.type_params.clone();
-            resolver.charge_entries::<AstIdent>(item.signature.type_params.len())?;
-            resolver
-                .type_params
-                .try_reserve(item.signature.type_params.len())
-                .map_err(|_| "trait method parameter allocation failed")?;
-            resolver
-                .type_params
-                .extend_from_slice(&item.signature.type_params);
-            resolver.bounds(&mut item.signature.bounds, declaration.module)?;
-            resolver.ty(&mut item.signature.result, declaration.module)?;
-            for (_, ty) in &mut item.signature.params {
-                resolver.ty(ty, declaration.module)?;
+            resolver.self_nominal = None;
+            resolver.self_allowed = true;
+            resolver.bounds(&mut declaration.bounds, declaration.module)?;
+            for path in &mut declaration.supertraits {
+                resolver.trait_path(path, declaration.module)?;
             }
-            if let Some(function) = &mut item.default {
+            for item in &mut declaration.items {
                 clone_vector(&declaration.type_params, &resolver.alias_budget)?;
                 resolver.type_params = declaration.type_params.clone();
-                resolver.charge_entries::<AstIdent>(function.type_params.len())?;
+                resolver.charge_entries::<AstIdent>(item.signature.type_params.len())?;
                 resolver
                     .type_params
-                    .try_reserve(function.type_params.len())
-                    .map_err(|_| "trait default parameter allocation failed")?;
+                    .try_reserve(item.signature.type_params.len())
+                    .map_err(|_| "trait method parameter allocation failed")?;
                 resolver
                     .type_params
-                    .extend_from_slice(&function.type_params);
-                resolver.bounds(&mut function.bounds, declaration.module)?;
-                resolver.ty(&mut function.result, declaration.module)?;
-                for (_, ty) in &mut function.params {
+                    .extend_from_slice(&item.signature.type_params);
+                resolver.bounds(&mut item.signature.bounds, declaration.module)?;
+                resolver.ty(&mut item.signature.result, declaration.module)?;
+                for (_, ty) in &mut item.signature.params {
                     resolver.ty(ty, declaration.module)?;
                 }
-                let names = resolver.function_locals(function, item.receiver)?;
-                validate_depth(DepthNode::Block(&function.body))?;
-                resolver.block(&mut function.body, declaration.module, &mut vec![names])?;
+                if let Some(function) = &mut item.default {
+                    clone_vector(&declaration.type_params, &resolver.alias_budget)?;
+                    resolver.type_params = declaration.type_params.clone();
+                    resolver.charge_entries::<AstIdent>(function.type_params.len())?;
+                    resolver
+                        .type_params
+                        .try_reserve(function.type_params.len())
+                        .map_err(|_| "trait default parameter allocation failed")?;
+                    resolver
+                        .type_params
+                        .extend_from_slice(&function.type_params);
+                    resolver.bounds(&mut function.bounds, declaration.module)?;
+                    resolver.ty(&mut function.result, declaration.module)?;
+                    for (_, ty) in &mut function.params {
+                        resolver.ty(ty, declaration.module)?;
+                    }
+                    let names = resolver.function_locals(function, item.receiver)?;
+                    validate_depth(DepthNode::Block(&function.body))?;
+                    resolver.block(&mut function.body, declaration.module, &mut vec![names])?;
+                }
             }
-        }
-        resolver.self_allowed = false;
+            Ok(())
+        })?;
     }
     for enumeration in &mut program.enums {
         resolver.type_params = enumeration.type_params.clone();
@@ -2670,63 +2923,239 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         }
     }
     for function in &mut program.functions {
-        resolver.type_params = function.type_params.clone();
-        resolver.bounds(&mut function.bounds, function.module)?;
-        resolver.ty(&mut function.result, function.module)?;
-        for (name, ty) in &mut function.params {
-            resolver.ty(ty, function.module)?;
-            if resolver
-                .binding_constructor(*name, function.module)?
-                .is_some()
-            {
-                return Err("enum variant patterns in function parameters are unsupported".into());
-            }
-        }
-        validate_depth(DepthNode::Block(&function.body))?;
-        let locals = resolver.function_locals(function, ReceiverKind::None)?;
-        if let Err(error) = resolver.block(&mut function.body, function.module, &mut vec![locals]) {
-            return Err(format!(
-                "in function {}: {error}",
-                resolver.display(&function.name)?
-            ));
-        }
-    }
-    for block in &mut program.impls {
-        resolver.type_params = block.type_params.clone();
-        resolver.bounds(&mut block.bounds, block.module)?;
-        if let Some(path) = &mut block.trait_path {
-            resolver.trait_path(path, block.module)?;
-        }
-        resolver.ty(&mut block.self_ty, block.module)?;
-        resolver.self_nominal = Some(match &block.self_ty {
-            Type::Named(path) => path.clone(),
-            Type::Apply(path) => path.path(resolver.names())?,
-            _ => return Err("impl requires a nominal self pattern".into()),
-        });
-        resolver.self_allowed = true;
-        for item in &mut block.items {
-            let function = &mut item.function;
-            resolver.type_params = block.type_params.clone();
-            for name in &function.type_params {
-                if resolver.param_contains(*name)? {
-                    return Err("duplicate visible generic parameter".into());
+        // Local/free declarations are collected separately by the frontend.
+        // None may inherit a preceding trait/default/impl Self owner.
+        resolver.with_source_owner(SourceOwnerContext::None, |resolver| {
+            resolver.type_params = function.type_params.clone();
+            resolver.bounds(&mut function.bounds, function.module)?;
+            resolver.ty(&mut function.result, function.module)?;
+            for (name, ty) in &mut function.params {
+                resolver.ty(ty, function.module)?;
+                if resolver
+                    .binding_constructor(*name, function.module)?
+                    .is_some()
+                {
+                    return Err(
+                        "enum variant patterns in function parameters are unsupported".into(),
+                    );
                 }
-                resolver.type_params.push(*name);
             }
-            resolver.bounds(&mut function.bounds, block.module)?;
-            resolver.ty(&mut function.result, block.module)?;
-            for (_, ty) in &mut function.params {
-                resolver.ty(ty, block.module)?;
-            }
-            let names = resolver.function_locals(function, item.receiver)?;
             validate_depth(DepthNode::Block(&function.body))?;
-            resolver.block(&mut function.body, block.module, &mut vec![names])?;
-        }
-        resolver.self_nominal = None;
-        resolver.self_allowed = false;
+            let locals = resolver.function_locals(function, ReceiverKind::None)?;
+            if let Err(error) =
+                resolver.block(&mut function.body, function.module, &mut vec![locals])
+            {
+                return Err(format!(
+                    "in function {}: {error}",
+                    resolver.display(&function.name)?
+                ));
+            }
+            Ok(())
+        })?;
+    }
+    for (source_index, block) in program.impls.iter_mut().enumerate() {
+        let owner = if block.trait_path.is_some() {
+            SourceOwnerContext::TraitImpl { source_index }
+        } else {
+            SourceOwnerContext::None
+        };
+        resolver.with_source_owner(owner, |resolver| {
+            resolver.type_params = block.type_params.clone();
+            resolver.bounds(&mut block.bounds, block.module)?;
+            if let Some(path) = &mut block.trait_path {
+                resolver.trait_path(path, block.module)?;
+            }
+            resolver.ty(&mut block.self_ty, block.module)?;
+            if resolver.contains_projection(&block.self_ty, 0)? {
+                return Err("unsupported: projection-bearing impl heads are unsupported".into());
+            }
+            resolver.self_nominal = Some(match &block.self_ty {
+                Type::Named(path) => path.clone(),
+                Type::Apply(path) => path.path(resolver.names())?,
+                _ => return Err("impl requires a nominal self pattern".into()),
+            });
+            resolver.self_allowed = true;
+            for associated in &mut block.associated_types {
+                validate_depth(DepthNode::Type(&associated.value))?;
+                resolver.ty(&mut associated.value, block.module)?;
+            }
+            for item in &mut block.items {
+                let function = &mut item.function;
+                resolver.type_params = block.type_params.clone();
+                for name in &function.type_params {
+                    if resolver.param_contains(*name)? {
+                        return Err("duplicate visible generic parameter".into());
+                    }
+                    resolver.type_params.push(*name);
+                }
+                resolver.bounds(&mut function.bounds, block.module)?;
+                resolver.ty(&mut function.result, block.module)?;
+                for (_, ty) in &mut function.params {
+                    resolver.ty(ty, block.module)?;
+                }
+                let names = resolver.function_locals(function, item.receiver)?;
+                validate_depth(DepthNode::Block(&function.body))?;
+                resolver.block(&mut function.body, block.module, &mut vec![names])?;
+            }
+            Ok(())
+        })?;
     }
     program.validate_name_handles()?;
     Ok(program)
+}
+
+#[cfg(test)]
+mod associated_projection_tests {
+    use super::*;
+
+    #[test]
+    fn nested_closed_projection_stock_sources_keep_real_boxed_children() {
+        for source in [
+            "trait Has{type Out;} struct S; struct U; impl Has for S{type Out=U;} impl Has for U{type Out=i32;} fn take(x:<<S as Has>::Out as Has>::Out)->i32{x} fn main(){if take(42)==42{println!(\"ok\");}}",
+            "trait Has{type Out;} struct A; struct B; struct C; impl Has for A{type Out=B;} impl Has for B{type Out=C;} impl Has for C{type Out=i32;} fn pass(x:<<<A as Has>::Out as Has>::Out as Has>::Out)->i32{x} fn main(){if pass(42)==42{println!(\"ok\");}}",
+        ] {
+            let program = parse(source).unwrap();
+            assert_eq!(program.traits[0].associated_types.len(), 1);
+            assert!(program.traits[0].items.is_empty());
+            let Type::Projection(outer) = &program.functions[0].params[0].1 else {
+                panic!("qualified source projection was erased");
+            };
+            let SourceProjection::Qualified {
+                self_ty,
+                trait_path,
+                ..
+            } = outer.as_ref()
+            else {
+                panic!("qualified projection became owning Self syntax");
+            };
+            assert!(matches!(self_ty, Type::Projection(_)));
+            assert!(matches!(trait_path, TraitPath::Source(_)));
+        }
+    }
+
+    #[test]
+    fn generic_impl_rhs_and_owning_self_keep_exact_source_shape() {
+        let program = parse("trait Has<T>{type Out;type Other;}struct S;impl<U> Has<U> for S{type Out=U;type Other=Self::Out;}fn main(){}").unwrap();
+        let implementation = &program.impls[0];
+        assert!(matches!(
+            implementation.associated_types[0].value,
+            Type::Param(_)
+        ));
+        assert!(matches!(&implementation.associated_types[1].value,
+            Type::Projection(p) if matches!(p.as_ref(), SourceProjection::SelfItem { .. })));
+    }
+
+    #[test]
+    fn aliases_keep_definition_projection_occurrences_and_substitute_actual_children() {
+        let program = parse("mod m{pub trait Has<T>{type Out;}}use m::Has as H;struct S;type Alias<T>=<S as H<T>>::Out;fn take(x:Alias<i32>)->Alias<i32>{x}fn main(){}").unwrap();
+        let function = &program.functions[0];
+        let Type::Projection(projection) = &function.result else {
+            panic!("alias erased projection");
+        };
+        let SourceProjection::Qualified {
+            trait_path: TraitPath::Source(path),
+            ..
+        } = projection.as_ref()
+        else {
+            panic!("alias lost source trait");
+        };
+        assert!(matches!(
+            path.segments.last().unwrap().args[0],
+            Type::Int(ir::IntTy::I32)
+        ));
+        let original = path
+            .path(program.names.as_ref())
+            .unwrap()
+            .original_use(program.names.as_ref())
+            .unwrap();
+        assert_eq!(original.len(), 1);
+        assert_eq!(program.names.spelling(original.segments()[0]).unwrap(), "H");
+        assert!(
+            retained_function_projection(
+                program.names.as_ref(),
+                function,
+                projection,
+                &ir::PlanBudget::default()
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn projected_trait_methods_and_ambiguous_or_foreign_self_stay_closed() {
+        for source in [
+            "trait Has{type Out;fn get()->Self::Out;}fn main(){}",
+            "trait Has{type Out;fn get(){let x:Self::Out=1;}}fn main(){}",
+            "trait Has{type Out;}struct S;impl S{fn get()->Self::Out{1}}fn main(){}",
+            "trait Has{type Out;}fn take<T>(x:T::Out){}fn main(){}",
+            "trait Has{type Out;}struct S;fn take(x:Self::Out){}fn main(){}",
+            "trait Base{type Out;}trait Child:Base{}struct S;impl Child for S{type X=Self::Out;}fn main(){}",
+        ] {
+            assert!(parse(source).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn member_transplant_within_one_owner_does_not_reuse_another_source_site() {
+        let program = parse("trait Has{type Out;}struct S;fn take(a:<S as Has>::Out,b:<S as Has>::Out){}fn main(){}").unwrap();
+        let function = &program.functions[0];
+        let Type::Projection(first) = &function.params[0].1 else {
+            panic!()
+        };
+        let Type::Projection(second) = &function.params[1].1 else {
+            panic!()
+        };
+        let mut changed = first.as_ref().clone();
+        let SourceProjection::Qualified { item, .. } = &mut changed else {
+            panic!()
+        };
+        let SourceProjection::Qualified {
+            item: replacement, ..
+        } = second.as_ref()
+        else {
+            panic!()
+        };
+        *item = *replacement;
+        assert!(
+            !retained_function_projection(
+                program.names.as_ref(),
+                function,
+                &changed,
+                &ir::PlanBudget::default()
+            )
+            .unwrap()
+        );
+        assert!(
+            retained_function_projection(
+                program.names.as_ref(),
+                function,
+                first,
+                &ir::PlanBudget::default()
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn projection_parsing_does_not_split_ordinary_shift_expressions() {
+        let program = parse("fn main(){let x=3<<2;let y=x>>1;}").unwrap();
+        let Stmt::Let {
+            value: Expr::Binary { op, .. },
+            ..
+        } = &program.functions[0].body.statements[0]
+        else {
+            panic!()
+        };
+        assert!(matches!(op, BinaryOp::Shl));
+        let Stmt::Let {
+            value: Expr::Binary { op, .. },
+            ..
+        } = &program.functions[0].body.statements[1]
+        else {
+            panic!()
+        };
+        assert!(matches!(op, BinaryOp::Shr));
+    }
 }
 
 #[cfg(test)]

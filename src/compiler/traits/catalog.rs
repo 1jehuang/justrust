@@ -405,6 +405,7 @@ impl CoreCatalogBuilder {
                         self_param,
                         env: env.clone(),
                         items: required.into(),
+                        associated_types: Arc::from([]),
                         supertraits: supers.into(),
                     },
                 )?;
@@ -499,6 +500,7 @@ impl CoreCatalogBuilder {
             budget: budget.clone(),
             declarations,
             headers: HeaderSet {
+                associated_types: Arc::from([]),
                 traits: traits.into(),
                 items: items.into(),
                 impls: Arc::from([]),

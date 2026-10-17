@@ -71,11 +71,17 @@ impl Encoder<'_> {
             ir::DeclKind::Trait => 5,
             ir::DeclKind::TraitItem => 6,
             ir::DeclKind::TraitImpl => 7,
+            ir::DeclKind::AssociatedType => 8,
         }])?;
         self.module_path(&path)?;
         match path.item() {
             frontend::PersistentDeclItem::Name(name) => {
                 self.append(b"N")?;
+                self.text(name)?;
+            }
+            frontend::PersistentDeclItem::AssociatedType { trait_name, name } => {
+                self.append(b"Y")?;
+                self.text(trait_name)?;
                 self.text(name)?;
             }
             frontend::PersistentDeclItem::Impl => self.append(b"I")?,
@@ -299,6 +305,9 @@ impl Encoder<'_> {
                 self.pattern(referent, env, depth + 1)
             }
             ir::Ty::Never => Err("unsupported associated instance self pattern".into()),
+            ir::Ty::AssociatedType(_) => {
+                Err("associated instance pattern contains unresolved associated type".into())
+            }
         }
     }
 
@@ -354,6 +363,9 @@ impl Encoder<'_> {
                 Ok(())
             }
             ir::Ty::Param(_) => Err("generic instance key contains unresolved parameter".into()),
+            ir::Ty::AssociatedType(_) => {
+                Err("generic instance key contains unresolved associated type".into())
+            }
             ir::Ty::Ref { kind, referent } => {
                 self.append(match kind {
                     ir::BorrowKind::Shared => b"rs",
@@ -447,7 +459,7 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
             | ir::Ty::Unit
             | ir::Ty::Never => {}
             ir::Ty::Ref { referent, .. } => walk(referent, depth + 1, budget)?,
-            ir::Ty::Param(_) => {
+            ir::Ty::Param(_) | ir::Ty::AssociatedType(_) => {
                 return Err("generic instance has non-closed argument".into());
             }
         }
@@ -543,10 +555,11 @@ pub(super) fn build(
             context: &mut frontend::PlanCtx,
             budget: &ir::PlanBudget,
         ) -> Result<(), String> {
-            charge_target_lookup(&target, budget)?;
             // A cached target or canonical nominal app is not admission authority.
-            // Validate the exact instance even for recursive/cache-hit demands.
+            // Validate all exact instance metadata before residual projection
+            // rejection or any recursive/cache-hit lookup.
             context.instance_facts(&target)?;
+            charge_target_lookup(&target, budget)?;
             // Exact recursive instances are already finite, regardless of call depth.
             if self.seen.contains_key(&target) {
                 return Ok(());

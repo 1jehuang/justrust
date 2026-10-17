@@ -131,6 +131,13 @@ pub(super) fn preflight_clone_node(
             Type::Named(path) => clone_ast_path(path, budget)?,
             Type::Tuple(fields) => clone_vector(fields, budget)?,
             Type::Apply(path) => clone_path(path, budget)?,
+            Type::Projection(projection) => {
+                budget.retain_bytes(std::mem::size_of::<SourceProjection>())?;
+                if let SourceProjection::Qualified { trait_path, .. } = projection.as_ref() {
+                    // The parent depth walker owns Self and actual-type children.
+                    clone_trait_path_shallow(trait_path, budget)?;
+                }
+            }
             _ => {}
         },
         DepthNode::Pattern(pattern) => match pattern {
@@ -273,6 +280,10 @@ pub(super) fn preflight_program_clone(
         clone_names(&implementation.type_params, budget)?;
         clone_bounds(&implementation.bounds, budget)?;
         walk_depth(DepthNode::Type(&implementation.self_ty), Some(budget))?;
+        clone_vector(&implementation.associated_types, budget)?;
+        for associated in &implementation.associated_types {
+            walk_depth(DepthNode::Type(&associated.value), Some(budget))?;
+        }
         clone_vector(&implementation.items, budget)?;
         for item in &implementation.items {
             clone_visibility(&item.visibility, budget)?;
@@ -307,6 +318,7 @@ pub(super) fn preflight_program_clone(
             clone_trait_path(path, budget)?;
         }
         clone_vector(&declaration.items, budget)?;
+        clone_vector(&declaration.associated_types, budget)?;
         for item in &declaration.items {
             let head = &item.signature;
             clone_names(&head.type_params, budget)?;
@@ -354,6 +366,73 @@ mod tests {
     use crate::compiler::expansion_budget::ExpansionBudget;
     use crate::compiler::module_identity::ModuleArenaBuilder;
     use std::path::Path;
+
+    #[test]
+    fn projection_clone_precharges_box_path_and_every_unused_rhs_child() {
+        let parsed = super::super::parse_unresolved(
+            "trait Family<T>{type Out;}struct S;\
+             impl Family<bool> for S{type Out=<S as Family<(bool,[i32;7])>>::Out;}\
+             fn main(){}",
+        )
+        .unwrap();
+        let rhs = &parsed.program.impls[0].associated_types[0].value;
+        let Type::Projection(projection) = rhs else {
+            panic!("expected actual projection RHS")
+        };
+        let SourceProjection::Qualified {
+            trait_path: TraitPath::Source(path),
+            ..
+        } = projection.as_ref()
+        else {
+            panic!("expected actual trait application");
+        };
+        let box_bytes = std::mem::size_of::<SourceProjection>();
+        let segments = std::mem::size_of_val(path.segments.as_slice()) * 2 + 128;
+        let args = std::mem::size_of_val(path.segments[0].args.as_slice()) * 2 + 128;
+        for (bytes, used, requested) in [
+            (1024 + box_bytes - 1, 1024, box_bytes),
+            (1024 + box_bytes + segments - 1, 1024 + box_bytes, segments),
+            (
+                1024 + box_bytes + segments + args - 1,
+                1024 + box_bytes + segments,
+                args,
+            ),
+        ] {
+            let budget = ir::PlanBudget::new(ir::PlanLimits {
+                bytes,
+                ..Default::default()
+            });
+            assert!(preflight_clone_node(&DepthNode::Type(rhs), &budget).is_err());
+            let failure = budget.first_resource_failure().unwrap();
+            assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
+            assert_eq!((failure.used, failure.requested), (used, requested));
+        }
+        let Type::Tuple(children) = &path.segments[0].args[0] else {
+            panic!("expected written nested tuple actual");
+        };
+        let children_bytes = std::mem::size_of_val(children.as_slice()) * 2 + 128;
+        let used = 1024 + box_bytes + segments + args + 1024;
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: used + children_bytes - 1,
+            ..Default::default()
+        });
+        assert!(walk_depth(DepthNode::Type(rhs), Some(&budget)).is_err());
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
+        assert_eq!((failure.used, failure.requested), (used, children_bytes));
+        preflight_program_clone(&parsed.program, &ir::PlanBudget::default()).unwrap();
+        fn check_vector<T>(values: &[T]) {
+            let bytes = std::mem::size_of_val(values) * 2 + 128;
+            let budget = ir::PlanBudget::new(ir::PlanLimits {
+                bytes: bytes - 1,
+                ..Default::default()
+            });
+            assert!(clone_vector(values, &budget).is_err());
+            assert_eq!(budget.first_resource_failure().unwrap().requested, bytes);
+        }
+        check_vector(&parsed.program.traits[0].associated_types);
+        check_vector(&parsed.program.impls[0].associated_types);
+    }
 
     #[test]
     fn unused_trait_actual_clone_admits_path_vectors_and_nested_type_storage() {

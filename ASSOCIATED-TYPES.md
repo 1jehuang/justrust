@@ -1,6 +1,6 @@
 # Closed associated-type projections
 
-Status: design frozen, implementation and native acceptance pending. Full Rust compatibility remains open.
+Status: bounded first vertical implemented and validated on October 17, 2026. Full Rust compatibility and general associated-type support remain open.
 
 ## First vertical contract
 
@@ -36,6 +36,15 @@ Candidate matching shares one substitution across Self and all trait arguments, 
 6. Body-local lowering constructs raw types under the state lock, releases it, normalizes with original body facts and applies existing typed/carrier admission.
 
 Every structural type visitor explicitly handles projections. Substitution rebuilds full Self/args and retains the associated item. Executable IR, CFG, closed instances and backend reject residual projections, including dead and nested metadata, rather than guessing word layout or empty carriers. Identity, semantic equality and normalization evidence remain distinct operations.
+
+## Verified first-vertical results
+
+- Full hosted suite: 2,851 tests across 138 binaries. The 1,128-test library suite, all-target check, strict all-target lint and formatting gates pass.
+- Both debug and release run the same 40-source stock-first corpus through 160 native workers1/8 CHECK/BUILD cells. Twelve executable sources produce 24 checked ELF images per profile, including distinct trait arguments, local annotations, generic impl substitution, tuples, non-Copy records, explicit Clone/Copy records, i128, aliases and nested chains.
+- The measured partition is 12 executable, 10 ordinary-invalid, 16 stock-valid explicit boundaries and 2 stock-invalid explicit boundaries. Original formatting/derive/parser boundaries remain classified as such rather than claimed as associated-type acceptance. All original 39 source bytes/order remain unchanged. An independently stock-measured manual Clone/Copy source is appended as source 40.
+- Public authority controls: 22 tests. Release private filters also pass 32 associated and 34 projection controls. Raw callback mismatches, exact source occurrence, foreign facts, phase/environment replay, residual dead metadata, sticky resources and shared DAG traversal are checked without creating public proof constructors.
+- The historical 62-source alias corpus changes only the `associated` outcome to supported; all source bytes/order remain unchanged.
+- Actual failed and passing build receipts are retained in `data/runs/xps14/2026-10-17-associated-types.jsonl`. No performance claim is made.
 
 ## Acceptance
 

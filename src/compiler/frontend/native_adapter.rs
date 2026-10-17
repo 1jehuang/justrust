@@ -291,7 +291,9 @@ impl NativeTokenBuffer {
             *slot = Some(part.span);
         }
         let mut suffixes = std::array::from_fn(|_| None);
-        if kind == ParserTokenKind::Punct && matches!(text, ">>" | ">=" | ">>=" | "&&") {
+        if kind == ParserTokenKind::Punct
+            && matches!(text, ">>" | ">=" | ">>=" | "&&" | "<<" | "<<=")
+        {
             for prefix in 1..text.len() {
                 suffixes[prefix - 1] = Some(
                     parts
@@ -1031,7 +1033,9 @@ impl NativeParserInput {
             }
         }
         let mut suffixes = std::array::from_fn(|_| None);
-        if kind == ParserTokenKind::Punct && matches!(text, ">>" | ">=" | ">>=" | "&&") {
+        if kind == ParserTokenKind::Punct
+            && matches!(text, ">>" | ">=" | ">>=" | "&&" | "<<" | "<<=")
+        {
             for prefix in 1..text.len() {
                 suffixes[prefix - 1] =
                     Some(self.part(projection, bytes.start + prefix..bytes.end)?);

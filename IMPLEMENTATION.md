@@ -303,6 +303,11 @@ cleanup failures.
       impls, bounds, supertraits, UFCS, unique dot dispatch and defaults under
       GENERIC-TRAITS.md. Same Self with distinct trait actuals retains separate
       coherence, proof and native instance identity. General traits remain open.
+- [x] Bounded closed associated-type declarations, assignment pairs and exact
+      normalization for ordinary signatures, aliases and locals under
+      ASSOCIATED-TYPES.md, with general Sized reference-free normal forms,
+      immutable raw schemas, scoped source authority and debug/release native
+      evidence. Projected required methods and rigid caller projections remain open.
 - [ ] Add trait type/lifetime/const parameters, generic methods, where clauses,
       associated types/constants, projection normalization, GATs, defaults and
       supertrait obligations beyond the bounded delivered source-default slice.
@@ -319,9 +324,9 @@ cleanup failures.
       retaining universal checks, binder-qualified substitution and sealed native
       instances. Optimization must not bypass unused-body validation.
 
-**Next:** extend the delivered trait-argument proof contract to associated-type
-goal and normalization APIs with
-ownership/type owners, then use a small Iterator-like source client. Closure
+**Next:** extend closed normalization to projected required-method conformance
+and rigid generic caller types with authoritative symbolic carrier/Copy/equality
+facts before attempting an Iterator-like source client. Closure
 capture design can proceed independently against the agreed place/region API.
 **Acceptance:** generic bodies prove obligations without favorable concrete
 witnesses, ambiguous/overlapping impls reject, and concrete dispatch, closures,

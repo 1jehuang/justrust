@@ -823,6 +823,7 @@ fn concrete_carrier_count(ty: &Ty, facts: ir::FactsCtx<'_>) -> Result<usize, Str
 fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
     let mut pending = vec![(ty, depth)];
     let mut work = 0usize;
+    let mut unresolved_associated_type = false;
     let mut nominals = std::collections::HashSet::new();
     let mut tuples = std::collections::HashSet::new();
     let mut arrays = std::collections::HashSet::new();
@@ -835,6 +836,11 @@ fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
             return Err("CFG type nesting exceeds limit 128".into());
         }
         match ty {
+            Ty::AssociatedType(projection) => {
+                unresolved_associated_type = true;
+                pending.push((&projection.trait_ref.self_ty, depth + 1));
+                pending.extend(projection.trait_ref.args.iter().map(|ty| (ty, depth + 1)));
+            }
             Ty::Ref { referent, .. } => {
                 if depth != 0 {
                     return Err("unsupported: nested or aggregate references".into());
@@ -887,6 +893,9 @@ fn validate_type(ty: &Ty, depth: usize) -> Result<(), String> {
         if pending.len() > ir::MAX_PATTERN_PROJECTION_WORK - work {
             return Err("CFG type work limit exceeded".into());
         }
+    }
+    if unresolved_associated_type {
+        return Err("unsupported: unresolved associated type in executable CFG".into());
     }
     Ok(())
 }

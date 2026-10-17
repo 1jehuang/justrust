@@ -341,7 +341,7 @@ const FIXTURES: &[Fixture] = &[
     },
     Fixture {
         name: "associated",
-        outcome: Outcome::Unsupported,
+        outcome: Outcome::Valid,
         source: "trait Tr{type Item;}struct S;impl Tr for S{type Item=i32;}type A=<S as Tr>::Item;fn main(){}",
         code: "",
     },

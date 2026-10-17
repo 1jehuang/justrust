@@ -10,7 +10,9 @@ use super::ir::{
 use super::module_identity::{ModuleArena, ModuleError, ModuleId};
 use std::sync::{Arc, Mutex};
 
+mod associated_types;
 mod catalog;
+pub use associated_types::NormalizedAssociatedType;
 pub use catalog::{
     CallableProvider, CatalogDecl, CatalogItem, CoreCatalog, CoreCatalogBuilder, DeclOrigin,
     RecipeDescriptor, RecipeShapeInventory,
@@ -292,6 +294,7 @@ fn clone_schema(schema: &GenericSchema, budget: &PlanBudget) -> Result<GenericSc
 #[derive(Clone, Debug, Default)]
 pub struct HeaderSet {
     pub traits: Arc<[TraitHeader]>,
+    pub associated_types: Arc<[AssociatedTypeHeader]>,
     pub items: Arc<[TraitItemHeader]>,
     pub impls: Arc<[ImplHeader]>,
     pub callables: Arc<[CallableHeader]>,
@@ -302,6 +305,7 @@ pub struct TraitHeader {
     pub self_param: ParamId,
     pub env: Arc<GenericEnv>,
     pub items: Arc<[DeclId]>,
+    pub associated_types: Arc<[DeclId]>,
     pub supertraits: Arc<[TraitRef]>,
 }
 #[derive(Clone, Debug)]
@@ -319,6 +323,19 @@ pub struct ImplHeader {
     pub schema_env: Arc<GenericEnv>,
     pub predicates: Arc<[Predicate]>,
     pub items: Arc<[(DeclId, DeclId)]>,
+    pub associated_types: Arc<[AssociatedTypeValue]>,
+}
+#[derive(Clone, Debug)]
+pub struct AssociatedTypeHeader {
+    pub declaration: DeclId,
+    pub trait_decl: DeclId,
+    pub env: Arc<GenericEnv>,
+}
+#[derive(Clone, Debug)]
+pub struct AssociatedTypeValue {
+    pub implementation: DeclId,
+    pub associated: DeclId,
+    pub rhs: Ty,
 }
 #[derive(Clone, Debug)]
 pub struct CallableHeader {
@@ -353,6 +370,13 @@ pub trait SchemaCx {
     fn core_catalog(&self) -> &Arc<CoreCatalog>;
     fn declaration_info(&self, id: DeclId) -> Result<SchemaDecl>;
     fn declaration_schema(&self, id: DeclId) -> Result<GenericSchema>;
+    fn associated_type_rhs(&self, implementation: DeclId, associated: DeclId) -> Result<Ty> {
+        let _ = (implementation, associated);
+        Err(FactsError::invalid(
+            self.budget(),
+            "associated type assignment has no authoritative RHS",
+        ))
+    }
     fn source_region_env(&self, id: DeclId) -> Result<Arc<ir::SourceRegionEnv>>;
     fn instantiate_schema(
         &self,
@@ -614,6 +638,19 @@ impl ValidatedFacts {
     }
     pub fn validate_ty(&self, ty: &Ty) -> Result<()> {
         self.validate_ty_with_budget(ty, self.budget())
+    }
+    pub fn validate_ty_metadata(&self, ty: &Ty) -> Result<()> {
+        self.validate_ty_metadata_with_budget(ty, self.budget())
+    }
+    pub fn validate_ty_metadata_with_budget(&self, ty: &Ty, budget: &PlanBudget) -> Result<()> {
+        if !self.budget().same_authority(budget) {
+            return Err(FactsError::invalid(
+                budget,
+                "metadata facts changed planning budget authority",
+            ));
+        }
+        self.world.check_facts(self, false)?;
+        self.world.validate_ty_metadata_in(ty, self.env(), 0)
     }
     pub fn projected_ty<'a>(&self, root: &'a Ty, path: &[ir::Projection]) -> Result<&'a Ty> {
         self.validate_ty(root)?;
@@ -1007,6 +1044,8 @@ pub struct ValidatedTraitWorld {
     requirements: Vec<(DeclId, Arc<[Predicate]>)>,
     origins: Vec<(DeclId, Arc<ir::SignatureOriginSchema>)>,
     carriers: Vec<DeclarationCarriers>,
+    normalized_callables: Vec<CallableHeader>,
+    projection_memo: Mutex<Vec<associated_types::NormalizationMemo>>,
 }
 
 impl ValidatedTraitWorld {
@@ -1144,10 +1183,15 @@ impl ValidatedTraitWorld {
             requirements: Vec::new(),
             origins: Vec::new(),
             carriers: Vec::new(),
+            normalized_callables: Vec::new(),
+            projection_memo: Mutex::new(Vec::new()),
         };
+        world.validate_header_type_metadata()?;
         world.validate_headers()?;
+        world.validate_associated_headers()?;
         world.validate_supertrait_graph()?;
         world.build_declared_environments()?;
+        world.stage_associated_types()?;
         world.build_origin_schemas()?;
         for h in world.headers.impls.iter() {
             world.validate_impl(h)?;
@@ -1297,6 +1341,12 @@ impl ValidatedTraitWorld {
         ))
     }
     fn callable_header(&self, id: DeclId) -> Result<&CallableHeader> {
+        for h in &self.normalized_callables {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if h.declaration == id {
+                return Ok(h);
+            }
+        }
         for h in self.headers.callables.iter() {
             charged(&self.budget, self.budget.charge_work(1))?;
             if h.declaration == id {
@@ -1353,6 +1403,10 @@ impl ValidatedTraitWorld {
         env: &GenericEnv,
         maybe_unsized: Option<ParamId>,
     ) -> Result<()> {
+        self.validate_ty_metadata_in(&goal.self_ty, env, 0)?;
+        for argument in goal.args.iter() {
+            self.validate_ty_metadata_in(argument, env, 0)?;
+        }
         let declaration = self.info(goal.declaration)?;
         if declaration.kind != DeclKind::Trait {
             return Err(FactsError::invalid(
@@ -1486,6 +1540,12 @@ impl ValidatedTraitWorld {
             Ok(())
         };
         match ty {
+            Ty::AssociatedType(_) => {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: residual associated type projection in executable type",
+                ));
+            }
             Ty::Param(param) => {
                 walk.has_parameters = true;
                 charged(&self.budget, self.budget.charge_work(env.scopes().len()))?;
@@ -1954,6 +2014,10 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         match (left, right) {
+            (Ty::AssociatedType(a), Ty::AssociatedType(b)) => Ok(a.item == b.item
+                && a.trait_ref.declaration == b.trait_ref.declaration
+                && self.eq_ty(&a.trait_ref.self_ty, &b.trait_ref.self_ty, depth + 1)?
+                && self.eq_types(&a.trait_ref.args, &b.trait_ref.args, depth + 1)?),
             (Ty::Param(a), Ty::Param(b)) => Ok(a == b),
             (Ty::Int(a), Ty::Int(b)) => Ok(a == b),
             (Ty::Float(a), Ty::Float(b)) => Ok(a == b),
@@ -2073,6 +2137,7 @@ impl ValidatedTraitWorld {
             .iter()
             .map(|h| h.declaration)
             .chain(self.headers.items.iter().map(|h| h.declaration))
+            .chain(self.headers.associated_types.iter().map(|h| h.declaration))
             .chain(self.headers.impls.iter().map(|h| h.declaration))
             .chain(self.headers.callables.iter().map(|h| h.declaration))
         {
@@ -2170,6 +2235,12 @@ impl ValidatedTraitWorld {
                 ));
             }
             self.validate_declaration_schema(item.declaration, &item.schema)?;
+            if self.schema_contains_projection(&item.schema)? {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: projection-bearing required trait method signatures",
+                ));
+            }
             if let Some(canonical) = self
                 .catalog
                 .headers()
@@ -2238,12 +2309,23 @@ impl ValidatedTraitWorld {
                 )?,
                 None => None,
             };
-            self.validate_schema_signature(
-                callable.declaration,
-                &callable.schema.signature,
-                &callable.schema.env,
-                default_self,
-            )?;
+            if !self.schema_contains_projection(&callable.schema)? {
+                self.validate_schema_signature(
+                    callable.declaration,
+                    &callable.schema.signature,
+                    &callable.schema.env,
+                    default_self,
+                )?;
+            } else if self
+                .info(callable.declaration)?
+                .owner
+                .is_some_and(|owner| self.headers.traits.iter().any(|h| h.declaration == owner))
+            {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: projection-bearing trait default signatures",
+                ));
+            }
             if let ReceiverMode::Borrowed { kind } = info.receiver
                 && !matches!(callable.schema.signature.params.first(),
                     Some(Ty::Ref { kind: actual, .. }) if *actual == kind)
@@ -2762,7 +2844,7 @@ impl ValidatedTraitWorld {
                 )
             }
         };
-        let raw = self.schema.declaration_schema(declaration)?;
+        let raw = self.normalized_declaration_schema(declaration)?;
         if raw.env.total_arity() != arguments.len() {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -3719,7 +3801,7 @@ impl ValidatedTraitWorld {
             }
         }
         for declaration in declarations {
-            let raw = self.schema.declaration_schema(declaration)?;
+            let raw = self.normalized_declaration_schema(declaration)?;
             let schema = charged(
                 &self.budget,
                 ir::derive_signature_origin_schema(&raw.signature, &raw.env, &self.budget),
@@ -4257,6 +4339,9 @@ impl ValidatedTraitWorld {
         facts: ProofContext<'_>,
         declaration: Option<DeclId>,
     ) -> Result<InstantiatedSchema> {
+        for argument in args {
+            self.validate_ty_metadata_in(argument, facts.env(), 0)?;
+        }
         if args.len() != schema.env.total_arity() {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -5128,10 +5213,18 @@ impl ValidatedTraitWorld {
                 return self.evidence(predicate, facts, ProofOrigin::Assumption);
             }
         }
-        let Predicate::Implements(goal) = predicate;
         if let Some(outcome) = self.prove_builtin(predicate, facts, active)? {
             return Ok(outcome);
         }
+        self.prove_implementation_in(predicate, facts, active)
+    }
+    fn prove_implementation_in(
+        &self,
+        predicate: &Predicate,
+        facts: ProofContext<'_>,
+        active: &mut Vec<GoalKey>,
+    ) -> Result<ProofOutcome> {
+        let Predicate::Implements(goal) = predicate;
         let mut selected = None;
         for implementation in self.headers.impls.iter() {
             charged(&self.budget, self.budget.charge_work(1))?;
@@ -5288,6 +5381,12 @@ impl ValidatedTraitWorld {
             // `[T]` is neither Sized nor Copy/Clone.
             Ty::Slice { .. } => false,
             Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => true,
+            Ty::AssociatedType(_) => {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: residual associated projection in builtin obligation",
+                ));
+            }
         };
         if !known {
             return Ok(Some(ProofOutcome::NotProven));
@@ -5321,6 +5420,10 @@ impl ValidatedTraitWorld {
         call: &TraitCall,
         context: ProofContext<'_>,
     ) -> Result<(Signature, Option<Arc<SignatureTopologyProof>>)> {
+        self.validate_ty_metadata_in(&call.trait_ref.self_ty, context.env(), 0)?;
+        for argument in call.trait_ref.args.iter().chain(call.method_args.iter()) {
+            self.validate_ty_metadata_in(argument, context.env(), 0)?;
+        }
         self.validate_ref_in(&call.trait_ref, context.env(), None)?;
         let item = self.item_header(call.item)?;
         if item.trait_decl != call.trait_ref.declaration {
@@ -6484,6 +6587,7 @@ mod tests {
         });
         let empty = env(&[], &budget);
         let headers = HeaderSet {
+            associated_types: Arc::from([]),
             traits: Arc::from([
                 TraitHeader {
                     declaration: id(0),
@@ -6493,6 +6597,7 @@ mod tests {
                     },
                     env: marker_env,
                     items: Arc::from([]),
+                    associated_types: Arc::from([]),
                     supertraits: Arc::from([]),
                 },
                 TraitHeader {
@@ -6503,6 +6608,7 @@ mod tests {
                     },
                     env: value_env,
                     items: Arc::from([id(3)]),
+                    associated_types: Arc::from([]),
                     supertraits: Arc::from([]),
                 },
             ]),
@@ -6538,6 +6644,7 @@ mod tests {
                         args: Arc::from([]),
                     })]),
                     items: Arc::from([(id(3), id(9))]),
+                    associated_types: Arc::from([]),
                 },
                 ImplHeader {
                     declaration: id(7),
@@ -6549,6 +6656,7 @@ mod tests {
                     schema_env: empty,
                     predicates: Arc::from([]),
                     items: Arc::from([]),
+                    associated_types: Arc::from([]),
                 },
             ]),
             callables: Arc::from([
@@ -8474,6 +8582,7 @@ mod tests {
         let header = carrier_header(&budget, 1, |p| sig(vec![p[0].clone()], p[0].clone()));
         let headers = HeaderSet {
             traits: Arc::from([]),
+            associated_types: Arc::from([]),
             items: Arc::from([]),
             impls: Arc::from([]),
             callables: Arc::from([header.clone()]),
