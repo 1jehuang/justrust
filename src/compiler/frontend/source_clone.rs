@@ -136,6 +136,15 @@ pub(super) fn preflight_clone_node(
                 }
             }
             Pattern::Tuple(fields) => clone_vector(fields, budget)?,
+            Pattern::TupleRest(fields) => {
+                clone_vector(&fields.prefix, budget)?;
+                clone_vector(&fields.suffix, budget)?;
+            }
+            Pattern::VariantRest { name, fields } => {
+                clone_ast_path(name, budget)?;
+                clone_vector(&fields.prefix, budget)?;
+                clone_vector(&fields.suffix, budget)?;
+            }
             _ => {}
         },
         DepthNode::Expr(expr) => match expr {
@@ -421,6 +430,28 @@ mod tests {
         assert_eq!(failure.requested, required);
         assert_eq!(failure.used, 1024);
         assert_eq!(budget.usage_snapshot().bytes, 1024);
+        assert!(!failure.arithmetic_overflow);
+    }
+
+    #[test]
+    fn positional_rest_clone_precharges_both_written_child_vectors() {
+        let fields = PositionalRest {
+            prefix: vec![Pattern::Wildcard],
+            suffix: vec![Pattern::Wildcard, Pattern::Wildcard],
+        };
+        let prefix_bytes = std::mem::size_of_val(fields.prefix.as_slice()) * 2 + 128;
+        let suffix_bytes = std::mem::size_of_val(fields.suffix.as_slice()) * 2 + 128;
+        let pattern = Pattern::TupleRest(fields);
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: 1024 + prefix_bytes + suffix_bytes - 1,
+            ..Default::default()
+        });
+        assert!(preflight_clone_node(&DepthNode::Pattern(&pattern), &budget).is_err());
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
+        assert_eq!(failure.used, 1024 + prefix_bytes);
+        assert_eq!(failure.requested, suffix_bytes);
+        assert_eq!(budget.usage_snapshot().bytes, 1024 + prefix_bytes);
         assert!(!failure.arithmetic_overflow);
     }
 

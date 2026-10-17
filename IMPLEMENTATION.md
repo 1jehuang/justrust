@@ -34,8 +34,11 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       aggregate domains, genuine arm locals, plain Field projections and selective
       moves. AGGREGATE-MATCHES.md records stock26/native104 debug/release cells,
       28 public malformed-IR controls and complete 2,247-test / 112-binary gates.
-      Refutable aggregate leaves, positional rest, guards, or-patterns and implicit
-      reference ergonomics remain unsupported.
+      Refutable aggregate leaves, guards, or-patterns and implicit reference
+      ergonomics remain unsupported. Positional rest is admitted below.
+- [x] Positional rest in nonempty structural tuples and nongeneric tuple structs,
+  with honest prefix/suffix source nodes, checked selected-field projections,
+  constructor privacy and partial moves. See `POSITIONAL-REST-PATTERNS.md`.
 - [x] Named record-rest match patterns with selected-member privacy, omitted-field
       nonconsumption and unchanged genuine binding/replay identities.
       RECORD-REST-MATCHES.md records stock27/native108 debug/release cells, twelve

@@ -1,6 +1,6 @@
 # Positional rest pattern contract
 
-Status: **implementation in progress, not accepted**. Full Rust remains open.
+Status: **bounded native slice accepted on October 17, 2026**. Full Rust remains open.
 
 ## Honest source representation
 
@@ -51,3 +51,28 @@ fallback and exact executable outputs, bootstrap debug/release gates, public
 malformed source/owner/nominal controls and complete unchanged hosted regression,
 strict lint, formatting and diff gates are required. Retain exact failed and
 passing redacted run summaries. No full-Rust, ABI/layout or speed claim follows.
+
+## Observed acceptance
+
+The stock-first corpus contains 24 exact sources: 17 stock-valid and seven
+stock-invalid. Native classification is 12 runtime, seven ordinary-invalid and
+five explicit Unsupported cases, exercised in 96 workers1/8 CHECK/BUILD cells.
+Bootstrap debug and release each passed all 26 focused tests, including 14 public
+owner/nominal/source-shape controls. Each profile executed 24 native images.
+Existing aggregate and record corpora retain their exact source bytes/order;
+only three newly supported positional-rest outcomes were promoted. Three older
+parser/native fixtures likewise retain their exact source while becoming
+positive checks instead of obsolete rejection expectations.
+
+The complete hosted suite passed 2,301 tests across 116 binaries with no failed,
+ignored or filtered tests (`20261017-111852910-1831807`). Strict all-target lint
+passed (`20261017-111906233-1832566`), as did formatting and diff checks. Debug
+and release focused receipts are `20261017-111621737-1820635` and
+`20261017-111627923-1821157`. Ten exact redacted failed/passing receipts live in
+`data/runs/xps14/2026-10-17-positional-rest-patterns.jsonl`.
+
+The failed gates are retained: incomplete integration, obsolete rejection
+fixtures, actual resolver-versus-checker phase classification, and the legal
+empty/unit tuple boundary. The latter remains typed Unsupported, not newly
+admitted semantics. No cap, stack setting, fallback compiler or source witness
+was weakened to obtain the final result.

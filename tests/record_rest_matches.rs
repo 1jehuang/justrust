@@ -1,5 +1,5 @@
 //! Named-record rest matches with checked selected fields and omitted-field ownership.
-//! Tuple/unit rest and refutable/guard/or/ref patterns remain explicit boundaries.
+//! Unit rest and refutable/guard/or/ref patterns remain explicit boundaries.
 //! Existing top-level enum-record rest support is retained as a separate control.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use justrust_engine::compiler::{self, frontend, ir, source};
@@ -158,14 +158,14 @@ fn cases() -> Vec<Case> {
             source: r#"struct Pair(i32,i32);fn main(){let answer=match Pair(42,2){Pair(a,..)=>a};if answer==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "structural_tuple_rest_boundary",
             source: r#"fn main(){let answer=match (42,2){(a,..)=>a};if answer==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "unit_rest_boundary",
@@ -382,7 +382,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (19, 8));
-    assert_eq!(partition, (12, 8, 7));
+    assert_eq!(partition, (14, 8, 5));
 }
 #[test]
 fn stock_record_rest_privacy_ownership_oracle_edition2024() {
@@ -493,7 +493,7 @@ fn source_record_rest_ir_retains_only_selected_plain_field_bindings() {
         counts.0 += 1;
         counts.1 += seen.len();
     }
-    assert_eq!(counts, (12, 11));
+    assert_eq!(counts, (14, 13));
 }
 
 #[test]
@@ -511,11 +511,7 @@ fn record_rest_closed_domains_reject_in_their_actual_frontend_phase() {
         .and_then(|prepared| frontend::parse_prepared(&prepared));
         if matches!(
             case.name,
-            "guard_boundary"
-                | "or_boundary"
-                | "tuple_struct_rest_boundary"
-                | "structural_tuple_rest_boundary"
-                | "ref_binding_boundary"
+            "guard_boundary" | "or_boundary" | "ref_binding_boundary"
         ) {
             let error = match parsed {
                 Err(error) => error,
@@ -555,7 +551,7 @@ fn record_rest_closed_domains_reject_in_their_actual_frontend_phase() {
             counts.1 += 1;
         }
     }
-    assert_eq!(counts, (5, 2));
+    assert_eq!(counts, (3, 2));
 }
 #[test]
 fn native_record_rest_workers1_8_check_build_no_compiler_fallback() {
@@ -642,8 +638,8 @@ fn native_record_rest_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 108);
-    assert_eq!(modes, (24, 24, 16, 16, 14, 14));
+    assert_eq!(modes, (28, 28, 16, 16, 10, 10));
     eprintln!(
-        "NATIVE RECORD REST MATCHES:108 cells, modes{modes:?};24 executed native images;28 Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
+        "NATIVE RECORD REST MATCHES:108 cells, modes{modes:?};28 executed native images;20 Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
     );
 }

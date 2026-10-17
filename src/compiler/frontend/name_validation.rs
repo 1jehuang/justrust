@@ -303,6 +303,24 @@ impl<'a> Validator<'a> {
         }
         Ok(())
     }
+    fn positional_patterns(&mut self, fields: &'a PositionalRest) -> Result<(), String> {
+        let count = fields
+            .prefix
+            .len()
+            .checked_add(fields.suffix.len())
+            .ok_or_else(|| {
+                transport(TokenError::InvalidInput(
+                    "positional pattern child count overflow",
+                ))
+            })?;
+        // Charge both explicit lists before reading or pushing either list.
+        // Omitted fields have no source nodes or generated binding identities.
+        self.work(count)?;
+        for child in fields.prefix.iter().chain(&fields.suffix) {
+            self.push(Visit::Pattern(child))?;
+        }
+        Ok(())
+    }
     fn expression_fields(&mut self, fields: &'a [(FieldSelector, Expr)]) -> Result<(), String> {
         self.work(fields.len())?;
         for (selector, expression) in fields {
@@ -770,6 +788,11 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Path(name))?;
                     self.pattern_fields(fields)?;
                 }
+                Pattern::VariantRest { name, fields } => {
+                    self.push(Visit::Path(name))?;
+                    self.positional_patterns(fields)?;
+                }
+                Pattern::TupleRest(fields) => self.positional_patterns(fields)?,
                 Pattern::Path(path) => self.push(Visit::Path(path))?,
                 Pattern::Binding { name, .. } => self.local(*name, true)?,
                 Pattern::Tuple(elements) => self.many(elements, Visit::Pattern)?,
@@ -1166,6 +1189,72 @@ mod tests {
                 .starts_with("contract:")
         );
     }
+    #[test]
+    fn positional_rest_checks_both_explicit_lists_and_variant_path() {
+        let mut foreign = builder();
+        let foreign_name = foreign.ident("foreign").unwrap();
+        let foreign_path = foreign.path("crate::Foreign").unwrap();
+        let _foreign = foreign.finish().unwrap();
+        for variant in [false, true] {
+            let mut input = builder();
+            let path = input.path("crate::Pair").unwrap();
+            let declaration = function(&mut input);
+            input.functions.push(declaration);
+            let mut valid = input.finish().unwrap();
+            let fields = PositionalRest {
+                prefix: vec![Pattern::Wildcard],
+                suffix: vec![Pattern::Wildcard],
+            };
+            let pattern = if variant {
+                Pattern::VariantRest { name: path, fields }
+            } else {
+                Pattern::TupleRest(fields)
+            };
+            valid.functions[0].body.statements.push(Stmt::LetPattern {
+                pattern,
+                ty: Type::Unit,
+                value: Expr::Bool(true),
+            });
+            validate_program_names(&valid).unwrap();
+            for suffix in [false, true] {
+                let mut malformed = valid.clone();
+                let Stmt::LetPattern { pattern, .. } =
+                    malformed.functions[0].body.statements.last_mut().unwrap()
+                else {
+                    unreachable!()
+                };
+                let fields = match pattern {
+                    Pattern::TupleRest(fields) | Pattern::VariantRest { fields, .. } => fields,
+                    _ => unreachable!(),
+                };
+                let target = if suffix {
+                    &mut fields.suffix
+                } else {
+                    &mut fields.prefix
+                };
+                target[0] = Pattern::Binding {
+                    name: foreign_name,
+                    mutable: false,
+                };
+                assert!(validate_program_names(&malformed).is_err());
+                assert!(
+                    validate_function_names(&malformed, &malformed.functions[0], None).is_err()
+                );
+            }
+            if variant {
+                let Stmt::LetPattern {
+                    pattern: Pattern::VariantRest { name, .. },
+                    ..
+                } = valid.functions[0].body.statements.last_mut().unwrap()
+                else {
+                    unreachable!()
+                };
+                *name = foreign_path.clone();
+                assert!(validate_program_names(&valid).is_err());
+            }
+        }
+    }
+
     #[test]
     fn tuple_struct_shape_requires_contiguous_real_tuple_fields() {
         let mut input = builder();

@@ -1,5 +1,31 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: bounded positional rest uses actual selected source children
+
+Accepted nonempty structural-tuple and nongeneric tuple-struct positional rest
+in let and irrefutable match patterns. Actual prefix/suffix nodes retain checked
+occurrences, binders and source inventory order; a borrowed checked projection
+maps suffix indices without allocating or fabricating omitted patterns. Tuple
+constructor privacy still includes omitted private fields. Existing Aggregate
+IR, selected-only CFG moves and nominal ownership remain unchanged.
+
+Stock24 classifies 17 valid/seven invalid; native12 runtime/seven invalid/five
+Unsupported produces 96 workers1/8 CHECK/BUILD cells and 24 executed images per
+bootstrap profile. Debug/release focused26 and public authority14 passed.
+Full hosted run `20261017-111852910-1831807` passed 2,301 tests/116 binaries,
+zero failures/ignored/filtered, with 0.11s compile and 12.27s tests. The slowest
+wide-integer oracle took 12.05s, a diagnostic observation, not a speedup claim.
+Strict lint passed `20261017-111906233-1832566`; formatting/diff checks passed.
+
+Retained failed gates show incomplete dispatch, obsolete exact-source rejection
+fixtures, an enum-rest resolver phase expectation and a legal empty-tuple
+Unsupported boundary. Corrections preserve source bytes and existing resource
+caps. Three older corpus outcomes and three parser/native fixtures are promoted
+only because their exact positional-rest source is now supported. Ten redacted
+receipts are in `data/runs/xps14/2026-10-17-positional-rest-patterns.jsonl`.
+Enum tuple-payload rest, array/slice patterns and full Rust remain open.
+
+
 ## 2026-10-17: named record-rest matches preserve omitted fields
 
 Only the checked named-record irrefutability gate changed: exact source Record

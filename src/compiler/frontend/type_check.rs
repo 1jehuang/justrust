@@ -1726,6 +1726,12 @@ impl<'a> Checker<'a> {
         pattern: &Pattern,
         expected: &ir::Ty,
     ) -> Result<Option<ir::StructTy>, String> {
+        if matches!(pattern, Pattern::VariantRest { .. }) {
+            let ir::Ty::Struct(ty) = self.positional_pattern_type(pattern, expected)? else {
+                return Err("contract: tuple struct rest resolved to non-struct".into());
+            };
+            return Ok(Some(ty));
+        }
         let Pattern::Variant {
             name,
             shape,
@@ -1768,6 +1774,92 @@ impl<'a> Checker<'a> {
         }
         Ok(Some(ty.clone()))
     }
+    fn empty_tuple_rest_unsupported() -> String {
+        super::super::source::SourceError {
+            kind: super::super::source::SourceErrorKind::Unsupported,
+            primary: None,
+            message: "positional rest requires a nonempty tuple".into(),
+            _diagnostic_lease: None,
+            location: None,
+        }
+        .to_string()
+    }
+    fn positional_pattern_type(
+        &self,
+        pattern: &Pattern,
+        expected: &ir::Ty,
+    ) -> Result<ir::Ty, String> {
+        let (actual, fields) = match pattern {
+            Pattern::TupleRest(fields) => {
+                let ir::Ty::Tuple(types) = expected else {
+                    if *expected == ir::Ty::Unit {
+                        return Err(Self::empty_tuple_rest_unsupported());
+                    }
+                    if *expected == ir::Ty::Never {
+                        return Err(
+                            "unsupported: positional rest cannot infer omitted tuple arity".into(),
+                        );
+                    }
+                    return Err("positional rest requires a nonempty structural tuple".into());
+                };
+                if types.is_empty() {
+                    return Err("unsupported: positional rest requires a nonempty tuple".into());
+                }
+                (expected.clone(), fields)
+            }
+            Pattern::VariantRest { name, fields } => {
+                let plan = self.signatures.plan()?;
+                let key = self.path_key(name, Namespace::Type)?;
+                let Some(declaration) = plan.registry.nominals.get(&key).copied() else {
+                    self.enum_variant(name)?;
+                    return Err("unsupported: enum tuple positional rest patterns".into());
+                };
+                let schema = self.nominal_source(declaration)?;
+                let NominalSchema::Struct(source) = schema.as_ref() else {
+                    return Err("expected tuple struct positional rest".into());
+                };
+                if source.shape != StructShape::Tuple {
+                    return Err("positional rest constructor is not a tuple struct".into());
+                }
+                let actual = self.nominal(name, Some(expected))?;
+                let ir::Ty::Struct(ty) = &actual else {
+                    return Err("contract: tuple rest constructor has non-struct type".into());
+                };
+                self.checked_struct_shape(ty)?;
+                if !self.visible(&ty.def().visibility)? {
+                    return Err("private tuple struct rest constructor".into());
+                }
+                for field in ty.def().fields.iter() {
+                    self.infer_work(0)?;
+                    if !self.visible(&field.visibility)? {
+                        return Err("private tuple struct rest constructor field".into());
+                    }
+                }
+                if !coerces(expected, &actual) {
+                    return Err("tuple struct rest pattern nominal mismatch".into());
+                }
+                (actual, fields)
+            }
+            _ => return Err("contract: expected positional rest pattern".into()),
+        };
+        self.accessible(&actual)?;
+        let arity = match &actual {
+            ir::Ty::Tuple(types) => types.len(),
+            ir::Ty::Struct(ty) => ty.def().fields.len(),
+            _ => return Err("contract: positional rest domain is not aggregate".into()),
+        };
+        let projection = fields.project(arity)?;
+        let count = fields
+            .prefix
+            .len()
+            .checked_add(fields.suffix.len())
+            .ok_or("positional rest count overflow")?;
+        self.signatures.plan()?.budget.charge_work(count)?;
+        for (index, _) in projection.iter() {
+            self.field_type(&actual, &FieldSelector::Tuple(index))?;
+        }
+        Ok(actual)
+    }
     fn validate_aggregate_pattern(
         &self,
         pattern: &Pattern,
@@ -1794,6 +1886,27 @@ impl<'a> Checker<'a> {
                     .ok_or("aggregate binder count overflow")?;
                 if *binders > ir::MAX_PATTERN_BINDINGS {
                     return Err("pattern binding count exceeds limit".into());
+                }
+                Ok(())
+            }
+            Pattern::TupleRest(fields) | Pattern::VariantRest { fields, .. } => {
+                let actual = self.positional_pattern_type(pattern, ty)?;
+                let arity = match &actual {
+                    ir::Ty::Tuple(types) => types.len(),
+                    ir::Ty::Struct(ty) => ty.def().fields.len(),
+                    _ => return Err("contract: positional rest aggregate type".into()),
+                };
+                let projection = fields.project(arity)?;
+                self.signatures.plan()?.budget.charge_work(
+                    fields
+                        .prefix
+                        .len()
+                        .checked_add(fields.suffix.len())
+                        .ok_or("positional rest count overflow")?,
+                )?;
+                for (index, pattern) in projection.iter() {
+                    let (_, field_ty) = self.field_type(&actual, &FieldSelector::Tuple(index))?;
+                    self.validate_aggregate_pattern(pattern, &field_ty, depth + 1, work, binders)?;
                 }
                 Ok(())
             }
@@ -3028,6 +3141,7 @@ impl<'a> Checker<'a> {
                 Ok(expected)
             }
             Pattern::Apply {..} => self.pattern_ty(self.pattern_source(pattern,ty)?,ty),
+            Pattern::TupleRest(_) | Pattern::VariantRest { .. } => self.positional_pattern_type(pattern, ty),
             Pattern::Bool(_) | Pattern::Int { .. } => Err("refutable literal pattern in let binding".into()),
             Pattern::Wildcard | Pattern::Binding { .. } => Ok(ty.clone()),
             Pattern::Tuple(patterns) => match ty {
@@ -3079,6 +3193,28 @@ impl<'a> Checker<'a> {
                 );
             }
             Pattern::Wildcard => {}
+            Pattern::TupleRest(fields) | Pattern::VariantRest { fields, .. } => {
+                let actual = self.positional_pattern_type(pattern, ty)?;
+                let arity = match &actual {
+                    ir::Ty::Tuple(types) => types.len(),
+                    ir::Ty::Struct(ty) => ty.def().fields.len(),
+                    _ => return Err("contract: positional rest binding type".into()),
+                };
+                let projection = fields.project(arity)?;
+                self.signatures.plan()?.budget.charge_work(
+                    fields
+                        .prefix
+                        .len()
+                        .checked_add(fields.suffix.len())
+                        .ok_or("positional rest count overflow")?,
+                )?;
+                for (index, pattern) in projection.iter() {
+                    let (_, field_ty) = self.field_type(&actual, &FieldSelector::Tuple(index))?;
+                    path.push(ir::Projection::Field(index));
+                    self.pattern_locals(pattern, &field_ty, path, names, pending, work)?;
+                    path.pop();
+                }
+            }
             Pattern::Path(_) | Pattern::Variant { .. } => {
                 if let Some(tuple) = self.tuple_pattern_type(pattern, ty)? {
                     let Pattern::Variant { fields, .. } = pattern else {
@@ -5002,6 +5138,9 @@ impl<'a> Checker<'a> {
                 if domain == ir::Ty::Never {
                     for arm in arms {
                         let hint = match &arm.pattern {
+                            Pattern::VariantRest { .. } | Pattern::TupleRest(_) => {
+                                Some(self.positional_pattern_type(&arm.pattern, &ir::Ty::Never)?)
+                            }
                             Pattern::Path(name) | Pattern::Variant { name, .. } => {
                                 if let Some(tuple) =
                                     self.tuple_pattern_type(&arm.pattern, &ir::Ty::Never)?
@@ -5123,7 +5262,13 @@ impl<'a> Checker<'a> {
                         Pattern::Apply { .. } => {
                             return Err("pattern application normalization invariant".into());
                         }
-                        Pattern::Struct { .. } | Pattern::Tuple(_) => {
+                        Pattern::TupleRest(_) if domain == ir::Ty::Unit => {
+                            return Err(Self::empty_tuple_rest_unsupported());
+                        }
+                        Pattern::Struct { .. }
+                        | Pattern::Tuple(_)
+                        | Pattern::TupleRest(_)
+                        | Pattern::VariantRest { .. } => {
                             (self.aggregate_match_pattern(arm_pattern, &domain)?, None)
                         }
                     };
@@ -6130,6 +6275,44 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod checked_identity_tests {
     use super::*;
+
+    #[test]
+    fn positional_rest_maps_real_prefix_and_suffix_fields() {
+        let program = parse("struct Pack(i32,i32,i32);fn value()->i32{let (first,..,last)=(1,2,3,4);match Pack(first,9,last){Pack(a,..,z)=>a+z}}fn main(){}").unwrap();
+        check(&program).unwrap();
+        let program = parse("fn value(){let (a,b,..,c)=(1,2);}fn main(){}").unwrap();
+        assert!(check(&program).is_err());
+    }
+
+    #[test]
+    fn positional_rest_on_unit_stays_typed_unsupported_in_match_and_let() {
+        for source in [
+            "fn value()->i32{match (){(..)=>42}}fn main(){}",
+            "fn value(){let (..)=();}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            let error = check(&program).unwrap_err();
+            assert!(
+                error.contains("unsupported: positional rest requires a nonempty tuple"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn positional_rest_moves_selected_fields_without_moving_omitted_fields() {
+        let program = parse("struct Token;struct Pack(Token,Token,Token);fn take(x:Token){}fn value(){let p=Pack(Token,Token,Token);match p{Pack(first,..)=>take(first)};take(p.2);}fn main(){}").unwrap();
+        check(&program).unwrap();
+        let program = parse("struct Token;struct Pack(Token,Token,Token);fn take(x:Token){}fn value(){let p=Pack(Token,Token,Token);match p{Pack(first,..)=>take(first)};take(p.0);}fn main(){}").unwrap();
+        assert!(check(&program).is_err());
+    }
+
+    #[test]
+    fn positional_rest_preserves_tuple_constructor_privacy_and_enum_boundary() {
+        assert!(parse("mod m{pub struct Pack(pub i32,i32,pub i32);pub fn make()->Pack{Pack(1,2,3)}}fn value()->i32{match m::make(){m::Pack(a,..,z)=>a+z}}fn main(){}").and_then(|program| check(&program)).is_err());
+        let error = parse("enum Item{Only(i32,i32,i32)}fn value()->i32{match Item::Only(1,2,3){Item::Only(a,..,z)=>a+z}}fn main(){}").and_then(|program| check(&program)).unwrap_err();
+        assert!(error.contains("unsupported"));
+    }
 
     #[test]
     fn tuple_struct_let_patterns_and_numeric_fields_remain_nominal() {

@@ -3120,10 +3120,10 @@ fn tuple_invalid_fields_assignments_and_operators_are_rejected() {
         "fn main(){let x=(1,).00;}",
         "fn main(){let x=(1,).0usize;}",
         "fn main(){let x=(1,).-1;}",
-        "fn main(){let (x,..)=(1,2);}",
     ] {
         assert!(parse(source).is_err(), "{source}");
     }
+    check(&parse("fn main(){let (x,..)=(1,2);}").unwrap()).unwrap();
 }
 
 #[test]

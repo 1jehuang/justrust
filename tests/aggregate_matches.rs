@@ -1,5 +1,5 @@
 //! Single-arm irrefutable aggregate matches, not general Rust pattern support.
-//! Refutable, guard/or/rest/ref/ergonomic/enum-child patterns remain boundaries.
+//! Refutable, guard/or/ref/ergonomic/enum-child patterns remain boundaries.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use justrust_engine::compiler::{self, frontend, ir, source};
 use std::fs::{self, OpenOptions};
@@ -185,7 +185,7 @@ fn cases() -> Vec<Case> {
             source: r#"struct Pair(i32,i32);fn main(){let result=match Pair(42,2){Pair(a,..)=>a};if result==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "ref_binding_boundary",
@@ -374,7 +374,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (19, 7));
-    assert_eq!(partition, (12, 7, 7));
+    assert_eq!(partition, (13, 7, 6));
 }
 #[test]
 fn stock_aggregate_matches_irrefutability_privacy_ownership_oracle_edition2024() {
@@ -457,7 +457,7 @@ fn source_aggregate_match_ir_has_checked_domains_and_only_plain_field_binding_pa
             counts.0 += 1;
         }
     }
-    assert_eq!(counts, (10, 2));
+    assert_eq!(counts, (11, 2));
 }
 #[test]
 fn aggregate_advanced_pattern_boundaries_reject_in_their_actual_frontend_phase() {
@@ -474,10 +474,7 @@ fn aggregate_advanced_pattern_boundaries_reject_in_their_actual_frontend_phase()
         .and_then(|prepared| frontend::parse_prepared(&prepared));
         if matches!(
             case.name,
-            "guard_boundary"
-                | "or_pattern_boundary"
-                | "rest_pattern_boundary"
-                | "ref_binding_boundary"
+            "guard_boundary" | "or_pattern_boundary" | "ref_binding_boundary"
         ) {
             let error = match parsed {
                 Err(error) => error,
@@ -520,7 +517,7 @@ fn aggregate_advanced_pattern_boundaries_reject_in_their_actual_frontend_phase()
             counts.1 += 1;
         }
     }
-    assert_eq!(counts, (4, 3));
+    assert_eq!(counts, (3, 3));
 }
 #[test]
 fn native_aggregate_matches_workers1_8_check_build_no_compiler_fallback() {
@@ -607,8 +604,8 @@ fn native_aggregate_matches_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 104);
-    assert_eq!(modes, (24, 24, 14, 14, 14, 14));
+    assert_eq!(modes, (26, 26, 14, 14, 12, 12));
     eprintln!(
-        "NATIVE AGGREGATE MATCHES:104 cells, modes{modes:?};24 executed native images;28 Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
+        "NATIVE AGGREGATE MATCHES:104 cells, modes{modes:?};26 executed native images;24 Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
     );
 }

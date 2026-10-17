@@ -166,7 +166,6 @@ fn never_patterns_use_explicit_shape_and_preserve_dead_value_types() {
 #[test]
 fn unsupported_patterns_and_pattern_nesting_are_explicit() {
     for source in [
-        "fn main(){let(x,..)=(1,2);}",
         "fn main(){let ref x=1;}",
         "fn main(){let x @ _=1;}",
         "fn main(){let 1=1;}",
@@ -180,6 +179,7 @@ fn unsupported_patterns_and_pattern_nesting_are_explicit() {
     ] {
         assert!(parse(source).is_err(), "accepted {source}");
     }
+    check(&parse("fn main(){let(x,..)=(1,2);}").unwrap()).unwrap();
     let source = format!(
         "fn main(){{let {}x{}=1;}}",
         "(".repeat(140),

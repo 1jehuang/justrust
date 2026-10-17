@@ -581,11 +581,10 @@ fn rejects_invalid_pattern_initializer_cannot_see_new_binding() {
 }
 
 #[test]
-fn rejects_legal_unsupported_tuple_rest_pattern() {
-    // Legal stock Rust, deliberately outside this let-pattern milestone.
-    rejects(
-        "tuple_rest_pattern",
+fn accepts_positional_tuple_rest_pattern() {
+    runs(
         r#"fn run() -> i32 { let (a, ..) = (1, 2, 3); a } fn main() { run(); }"#,
+        "",
     );
 }
 

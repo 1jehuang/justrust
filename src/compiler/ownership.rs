@@ -7239,6 +7239,35 @@ mod tests {
     }
 
     #[test]
+    fn positional_rest_preserves_middle_and_rejects_selected_or_parent_reuse() {
+        for source in [
+            "struct Cell{n:i32} struct Trio(Cell,Cell,Cell); fn f(p:Trio)->Cell{let n=match p{Trio(first,..,last)=>first.n+last.n};p.1}",
+            "struct Cell{n:i32} struct Trio(Cell,Cell,Cell); fn f(p:Trio)->Cell{let Trio(first,..,last)=p;let n=first.n+last.n;p.1}",
+            "struct Cell{n:i32} fn f(p:(Cell,Cell,Cell))->Cell{let n=match p{(first,..,last)=>first.n+last.n};p.1}",
+            "struct Cell{n:i32} struct Trio(i32,Cell,i32); fn f(p:Trio)->Trio{let n=match p{Trio(first,..,last)=>first+last};p}",
+            "struct Cell{n:i32} struct Trio(Cell,Cell,Cell); fn f(p:Trio)->Trio{match p{Trio(..)=>()};p}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+        for source in [
+            "struct Cell{n:i32} struct Trio(Cell,Cell,Cell); fn f(p:Trio)->Trio{match p{Trio(first,..,last)=>first.n+last.n};p}",
+            "struct Cell{n:i32} struct Trio(Cell,Cell,Cell); fn f(p:Trio)->Cell{match p{Trio(first,..,last)=>first.n+last.n};p.2}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.complete);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.kind == ErrorKind::ReadNotDefinitelyInitialized),
+                "{source}: {:?}",
+                result.diagnostics
+            );
+        }
+    }
+
+    #[test]
     fn record_rest_match_omitted_noncopy_fields_remain_owned() {
         for source in [
             "struct Cell{n:i32} struct Record{selected:Cell,omitted:Cell} fn f(p:Record)->Cell{let n=match p{Record{selected,..}=>selected.n};p.omitted}",

@@ -6740,6 +6740,42 @@ mod tests {
     }
 
     #[test]
+    fn positional_rest_emits_only_actual_prefix_and_suffix_field_moves() {
+        for structural in [false, true] {
+            for matching in [false, true] {
+                let (ty, pattern) = if structural {
+                    ("(Cell,Cell,Cell)", "(first,..,last)")
+                } else {
+                    ("Trio", "Trio(first,..,last)")
+                };
+                let body = if matching {
+                    format!("match p{{{pattern}=>{{let _=first;last}}}}")
+                } else {
+                    format!("let {pattern}=p;let _=first;last")
+                };
+                let text = format!(
+                    "struct Cell{{n:i32}} struct Trio(Cell,Cell,Cell); fn f(p:{ty})->Cell{{{body}}} fn main(){{}}"
+                );
+                let function = nominal_lowered(&checked(&text, 0));
+                let root = function.params[0];
+                let reads: Vec<_> = function.blocks.iter().flat_map(|block| &block.statements).filter_map(|statement| match &statement.value {
+                    Statement::Assign { value: Rvalue::Use(operand @ (Operand::Copy(place) | Operand::Move(place))), .. } if place.local == root => Some(operand),
+                    _ => None,
+                }).collect();
+                assert_eq!(reads.len(), 2);
+                for index in [0, 2] {
+                    assert_eq!(reads.iter().filter(|operand| matches!(operand, Operand::Move(place) if place.projection == [Projection::Field(index)])).count(), 1);
+                }
+                assert!(!function.blocks.iter().any(|block| matches!(
+                    block.terminator.value,
+                    Terminator::SwitchVariant { .. }
+                )));
+                assert!(super::super::ownership::analyze(&function).passed());
+            }
+        }
+    }
+
+    #[test]
     fn record_rest_match_emits_only_selected_field_move_and_no_tag() {
         let source = checked(
             "struct Cell{n:i32} struct Record{selected:Cell,omitted:Cell} fn f(p:Record)->Cell{match p{Record{selected,..}=>selected}} fn main(){}",

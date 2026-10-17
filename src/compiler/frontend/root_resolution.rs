@@ -1396,6 +1396,46 @@ impl Resolver<'_> {
         }
         Ok(false)
     }
+    fn positional_constructor_pattern(
+        &mut self,
+        name: &mut AstPath,
+        fields: &mut PositionalRest,
+        module: ModuleId,
+        names: &mut std::collections::HashSet<LocalKey>,
+    ) -> Result<(), String> {
+        // The value lookup enforces the complete constructor visibility,
+        // including restrictions on fields omitted by positional rest.
+        let item = self
+            .path(name, module, false, false)?
+            .ok_or("unresolved positional rest constructor")?;
+        if item.kind == ResolvedKind::Variant {
+            return Err(Self::unsupported(
+                "enum tuple payload positional rest patterns are unsupported",
+            ));
+        }
+        if item.kind != ResolvedKind::Struct {
+            return Err("positional rest requires a tuple struct constructor".into());
+        }
+        let arity = self.tuple_struct(item.source()?)?.fields.len();
+        let selected = fields
+            .prefix
+            .len()
+            .checked_add(fields.suffix.len())
+            .ok_or("positional rest pattern field count overflow")?;
+        self.alias_budget.charge_work(selected)?;
+        // Validate physical prefix/suffix positions without manufacturing
+        // omitted wildcard nodes or changing source-order child identities.
+        for (index, _) in fields.project(arity)?.iter() {
+            if index >= arity {
+                return Err("positional rest field index out of bounds".into());
+            }
+        }
+        *name = self.resolved_use(item.source()?, name)?;
+        for field in fields.prefix.iter_mut().chain(fields.suffix.iter_mut()) {
+            self.pattern(field, module, names)?;
+        }
+        Ok(())
+    }
     fn pattern(
         &mut self,
         pattern: &mut Pattern,
@@ -1407,9 +1447,10 @@ impl Resolver<'_> {
                 clone_vector(&path.segments, &self.alias_budget)?;
                 Some(path.clone())
             }
-            Pattern::Struct { name, .. } | Pattern::Variant { name, .. } | Pattern::Path(name) => {
-                Some(self.alias_source_path(name)?)
-            }
+            Pattern::Struct { name, .. }
+            | Pattern::Variant { name, .. }
+            | Pattern::VariantRest { name, .. }
+            | Pattern::Path(name) => Some(self.alias_source_path(name)?),
             _ => None,
         };
         let named_constructor = matches!(pattern, Pattern::Struct { .. })
@@ -1437,6 +1478,10 @@ impl Resolver<'_> {
                         fields,
                         rest: *rest,
                     };
+                }
+                Pattern::VariantRest { name, fields } => {
+                    *name = canonical;
+                    return self.positional_constructor_pattern(name, fields, module, names);
                 }
                 Pattern::Struct { name, .. }
                 | Pattern::Variant { name, .. }
@@ -1544,6 +1589,15 @@ impl Resolver<'_> {
                         "duplicate pattern binding {}",
                         self.ident_display(*name)?
                     ));
+                }
+            }
+            Pattern::VariantRest { name, fields } => {
+                self.positional_constructor_pattern(name, fields, module, names)?;
+            }
+            Pattern::TupleRest(fields) => {
+                for field in fields.prefix.iter_mut().chain(fields.suffix.iter_mut()) {
+                    self.alias_budget.charge_work(1)?;
+                    self.pattern(field, module, names)?;
                 }
             }
             Pattern::Tuple(fields) => {
@@ -2555,6 +2609,91 @@ mod tuple_shape_tests {
         assert_eq!(
             resolve(&parsed).unwrap_err(),
             "in function crate::main: unsupported: first-class tuple struct constructors are unsupported"
+        );
+    }
+}
+
+#[cfg(test)]
+mod positional_rest_tests {
+    use super::*;
+
+    #[test]
+    fn imported_tuple_rest_retains_only_real_children_and_certified_constructor() {
+        let parsed = parse_unresolved(
+            "mod a{pub struct Triple(pub i32,pub i32,pub i32);}use a::Triple as T;fn main(){let T(x,..,y)=T(1,2,3);let z=x+y;}",
+        )
+        .unwrap();
+        let program = resolve(&parsed).unwrap();
+        let Stmt::LetPattern {
+            pattern: Pattern::VariantRest { name, fields },
+            ..
+        } = &program.functions[0].body.statements[0]
+        else {
+            panic!("positional rest lost its explicit source shape");
+        };
+        assert_eq!(fields.prefix.len(), 1);
+        assert_eq!(fields.suffix.len(), 1);
+        assert_eq!(
+            fields
+                .project(3)
+                .unwrap()
+                .iter()
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+        assert_eq!(
+            name_scope::path_key(program.names.as_ref(), name, Namespace::Type).unwrap(),
+            name_scope::path_key(
+                program.names.as_ref(),
+                &program.structs[0].name,
+                Namespace::Type
+            )
+            .unwrap()
+        );
+        assert!(
+            !name
+                .source_occurrences(program.names.as_ref())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn tuple_rest_traverses_nested_real_bindings_without_omitted_nodes() {
+        for source in [
+            "fn main(){let (x,..,y)=(1,2,3);let z=x+y;}",
+            "struct T(i32,i32,i32);fn main(){macro_rules! n{()=>{1};}let T(x,..,y)=T(n!(),2,3);let z=x+y;}",
+            "struct T(i32,i32);fn main(){let T(..)=T(1,2);}",
+        ] {
+            resolve(&parse_unresolved(source).unwrap())
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+
+    #[test]
+    fn tuple_rest_omitted_private_fields_still_restrict_constructor() {
+        let source = "mod a{pub struct T(pub i32,i32,pub i32);pub fn make()->T{T(1,2,3)}}fn main(){let a::T(x,..,y)=a::make();}";
+        let error = resolve(&parse_unresolved(source).unwrap()).unwrap_err();
+        assert!(error.contains("private item"), "{error}");
+        assert!(!error.contains("unsupported:"), "{error}");
+    }
+
+    #[test]
+    fn tuple_rest_excess_fields_invalid_and_enum_payload_explicitly_unsupported() {
+        let source = "struct T(i32);fn main(){let T(x,..,y)=T(1);}";
+        let error = resolve(&parse_unresolved(source).unwrap()).unwrap_err();
+        assert!(
+            error.contains("positional rest pattern has too many fields"),
+            "{error}"
+        );
+        let source = "enum E{V(i32,i32)}fn main(){let E::V(x,..)=E::V(1,2);}";
+        let error = resolve(&parse_unresolved(source).unwrap()).unwrap_err();
+        assert!(
+            error.contains(
+                "unsupported: enum tuple payload positional rest patterns are unsupported"
+            ),
+            "{error}"
         );
     }
 }
