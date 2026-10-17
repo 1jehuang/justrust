@@ -2,14 +2,18 @@
 //!
 //! Private ABI: arguments are evaluated left-to-right and pushed as eight-byte
 //! stack words. The callee reads them in reverse order above rbp. eax carries
-//! bool results (unit is zero), while rax carries normalized 64-bit integers.
+//! bool results (unit is zero), while rax carries normalized <=64-bit integers.
+//! The i128/u128 private carrier is an indirect 16-byte scalar snapshot, low
+//! limb at offset 0 and high limb at offset 8, with eight-byte alignment.
+//! Wide parameters use one snapshot pointer word and wide results use sret.
 //! Signed integers are sign-extended and unsigned integers zero-extended from
 //! their declared width. References remain a separate thin-pointer class,
 //! including borrowed receiver argument0 and references to aggregate referents.
 //! All registers are caller-saved. Frames use
 //! stable rbp-relative slots, independent of temporary pushes. At most 4096
 //! parameters/arguments are accepted. This is not a platform interoperability ABI.
-//! Aggregate layout is private: each scalar/unit leaf occupies eight bytes,
+//! Aggregate layout is private: ordinary scalar/unit leaves occupy eight bytes,
+//! wide integer leaves occupy sixteen bytes,
 //! tuples and nominal structs concatenate their fields. Payload enums contain
 //! an eight-byte tag followed by the largest variant's concatenated fields.
 //! Any non-unit variant shape makes the entire enum use aggregate transport,
@@ -23,6 +27,16 @@ use super::frontend::{BinaryOp, Program, UnaryOp};
 use super::ir::{self, LocalId};
 use super::ownership;
 use std::collections::HashMap;
+
+mod wide_float;
+mod wide_int;
+
+/// Physical storage only. Wide integers remain scalar Copy values in analysis.
+fn wide_integer(ty: &ir::Ty) -> bool {
+    matches!(ty, ir::Ty::Int(integer) if integer.bits() == 128)
+}
+
+const WIDE_SCRATCH_BYTES: i32 = 256;
 
 const MAX_ARGS: usize = 4096;
 /// Expanded stack-word limit per call: every logical argument may occupy at
@@ -138,6 +152,9 @@ fn indirect(ty: &ir::Ty) -> Result<bool, String> {
     if ty.contains_slice() {
         return Err(SLICE_UNSUPPORTED.into());
     }
+    if wide_integer(ty) {
+        return Ok(true);
+    }
     match ty {
         ir::Ty::Tuple(_) | ir::Ty::Struct(_) | ir::Ty::Array { .. } => Ok(true),
         ir::Ty::Enum(ty) => Ok(ty.has_payload()),
@@ -153,6 +170,10 @@ fn indirect(ty: &ir::Ty) -> Result<bool, String> {
 }
 
 fn value_size(ty: &ir::Ty) -> Result<i32, String> {
+    if wide_integer(ty) {
+        // PRIVATE layout: low limb at 0, high limb at 8, eight-byte alignment.
+        return Ok(16);
+    }
     if matches!(ty, ir::Ty::Param(_)) {
         return Err("type parameter has no native layout".into());
     }
@@ -269,6 +290,9 @@ struct Emitter<'a> {
     resolve: &'a dyn Fn(&ir::CallTarget) -> Result<String, String>,
     locals: Vec<i32>,
     aggregate_scratch: i32,
+    /// 0=LHS, 16=RHS, 32=result, 48..256=wide arithmetic workspace.
+    /// Independent of aggregate scratch so constructors cannot destroy inputs.
+    wide_scratch: i32,
     returns: Vec<usize>,
     traps: Vec<usize>,
     edges: Vec<(usize, cfg::BlockId)>,
@@ -294,7 +318,49 @@ impl<'a> Emitter<'a> {
         self.bytes(&[0x48, 0xb8]);
         self.bytes(&value.to_le_bytes());
     }
+    /// Capture an already evaluated numeric value into dedicated two-limb
+    /// storage. Wide values arrive by address, other numbers in rax. Only rax
+    /// and rdx are clobbered. Source signedness determines the extension.
+    fn snapshot_number(&mut self, ty: ir::NumTy, slot: i32) {
+        if matches!(ty, ir::NumTy::Int(integer) if integer.bits() == 128) {
+            self.bytes(&[0x48, 0x8b, 0x50, 0x08, 0x48, 0x8b, 0x00]);
+        } else if matches!(ty, ir::NumTy::Int(integer) if integer.is_signed()) {
+            self.bytes(&[0x48, 0x99]); // cqo: source is already normalized
+        } else {
+            self.bytes(&[0x31, 0xd2]);
+        }
+        self.bytes(&[0x48, 0x89, 0x85]);
+        self.i32(self.wide_scratch + slot);
+        self.bytes(&[0x48, 0x89, 0x95]);
+        self.i32(self.wide_scratch + slot + 8);
+    }
+    fn wide_constant(&mut self, value: ir::IntValue) {
+        self.word(value.bits as u64);
+        self.bytes(&[0x48, 0x89, 0x85]);
+        self.i32(self.wide_scratch + 32);
+        self.word((value.bits >> 64) as u64);
+        self.bytes(&[0x48, 0x89, 0x85]);
+        self.i32(self.wide_scratch + 40);
+        self.address(self.wide_scratch + 32);
+    }
+    fn integer_cast(&mut self, value: &cfg::Operand, to: ir::IntTy) -> Result<(), String> {
+        let ir::Ty::Int(from) = self.function().operand_ty(value)? else {
+            return Err("integer cast requires an integer source".into());
+        };
+        self.operand(value)?;
+        if to.bits() == 128 {
+            self.snapshot_number(ir::NumTy::Int(from), 32);
+            self.address(self.wide_scratch + 32);
+        } else {
+            if from.bits() == 128 {
+                self.bytes(&[0x48, 0x8b, 0x00]);
+            }
+            self.normalize_integer(to);
+        }
+        Ok(())
+    }
     fn normalize_integer(&mut self, ty: ir::IntTy) {
+        assert!(ty.bits() <= 64, "wide integer reached word normalization");
         if ty.bits() < 64 {
             let shift = (64 - ty.bits()) as u8;
             self.bytes(&[0x48, 0xc1, 0xe0, shift]);
@@ -302,6 +368,7 @@ impl<'a> Emitter<'a> {
         }
     }
     fn check_integer_range(&mut self, ty: ir::IntTy) {
+        assert!(ty.bits() <= 64, "wide integer reached word range check");
         if ty.bits() < 64 {
             self.bytes(&[0x48, 0x89, 0xc2]); // rdx = untruncated result
             self.normalize_integer(ty);
@@ -610,8 +677,12 @@ impl<'a> Emitter<'a> {
         match operand {
             cfg::Operand::Constant(cfg::Constant::Int(value)) => {
                 value.validate()?;
-                self.word(value.bits);
-                self.normalize_integer(value.ty);
+                if value.ty.bits() == 128 {
+                    self.wide_constant(*value);
+                } else {
+                    self.word(value.bits as u64);
+                    self.normalize_integer(value.ty);
+                }
             }
             cfg::Operand::Constant(cfg::Constant::Float(value)) => {
                 value.validate()?;
@@ -759,6 +830,9 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
     fn binary_integer(&mut self, op: BinaryOp, ty: ir::IntTy) -> Result<(), String> {
+        if ty.bits() > 64 {
+            return Err("wide integer cannot use the word arithmetic kernel".into());
+        }
         match op {
             BinaryOp::Shl | BinaryOp::Shr => {
                 // RCX is the independently typed, normalized FULL count.
@@ -947,6 +1021,12 @@ impl<'a> Emitter<'a> {
     }
     fn float_cast(&mut self, from: ir::NumTy, to: ir::NumTy) -> Result<(), String> {
         use ir::{FloatTy, NumTy};
+        if matches!(from, NumTy::Int(integer) if integer.bits() == 128)
+            || matches!(to, NumTy::Int(integer) if integer.bits() == 128)
+        {
+            self.snapshot_number(from, 0);
+            return self.wide_float_cast(from, to);
+        }
         match (from, to) {
             (NumTy::Float(FloatTy::F32), NumTy::Float(FloatTy::F32))
             | (NumTy::Float(FloatTy::F64), NumTy::Float(FloatTy::F64)) => {}
@@ -998,14 +1078,14 @@ impl<'a> Emitter<'a> {
         let (minimum, maximum, lower, upper) = if integer.is_signed() {
             (
                 u64::MAX << (bits - 1),
-                integer.mask() >> 1,
+                (integer.mask() >> 1) as u64,
                 -(2f64.powi(bits - 1)),
                 2f64.powi(bits - 1),
             )
         } else {
             // Unsigned lower saturation: anything <= -1.0 maps to zero, as does
             // (-1, 0) via truncation. Use -1 as an exact bound.
-            (0, integer.mask(), -1.0, 2f64.powi(bits))
+            (0, integer.mask() as u64, -1.0, 2f64.powi(bits))
         };
         let mut exits = Vec::new();
         self.bytes(&[0x66, 0x0f, 0x2e, 0xc0]); // ucomisd xmm0, xmm0
@@ -1097,11 +1177,10 @@ impl<'a> Emitter<'a> {
         match value {
             cfg::Rvalue::Use(operand) => self.operand(operand)?,
             cfg::Rvalue::IntCast { value, to } => {
-                // Exact CFG validation established an integer source. Operand
-                // transport already extends SOURCE signedness to 64 bits.
-                // Casts only normalize the destination and never range-trap.
-                self.operand(value)?;
-                self.normalize_integer(*to);
+                // Exact CFG validation established an integer source. Extend
+                // SOURCE signedness before destination-width normalization.
+                // Wide endpoints use limbs, never the legacy word kernel.
+                self.integer_cast(value, *to)?;
             }
             cfg::Rvalue::FloatCast { value, to } => {
                 let from = ir::NumTy::of(&self.function().operand_ty(value)?)
@@ -1152,6 +1231,12 @@ impl<'a> Emitter<'a> {
                     return Ok(());
                 }
                 self.operand(value)?;
+                if let ir::Ty::Int(integer) = ty
+                    && integer.bits() == 128
+                {
+                    self.snapshot_number(ir::NumTy::Int(integer), 0);
+                    return self.wide_unary(*op, integer);
+                }
                 match (op, ty) {
                     (UnaryOp::Neg, ir::Ty::Int(integer)) if integer.is_signed() => {
                         self.bytes(&[0x48, 0xf7, 0xd8]);
@@ -1178,6 +1263,16 @@ impl<'a> Emitter<'a> {
                     // Operand effects already occurred in earlier CFG steps.
                     // Divergence leaves no value to load or arithmetic to run.
                     return Ok(());
+                }
+                if let (ir::Ty::Int(integer), ir::Ty::Int(rhs)) =
+                    (&ty, self.function().operand_ty(right)?)
+                    && (integer.bits() == 128 || rhs.bits() == 128)
+                {
+                    self.operand(left)?;
+                    self.snapshot_number(ir::NumTy::Int(*integer), 0);
+                    self.operand(right)?;
+                    self.snapshot_number(ir::NumTy::Int(rhs), 16);
+                    return self.wide_binary(*op, *integer, rhs);
                 }
                 self.operand(left)?;
                 self.bytes(&[0x49, 0x89, 0xc0]); // r8 = normalized left, full width
@@ -1275,6 +1370,25 @@ impl<'a> Emitter<'a> {
                 op,
             } => {
                 let element = self.index_address(array, index)?;
+                if let (ir::Ty::Int(integer), ir::Ty::Int(rhs)) =
+                    (element, self.function().operand_ty(value)?)
+                    && (integer.bits() == 128 || rhs.bits() == 128)
+                {
+                    // Preserve the selected address across a kernel that may
+                    // clobber every caller-saved register. Never recompute it.
+                    self.bytes(&[0x50]);
+                    if integer.bits() <= 64 {
+                        self.bytes(&[0x48, 0x8b, 0x00]);
+                        self.normalize_integer(*integer);
+                    }
+                    self.snapshot_number(ir::NumTy::Int(*integer), 0);
+                    self.operand(value)?;
+                    self.snapshot_number(ir::NumTy::Int(rhs), 16);
+                    self.wide_binary(*op, *integer, rhs)?;
+                    self.bytes(&[0x5f]); // pop rdi: exact selected destination
+                    self.store_address_value(element)?;
+                    return Ok(());
+                }
                 // RHS/index effects are already owning CFG snapshots. Keep the
                 // one selected address across every closed scalar kernel,
                 // including multiplication/division's RDX and shifts' RCX.
@@ -1371,8 +1485,20 @@ impl<'a> Emitter<'a> {
                 // Left-to-right evaluation. A two-word shared byte slice
                 // operand leaves its carrier address in rax; both words are
                 // pushed (data, then len), never the carrier pointer itself.
+                let mut wide_argument = 0;
                 for ((operand, words), param) in args.iter().zip(&words).zip(&signature.params) {
                     match words {
+                        1 if wide_integer(param) => {
+                            // A materialized constant lives in shared result
+                            // scratch. Give each argument a stable distinct
+                            // snapshot until this call returns.
+                            self.operand(operand)?;
+                            let slot = self.wide_scratch + WIDE_SCRATCH_BYTES + wide_argument * 16;
+                            self.store_value(slot, param)?;
+                            self.address(slot);
+                            self.bytes(&[0x50]);
+                            wide_argument += 1;
+                        }
                         1 => {
                             self.operand(operand)?;
                             self.bytes(&[0x50]);
@@ -1452,6 +1578,42 @@ pub fn emit_cfg_function(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let param_words = parameter_words(&param_tys)?;
+    let mut needs_wide = function.locals.iter().any(|local| wide_integer(&local.ty));
+    let mut max_wide_arguments = 0_i32;
+    for block in &function.blocks {
+        let mut inspect = |operand: &cfg::Operand| {
+            // ConcreteCfg already proves Copy/Move permissions using its
+            // sealed canonical facts. This is physical layout classification,
+            // not a second proof with the weaker FactsCtx::Concrete fallback.
+            needs_wide |= match operand {
+                cfg::Operand::Copy(place) | cfg::Operand::Move(place) => {
+                    wide_integer(function.place_ty(place)?)
+                }
+                cfg::Operand::Constant(_) => wide_integer(&function.operand_ty(operand)?),
+            };
+            Ok(())
+        };
+        for statement in &block.statements {
+            statement.value.visit_operands(&mut inspect)?;
+        }
+        block.terminator.value.visit_operands(&mut inspect)?;
+        // A cast may write straight into a wide projected destination while
+        // its only operand is narrow. Do not rely on a lowering temporary.
+        for statement in &block.statements {
+            if let cfg::Statement::Assign { destination, .. } = &statement.value {
+                needs_wide |= wide_integer(function.place_ty(destination)?);
+            }
+        }
+        if let cfg::Terminator::Call { signature, .. } = &block.terminator.value {
+            let count = signature
+                .params
+                .iter()
+                .filter(|ty| wide_integer(ty))
+                .count();
+            max_wide_arguments = max_wide_arguments
+                .max(i32::try_from(count).map_err(|_| "wide argument scratch count overflow")?);
+        }
+    }
     let mut frame_bytes = 0;
     let locals = function
         .locals
@@ -1481,6 +1643,17 @@ pub fn emit_cfg_function(
         .filter(|size| *size <= MAX_FRAME_BYTES)
         .ok_or("function exceeds private frame limit")?;
     let aggregate_scratch = -frame_bytes;
+    if needs_wide {
+        let wide_bytes = max_wide_arguments
+            .checked_mul(16)
+            .and_then(|bytes| bytes.checked_add(WIDE_SCRATCH_BYTES))
+            .ok_or("wide argument scratch exceeds private frame limit")?;
+        frame_bytes = frame_bytes
+            .checked_add(wide_bytes)
+            .filter(|size| *size <= MAX_FRAME_BYTES)
+            .ok_or("wide arithmetic scratch exceeds private frame limit")?;
+    }
+    let wide_scratch = -frame_bytes;
     let aggregate_result = result_indirect(&function.result)?;
     let result_size = value_size(&function.result)?;
     let param_offsets = argument_slot_offsets(&param_words, aggregate_result)?;
@@ -1494,6 +1667,7 @@ pub fn emit_cfg_function(
         resolve,
         locals,
         aggregate_scratch,
+        wide_scratch,
         returns: Vec::new(),
         traps: Vec::new(),
         edges: Vec::new(),
@@ -1936,6 +2110,169 @@ mod tests {
     }
 
     #[test]
+    fn wide_integer_private_layout_uses_indirect_scalar_storage() {
+        for integer in [ir::IntTy::I128, ir::IntTy::U128] {
+            let ty = ir::Ty::Int(integer);
+            assert_eq!(value_size(&ty), Ok(16));
+            assert_eq!(indirect(&ty), Ok(true));
+            assert_eq!(result_indirect(&ty), Ok(true));
+            assert_eq!(argument_words(&ty), Ok(1));
+            let reference = ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: std::sync::Arc::new(ty.clone()),
+            };
+            assert_eq!(value_size(&reference), Ok(8));
+            assert_eq!(indirect(&reference), Ok(false));
+            let tuple =
+                ir::Ty::Tuple(vec![ir::Ty::Int(ir::IntTy::U8), ty.clone(), ir::Ty::Bool].into());
+            assert_eq!(value_size(&tuple), Ok(32));
+            assert_eq!(field_offset(&tuple, 1).unwrap().0, 8);
+            assert_eq!(field_offset(&tuple, 2).unwrap().0, 24);
+            let array = ir::Ty::Array {
+                element: std::sync::Arc::new(ty),
+                len: 3,
+            };
+            assert_eq!(value_size(&array), Ok(48));
+            assert_eq!(array_offset(&array, 2).unwrap().0, 32);
+            let mut frame = 8;
+            assert_eq!(allocate_value(&mut frame, &array), Ok(-56));
+        }
+    }
+
+    #[test]
+    fn wide_integer_private_transport_keeps_constants_fields_and_returns_distinct() {
+        let program = frontend::parse(
+            r#"
+            struct Packet { before:u8, wide:u128, after:u64 }
+            enum Choice { Empty, Full(u128) }
+            fn id<T>(value:T)->T { value }
+            fn pair(a:u128,b:u128)->bool {
+                a==18446744073709551617u128 && b==36893488147419103235u128
+            }
+            fn read(value:&u128)->u128 { *value }
+            fn write(value:&mut u128, next:u128) { *value=next; }
+            fn main() {
+                let a=id(18446744073709551617u128);
+                let b=id(36893488147419103235u128);
+                let packet=id(Packet { before:3u8,wide:a,after:5u64 });
+                let mut values=[a;3];
+                let index=1usize;
+                values[index]=b;
+                values[index]+=1u128;
+                let mut value=0u128;
+                write(&mut value,b);
+                let signed=-1i8 as i128;
+                let negative=-1i128 as u128;
+                let chosen=match Choice::Full(b) {
+                    Choice::Empty=>0u128,
+                    Choice::Full(inner)=>inner
+                };
+                if pair(18446744073709551617u128,36893488147419103235u128)
+                    && packet.before==3u8 && packet.wide==a && packet.after==5u64
+                    && values[0usize]==a && values[index]==36893488147419103236u128
+                    && values[2usize]==a && read(&value)==b && chosen==b
+                    && signed==(-1i128) && negative==340282366920938463463374607431768211455u128
+                    && (a as u64)==1u64 && (1u8<<1u128)==2u8
+                { println!("wide transport ok"); }
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&program);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"wide transport ok\n");
+    }
+
+    #[test]
+    fn wide_integer_referenced_array_compounds_keep_rhs_first_and_selected_cell() {
+        let program = frontend::parse(
+            r#"
+            fn index()->usize { println!("index"); 1usize }
+            fn count()->u128 { println!("rhs"); 64u128 }
+            fn update(values:&mut [u128;2]) {
+                let mut selected=0usize;
+                values[selected] <<= { selected=1usize; println!("move rhs"); 64u128 };
+                values[index()] >>= count();
+            }
+            fn signed(values:&mut [i128;2]) {
+                let selected=1usize;
+                values[selected] >>= 65u128;
+            }
+            fn narrow(values:&mut [i32;2]) {
+                let selected=1usize;
+                values[selected] >>= 1i128;
+                values[selected] <<= 1u128;
+            }
+            fn main() {
+                let mut values=[1u128,2u128];
+                update(&mut values);
+                let mut negative=[-8i128,-73786976294838206464i128];
+                signed(&mut negative);
+                let mut old=[-8i32,-8i32];
+                narrow(&mut old);
+                if values[0usize]==1u128 && values[1usize]==2u128
+                    && negative[0usize]==(-8i128) && negative[1usize]==(-2i128)
+                    && old[0usize]==(-8i32) && old[1usize]==(-8i32)
+                { println!("referenced compound ok"); }
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&program);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            output.stdout,
+            b"move rhs\nrhs\nindex\nreferenced compound ok\n"
+        );
+    }
+
+    #[test]
+    fn wide_integer_referenced_array_compound_checks_bounds_before_cell_access() {
+        let program = frontend::parse(
+            r#"
+            fn index()->usize { println!("index"); 2usize }
+            fn count()->u128 { println!("rhs"); 1u128 }
+            fn update(values:&mut [u128;2]) { values[index()] <<= count(); }
+            fn main() { let mut values=[1u128,2u128]; update(&mut values); }
+            "#,
+        )
+        .unwrap();
+        let output = run(&program);
+        assert_eq!(output.status.code(), Some(101), "{output:?}");
+        assert_eq!(output.stdout, b"rhs\nindex\n");
+    }
+
+    #[test]
+    fn wide_integer_scratch_planning_preserves_sealed_nominal_copy_facts() {
+        let compilation = super::super::compile(
+            r#"
+            struct Wrap<T> { value:T }
+            impl<T:Copy> Clone for Wrap<T> { fn clone(&self)->Self { *self } }
+            impl<T:Copy> Copy for Wrap<T> {}
+            fn twice<T:Copy>(value:T)->(T,T) { (value,value) }
+            fn main() {
+                let wide=twice::<Wrap<u128>>(Wrap { value:18446744073709551617u128 });
+                let floats=twice::<Wrap<f64>>(Wrap { value:2.5f64 });
+                if wide.0.value==18446744073709551617u128
+                    && wide.1.value==18446744073709551617u128
+                    && floats.0.value+floats.1.value==5.0f64
+                { println!("sealed copy ok"); }
+            }
+            "#
+            .into(),
+            1,
+            false,
+        )
+        .unwrap();
+        let path = executable_bytes(&compilation.executable.unwrap());
+        let output = execute(Command::new(&path).stdout(Stdio::piped()));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"sealed copy ok\n");
+    }
+
+    #[test]
     fn expanded_argument_words_preserve_single_word_abi_and_reserve_two_word_slots() {
         assert_eq!(
             SHARED_BYTE_SLICE_LAYOUT,
@@ -2007,6 +2344,7 @@ mod tests {
             resolve: &resolve,
             locals: Vec::new(),
             aggregate_scratch: 0,
+            wide_scratch: 0,
             returns: Vec::new(),
             traps: Vec::new(),
             edges: Vec::new(),
@@ -3959,6 +4297,7 @@ mod tests {
             resolve: &|_| Err("physical fixture has no instance calls".into()),
             locals: vec![],
             aggregate_scratch: -8,
+            wide_scratch: -264,
             returns: vec![],
             traps: vec![],
             edges: vec![],
@@ -4205,6 +4544,7 @@ mod tests {
                 resolve: &|_| Err("physical fixture has no instance calls".into()),
                 locals: vec![],
                 aggregate_scratch: 0,
+                wide_scratch: 0,
                 returns: vec![],
                 traps: vec![],
                 edges: vec![],
@@ -4285,6 +4625,7 @@ mod tests {
             resolve: &|_| Err("physical fixture has no instance calls".into()),
             locals: vec![],
             aggregate_scratch: -32,
+            wide_scratch: -288,
             returns: vec![],
             traps: vec![],
             edges: vec![],

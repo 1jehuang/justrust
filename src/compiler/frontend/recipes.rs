@@ -186,6 +186,8 @@ pub(super) fn inventory(
         ir::IntTy::U32,
         ir::IntTy::U64,
         ir::IntTy::Usize,
+        ir::IntTy::I128,
+        ir::IntTy::U128,
     ] {
         add(
             &mut descriptors,
@@ -671,4 +673,29 @@ pub(super) fn checked_body(
     ir::validate_call_evidence(&f, facts, budget)?;
     ir::canonicalize_checked_calls(&f, facts, &mut cx, budget)
         .map_err(|e| e.into_legacy_diagnostic(budget))
+}
+
+#[cfg(test)]
+mod wide_tests {
+    use super::*;
+
+    #[test]
+    fn wide_clone_recipe_is_scalar_read_load_without_aggregate_origins() {
+        for kind in [ir::IntTy::I128, ir::IntTy::U128] {
+            let mut events = Vec::new();
+            walk(tr::RecipeDescriptor::CloneInt(kind), |event| {
+                events.push(event);
+                Ok(())
+            })
+            .unwrap();
+            assert!(matches!(events.as_slice(), [Event::Read, Event::Load]));
+            let budget = ir::PlanBudget::new(ir::PlanLimits::default());
+            let wide = counts(tr::RecipeDescriptor::CloneInt(kind), &budget).unwrap();
+            let narrow = counts(tr::RecipeDescriptor::CloneInt(ir::IntTy::I64), &budget).unwrap();
+            assert_eq!(wide, narrow);
+            assert_eq!(wide.call_result_origins, 0);
+            assert_eq!(wide.loan_sites, 0);
+            assert_eq!(wide.binders, 0);
+        }
+    }
 }

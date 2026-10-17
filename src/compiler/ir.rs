@@ -2774,6 +2774,8 @@ pub enum IntTy {
     U32,
     U64,
     Usize,
+    I128,
+    U128,
 }
 
 impl IntTy {
@@ -2782,6 +2784,7 @@ impl IntTy {
             Self::I8 | Self::U8 => 8,
             Self::I16 | Self::U16 => 16,
             Self::I32 | Self::U32 => 32,
+            Self::I128 | Self::U128 => 128,
             Self::I64 | Self::Isize | Self::U64 | Self::Usize => 64,
         }
     }
@@ -2789,12 +2792,12 @@ impl IntTy {
     pub const fn is_signed(self) -> bool {
         matches!(
             self,
-            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::Isize
+            Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::Isize | Self::I128
         )
     }
 
-    pub const fn mask(self) -> u64 {
-        u64::MAX >> (64 - self.bits())
+    pub const fn mask(self) -> u128 {
+        u128::MAX >> (128 - self.bits())
     }
 
     pub const fn name(self) -> &'static str {
@@ -2809,6 +2812,8 @@ impl IntTy {
             Self::U32 => "u32",
             Self::U64 => "u64",
             Self::Usize => "usize",
+            Self::I128 => "i128",
+            Self::U128 => "u128",
         }
     }
 }
@@ -2816,7 +2821,7 @@ impl IntTy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct IntValue {
     pub ty: IntTy,
-    pub bits: u64,
+    pub bits: u128,
 }
 
 impl IntValue {
@@ -2831,14 +2836,14 @@ impl IntValue {
     pub const fn i32(value: i32) -> Self {
         Self {
             ty: IntTy::I32,
-            bits: value as u32 as u64,
+            bits: value as u32 as u128,
         }
     }
 
     pub const fn usize(value: u64) -> Self {
         Self {
             ty: IntTy::Usize,
-            bits: value,
+            bits: value as u128,
         }
     }
 }
@@ -3077,6 +3082,20 @@ pub enum BorrowKind {
 
 /// Checks structural typing, not the runtime proof needed to read a payload.
 pub fn projected_ty<'a>(root: &'a Ty, path: &[Projection]) -> Result<&'a Ty, String> {
+    projected_ty_inner(root, path, false)
+}
+
+/// Static mutation authority, including unreachable metadata. Binding lifetime,
+/// initialization and exclusive loan access remain ownership-analysis duties.
+pub(super) fn projected_mut_ty<'a>(root: &'a Ty, path: &[Projection]) -> Result<&'a Ty, String> {
+    projected_ty_inner(root, path, true)
+}
+
+fn projected_ty_inner<'a>(
+    root: &'a Ty,
+    path: &[Projection],
+    mutable: bool,
+) -> Result<&'a Ty, String> {
     if path.len() > MAX_PATTERN_PROJECTION_DEPTH {
         return Err("projection depth exceeds limit 128".into());
     }
@@ -3085,9 +3104,15 @@ pub fn projected_ty<'a>(root: &'a Ty, path: &[Projection]) -> Result<&'a Ty, Str
     while let Some(projection) = path.next() {
         ty = match *projection {
             Projection::Deref => {
-                let Ty::Ref { referent, .. } = ty else {
+                let Ty::Ref { kind, referent } = ty else {
                     return Err("dereference requires reference type".into());
                 };
+                if mutable && *kind != BorrowKind::Mut {
+                    return Err(
+                        "compound indexed mutation requires mutable reference at every dereference"
+                            .into(),
+                    );
+                }
                 referent
             }
             Projection::ConstantIndex(index) => {
@@ -4773,7 +4798,7 @@ fn validate_compound_types(op: BinaryOp, target: &Ty, value: &TypedExpr) -> Resu
         BinaryOp::Shl | BinaryOp::Shr => {
             if let (Ty::Int(integer), ExprKind::Int(count), Completion::Returns) =
                 (target, &value.kind, value.completion)
-                && count.bits >= u64::from(integer.bits())
+                && count.bits >= u128::from(integer.bits())
             {
                 return Err(
                     "constant compound shift count is negative or exceeds LHS width".into(),
@@ -5776,14 +5801,13 @@ impl CheckedFunction {
                         local(array.local)?;
                         expr(*index)?;
                         expr(*value)?;
-                        if array.projection.contains(&Projection::Deref) {
-                            return Err(
-                                "compound runtime indexing through dereference is unsupported"
-                                    .into(),
-                            );
+                        if !array.projection.contains(&Projection::Deref)
+                            && !self.locals[array.local.0].mutable
+                        {
+                            return Err("compound indexed mutation requires mutable binding".into());
                         }
                         let array_ty =
-                            projected_ty(&self.locals[array.local.0].ty, &array.projection)?;
+                            projected_mut_ty(&self.locals[array.local.0].ty, &array.projection)?;
                         let Ty::Array { element, .. } = array_ty else {
                             return Err("compound indexed assignment requires array type".into());
                         };
@@ -7324,6 +7348,7 @@ mod tests {
             *actual = op;
             assert!(function.validate().unwrap_err().contains("compound"));
         }
+        function.locals[0].mutable = true;
         function.locals[0].ty = Ty::Array {
             element: Arc::new(Ty::Int(IntTy::I32)),
             len: 2,
@@ -7386,6 +7411,8 @@ mod tests {
             IntTy::U32,
             IntTy::U64,
             IntTy::Usize,
+            IntTy::I128,
+            IntTy::U128,
         ];
         for op in [BinaryOp::Shl, BinaryOp::Shr] {
             for left in types {
@@ -7639,7 +7666,7 @@ mod tests {
         invalid = function.clone();
         invalid.exprs[0].kind = ExprKind::Int(IntValue {
             ty: IntTy::I32,
-            bits: 1u64 << 32,
+            bits: 1u128 << 32,
         });
         assert!(invalid.validate().unwrap_err().contains("noncanonical"));
         invalid = function.clone();
@@ -7666,6 +7693,57 @@ mod tests {
     }
 
     #[test]
+    fn wide_integer_hashes_and_patterns_retain_both_limbs() {
+        #[derive(Default)]
+        struct Bytes(Vec<u8>);
+        impl Hasher for Bytes {
+            fn finish(&self) -> u64 {
+                0
+            }
+            fn write(&mut self, bytes: &[u8]) {
+                self.0.extend_from_slice(bytes);
+            }
+        }
+        for ty in [IntTy::I128, IntTy::U128] {
+            let low = IntValue { ty, bits: 7 };
+            let high = IntValue {
+                ty,
+                bits: (1_u128 << 127) | 7,
+            };
+            let mut low_hash = Bytes::default();
+            let mut high_hash = Bytes::default();
+            low.hash(&mut low_hash);
+            high.hash(&mut high_hash);
+            assert_ne!(low_hash.0, high_hash.0);
+            high.validate().unwrap();
+            let mut function = fixture();
+            function.exprs[0].ty = Ty::Int(ty);
+            function.exprs[0].kind = ExprKind::Int(high);
+            function.validate().unwrap();
+            function
+                .validate_match(
+                    ExprId(0),
+                    &[MatchArm {
+                        pattern: MatchPattern::Int(high),
+                        body: ExprId(0),
+                    }],
+                    &Default::default(),
+                )
+                .unwrap();
+        }
+        for ty in [IntTy::I64, IntTy::U64, IntTy::Usize] {
+            assert!(
+                IntValue {
+                    ty,
+                    bits: 1_u128 << 64
+                }
+                .validate()
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn integer_descriptors_constants_and_patterns_preserve_exact_identity() {
         let types = [
             (IntTy::I8, 8, true, "i8"),
@@ -7678,14 +7756,16 @@ mod tests {
             (IntTy::U32, 32, false, "u32"),
             (IntTy::U64, 64, false, "u64"),
             (IntTy::Usize, 64, false, "usize"),
+            (IntTy::I128, 128, true, "i128"),
+            (IntTy::U128, 128, false, "u128"),
         ];
         for (ty, bits, signed, name) in types {
             assert_eq!(ty.bits(), bits);
             assert_eq!(ty.is_signed(), signed);
             assert_eq!(ty.name(), name);
-            assert_eq!(ty.mask(), u64::MAX >> (64 - bits));
+            assert_eq!(ty.mask(), u128::MAX >> (128 - bits));
             assert!(Ty::Int(ty).is_copy());
-            for raw in [0, ty.mask(), 1u64 << (bits - 1)] {
+            for raw in [0, ty.mask(), 1u128 << (bits - 1)] {
                 let integer = IntValue { ty, bits: raw };
                 integer.validate().unwrap();
                 let mut function = fixture();
@@ -7713,10 +7793,10 @@ mod tests {
                         .is_err()
                 );
             }
-            if bits < 64 {
+            if bits < 128 {
                 let invalid = IntValue {
                     ty,
-                    bits: 1u64 << bits,
+                    bits: 1u128 << bits,
                 };
                 assert!(invalid.validate().is_err());
                 let mut function = fixture();
@@ -7738,8 +7818,8 @@ mod tests {
                 );
             }
         }
-        assert_eq!(IntValue::i32(-1).bits, u32::MAX as u64);
-        assert_eq!(IntValue::usize(u64::MAX).bits, u64::MAX);
+        assert_eq!(IntValue::i32(-1).bits, u32::MAX as u128);
+        assert_eq!(IntValue::usize(u64::MAX).bits, u128::from(u64::MAX));
         assert!(
             !pattern_types_equal(&Ty::Int(IntTy::U64), &Ty::Int(IntTy::Usize), &mut 0).unwrap()
         );

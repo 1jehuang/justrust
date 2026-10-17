@@ -2444,7 +2444,7 @@ impl Transfer<'_> {
         // An unknown slot can only replace an element of an already ready
         // array. Never initialize a guessed child or resurrect missing bits.
         self.carrier_read(state, array)?;
-        let deref = array.projection.first() == Some(&Projection::Deref);
+        let deref = array.projection.contains(&Projection::Deref);
         if deref {
             self.mut_authority(array);
         }
@@ -4649,7 +4649,7 @@ mod tests {
                 },
                 IntValue {
                     ty: IntTy::U64,
-                    bits: u64::MAX,
+                    bits: u128::from(u64::MAX),
                 },
                 IntValue {
                     ty: IntTy::U64,
@@ -5055,6 +5055,8 @@ mod tests {
             IntTy::U32,
             IntTy::U64,
             IntTy::Usize,
+            IntTy::I128,
+            IntTy::U128,
         ] {
             let ty = Ty::Int(kind);
             assert!(ty.is_copy());
@@ -5091,6 +5093,10 @@ mod tests {
             IntTy::U8,
             IntTy::U16,
             IntTy::U32,
+            IntTy::I64,
+            IntTy::U64,
+            IntTy::Isize,
+            IntTy::Usize,
         ] {
             let mut f = fixture();
             f.locals.push(local(Ty::Int(kind)));
@@ -5099,7 +5105,7 @@ mod tests {
                     destination: place(1),
                     value: Rvalue::Use(Operand::Constant(Constant::Int(IntValue {
                         ty: kind,
-                        bits: 1u64 << kind.bits(),
+                        bits: 1u128 << kind.bits(),
                     }))),
                 })],
                 terminator: located(Terminator::Unreachable),
@@ -6442,11 +6448,20 @@ mod tests {
                     .any(|d| d.kind == ErrorKind::ReadNotDefinitelyInitialized)
             );
             f.locals[1].mutable = false;
+            let immutable = analyze(&f);
             assert!(
-                analyze(&f)
-                    .diagnostics
-                    .iter()
-                    .any(|d| d.kind == ErrorKind::ImmutableReassignment)
+                immutable.complete && !immutable.passed(),
+                "{op:?}: {:?}",
+                immutable.diagnostics
+            );
+            assert!(
+                immutable.diagnostics.iter().any(|d| matches!(
+                    &d.kind,
+                    ErrorKind::InvalidCfg(message)
+                        if message == "compound indexed mutation requires mutable binding"
+                )),
+                "{op:?}: {:?}",
+                immutable.diagnostics
             );
             f.locals[1].mutable = true;
             f.blocks[0].statements.last_mut().unwrap().value = Statement::IndexAssignOp {
@@ -6509,6 +6524,38 @@ mod tests {
             "fn f(i:usize)->i32{let mut a=[1,2];let r=&a[0];a[i]+=1;*r}",
         ] {
             assert!(!analyze(&borrowed_source(source)).passed(), "{source}");
+        }
+    }
+
+    #[test]
+    fn wide_compound_index_reference_paths_preserve_exclusive_scalar_access() {
+        for source in [
+            "fn f(a:&mut [u128;2],i:usize,n:u128){a[i]<<=n;}",
+            "fn f(a:&mut [u128;2],i:usize,n:u128){(*a)[i]>>=n;}",
+            "fn f(a:&mut ([u128;2],u8),i:usize,n:u128){a.0[i]<<=n;}",
+            "fn f(i:usize,n:u128){let mut a=[1u128,2u128];let t=(&mut a,0u8);t.0[i]<<=n;}",
+            "fn f(i:usize,n:u128){let mut a=[1i128,2i128];let t=(&mut a,0u8);t.0[i]>>=n;}",
+            "fn f(i:usize)->u128{let mut x=[1u128,2u128];let mut y=[3u128,4u128];let mut a=&mut x;a[i]<<={a=&mut y;1u128};x[0]+y[0]}",
+            "fn f()->u128{let mut x=[1u128,2u128];let mut y=[3u128,4u128];let mut a=&mut x;a[{a=&mut y;0usize}]<<=1u128;x[0]+y[0]}",
+        ] {
+            let proof = verify_template(carrier_reference_template(source))
+                .unwrap_or_else(|analysis| panic!("{source}: {:?}", analysis.diagnostics));
+            assert!(proof.analysis().passed());
+        }
+        for source in [
+            "fn f(a:&mut [u128;2],i:usize,n:u128)->u128{let r=&(*a)[0];a[i]<<=n;*r}",
+            "fn f(i:usize,n:u128)->u128{let mut a=[1u128,2u128];let t=(&mut a,0u8);let r=&(*t.0)[0];t.0[i]>>=n;*r}",
+        ] {
+            let result = verify_template(carrier_reference_template(source)).unwrap_err();
+            assert!(!result.passed(), "{source}");
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| matches!(diagnostic.kind, ErrorKind::BorrowConflict(_))),
+                "{source}: {:?}",
+                result.diagnostics
+            );
         }
     }
 
@@ -6903,7 +6950,7 @@ mod tests {
                 destination: place(2),
                 value: Rvalue::Use(Operand::Constant(Constant::Int(IntValue {
                     ty: IntTy::Usize,
-                    bits: u64::MAX,
+                    bits: u128::from(u64::MAX),
                 }))),
             }),
             dynamic_read(),

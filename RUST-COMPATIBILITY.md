@@ -6,7 +6,7 @@ subset is a bootstrap milestone, not the intended final language or architecture
 Normal Rust tools may build our implementation and act as external test oracles.
 They must not compile user programs on our native implementation path.
 
-## Integer foundation through 64 bits
+## Integer foundation through 128 bits
 
 `INTEGER-TYPES.md` defines all ten signed/unsigned primitives through 64 bits,
 canonical typed low-bit constants, radix literals, signed minima, typed patterns
@@ -25,8 +25,14 @@ assignments and general compound expressions remain open. `FLOATS.md` adds
 native f32/f64 values, arithmetic/remainder, IEEE comparisons, numeric casts,
 canonical Copy/Clone and bounded float-domain inference. `LABELED-CONTROL-FLOW.md`
 adds lexically resolved loop/while/block labels and target-specific cleanup.
-Float library methods/formatting, general const evaluation, platform FFI,
-128-bit integers and broader inference remain separate work. The full Rust
+`INTEGER128.md` extends canonical scalar identity to i128/u128, all 144
+integer cast pairs, full-width checked arithmetic and direct f32/f64 conversion.
+Its private 16-byte transport remains scalar Copy, not platform Rust/C layout.
+Mutable-reference indexed compounds retain exact primitive evaluation order and
+every-hop mutable authority. The 92-source stock oracle and 368 native
+CHECK/BUILD cells pass, together with 1,677 complete hosted tests. Bool/char/enum/
+pointer conversions, float library methods/formatting, general const evaluation,
+platform FFI and broader inference remain separate work. The full Rust
 compatibility goal remains open.
 
 ## Source trait defaults

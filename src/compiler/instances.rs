@@ -888,6 +888,28 @@ mod tests {
             assert_ne!(shared_key.canonical, key.canonical);
             assert_ne!(shared_key.symbol, key.symbol);
         }
+        let wide_keys = [
+            ir::IntTy::I64,
+            ir::IntTy::U64,
+            ir::IntTy::I128,
+            ir::IntTy::U128,
+        ]
+        .map(|integer| {
+            let ty = ir::Ty::Int(integer);
+            let first_key = identity(&target(declaration, ty.clone()), &first, &budget).unwrap();
+            let reordered_key =
+                identity(&target(other_declaration, ty), &reordered, &other_budget).unwrap();
+            assert_eq!(first_key.canonical, reordered_key.canonical);
+            assert_eq!(first_key.symbol, reordered_key.symbol);
+            first_key.symbol
+        });
+        assert_eq!(
+            wide_keys
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            wide_keys.len()
+        );
         let mut excessive = scalar;
         for _ in 0..=ir::PlanLimits::default().depth {
             excessive = reference(ir::BorrowKind::Shared, excessive);

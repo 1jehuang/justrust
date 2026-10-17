@@ -461,10 +461,11 @@ fn main(){if run()==7{println!("shift oracle ok");}}"#,
 }
 
 #[test]
-fn rejects_legal_unsupported_integer128_shifts() {
-    rejects(
-        "legalunsupported: integer128_shifts",
+fn accepts_integer128_shifts() {
+    // Exact source stock/native parity: 20261017-045214157-72203.
+    runs(
         r#"fn run()->i32{let x=1u128<<100u8;let y=x>>100u8;if y==1u128{7}else{0}}
 fn main(){if run()==7{println!("shift oracle ok");}}"#,
+        "shift oracle ok\n",
     );
 }

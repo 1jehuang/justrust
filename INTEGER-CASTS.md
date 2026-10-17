@@ -1,5 +1,9 @@
 # Integer-to-integer casts
 
+Historical milestone scope below. `INTEGER128.md` now extends native scalar
+identity/arithmetic and all integer/numeric cast endpoints through i128/u128.
+Earlier exclusion statements describe this checkpoint, not current support.
+
 Status: implemented and hosted-validated, 2026-10-16. All component owners
 and both read-only reviewers cleared the actual patch. Exact32 stock/native
 plus four graph gates, 1,067 hosted tests, strict all-target lint and formatting

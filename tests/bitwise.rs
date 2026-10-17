@@ -343,10 +343,11 @@ fn main(){if run()==7{println!("bitwise oracle ok");}}"#,
 }
 
 #[test]
-fn rejects_legal_unsupported_integer128_bitwise() {
-    rejects(
-        "legalunsupported: integer128_bitwise",
+fn accepts_integer128_bitwise() {
+    // Exact source stock/native parity: 20261017-045214157-72203.
+    runs(
         r#"fn run()->i32{let x=1u128|2u128;let y=-1i128&7i128;if x==3u128 && y==7i128{7}else{0}}
 fn main(){if run()==7{println!("bitwise oracle ok");}}"#,
+        "bitwise oracle ok\n",
     );
 }

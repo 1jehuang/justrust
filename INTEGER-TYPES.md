@@ -1,5 +1,9 @@
 # Integer foundation through 64 bits
 
+Historical milestone scope below. `INTEGER128.md` now extends native scalar
+identity/arithmetic and all integer/numeric cast endpoints through i128/u128.
+Earlier exclusion statements describe this checkpoint, not current support.
+
 ## Status and scope
 
 This is a coordinated implementation contract, not a claim of full Rust support.

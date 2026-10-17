@@ -500,10 +500,11 @@ fn main(){if run()==7{println!("cast oracle ok");}}"#,
 }
 
 #[test]
-fn rejects_legal_unsupported_integer128_cast() {
-    rejects(
-        "legalunsupported: integer128_cast",
+fn accepts_integer128_cast() {
+    // Exact source stock/native parity: 20261017-045214157-72203.
+    runs(
         r#"fn run()->i32{let x=300u128 as u8;if x==44u8{7}else{0}}
 fn main(){if run()==7{println!("cast oracle ok");}}"#,
+        "cast oracle ok\n",
     );
 }

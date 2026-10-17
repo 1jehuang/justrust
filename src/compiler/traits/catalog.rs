@@ -3,7 +3,8 @@
 use super::*;
 use crate::compiler::ir::{BinderId, BorrowKind, IntTy};
 
-pub const CATALOG_VERSION: u32 = 3;
+pub const CATALOG_VERSION: u32 = 4;
+
 const BASE_COUNT: u32 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -20,21 +21,21 @@ pub enum RecipeDescriptor {
 impl RecipeDescriptor {
     fn order(self) -> (u8, u16) {
         match self {
-            Self::CloneInt(i) => (
-                0,
-                match i {
-                    IntTy::I8 => 0,
-                    IntTy::I16 => 1,
-                    IntTy::I32 => 2,
-                    IntTy::I64 => 3,
-                    IntTy::Isize => 4,
-                    IntTy::U8 => 5,
-                    IntTy::U16 => 6,
-                    IntTy::U32 => 7,
-                    IntTy::U64 => 8,
-                    IntTy::Usize => 9,
-                },
-            ),
+            Self::CloneInt(i) => match i {
+                IntTy::I8 => (0, 0),
+                IntTy::I16 => (0, 1),
+                IntTy::I32 => (0, 2),
+                IntTy::I64 => (0, 3),
+                IntTy::Isize => (0, 4),
+                IntTy::U8 => (0, 5),
+                IntTy::U16 => (0, 6),
+                IntTy::U32 => (0, 7),
+                IntTy::U64 => (0, 8),
+                IntTy::Usize => (0, 9),
+                // Append after every existing family, preserving old catalog IDs.
+                IntTy::I128 => (8, 0),
+                IntTy::U128 => (8, 1),
+            },
             Self::CloneBool => (1, 0),
             Self::CloneUnit => (2, 0),
             Self::CloneNever => (3, 0),
@@ -769,4 +770,76 @@ pub(super) fn fixture_source_decl(
         .checked_add(ordinal)
         .ok_or_else(|| FactsError::resource(budget, "fixture source declaration index overflow"))?;
     Ok(DeclId { snapshot, index })
+}
+
+#[cfg(test)]
+mod wide_tests {
+    use super::*;
+
+    #[test]
+    fn wide_clone_catalog_schema_preserves_signedness_and_scalar_result() {
+        let budget = PlanBudget::new(ir::PlanLimits::default());
+        let snapshot = SnapshotId::allocate().unwrap();
+        for kind in [IntTy::I128, IntTy::U128] {
+            let declaration = DeclId {
+                snapshot,
+                index: 100,
+            };
+            let schema = recipe_schema(
+                declaration,
+                RecipeDescriptor::CloneInt(kind),
+                id(snapshot, CatalogItem::Sized),
+                id(snapshot, CatalogItem::Clone),
+                &budget,
+            )
+            .unwrap();
+            assert!(matches!(schema.signature.result, Ty::Int(actual) if actual == kind));
+            assert!(
+                matches!(schema.signature.params.as_slice(), [Ty::Ref { kind: BorrowKind::Shared, referent }] if matches!(referent.as_ref(), Ty::Int(actual) if *actual == kind))
+            );
+            assert!(schema.signature.ref_contract.results.is_empty());
+            assert_eq!(schema.signature.ref_contract.input_regions.len(), 1);
+            assert!(schema.predicates.is_empty());
+            assert_eq!(schema.env.ordered_params().count(), 0);
+        }
+    }
+
+    #[test]
+    fn wide_recipe_identity_appends_without_legacy_order_drift() {
+        let ints = [
+            IntTy::I8,
+            IntTy::I16,
+            IntTy::I32,
+            IntTy::I64,
+            IntTy::Isize,
+            IntTy::U8,
+            IntTy::U16,
+            IntTy::U32,
+            IntTy::U64,
+            IntTy::Usize,
+        ];
+        for (index, kind) in ints.into_iter().enumerate() {
+            assert_eq!(RecipeDescriptor::CloneInt(kind).order(), (0, index as u16));
+        }
+        let old = [
+            (RecipeDescriptor::CloneBool, (1, 0)),
+            (RecipeDescriptor::CloneUnit, (2, 0)),
+            (RecipeDescriptor::CloneNever, (3, 0)),
+            (RecipeDescriptor::CloneTuple { arity: 2 }, (4, 2)),
+            (RecipeDescriptor::CloneArray { len: 3 }, (5, 3)),
+            (RecipeDescriptor::CloneSharedRef, (6, 0)),
+            (RecipeDescriptor::CloneFloat(ir::FloatTy::F32), (7, 0)),
+            (RecipeDescriptor::CloneFloat(ir::FloatTy::F64), (7, 1)),
+        ];
+        for (descriptor, order) in old {
+            assert_eq!(descriptor.order(), order);
+            assert!(order < RecipeDescriptor::CloneInt(IntTy::I128).order());
+        }
+        assert_eq!(RecipeDescriptor::CloneInt(IntTy::I128).order(), (8, 0));
+        assert_eq!(RecipeDescriptor::CloneInt(IntTy::U128).order(), (8, 1));
+        assert_ne!(
+            RecipeDescriptor::CloneInt(IntTy::I128),
+            RecipeDescriptor::CloneInt(IntTy::U128)
+        );
+    }
 }

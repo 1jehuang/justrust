@@ -452,11 +452,12 @@ fn main(){run();}"#,
 }
 
 #[test]
-fn rejects_legal_unsupported_integer128_compounds() {
-    rejects(
-        "legalunsupported: integer128_compounds",
+fn accepts_integer128_compounds() {
+    // Exact source stock/native parity: 20261017-045214157-72203.
+    runs(
         r#"fn run()->i32{let mut x=3u128;x+=4u128;x<<=2u8;x>>=2u8;if x==7u128{7}else{0}}
 fn main(){if run()==7{println!("compound oracle ok");}}"#,
+        "compound oracle ok\n",
     );
 }
 

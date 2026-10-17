@@ -4,7 +4,7 @@
 //! AST means semantic diagnostics identify functions and names instead of spans.
 //! Explicit semicolons discard expression values, while omitted-semicolon
 //! blocklike statements require unit. While loops do not establish return flow.
-//! Numeric literals support primitive integers through 64 bits.
+//! Numeric literals support primitive integers through 128 bits.
 //! Inline modules, named nonempty braced structs, nonempty unit/tuple/braced enums, ordinary visibility, and
 //! module-level named/grouped imports have separate type/value namespaces. Named
 //! structs and enums are nominal and non-Copy. Match admits scalar literals,
@@ -3071,7 +3071,7 @@ pub enum Stmt {
 /// Source literal magnitude, before contextual signedness and range checking.
 #[derive(Clone, Debug)]
 pub struct IntegerLiteral {
-    pub magnitude: u64,
+    pub magnitude: u128,
     pub suffix: Option<ir::IntTy>,
 }
 
@@ -3081,11 +3081,13 @@ fn integer_type(name: &str) -> Option<ir::IntTy> {
         "i8" => I8,
         "i16" => I16,
         "i32" => I32,
+        "i128" => I128,
         "i64" => I64,
         "isize" => Isize,
         "u8" => U8,
         "u16" => U16,
         "u32" => U32,
+        "u128" => U128,
         "u64" => U64,
         "usize" => Usize,
         _ => return None,
@@ -3208,7 +3210,7 @@ fn parse_integer_literal(text: &str) -> Result<IntegerLiteral, String> {
     };
     let bytes = text.as_bytes();
     let mut at = start;
-    let mut magnitude = 0u64;
+    let mut magnitude = 0u128;
     let mut digit_seen = false;
     while let Some(&b) = bytes.get(at) {
         if b == b'_' {
@@ -3219,9 +3221,9 @@ fn parse_integer_literal(text: &str) -> Result<IntegerLiteral, String> {
             break;
         };
         magnitude = magnitude
-            .checked_mul(u64::from(radix))
-            .and_then(|n| n.checked_add(u64::from(digit)))
-            .ok_or("integer literal exceeds u64")?;
+            .checked_mul(u128::from(radix))
+            .and_then(|n| n.checked_add(u128::from(digit)))
+            .ok_or("integer literal exceeds u128")?;
         digit_seen = true;
         at += 1;
     }
@@ -3253,19 +3255,24 @@ fn resolve_integer(
         return Err("unsigned integer negation is invalid".into());
     }
     let limit = if ty.is_signed() {
-        let sign = 1u64 << (ty.bits() - 1);
+        let sign = 1u128 << (ty.bits() - 1);
         if negative { sign } else { sign - 1 }
     } else {
         ty.mask()
     };
     if literal.magnitude > limit {
+        let inference = if literal.suffix.is_none() && contextual.is_none() {
+            "; backward numeric inference is unsupported"
+        } else {
+            ""
+        };
         return Err(format!(
-            "integer literal out of range for {}; backward numeric inference is unsupported",
+            "integer literal out of range for {}{inference}",
             ty.name()
         ));
     }
     let bits = if negative {
-        0u64.wrapping_sub(literal.magnitude) & ty.mask()
+        0u128.wrapping_sub(literal.magnitude) & ty.mask()
     } else {
         literal.magnitude
     };
@@ -3278,7 +3285,7 @@ impl Expr {
     /// Construct a source signed literal for hand-built frontend fixtures.
     pub fn i32(value: i32) -> Self {
         let literal = Self::Integer(IntegerLiteral {
-            magnitude: u64::from(value.unsigned_abs()),
+            magnitude: u128::from(value.unsigned_abs()),
             suffix: Some(ir::IntTy::I32),
         });
         if value < 0 {
@@ -4196,7 +4203,7 @@ impl Parser {
         let literal = parse_integer_literal(&token.text).map_err(|e| self.error(&e))?;
         let value = resolve_integer(&literal, false, Some(&ir::Ty::Int(ir::IntTy::Usize)))
             .map_err(|e| self.error(&e))?;
-        if value.bits > ir::MAX_ARRAY_LEN as u64 {
+        if value.bits > ir::MAX_ARRAY_LEN as u128 {
             return Err(self.error("array length/index exceeds supported limit"));
         }
         let number = value.bits as usize;
@@ -5463,6 +5470,7 @@ impl Parser {
             args,
         })
     }
+    #[inline(never)]
     fn expr_prefix(&mut self, statement: bool) -> Result<Expr, String> {
         let left = if self.eat("<") {
             self.trait_call_prefix()?
@@ -5522,137 +5530,155 @@ impl Parser {
             };
             Expr::Continue { label }
         } else if self.eat("match") {
-            let scrutinee = Box::new(self.condition()?);
-            self.expect("{")?;
-            let mut arms = Vec::new();
-            while !self.is("}") {
-                if arms.len() >= 4096 {
-                    return Err(self.error("match arm count exceeds limit 4096"));
-                }
-                let pattern = self.pattern()?;
-                if self.is("if") || self.is("|") || self.is("@") {
-                    return Err(
-                        self.error("match guards, or-patterns and @ patterns are unsupported")
-                    );
-                }
-                self.expect("=>")?;
-                let direct_return = self.eat("return");
-                let body = if direct_return {
-                    let value = if self.is(",") || self.is("}") {
-                        None
-                    } else {
-                        Some(self.nested_expr()?)
-                    };
-                    Expr::Block(Block {
-                        statements: vec![Stmt::Return(value)],
-                        tail: None,
-                    })
-                } else {
-                    self.nested_expr()?
-                };
-                let blocklike = !direct_return
-                    && matches!(
-                        body,
-                        Expr::Block(_) | Expr::If { .. } | Expr::Loop { .. } | Expr::Match { .. }
-                    );
-                arms.push(MatchArm { pattern, body });
-                if !self.eat(",") && !self.is("}") && !blocklike {
-                    return Err(self.error("expected comma after match arm"));
-                }
-            }
-            self.expect("}")?;
-            Expr::Match { scrutinee, arms }
+            return self.match_prefix();
         } else if self.eat("if") {
-            let condition = Box::new(self.condition()?);
-            let then_block = self.block()?;
-            let else_block = if self.eat("else") {
-                if self.is("if") {
-                    Block {
-                        statements: Vec::new(),
-                        tail: Some(Box::new(if statement {
-                            self.statement_expr()?
-                        } else {
-                            self.expr(0)?
-                        })),
-                    }
-                } else {
-                    self.block()?
-                }
-            } else {
-                Block {
-                    statements: Vec::new(),
-                    tail: None,
-                }
-            };
-            Expr::If {
-                condition,
-                then_block,
-                else_block,
-            }
+            return self.if_prefix(statement);
         } else if self.is("{") {
             Expr::Block(self.block()?)
         } else if self.eat("[") {
-            if self.eat("]") {
-                Expr::Array(Vec::new())
-            } else {
-                let first = self.nested_expr()?;
-                if self.eat(";") {
-                    let len = self.array_number("array repeat length")?;
-                    self.expect("]")?;
-                    Expr::Repeat {
-                        value: Box::new(first),
-                        len,
-                    }
-                } else {
-                    let mut values = vec![first];
-                    while self.eat(",") && !self.is("]") {
-                        if values.len() >= ir::MAX_ARRAY_LEN {
-                            return Err(self.error("array literal exceeds supported length"));
-                        }
-                        values.push(self.nested_expr()?);
-                    }
-                    self.expect("]")?;
-                    Expr::Array(values)
-                }
-            }
+            return self.array_prefix();
         } else if self.eat("(") {
-            if self.eat(")") {
-                Expr::Block(Block {
-                    statements: Vec::new(),
-                    tail: None,
-                })
-            } else {
-                let first = self.nested_expr()?;
-                if self.eat(",") {
-                    let mut fields = vec![first];
-                    while !self.is(")") {
-                        fields.push(self.nested_expr()?);
-                        if !self.eat(",") {
-                            break;
-                        }
-                    }
-                    self.expect(")")?;
-                    Expr::Tuple(fields)
-                } else {
-                    self.expect(")")?;
-                    first
-                }
-            }
+            return self.group_prefix();
         } else if !self.token().string
             && self.token().text.starts_with(|c: char| c.is_ascii_digit())
         {
-            let text = self.token().text.clone();
-            if let Some(literal) = parse_float_literal(&text).map_err(|e| self.error(&e))? {
-                self.at += 1;
-                return Ok(Expr::Float(literal));
-            }
-            let literal = parse_integer_literal(&text).map_err(|e| self.error(&e))?;
-            self.at += 1;
-            Expr::Integer(literal)
+            return self.number_prefix();
         } else {
             self.named_expr()?
         };
         Ok(left)
+    }
+    // Keep unrelated syntax temporaries out of every recursive prefix frame.
+    // In particular u128's alignment must not multiply match-arm and literal
+    // scratch storage across all 128 admitted syntax levels.
+    #[inline(never)]
+    fn number_prefix(&mut self) -> Result<Expr, String> {
+        let text = self.token().text.clone();
+        let expression =
+            if let Some(literal) = parse_float_literal(&text).map_err(|e| self.error(&e))? {
+                Expr::Float(literal)
+            } else {
+                Expr::Integer(parse_integer_literal(&text).map_err(|e| self.error(&e))?)
+            };
+        self.at += 1;
+        Ok(expression)
+    }
+    #[inline(never)]
+    fn group_prefix(&mut self) -> Result<Expr, String> {
+        if self.eat(")") {
+            return Ok(Expr::Block(Block {
+                statements: Vec::new(),
+                tail: None,
+            }));
+        }
+        let first = self.nested_expr()?;
+        if !self.eat(",") {
+            self.expect(")")?;
+            return Ok(first);
+        }
+        let mut fields = vec![first];
+        while !self.is(")") {
+            fields.push(self.nested_expr()?);
+            if !self.eat(",") {
+                break;
+            }
+        }
+        self.expect(")")?;
+        Ok(Expr::Tuple(fields))
+    }
+    #[inline(never)]
+    fn array_prefix(&mut self) -> Result<Expr, String> {
+        if self.eat("]") {
+            return Ok(Expr::Array(Vec::new()));
+        }
+        let first = self.nested_expr()?;
+        if self.eat(";") {
+            let len = self.array_number("array repeat length")?;
+            self.expect("]")?;
+            return Ok(Expr::Repeat {
+                value: Box::new(first),
+                len,
+            });
+        }
+        let mut values = vec![first];
+        while self.eat(",") && !self.is("]") {
+            if values.len() >= ir::MAX_ARRAY_LEN {
+                return Err(self.error("array literal exceeds supported length"));
+            }
+            values.push(self.nested_expr()?);
+        }
+        self.expect("]")?;
+        Ok(Expr::Array(values))
+    }
+    #[inline(never)]
+    fn if_prefix(&mut self, statement: bool) -> Result<Expr, String> {
+        let condition = Box::new(self.condition()?);
+        let then_block = self.block()?;
+        let else_block = if self.eat("else") {
+            if self.is("if") {
+                Block {
+                    statements: Vec::new(),
+                    tail: Some(Box::new(if statement {
+                        self.statement_expr()?
+                    } else {
+                        self.expr(0)?
+                    })),
+                }
+            } else {
+                self.block()?
+            }
+        } else {
+            Block {
+                statements: Vec::new(),
+                tail: None,
+            }
+        };
+        Ok(Expr::If {
+            condition,
+            then_block,
+            else_block,
+        })
+    }
+    #[inline(never)]
+    fn match_prefix(&mut self) -> Result<Expr, String> {
+        let scrutinee = Box::new(self.condition()?);
+        self.expect("{")?;
+        let mut arms = Vec::new();
+        while !self.is("}") {
+            if arms.len() >= 4096 {
+                return Err(self.error("match arm count exceeds limit 4096"));
+            }
+            let pattern = self.pattern()?;
+            if self.is("if") || self.is("|") || self.is("@") {
+                return Err(self.error("match guards, or-patterns and @ patterns are unsupported"));
+            }
+            self.expect("=>")?;
+            let direct_return = self.eat("return");
+            let body = if direct_return {
+                let value = if self.is(",") || self.is("}") {
+                    None
+                } else {
+                    Some(self.nested_expr()?)
+                };
+                Expr::Block(Block {
+                    statements: vec![Stmt::Return(value)],
+                    tail: None,
+                })
+            } else {
+                self.nested_expr()?
+            };
+            let blocklike = !direct_return
+                && matches!(
+                    body,
+                    Expr::Block(_) | Expr::If { .. } | Expr::Loop { .. } | Expr::Match { .. }
+                );
+            arms.push(MatchArm { pattern, body });
+            if !self.eat(",") && !self.is("}") && !blocklike {
+                return Err(self.error("expected comma after match arm"));
+            }
+        }
+        self.expect("}")?;
+        Ok(Expr::Match { scrutinee, arms })
     }
     fn expr_continuation(
         &mut self,
@@ -5686,7 +5712,7 @@ impl Parser {
                     let value =
                         resolve_integer(&literal, false, Some(&ir::Ty::Int(ir::IntTy::Usize)))
                             .map_err(|e| self.error(&e))?;
-                    if value.bits > ir::MAX_ARRAY_LEN as u64 {
+                    if value.bits > ir::MAX_ARRAY_LEN as u128 {
                         return Err(self.error("array index exceeds supported limit"));
                     }
                     let index = value.bits as usize;
@@ -10940,7 +10966,7 @@ impl<'a> CountEvaluator<'a> {
                 ir::ExprKind::IntCast { value, to } => match self.value(*value)? {
                     CountValue::Known(value) => CountValue::Known(ir::IntValue {
                         ty: *to,
-                        bits: count_integer(value) as u64 & to.mask(),
+                        bits: count_cast(value, *to),
                     }),
                     other => other,
                 },
@@ -10952,7 +10978,12 @@ impl<'a> CountEvaluator<'a> {
                                 if !value.ty.is_signed() {
                                     return Err("unsigned negation in shift count".into());
                                 }
-                                count_checked_signed(-count_integer(value), value.ty)?
+                                count_checked_signed(
+                                    count_integer(value)
+                                        .checked_neg()
+                                        .ok_or("arithmetic overflow in static shift count")?,
+                                    value.ty,
+                                )?
                             }
                         };
                         CountValue::Known(ir::IntValue { ty: value.ty, bits })
@@ -11009,30 +11040,41 @@ impl<'a> CountEvaluator<'a> {
     }
 }
 fn count_integer(value: ir::IntValue) -> i128 {
-    let bits = value.ty.bits();
-    if value.ty.is_signed() && value.bits & (1u64 << (bits - 1)) != 0 {
-        value.bits as i128 - (1i128 << bits)
-    } else {
-        value.bits as i128
-    }
+    // Sign extension by shifts avoids constructing 2^128 or negating MIN.
+    let shift = 128 - value.ty.bits();
+    ((value.bits << shift) as i128) >> shift
 }
-fn count_checked_signed(value: i128, ty: ir::IntTy) -> Result<u64, String> {
-    let limit = 1i128 << (ty.bits() - 1);
-    if value < -limit || value >= limit {
-        return Err("arithmetic overflow in static shift count".into());
+fn count_cast(value: ir::IntValue, to: ir::IntTy) -> u128 {
+    let extended = if value.ty.is_signed() {
+        count_integer(value) as u128
+    } else {
+        value.bits
+    };
+    extended & to.mask()
+}
+fn count_checked_signed(value: i128, ty: ir::IntTy) -> Result<u128, String> {
+    if ty.bits() < 128 {
+        let limit = 1i128 << (ty.bits() - 1);
+        if value < -limit || value >= limit {
+            return Err("arithmetic overflow in static shift count".into());
+        }
     }
-    Ok(value as u64 & ty.mask())
+    Ok(value as u128 & ty.mask())
 }
 fn count_shift_amount(value: ir::IntValue, lhs: ir::IntTy) -> Result<u32, String> {
     value.validate()?;
-    let amount = count_integer(value);
-    if amount < 0 || amount >= lhs.bits() as i128 {
+    if (value.ty.is_signed() && count_integer(value) < 0) || value.bits >= u128::from(lhs.bits()) {
+        let amount = if value.ty.is_signed() {
+            count_integer(value).to_string()
+        } else {
+            value.bits.to_string()
+        };
         return Err(format!(
             "shift count {amount} overflows {}-bit integer",
             lhs.bits()
         ));
     }
-    Ok(amount as u32)
+    Ok(value.bits as u32)
 }
 fn count_binary(op: BinaryOp, lhs: ir::IntValue, rhs: ir::IntValue) -> Result<CountValue, String> {
     lhs.validate()?;
@@ -11042,7 +11084,7 @@ fn count_binary(op: BinaryOp, lhs: ir::IntValue, rhs: ir::IntValue) -> Result<Co
         let amount = count_shift_amount(rhs, ty)?;
         match op {
             BinaryOp::Shl => (lhs.bits << amount) & ty.mask(),
-            _ if ty.is_signed() => (count_integer(lhs) >> amount) as u64 & ty.mask(),
+            _ if ty.is_signed() => (count_integer(lhs) >> amount) as u128 & ty.mask(),
             _ => lhs.bits >> amount,
         }
     } else {
@@ -11058,7 +11100,13 @@ fn count_binary(op: BinaryOp, lhs: ir::IntValue, rhs: ir::IntValue) -> Result<Co
                     let a = count_integer(lhs);
                     let b = count_integer(rhs);
                     if matches!(op, BinaryOp::Div | BinaryOp::Rem)
-                        && (b == 0 || (a == -(1i128 << (ty.bits() - 1)) && b == -1))
+                        && (b == 0
+                            || (a
+                                == count_integer(ir::IntValue {
+                                    ty,
+                                    bits: 1u128 << (ty.bits() - 1),
+                                })
+                                && b == -1))
                     {
                         return Err("invalid division in static shift count".into());
                     }
@@ -11072,18 +11120,17 @@ fn count_binary(op: BinaryOp, lhs: ir::IntValue, rhs: ir::IntValue) -> Result<Co
                     .ok_or("arithmetic overflow in static shift count")?;
                     count_checked_signed(value, ty)?
                 } else {
-                    let a = lhs.bits as u128;
-                    let b = rhs.bits as u128;
-                    let value = match op {
+                    let a = lhs.bits;
+                    let b = rhs.bits;
+                    match op {
                         BinaryOp::Add => a.checked_add(b),
                         BinaryOp::Sub => a.checked_sub(b),
                         BinaryOp::Mul => a.checked_mul(b),
                         BinaryOp::Div => a.checked_div(b),
                         _ => a.checked_rem(b),
                     }
-                    .filter(|v| *v <= ty.mask() as u128)
-                    .ok_or("invalid arithmetic in static shift count")?;
-                    value as u64
+                    .filter(|v| *v <= ty.mask())
+                    .ok_or("invalid arithmetic in static shift count")?
                 }
             }
             _ => return Ok(CountValue::Unsupported),
@@ -11689,7 +11736,15 @@ impl<'a> Expectation<'a> {
             Self::CastableToInt(to) if literal.suffix.is_none() => Some(ir::Ty::Int(to)),
             _ => None,
         };
-        resolve_integer(literal, negative, self.hard().or(cast_hint.as_ref()))
+        resolve_integer(literal, negative, self.hard().or(cast_hint.as_ref())).map_err(|error| {
+            if cast_hint.is_some() && error.starts_with("integer literal out of range") {
+                // A cast is a soft hint, not a source type obligation. The
+                // default source integer could legally be wider than its cast.
+                format!("{error}; backward numeric inference is unsupported")
+            } else {
+                error
+            }
+        })
     }
 }
 impl<'a> From<Option<&'a ir::Ty>> for Expectation<'a> {
@@ -13625,13 +13680,26 @@ impl<'a> Checker<'a> {
                     op,
                     value,
                 } => {
-                    let (array, ty, _) = self.checked_place(array)?;
-                    if array.projection.contains(&ir::Projection::Deref) {
-                        return Err("runtime indexed access through references is unsupported; snapshot a Copy referent first".into());
+                    let (mut array, mut ty, mut writable) = self.checked_place(array)?;
+                    if let ir::Ty::Ref { kind, referent } = &ty {
+                        if array.projection.len() >= 128 {
+                            return Err(
+                                "normalized place projection nesting exceeds limit128".into()
+                            );
+                        }
+                        writable = *kind == ir::BorrowKind::Mut;
+                        ty = referent.as_ref().clone();
+                        array.projection.push(ir::Projection::Deref);
+                    }
+                    if !writable {
+                        return Err("compound index assignment requires a mutable place; shared references cannot write".into());
                     }
                     let ir::Ty::Array { element, .. } = ty else {
                         return Err("compound index assignment requires an array".into());
                     };
+                    // Retain the place rather than reading/copying the referent.
+                    // Lowering snapshots RHS, then index, then resolves this
+                    // current carrier and performs the checked read/write.
                     let (value, flow) = self.compound_value(*op, &element, value)?;
                     let index = self.expr_expected_when(
                         index,
@@ -14885,7 +14953,7 @@ impl<'a> Checker<'a> {
                     );
                 }
                 let mut catchall = false;
-                let mut covered = std::collections::HashSet::<u64>::new();
+                let mut covered = std::collections::HashSet::<u128>::new();
                 let mut checked = Vec::with_capacity(arms.len());
                 let mut result = ir::Ty::Never;
                 let mut completes = false;
@@ -14904,7 +14972,7 @@ impl<'a> Checker<'a> {
                                     "bool match pattern does not match {domain:?}"
                                 ));
                             }
-                            (ir::MatchPattern::Bool(*value), Some(u64::from(*value)))
+                            (ir::MatchPattern::Bool(*value), Some(u128::from(*value)))
                         }
                         Pattern::Int { literal, negative } => {
                             if !matches!(domain, ir::Ty::Int(_)) {
@@ -14961,7 +15029,7 @@ impl<'a> Checker<'a> {
                                     variant,
                                     bindings,
                                 },
-                                Some(variant as u64),
+                                Some(variant as u128),
                             )
                         }
                         Pattern::Apply { .. } => {
@@ -16705,7 +16773,7 @@ mod typed_tests {
     #[test]
     fn compound_statement_tokens_types_and_expression_boundaries() {
         for name in [
-            "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize",
+            "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
         ] {
             let source = format!(
                 "fn main(){{let mut x:{name}=4;x+=1;x-=1;x*=2;x/=2;x%=3;x&=3;x|=1;x^=2;x<<=1u64;x>>=1i8;}}"
@@ -16787,6 +16855,48 @@ mod typed_tests {
     }
 
     #[test]
+    fn indexed_compound_autodereferences_mutable_array_carriers() {
+        for source in [
+            "fn shift(a:&mut [u8;2],i:usize,n:u128){a[i]<<=n;}fn main(){}",
+            "fn shift(a:&mut [u8;2],i:usize,n:u128){(*a)[i]>>=n;}fn main(){}",
+            "fn shift(a:&mut ([u8;2],),i:usize,n:u128){a.0[i]<<=n;}fn main(){}",
+            "fn shift(a:&mut [u128;2],i:usize,n:u128){a[i]+=n;}fn main(){}",
+            "fn main(){let mut a=[1u8,2u8];let r=&mut a;let i=0usize;r[i]<<=1u128;}",
+        ] {
+            check(&parse(source).unwrap()).unwrap();
+        }
+        for source in [
+            "fn shift(a:&[u8;2],i:usize,n:u128){a[i]<<=n;}fn main(){}",
+            "fn shift(mut a:&[u8;2],i:usize,n:u128){a[i]<<=n;}fn main(){}",
+            "fn shift(a:&[u8;2],i:usize,n:u128){(*a)[i]<<=n;}fn main(){}",
+            "fn main(){let a=[1u8,2u8];let r=&a;let i=0usize;r[i]<<=1u128;}",
+            "fn main(){let mut a=[1u8,2u8];let r=&mut a;let s=&*r;let i=0usize;r[i]<<=1u128;let x=*s;}",
+        ] {
+            assert!(parse(source).and_then(|p| check(&p)).is_err(), "{source}");
+        }
+        let p = parse("fn rhs()->u128{1}fn idx()->usize{0}fn shift(a:&mut [u8;2]){a[idx()]<<=rhs();}fn main(){}").unwrap();
+        let f = type_function_with_signatures(&p, 2, &signature_table(&p).unwrap()).unwrap();
+        let ir::Stmt::AssignIndexOp {
+            array,
+            index,
+            value,
+            ..
+        } = &f.body.statements[0]
+        else {
+            panic!("expected indexed compound assignment")
+        };
+        assert_eq!(array.projection, [ir::Projection::Deref]);
+        assert!(value.0 < index.0, "RHS must be typed before index");
+        assert_eq!(
+            f.exprs
+                .iter()
+                .filter(|e| matches!(e.kind, ir::ExprKind::Call { .. }))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn compound_shift_queries_share_count_memo_and_check_dead_statements() {
         for source in [
             "fn main(){let mut x=1u8;x<<=8u64;}",
@@ -16823,7 +16933,7 @@ mod typed_tests {
     #[test]
     fn shifts_keep_independent_integer_operands_and_parser_precedence() {
         let names = [
-            "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize",
+            "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
         ];
         for lhs in names {
             for rhs in names {
@@ -16981,7 +17091,7 @@ mod typed_tests {
     #[test]
     fn bitwise_exact_integer_and_boolean_types_preserve_operand_hints() {
         for name in [
-            "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize",
+            "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
         ] {
             let source = format!("fn f(x:{name})->{name}{{(x & 3) | (1 ^ x)}}fn main(){{}}");
             let p = parse(&source).unwrap();
@@ -17247,11 +17357,220 @@ mod typed_tests {
     }
 
     #[test]
+    fn wide_count_evaluation_preserves_sign_high_limbs_and_checked_bounds() {
+        use ir::IntTy::{I8, I128, U8, U64, U128};
+        let int = |ty, bits| ir::IntValue { ty, bits };
+        let known = |op, left, right| {
+            let CountValue::Known(value) = count_binary(op, left, right).unwrap() else {
+                panic!("expected exact static value")
+            };
+            value
+        };
+        let min = int(I128, 1u128 << 127);
+        let max = int(I128, i128::MAX as u128);
+        let umax = int(U128, u128::MAX);
+        assert_eq!(count_integer(min), i128::MIN);
+        assert_eq!(count_integer(max), i128::MAX);
+        assert_eq!(count_cast(int(I8, 255), U128), u128::MAX);
+        assert_eq!(count_cast(int(U8, 255), I128), 255);
+        assert_eq!(count_cast(umax, U64), u64::MAX as u128);
+        assert_eq!(count_checked_signed(i128::MIN, I128).unwrap(), min.bits);
+        assert_eq!(count_checked_signed(i128::MAX, I128).unwrap(), max.bits);
+        assert!(count_checked_signed(128, I8).is_err());
+        assert!(count_checked_signed(-129, I8).is_err());
+        assert_eq!(known(BinaryOp::Sub, umax, int(U128, 1)).bits, u128::MAX - 1);
+        assert_eq!(
+            known(BinaryOp::Add, min, int(I128, 1)).bits,
+            (1u128 << 127) + 1
+        );
+        assert_eq!(known(BinaryOp::Shr, min, int(U128, 127)).bits, u128::MAX);
+        assert_eq!(
+            known(BinaryOp::Shl, int(U128, 1), int(I128, 127)).bits,
+            1u128 << 127
+        );
+        assert_eq!(
+            known(BinaryOp::Div, min, int(I128, 2)).bits,
+            (i128::MIN / 2) as u128
+        );
+        assert_eq!(known(BinaryOp::Rem, umax, int(U128, 2)).bits, 1);
+        for (op, lhs, rhs) in [
+            (BinaryOp::Add, max, int(I128, 1)),
+            (BinaryOp::Sub, min, int(I128, 1)),
+            (BinaryOp::Mul, min, int(I128, 2)),
+            (BinaryOp::Add, umax, int(U128, 1)),
+            (BinaryOp::Sub, int(U128, 0), int(U128, 1)),
+            (BinaryOp::Mul, umax, int(U128, 2)),
+            (BinaryOp::Div, min, int(I128, u128::MAX)),
+            (BinaryOp::Rem, min, int(I128, u128::MAX)),
+            (BinaryOp::Div, umax, int(U128, 0)),
+            (BinaryOp::Rem, umax, int(U128, 0)),
+            (BinaryOp::Shl, int(U128, 1), int(U128, 128)),
+            (BinaryOp::Shr, min, int(I128, u128::MAX)),
+        ] {
+            assert!(
+                count_binary(op, lhs, rhs).is_err(),
+                "{op:?}: {lhs:?} {rhs:?}"
+            );
+        }
+        for value in [umax, min, int(U128, 1u128 << 64), int(I128, u128::MAX)] {
+            assert!(count_shift_amount(value, U8).is_err());
+        }
+        assert_eq!(count_shift_amount(int(U128, 7), U8).unwrap(), 7);
+        let arena = vec![
+            ir::TypedExpr {
+                ty: ir::Ty::Int(I128),
+                completion: ir::Completion::Returns,
+                kind: ir::ExprKind::Int(min),
+            },
+            ir::TypedExpr {
+                ty: ir::Ty::Int(I128),
+                completion: ir::Completion::Returns,
+                kind: ir::ExprKind::Unary {
+                    op: UnaryOp::Neg,
+                    value: ir::ExprId(0),
+                },
+            },
+        ];
+        assert!(
+            CountEvaluator::new(&arena)
+                .unwrap()
+                .evaluate(ir::ExprId(1))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn wide_source_casts_and_static_counts_are_exact() {
+        let names = [
+            "i8", "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
+        ];
+        for from in names {
+            for to in names {
+                let source = format!("fn f(x:{from})->{to}{{x as {to}}}fn main(){{}}");
+                check(&parse(&source).unwrap()).unwrap();
+            }
+        }
+        for integer in ["i128", "u128"] {
+            for float in ["f32", "f64"] {
+                let source = format!(
+                    "fn f(x:{integer})->{float}{{x as {float}}}fn g(x:{float})->{integer}{{x as {integer}}}fn main(){{}}"
+                );
+                check(&parse(&source).unwrap()).unwrap();
+            }
+        }
+        for count in [
+            "127u128",
+            "(340282366920938463463374607431768211455u128%128u128)",
+            "((340282366920938463463374607431768211455u128*0u128) as u8)",
+            "((-170141183460469231731687303715884105728i128>>127u128)&127i128)",
+            "(((-1i8) as u128)&127u128)",
+            "((18446744073709551616u128 as u64) as i128)",
+        ] {
+            let source = format!("fn main(){{let x=1u128<<{count};let mut y=1i128;y>>={count};}}");
+            check(&parse(&source).unwrap()).unwrap();
+        }
+        for count in [
+            "128u128",
+            "18446744073709551616u128",
+            "340282366920938463463374607431768211455u128",
+            "-170141183460469231731687303715884105728i128",
+            "(-(-170141183460469231731687303715884105728i128))",
+            "(170141183460469231731687303715884105727i128+1i128)",
+            "(-170141183460469231731687303715884105728i128-1i128)",
+            "(340282366920938463463374607431768211455u128+1u128)",
+            "(340282366920938463463374607431768211455u128*2u128)",
+            "((-170141183460469231731687303715884105728i128)/(-1i128))",
+            "((-170141183460469231731687303715884105728i128)%(-1i128))",
+            "(1u128<<128u128)",
+        ] {
+            for body in [
+                format!("let x=1u128<<{count};"),
+                format!("let mut x=1u128;return;x<<={count};"),
+                format!("let x=1u8<<{count};"),
+            ] {
+                let source = format!("fn main(){{{body}}}");
+                assert!(parse(&source).and_then(|p| check(&p)).is_err(), "{source}");
+            }
+        }
+    }
+
+    #[test]
+    fn wide_literals_and_patterns_keep_all_128_bits() {
+        for text in [
+            "340_282_366_920_938_463_463_374_607_431_768_211_455u128",
+            "0xffff_ffff_ffff_ffff_ffff_ffff_ffff_ffffu128",
+            "0b11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111u128",
+            "0o3777777777777777777777777777777777777777777u128",
+        ] {
+            let literal = parse_integer_literal(text).unwrap();
+            assert_eq!(literal.magnitude, u128::MAX, "{text}");
+            assert_eq!(
+                resolve_integer(&literal, false, None).unwrap().bits,
+                u128::MAX
+            );
+        }
+        for text in [
+            "340282366920938463463374607431768211456u128",
+            "0x100000000000000000000000000000000u128",
+            "1u128bad",
+            "0b102u128",
+        ] {
+            assert!(parse_integer_literal(text).is_err(), "{text}");
+        }
+        for source in [
+            "fn main(){let x=170141183460469231731687303715884105728i128;}",
+            "fn main(){let x=-170141183460469231731687303715884105729i128;}",
+            "fn main(){let x=-1u128;}",
+            "fn main(){let x:u64=18446744073709551616;}",
+            "fn main(){let x:i128=340282366920938463463374607431768211455;}",
+            "fn main(){let x=18446744073709551616;}",
+        ] {
+            assert!(parse(source).and_then(|p| check(&p)).is_err(), "{source}");
+        }
+        for source in [
+            "fn main(){let x=170141183460469231731687303715884105728i128;}",
+            "fn main(){let x=-170141183460469231731687303715884105729i128;}",
+            "fn main(){let x=0x80000000000000000000000000000000i128;}",
+            "fn main(){let x:i128=170141183460469231731687303715884105728;}",
+        ] {
+            let error = parse(source).and_then(|p| check(&p)).unwrap_err();
+            assert!(error.contains("out of range for i128"), "{error}");
+            assert!(
+                !error.contains("unsupported"),
+                "invalid Rust is not an unsupported feature: {error}"
+            );
+        }
+        assert!(
+            parse("fn main(){let x=300 as u8;}")
+                .and_then(|p| check(&p))
+                .unwrap_err()
+                .contains("unsupported")
+        );
+        let source = "fn f(x:u128)->i32{match x{0=>1,18446744073709551616=>2,340282366920938463463374607431768211455=>3,_=>4}}fn g(x:i128)->i32{match x{-170141183460469231731687303715884105728=>1,170141183460469231731687303715884105727=>2,_=>3}}fn main(){}";
+        let p = parse(source).unwrap();
+        check(&p).unwrap();
+        let f = type_function_with_signatures(&p, 0, &signature_table(&p).unwrap()).unwrap();
+        let ir::ExprKind::Match { arms, .. } = &f.exprs[f.body.tail.unwrap().0].kind else {
+            panic!("expected match")
+        };
+        let bits = arms
+            .iter()
+            .filter_map(|arm| match arm.pattern {
+                ir::MatchPattern::Int(value) => Some(value.bits),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(bits, [0, 1u128 << 64, u128::MAX]);
+    }
+
+    #[test]
     fn integer_literal_bounds_contexts_and_grouped_minima_are_exact() {
         use ir::IntTy::*;
-        for ty in [I8, I16, I32, I64, Isize, U8, U16, U32, U64, Usize] {
+        for ty in [
+            I8, I16, I32, I64, I128, Isize, U8, U16, U32, U64, U128, Usize,
+        ] {
             let max = if ty.is_signed() {
-                (1u64 << (ty.bits() - 1)) - 1
+                (1u128 << (ty.bits() - 1)) - 1
             } else {
                 ty.mask()
             };
@@ -17272,7 +17591,7 @@ mod typed_tests {
             )
             .unwrap();
             assert_eq!(value, ir::IntValue { ty, bits: max });
-            if max < u64::MAX {
+            if max < u128::MAX {
                 assert!(
                     resolve_integer(
                         &IntegerLiteral {
@@ -17286,7 +17605,7 @@ mod typed_tests {
                 );
             }
             if ty.is_signed() {
-                let magnitude = 1u64 << (ty.bits() - 1);
+                let magnitude = 1u128 << (ty.bits() - 1);
                 let source = format!(
                     "fn f()->{}{{-((({magnitude}{})))}}fn main(){{let x:{}=-(({magnitude}));}}",
                     ty.name(),
@@ -17349,8 +17668,8 @@ mod typed_tests {
             "0x_",
             "0b2",
             "0o8",
-            "18446744073709551616u64",
-            "0x1_0000_0000_0000_0000u64",
+            "340282366920938463463374607431768211456u128",
+            "0x1_0000_0000_0000_0000_0000_0000_0000_0000u128",
         ] {
             assert!(
                 parse_integer_literal(literal).is_err(),
@@ -17358,6 +17677,8 @@ mod typed_tests {
             );
         }
         for source in [
+            "fn main(){let x=18446744073709551616u64;}",
+            "fn main(){let x=0x1_0000_0000_0000_0000u64;}",
             "fn main(){let x:u8=1i8;}",
             "fn main(){let x:i64=1isize;}",
             "fn main(){let a=[1];let i=0u64;let x=a[i];}",

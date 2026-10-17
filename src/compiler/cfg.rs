@@ -530,7 +530,7 @@ pub enum Terminator {
 }
 
 impl Rvalue {
-    fn visit_operands(
+    pub(super) fn visit_operands(
         &self,
         visit: &mut impl FnMut(&Operand) -> Result<(), String>,
     ) -> Result<(), String> {
@@ -562,7 +562,7 @@ impl Rvalue {
     }
 }
 impl Statement {
-    fn visit_operands(
+    pub(super) fn visit_operands(
         &self,
         visit: &mut impl FnMut(&Operand) -> Result<(), String>,
     ) -> Result<(), String> {
@@ -579,7 +579,7 @@ impl Statement {
     }
 }
 impl Terminator {
-    fn visit_operands(
+    pub(super) fn visit_operands(
         &self,
         visit: &mut impl FnMut(&Operand) -> Result<(), String>,
     ) -> Result<(), String> {
@@ -1672,6 +1672,14 @@ impl Function {
         Ok(element)
     }
 
+    fn indexed_mutation_ty(&self, array: &Place) -> Result<&Ty, String> {
+        let local = self.locals.get(array.local.0).ok_or("invalid CFG local")?;
+        if !array.projection.contains(&Projection::Deref) && !local.mutable {
+            return Err("compound indexed mutation requires mutable binding".into());
+        }
+        ir::projected_mut_ty(&local.ty, &array.projection)
+    }
+
     fn binary_ty(op: BinaryOp, left: Ty, right: Ty, count: Option<IntValue>) -> Result<Ty, String> {
         if left == Ty::Never || right == Ty::Never {
             return Err("CFG binary operator on never is unsupported".into());
@@ -1685,8 +1693,8 @@ impl Function {
             };
             if let Some(count) = count {
                 let negative =
-                    count.ty.is_signed() && count.bits & (1_u64 << (count.ty.bits() - 1)) != 0;
-                if negative || count.bits >= u64::from(integer.bits()) {
+                    count.ty.is_signed() && count.bits & (1_u128 << (count.ty.bits() - 1)) != 0;
+                if negative || count.bits >= u128::from(integer.bits()) {
                     return Err("CFG constant shift count is negative or exceeds LHS width".into());
                 }
             }
@@ -2032,12 +2040,7 @@ impl Function {
                         value,
                         op,
                     } => {
-                        if array.projection.contains(&Projection::Deref) {
-                            return Err(
-                                "compound runtime indexing through dereference is unsupported"
-                                    .into(),
-                            );
-                        }
+                        self.indexed_mutation_ty(array)?;
                         let element = self.indexed_element_ty(array, index, facts)?;
                         self.compound_ty(*op, element, value, facts)?;
                     }
@@ -4963,6 +4966,187 @@ mod tests {
     }
 
     #[test]
+    fn dead_indexed_compounds_require_every_reference_hop_mutable() {
+        let array = Ty::Array {
+            element: std::sync::Arc::new(Ty::Int(IntTy::U128)),
+            len: 2,
+        };
+        let reference = |kind, referent| Ty::Ref {
+            kind,
+            referent: std::sync::Arc::new(referent),
+        };
+        let mutable = reference(ir::BorrowKind::Mut, array.clone());
+        let shared = reference(ir::BorrowKind::Shared, array.clone());
+        for (root, projection, accepted) in [
+            (mutable.clone(), vec![Projection::Deref], true),
+            (shared.clone(), vec![Projection::Deref], false),
+            (
+                Ty::Tuple(vec![mutable.clone(), Ty::Bool].into()),
+                vec![Projection::Field(0), Projection::Deref],
+                true,
+            ),
+            (
+                Ty::Tuple(vec![shared, Ty::Bool].into()),
+                vec![Projection::Field(0), Projection::Deref],
+                false,
+            ),
+            (
+                reference(ir::BorrowKind::Shared, mutable.clone()),
+                vec![Projection::Deref, Projection::Deref],
+                false,
+            ),
+            (
+                reference(ir::BorrowKind::Mut, mutable),
+                vec![Projection::Deref, Projection::Deref],
+                true,
+            ),
+            (array, vec![], false),
+        ] {
+            let mut source = with_root(root.clone(), vec![], vec![]);
+            source.locals[0].mutable = false;
+            let mut function = nominal_lowered(&with_root(Ty::Unit, vec![], vec![]));
+            function.locals[0].ty = root.clone();
+            function.locals[0].mutable = false;
+            let target = Place {
+                local: LocalId(0),
+                projection: projection.clone(),
+            };
+            assert_eq!(
+                function.indexed_mutation_ty(&target).is_ok(),
+                accepted,
+                "metadata {projection:?}"
+            );
+            function.blocks.push(BasicBlock {
+                statements: vec![Located {
+                    value: Statement::IndexAssignOp {
+                        array: Place {
+                            local: LocalId(0),
+                            projection: projection.clone(),
+                        },
+                        index: Operand::Constant(Constant::Int(IntValue::usize(0))),
+                        value: Operand::Constant(Constant::Int(IntValue {
+                            ty: IntTy::U128,
+                            bits: 1,
+                        })),
+                        op: BinaryOp::Add,
+                    },
+                    origin: None,
+                }],
+                terminator: Located {
+                    value: Terminator::Unreachable,
+                    origin: None,
+                },
+            });
+            // The facts-free legacy verifier rejects aggregate and mutable
+            // nested carriers independently. Exercise its all-block path only
+            // for supported roots, and the exact mutation guard above for all.
+            if validate_type(&root, 0).is_ok() {
+                assert_eq!(function.validate().is_ok(), accepted, "{projection:?}");
+            }
+            source.exprs = vec![
+                expr(Ty::Int(IntTy::Usize), ir::ExprKind::Int(IntValue::usize(0))),
+                expr(
+                    Ty::Int(IntTy::U128),
+                    ir::ExprKind::Int(IntValue {
+                        ty: IntTy::U128,
+                        bits: 1,
+                    }),
+                ),
+            ];
+            source.body.statements = vec![ir::Stmt::AssignIndexOp {
+                array: Place {
+                    local: LocalId(0),
+                    projection: projection.clone(),
+                },
+                index: ExprId(0),
+                value: ExprId(1),
+                op: BinaryOp::Add,
+            }];
+            if !matches!(&root, Ty::Ref { referent, .. } if matches!(&**referent, Ty::Ref { .. })) {
+                assert_eq!(source.validate().is_ok(), accepted, "IR {projection:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn reference_array_compounds_preserve_projection_and_reject_malformed_dead_updates() {
+        for integer in [IntTy::U8, IntTy::I128, IntTy::U128] {
+            let source = with_root(
+                Ty::Ref {
+                    kind: ir::BorrowKind::Mut,
+                    referent: std::sync::Arc::new(Ty::Array {
+                        element: std::sync::Arc::new(Ty::Int(integer)),
+                        len: 2,
+                    }),
+                },
+                vec![
+                    expr(Ty::Int(IntTy::Usize), ir::ExprKind::Int(IntValue::usize(0))),
+                    expr(
+                        Ty::Int(IntTy::U128),
+                        ir::ExprKind::Int(IntValue {
+                            ty: IntTy::U128,
+                            bits: 1,
+                        }),
+                    ),
+                ],
+                vec![ir::Stmt::AssignIndexOp {
+                    array: Place {
+                        local: LocalId(0),
+                        projection: vec![Projection::Deref],
+                    },
+                    index: ExprId(0),
+                    value: ExprId(1),
+                    op: BinaryOp::Shl,
+                }],
+            );
+            let function = nominal_lowered(&source);
+            let update = function
+                .blocks
+                .iter()
+                .flat_map(|b| &b.statements)
+                .find(|s| matches!(s.value, Statement::IndexAssignOp { .. }))
+                .unwrap()
+                .clone();
+            let Statement::IndexAssignOp { array, .. } = &update.value else {
+                unreachable!()
+            };
+            assert_eq!(array.projection, [Projection::Deref]);
+            for case in 0..4 {
+                let mut invalid = function.clone();
+                let mut bad = update.clone();
+                let Statement::IndexAssignOp {
+                    array,
+                    index,
+                    value,
+                    op,
+                } = &mut bad.value
+                else {
+                    unreachable!()
+                };
+                match case {
+                    0 => *index = Operand::Constant(Constant::Bool(false)),
+                    1 => {
+                        *value = Operand::Constant(Constant::Int(IntValue {
+                            ty: IntTy::U64,
+                            bits: 1_u128 << 64,
+                        }))
+                    }
+                    2 => *op = BinaryOp::Eq,
+                    _ => array.projection.push(Projection::Field(99)),
+                }
+                invalid.blocks.push(BasicBlock {
+                    statements: vec![bad],
+                    terminator: Located {
+                        value: Terminator::Unreachable,
+                        origin: None,
+                    },
+                });
+                assert!(invalid.validate().is_err(), "case {case} {integer:?}");
+            }
+        }
+    }
+
+    #[test]
     fn compounds_validate_dead_ops_and_lower_rhs_then_single_index_update() {
         let base = nominal_lowered(&with_root(
             Ty::Array {
@@ -5031,7 +5215,7 @@ mod tests {
                 index.clone(),
                 Operand::Constant(Constant::Int(IntValue {
                     ty: IntTy::U64,
-                    bits: u64::MAX,
+                    bits: u128::from(u64::MAX),
                 })),
             ),
             (
@@ -5148,6 +5332,30 @@ mod tests {
     }
 
     #[test]
+    fn wide_shift_count_boundaries_do_not_truncate_high_limbs() {
+        let function = nominal_lowered(&with_root(Ty::Unit, vec![], vec![]));
+        for op in [BinaryOp::Shl, BinaryOp::Shr] {
+            for lhs in [IntTy::I128, IntTy::U128] {
+                for bits in [0, 127, 128, 1_u128 << 64, 1_u128 << 127, u128::MAX] {
+                    let result = function.rvalue_ty(&Rvalue::Binary {
+                        op,
+                        left: Operand::Constant(Constant::Int(IntValue { ty: lhs, bits: 1 })),
+                        right: Operand::Constant(Constant::Int(IntValue {
+                            ty: IntTy::U128,
+                            bits,
+                        })),
+                    });
+                    if bits < 128 {
+                        assert_eq!(result.unwrap(), Ty::Int(lhs));
+                    } else {
+                        assert!(result.unwrap_err().contains("shift count"));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn shifts_validate_all_pairs_full_counts_dead_blocks_and_eager_order() {
         let types = [
             IntTy::I8,
@@ -5160,6 +5368,8 @@ mod tests {
             IntTy::U32,
             IntTy::U64,
             IntTy::Usize,
+            IntTy::I128,
+            IntTy::U128,
         ];
         let function = nominal_lowered(&with_root(Ty::Unit, vec![], vec![]));
         for op in [BinaryOp::Shl, BinaryOp::Shr] {
@@ -5171,7 +5381,7 @@ mod tests {
                     }));
                     let count =
                         |bits| Operand::Constant(Constant::Int(IntValue { ty: right, bits }));
-                    for bits in [0, u64::from(left.bits() - 1)] {
+                    for bits in [0, u128::from(left.bits() - 1)] {
                         assert_eq!(
                             function
                                 .rvalue_ty(&Rvalue::Binary {
@@ -5183,7 +5393,7 @@ mod tests {
                             Ty::Int(left)
                         );
                     }
-                    for bits in [u64::from(left.bits()), right.mask()] {
+                    for bits in [u128::from(left.bits()), right.mask()] {
                         assert!(
                             function
                                 .rvalue_ty(&Rvalue::Binary {
@@ -5195,13 +5405,13 @@ mod tests {
                                 .contains("shift count")
                         );
                     }
-                    if right.bits() == 64 {
+                    if right.bits() >= 64 {
                         assert!(
                             function
                                 .rvalue_ty(&Rvalue::Binary {
                                     op,
                                     left: lhs.clone(),
-                                    right: count(1_u64 << 32)
+                                    right: count(1_u128 << (right.bits() - 1))
                                 })
                                 .is_err()
                         );
@@ -5234,12 +5444,28 @@ mod tests {
             }
             for count in [
                 IntValue {
+                    ty: IntTy::U128,
+                    bits: 1_u128 << 64,
+                },
+                IntValue {
+                    ty: IntTy::I128,
+                    bits: 1_u128 << 127,
+                },
+                IntValue {
+                    ty: IntTy::U128,
+                    bits: 128,
+                },
+                IntValue {
+                    ty: IntTy::U64,
+                    bits: 1_u128 << 64,
+                },
+                IntValue {
                     ty: IntTy::U64,
                     bits: 64,
                 },
                 IntValue {
                     ty: IntTy::U64,
-                    bits: u64::MAX,
+                    bits: u128::from(u64::MAX),
                 },
                 IntValue {
                     ty: IntTy::U8,
@@ -5372,6 +5598,8 @@ mod tests {
                 IntTy::U32,
                 IntTy::U64,
                 IntTy::Usize,
+                IntTy::I128,
+                IntTy::U128,
             ] {
                 let operand = Operand::Constant(Constant::Int(IntValue {
                     ty,
@@ -5539,6 +5767,8 @@ mod tests {
             IntTy::U32,
             IntTy::U64,
             IntTy::Usize,
+            IntTy::I128,
+            IntTy::U128,
         ];
         let function = nominal_lowered(&with_root(Ty::Int(IntTy::I32), vec![], vec![]));
         for from in types {
@@ -5764,6 +5994,8 @@ mod tests {
             IntTy::U32,
             IntTy::U64,
             IntTy::Usize,
+            IntTy::I128,
+            IntTy::U128,
         ] {
             let mut function = nominal_lowered(&with_root(Ty::Int(ty), vec![], vec![]));
             let operand = Operand::Constant(Constant::Int(IntValue {
@@ -5842,14 +6074,14 @@ mod tests {
                         .is_err()
                 );
             }
-            if ty.bits() < 64 {
+            if ty.bits() < 128 {
                 function.blocks.push(BasicBlock {
                     statements: vec![Located {
                         value: Statement::Assign {
                             destination: place(LocalId(0)),
                             value: Rvalue::Use(Operand::Constant(Constant::Int(IntValue {
                                 ty,
-                                bits: 1u64 << ty.bits(),
+                                bits: 1u128 << ty.bits(),
                             }))),
                         },
                         origin: None,

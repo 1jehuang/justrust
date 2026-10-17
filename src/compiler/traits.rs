@@ -7410,6 +7410,32 @@ mod tests {
     }
 
     #[test]
+    fn wide_integer_identity_and_builtin_scalar_facts() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        for kind in [IntTy::I128, IntTy::U128] {
+            let ty = Ty::Int(kind);
+            assert!(facts.must_copy(&ty).unwrap());
+            assert!(world.eq_ty(&ty, &ty, 0).unwrap());
+            for other in [IntTy::I64, IntTy::U64, IntTy::I128, IntTy::U128] {
+                assert_eq!(world.eq_ty(&ty, &Ty::Int(other), 0).unwrap(), kind == other);
+            }
+            for item in [CatalogItem::Copy, CatalogItem::Clone, CatalogItem::Sized] {
+                let predicate = Predicate::Implements(TraitRef {
+                    declaration: world.catalog.id(item),
+                    self_ty: ty.clone(),
+                    args: Arc::from([]),
+                });
+                assert!(matches!(
+                    world.prove_goal(&predicate, &facts).unwrap(),
+                    ProofOutcome::Proved(_)
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn canonical_catalog_identity_and_provided_dispatch_boundaries() {
         let c = case();
         let world = c.build().unwrap();

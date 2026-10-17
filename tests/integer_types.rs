@@ -497,13 +497,14 @@ fn main() { run(); }
 }
 
 #[test]
-fn rejects_legal_unsupported_integer_128_types() {
-    // Stock accepts and runs this fixture, outside phase-one integer scope.
-    rejects(
-        "integer_128_types",
+fn accepts_integer_128_types() {
+    // Promoted after the exact historical source passed stock and native
+    // CHECK/BUILD/runtime at both workers 1 and 8.
+    runs(
         r#"fn id(x:i128)->i128{x} fn run()->i32{let x=id(-170141183460469231731687303715884105728i128);let y:u128=340282366920938463463374607431768211455u128;if x<0i128 && y>0u128{7}else{0}}
 fn main() { if run() == 7 { println!("integer types oracle ok"); } }
 "#,
+        "integer types oracle ok\n",
     );
 }
 

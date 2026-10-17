@@ -29,7 +29,7 @@ fn set(local: usize, fields: &[usize], value: Operand) -> Statement {
 fn int(value: i32) -> Operand {
     Operand::Constant(Constant::Int(IntValue {
         ty: IntTy::I32,
-        bits: value as u32 as u64,
+        bits: value as u32 as u128,
     }))
 }
 fn copy(local: usize, fields: &[usize]) -> Operand {

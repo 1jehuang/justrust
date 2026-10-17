@@ -1,5 +1,33 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Native two-limb scalars and full-width numeric casts
+
+INTEGER128.md records native i128/u128 semantics and private 16-byte scalar Copy
+transport. The independent stock-first corpus covers 92 exact sources and 368
+native workers1/8 CHECK/BUILD cells. Runtime arithmetic traps require status101,
+not signals; accepted builds require ELF and exact output. Native emitted-code
+oracles additionally compare arithmetic and roughly25,000 IEEE cast outcomes.
+Five historical sources are promoted unchanged after stock/native execution.
+
+Full regression caught a real integration error: wide scratch discovery called
+standalone operand typing on every operand, losing authoritative nominal Copy
+facts. The physical scan now classifies Copy/Move storage through place types
+only after sealed CFG validation. Canonical Copy and float aggregate regressions
+pass without weakening permissions. Referenced-array compounds additionally
+require mutable authority at every dereference, including dead metadata and
+stored carrier paths. Stock confirms RHS then index then current carrier,
+including an index expression rebinding the reference. A newly added oracle
+harness handles only pre-spawn OS26 with bounded retries, never replaying an
+executed program, and tests concurrent execution plus retry exhaustion.
+
+Final retained profiles: all-target check `20261017-045445276-83224`, all1,677
+tests/89binaries `20261017-045447149-83291`, strict all-target lint
+`20261017-045502213-84341`. The complete test execution took12.90s; the slowest
+stock-first native corpus test took12.32s, reported as a test bottleneck. These
+are validation costs, not before/after speed measurements. Receipts are in
+data/runs/xps14/2026-10-17-integer128.jsonl. General source expansion, library
+compilation, project compatibility and the full Rust program remain open.
+
 ## 2026-10-17: Type aliases erase canonically, with iterative bounded expansion
 
 Source mono/generic aliases resolve in their definition context and substitute

@@ -136,8 +136,11 @@ missing-file changes invalidate only justified consumers without stale lookup.
 
 ### G2. Typed values, patterns, inference and control flow
 
-- [ ] Complete i128/u128, char, str/string literals, raw pointers, function
-      items/pointers, type aliases, never coercions and remaining literal forms.
+- [x] Native i128/u128 scalar arithmetic, numeric casts, transport and exact
+      typed constants under INTEGER128.md (not platform ABI or full Rust).
+- [ ] Complete char, str/string literals, raw pointers, function items/pointers,
+      remaining type-alias inference/generic forms, never coercions and literals.
+      Bounded canonical source aliases are delivered under TYPE-ALIASES.md.
       Extend float/library behavior without confusing private scalar transport
       with platform layout or profile-correct arithmetic behavior.
 - [ ] Complete empty/unit/tuple structs, construction/update forms, unions,
@@ -471,12 +474,34 @@ four graph tests, with soft source inference grounded in primary semantics.
 The tracked22corpus native campaign verifies all816cases.
 Additional operators remain separate follow-through work.
 Full Rust completion remains the goal, not this bounded milestone.
-Integer128, broader float library/ABI behavior, broader inference/traits/methods, Drop,
+Native Integer128 is delivered under INTEGER128.md. Broader float library/ABI
+behavior, broader inference/traits/methods, Drop,
 reference-containing values, libraries and project integration remain open.
 
 ## Delivered milestones, newest first
 
 Numbers below are evidence at each checkpoint, not cumulative full-Rust coverage.
+
+### Native i128/u128 scalars
+
+INTEGER128.md adds canonical two-limb integer values, checked native arithmetic
+including multiplication/division/remainder, all 144 integer casts and direct
+f32/f64 wide conversions. Private 16-byte scalar Copy transport preserves both
+limbs through generic calls, references and mixed aggregates. Mutable-reference
+indexed compounds retain stock RHS/index/current-carrier order, initialization
+and every-hop mutable authority, including dead malformed metadata. Physical
+scratch planning preserves sealed nominal Copy facts instead of re-proving them
+with standalone facts.
+
+All 1,677 hosted tests across 89 binaries, all-target check, strict lint and
+formatting pass. Independent stock classification covers 92 exact sources, then
+368 native workers1/8 CHECK/BUILD cells with ELF/runtime and artifact gates.
+Five unchanged historical integer-type/operator/cast boundaries are promoted
+only after executable stock/native parity. Three canonical graph tests, native
+arithmetic and roughly 25,000 IEEE conversion oracles complement source coverage.
+Retained receipts are data/runs/xps14/2026-10-17-integer128.jsonl. No platform ABI,
+profile-exact panic/unwind, complete numeric libraries, full Rust or speed claim
+is implied.
 
 ### Bounded first-order generic inference
 
