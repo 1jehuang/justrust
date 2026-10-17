@@ -10112,3 +10112,24 @@ general reference inference, complete macro expansion, library crate artifacts,
 core/alloc/std and full Rust remain open. The wide-integer oracle still dominates
 test wall time at about 12.2 seconds. These are correctness measurements, not a
 compiler speedup claim.
+
+## 2026-10-17: immutable production parser cursor
+
+Hosted all-target check `20261017-060334104-402872`, full regression
+`20261017-060335863-403027` (1766 tests, 93 binaries), strict all-target lint
+`20261017-060350663-404097` and formatting pass. The parser now views immutable
+existing lexer output. Type-only punctuation splits preserve original bytes,
+while expression operators remain intact. Cursor checkpoints retain the exact
+input identity and split position, including array-count syntax fallback.
+
+Frontend `20261017-060302085-400443` passes 179 tests, including eight new cursor
+and parser controls. Unicode/CRLF coordinates and views retained across cursor
+changes are explicitly exercised. Source units `20261017-060049783-390487`
+pass 61 tests; the unchanged source/identity/nested-reference integration and
+graph targets pass 19 tests in `20261017-060052585-390594`. Independent read-only
+review found no bounded cursor blocker. Six redacted summaries are retained in
+`data/runs/xps14/2026-10-17-cursor.jsonl`.
+
+This is a real parser prerequisite, not a new lexer or macro implementation.
+The slowest wide-integer conformance test still takes about 12.2 seconds in the
+full suite. No before/after speed claim follows from these correctness gates.

@@ -19,6 +19,9 @@ use super::ir;
 use super::traits as tr;
 use std::collections::HashMap;
 
+mod token_cursor;
+use token_cursor::{TokenCursor, TokenView};
+
 use super::source_replay as sr;
 use tr::FactsError;
 
@@ -3886,11 +3889,11 @@ struct Token {
     string: bool,
     bytes: std::ops::Range<usize>,
 }
-fn compound_operator(token: &Token) -> Option<BinaryOp> {
+fn compound_operator(token: TokenView<'_>) -> Option<BinaryOp> {
     if token.string {
         return None;
     }
-    Some(match token.text.as_str() {
+    Some(match token.text {
         "+=" => BinaryOp::Add,
         "-=" => BinaryOp::Sub,
         "*=" => BinaryOp::Mul,
@@ -4286,27 +4289,38 @@ fn lex(source: &str) -> Result<Vec<Token>, ParseError> {
     });
     Ok(tokens)
 }
-struct Parser {
+struct Parser<'input> {
     alias_target: bool,
     pending_bounds: Vec<TypeBound>,
-    tokens: Vec<Token>,
-    at: usize,
+    cursor: TokenCursor<'input>,
     nesting: usize,
     allow_struct: bool,
     type_params: Vec<String>,
     use_expansions: usize,
     use_expansion_bytes: usize,
 }
-impl Parser {
-    fn token(&self) -> &Token {
-        &self.tokens[self.at]
+impl<'input> Parser<'input> {
+    fn new(tokens: &'input [Token]) -> Self {
+        Self {
+            alias_target: false,
+            pending_bounds: Vec::new(),
+            cursor: TokenCursor::new(tokens),
+            nesting: 0,
+            allow_struct: true,
+            type_params: Vec::new(),
+            use_expansions: 0,
+            use_expansion_bytes: 0,
+        }
+    }
+    fn token(&self) -> TokenView<'input> {
+        self.cursor.current()
     }
     fn is(&self, s: &str) -> bool {
         !self.token().string && self.token().text == s
     }
     fn eat(&mut self, s: &str) -> bool {
         if self.is(s) {
-            self.at += 1;
+            self.cursor.bump();
             true
         } else {
             false
@@ -4360,10 +4374,10 @@ impl Parser {
                 .chars()
                 .next()
                 .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-            && !reserved.contains(&t.text.as_str())
+            && !reserved.contains(&t.text)
         {
-            let name = t.text.clone();
-            self.at += 1;
+            let name = t.text.to_owned();
+            self.cursor.bump();
             Ok(name)
         } else {
             Err(self.error("expected ASCII identifier"))
@@ -4382,10 +4396,7 @@ impl Parser {
         if self.token().string {
             return Err(self.error("quoted tokens are not types"));
         }
-        if self.is("&&") {
-            self.tokens[self.at].text = "&".into();
-            self.tokens[self.at].column += 1;
-            self.tokens[self.at].bytes.start += 1;
+        if self.cursor.consume_type_amp_prefix() {
             return Ok(Type::Ref {
                 kind: ir::BorrowKind::Shared,
                 region: None,
@@ -4431,17 +4442,21 @@ impl Parser {
                 return Err(self.unsupported("associated type projections are unsupported"));
             }
             Ok(Type::SelfType)
-        } else if self.type_params.contains(&self.token().text) {
+        } else if self
+            .type_params
+            .iter()
+            .any(|name| name == self.token().text)
+        {
             let name = self.ident()?;
             if self.is("::") {
                 return Err(self.unsupported("associated type projections are unsupported"));
             }
             Ok(Type::Param(name))
-        } else if let Some(ty) = integer_type(&self.token().text) {
-            self.at += 1;
+        } else if let Some(ty) = integer_type(self.token().text) {
+            self.cursor.bump();
             Ok(Type::Int(ty))
-        } else if let Some(ty) = float_type(&self.token().text) {
-            self.at += 1;
+        } else if let Some(ty) = float_type(self.token().text) {
+            self.cursor.bump();
             Ok(Type::Float(ty))
         } else if self.eat("bool") {
             Ok(Type::Bool)
@@ -4474,20 +4489,13 @@ impl Parser {
     }
     /// Split closing angle tokens only while parsing types, never expressions.
     fn close_angle(&mut self) -> Result<(), ParseError> {
-        if self.eat(">") {
-            return Ok(());
+        if self.cursor.consume_type_gt() {
+            Ok(())
+        } else {
+            Err(self.error("expected generic closing >"))
         }
-        let remainder = match self.token().text.as_str() {
-            ">>" => ">",
-            ">=" => "=",
-            ">>=" => ">=",
-            _ => return Err(self.error("expected generic closing >")),
-        };
-        self.tokens[self.at].text = remainder.into();
-        self.tokens[self.at].column += 1;
-        self.tokens[self.at].bytes.start += 1;
-        Ok(())
     }
+
     fn type_arguments(&mut self) -> Result<Vec<Type>, ParseError> {
         self.expect("<")?;
         let mut args = Vec::new();
@@ -4509,13 +4517,11 @@ impl Parser {
             if segments.len() >= 128 {
                 return Err(self.limit("path depth resource limit 128"));
             }
-            let name = if matches!(
-                self.token().text.as_str(),
-                "crate" | "self" | "super" | "Self"
-            ) && !self.token().string
+            let name = if matches!(self.token().text, "crate" | "self" | "super" | "Self")
+                && !self.token().string
             {
-                let name = self.token().text.clone();
-                self.at += 1;
+                let name = self.token().text.to_owned();
+                self.cursor.bump();
                 name
             } else {
                 self.ident()?
@@ -4596,17 +4602,18 @@ impl Parser {
     fn path(&mut self) -> Result<String, ParseError> {
         let mut parts = Vec::new();
         if self.is("crate") || self.is("self") || self.is("super") {
-            let first = self.token().text.clone();
-            self.at += 1;
+            let first = self.token().text.to_owned();
+            self.cursor.bump();
             parts.push(first.clone());
             if first == "super" {
                 while self.is("::")
                     && self
-                        .tokens
-                        .get(self.at + 1)
+                        .cursor
+                        .peek(1)
                         .is_some_and(|t| !t.string && t.text == "super")
                 {
-                    self.at += 2;
+                    self.cursor.bump();
+                    self.cursor.bump();
                     parts.push("super".into());
                 }
             }
@@ -4662,8 +4669,8 @@ impl Parser {
                 }
                 let keyword = self.is("self") || self.is("super") || self.is("crate");
                 let segment = if keyword {
-                    let segment = self.token().text.clone();
-                    self.at += 1;
+                    let segment = self.token().text.to_owned();
+                    self.cursor.bump();
                     segment
                 } else {
                     self.ident()?
@@ -4734,7 +4741,7 @@ impl Parser {
         Ok(())
     }
     fn array_number(&mut self, context: &str) -> Result<usize, ParseError> {
-        let start = self.at;
+        let start = self.cursor.checkpoint();
         let token = self.token();
         if token.string {
             return Err(self.error(&format!("{context} requires an integer literal")));
@@ -4742,16 +4749,19 @@ impl Parser {
         if !token.text.starts_with(|c: char| c.is_ascii_digit()) {
             return self.unsupported_array_expression(context);
         }
-        let literal = parse_integer_literal(&token.text).map_err(|e| self.error(&e))?;
+        let literal = parse_integer_literal(token.text).map_err(|e| self.error(&e))?;
         let value = resolve_integer(&literal, false, Some(&ir::Ty::Int(ir::IntTy::Usize)))
             .map_err(|e| self.error(&e))?;
         if value.bits > ir::MAX_ARRAY_LEN as u128 {
             return Err(self.limit("array length/index exceeds supported limit"));
         }
         let number = value.bits as usize;
-        self.at += 1;
+        self.cursor.bump();
         if !self.is("]") {
-            self.at = start;
+            assert!(
+                self.cursor.restore(start),
+                "parser checkpoint belongs to this input"
+            );
             return self.unsupported_array_expression(context);
         }
         Ok(number)
@@ -4861,13 +4871,13 @@ impl Parser {
     ) -> Result<(), ParseError> {
         if !self.token().string
             && matches!(
-                self.token().text.as_str(),
+                self.token().text,
                 "async" | "unsafe" | "extern" | "static" | "union" | "macro_rules"
             )
         {
             return Err(self.unsupported("item syntax is unsupported"));
         }
-        if self.is("const") && !self.tokens.get(self.at + 1).is_some_and(|t| t.text == "fn") {
+        if self.is("const") && !self.cursor.peek(1).is_some_and(|t| t.text == "fn") {
             return Err(self.unsupported("const items and constant evaluation are unsupported"));
         }
         let (name, kind) = if self.eat("use") {
@@ -5163,12 +5173,7 @@ impl Parser {
             (name, ItemKind::Function)
         } else if self.eat("type") {
             let name = self.ident()?;
-            if self.is("<")
-                && self
-                    .tokens
-                    .get(self.at + 1)
-                    .is_some_and(|t| t.text == "const")
-            {
+            if self.is("<") && self.cursor.peek(1).is_some_and(|t| t.text == "const") {
                 return Err(self.unsupported("const type alias parameters are unsupported"));
             }
             let params = self.type_parameters()?;
@@ -5230,7 +5235,7 @@ impl Parser {
         if self.token().string {
             return Err(self.error("expected named lifetime, not a string"));
         }
-        let text = self.token().text.clone();
+        let text = self.token().text.to_owned();
         let name = text
             .strip_prefix('\'')
             .ok_or_else(|| self.error("expected named lifetime"))?;
@@ -5255,7 +5260,7 @@ impl Parser {
         {
             return Err(self.error("expected named ASCII lifetime"));
         }
-        self.at += 1;
+        self.cursor.bump();
         Ok(text)
     }
     fn region_bounds(&mut self, long: &str, regions: &mut RegionDecls) -> Result<(), ParseError> {
@@ -5546,8 +5551,8 @@ impl Parser {
             if self.token().string {
                 return Err(self.error("expected an integer literal after minus"));
             }
-            let literal = parse_integer_literal(&self.token().text).map_err(|e| self.error(&e))?;
-            self.at += 1;
+            let literal = parse_integer_literal(self.token().text).map_err(|e| self.error(&e))?;
+            self.cursor.bump();
             return Ok(Pattern::Int { literal, negative });
         }
         if self.eat("_") {
@@ -5730,17 +5735,14 @@ impl Parser {
                 statements.push(Stmt::Return(value));
             } else if self.is("while")
                 || (self.token().text.starts_with('\'')
-                    && self.tokens.get(self.at + 1).is_some_and(|t| t.text == ":")
-                    && self
-                        .tokens
-                        .get(self.at + 2)
-                        .is_some_and(|t| t.text == "while"))
+                    && self.cursor.peek(1).is_some_and(|t| t.text == ":")
+                    && self.cursor.peek(2).is_some_and(|t| t.text == "while"))
             {
                 let label = if self.is("while") {
                     None
                 } else {
                     let label = self.token().text.trim_start_matches('\'').to_owned();
-                    self.at += 1;
+                    self.cursor.bump();
                     self.expect(":")?;
                     Some(label)
                 };
@@ -5759,7 +5761,7 @@ impl Parser {
             } else {
                 let expr = self.statement_expr()?;
                 if let Some(op) = compound_operator(self.token()) {
-                    self.at += 1;
+                    self.cursor.bump();
                     statements.push(self.compound_statement(expr, op)?);
                 } else if self.eat("=") {
                     let value = self.expr(0)?;
@@ -5892,8 +5894,8 @@ impl Parser {
             if !self.token().string {
                 return Err(self.error("println! requires one literal string"));
             }
-            let text = self.token().text.clone();
-            self.at += 1;
+            let text = self.token().text.to_owned();
+            self.cursor.bump();
             let text = literal_format(&text).map_err(|e| self.error(&e))?;
             self.eat(",");
             self.expect(")")?;
@@ -5955,18 +5957,17 @@ impl Parser {
                     .text
                     .parse::<usize>()
                     .map_err(|_| self.error("tuple field index is out of range"))?;
-                self.at += 1;
+                self.cursor.bump();
                 FieldSelector::Tuple(index)
             } else {
                 FieldSelector::Named(self.ident()?)
             };
-            let type_args =
-                if self.is("::") && self.tokens.get(self.at + 1).is_some_and(|t| t.text == "<") {
-                    self.expect("::")?;
-                    self.type_arguments()?
-                } else {
-                    Vec::new()
-                };
+            let type_args = if self.is("::") && self.cursor.peek(1).is_some_and(|t| t.text == "<") {
+                self.expect("::")?;
+                self.type_arguments()?
+            } else {
+                Vec::new()
+            };
             if self.eat("(") {
                 let FieldSelector::Named(name) = field else {
                     return Err(self.error("tuple fields are not methods"));
@@ -6004,7 +6005,7 @@ impl Parser {
             return self.labeled_expression(min, statement);
         }
         let statement_blocklike =
-            statement && matches!(self.token().text.as_str(), "if" | "match" | "loop" | "{");
+            statement && matches!(self.token().text, "if" | "match" | "loop" | "{");
         if self.is("&&") {
             return Err(self.unsupported("nested reference borrows are unsupported in B1"));
         }
@@ -6014,7 +6015,7 @@ impl Parser {
     #[inline(never)]
     fn labeled_expression(&mut self, min: u8, statement: bool) -> Result<Expr, ParseError> {
         let label = self.token().text.trim_start_matches('\'').to_owned();
-        self.at += 1;
+        self.cursor.bump();
         self.expect(":")?;
         let left = if self.eat("loop") {
             Expr::Loop {
@@ -6104,12 +6105,12 @@ impl Parser {
         } else if self.eat("break") {
             let label = if self.token().text.starts_with('\'') {
                 let label = self.token().text.trim_start_matches('\'').to_owned();
-                self.at += 1;
+                self.cursor.bump();
                 Some(label)
             } else {
                 None
             };
-            let value = if matches!(self.token().text.as_str(), ";" | "}" | ")" | "]" | "," | "") {
+            let value = if matches!(self.token().text, ";" | "}" | ")" | "]" | "," | "") {
                 None
             } else {
                 Some(Box::new(self.expr(0)?))
@@ -6118,7 +6119,7 @@ impl Parser {
         } else if self.eat("continue") {
             let label = if self.token().text.starts_with('\'') {
                 let label = self.token().text.trim_start_matches('\'').to_owned();
-                self.at += 1;
+                self.cursor.bump();
                 Some(label)
             } else {
                 None
@@ -6148,14 +6149,14 @@ impl Parser {
     // scratch storage across all 128 admitted syntax levels.
     #[inline(never)]
     fn number_prefix(&mut self) -> Result<Expr, ParseError> {
-        let text = self.token().text.clone();
+        let text = self.token().text.to_owned();
         let expression =
             if let Some(literal) = parse_float_literal(&text).map_err(|e| self.error(&e))? {
                 Expr::Float(literal)
             } else {
                 Expr::Integer(parse_integer_literal(&text).map_err(|e| self.error(&e))?)
             };
-        self.at += 1;
+        self.cursor.bump();
         Ok(expression)
     }
     #[inline(never)]
@@ -6299,9 +6300,9 @@ impl Parser {
                 break;
             }
             if self.eat("[") {
-                let literal = self.token().text.clone();
+                let literal = self.token().text.to_owned();
                 let constant = (!self.token().string
-                    && self.tokens.get(self.at + 1).is_some_and(|t| t.text == "]"))
+                    && self.cursor.peek(1).is_some_and(|t| t.text == "]"))
                 .then(|| parse_integer_literal(&literal).ok())
                 .flatten()
                 .filter(|literal| literal.suffix.is_none());
@@ -6313,7 +6314,7 @@ impl Parser {
                         return Err(self.limit("array index exceeds supported limit"));
                     }
                     let index = value.bits as usize;
-                    self.at += 1;
+                    self.cursor.bump();
                     self.expect("]")?;
                     left = Expr::Index {
                         base: Box::new(left),
@@ -6360,7 +6361,7 @@ impl Parser {
                 left = self.cast_after_as(left)?;
                 continue;
             }
-            let (precedence, op) = match self.token().text.as_str() {
+            let (precedence, op) = match self.token().text {
                 "||" => (1, BinaryOp::Or),
                 "&&" => (2, BinaryOp::And),
                 "==" => (3, BinaryOp::Eq),
@@ -6392,8 +6393,8 @@ impl Parser {
                     | BinaryOp::Shl
                     | BinaryOp::Shr
             ) && self
-                .tokens
-                .get(self.at + 1)
+                .cursor
+                .peek(1)
                 .is_some_and(|token| !token.string && token.text == "=")
             {
                 return Err(self.unsupported("compound bitwise/shift assignments are unsupported"));
@@ -6406,7 +6407,7 @@ impl Parser {
             } else if precedence < 3 {
                 compared = false;
             }
-            self.at += 1;
+            self.cursor.bump();
             let right = self.expr(precedence + 1)?;
             left = Expr::Binary {
                 op,
@@ -6432,17 +6433,7 @@ fn literal_format(text: &str) -> Result<String, String> {
 
 /// Parse syntax only, retaining imports and visibility for the signatures phase.
 fn parse_syntax_tokens(tokens: Vec<Token>) -> Result<ParsedProgram, ParseError> {
-    let mut parser = Parser {
-        alias_target: false,
-        pending_bounds: Vec::new(),
-        tokens,
-        at: 0,
-        nesting: 0,
-        allow_struct: true,
-        type_params: Vec::new(),
-        use_expansions: 0,
-        use_expansion_bytes: 0,
-    };
+    let mut parser = Parser::new(&tokens);
     let mut parsed = ParsedProgram {
         program: Program {
             functions: Vec::new(),
@@ -20132,18 +20123,8 @@ mod typed_tests {
 mod prepared_location_tests {
     use super::*;
 
-    fn parser(text: &str) -> Parser {
-        Parser {
-            alias_target: false,
-            pending_bounds: Vec::new(),
-            tokens: lex(text).unwrap(),
-            at: 0,
-            nesting: 0,
-            allow_struct: true,
-            type_params: Vec::new(),
-            use_expansions: 0,
-            use_expansion_bytes: 0,
-        }
+    fn parser(tokens: &[Token]) -> Parser<'_> {
+        Parser::new(tokens)
     }
 
     #[test]
@@ -20175,7 +20156,8 @@ mod prepared_location_tests {
     #[test]
     fn split_angles_and_shared_references_keep_exact_remaining_bytes() {
         for (text, expected) in [(">>", ">"), (">=", "="), (">>=", ">=")] {
-            let mut parser = parser(text);
+            let tokens = lex(text).unwrap();
+            let mut parser = parser(&tokens);
             parser.close_angle().unwrap();
             assert_eq!(parser.token().text, expected);
             assert_eq!(parser.token().bytes, 1..text.len());
@@ -20185,11 +20167,60 @@ mod prepared_location_tests {
                 assert_eq!(parser.token().bytes, 2..3);
             }
         }
-        let mut parser = parser("&&&&");
+        let tokens = lex("&&&&").unwrap();
+        let mut parser = parser(&tokens);
         let error = parser.ty().unwrap_err();
-        assert_eq!(parser.tokens[0].bytes, 1..2);
-        assert_eq!(parser.tokens[1].bytes, 3..4);
+        assert_eq!(tokens[0].bytes, 0..2);
+        assert_eq!(tokens[1].bytes, 2..4);
         assert_eq!(error.bytes, 4..4);
+    }
+
+    #[test]
+    fn cursor_array_count_rewind_preserves_categories_spans_and_counters() {
+        use super::super::source::SourceErrorKind;
+        for (text, kind, bytes) in [
+            ("1+2]", SourceErrorKind::Unsupported, 3..4),
+            ("1+]", SourceErrorKind::Syntax, 2..3),
+            ("1+2", SourceErrorKind::Syntax, 3..3),
+        ] {
+            let tokens = lex(text).unwrap();
+            let mut parser = parser(&tokens);
+            parser.use_expansions = 7;
+            parser.use_expansion_bytes = 19;
+            let error = parser.array_number("array length").unwrap_err();
+            assert_eq!(error.kind, kind, "{text}");
+            assert_eq!(error.bytes, bytes, "{text}");
+            assert_eq!(parser.use_expansions, 7);
+            assert_eq!(parser.use_expansion_bytes, 19);
+        }
+    }
+
+    #[test]
+    fn cursor_nested_reference_and_angle_parsing_preserves_original_tokens() {
+        for text in ["&&i64", "& &i64", "&&&&i64", "Outer<Inner<i64>>="] {
+            let tokens = lex(text).unwrap();
+            let original = format!("{tokens:?}");
+            let mut parser = parser(&tokens);
+            let ty = parser.ty().unwrap();
+            if text.starts_with("Outer") {
+                assert!(matches!(ty, Type::Apply(_)));
+                assert_eq!(parser.token().text, "=");
+                assert_eq!(parser.token().bytes, text.len() - 1..text.len());
+            } else {
+                let mut referent = &ty;
+                let mut references = 0;
+                while let Type::Ref {
+                    referent: inner, ..
+                } = referent
+                {
+                    references += 1;
+                    referent = inner;
+                }
+                assert_eq!(references, text.bytes().filter(|&b| b == b'&').count());
+                assert!(parser.is(""));
+            }
+            assert_eq!(format!("{tokens:?}"), original);
+        }
     }
 
     #[test]

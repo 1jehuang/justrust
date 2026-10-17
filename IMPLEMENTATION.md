@@ -56,6 +56,9 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       retained constness with universally checked forwarding-only bodies and
       scalar-root shared/mutable inference replay under CORE-IDENTITY.md. This
       is not CTFE, a library crate artifact or whole-core compilation.
+- [x] Immutable production parser cursor over the existing lexer, exact type-only
+      punctuation views and checked restoration, without macro admission
+      (CURSOR-MIGRATION.md).
 
 ## Remaining implementation program
 
@@ -831,3 +834,12 @@ preserves configured-source/no-child-IO and semantic publication boundaries.
 Its proposed APIs, caps and stock matrix are a work contract, not macro, core,
 CTFE or full Rust acceptance. Freeze each implementation lane before editing
 shared files and close the actual native gates, not only token fixture tests.
+
+### Immutable production parser cursor checkpoint
+
+`CURSOR-MIGRATION.md` delivers T0a over the existing lexer and semantic pipeline.
+Type-only splits and array-count restoration no longer mutate the token buffer.
+The complete hosted suite passes 1766 tests in 93 binaries, with strict lint,
+formatting and independent bounded review. Standalone token/session/tree/budget
+implementation is a subsequent lane. No lexer replacement, hygienic identifier
+resolution or native macro expansion is claimed by the cursor migration.
