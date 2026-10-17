@@ -188,6 +188,10 @@ impl Encoder<'_> {
                 self.count(*len)?;
                 self.pattern(element, env, depth + 1)
             }
+            ir::Ty::Slice { element } => {
+                self.append(b"l")?;
+                self.pattern(element, env, depth + 1)
+            }
             ir::Ty::Struct(structure) => {
                 self.append(b"s")?;
                 self.declaration(structure.def().source_decl)?;
@@ -240,6 +244,10 @@ impl Encoder<'_> {
                 self.append(b"a")?;
                 self.count(*len)?;
                 // Zero-sized arrays still contribute their exact element identity.
+                self.ty(element, depth + 1)
+            }
+            ir::Ty::Slice { element } => {
+                self.append(b"l")?;
                 self.ty(element, depth + 1)
             }
             ir::Ty::Struct(structure) => {
@@ -343,7 +351,9 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
                     walk(field, depth + 1, budget)?;
                 }
             }
-            ir::Ty::Array { element, .. } => walk(element, depth + 1, budget)?,
+            ir::Ty::Array { element, .. } | ir::Ty::Slice { element } => {
+                walk(element, depth + 1, budget)?
+            }
             ir::Ty::Struct(_)
             | ir::Ty::Enum(_)
             | ir::Ty::Int(_)

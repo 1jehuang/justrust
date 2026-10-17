@@ -1643,6 +1643,9 @@ impl<'a> MoveShape<'a> {
             },
             Ty::Array { element, len } => Self::Array { element, len: *len },
             Ty::Enum(definition) => Self::Sum(definition.def()),
+            // No ownership model for unsized slices or slice carriers yet.
+            Ty::Slice { .. } => return Err(Exhausted),
+            Ty::Ref { referent, .. } if referent.contains_slice() => return Err(Exhausted),
             Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Ref { .. } => Self::Scalar,
         })
     }

@@ -379,7 +379,8 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
             Ty::Ref { referent, .. }
             | Ty::Array {
                 element: referent, ..
-            } => child(referent)?,
+            }
+            | Ty::Slice { element: referent } => child(referent)?,
             Ty::Tuple(fields) => {
                 for ty in fields.iter() {
                     child(ty)?;
@@ -511,6 +512,10 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                         for index in 0..*len {
                             child(CarrierStep::ConstantIndex(index), element)?;
                         }
+                    }
+                    Ty::Slice { .. } => {
+                        // Reached only when the element type carries references.
+                        return Err("reference-carrying slice elements are unsupported".into());
                     }
                     Ty::Struct(value) => {
                         for (index, field) in value.def().fields.iter().enumerate() {
@@ -2088,6 +2093,20 @@ fn substitute_ty_walk(
                 len: *len,
             }
         }
+        Ty::Slice { element } => {
+            budget.retain_bytes(std::mem::size_of::<Ty>() + std::mem::size_of::<usize>())?;
+            Ty::Slice {
+                element: Arc::new(substitute_ty_walk(
+                    element,
+                    env,
+                    args,
+                    caller,
+                    cx,
+                    budget,
+                    depth + 1,
+                )?),
+            }
+        }
         Ty::Ref { kind, referent } => {
             budget.retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
             Ty::Ref {
@@ -2262,6 +2281,9 @@ pub fn instantiate_checked(
             ExprKind::IntCast { .. }
             | ExprKind::Deref { .. }
             | ExprKind::DynamicIndex { .. }
+            | ExprKind::ArrayToSlice { .. }
+            | ExprKind::SliceLen { .. }
+            | ExprKind::SliceIndex { .. }
             | ExprKind::Array(_)
             | ExprKind::Repeat { .. }
             | ExprKind::Index { .. }
@@ -2596,6 +2618,7 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
         budget.charge_work(1)?;
         match ty {
             Ty::Ref { .. } => return Err("reference generic arguments are unsupported".into()),
+            Ty::Slice { .. } => return Err("slice generic arguments are unsupported".into()),
             Ty::Tuple(fields) => {
                 for field in fields.iter() {
                     walk(field, budget, depth + 1)?;
@@ -3076,6 +3099,11 @@ pub enum Ty {
         element: Arc<Ty>,
         len: usize,
     },
+    /// Unsized slice. Has no by-value layout. Only `Ref<Slice<u8>>` (shared) is
+    /// admitted by the frontend; every other position is rejected.
+    Slice {
+        element: Arc<Ty>,
+    },
     /// Nominal and always non-Copy in this slice, even with only scalar fields.
     Struct(StructTy),
     Enum(EnumTy),
@@ -3084,6 +3112,81 @@ pub enum Ty {
 }
 
 impl Ty {
+    /// Exactly shared `&[u8]`.
+    pub fn shared_byte_slice(&self) -> bool {
+        matches!(
+            self,
+            Self::Ref { kind: BorrowKind::Shared, referent }
+                if matches!(&**referent, Self::Slice { element } if **element == Self::Int(IntTy::U8))
+        )
+    }
+
+    /// `Some(N)` exactly for shared `&[u8; N]`.
+    pub fn shared_byte_array_len(&self) -> Option<usize> {
+        match self {
+            Self::Ref {
+                kind: BorrowKind::Shared,
+                referent,
+            } => match &**referent {
+                Self::Array { element, len } if **element == Self::Int(IntTy::U8) => Some(*len),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The canonical shared byte slice type `&[u8]`.
+    pub fn shared_byte_slice_ty() -> Self {
+        Self::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(Self::Slice {
+                element: Arc::new(Self::Int(IntTy::U8)),
+            }),
+        }
+    }
+
+    /// Whether any slice type occurs anywhere inside this type. Shared type
+    /// structure (nominal definitions, tuple/array/reference Arcs) is visited
+    /// once, so exponentially large expanded layouts stay linear in the DAG.
+    pub fn contains_slice(&self) -> bool {
+        let mut pending = vec![self];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(ty) = pending.pop() {
+            match ty {
+                Self::Slice { .. } => return true,
+                Self::Ref {
+                    referent: inner, ..
+                }
+                | Self::Array { element: inner, .. } => {
+                    if seen.insert(Arc::as_ptr(inner) as usize) {
+                        pending.push(inner);
+                    }
+                }
+                Self::Tuple(fields) => {
+                    if seen.insert(fields.as_ptr() as usize) {
+                        pending.extend(fields.iter());
+                    }
+                }
+                Self::Struct(value) => {
+                    if seen.insert(std::ptr::from_ref(value.def()) as usize) {
+                        pending.extend(value.def().type_args.iter());
+                        pending.extend(value.def().fields.iter().map(|f| &f.ty));
+                    }
+                }
+                Self::Enum(value) => {
+                    if seen.insert(std::ptr::from_ref(value.def()) as usize) {
+                        pending.extend(value.def().type_args.iter());
+                        for variant in value.def().variants.iter() {
+                            pending.extend(variant.fields.iter().map(|f| &f.ty));
+                        }
+                    }
+                }
+                Self::Param(_) | Self::Int(_) | Self::Bool | Self::Unit | Self::Never => {}
+            }
+        }
+        false
+    }
+
     pub fn field_count(&self) -> Option<usize> {
         match self {
             Self::Tuple(fields) => Some(fields.len()),
@@ -3104,7 +3207,7 @@ impl Ty {
         match self {
             Self::Ref { kind, .. } => *kind == BorrowKind::Shared,
             Self::Int(_) | Self::Bool | Self::Unit | Self::Never => true,
-            Self::Struct(_) | Self::Enum(_) | Self::Param(_) => false,
+            Self::Struct(_) | Self::Enum(_) | Self::Param(_) | Self::Slice { .. } => false,
             Self::Tuple(_) | Self::Array { .. } => {
                 let mut pending = vec![self];
                 let mut seen = std::collections::HashSet::new();
@@ -3115,7 +3218,9 @@ impl Ty {
                             kind: BorrowKind::Mut,
                             ..
                         } => return false,
-                        Self::Struct(_) | Self::Enum(_) | Self::Param(_) => return false,
+                        Self::Struct(_) | Self::Enum(_) | Self::Param(_) | Self::Slice { .. } => {
+                            return false;
+                        }
                         Self::Tuple(fields) if seen.insert(fields.as_ptr()) => {
                             pending.extend(fields.iter());
                         }
@@ -3203,6 +3308,10 @@ impl<'f> FactsCtx<'f> {
                     if *len > MAX_ARRAY_LEN {
                         return Err("array length limit exceeded".into());
                     }
+                    walk(facts, element, depth + 1, work, budget)?;
+                }
+                Ty::Slice { element } => {
+                    // Structural only: admission of `&[u8]` is a frontend decision.
                     walk(facts, element, depth + 1, work, budget)?;
                 }
                 Ty::Struct(value) => {
@@ -3812,6 +3921,7 @@ fn ref_type_walk(
                 }
                 child(element)?;
             }
+            Ty::Slice { element } => child(element)?,
             Ty::Struct(value) => {
                 for argument in value.def().type_args.iter() {
                     child(argument)?;
@@ -3898,6 +4008,7 @@ fn ref_types_equal(
             (Ty::Array { element: a, len: x }, Ty::Array { element: b, len: y }) => {
                 x == y && child(a, b)?
             }
+            (Ty::Slice { element: a }, Ty::Slice { element: b }) => child(a, b)?,
             (
                 Ty::Ref {
                     kind: a,
@@ -4562,6 +4673,22 @@ pub enum ExprKind {
         base: ExprId,
         index: ExprId,
     },
+    /// Unsizes exactly shared `&[u8; N]` to shared `&[u8]`. N comes from the
+    /// validated operand type. The operand is evaluated once and its loan is the
+    /// only storage authority; this node appends length metadata only.
+    ArrayToSlice {
+        reference: ExprId,
+    },
+    /// Builtin length of exactly shared `&[u8]`, result `usize`.
+    SliceLen {
+        slice: ExprId,
+    },
+    /// Runtime bounds-checked read of exactly shared `&[u8]` at a `usize` index,
+    /// result `u8` by copy. There is no slice place or mutable slice index.
+    SliceIndex {
+        slice: ExprId,
+        index: ExprId,
+    },
     Array(Vec<ExprId>),
     Repeat {
         value: ExprId,
@@ -4801,6 +4928,9 @@ impl CheckedFunction {
                 ExprKind::IntCast { .. }
                 | ExprKind::Deref { .. }
                 | ExprKind::DynamicIndex { .. }
+                | ExprKind::ArrayToSlice { .. }
+                | ExprKind::SliceLen { .. }
+                | ExprKind::SliceIndex { .. }
                 | ExprKind::Repeat { .. }
                 | ExprKind::Index { .. }
                 | ExprKind::Int(_)
@@ -5166,6 +5296,45 @@ impl CheckedFunction {
                     let mut work = 0;
                     if !pattern_types_equal(&value.ty, element, &mut work)? {
                         return Err("dynamic index result type mismatch".into());
+                    }
+                }
+                ExprKind::ArrayToSlice { reference } => {
+                    expr(*reference)?;
+                    let source = &self.exprs[reference.0];
+                    if source.ty.shared_byte_array_len().is_none() {
+                        return Err("array-to-slice requires shared byte array reference".into());
+                    }
+                    if !value.ty.shared_byte_slice() {
+                        return Err("array-to-slice result must be shared byte slice".into());
+                    }
+                    if value.completion != source.completion {
+                        return Err("array-to-slice completion mismatch".into());
+                    }
+                }
+                ExprKind::SliceLen { slice } => {
+                    expr(*slice)?;
+                    let source = &self.exprs[slice.0];
+                    if !source.ty.shared_byte_slice() {
+                        return Err("slice length requires shared byte slice".into());
+                    }
+                    if value.ty != Ty::Int(IntTy::Usize) {
+                        return Err("slice length result must be usize".into());
+                    }
+                    if value.completion != source.completion {
+                        return Err("slice length completion mismatch".into());
+                    }
+                }
+                ExprKind::SliceIndex { slice, index } => {
+                    expr(*slice)?;
+                    expr(*index)?;
+                    if !self.exprs[slice.0].ty.shared_byte_slice() {
+                        return Err("slice index requires shared byte slice".into());
+                    }
+                    if self.exprs[index.0].ty != Ty::Int(IntTy::Usize) {
+                        return Err("slice index requires usize".into());
+                    }
+                    if value.ty != Ty::Int(IntTy::U8) {
+                        return Err("slice index result must be u8".into());
                     }
                 }
                 ExprKind::Array(elements) => {

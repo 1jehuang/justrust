@@ -280,6 +280,8 @@ mod canonical_source_replay_tests {
             facts: original.facts.clone(),
             inventory,
             calls: Default::default(),
+            builtin_lens: Default::default(),
+            unsizes: Default::default(),
             bindings: Default::default(),
             narrow: Default::default(),
             emissions: Default::default(),
@@ -391,6 +393,10 @@ struct SourceBindingSite {
 #[derive(Clone, Debug)]
 struct SourceCallSite {
     node: sr::SourceNode,
+    /// Syntactic `receiver.len()` with no arguments or type arguments. This is
+    /// only a candidate: the checker alone decides builtin SliceLen from the
+    /// typed receiver, and replay requires typed evidence for every builtin row.
+    len_candidate: bool,
     ordinary: Option<String>,
     application: Option<GenericPath>,
     argument_binding: Option<sr::SourceNode>,
@@ -500,7 +506,9 @@ fn compare_source_type_work(
             }
             compare_source_type_work(referent, budget, at + 1)?;
         }
-        Type::Array(element, _) => compare_source_type_work(element, budget, at + 1)?,
+        Type::Array(element, _) | Type::Slice(element) => {
+            compare_source_type_work(element, budget, at + 1)?
+        }
         Type::Tuple(fields) => {
             for field in fields {
                 compare_source_type_work(field, budget, at + 1)?;
@@ -644,6 +652,7 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
         Type::Array(element, len) => {
             Type::Array(Box::new(copy_source_type(element, budget, at + 1)?), *len)
         }
+        Type::Slice(element) => Type::Slice(Box::new(copy_source_type(element, budget, at + 1)?)),
         Type::Tuple(fields) => {
             let mut result = Vec::new();
             result
@@ -705,7 +714,9 @@ fn retain_source_type(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resul
             }
             retain_source_type(referent, budget, depth + 1)?;
         }
-        Type::Array(element, _) => retain_source_type(element, budget, depth + 1)?,
+        Type::Array(element, _) | Type::Slice(element) => {
+            retain_source_type(element, budget, depth + 1)?
+        }
         Type::Tuple(fields) => {
             for field in fields {
                 retain_source_type(field, budget, depth + 1)?;
@@ -1034,6 +1045,7 @@ impl SourceInventory {
                     &mut self.calls,
                     SourceCallSite {
                         node: node.clone(),
+                        len_candidate: false,
                         ordinary: Some(copy_source_string(name, budget)?),
                         application: application
                             .map(|path| copy_source_path(path, budget, 0))
@@ -1069,6 +1081,7 @@ impl SourceInventory {
                     &mut self.calls,
                     SourceCallSite {
                         node: node.clone(),
+                        len_candidate: slice_len_candidate(expr),
                         ordinary: None,
                         application: None,
                         argument_binding: None,
@@ -1261,6 +1274,27 @@ impl SourceInventory {
     }
 }
 
+/// Syntactic shape of a builtin shared byte-slice `.len()` occurrence.
+fn slice_len_candidate(expr: &Expr) -> bool {
+    matches!(expr, Expr::MethodCall { name, type_args, args, .. }
+        if name == "len" && type_args.is_empty() && args.is_empty())
+}
+
+/// Typed builtin `.len()` occurrence: original source call index, the checked
+/// SliceLen expression, and its exact checked receiver expression.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct BuiltinLenOccurrence {
+    pub(super) source_index: usize,
+    pub(super) expr: ir::ExprId,
+    pub(super) receiver: ir::ExprId,
+}
+/// Checked ArrayToSlice wrapper and its exact wrapped operand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct UnsizeOccurrence {
+    pub(super) wrapper: ir::ExprId,
+    pub(super) reference: ir::ExprId,
+}
+
 #[derive(Clone)]
 struct RawSharedOccurrence {
     source_index: usize,
@@ -1274,6 +1308,8 @@ pub(super) struct CanonicalSourceCapability {
     facts: Arc<tr::ValidatedFacts>,
     inventory: SourceInventory,
     calls: std::cell::RefCell<Vec<(usize, ir::ExprId, ir::Callee)>>,
+    builtin_lens: std::cell::RefCell<Vec<BuiltinLenOccurrence>>,
+    unsizes: std::cell::RefCell<Vec<UnsizeOccurrence>>,
     bindings: std::cell::RefCell<Vec<(usize, ir::LocalId)>>,
     narrow: std::cell::RefCell<Vec<RawSharedOccurrence>>,
     emissions: std::cell::RefCell<Vec<(usize, usize)>>,
@@ -1288,6 +1324,8 @@ pub(super) struct OriginalSource {
     calls: Vec<SourceCallSite>,
     bindings: Vec<SourceBindingSite>,
     call_mapping: Vec<(usize, ir::ExprId, ir::Callee)>,
+    builtin_len_mapping: Vec<BuiltinLenOccurrence>,
+    unsize_mapping: Vec<UnsizeOccurrence>,
     binding_mapping: Vec<(usize, ir::LocalId)>,
     narrow: Vec<RawSharedOccurrence>,
     root_positions: Vec<Option<usize>>,
@@ -1343,6 +1381,68 @@ impl CanonicalSourceCapability {
         sr::push(
             &mut self.calls.borrow_mut(),
             (index, id, target.clone()),
+            budget,
+        )
+        .map_err(|e| self.render(e))
+    }
+    /// Record a typed builtin `.len()` at its exact original source occurrence.
+    /// Only a syntactic candidate whose checked result is exactly SliceLen over a
+    /// shared byte slice qualifies; nothing is inferred from spelling alone.
+    fn record_builtin_len(
+        &self,
+        expr: &Expr,
+        id: ir::ExprId,
+        checked: &[ir::TypedExpr],
+    ) -> Result<(), String> {
+        let budget = &self.plan.budget;
+        sr::work(budget, 1).map_err(|e| self.render(e))?;
+        let index = self
+            .inventory
+            .call_pointers
+            .get(&(expr as *const Expr as usize))
+            .copied()
+            .ok_or_else(|| {
+                self.render(FactsError::invalid(
+                    budget,
+                    "builtin length has no original occurrence",
+                ))
+            })?;
+        let site = &self.inventory.calls[index];
+        let typed = checked.get(id.0).map(|e| (&e.kind, &e.ty));
+        let Some((ir::ExprKind::SliceLen { slice }, ty)) = typed else {
+            return Err(self.render(FactsError::invalid(
+                budget,
+                "builtin length occurrence did not produce SliceLen",
+            )));
+        };
+        if !site.len_candidate
+            || *ty != ir::Ty::Int(ir::IntTy::Usize)
+            || !checked
+                .get(slice.0)
+                .is_some_and(|receiver| receiver.ty.shared_byte_slice())
+        {
+            return Err(self.render(FactsError::invalid(
+                budget,
+                "builtin length occurrence has wrong typed shape",
+            )));
+        }
+        sr::push(
+            &mut self.builtin_lens.borrow_mut(),
+            BuiltinLenOccurrence {
+                source_index: index,
+                expr: id,
+                receiver: *slice,
+            },
+            budget,
+        )
+        .map_err(|e| self.render(e))
+    }
+    fn record_unsize(&self, wrapper: ir::ExprId, reference: ir::ExprId) -> Result<(), String> {
+        let budget = &self.plan.budget;
+        sr::work(budget, 1).map_err(|e| self.render(e))?;
+        sr::push(
+            &mut self.unsizes.borrow_mut(),
+            UnsizeOccurrence { wrapper, reference },
             budget,
         )
         .map_err(|e| self.render(e))
@@ -1914,6 +2014,137 @@ fn source_binding_type(
     Ok((local, ty))
 }
 
+/// Exact replay of typed builtin `.len()` occurrences. Every row names a distinct
+/// syntactic candidate with no ordinary call correspondence, maps to exactly one
+/// checked SliceLen over its retained receiver, rows follow source order, and
+/// every SliceLen in the checked arena is covered. Returns the builtin sources.
+fn replay_builtin_lens(
+    original: &OriginalSource,
+    checked: &ir::CheckedFunction,
+    ordinary: &[Option<usize>],
+    seen: &mut [bool],
+    budget: &ir::PlanBudget,
+) -> Result<Vec<bool>, FactsError> {
+    sr::work(budget, original.calls.len())?;
+    sr::retain(budget, original.calls.len())?;
+    let mut sources = Vec::new();
+    sources
+        .try_reserve_exact(original.calls.len())
+        .map_err(|_| FactsError::resource(budget, "builtin occurrence allocation"))?;
+    sources.resize(original.calls.len(), false);
+    let mut previous: Option<(usize, ir::ExprId)> = None;
+    for row in &original.builtin_len_mapping {
+        sr::work(budget, 1)?;
+        let site = original
+            .calls
+            .get(row.source_index)
+            .ok_or_else(|| FactsError::invalid(budget, "orphan builtin length occurrence"))?;
+        if !site.len_candidate || site.ordinary.is_some() || site.application.is_some() {
+            return Err(FactsError::invalid(
+                budget,
+                "builtin length mapped from a non-candidate source call",
+            ));
+        }
+        if std::mem::replace(&mut sources[row.source_index], true)
+            || ordinary.get(row.source_index).copied().flatten().is_some()
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "duplicate builtin length correspondence",
+            ));
+        }
+        if let Some((index, expr)) = previous
+            && (row.source_index <= index || row.expr.0 <= expr.0)
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "builtin length occurrences changed source order",
+            ));
+        }
+        previous = Some((row.source_index, row.expr));
+        let value = checked
+            .exprs
+            .get(row.expr.0)
+            .ok_or_else(|| FactsError::invalid(budget, "builtin length outside checked arena"))?;
+        let ir::ExprKind::SliceLen { slice } = value.kind else {
+            return Err(FactsError::invalid(
+                budget,
+                "builtin length mapped to a different operation",
+            ));
+        };
+        if slice != row.receiver
+            || value.ty != ir::Ty::Int(ir::IntTy::Usize)
+            || !checked
+                .exprs
+                .get(slice.0)
+                .is_some_and(|receiver| receiver.ty.shared_byte_slice())
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "builtin length receiver or type changed",
+            ));
+        }
+        if std::mem::replace(&mut seen[row.expr.0], true) {
+            return Err(FactsError::invalid(
+                budget,
+                "checked builtin length mapped from two source occurrences",
+            ));
+        }
+    }
+    sr::work(budget, checked.exprs.len())?;
+    for (index, expr) in checked.exprs.iter().enumerate() {
+        if matches!(expr.kind, ir::ExprKind::SliceLen { .. }) && !seen[index] {
+            return Err(FactsError::invalid(
+                budget,
+                "orphan checked builtin length lacks original occurrence",
+            ));
+        }
+    }
+    Ok(sources)
+}
+
+/// Exact replay of ArrayToSlice wrappers: each checked wrapper is recorded once
+/// with its exact operand, so a replaced wrapped call or operand is rejected.
+fn replay_unsizes(
+    original: &OriginalSource,
+    checked: &ir::CheckedFunction,
+    budget: &ir::PlanBudget,
+) -> Result<(), FactsError> {
+    sr::work(budget, checked.exprs.len())?;
+    sr::retain(budget, checked.exprs.len())?;
+    let mut covered = Vec::new();
+    covered
+        .try_reserve_exact(checked.exprs.len())
+        .map_err(|_| FactsError::resource(budget, "unsize coverage allocation"))?;
+    covered.resize(checked.exprs.len(), false);
+    for row in &original.unsize_mapping {
+        sr::work(budget, 1)?;
+        let value = checked
+            .exprs
+            .get(row.wrapper.0)
+            .ok_or_else(|| FactsError::invalid(budget, "unsize wrapper outside checked arena"))?;
+        if !matches!(value.kind, ir::ExprKind::ArrayToSlice { reference } if reference == row.reference)
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "array-to-slice wrapper changed its wrapped operand",
+            ));
+        }
+        if std::mem::replace(&mut covered[row.wrapper.0], true) {
+            return Err(FactsError::invalid(
+                budget,
+                "duplicate array-to-slice wrapper correspondence",
+            ));
+        }
+    }
+    for (index, expr) in checked.exprs.iter().enumerate() {
+        if matches!(expr.kind, ir::ExprKind::ArrayToSlice { .. }) && !covered[index] {
+            return Err(FactsError::invalid(budget, "orphan array-to-slice wrapper"));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn replay_source_body(
     original: &OriginalSource,
     checked: &Arc<ir::CheckedFunction>,
@@ -1944,6 +2175,7 @@ pub(super) fn replay_source_body(
         compare_call_site_work(retained, budget)?;
         sr::work(budget, 1)?;
         if fresh.node != retained.node
+            || fresh.len_candidate != retained.len_candidate
             || fresh.ordinary != retained.ordinary
             || fresh.application != retained.application
             || fresh.argument_binding != retained.argument_binding
@@ -2054,8 +2286,13 @@ pub(super) fn replay_source_body(
             ));
         }
     }
+    let builtin_sources = replay_builtin_lens(original, checked, &positions, &mut seen, budget)?;
+    replay_unsizes(original, checked, budget)?;
     for (index, site) in original.calls.iter().enumerate() {
         sr::work(budget, 1)?;
+        if builtin_sources[index] {
+            continue;
+        }
         let position = positions[index].ok_or_else(|| {
             FactsError::invalid(budget, "dead or live original call lacks correspondence")
         })?;
@@ -2350,7 +2587,12 @@ pub(super) fn replay_source_body(
             "unused or missing original shared frontier",
         ));
     }
-    if original.call_mapping.len() != original.calls.len() {
+    if original
+        .call_mapping
+        .len()
+        .checked_add(original.builtin_len_mapping.len())
+        != Some(original.calls.len())
+    {
         return Err(FactsError::invalid(budget, "orphan original call mapping"));
     }
     for (index, expr) in checked.exprs.iter().enumerate() {
@@ -2439,6 +2681,8 @@ impl PlanCtx {
                     facts: facts.clone(),
                     inventory,
                     calls: Default::default(),
+                    builtin_lens: Default::default(),
+                    unsizes: Default::default(),
                     bindings: Default::default(),
                     narrow: Default::default(),
                     emissions: Default::default(),
@@ -2477,6 +2721,8 @@ impl PlanCtx {
                     calls,
                     bindings: std::mem::take(&mut cap.inventory.bindings),
                     call_mapping: cap.calls.take(),
+                    builtin_len_mapping: cap.builtin_lens.take(),
+                    unsize_mapping: cap.unsizes.take(),
                     binding_mapping: cap.bindings.take(),
                     narrow: cap.narrow.take(),
                     root_positions,
@@ -2496,6 +2742,8 @@ impl PlanCtx {
 }
 
 mod recipes;
+#[cfg(test)]
+mod slice_tests;
 pub use tr::CallableProvider;
 
 #[derive(Clone, Debug)]
@@ -2691,6 +2939,8 @@ pub enum Type {
         referent: Box<Type>,
     },
     Array(Box<Type>, usize),
+    /// Unsized `[T]`. Only admitted behind a shared reference with `u8` elements.
+    Slice(Box<Type>),
     Int(ir::IntTy),
     Bool,
     Unit,
@@ -3445,6 +3695,9 @@ impl Parser {
         }
         if self.eat("[") {
             let element = self.ty()?;
+            if self.eat("]") {
+                return Ok(Type::Slice(Box::new(element)));
+            }
             self.expect(";")?;
             let len = self.array_number("array length")?;
             self.expect("]")?;
@@ -4392,6 +4645,10 @@ impl Parser {
                 let condition = self.condition()?;
                 let body = self.block()?;
                 statements.push(Stmt::While { condition, body });
+            } else if self.is("for") {
+                return Err(self.error(
+                    "unsupported: for loops and iterators (including slice iteration); use while with an index",
+                ));
             } else {
                 let expr = self.statement_expr()?;
                 if let Some(op) = compound_operator(self.token()) {
@@ -4882,7 +5139,13 @@ impl Parser {
                         index,
                     };
                 } else {
+                    if self.is("..") {
+                        return Err(self.error("unsupported: range indexing and subslicing"));
+                    }
                     let index = self.nested_expr()?;
+                    if self.is("..") || self.is("..=") {
+                        return Err(self.error("unsupported: range indexing and subslicing"));
+                    }
                     self.expect("]")?;
                     left = Expr::DynamicIndex {
                         base: Box::new(left),
@@ -5384,7 +5647,7 @@ impl Resolver<'_> {
                 }
             }
             Type::Ref { referent, .. } => self.ty(referent, module)?,
-            Type::Array(element, _) => self.ty(element, module)?,
+            Type::Array(element, _) | Type::Slice(element) => self.ty(element, module)?,
             Type::Named(name) => {
                 let item = self
                     .path(name, module, true, false)?
@@ -5971,7 +6234,9 @@ fn walk_depth(root: DepthNode<'_>, budget: Option<&ir::PlanBudget>) -> Result<()
         let mut push = |node| stack.push((node, depth + 1));
         match node {
             DepthNode::Type(Type::Ref { referent, .. }) => push(DepthNode::Type(referent)),
-            DepthNode::Type(Type::Array(element, _)) => push(DepthNode::Type(element)),
+            DepthNode::Type(Type::Array(element, _) | Type::Slice(element)) => {
+                push(DepthNode::Type(element))
+            }
             DepthNode::Type(Type::Tuple(fields)) => {
                 for field in fields {
                     push(DepthNode::Type(field));
@@ -6272,6 +6537,7 @@ fn source_type_storage(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resu
             }
         }
         Type::Array(element, _)
+        | Type::Slice(element)
         | Type::Ref {
             referent: element, ..
         } => add(source_type_storage(element, budget, depth + 1)?)?,
@@ -6808,6 +7074,7 @@ impl PlanCtx {
             }
             let result =
                 state.source_ty(&registry, &f.result, &bindings, caller, budget, 0, true)?;
+            reject_slice_result(&result)?;
             if info.env.is_generic() {
                 for ty in params.iter().chain(std::iter::once(&result)) {
                     validate_root_carrier(ty, caller, budget)?;
@@ -6904,6 +7171,7 @@ impl PlanCtx {
                 }
                 let result =
                     state.source_ty(&registry, &h.result, &bindings, caller, budget, 0, true)?;
+                reject_slice_result(&result)?;
                 let ref_contract = canonical_ref_contract(
                     &h.regions,
                     &h.params,
@@ -7964,6 +8232,9 @@ fn metered_type_equal(
         (ir::Ty::Array { element: a, len: n }, ir::Ty::Array { element: b, len: m }) => {
             Ok(n == m && metered_type_equal(a, b, budget, depth + 1)?)
         }
+        (ir::Ty::Slice { element: a }, ir::Ty::Slice { element: b }) => {
+            metered_type_equal(a, b, budget, depth + 1)
+        }
         (
             ir::Ty::Ref {
                 kind: a,
@@ -7979,6 +8250,7 @@ fn metered_type_equal(
         (
             ir::Ty::Tuple(_)
             | ir::Ty::Array { .. }
+            | ir::Ty::Slice { .. }
             | ir::Ty::Ref { .. }
             | ir::Ty::Struct(_)
             | ir::Ty::Enum(_),
@@ -7988,6 +8260,7 @@ fn metered_type_equal(
             _,
             ir::Ty::Tuple(_)
             | ir::Ty::Array { .. }
+            | ir::Ty::Slice { .. }
             | ir::Ty::Ref { .. }
             | ir::Ty::Struct(_)
             | ir::Ty::Enum(_),
@@ -8679,6 +8952,9 @@ fn argument_height(
         ir::Ty::Ref { .. } => {
             return Err("reference-containing generic arguments are unsupported".into());
         }
+        ir::Ty::Slice { .. } => {
+            return Err("unsupported: slice generic arguments".into());
+        }
         ir::Ty::Tuple(fields) => {
             for field in fields.iter() {
                 child(field)?;
@@ -8737,7 +9013,7 @@ fn collect_source_params(
                 collect_source_params(f, used, budget, depth + 1)?;
             }
         }
-        Type::Array(t, _) | Type::Ref { referent: t, .. } => {
+        Type::Array(t, _) | Type::Slice(t) | Type::Ref { referent: t, .. } => {
             collect_source_params(t, used, budget, depth + 1)?
         }
         _ => {}
@@ -8850,6 +9126,23 @@ impl PlanState {
                     transport,
                 )?
             }
+            Type::Ref {
+                kind,
+                referent: slice,
+                ..
+            } if matches!(slice.as_ref(), Type::Slice(_)) => {
+                if !allow_ref {
+                    return Err(
+                        "unsupported: slice references in generic, nested or aggregate types"
+                            .into(),
+                    );
+                }
+                admit_shared_byte_slice(*kind, slice)?;
+                if matches!(caller, ir::FactsCtx::Universal(_)) {
+                    return Err("unsupported: shared byte slices in generic callables".into());
+                }
+                ir::Ty::shared_byte_slice_ty()
+            }
             Type::Ref { kind, referent, .. } => {
                 if !allow_ref {
                     return Err("references in generic or aggregate types are unsupported".into());
@@ -8869,6 +9162,9 @@ impl PlanState {
                     kind: *kind,
                     referent: Arc::new(inner),
                 }
+            }
+            Type::Slice(_) => {
+                return Err(BARE_SLICE_UNSUPPORTED.into());
             }
             Type::Array(element, len) => {
                 if *len > ir::MAX_ARRAY_LEN {
@@ -10384,6 +10680,40 @@ fn canonical_ref_contract(
     }))
 }
 
+/// Values may carry a slice only as exactly shared `&[u8]`.
+fn admit_slice_value(ty: &ir::Ty) -> Result<(), String> {
+    if ty.contains_slice() && !ty.shared_byte_slice() {
+        return Err(if matches!(ty, ir::Ty::Slice { .. }) {
+            BARE_SLICE_UNSUPPORTED.into()
+        } else {
+            "unsupported: slices nested in aggregate or reference types".into()
+        });
+    }
+    Ok(())
+}
+fn reject_slice_result(result: &ir::Ty) -> Result<(), String> {
+    if result.contains_slice() {
+        return Err("unsupported: slice return types".into());
+    }
+    Ok(())
+}
+const BARE_SLICE_UNSUPPORTED: &str = "unsupported: bare by-value slice type [T]; only shared &[u8] parameters and locals are admitted";
+
+/// Phase-1 slice admission: exactly a shared reference to `[u8]`.
+fn admit_shared_byte_slice(kind: ir::BorrowKind, slice: &Type) -> Result<(), String> {
+    let Type::Slice(element) = slice else {
+        return Err("internal: slice admission on non-slice type".into());
+    };
+    if kind != ir::BorrowKind::Shared {
+        return Err("unsupported: mutable slice references (&mut [T])".into());
+    }
+    match element.as_ref() {
+        Type::Int(ir::IntTy::U8) => Ok(()),
+        Type::Param(_) => Err("unsupported: generic slice element types (&[T])".into()),
+        _ => Err("unsupported: non-u8 slice element types; only &[u8] is admitted".into()),
+    }
+}
+
 fn source_reference_layers(ty: &Type) -> Result<usize, String> {
     let mut inner = ty;
     let mut layers = 0;
@@ -10434,6 +10764,10 @@ fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result<ir::Ty, St
             .ok_or_else(|| "Self outside impl".into()),
         Type::Apply(_) | Type::Param(_) => {
             Err("generic types require authoritative declaration environment".into())
+        }
+        Type::Slice(_) => Err(BARE_SLICE_UNSUPPORTED.into()),
+        Type::Ref { referent, .. } if matches!(referent.as_ref(), Type::Slice(_)) => {
+            Err("unsupported: shared byte slices require the planning frontend".into())
         }
         Type::Ref { kind, referent, .. } => {
             if !allow_ref || matches!(referent.as_ref(), Type::Never | Type::Infer) {
@@ -10635,6 +10969,9 @@ impl<'a> Checker<'a> {
     }
     fn checked_type_actual(&self, source: &Type) -> Result<ir::Ty, String> {
         let ty = checked_ty(source, self.signatures)?;
+        if ty.contains_slice() {
+            return Err("unsupported: slice generic arguments".into());
+        }
         let plan = self
             .signatures
             .plan
@@ -10744,6 +11081,7 @@ impl<'a> Checker<'a> {
         Ok(frame.id)
     }
     fn local(&mut self, name: &str, ty: ir::Ty, mutable: bool) -> Result<ir::LocalId, String> {
+        admit_slice_value(&ty)?;
         let local = ir::LocalId(self.locals.len());
         self.charge_node(std::mem::size_of::<ir::LocalDecl>() + name.len())?;
         self.locals.push(ir::LocalDecl {
@@ -11038,6 +11376,14 @@ impl<'a> Checker<'a> {
                     .result,
                 )
             }
+            Expr::MethodCall { receiver, .. }
+                if slice_len_candidate(e)
+                    && self
+                        .scalar_hint(receiver)?
+                        .is_some_and(|ty| ty.shared_byte_slice()) =>
+            {
+                Some(ir::Ty::Int(ir::IntTy::Usize))
+            }
             Expr::MethodCall {
                 receiver,
                 name,
@@ -11162,6 +11508,7 @@ impl<'a> Checker<'a> {
             Expr::Index { base, .. } | Expr::DynamicIndex { base, .. } => {
                 match self.scalar_hint(base)? {
                     Some(ir::Ty::Array { element, .. }) => Some(element.as_ref().clone()),
+                    Some(ty) if ty.shared_byte_slice() => Some(ir::Ty::Int(ir::IntTy::U8)),
                     _ => None,
                 }
             }
@@ -12037,7 +12384,114 @@ impl<'a> Checker<'a> {
         e: &Expr,
         expectation: Expectation<'_>,
     ) -> Result<ir::ExprId, String> {
+        if let Some(id) = self.builtin_slice_len(e)? {
+            if let Some(cap) = self.canonical {
+                cap.record_builtin_len(e, id, &self.exprs)?;
+            }
+            return Ok(id);
+        }
         let result = self.expr_with_expectation_inner(e, expectation)?;
+        let result = self.record_original_call(e, result)?;
+        match expectation.hard() {
+            Some(expected)
+                if expected.shared_byte_slice()
+                    && self.exprs[result.0].ty.shared_byte_array_len().is_some() =>
+            {
+                self.coerce_shared_byte_array_to_slice(result, expected)
+            }
+            _ => Ok(result),
+        }
+    }
+    /// Expected-site unsizing of exactly shared `&[u8; N]` to shared `&[u8]`.
+    /// The operand keeps its own identity (including any recorded original call);
+    /// the wrapper is recorded separately with its exact operand for replay.
+    fn coerce_shared_byte_array_to_slice(
+        &mut self,
+        value: ir::ExprId,
+        expected: &ir::Ty,
+    ) -> Result<ir::ExprId, String> {
+        if !expected.shared_byte_slice() {
+            return Err("array-to-slice coercion target must be &[u8]".into());
+        }
+        let source = &self.exprs[value.0];
+        if source.ty.shared_byte_array_len().is_none() {
+            return Err("array-to-slice coercion requires a shared &[u8; N] operand".into());
+        }
+        let completion = source.completion;
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: ir::Ty::shared_byte_slice_ty(),
+            completion,
+            kind: ir::ExprKind::ArrayToSlice { reference: value },
+        });
+        if let Some(cap) = self.canonical {
+            cap.record_unsize(id, value)?;
+        }
+        Ok(id)
+    }
+    /// Builtin `.len()` only on an exactly typed shared `&[u8]` receiver with
+    /// zero arguments; every other `len` goes through ordinary method resolution.
+    fn builtin_slice_len(&mut self, e: &Expr) -> Result<Option<ir::ExprId>, String> {
+        let Expr::MethodCall { receiver, .. } = e else {
+            return Ok(None);
+        };
+        if !slice_len_candidate(e)
+            || !self
+                .scalar_hint(receiver)?
+                .is_some_and(|ty| ty.shared_byte_slice())
+        {
+            return Ok(None);
+        }
+        let slice = self.expr(receiver)?;
+        let flow = self.flow(slice);
+        if !flow.ty.shared_byte_slice() {
+            return Err("builtin slice length receiver changed type".into());
+        }
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: ir::Ty::Int(ir::IntTy::Usize),
+            completion: if flow.completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            },
+            kind: ir::ExprKind::SliceLen { slice },
+        });
+        Ok(Some(id))
+    }
+    fn slice_index(&mut self, slice: ir::ExprId, index: &Expr) -> Result<ir::ExprId, String> {
+        let source = self.flow(slice);
+        let index = self.expr_expected_when(
+            index,
+            self.reachable && source.completes,
+            Some(&ir::Ty::Int(ir::IntTy::Usize)),
+        )?;
+        self.slice_index_checked(slice, index)
+    }
+    fn slice_index_checked(
+        &mut self,
+        slice: ir::ExprId,
+        index: ir::ExprId,
+    ) -> Result<ir::ExprId, String> {
+        let source = self.flow(slice);
+        let index_flow = self.flow(index);
+        self.require_index(&index_flow)?;
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: ir::Ty::Int(ir::IntTy::U8),
+            completion: if source.completes && index_flow.completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            },
+            kind: ir::ExprKind::SliceIndex { slice, index },
+        });
+        Ok(id)
+    }
+    fn record_original_call(&mut self, e: &Expr, result: ir::ExprId) -> Result<ir::ExprId, String> {
         if matches!(
             e,
             Expr::Call { .. }
@@ -12087,6 +12541,9 @@ impl<'a> Checker<'a> {
         _kind: ir::BorrowKind,
         referent: &ir::Ty,
     ) -> Result<(), String> {
+        if referent.contains_slice() {
+            return Err("unsupported: borrowing or reborrowing slice places".into());
+        }
         self.validate_value_carriers(referent)
     }
     fn borrow_expression(
@@ -12215,6 +12672,9 @@ impl<'a> Checker<'a> {
             ir::Callee::Direct(target) => target.type_args.as_ref(),
             ir::Callee::TraitItem(call) => call.method_args.as_ref(),
         };
+        if actuals.iter().any(ir::Ty::contains_slice) {
+            return Err("unsupported: slice generic arguments".into());
+        }
         plan.budget.charge_work(type_actual_regions.len())?;
         self.charge_node(
             type_actual_regions
@@ -12827,6 +13287,9 @@ impl<'a> Checker<'a> {
                     return Err("nested/chained runtime indexed place bases are unsupported; snapshot the row first".into());
                 }
                 let base = self.expr(base)?;
+                if self.flow(base).ty.shared_byte_slice() {
+                    return self.slice_index(base, index);
+                }
                 if self.deref_source(base) {
                     return Err("runtime indexed access through references is unsupported in B1; snapshot a Copy referent first".into());
                 }
@@ -12857,6 +13320,17 @@ impl<'a> Checker<'a> {
                 }
                 let base = self.expr(base)?;
                 let flow = self.flow(base);
+                if flow.ty.shared_byte_slice() {
+                    // Constant slice indexes use the same runtime-checked read.
+                    let constant = ir::ExprId(self.exprs.len());
+                    self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                    self.exprs.push(ir::TypedExpr {
+                        ty: ir::Ty::Int(ir::IntTy::Usize),
+                        completion: ir::Completion::Returns,
+                        kind: ir::ExprKind::Int(ir::IntValue::usize(*index as u64)),
+                    });
+                    return self.slice_index_checked(base, constant);
+                }
                 let ty = self.index_type(&flow.ty, *index)?;
                 (
                     ir::ExprKind::Index {
@@ -13606,6 +14080,7 @@ impl<'a> Checker<'a> {
             }
         };
         self.accessible(&flow.ty)?;
+        admit_slice_value(&flow.ty)?;
         if matches!(flow.ty, ir::Ty::Array { .. } | ir::Ty::Tuple(_)) {
             self.validate_value_carriers(&flow.ty)?;
         }

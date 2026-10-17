@@ -260,6 +260,9 @@ pub(super) fn inventory(
                 ty(t, ds, b, depth + 1)?;
             }
             Type::Ref { referent, .. } => ty(referent, ds, b, depth + 1)?,
+            // `[T]` is unsized and not Clone: no recipe descriptor. Admission of
+            // slice types is decided by the typed frontend, not recipe discovery.
+            Type::Slice(_) => {}
             Type::Apply(p) => {
                 for s in &p.segments {
                     for t in &s.args {

@@ -29,7 +29,13 @@ const MAX_FRAME_BYTES: i32 = 1024 * 1024;
 const BASE: u64 = 0x400000;
 const PAGE: usize = 4096;
 
+const SLICE_UNSUPPORTED: &str =
+    "unsupported: shared byte slices not yet supported by native backend (two-word ABI pending)";
+
 fn indirect(ty: &ir::Ty) -> Result<bool, String> {
+    if ty.contains_slice() {
+        return Err(SLICE_UNSUPPORTED.into());
+    }
     match ty {
         ir::Ty::Tuple(_) | ir::Ty::Struct(_) | ir::Ty::Array { .. } => Ok(true),
         ir::Ty::Enum(ty) => Ok(ty.has_payload()),
@@ -37,12 +43,16 @@ fn indirect(ty: &ir::Ty) -> Result<bool, String> {
             Ok(false)
         }
         ir::Ty::Param(_) => Err("type parameter has no native ABI".into()),
+        ir::Ty::Slice { .. } => Err(SLICE_UNSUPPORTED.into()),
     }
 }
 
 fn value_size(ty: &ir::Ty) -> Result<i32, String> {
     if matches!(ty, ir::Ty::Param(_)) {
         return Err("type parameter has no native layout".into());
+    }
+    if ty.contains_slice() {
+        return Err(SLICE_UNSUPPORTED.into());
     }
     if let ir::Ty::Array { element, len } = ty {
         if *len > ir::MAX_ARRAY_LEN {

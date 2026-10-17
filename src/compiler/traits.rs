@@ -1366,6 +1366,16 @@ impl ValidatedTraitWorld {
                     },
                 )?;
             }
+            Ty::Slice { element } => {
+                // Unsized: only meaningful directly behind a reference.
+                if !matches!(usage, TypeUse::Referent { .. }) {
+                    return Err(FactsError::unsupported(
+                        &self.budget,
+                        "unsupported: slice type outside a reference",
+                    ));
+                }
+                child(element, TypeUse::Aggregate)?;
+            }
             Ty::Ref { kind, referent } => {
                 let depth = match usage {
                     TypeUse::Root | TypeUse::Aggregate => 1,
@@ -1780,6 +1790,7 @@ impl ValidatedTraitWorld {
                     len: bl,
                 },
             ) => Ok(al == bl && self.eq_ty(a, b, depth + 1)?),
+            (Ty::Slice { element: a }, Ty::Slice { element: b }) => self.eq_ty(a, b, depth + 1),
             (
                 Ty::Ref {
                     kind: a,
@@ -4834,6 +4845,8 @@ impl ValidatedTraitWorld {
                 true
             }
             Ty::Ref { kind, .. } => item == CatalogItem::Sized || *kind == ir::BorrowKind::Shared,
+            // `[T]` is neither Sized nor Copy/Clone.
+            Ty::Slice { .. } => false,
             Ty::Int(_) | Ty::Bool | Ty::Unit | Ty::Never => true,
         };
         if !known {

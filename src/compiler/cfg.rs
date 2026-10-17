@@ -2704,6 +2704,11 @@ impl Lowerer<'_> {
         self.live(destination.local, Some(id));
         let origin = Some(id);
         match &expression.kind {
+            ir::ExprKind::ArrayToSlice { .. }
+            | ir::ExprKind::SliceLen { .. }
+            | ir::ExprKind::SliceIndex { .. } => {
+                return Err(SLICE_UNSUPPORTED.into());
+            }
             ir::ExprKind::IntCast { value, to } => {
                 let value = self.expression(*value)?;
                 self.assign(
@@ -3114,12 +3119,37 @@ enum SourceLowering<'a> {
     Original(&'a std::sync::Arc<super::source_replay::CanonicalSourcePublication>),
 }
 
+/// Explicit fence until CFG/ownership/borrow lowering for shared byte slices
+/// exists: no slice-typed value or slice operation is lowered or published.
+pub(super) const SLICE_UNSUPPORTED: &str =
+    "unsupported: shared byte slices not yet supported by CFG lowering";
+
+fn reject_slices(source: &ir::CheckedFunction) -> Result<(), String> {
+    let slice_expr = source.exprs.iter().any(|expression| {
+        expression.ty.contains_slice()
+            || matches!(
+                expression.kind,
+                ir::ExprKind::ArrayToSlice { .. }
+                    | ir::ExprKind::SliceLen { .. }
+                    | ir::ExprKind::SliceIndex { .. }
+            )
+    });
+    if slice_expr
+        || source.result.contains_slice()
+        || source.locals.iter().any(|local| local.ty.contains_slice())
+    {
+        return Err(SLICE_UNSUPPORTED.into());
+    }
+    Ok(())
+}
+
 fn lower_internal_with_source(
     source: &ir::CheckedFunction,
     facts: ir::FactsCtx<'_>,
     budget: Option<&ir::PlanBudget>,
     authority: SourceLowering<'_>,
 ) -> Result<Function, String> {
+    reject_slices(source)?;
     if let Some(budget) = budget {
         source.preflight_plan(facts, budget)?;
         budget.retain_bytes(
