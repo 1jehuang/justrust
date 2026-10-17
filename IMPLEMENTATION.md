@@ -250,8 +250,14 @@ missing-file changes invalidate only justified consumers without stale lookup.
       discriminants, recursive types, alignment/layout and repr attributes.
       Bounded nongeneric unit and nonempty tuple forms are delivered under
       UNIT-STRUCTS.md and TUPLE-STRUCTS.md, not full aggregate compatibility.
-- [ ] Generalize slices/DST metadata, array/slice coercions and indexing beyond
-      delivered shared `&[u8]`; retain bounds/evaluation order and size limits.
+- [x] General typed shared `&[T]` parameters/locals, exact array unsizing,
+      element-count len and authoritative Copy reads, including rigid generic,
+      wide and Copy aggregate elements, under TYPED-SLICES.md. Checked native
+      stride, bounds/overflow, independent values and original loan origins are
+      verified; this is not general reference/DST or platform ABI support.
+- [ ] Complete remaining slice/DST metadata, mutable/range indexing, slice returns,
+      nested reference-bearing elements and borrowed indexed-place capabilities,
+      retaining bounds/evaluation order, concrete admission and size limits.
 - [ ] Complete nested/or/range/ref/@/slice patterns, guards, match ergonomics,
       exhaustiveness/usefulness, conditional pattern forms beyond delivered
       IF-LET.md/WHILE-LET.md/LET-ELSE.md slices and destructuring assignment.

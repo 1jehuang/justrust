@@ -379,8 +379,15 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
             Ty::Ref { referent, .. }
             | Ty::Array {
                 element: referent, ..
+            } => child(referent)?,
+            Ty::Slice { element } => {
+                // A slice descriptor carries its outer loan, not channels
+                // hidden inside an element. Concrete element references are
+                // rejected again after substitution, never given a fake tail.
+                child(element)?;
+                reject_references(element, budget)?;
+                has = false;
             }
-            | Ty::Slice { element: referent } => child(referent)?,
             Ty::Tuple(fields) => {
                 for ty in fields.iter() {
                     child(ty)?;
@@ -3299,8 +3306,8 @@ pub enum Ty {
         element: Arc<Ty>,
         len: usize,
     },
-    /// Unsized slice. Has no by-value layout. Only `Ref<Slice<u8>>` (shared) is
-    /// admitted by the frontend; every other position is rejected.
+    /// Unsized slice. Only an admitted shared root reference has a native
+    /// descriptor; the exact element type is retained through substitution.
     Slice {
         element: Arc<Ty>,
     },
@@ -3312,6 +3319,35 @@ pub enum Ty {
 }
 
 impl Ty {
+    /// Element of exactly a shared root slice reference, without granting
+    /// element admission, Copy permission, or a concrete native layout.
+    pub fn shared_slice_element(&self) -> Option<&Ty> {
+        match self {
+            Self::Ref {
+                kind: BorrowKind::Shared,
+                referent,
+            } => match referent.as_ref() {
+                Self::Slice { element } => Some(element.as_ref()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Exact element and extent of a shared root array reference.
+    pub fn shared_array_element_len(&self) -> Option<(&Ty, usize)> {
+        match self {
+            Self::Ref {
+                kind: BorrowKind::Shared,
+                referent,
+            } => match referent.as_ref() {
+                Self::Array { element, len } => Some((element.as_ref(), *len)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Exactly shared `&[u8]`.
     pub fn shared_byte_slice(&self) -> bool {
         matches!(
@@ -3439,6 +3475,246 @@ impl Ty {
                 true
             }
         }
+    }
+}
+
+/// Bounded postorder DAG walk. Metadata and binder validation happens first.
+fn slice_boundary_walk(
+    ty: &Ty,
+    allow_references: bool,
+    budget: Option<&PlanBudget>,
+    depth: usize,
+    work: &mut usize,
+) -> Result<(), String> {
+    struct Scratch<T> {
+        values: Vec<T>,
+        base: Option<PlanReservation>,
+        extra: Option<PlanReservation>,
+    }
+    impl<T> Scratch<T> {
+        fn new() -> Self {
+            Self {
+                values: Vec::new(),
+                base: None,
+                extra: None,
+            }
+        }
+        fn push(&mut self, value: T, budget: Option<&PlanBudget>) -> Result<(), String> {
+            if self.values.len() == self.values.capacity() {
+                let target = self
+                    .values
+                    .capacity()
+                    .checked_mul(2)
+                    .ok_or("slice scratch capacity overflow")?
+                    .max(4);
+                let bytes = target
+                    .checked_mul(std::mem::size_of::<T>())
+                    .ok_or("slice scratch byte overflow")?;
+                let mut staged = Self::new();
+                staged.base = budget.map(|b| b.reserve_bytes(bytes)).transpose()?;
+                if let Some(b) = budget {
+                    b.charge_work(self.values.len())?;
+                }
+                staged
+                    .values
+                    .try_reserve_exact(target)
+                    .map_err(|_| "slice scratch allocation resource failure")?;
+                let excess = staged
+                    .values
+                    .capacity()
+                    .checked_sub(target)
+                    .and_then(|n| n.checked_mul(std::mem::size_of::<T>()))
+                    .ok_or("slice scratch capacity overflow")?;
+                staged.extra = budget.map(|b| b.reserve_bytes(excess)).transpose()?;
+                staged.values.append(&mut self.values);
+                *self = staged;
+            }
+            self.values.push(value);
+            Ok(())
+        }
+    }
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    struct Key(u8, usize);
+    enum Frame<'a> {
+        Enter(&'a Ty, usize),
+        Finish(Key, usize, usize),
+    }
+    fn charge(budget: Option<&PlanBudget>, work: &mut usize) -> Result<(), String> {
+        if let Some(b) = budget {
+            if b.has_resource_failure() {
+                return Err("planning resource budget already exhausted".into());
+            }
+            b.charge_work(1)?;
+        }
+        *work = work.checked_add(1).ok_or("slice type work overflow")?;
+        if *work > MAX_PATTERN_PROJECTION_WORK {
+            return Err("slice type resource limit exceeded".into());
+        }
+        Ok(())
+    }
+    let mut pending = Scratch::new();
+    // None is a currently visiting allocation, Some(height) a complete subtree.
+    let mut memo: Scratch<(Key, Option<usize>)> = Scratch::new();
+    let mut heights: Scratch<usize> = Scratch::new();
+    charge(budget, work)?;
+    pending.push(Frame::Enter(ty, depth), budget)?;
+    while let Some(frame) = pending.values.pop() {
+        charge(budget, work)?;
+        match frame {
+            Frame::Finish(key, at, count) => {
+                let mut height = 0usize;
+                for _ in 0..count {
+                    charge(budget, work)?;
+                    height = height.max(
+                        heights
+                            .values
+                            .pop()
+                            .ok_or("slice DAG result underflow")?
+                            .checked_add(1)
+                            .ok_or("slice type depth overflow")?,
+                    );
+                }
+                if let Some(b) = budget {
+                    b.check_depth(at.checked_add(height).ok_or("slice type depth overflow")?)?;
+                }
+                let mut found = false;
+                for (candidate, result) in &mut memo.values {
+                    charge(budget, work)?;
+                    if *candidate == key {
+                        *result = Some(height);
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err("slice DAG completion has no owner".into());
+                }
+                heights.push(height, budget)?;
+            }
+            Frame::Enter(node, at) => {
+                if let Some(b) = budget {
+                    b.check_depth(at)?;
+                }
+                let key = match node {
+                    Ty::Ref { .. } if !allow_references => return Err("unsupported: slice elements containing references or slices, or nested slice carriers".into()),
+                    Ty::Slice { .. } => return Err("unsupported: slice elements containing references or slices, or nested slice carriers".into()),
+                    Ty::Ref { referent, .. } => Some(Key(0, Arc::as_ptr(referent) as usize)),
+                    Ty::Array { element, .. } => Some(Key(1, Arc::as_ptr(element) as usize)),
+                    Ty::Tuple(fields) => Some(Key(2, fields.as_ptr() as usize)),
+                    Ty::Struct(value) => Some(Key(3, value.def() as *const StructDef as usize)),
+                    Ty::Enum(value) => Some(Key(4, value.def() as *const EnumDef as usize)),
+                    _ => None,
+                };
+                let Some(key) = key else {
+                    heights.push(0usize, budget)?;
+                    continue;
+                };
+                let mut known = None;
+                for (candidate, result) in &memo.values {
+                    charge(budget, work)?;
+                    if *candidate == key {
+                        known = Some(*result);
+                        break;
+                    }
+                }
+                if let Some(result) = known {
+                    let height = result.ok_or("slice type by-value cycle")?;
+                    if let Some(b) = budget {
+                        b.check_depth(at.checked_add(height).ok_or("slice type depth overflow")?)?;
+                    }
+                    heights.push(height, budget)?;
+                    continue;
+                }
+                memo.push((key, None), budget)?;
+                let finish = pending.values.len();
+                pending.push(Frame::Finish(key, at, 0), budget)?;
+                let next = at.checked_add(1).ok_or("slice type depth overflow")?;
+                let mut count = 0usize;
+                let mut child = |ty| -> Result<(), String> {
+                    charge(budget, work)?;
+                    count = count.checked_add(1).ok_or("slice DAG edge overflow")?;
+                    pending.push(Frame::Enter(ty, next), budget)
+                };
+                match node {
+                    Ty::Ref { referent, .. }
+                    | Ty::Array {
+                        element: referent, ..
+                    } => child(referent)?,
+                    Ty::Tuple(fields) => {
+                        for field in fields.iter() {
+                            child(field)?;
+                        }
+                    }
+                    Ty::Struct(value) => {
+                        for argument in value.def().type_args.iter() {
+                            child(argument)?;
+                        }
+                        for field in value.def().fields.iter() {
+                            child(&field.ty)?;
+                        }
+                    }
+                    Ty::Enum(value) => {
+                        for argument in value.def().type_args.iter() {
+                            child(argument)?;
+                        }
+                        for variant in value.def().variants.iter() {
+                            for field in variant.fields.iter() {
+                                child(&field.ty)?;
+                            }
+                        }
+                    }
+                    _ => return Err("slice DAG node lost compound shape".into()),
+                }
+                pending.values[finish] = Frame::Finish(key, at, count);
+            }
+        }
+    }
+    if heights.values.len() != 1 {
+        return Err("slice DAG result count mismatch".into());
+    }
+    Ok(())
+}
+
+fn validate_shared_slice_element_inner(
+    element: &Ty,
+    facts: FactsCtx<'_>,
+    budget: Option<&PlanBudget>,
+) -> Result<(), String> {
+    if let Some(budget) = budget {
+        if budget.has_resource_failure() {
+            return Err("planning resource budget already exhausted".into());
+        }
+        facts.validate_value_ty_with_budget(element, budget)?;
+    } else {
+        facts.validate_value_ty(element)?;
+    }
+    slice_boundary_walk(element, false, budget, 0, &mut 0)
+}
+
+/// Validate exact element metadata, Sized obligations and the current
+/// reference-free slice boundary. Re-run after every concrete substitution.
+pub fn validate_shared_slice_element(
+    element: &Ty,
+    facts: FactsCtx<'_>,
+    budget: &PlanBudget,
+) -> Result<(), String> {
+    validate_shared_slice_element_inner(element, facts, Some(budget))
+}
+
+/// Legacy structural callers have no planning ledger. Validated callers reuse
+/// their original ledger, never an equal-limit replacement authority.
+pub fn validate_shared_slice_element_with_facts(
+    element: &Ty,
+    facts: FactsCtx<'_>,
+) -> Result<(), String> {
+    validate_shared_slice_element_inner(element, facts, facts.validated().map(|f| f.budget()))
+}
+
+fn validate_slice_carrier_with_facts(ty: &Ty, facts: FactsCtx<'_>) -> Result<(), String> {
+    if let Some(element) = ty.shared_slice_element() {
+        validate_shared_slice_element_with_facts(element, facts)
+    } else {
+        slice_boundary_walk(ty, true, facts.validated().map(|f| f.budget()), 0, &mut 0)
     }
 }
 
@@ -4941,18 +5217,18 @@ pub enum ExprKind {
         base: ExprId,
         index: ExprId,
     },
-    /// Unsizes exactly shared `&[u8; N]` to shared `&[u8]`. N comes from the
+    /// Unsizes shared `&[T; N]` to shared `&[T]`. N comes from the
     /// validated operand type. The operand is evaluated once and its loan is the
     /// only storage authority; this node appends length metadata only.
     ArrayToSlice {
         reference: ExprId,
     },
-    /// Builtin length of exactly shared `&[u8]`, result `usize`.
+    /// Builtin length of an admitted shared slice, result `usize`.
     SliceLen {
         slice: ExprId,
     },
-    /// Runtime bounds-checked read of exactly shared `&[u8]` at a `usize` index,
-    /// result `u8` by copy. There is no slice place or mutable slice index.
+    /// Runtime bounds-checked Copy read of the exact shared slice element at a
+    /// `usize` index. There is no slice place or mutable slice index.
     SliceIndex {
         slice: ExprId,
         index: ExprId,
@@ -5635,11 +5911,22 @@ impl CheckedFunction {
             }
         }
         facts.validate_value_ty(&self.result)?;
+        // Returns remain closed even though the descriptor is a legal local
+        // and argument. All metadata is checked before the position boundary.
+        slice_boundary_walk(
+            &self.result,
+            true,
+            facts.validated().map(|f| f.budget()),
+            0,
+            &mut 0,
+        )?;
         for local in &self.locals {
             facts.validate_value_ty(&local.ty)?;
+            validate_slice_carrier_with_facts(&local.ty, facts)?;
         }
         for expression in &self.exprs {
             facts.validate_value_ty(&expression.ty)?;
+            validate_slice_carrier_with_facts(&expression.ty, facts)?;
         }
         let local = |id: LocalId| {
             if id.0 < self.locals.len() {
@@ -5853,11 +6140,16 @@ impl CheckedFunction {
                 ExprKind::ArrayToSlice { reference } => {
                     expr(*reference)?;
                     let source = &self.exprs[reference.0];
-                    if source.ty.shared_byte_array_len().is_none() {
-                        return Err("array-to-slice requires shared byte array reference".into());
-                    }
-                    if !value.ty.shared_byte_slice() {
-                        return Err("array-to-slice result must be shared byte slice".into());
+                    let Some((source_element, _)) = source.ty.shared_array_element_len() else {
+                        return Err("array-to-slice requires shared array reference".into());
+                    };
+                    let Some(result_element) = value.ty.shared_slice_element() else {
+                        return Err("array-to-slice result must be shared slice".into());
+                    };
+                    validate_shared_slice_element_with_facts(source_element, facts)?;
+                    validate_shared_slice_element_with_facts(result_element, facts)?;
+                    if !pattern_types_equal(source_element, result_element, &mut 0)? {
+                        return Err("array-to-slice element type mismatch".into());
                     }
                     if value.completion != source.completion {
                         return Err("array-to-slice completion mismatch".into());
@@ -5866,9 +6158,10 @@ impl CheckedFunction {
                 ExprKind::SliceLen { slice } => {
                     expr(*slice)?;
                     let source = &self.exprs[slice.0];
-                    if !source.ty.shared_byte_slice() {
-                        return Err("slice length requires shared byte slice".into());
-                    }
+                    let Some(element) = source.ty.shared_slice_element() else {
+                        return Err("slice length requires shared slice".into());
+                    };
+                    validate_shared_slice_element_with_facts(element, facts)?;
                     if value.ty != Ty::Int(IntTy::Usize) {
                         return Err("slice length result must be usize".into());
                     }
@@ -5879,14 +6172,21 @@ impl CheckedFunction {
                 ExprKind::SliceIndex { slice, index } => {
                     expr(*slice)?;
                     expr(*index)?;
-                    if !self.exprs[slice.0].ty.shared_byte_slice() {
-                        return Err("slice index requires shared byte slice".into());
-                    }
+                    let Some(element) = self.exprs[slice.0].ty.shared_slice_element() else {
+                        return Err("slice index requires shared slice".into());
+                    };
+                    validate_shared_slice_element_with_facts(element, facts)?;
                     if self.exprs[index.0].ty != Ty::Int(IntTy::Usize) {
                         return Err("slice index requires usize".into());
                     }
-                    if value.ty != Ty::Int(IntTy::U8) {
-                        return Err("slice index result must be u8".into());
+                    if !pattern_types_equal(&value.ty, element, &mut 0)? {
+                        return Err("slice index result element type mismatch".into());
+                    }
+                    if !facts.must_copy(element)? {
+                        return Err(
+                            "slice index cannot move a non-Copy element from borrowed storage"
+                                .into(),
+                        );
                     }
                 }
                 ExprKind::Array(elements) => {
@@ -6248,6 +6548,10 @@ impl CheckedFunction {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "ir/typed_slice_tests.rs"]
+mod typed_slice_tests;
 
 #[cfg(test)]
 mod original_replay_transport_tests {

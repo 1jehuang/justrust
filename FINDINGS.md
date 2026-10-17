@@ -1,5 +1,44 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: typed shared slices with exact generic elements and native stride
+
+- Accepted bounded TYPED-SLICES.md, not general DSTs or full Rust. Shared params
+  and locals carry exact scalar, wide, aggregate or rigid generic element types.
+  Array unsizing preserves T and loan origins; len counts elements without Copy;
+  indexed whole values require original Copy facts and independent result storage.
+  Byte-only helpers remain byte-only. Mutable/range/indexed borrowed-place access,
+  slice returns and reference-bearing elements remain explicit boundaries.
+- The private descriptor stays two words. Concrete stride is the same checked
+  value_size as arrays, including wide and 320-byte physical-copy controls.
+  Unsigned bounds precede checked extent/offset multiplication, pointer addition
+  and load. Scalar signed/float/bool and whole aggregate snapshots are exercised.
+- Frozen stock32 source bytes/order match JSON SHA256
+  7fdc2d02f5053be00f5724b3239634915e23afda97767b4b1c43994db0017bc4.
+  Partition:18 runtime,3 bounds traps,5 ordinary invalid,6 stock-valid unsupported.
+  Each debug/release native profile checks128 workers1/8 CHECK/BUILD cells and42
+  ELF executions with compiler fallback disabled. Stock SIGABRT/panic output and
+  native101/empty-stream traps are deliberately distinct checked contracts.
+- Initial actual failures are retained: generic slice inference lacked array
+  element evidence, canonical carrier transport omitted Slice recursion, and the
+  new ordinary-type scan expanded a shared nominal DAG exponentially. Fixes reuse
+  checked element evidence, exact schema transport and charged postorder DAG
+  memoization with subtree heights; scratch backing remains owned through rounded
+  capacity admission and errors. No cap increase or unmetered contains_slice bypass.
+- Metadata/Sized/ref-free admission is rechecked after concrete substitution.
+  Public28 and private IR6 authority controls retain exact type/Copy/foreign-world
+  negatives. Two compile witnesses hit earlier generic-argument boundaries, so
+  they are not misrepresented as post-substitution proofs. Four old parameter
+  witnesses are source-preserving promotions. Two new temporary-array witnesses
+  retain their exact unsupported parser outcome, not fabricated rvalue lifetimes.
+- Final hosted all-target check160015666-3170287 and strict lint160018813-3170509
+  passed. Full160022628-3170828 passed2795/2795 across136 binaries with zero
+  ignored/filtered; release160045140-3172528 passed34/34. Earlier private release
+  slice filter155909005-3161852 passed49 with1048 explicitly filtered. Formatting
+  and diff checks passed. All21 actual failed/passing receipts are retained in
+  data/runs/xps14/2026-10-17-typed-slices.jsonl, including the mistaken release
+  target command. Early stable-client SSH fallback is recorded; final gates were
+  hosted. No performance improvement or full Rust compatibility is claimed.
+
 ## 2026-10-17: complete generic trait applications through proof and native keys
 
 - Accepted bounded GENERIC-TRAITS.md, not full Rust. Source trait binders retain

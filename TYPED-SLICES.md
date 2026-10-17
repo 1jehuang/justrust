@@ -1,6 +1,7 @@
 # Typed shared slices with checked element layout
 
-Status: pending implementation acceptance. Full Rust compatibility remains open.
+Status: accepted bounded implementation on October 17, 2026. Full Rust
+compatibility, general DSTs and the excluded borrow capabilities remain open.
 
 ## Scope and authority
 
@@ -75,3 +76,37 @@ execution under debug/release bootstrap profiles, complete unfiltered regression
 strict lint and formatting. Retain failed and passing measured receipts. Associated
 type/projection normalization remains the next independent proof foundation, not
 an Iterator or full Rust claim from this slice milestone.
+
+## Measured acceptance
+
+The frozen 32-source stock-first corpus retains every source byte and its order:
+18 normal runtime programs, three bounds traps, five ordinary invalid programs
+and six stock-valid capability boundaries. Native workers 1/8 CHECK/BUILD execute
+128 cells and 42 ELF images in each debug/release bootstrap profile with compiler
+fallback disabled. Stock abort/panic diagnostics and the native exit-101 empty
+stream trap contract are checked separately, not reported as identical behavior.
+
+Original facts validate all typed functions, including nominal Copy permission
+and rigid generic templates. The 28 public authority controls and six private IR
+controls retain malformed element/result/index, foreign metadata, concrete
+reference substitution, original resource latches and real Copy-proof checks.
+Four existing private parameter witnesses are promoted without changing source;
+byte-only helper predicates and the remaining old boundaries stay unchanged.
+Two newly written temporary-array-borrow controls retain their exact source as
+parser boundaries rather than pretending this milestone admits rvalue borrows.
+
+The final frozen hosted gate passed all-target check, strict all-target Clippy
+with `-D warnings`, 2,795 unfiltered tests across 136 binaries, release public
+acceptance 34/34, formatting and diff checks. The earlier release private slice
+filter passed 49 tests with 1,048 unrelated tests explicitly filtered out. The
+retained receipt file is `data/runs/xps14/2026-10-17-typed-slices.jsonl`.
+
+Real failed gates are retained alongside the passing runs: missing array-to-slice
+inference evidence, missing canonical Slice element transport, exponential shared
+nominal-DAG scanning, the scratch type annotation, precise earlier capability
+diagnostics, legacy fact-free Copy validation and a mistaken release target name.
+The DAG scan now charges checked postorder traversal and actual-capacity scratch,
+retains subtree heights on reuse, and stages backing before admission. Allocation
+failure is an error, not an invented byte-budget-denial record. Early hosted SSH
+failures used the stable client's explicit local fallback; the final acceptance
+ran on hosted. No compile-speed or broad Rust compatibility claim follows.

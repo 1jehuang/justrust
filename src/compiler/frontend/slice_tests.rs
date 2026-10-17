@@ -205,6 +205,18 @@ fn slice_locals_and_coercion_sites() {
 }
 
 #[test]
+fn typed_shared_slice_parameters_are_admitted() {
+    for source in [
+        "fn f(b: &[u16]) {}",
+        "fn f(b: &[i32]) {}",
+        "fn f<T>(b: &[T]) {}",
+        "fn f<T>(b: &[u8], t: T) {}",
+    ] {
+        publish(source, 0).unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
+}
+
+#[test]
 fn rejects_outside_admitted_domain() {
     for (source, index, needle) in [
         ("fn f(b: [u8]) {}", 0, "bare by-value slice"),
@@ -214,10 +226,6 @@ fn rejects_outside_admitted_domain() {
             "bare by-value slice",
         ),
         ("fn f(b: &mut [u8]) {}", 0, "mutable slice"),
-        ("fn f(b: &[u16]) {}", 0, "non-u8 slice"),
-        ("fn f(b: &[i32]) {}", 0, "non-u8 slice"),
-        ("fn f<T>(b: &[T]) {}", 0, "generic slice"),
-        ("fn f<T>(b: &[u8], t: T) {}", 0, "generic callables"),
         ("fn f<'a>(b: &'a [u8]) -> &'a [u8] { b }", 0, "slice return"),
         ("fn f(b: &&[u8]) {}", 0, "slice"),
         ("fn f(b: (&[u8], u8)) {}", 0, "slice"),

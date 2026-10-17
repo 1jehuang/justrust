@@ -40,7 +40,7 @@ const WIDE_SCRATCH_BYTES: i32 = 256;
 
 const MAX_ARGS: usize = 4096;
 /// Expanded stack-word limit per call: every logical argument may occupy at
-/// most two words (shared byte slice: data, len) plus one sret word.
+/// most two words (shared slice: data, len) plus one sret word.
 const MAX_ARG_WORDS: usize = 2 * MAX_ARGS + 1;
 const MAX_FRAME_BYTES: i32 = 1024 * 1024;
 const BASE: u64 = 0x400000;
@@ -54,9 +54,9 @@ pub struct SliceLayout {
     pub data_offset: u8,
     pub len_offset: u8,
     pub word_bytes: u8,
-    /// Private element stride. Current private u8 arrays use eight-byte
-    /// leaves, so this is 8, NOT Rust's packed 1.
-    pub element_stride: u8,
+    /// Exact private array element size, not Rust/FFI layout. This is compile
+    /// time metadata only, never a third runtime descriptor word.
+    pub element_stride: u32,
 }
 
 /// `&[u8]` on this private x86-64 backend: 16-byte carrier storage, true
@@ -68,14 +68,23 @@ pub const SHARED_BYTE_SLICE_LAYOUT: SliceLayout = SliceLayout {
     element_stride: 8,
 };
 
+fn shared_slice_layout(element: &ir::Ty) -> Result<SliceLayout, String> {
+    Ok(SliceLayout {
+        element_stride: u32::try_from(value_size(element)?)
+            .map_err(|_| "slice element exceeds private layout limit")?,
+        ..SHARED_BYTE_SLICE_LAYOUT
+    })
+}
+
 /// Expanded stack words a parameter of `ty` occupies in the private call ABI.
 /// Every currently admitted shape is one word (scalars, thin references and
 /// aggregate snapshot pointers). Unsupported shapes error exactly as their
 /// transport classification does.
-/// Exactly shared `&[u8]` is true two-word transport (data, len); it is
+/// Exactly shared `&[T]` is true two-word transport (data, len); it is
 /// checked BEFORE `indirect`. Bare `Slice` has no by-value ABI and errors.
 fn argument_words(ty: &ir::Ty) -> Result<usize, String> {
-    if ty.shared_byte_slice() {
+    if let Some(element) = ty.shared_slice_element() {
+        shared_slice_layout(element)?;
         return Ok(2);
     }
     indirect(ty)?;
@@ -126,11 +135,11 @@ fn argument_slot_offsets(words: &[usize], sret: bool) -> Result<Vec<i32>, String
     Ok(offsets)
 }
 
-/// Every slice shape other than exactly shared `&[u8]` (bare `[T]`, other
-/// elements, mutable slices, slices nested in aggregates) has no native layout.
+/// Only exactly shared `&[T]` has a native carrier. Bare/mutable/nested slices
+/// remain unsupported, as do elements rejected by concrete admission.
 const SLICE_UNSUPPORTED: &str =
-    "unsupported: only shared &[u8] parameters and locals have a native slice layout";
-const SLICE_RESULT_UNSUPPORTED: &str = "unsupported: shared byte slice returns have no native ABI";
+    "unsupported: only shared &[T] parameters and locals have a native slice layout";
+const SLICE_RESULT_UNSUPPORTED: &str = "unsupported: shared slice returns have no native ABI";
 
 /// Transport class of a function or call result. Slice results are rejected
 /// here, before `indirect` would classify the carrier as snapshot storage.
@@ -141,12 +150,13 @@ fn result_indirect(ty: &ir::Ty) -> Result<bool, String> {
     indirect(ty)
 }
 
-/// Storage transport class. Exactly shared `&[u8]` is a 16-byte frame carrier
+/// Storage transport class. Exactly shared `&[T]` is a 16-byte frame carrier
 /// whose operand convention is its snapshot ADDRESS in rax, exactly like
 /// aggregates, so local copies move both words. It never crosses a call
 /// boundary as a pointer: calls use `argument_words` == 2 and push both words.
 fn indirect(ty: &ir::Ty) -> Result<bool, String> {
-    if ty.shared_byte_slice() {
+    if let Some(element) = ty.shared_slice_element() {
+        shared_slice_layout(element)?;
         return Ok(true);
     }
     if ty.contains_slice() {
@@ -177,7 +187,8 @@ fn value_size(ty: &ir::Ty) -> Result<i32, String> {
     if matches!(ty, ir::Ty::Param(_)) {
         return Err("type parameter has no native layout".into());
     }
-    if ty.shared_byte_slice() {
+    if let Some(element) = ty.shared_slice_element() {
+        shared_slice_layout(element)?;
         return Ok(2 * i32::from(SHARED_BYTE_SLICE_LAYOUT.word_bytes));
     }
     if ty.contains_slice() {
@@ -539,10 +550,10 @@ impl<'a> Emitter<'a> {
         }
         Ok(())
     }
-    // Shared byte slice carrier helpers. Convention: a slice operand leaves
+    // Shared slice carrier helpers. Convention: a slice operand leaves
     // the ADDRESS of a two-word carrier snapshot in rax (like aggregates), but
     // unlike aggregates that address never crosses a call boundary: calls push
-    // both words. Every store/load/call site must test the shared-byte-slice
+    // both words. Every store/load/call site must test the exact shared-slice
     // shape BEFORE the existing `indirect`/scalar branches.
     fn load_word(&mut self, register: u8, base: u8, displacement: u8) {
         // mov reg64, [base + disp8]
@@ -644,15 +655,43 @@ impl<'a> Emitter<'a> {
     }
     /// SliceIndex step 2: rax = full 64-bit unsigned index, rsi = data,
     /// rdx = len. Trap (exit 101) on index >= len BEFORE scaling, address
-    /// formation or load. Then load the eight-byte element and normalize u8.
-    fn checked_slice_index_load(&mut self, layout: SliceLayout) {
+    /// formation or load. Check full descriptor extent and element offset
+    /// using unsigned multiplication, then load the exact element value.
+    fn checked_slice_index_load(
+        &mut self,
+        layout: SliceLayout,
+        element: &ir::Ty,
+    ) -> Result<(), String> {
+        let stride = i32::try_from(layout.element_stride)
+            .map_err(|_| "slice stride exceeds private layout limit")?;
+        if stride != value_size(element)? {
+            return Err("slice stride disagrees with exact array element layout".into());
+        }
         self.bytes(&[0x48, 0x39, 0xd0]); // cmp rax, rdx
         self.trap_if(0x83); // jae: unsigned, so high-bit indices trap
-        self.bytes(&[0x48, 0x69, 0xc0]); // rax *= private element stride
-        self.i32(i32::from(layout.element_stride));
+        self.bytes(&[0x49, 0x89, 0xc0]); // r8 = index snapshot
+        self.bytes(&[0x48, 0x89, 0xd0, 0xb9]); // rax = len, ecx = stride
+        self.i32(stride);
+        self.bytes(&[0x48, 0xf7, 0xe1]); // unsigned rdx:rax = len * stride
+        self.trap_if(0x82); // jc: multiplication overflow
+        self.bytes(&[0x48, 0x01, 0xf0]); // rax = data + extent
+        self.trap_if(0x82); // jc: pointer extent overflow
+        self.bytes(&[0x4c, 0x89, 0xc0]); // rax = original index snapshot
+        self.bytes(&[0x48, 0xf7, 0xe1]); // unsigned rdx:rax = index * stride
+        self.trap_if(0x82);
         self.bytes(&[0x48, 0x01, 0xf0]); // rax += data
-        self.bytes(&[0x48, 0x8b, 0x00]);
-        self.normalize_integer(ir::IntTy::U8);
+        self.trap_if(0x82); // jc: pointer element overflow
+        if indirect(element)? {
+            // No borrowed element address escapes as a value: materialize an
+            // independent full wide/aggregate snapshot before assignment.
+            self.store_value(self.aggregate_scratch, element)?;
+        } else {
+            self.bytes(&[0x48, 0x8b, 0x00]);
+            if let ir::Ty::Int(integer) = element {
+                self.normalize_integer(*integer);
+            }
+        }
+        Ok(())
     }
     fn trap_block(&mut self) -> Result<(), String> {
         let trap = self.position();
@@ -664,13 +703,19 @@ impl<'a> Emitter<'a> {
         }
         Ok(())
     }
-    /// rax = address of an exactly shared `&[u8]` whole-local carrier.
+    /// rax = address of an exactly shared `&[T]` whole-local carrier.
     fn slice_operand(&mut self, operand: &cfg::Operand) -> Result<(), String> {
         let (cfg::Operand::Copy(place) | cfg::Operand::Move(place)) = operand else {
             return Err("slice operand requires a local carrier".into());
         };
-        if !place.projection.is_empty() || !self.function().place_ty(place)?.shared_byte_slice() {
-            return Err("slice operand requires a whole shared &[u8] local".into());
+        if !place.projection.is_empty()
+            || self
+                .function()
+                .place_ty(place)?
+                .shared_slice_element()
+                .is_none()
+        {
+            return Err("slice operand requires a whole shared &[T] local".into());
         }
         self.load_place(place)
     }
@@ -1323,13 +1368,13 @@ impl<'a> Emitter<'a> {
             cfg::Rvalue::ArrayToSlice { reference } => {
                 // N comes only from the validated operand type. The operand is
                 // the thin array pointer (the dummy word address for N == 0).
-                let len = self
-                    .function()
-                    .operand_ty(reference)?
-                    .shared_byte_array_len()
-                    .ok_or("array-to-slice requires exactly shared &[u8; N]")?;
+                let source = self.function().operand_ty(reference)?;
+                let (element, len) = source
+                    .shared_array_element_len()
+                    .ok_or("array-to-slice requires exactly shared &[T; N]")?;
+                let layout = shared_slice_layout(element)?;
                 self.operand(reference)?;
-                self.array_to_slice(SHARED_BYTE_SLICE_LAYOUT, self.aggregate_scratch, len)?;
+                self.array_to_slice(layout, self.aggregate_scratch, len)?;
             }
             cfg::Rvalue::SliceLen { slice } => {
                 self.slice_operand(slice)?;
@@ -1339,8 +1384,13 @@ impl<'a> Emitter<'a> {
                 if self.function().operand_ty(index)? != ir::Ty::Int(ir::IntTy::Usize) {
                     return Err("slice index requires genuine usize operand".into());
                 }
+                let slice_ty = self.function().operand_ty(slice)?;
+                let element = slice_ty
+                    .shared_slice_element()
+                    .ok_or("slice index requires exactly shared &[T]")?;
+                let layout = shared_slice_layout(element)?;
                 self.slice_operand(slice)?;
-                self.snapshot_slice(SHARED_BYTE_SLICE_LAYOUT);
+                self.snapshot_slice(layout);
                 // Index transport clobbers only rax: a constant immediate or a
                 // whole-local usize load, preserving the rsi/rdx snapshot.
                 match index {
@@ -1349,7 +1399,7 @@ impl<'a> Emitter<'a> {
                     _ => return Err("slice index requires a whole-local or constant usize".into()),
                 }
                 self.operand(index)?;
-                self.checked_slice_index_load(SHARED_BYTE_SLICE_LAYOUT);
+                self.checked_slice_index_load(layout, element)?;
             }
         }
         Ok(())
@@ -1493,7 +1543,7 @@ impl<'a> Emitter<'a> {
                 let words = parameter_words(&signature.params)?;
                 let aggregate = result_indirect(&signature.result)?;
                 let cleanup = call_cleanup_bytes(&words, aggregate)?;
-                // Left-to-right evaluation. A two-word shared byte slice
+                // Left-to-right evaluation. A two-word shared slice
                 // operand leaves its carrier address in rax; both words are
                 // pushed (data, then len), never the carrier pointer itself.
                 let mut wide_argument = 0;
@@ -1514,8 +1564,12 @@ impl<'a> Emitter<'a> {
                             self.operand(operand)?;
                             self.bytes(&[0x50]);
                         }
-                        2 if param.shared_byte_slice()
-                            && self.function().operand_ty(operand)?.shared_byte_slice() =>
+                        2 if param.shared_slice_element().is_some()
+                            && self
+                                .function()
+                                .operand_ty(operand)?
+                                .shared_slice_element()
+                                .is_some() =>
                         {
                             self.slice_operand(operand)?;
                             self.push_slice_argument(SHARED_BYTE_SLICE_LAYOUT);
@@ -1574,6 +1628,33 @@ pub fn emit_cfg_function(
     resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
 ) -> Result<Object, String> {
     let function = concrete.function().as_ref();
+    let validate_slice = |ty: &ir::Ty| -> Result<(), String> {
+        if let Some(element) = ty.shared_slice_element() {
+            // Universal reference-free admission is not a concrete layout
+            // certificate. Recheck the fully substituted type and its exact
+            // sealed facts before emitting any descriptor or memory access.
+            ir::validate_shared_slice_element(
+                element,
+                ir::FactsCtx::Validated(concrete.facts()),
+                concrete.facts().budget(),
+            )?;
+            shared_slice_layout(element)?;
+        }
+        Ok(())
+    };
+    for local in &function.locals {
+        concrete.facts().budget().charge_work(1)?;
+        validate_slice(&local.ty)?;
+    }
+    for block in &function.blocks {
+        concrete.facts().budget().charge_work(1)?;
+        if let cfg::Terminator::Call { signature, .. } = &block.terminator.value {
+            for param in &signature.params {
+                concrete.facts().budget().charge_work(1)?;
+                validate_slice(param)?;
+            }
+        }
+    }
     if function.params.len() > MAX_ARGS {
         return Err(format!("at most {MAX_ARGS} parameters are supported"));
     }
@@ -1641,7 +1722,18 @@ pub fn emit_cfg_function(
                     }
                     cfg::Rvalue::EnumVariant { ty, .. } => value_size(&ir::Ty::Enum(ty.clone()))?,
                     cfg::Rvalue::ArrayToSlice { .. } => {
-                        value_size(&ir::Ty::shared_byte_slice_ty())?
+                        2 * i32::from(SHARED_BYTE_SLICE_LAYOUT.word_bytes)
+                    }
+                    cfg::Rvalue::SliceIndex { slice, .. } => {
+                        let slice_ty = function.operand_ty(slice)?;
+                        let element = slice_ty
+                            .shared_slice_element()
+                            .ok_or("slice index requires exactly shared &[T]")?;
+                        if indirect(element)? {
+                            value_size(element)?
+                        } else {
+                            0
+                        }
                     }
                     _ => 0,
                 };
@@ -1687,7 +1779,7 @@ pub fn emit_cfg_function(
     emitter.i32(frame_bytes);
     for ((local, offset), words) in function.params.iter().zip(&param_offsets).zip(&param_words) {
         let local_ty = &function.locals[local.0].ty;
-        if *words == 2 && local_ty.shared_byte_slice() {
+        if *words == 2 && local_ty.shared_slice_element().is_some() {
             // len at offset, data at offset+8, into the local carrier.
             emitter.store_slice_parameter(
                 SHARED_BYTE_SLICE_LAYOUT,
@@ -2448,7 +2540,8 @@ mod tests {
         e.bytes(&[0x58]);
         e.snapshot_slice(layout);
         e.word(index);
-        e.checked_slice_index_load(layout);
+        e.checked_slice_index_load(layout, &ir::Ty::Int(ir::IntTy::U8))
+            .unwrap();
         e.bytes(&[0x4c, 0x01, 0xd0]); // rax += len
         e.bytes(&[0x89, 0xc7, 0xb8, 60, 0, 0, 0, 0x0f, 0x05]);
         e.trap_block().unwrap();
@@ -2469,6 +2562,222 @@ mod tests {
         assert_eq!(run_slice_helpers(1, 2), Some(44 + 2));
         for (index, len) in [(3, 3), (2, 2), (0, 0), (u64::MAX, 3), (1 << 63, 3)] {
             assert_eq!(run_slice_helpers(index, len), Some(101), "{index} {len}");
+        }
+    }
+
+    #[test]
+    fn typed_slice_layout_uses_exact_array_stride_and_two_word_transport() {
+        for element in [
+            ir::Ty::Int(ir::IntTy::I8),
+            ir::Ty::Int(ir::IntTy::U128),
+            ir::Ty::Float(ir::FloatTy::F32),
+            ir::Ty::Bool,
+            ir::Ty::Tuple(vec![ir::Ty::Int(ir::IntTy::U128), ir::Ty::Bool].into()),
+            ir::Ty::Array {
+                element: std::sync::Arc::new(ir::Ty::Int(ir::IntTy::U64)),
+                len: 40,
+            },
+            ir::Ty::Array {
+                element: std::sync::Arc::new(ir::Ty::Bool),
+                len: 0,
+            },
+        ] {
+            let layout = shared_slice_layout(&element).unwrap();
+            assert_eq!(layout.element_stride as i32, value_size(&element).unwrap());
+            let slice = ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: std::sync::Arc::new(ir::Ty::Slice {
+                    element: std::sync::Arc::new(element.clone()),
+                }),
+            };
+            assert_eq!(argument_words(&slice), Ok(2));
+            assert_eq!(value_size(&slice), Ok(16));
+            assert_eq!(indirect(&slice), Ok(true));
+            assert!(result_indirect(&slice).is_err());
+            assert!(!slice.shared_byte_slice());
+            let array = ir::Ty::Array {
+                element: std::sync::Arc::new(element),
+                len: 2,
+            };
+            assert_eq!(
+                array_offset(&array, 1).unwrap().0,
+                layout.element_stride as i32
+            );
+        }
+        let large = ir::Ty::Array {
+            element: std::sync::Arc::new(ir::Ty::Int(ir::IntTy::U64)),
+            len: 40,
+        };
+        assert_eq!(shared_slice_layout(&large).unwrap().element_stride, 320);
+        let parameter = ir::Ty::Param(ir::ParamId {
+            owner: ir::BinderId {
+                declaration: ir::DeclId {
+                    snapshot: ir::SnapshotId::allocate().unwrap(),
+                    index: 0,
+                },
+            },
+            index: 0,
+        });
+        assert!(shared_slice_layout(&parameter).is_err());
+    }
+
+    // Physical helper control only, not a substitute for sealed source/CFG
+    // admission. All backing, frame and expected representations are bounded.
+    fn run_typed_slice_helper(
+        element: &ir::Ty,
+        backing: &[u64],
+        expected: &[u64],
+        index: u64,
+        len: u64,
+        pointer: Option<u64>,
+    ) -> Option<i32> {
+        assert!(backing.len() <= 80 && expected.len() <= 40);
+        let concrete = unit_concrete_fixture();
+        let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
+        let mut e = Emitter {
+            object: Object {
+                code: Vec::new(),
+                calls: Vec::new(),
+                strings: Vec::new(),
+            },
+            concrete: &concrete,
+            resolve: &resolve,
+            locals: Vec::new(),
+            aggregate_scratch: -2048,
+            wide_scratch: 0,
+            returns: Vec::new(),
+            traps: Vec::new(),
+            edges: Vec::new(),
+        };
+        e.bytes(&[0x55, 0x48, 0x89, 0xe5, 0x48, 0x81, 0xec]);
+        e.i32(2048);
+        for (word, value) in backing.iter().enumerate() {
+            e.word(*value);
+            e.bytes(&[0x48, 0x89, 0x85]);
+            e.i32(-1024 + i32::try_from(word).unwrap() * 8);
+        }
+        if let Some(pointer) = pointer {
+            e.word(pointer);
+        } else {
+            e.address(-1024);
+        }
+        let layout = shared_slice_layout(element).unwrap();
+        e.array_to_slice(layout, -32, usize::try_from(len).unwrap())
+            .unwrap();
+        e.snapshot_slice(layout);
+        e.word(index);
+        e.checked_slice_index_load(layout, element).unwrap();
+        e.bytes(&[0x49, 0x89, 0xc1]); // r9 = independent result or result pointer
+        // Destroy original backing after extraction. An aggregate alias would
+        // now read zeros rather than the complete expected snapshot.
+        for word in 0..backing.len() {
+            e.immediate(0);
+            e.bytes(&[0x48, 0x89, 0x85]);
+            e.i32(-1024 + i32::try_from(word).unwrap() * 8);
+        }
+        if indirect(element).unwrap() {
+            for (word, value) in expected.iter().enumerate() {
+                e.word(*value);
+                e.bytes(&[0x49, 0x39, 0x81]); // cmp [r9+disp32], rax
+                e.i32(i32::try_from(word).unwrap() * 8);
+                e.trap_if(0x85);
+            }
+        } else if let Some(value) = expected.first() {
+            e.word(*value);
+            e.bytes(&[0x49, 0x39, 0xc1]); // cmp r9, rax
+            e.trap_if(0x85);
+        }
+        e.bytes(&[0xbf, 42, 0, 0, 0, 0xb8, 60, 0, 0, 0, 0x0f, 0x05]);
+        e.trap_block().unwrap();
+        let elf = link(&[("main".into(), e.object)]).unwrap();
+        let path = executable_bytes(&elf);
+        let output = execute(&mut Command::new(&path));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        output.status.code()
+    }
+
+    #[test]
+    fn typed_slice_helpers_preserve_signed_float_bool_wide_and_aggregate_values() {
+        assert_eq!(
+            run_typed_slice_helper(
+                &ir::Ty::Int(ir::IntTy::I8),
+                &[249],
+                &[(-7_i64) as u64],
+                0,
+                1,
+                None
+            ),
+            Some(42)
+        );
+        assert_eq!(
+            run_typed_slice_helper(
+                &ir::Ty::Float(ir::FloatTy::F32),
+                &[u64::from((-2.5_f32).to_bits())],
+                &[u64::from((-2.5_f32).to_bits())],
+                0,
+                1,
+                None
+            ),
+            Some(42)
+        );
+        assert_eq!(
+            run_typed_slice_helper(
+                &ir::Ty::Float(ir::FloatTy::F64),
+                &[(-2.5_f64).to_bits()],
+                &[(-2.5_f64).to_bits()],
+                0,
+                1,
+                None
+            ),
+            Some(42)
+        );
+        assert_eq!(
+            run_typed_slice_helper(&ir::Ty::Bool, &[1], &[1], 0, 1, None),
+            Some(42)
+        );
+        assert_eq!(
+            run_typed_slice_helper(
+                &ir::Ty::Int(ir::IntTy::U128),
+                &[1, 2, 3, 4],
+                &[3, 4],
+                1,
+                2,
+                None
+            ),
+            Some(42)
+        );
+        let tuple = ir::Ty::Tuple(vec![ir::Ty::Int(ir::IntTy::U128), ir::Ty::Bool].into());
+        assert_eq!(
+            run_typed_slice_helper(&tuple, &[3, 4, 1, 5, 6, 0], &[5, 6, 0], 1, 2, None),
+            Some(42)
+        );
+        let large = ir::Ty::Array {
+            element: std::sync::Arc::new(ir::Ty::Int(ir::IntTy::U64)),
+            len: 40,
+        };
+        assert_eq!(
+            run_typed_slice_helper(&large, &[7; 80], &[7; 40], 1, 2, None),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn typed_slice_helpers_trap_bounds_extent_and_pointer_overflow_before_load() {
+        let element = ir::Ty::Int(ir::IntTy::U128);
+        for (index, len, pointer) in [
+            (0, 0, Some(u64::MAX)),
+            (1, 1, Some(u64::MAX)),
+            (u64::MAX, 1, Some(u64::MAX)),
+            (1 << 63, 2, Some(u64::MAX)),
+            (0, (u64::MAX / 16) + 1, Some(0)),
+            (1, 2, Some(u64::MAX - 15)),
+        ] {
+            assert_eq!(
+                run_typed_slice_helper(&element, &[], &[], index, len, pointer),
+                Some(101),
+                "{index} {len} {pointer:?}"
+            );
         }
     }
 

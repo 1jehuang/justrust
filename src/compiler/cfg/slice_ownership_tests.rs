@@ -1,4 +1,4 @@
-//! Shared byte slice (`&[u8]`) CFG lowering, ownership and borrow analysis.
+//! Shared slice CFG lowering, ownership and borrow analysis.
 //! Native emission is gated separately by the backend; these tests exercise
 //! check-only compilation, which still requires successful ownership analysis.
 use super::*;
@@ -248,4 +248,146 @@ fn large_byte_arrays_unsize_to_slices_past_the_old_4096_limit() {
         limit + 1
     ));
     assert!(error.contains("limit"), "{error}");
+}
+
+#[test]
+fn typed_slice_index_returns_exact_independent_copy_element_values() {
+    for element in [
+        "i32",
+        "i128",
+        "u128",
+        "f64",
+        "bool",
+        "(i32,bool,i128)",
+        "[i64;2]",
+    ] {
+        let function = lowered(
+            &format!("fn f(s:&[{element}],i:usize)->{element}{{s[i]}}"),
+            "f",
+        );
+        function.validate().unwrap();
+        let expected = function.locals[function.params[0].0]
+            .ty
+            .shared_slice_element()
+            .unwrap();
+        assert_eq!(&function.result, expected);
+        let mut reads = 0;
+        for statement in function.blocks.iter().flat_map(|block| &block.statements) {
+            if let Statement::Assign {
+                destination,
+                value: Rvalue::SliceIndex { slice, index },
+            } = &statement.value
+            {
+                reads += 1;
+                assert_eq!(function.place_ty(destination).unwrap(), expected);
+                assert_eq!(function.operand_ty(index).unwrap(), Ty::Int(IntTy::Usize));
+                let (Operand::Copy(handle), Operand::Copy(subscript)) = (slice, index) else {
+                    panic!("whole copied snapshots required")
+                };
+                assert!(handle.projection.is_empty() && subscript.projection.is_empty());
+                assert_ne!(destination.local, handle.local);
+                assert_ne!(handle.local, subscript.local);
+            }
+        }
+        assert_eq!(reads, 1, "{element}");
+        assert!(
+            super::super::ownership::analyze(&function).passed(),
+            "{element}"
+        );
+    }
+}
+
+#[test]
+fn typed_array_unsizing_keeps_element_identity_and_rejects_byte_reinterpretation() {
+    let mut function = lowered(
+        "fn f()->usize{let data:[i128;2]=[1,2];let view:&[i128]=&data;view.len()}",
+        "f",
+    );
+    let (destination, reference) = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .find_map(|statement| match &statement.value {
+            Statement::Assign {
+                destination,
+                value: Rvalue::ArrayToSlice { reference },
+            } => Some((destination.clone(), reference.clone())),
+            _ => None,
+        })
+        .unwrap();
+    let array = function.operand_ty(&reference).unwrap();
+    let (element, len) = array.shared_array_element_len().unwrap();
+    assert_eq!(len, 2);
+    assert_eq!(
+        function
+            .place_ty(&destination)
+            .unwrap()
+            .shared_slice_element(),
+        Some(element)
+    );
+    assert_eq!(function.loan_sites.len(), 1);
+    function.validate().unwrap();
+    function.locals[destination.local.0].ty = Ty::shared_byte_slice_ty();
+    assert!(function.validate().is_err());
+}
+
+#[test]
+fn noncopy_slice_length_is_legal_but_forged_whole_element_copy_is_not() {
+    let mut function = lowered("struct Cell{n:i32}fn f(s:&[Cell])->usize{s.len()}", "f");
+    function.validate().unwrap();
+    assert!(super::super::ownership::analyze(&function).passed());
+    let mut changed = 0;
+    for statement in function
+        .blocks
+        .iter_mut()
+        .flat_map(|block| &mut block.statements)
+    {
+        if let Statement::Assign { value, .. } = &mut statement.value
+            && let Rvalue::SliceLen { slice } = value
+        {
+            *value = Rvalue::SliceIndex {
+                slice: slice.clone(),
+                index: Operand::Constant(Constant::Int(IntValue::usize(0))),
+            };
+            changed += 1;
+        }
+    }
+    assert_eq!(changed, 1);
+    assert!(function.validate().unwrap_err().contains("non-Copy"));
+    let error = rejected("struct Cell{n:i32}fn f(s:&[Cell])->i32{s[0].n}fn main(){}");
+    assert!(error.contains("unsupported"), "{error}");
+}
+
+#[test]
+fn typed_slice_generic_copy_readers_and_noncopy_len_keep_real_closed_boundaries() {
+    accepted(
+        "fn first<T:Copy>(s:&[T])->T{s[0]}fn main(){let data:[(i32,bool,i128);2]=[(1,true,2),(3,false,4)];let value=first::<(i32,bool,i128)>(&data);let wide:[u128;1]=[7];let n=first::<u128>(&wide);}",
+    );
+    accepted(
+        "struct Cell{n:i32}fn size<T>(s:&[T])->usize{s.len()}fn main(){let data:[Cell;2]=[Cell{n:1},Cell{n:2}];let n=size::<Cell>(&data);}",
+    );
+    let error = rejected(
+        "fn first<T>(s:&[T])->T{s[0]}fn main(){let data:[i32;1]=[1];let value=first::<i32>(&data);}",
+    );
+    assert!(!error.is_empty());
+    let error = rejected(
+        "fn size<T>(s:&[T])->usize{s.len()}fn main(){let n=1;let data:[&i32;1]=[&n];let len=size::<&i32>(&data);}",
+    );
+    assert!(error.contains("unsupported"), "{error}");
+}
+
+#[test]
+fn typed_slice_origins_current_cell_last_use_and_backing_lifetime_remain_authoritative() {
+    borrow_rejected(
+        "fn main(){let mut data:[i32;2]=[1,2];let view:&[i32]=&data;data[0]=3;let value=view[0];}",
+    );
+    borrow_rejected(
+        "fn main(){let view:&[i128];{let data:[i128;1]=[1];view=&data;}let value=view[0];}",
+    );
+    accepted(
+        "fn main(){let mut first:[i32;2]=[1,2];let second:[i32;1]=[3];let mut view:&[i32]=&first;let old=view[0];view=&second;first[0]=old;let value=view[0];}",
+    );
+    accepted(
+        "fn main(){let mut data:[i128;1]=[1];let view:&[i128]=&data;let value=view[0];data[0]=value;}",
+    );
 }

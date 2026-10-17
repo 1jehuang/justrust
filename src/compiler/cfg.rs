@@ -1849,23 +1849,48 @@ impl Function {
             Rvalue::Use(operand) => self.operand_ty_with_facts(operand, facts),
             Rvalue::ArrayToSlice { reference } => {
                 let source = self.slice_operand_ty(reference, facts)?;
-                if source.shared_byte_array_len().is_none() {
-                    return Err("CFG array-to-slice requires shared byte array reference".into());
+                let (element, _) = source
+                    .shared_array_element_len()
+                    .ok_or("CFG array-to-slice requires shared array reference")?;
+                ir::validate_shared_slice_element_with_facts(element, facts)?;
+                let Ty::Ref { referent, .. } = &source else {
+                    return Err("CFG array-to-slice requires shared array reference".into());
+                };
+                let Ty::Array { element, .. } = referent.as_ref() else {
+                    return Err("CFG array-to-slice requires shared array reference".into());
+                };
+                if let Some(authority) = facts.validated() {
+                    authority.budget().charge_nodes(1)?;
+                    authority.budget().retain_bytes(
+                        std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>(),
+                    )?;
                 }
-                Ok(Ty::shared_byte_slice_ty())
+                Ok(Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent: std::sync::Arc::new(Ty::Slice {
+                        element: element.clone(),
+                    }),
+                })
             }
             Rvalue::SliceLen { slice } => {
-                if !self.slice_operand_ty(slice, facts)?.shared_byte_slice() {
-                    return Err("CFG slice length requires shared byte slice".into());
-                }
+                let source = self.slice_operand_ty(slice, facts)?;
+                let element = source
+                    .shared_slice_element()
+                    .ok_or("CFG slice length requires shared slice")?;
+                ir::validate_shared_slice_element_with_facts(element, facts)?;
                 Ok(Ty::Int(IntTy::Usize))
             }
             Rvalue::SliceIndex { slice, index } => {
-                if !self.slice_operand_ty(slice, facts)?.shared_byte_slice() {
-                    return Err("CFG slice index requires shared byte slice".into());
-                }
+                let source = self.slice_operand_ty(slice, facts)?;
+                let element = source
+                    .shared_slice_element()
+                    .ok_or("CFG slice index requires shared slice")?;
+                ir::validate_shared_slice_element_with_facts(element, facts)?;
                 self.require_operand_with_facts(index, &Ty::Int(IntTy::Usize), facts)?;
-                Ok(Ty::Int(IntTy::U8))
+                if !facts.must_copy(element)? {
+                    return Err("CFG slice index cannot copy a non-Copy element".into());
+                }
+                Ok(element.clone())
             }
             Rvalue::Println(_) => Ok(Ty::Unit),
             Rvalue::Unary { op, value } => {
@@ -1941,6 +1966,12 @@ impl Function {
             facts.validate_ty(&local.ty)?;
         }
         facts.validate_ty(&self.result)?;
+        for local in &self.locals {
+            validate_slice_position(&local.ty, facts)?;
+        }
+        if self.result.contains_slice() {
+            return Err(SLICE_UNSUPPORTED.into());
+        }
         let block = |id: BlockId| -> Result<(), String> {
             if id.0 < self.blocks.len() {
                 Ok(())
@@ -3663,21 +3694,43 @@ enum SourceLowering<'a> {
     Original(&'a std::sync::Arc<super::source_replay::CanonicalSourcePublication>),
 }
 
-/// Shared byte slices outside the admitted domain (only whole nongeneric
-/// `&[u8]` locals/temporaries; never results, aggregates or nested positions).
+/// Shared slices are whole root locals/temporaries, never results, aggregates
+/// or nested reference positions. Element authority is checked separately.
 pub(super) const SLICE_UNSUPPORTED: &str =
-    "unsupported: slice type outside shared &[u8] locals is not supported by CFG lowering";
+    "unsupported: slice type outside root shared slice locals is not supported by CFG lowering";
 
-fn reject_slices(source: &ir::CheckedFunction) -> Result<(), String> {
-    let outside = |ty: &Ty| ty.contains_slice() && !ty.shared_byte_slice();
-    if source.result.contains_slice()
-        || source
-            .exprs
-            .iter()
-            .any(|expression| outside(&expression.ty))
-        || source.locals.iter().any(|local| outside(&local.ty))
-    {
+fn validate_slice_position(ty: &Ty, facts: ir::FactsCtx<'_>) -> Result<(), String> {
+    if let Some(element) = ty.shared_slice_element() {
+        ir::validate_shared_slice_element_with_facts(element, facts)?;
+    } else if ty.contains_slice() {
         return Err(SLICE_UNSUPPORTED.into());
+    }
+    Ok(())
+}
+
+fn reject_slices(
+    source: &ir::CheckedFunction,
+    facts: ir::FactsCtx<'_>,
+    budget: Option<&ir::PlanBudget>,
+) -> Result<(), String> {
+    if let Some(budget) = budget {
+        budget.charge_work(
+            source
+                .exprs
+                .len()
+                .checked_add(source.locals.len())
+                .and_then(|count| count.checked_add(1))
+                .ok_or("CFG slice type work overflow")?,
+        )?;
+    }
+    if source.result.contains_slice() {
+        return Err(SLICE_UNSUPPORTED.into());
+    }
+    for local in &source.locals {
+        validate_slice_position(&local.ty, facts)?;
+    }
+    for expression in &source.exprs {
+        validate_slice_position(&expression.ty, facts)?;
     }
     Ok(())
 }
@@ -3688,7 +3741,6 @@ fn lower_internal_with_source(
     budget: Option<&ir::PlanBudget>,
     authority: SourceLowering<'_>,
 ) -> Result<Function, String> {
-    reject_slices(source)?;
     if let Some(budget) = budget {
         source.preflight_plan(facts, budget)?;
         budget.retain_bytes(
@@ -3720,6 +3772,9 @@ fn lower_internal_with_source(
                 .map_err(|error| error.into_legacy_diagnostic(budget))?;
         }
     }
+    // Metadata and exact publication authority precede unsupported-position
+    // classification, including for unused and concretely substituted types.
+    reject_slices(source, facts, budget)?;
     let arena_size = source
         .exprs
         .len()

@@ -1170,8 +1170,25 @@ impl<'s> Checker<'s> {
             solver.constrain(&formal, &evidence, 0)?;
         }
         for (formal, expr) in schema.signature.params.iter().zip(args) {
-            let formal = solver.schema(formal, 0)?;
             let evidence = self.inference_evidence(expr, 0)?;
+            if let Some(element) = formal.shared_slice_element()
+                && let InferKind::Ref(ir::BorrowKind::Shared, referent) = evidence.as_ref()
+            {
+                self.infer_work(1)?;
+                let actual = match referent.as_ref() {
+                    InferKind::Array(element, _) => Some(element.clone()),
+                    InferKind::Rigid(ir::Ty::Slice { element }) => {
+                        Some(self.infer_type_term(element, None, 1)?)
+                    }
+                    _ => None,
+                };
+                if let Some(actual) = actual {
+                    let element = solver.schema(element, 1)?;
+                    solver.constrain(&element, &actual, 1)?;
+                    continue;
+                }
+            }
+            let formal = solver.schema(formal, 0)?;
             solver.constrain(&formal, &evidence, 0)?;
         }
         solver.finish(fallback)
@@ -1780,9 +1797,9 @@ pub(super) fn canonical_ref_contract(
     }))
 }
 
-/// Values may carry a slice only as exactly shared `&[u8]`.
-pub(super) fn admit_slice_value(ty: &ir::Ty) -> Result<(), String> {
-    if ty.contains_slice() && !ty.shared_byte_slice() {
+/// A slice carrier is admitted only as an exact shared root reference.
+fn admit_slice_value_shape(ty: &ir::Ty) -> Result<(), String> {
+    if ty.contains_slice() && ty.shared_slice_element().is_none() {
         return Err(if matches!(ty, ir::Ty::Slice { .. }) {
             BARE_SLICE_UNSUPPORTED.into()
         } else {
@@ -1797,21 +1814,17 @@ pub(super) fn reject_slice_result(result: &ir::Ty) -> Result<(), String> {
     }
     Ok(())
 }
-pub(super) const BARE_SLICE_UNSUPPORTED: &str = "unsupported: bare by-value slice type [T]; only shared &[u8] parameters and locals are admitted";
+pub(super) const BARE_SLICE_UNSUPPORTED: &str = "unsupported: bare by-value slice type [T]; only shared &[T] parameters and locals are admitted";
 
-/// Phase-1 slice admission: exactly a shared reference to `[u8]`.
-pub(super) fn admit_shared_byte_slice(kind: ir::BorrowKind, slice: &Type) -> Result<(), String> {
-    let Type::Slice(element) = slice else {
+/// Source shape only. The lowered element requires authoritative IR admission.
+pub(super) fn admit_shared_slice_kind(kind: ir::BorrowKind, slice: &Type) -> Result<(), String> {
+    let Type::Slice(_) = slice else {
         return Err("internal: slice admission on non-slice type".into());
     };
     if kind != ir::BorrowKind::Shared {
         return Err("unsupported: mutable slice references (&mut [T])".into());
     }
-    match element.as_ref() {
-        Type::Int(ir::IntTy::U8) => Ok(()),
-        Type::Param(_) => Err("unsupported: generic slice element types (&[T])".into()),
-        _ => Err("unsupported: non-u8 slice element types; only &[u8] is admitted".into()),
-    }
+    Ok(())
 }
 
 pub(super) fn source_reference_layers(ty: &Type) -> Result<usize, String> {
@@ -1851,10 +1864,14 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
         if !allow_ref && matches!(ty, Type::Ref { .. }) {
             return Err("nested or aggregate references are unsupported".into());
         }
-        let caller = env
-            .param_env
-            .as_deref()
-            .map_or(ir::FactsCtx::Concrete, ir::FactsCtx::Universal);
+        let caller = env.facts.as_deref().map_or_else(
+            || {
+                env.param_env
+                    .as_deref()
+                    .map_or(ir::FactsCtx::Concrete, ir::FactsCtx::Universal)
+            },
+            ir::FactsCtx::Validated,
+        );
         return plan.source_ty(ty, &env.params, caller, &plan.budget);
     }
     match ty {
@@ -1867,7 +1884,7 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
         }
         Type::Slice(_) => Err(BARE_SLICE_UNSUPPORTED.into()),
         Type::Ref { referent, .. } if matches!(referent.as_ref(), Type::Slice(_)) => {
-            Err("unsupported: shared byte slices require the planning frontend".into())
+            Err("unsupported: shared slices require the planning frontend".into())
         }
         Type::Ref { kind, referent, .. } => {
             if !allow_ref || matches!(referent.as_ref(), Type::Never | Type::Infer) {
@@ -3427,13 +3444,24 @@ impl<'a> Checker<'a> {
         }
         Ok(local)
     }
+    fn admit_slice_value(&self, ty: &ir::Ty) -> Result<(), String> {
+        admit_slice_value_shape(ty)?;
+        if let Some(element) = ty.shared_slice_element() {
+            ir::validate_shared_slice_element(
+                element,
+                self.facts(),
+                &self.signatures.plan()?.budget,
+            )?;
+        }
+        Ok(())
+    }
     pub(super) fn temporary(
         &mut self,
         text: &str,
         ty: ir::Ty,
         mutable: bool,
     ) -> Result<ir::LocalId, String> {
-        admit_slice_value(&ty)?;
+        self.admit_slice_value(&ty)?;
         let local = ir::LocalId(self.locals.len());
         self.charge_node(std::mem::size_of::<ir::LocalDecl>() + text.len())?;
         self.locals.push(ir::LocalDecl {
@@ -3778,7 +3806,7 @@ impl<'a> Checker<'a> {
                 if slice_len_candidate(e, self.names()?)?
                     && self
                         .scalar_hint(receiver)?
-                        .is_some_and(|ty| ty.shared_byte_slice()) =>
+                        .is_some_and(|ty| ty.shared_slice_element().is_some()) =>
             {
                 Some(ir::Ty::Int(ir::IntTy::Usize))
             }
@@ -3907,7 +3935,18 @@ impl<'a> Checker<'a> {
             Expr::Index { base, .. } | Expr::DynamicIndex { base, .. } => {
                 match self.scalar_hint(base)? {
                     Some(ir::Ty::Array { element, .. }) => Some(element.as_ref().clone()),
-                    Some(ty) if ty.shared_byte_slice() => Some(ir::Ty::Int(ir::IntTy::U8)),
+                    Some(ty) => {
+                        if let Some(element) = ty.shared_slice_element() {
+                            ir::validate_shared_slice_element(
+                                element,
+                                self.facts(),
+                                &self.signatures.plan()?.budget,
+                            )?;
+                            Some(element.clone())
+                        } else {
+                            None
+                        }
+                    }
                     _ => None,
                 }
             }
@@ -5054,34 +5093,41 @@ impl<'a> Checker<'a> {
         let result = self.record_original_call(e, result)?;
         match expectation.hard() {
             Some(expected)
-                if expected.shared_byte_slice()
-                    && self.exprs[result.0].ty.shared_byte_array_len().is_some() =>
+                if expected.shared_slice_element().is_some()
+                    && self.exprs[result.0].ty.shared_array_element_len().is_some() =>
             {
-                self.coerce_shared_byte_array_to_slice(result, expected)
+                self.coerce_shared_array_to_slice(result, expected)
             }
             _ => Ok(result),
         }
     }
-    /// Expected-site unsizing of exactly shared `&[u8; N]` to shared `&[u8]`.
+    /// Expected-site unsizing of shared `&[T; N]` to exactly shared `&[T]`.
     /// The operand keeps its own identity (including any recorded original call);
     /// the wrapper is recorded separately with its exact operand for replay.
-    pub(super) fn coerce_shared_byte_array_to_slice(
+    pub(super) fn coerce_shared_array_to_slice(
         &mut self,
         value: ir::ExprId,
         expected: &ir::Ty,
     ) -> Result<ir::ExprId, String> {
-        if !expected.shared_byte_slice() {
-            return Err("array-to-slice coercion target must be &[u8]".into());
-        }
+        let element = expected
+            .shared_slice_element()
+            .ok_or("array-to-slice coercion target must be a shared slice")?;
         let source = &self.exprs[value.0];
-        if source.ty.shared_byte_array_len().is_none() {
-            return Err("array-to-slice coercion requires a shared &[u8; N] operand".into());
+        let (actual, _) = source
+            .ty
+            .shared_array_element_len()
+            .ok_or("array-to-slice coercion requires a shared array operand")?;
+        let budget = &self.signatures.plan()?.budget;
+        ir::validate_shared_slice_element(element, self.facts(), budget)?;
+        ir::validate_shared_slice_element(actual, self.facts(), budget)?;
+        if !metered_type_equal(actual, element, budget, 0)? {
+            return Err("array-to-slice coercion element type mismatch".into());
         }
         let completion = source.completion;
         let id = ir::ExprId(self.exprs.len());
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         self.exprs.push(ir::TypedExpr {
-            ty: ir::Ty::shared_byte_slice_ty(),
+            ty: expected.clone(),
             completion,
             kind: ir::ExprKind::ArrayToSlice { reference: value },
         });
@@ -5090,7 +5136,7 @@ impl<'a> Checker<'a> {
         }
         Ok(id)
     }
-    /// Builtin `.len()` only on an exactly typed shared `&[u8]` receiver with
+    /// Builtin `.len()` only on an exactly typed shared `&[T]` receiver with
     /// zero arguments; every other `len` goes through ordinary method resolution.
     pub(super) fn builtin_slice_len(&mut self, e: &Expr) -> Result<Option<ir::ExprId>, String> {
         let Expr::MethodCall { receiver, .. } = e else {
@@ -5099,15 +5145,17 @@ impl<'a> Checker<'a> {
         if !slice_len_candidate(e, self.names()?)?
             || !self
                 .scalar_hint(receiver)?
-                .is_some_and(|ty| ty.shared_byte_slice())
+                .is_some_and(|ty| ty.shared_slice_element().is_some())
         {
             return Ok(None);
         }
         let slice = self.expr(receiver)?;
         let flow = self.flow(slice);
-        if !flow.ty.shared_byte_slice() {
-            return Err("builtin slice length receiver changed type".into());
-        }
+        let element = flow
+            .ty
+            .shared_slice_element()
+            .ok_or("builtin slice length receiver changed type")?;
+        ir::validate_shared_slice_element(element, self.facts(), &self.signatures.plan()?.budget)?;
         let id = ir::ExprId(self.exprs.len());
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         self.exprs.push(ir::TypedExpr {
@@ -5120,6 +5168,79 @@ impl<'a> Checker<'a> {
             kind: ir::ExprKind::SliceLen { slice },
         });
         Ok(Some(id))
+    }
+    /// Check the closed borrowed-field capability before attempting a whole-element move.
+    /// Repeated borrowed scans avoid a new projection allocation and charge every step.
+    #[inline(never)]
+    fn reject_noncopy_slice_field(&mut self, expression: &Expr) -> Result<(), String> {
+        let Some(plan) = &self.signatures.plan else {
+            return Ok(());
+        };
+        let budget = plan.budget.clone();
+        let mut root = expression;
+        let mut fields = 0usize;
+        while let Expr::Field { base, .. } = root {
+            budget.charge_work(1)?;
+            fields += 1;
+            root = base;
+        }
+        let (receiver, dynamic_index) = match root {
+            Expr::Index { base, .. } => (base.as_ref(), None),
+            Expr::DynamicIndex { base, index } => (base.as_ref(), Some(index.as_ref())),
+            _ => return Ok(()),
+        };
+        let Some(hint) = self.scalar_hint(receiver)? else {
+            return Ok(());
+        };
+        let Some(element) = hint.shared_slice_element() else {
+            return Ok(());
+        };
+        ir::validate_shared_slice_element(element, self.facts(), &budget)?;
+        if self.facts().must_copy(element)? {
+            return Ok(());
+        }
+        let slice = self.expr(receiver)?;
+        let source = self.flow(slice);
+        let mut ty = source
+            .ty
+            .shared_slice_element()
+            .ok_or("slice field receiver changed type")?
+            .clone();
+        ir::validate_shared_slice_element(&ty, self.facts(), &budget)?;
+        if let Some(index) = dynamic_index {
+            let index = self.expr_expected_when(
+                index,
+                self.reachable && source.completes,
+                Some(&ir::Ty::Int(ir::IntTy::Usize)),
+            )?;
+            self.require_index(&self.flow(index))?;
+        }
+        for remaining in (0..fields).rev() {
+            let mut node = expression;
+            for _ in 0..remaining {
+                budget.charge_work(1)?;
+                let Expr::Field { base, .. } = node else {
+                    unreachable!()
+                };
+                node = base;
+            }
+            budget.charge_work(1)?;
+            let Expr::Field { field, .. } = node else {
+                unreachable!()
+            };
+            ty = self.field_type(&ty, field)?.1;
+        }
+        if !self.facts().must_copy(&ty)? {
+            return Err("cannot move a non-Copy field out of a borrowed slice element".into());
+        }
+        Err(super::super::source::SourceError {
+            kind: super::super::source::SourceErrorKind::Unsupported,
+            primary: None,
+            message: "borrowed field reads through non-Copy slice elements are unsupported".into(),
+            _diagnostic_lease: None,
+            location: None,
+        }
+        .to_string())
     }
     pub(super) fn slice_index(
         &mut self,
@@ -5142,10 +5263,19 @@ impl<'a> Checker<'a> {
         let source = self.flow(slice);
         let index_flow = self.flow(index);
         self.require_index(&index_flow)?;
+        let element = source
+            .ty
+            .shared_slice_element()
+            .ok_or("slice index receiver must be a shared slice")?;
+        ir::validate_shared_slice_element(element, self.facts(), &self.signatures.plan()?.budget)?;
+        if !self.facts().must_copy(element)? {
+            return Err("cannot move a non-Copy element out of a borrowed slice".into());
+        }
+        let element = element.clone();
         let id = ir::ExprId(self.exprs.len());
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         self.exprs.push(ir::TypedExpr {
-            ty: ir::Ty::Int(ir::IntTy::U8),
+            ty: element,
             completion: if source.completes && index_flow.completes {
                 ir::Completion::Returns
             } else {
@@ -6004,7 +6134,7 @@ impl<'a> Checker<'a> {
             }
         };
         self.accessible(&flow.ty)?;
-        admit_slice_value(&flow.ty)?;
+        self.admit_slice_value(&flow.ty)?;
         if matches!(flow.ty, ir::Ty::Array { .. } | ir::Ty::Tuple(_)) {
             self.validate_value_carriers(&flow.ty)?;
         }
@@ -6505,7 +6635,7 @@ impl<'a> Checker<'a> {
                     return Err("nested/chained runtime indexed place bases are unsupported; snapshot the row first".into());
                 }
                 let base = self.expr(base)?;
-                if self.flow(base).ty.shared_byte_slice() {
+                if self.flow(base).ty.shared_slice_element().is_some() {
                     return self.slice_index(base, index);
                 }
                 if self.deref_source(base) {
@@ -6538,7 +6668,7 @@ impl<'a> Checker<'a> {
                 }
                 let base = self.expr(base)?;
                 let flow = self.flow(base);
-                if flow.ty.shared_byte_slice() {
+                if flow.ty.shared_slice_element().is_some() {
                     // Constant slice indexes use the same runtime-checked read.
                     let constant = ir::ExprId(self.exprs.len());
                     self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
@@ -6774,6 +6904,7 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::Field { base, field } => {
+                self.reject_noncopy_slice_field(e)?;
                 let receiver = base.as_ref();
                 let mut base = self.expr(base)?;
                 let mut flow = self.flow(base);
@@ -7181,7 +7312,7 @@ impl<'a> Checker<'a> {
             }
         };
         self.accessible(&flow.ty)?;
-        admit_slice_value(&flow.ty)?;
+        self.admit_slice_value(&flow.ty)?;
         if matches!(flow.ty, ir::Ty::Array { .. } | ir::Ty::Tuple(_)) {
             self.validate_value_carriers(&flow.ty)?;
         }
@@ -7658,6 +7789,74 @@ pub fn check(program: &Program) -> Result<(), String> {
 
 #[cfg(test)]
 mod checked_identity_tests {
+    #[test]
+    fn typed_slices_check_exact_wide_and_aggregate_elements() {
+        for source in [
+            "fn read(s:&[i128])->i128{s[0]}fn main(){let values=[42i128,7i128];let answer=read(&values);}",
+            "fn read<T:Copy>(s:&[T])->T{s[0]}fn main(){let values=[42u16,7u16];let answer=read(&values);}",
+            "fn read<T:Copy>(s:&[T])->T{s[0]}fn forward<T:Copy>(s:&[T])->T{read(s)}fn main(){}",
+            "fn read(s:&[(i32,bool)])->i32{s[0].0}fn main(){let values=[(42,true)];let answer=read(&values);}",
+            "struct Cell{n:i32}fn length(s:&[Cell])->usize{s.len()}fn main(){let values=[Cell{n:42}];let count=length(&values);}",
+        ] {
+            let program = parse(source).unwrap();
+            check(&program).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+
+    #[test]
+    fn typed_slice_inference_does_not_admit_temporary_array_borrows() {
+        for source in [
+            "fn read<T:Copy>(s:&[T])->T{s[0]}fn value()->u16{read(&[42])}fn main(){}",
+            "fn read<T:Copy>(s:&[T],later:T)->T{s[0]}fn main(){let answer=read(&[42],7u16);}",
+        ] {
+            let error = parse(source).unwrap_err();
+            assert!(
+                error.contains("borrowing requires a local-root static place"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_slice_reads_do_not_invent_noncopy_borrowed_places() {
+        for source in [
+            "struct Cell{n:i32}fn read(s:&[Cell])->Cell{s[0]}fn main(){}",
+            "fn read<T>(s:&[T])->T{s[0]}fn main(){}",
+            "struct Cell{n:i32}fn read(s:&[Cell])->i32{s[true].n}fn main(){}",
+            "struct Cell{n:i32}fn read(s:&[Cell])->i32{s[0].missing}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            let error = check(&program).unwrap_err();
+            assert!(!error.contains("unsupported:"), "{source}: {error}");
+        }
+        for source in [
+            "struct Cell{n:i32}fn read(s:&[Cell])->i32{s[0].n}fn main(){}",
+            "struct Inner{n:i32}struct Cell{inner:Inner}fn read(s:&[Cell])->i32{s[0].inner.n}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            let error = check(&program).unwrap_err();
+            assert!(
+                error.contains(
+                    "borrowed field reads through non-Copy slice elements are unsupported"
+                ),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_slice_unsizing_keeps_exact_element_and_reference_boundaries() {
+        for source in [
+            "fn read(s:&[u16])->u16{s[0]}fn main(){let values=[42u8];let answer=read(&values);}",
+            "fn read(s:&[i32])->i32{s[0]}fn main(){let values=[true];let answer=read(&values);}",
+        ] {
+            let program = parse(source).unwrap();
+            assert!(check(&program).is_err(), "{source}");
+        }
+        let source = "fn read<T:Copy>(s:&[T])->T{s[0]}fn main(){let n=42;let values=[&n];let answer=read(&values);}";
+        let program = parse(source).unwrap();
+        assert!(check(&program).is_err());
+    }
     use super::*;
 
     #[test]

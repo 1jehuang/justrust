@@ -1706,7 +1706,7 @@ impl SourceInventory {
     }
 }
 
-/// Syntactic shape of a builtin shared byte-slice `.len()` occurrence.
+/// Syntactic shape of a builtin shared-slice `.len()` occurrence.
 fn slice_len_candidate(expr: &Expr, names: &NameStore) -> Result<bool, String> {
     // This lexical candidate never grants builtin authority. The retained
     // checker proof still establishes the actual SliceLen operation.
@@ -1835,7 +1835,7 @@ impl CanonicalSourceCapability {
     }
     /// Record a typed builtin `.len()` at its exact original source occurrence.
     /// Only a syntactic candidate whose checked result is exactly SliceLen over a
-    /// shared byte slice qualifies; nothing is inferred from spelling alone.
+    /// shared slice qualifies; nothing is inferred from spelling alone.
     fn record_builtin_len(
         &self,
         expr: &Expr,
@@ -1867,7 +1867,7 @@ impl CanonicalSourceCapability {
             || *ty != ir::Ty::Int(ir::IntTy::Usize)
             || !checked
                 .get(slice.0)
-                .is_some_and(|receiver| receiver.ty.shared_byte_slice())
+                .is_some_and(|receiver| receiver.ty.shared_slice_element().is_some())
         {
             return Err(self.render(FactsError::invalid(
                 budget,
@@ -2764,7 +2764,7 @@ fn replay_builtin_lens(
             || !checked
                 .exprs
                 .get(slice.0)
-                .is_some_and(|receiver| receiver.ty.shared_byte_slice())
+                .is_some_and(|receiver| receiver.ty.shared_slice_element().is_some())
         {
             return Err(FactsError::invalid(
                 budget,
@@ -3992,7 +3992,7 @@ pub enum Type {
         referent: Box<Type>,
     },
     Array(Box<Type>, usize),
-    /// Unsized `[T]`. Only admitted behind a shared reference with `u8` elements.
+    /// Unsized `[T]`. Admitted values require a checked shared reference.
     Slice(Box<Type>),
     Int(ir::IntTy),
     Float(ir::FloatTy),
@@ -12732,10 +12732,32 @@ impl PlanCtx {
         budget: &ir::PlanBudget,
     ) -> Result<ir::Ty, String> {
         self.check_budget(budget)?;
-        self.state
-            .lock()
-            .map_err(|_| "generic plan context poisoned")?
-            .source_ty(&self.registry, ty, bindings, caller, budget, 0, true)
+        let structural = match caller {
+            ir::FactsCtx::Validated(facts) => {
+                if !facts.budget().same_authority(budget)
+                    || !Arc::ptr_eq(facts.world(), &self.trait_world()?)
+                {
+                    return Err("source type changed validated caller authority".into());
+                }
+                ir::FactsCtx::Universal(facts.env().as_ref())
+            }
+            other => other,
+        };
+        // Validated nominal facts may re-enter SchemaAdapter and this mutex.
+        // Intern structurally under the exact binder, then check the original
+        // caller's complete authority after the lexical state guard is gone.
+        let out = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| "generic plan context poisoned")?;
+            state.source_ty(&self.registry, ty, bindings, structural, budget, 0, true)?
+        };
+        caller.validate_ty_with_budget(&out, budget)?;
+        if let Some(element) = out.shared_slice_element() {
+            ir::validate_shared_slice_element(element, caller, budget)?;
+        }
+        Ok(out)
     }
     fn application(
         &self,

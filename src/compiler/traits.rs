@@ -1547,6 +1547,10 @@ impl ValidatedTraitWorld {
                     ));
                 }
                 child(element, TypeUse::Aggregate)?;
+                // Symbolic parameters remain checked in their exact environment.
+                // A concrete instantiation is checked again, including references
+                // hidden in nominal fields, before it can carry slice elements.
+                charged(&self.budget, ir::reject_references(element, &self.budget))?;
             }
             Ty::Ref { kind, referent } => {
                 let depth = match usage {
@@ -3192,6 +3196,9 @@ impl ValidatedTraitWorld {
                     len: bl,
                 },
             ) if al == bl => self.collect_nominal_mappings(a, b, output, depth + 1)?,
+            (Ty::Slice { element: a }, Ty::Slice { element: b }) => {
+                self.collect_nominal_mappings(a, b, output, depth + 1)?;
+            }
             (Ty::Struct(a), Ty::Struct(b))
                 if a.def().source_decl == b.def().source_decl
                     && a.def().fields.len() == b.def().fields.len() =>
@@ -6663,6 +6670,88 @@ mod tests {
             kind: BorrowKind::Shared,
             referent: Arc::new(ty),
         }
+    }
+
+    fn shared_slice(element: Ty) -> Ty {
+        reference(Ty::Slice {
+            element: Arc::new(element),
+        })
+    }
+
+    #[test]
+    fn typed_slice_facts_admit_exact_elements_without_requiring_copy() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        for element in [
+            Ty::Int(IntTy::I128),
+            Ty::Tuple(Arc::from([Ty::Bool, Ty::Int(IntTy::I32)])),
+            c.leaf.clone(),
+            c.caller_parameter.clone(),
+        ] {
+            facts.validate_ty(&shared_slice(element)).unwrap();
+        }
+        assert!(
+            matches!(facts.validate_ty(&shared_slice(reference(Ty::Bool))), Err(error) if error.kind() == FactsErrorKind::Unsupported)
+        );
+        let foreign = case();
+        assert!(
+            matches!(facts.validate_ty(&shared_slice(foreign.leaf)), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
+    }
+
+    #[test]
+    fn generic_shared_slice_retains_single_original_reference_carrier() {
+        let mut c = case();
+        let signature = reference_signature(
+            vec![shared_slice(c.caller_parameter.clone())],
+            Ty::Unit,
+            &c.budget,
+        );
+        let caller = &mut Arc::make_mut(&mut c.headers.callables)[1];
+        caller.schema.signature = signature;
+        caller.schema.predicates = Arc::from([]);
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        facts
+            .validate_ty(&shared_slice(c.caller_parameter.clone()))
+            .unwrap();
+        for element in [
+            Ty::Int(IntTy::I32),
+            Ty::Int(IntTy::U128),
+            Ty::Tuple(Arc::from([Ty::Int(IntTy::I32), Ty::Bool])),
+        ] {
+            let target = CallTarget {
+                declaration: c.caller,
+                type_args: Arc::from([element]),
+            };
+            let closed = world.instance_facts(&target).unwrap();
+            let carrier = closed.carrier_contract(SignatureSubject::Body).unwrap();
+            assert_eq!(carrier.original_contract().inputs.len(), 1);
+            assert_eq!(carrier.contract().inputs.len(), 1);
+            assert!(matches!(
+                carrier.contract().inputs[0].location.channel,
+                ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 })
+            ));
+            assert!(carrier.component_mappings().is_empty());
+        }
+        let locations =
+            ir::carrier_locations(&shared_slice(c.caller_parameter.clone()), &c.budget).unwrap();
+        assert_eq!(locations.len(), 1);
+        assert!(locations[0].path.0.is_empty());
+        assert!(matches!(
+            locations[0].channel,
+            ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 })
+        ));
+        assert!(matches!(
+            world.collect_nominal_mappings(
+                &shared_slice(Ty::Bool),
+                &shared_slice(Ty::Int(IntTy::I32)),
+                &mut Vec::new(),
+                0,
+            ),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata
+        ));
     }
 
     fn generic_marker_case() -> Case {

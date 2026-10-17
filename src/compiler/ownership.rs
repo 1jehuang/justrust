@@ -1654,12 +1654,28 @@ impl<'a> MoveShape<'a> {
             },
             Ty::Array { element, len } => Self::Array { element, len: *len },
             Ty::Enum(definition) => Self::Sum(definition.def()),
-            // Exactly shared `&[u8]` is a Copy reference carrier. Its referent
-            // is one opaque unsized leaf: u8 elements carry no references and
-            // no slice place, move or mutable element access exists.
-            Ty::Slice { element } if **element == Ty::Int(super::ir::IntTy::U8) => Self::Scalar,
-            Ty::Ref { .. } if ty.shared_byte_slice() => Self::Scalar,
-            Ty::Slice { .. } => return Err(Exhausted),
+            // A checked shared slice is a Copy descriptor, not an element
+            // place capability. Its reference-free unsized referent remains
+            // one opaque leaf; all reads retain the descriptor's real origins.
+            Ty::Slice { element } => {
+                if let Some(plan) = &budget.plan {
+                    super::ir::validate_shared_slice_element(element, facts, plan)
+                } else {
+                    super::ir::validate_shared_slice_element_with_facts(element, facts)
+                }
+                .map_err(|_| Exhausted)?;
+                Self::Scalar
+            }
+            Ty::Ref { .. } if ty.shared_slice_element().is_some() => {
+                let element = ty.shared_slice_element().ok_or(Exhausted)?;
+                if let Some(plan) = &budget.plan {
+                    super::ir::validate_shared_slice_element(element, facts, plan)
+                } else {
+                    super::ir::validate_shared_slice_element_with_facts(element, facts)
+                }
+                .map_err(|_| Exhausted)?;
+                Self::Scalar
+            }
             Ty::Ref { referent, .. } if referent.contains_slice() => return Err(Exhausted),
             Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Ref { .. } => Self::Scalar,
         })

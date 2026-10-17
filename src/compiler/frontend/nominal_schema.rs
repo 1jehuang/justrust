@@ -218,11 +218,27 @@ impl PlanState {
                             .into(),
                     );
                 }
-                admit_shared_byte_slice(*kind, slice)?;
-                if matches!(caller, ir::FactsCtx::Universal(_)) {
-                    return Err("unsupported: shared byte slices in generic callables".into());
+                admit_shared_slice_kind(*kind, slice)?;
+                let Type::Slice(element) = slice.as_ref() else {
+                    return Err("invalid shared slice source shape".into());
+                };
+                let element = self.source_ty_with_transport(
+                    registry,
+                    element,
+                    bindings,
+                    caller,
+                    budget,
+                    depth + 1,
+                    false,
+                    transport,
+                )?;
+                ir::validate_shared_slice_element(&element, caller, budget)?;
+                ir::Ty::Ref {
+                    kind: *kind,
+                    referent: Arc::new(ir::Ty::Slice {
+                        element: Arc::new(element),
+                    }),
                 }
-                ir::Ty::shared_byte_slice_ty()
             }
             Type::Ref { kind, referent, .. } => {
                 if !allow_ref {
