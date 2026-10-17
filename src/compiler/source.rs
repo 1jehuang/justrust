@@ -8,11 +8,14 @@ use std::sync::Arc;
 pub mod source_attrs;
 #[path = "source_cfg.rs"]
 pub mod source_cfg;
+#[path = "source_lex.rs"]
+pub mod source_lex;
 #[path = "source_map.rs"]
 pub mod source_map;
 #[path = "source_probe.rs"]
 pub mod source_probe;
 pub use source_cfg::CfgSet;
+pub use source_lex::{PreparedLexInput, PreparedMode, PreparedViewId, ProjectedSpan};
 pub use source_map::{FileId, OriginSegment, SourceMap, SourceSpan};
 pub use source_probe::{SourceProbeRecord, SourceProbeRequest, prepare_probe_file};
 const MAX_FILE_DEPTH: usize = 64;
@@ -41,6 +44,10 @@ pub enum SourceErrorKind {
     Limit,
     Cycle,
     Module,
+    /// Invalid provenance or foreign checked utility handles, not user syntax.
+    Contract,
+    /// Allocation or issuing-authority failure, not unsupported Rust syntax.
+    Infrastructure,
 }
 #[derive(Clone, Debug)]
 pub struct SourceLocation {
@@ -56,6 +63,32 @@ pub struct SourceError {
     pub location: Option<SourceLocation>,
 }
 impl SourceError {
+    pub fn from_token(error: super::token_session::TokenError) -> Self {
+        use super::expansion_budget::BudgetFailureKind;
+        use super::token_session::TokenError;
+        let kind = match &error {
+            TokenError::Budget(failure) => match failure.kind {
+                BudgetFailureKind::Limit | BudgetFailureKind::Overflow => SourceErrorKind::Limit,
+                BudgetFailureKind::Allocation | BudgetFailureKind::Infrastructure => {
+                    SourceErrorKind::Infrastructure
+                }
+            },
+            TokenError::SourceLimit { .. } | TokenError::TraceTruncated => SourceErrorKind::Limit,
+            TokenError::IdExhausted => SourceErrorKind::Infrastructure,
+            TokenError::UnbalancedDelimiter { .. } => SourceErrorKind::Syntax,
+            TokenError::ForeignHandle
+            | TokenError::InvalidHandle
+            | TokenError::InvalidRange
+            | TokenError::InvalidUtf8Boundary
+            | TokenError::InvalidInput(_) => SourceErrorKind::Contract,
+        };
+        Self {
+            kind,
+            primary: None,
+            message: error.to_string(),
+            location: None,
+        }
+    }
     pub fn syntax(primary: Option<SourceSpan>, message: impl Into<String>) -> Self {
         Self {
             kind: SourceErrorKind::Syntax,
@@ -80,8 +113,11 @@ impl std::fmt::Display for SourceError {
         if let Some(l) = &self.location {
             write!(f, "{}:{}:{}: ", l.path.display(), l.line, l.column)?;
         }
-        if self.kind == SourceErrorKind::Unsupported {
-            f.write_str("unsupported: ")?;
+        match self.kind {
+            SourceErrorKind::Unsupported => f.write_str("unsupported: ")?,
+            SourceErrorKind::Contract => f.write_str("contract: ")?,
+            SourceErrorKind::Infrastructure => f.write_str("infrastructure: ")?,
+            _ => {}
         }
         f.write_str(&self.message)
     }
@@ -145,16 +181,40 @@ pub fn load(path: &Path) -> Result<LoadedSource, String> {
 pub fn prepare_file(path: &Path, options: &SourceOptions) -> Result<PreparedSource, SourceError> {
     prepare_with_reader(path, options, &mut FsReader)
 }
+pub(super) fn prepare_file_with_budget(
+    path: &Path,
+    options: &SourceOptions,
+    budget: &super::expansion_budget::ExpansionBudget,
+) -> Result<PreparedSource, SourceError> {
+    prepare_with_reader_budget(path, options, &mut FsReader, budget)
+}
 fn prepare_with_reader(
     path: &Path,
     options: &SourceOptions,
     reader: &mut dyn SourceReader,
 ) -> Result<PreparedSource, SourceError> {
+    prepare_with_reader_budget(
+        path,
+        options,
+        reader,
+        &super::expansion_budget::ExpansionBudget::default(),
+    )
+}
+fn prepare_with_reader_budget(
+    path: &Path,
+    options: &SourceOptions,
+    reader: &mut dyn SourceReader,
+    budget: &super::expansion_budget::ExpansionBudget,
+) -> Result<PreparedSource, SourceError> {
+    budget
+        .check()
+        .map_err(|error| SourceError::from_token(error.into()))?;
     options
         .cfg
         .validate_native()
         .map_err(|message| Loader::error(SourceErrorKind::Unsupported, None, message))?;
     let mut loader = Loader::new(options, Some(reader));
+    loader.lexical_budget = budget.clone();
     loader
         .file(
             path,
@@ -220,6 +280,7 @@ struct Loader<'a> {
     options: &'a SourceOptions,
     reader: Option<&'a mut dyn SourceReader>,
     prepared: PreparedSource,
+    lexical_budget: super::expansion_budget::ExpansionBudget,
 }
 impl<'a> Loader<'a> {
     fn new(options: &'a SourceOptions, reader: Option<&'a mut dyn SourceReader>) -> Self {
@@ -228,6 +289,7 @@ impl<'a> Loader<'a> {
             options,
             reader,
             prepared: PreparedSource::default(),
+            lexical_budget: super::expansion_budget::ExpansionBudget::default(),
         }
     }
     fn error(
@@ -340,6 +402,7 @@ impl<'a> Loader<'a> {
         self.prepared.files += 1;
         let original: Arc<str> = text.into();
         let id = self.prepared.sources.add(path, original.clone());
+        self.validate_original(id, &original, 0)?;
         let filtered = source_attrs::prepare(&original, &self.options.cfg).map_err(|e| {
             Self::error(
                 match e.kind {
@@ -384,6 +447,45 @@ impl<'a> Loader<'a> {
             });
         }
         self.expand(&filtered.text, &original, id, 0, directory, depth)
+    }
+    /// Lexical validation only, before configuration processing or module IO.
+    /// All original files share this loader's authority. No token input counts
+    /// are charged until the configured lexer actually issues token events.
+    fn validate_original(&self, id: FileId, text: &str, base: usize) -> Result<(), SourceError> {
+        use super::lexer::{LexError, validate_source};
+        use super::token::Edition;
+        validate_source(text, Edition::E2024, &self.lexical_budget).map_err(|error| match error {
+            LexError::Source {
+                kind,
+                prepared,
+                message,
+                ..
+            } => {
+                let valid = text.get(prepared.clone());
+                let start = base.checked_add(prepared.start);
+                let end = base.checked_add(prepared.end);
+                let raw = start.zip(end).filter(|(lo, hi)| {
+                    valid.is_some()
+                        && self
+                            .prepared
+                            .sources
+                            .files
+                            .get(id.0 as usize)
+                            .and_then(|file| file.contents.get(*lo..*hi))
+                            == valid
+                });
+                match raw {
+                    Some((lo, hi)) => Self::error(kind, Some(Self::span(id, lo..hi)), message),
+                    None => Self::error(
+                        SourceErrorKind::Contract,
+                        None,
+                        "raw lexer returned an invalid original-source range",
+                    ),
+                }
+            }
+            LexError::Transport(error) => SourceError::from_token(error),
+            LexError::Projection(error) => error,
+        })
     }
     fn append(
         &mut self,
@@ -1044,6 +1146,83 @@ mod tests {
                 ["canonicalize", "stat", "open", "stat-opened", "read"]
             );
         }
+    }
+    #[test]
+    fn full_original_lexing_precedes_configuration_and_all_child_observations() {
+        for root in [
+            "#[cfg(any())] fn hidden(){let text=\"\\q\";} mod child; fn main(){}",
+            "#[cfg(any())] mod child; fn main(){let text=\"\\u{D800}\";}",
+            "#[unknown_attribute] fn hidden(){} mod child; fn main(){`}",
+            "mod child; fn main(){let text=r###\"unterminated;}",
+        ] {
+            let mut reader = RecordingReader {
+                root: root.into(),
+                child: Some("pub fn child(){}".into()),
+                ..Default::default()
+            };
+            let error =
+                prepare_with_reader(Path::new("main.rs"), &SourceOptions::default(), &mut reader)
+                    .unwrap_err();
+            assert_eq!(error.kind, SourceErrorKind::Syntax, "{root}: {error}");
+            assert!(error.primary.is_some(), "{root}: {error}");
+            assert_eq!(error.location.as_ref().unwrap().path, Path::new("main.rs"));
+            assert!(
+                reader
+                    .calls
+                    .iter()
+                    .all(|(_, path)| path == Path::new("main.rs")),
+                "{root}: {:?}",
+                reader.calls
+            );
+            assert_eq!(
+                reader
+                    .calls
+                    .iter()
+                    .map(|(kind, _)| *kind)
+                    .collect::<Vec<_>>(),
+                ["canonicalize", "stat", "open", "stat-opened", "read"]
+            );
+            let error = prepare_text("text.rs", root, &SourceOptions::default()).unwrap_err();
+            assert_eq!(error.kind, SourceErrorKind::Syntax, "{root}: {error}");
+            assert_eq!(error.location.as_ref().unwrap().path, Path::new("text.rs"));
+        }
+    }
+    #[test]
+    fn source_validation_uses_one_shared_work_authority_across_files() {
+        use super::super::expansion_budget::{Counter, ExpansionBudget, ExpansionLimits};
+        use super::super::lexer::validate_source;
+        use super::super::token::Edition;
+        let root = "mod child; fn main(){}";
+        let child = "pub fn child(){}";
+        let root_budget = ExpansionBudget::default();
+        validate_source(root, Edition::E2024, &root_budget).unwrap();
+        let child_budget = ExpansionBudget::default();
+        validate_source(child, Edition::E2024, &child_budget).unwrap();
+        let total = root_budget.snapshot().counters[Counter::Work as usize]
+            + child_budget.snapshot().counters[Counter::Work as usize];
+        let mut limits = ExpansionLimits::default();
+        limits.counters[Counter::Work as usize] = total - 1;
+        let budget = ExpansionBudget::new(limits);
+        let mut reader = RecordingReader {
+            root: root.into(),
+            child: Some(child.into()),
+            ..Default::default()
+        };
+        let error = prepare_with_reader_budget(
+            Path::new("main.rs"),
+            &SourceOptions::default(),
+            &mut reader,
+            &budget,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, SourceErrorKind::Limit, "{error}");
+        assert!(
+            reader
+                .calls
+                .iter()
+                .any(|(kind, path)| *kind == "read" && path == Path::new("child.rs"))
+        );
+        assert_eq!(budget.snapshot().counters[Counter::InputTokens as usize], 0);
     }
 
     #[test]

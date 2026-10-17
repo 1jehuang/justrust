@@ -204,6 +204,10 @@ impl Default for ExpansionBudget {
     }
 }
 impl ExpansionBudget {
+    /// Identity of the shared admission ledger, not equality of configured limits.
+    pub fn same_authority(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+    }
     /// Raised caps are rejected by pre-poisoning, never silently clamped.
     /// Call `check` to observe construction failure before allocating payloads.
     pub fn new(limits: ExpansionLimits) -> Self {
@@ -511,6 +515,15 @@ mod tests {
             backtrace_frames: 2,
         }
     }
+    #[test]
+    fn authority_identity_distinguishes_equal_limits_from_shared_clones() {
+        let budget = ExpansionBudget::default();
+        assert!(budget.same_authority(&budget.clone()));
+        assert!(!budget.same_authority(&ExpansionBudget::default()));
+        budget.charge(Counter::Work, 7).unwrap();
+        assert_eq!(budget.snapshot().counters[Counter::Work as usize], 7);
+    }
+
     #[test]
     fn published_caps_are_exact() {
         let l = ExpansionLimits::default();

@@ -1,14 +1,16 @@
 //! Sealed source ownership and issuing authority for token-only handles.
 //! No raw FileId/SourceSpan is accepted as an owned source reference.
+use std::hash::BuildHasher;
 use std::mem::size_of;
 use std::num::NonZeroU64;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::expansion_budget::{BudgetFailure, ByteLease, Counter, Depth, ExpansionBudget, Storage};
 use super::expansion_span::{ExpansionRecord, SpanData, SpanOrigin, SyntheticReason, TraceFrame};
 use super::hygiene::{ContextData, Transparency};
-use super::source::source_map::{FileId, SourceMap, SourceSpan};
+use super::source::source_map::{FileId, SourceFile, SourceMap, SourceSpan};
 use super::source::{MAX_BYTES, MAX_FILES};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,7 +118,50 @@ pub struct OriginalSpan {
 
 struct SealedSources {
     id: SourceSnapshotId,
-    map: SourceMap,
+    storage: SourceStorage,
+    // Drop after the backing. Clones retain this through the shared Arc, rather
+    // than tying source ownership to any particular TokenSession lifetime.
+    _lease: Option<ByteLease>,
+}
+
+enum SourceStorage {
+    Map(SourceMap),
+    Raw {
+        path: PathBuf,
+        contents: String,
+        line_starts: Vec<u32>,
+    },
+}
+
+struct SourceView<'a> {
+    path: &'a Path,
+    contents: &'a str,
+    line_starts: &'a [u32],
+}
+
+impl SourceStorage {
+    fn view(&self, index: usize) -> Result<SourceView<'_>, TokenError> {
+        match self {
+            Self::Map(map) => {
+                let file = map.files.get(index).ok_or(TokenError::InvalidHandle)?;
+                Ok(SourceView {
+                    path: &file.lexical_path,
+                    contents: &file.contents,
+                    line_starts: &file.line_starts,
+                })
+            }
+            Self::Raw {
+                path,
+                contents,
+                line_starts,
+            } if index == 0 => Ok(SourceView {
+                path,
+                contents,
+                line_starts,
+            }),
+            Self::Raw { .. } => Err(TokenError::InvalidHandle),
+        }
+    }
 }
 
 /// Takes ownership of a bounded source map without copying its bytes.
@@ -129,6 +174,139 @@ pub struct SourceSnapshot {
 
 impl SourceSnapshot {
     pub fn new(map: SourceMap) -> Result<Self, TokenError> {
+        Self::validate_map(&map, None)?;
+        Self::seal(SourceStorage::Map(map), None)
+    }
+
+    /// Copies only map metadata. Original contents remain shared with their
+    /// source owner, whose source-byte accounting is not replaced by this lease.
+    pub fn copy_borrowed(map: &SourceMap, budget: &ExpansionBudget) -> Result<Self, TokenError> {
+        budget.check()?;
+        Self::validate_map(map, Some(budget))?;
+        let mut lease = Self::metadata_lease(budget)?;
+        let mut files = Self::copy_capacity::<SourceFile>(map.files.len(), budget, &mut lease)?;
+        for file in &map.files {
+            let lexical_path = Self::copy_path(&file.lexical_path, budget, &mut lease)?;
+            let mut line_starts =
+                Self::copy_capacity::<u32>(file.line_starts.len(), budget, &mut lease)?;
+            budget.charge(Counter::Work, file.line_starts.len() as u64)?;
+            line_starts.extend_from_slice(&file.line_starts);
+            files.push(SourceFile {
+                lexical_path,
+                contents: Arc::clone(&file.contents),
+                line_starts,
+            });
+        }
+        Self::seal(SourceStorage::Map(SourceMap { files }), Some(lease))
+    }
+
+    /// Creates one syntax-only identity source without preparation, cfg or I/O.
+    /// Unlike borrowed map contents, the new text payload belongs to this lease.
+    pub fn from_text(
+        name: &Path,
+        text: &str,
+        budget: &ExpansionBudget,
+    ) -> Result<Self, TokenError> {
+        budget.check()?;
+        if text.len() > MAX_BYTES {
+            return Err(TokenError::SourceLimit {
+                resource: SourceLimitResource::Bytes,
+                used: 0,
+                requested: text.len(),
+                limit: MAX_BYTES,
+            });
+        }
+        let mut lease = Self::metadata_lease(budget)?;
+        let path = Self::copy_path(name, budget, &mut lease)?;
+        budget.charge(Counter::Work, text.len() as u64)?;
+        let mut contents = String::new();
+        let base = lease.bytes();
+        Self::reserve_payload(&mut lease, base, text.len(), 1)?;
+        contents
+            .try_reserve_exact(text.len())
+            .map_err(|_| budget.poison_allocation())?;
+        Self::reserve_payload(&mut lease, base, contents.capacity(), 1)?;
+        contents.push_str(text);
+        budget.charge(Counter::Work, text.len() as u64 + 1)?;
+        let lines = text.bytes().filter(|byte| *byte == b'\n').count() + 1;
+        let mut line_starts = Self::copy_capacity::<u32>(lines, budget, &mut lease)?;
+        budget.charge(Counter::Work, text.len() as u64 + 1)?;
+        line_starts.push(0);
+        for (index, byte) in text.bytes().enumerate() {
+            if byte == b'\n' {
+                line_starts.push((index + 1) as u32);
+            }
+        }
+        Self::seal(
+            SourceStorage::Raw {
+                path,
+                contents,
+                line_starts,
+            },
+            Some(lease),
+        )
+    }
+
+    /// Exact sealed-owner equality, not equality of paths or source contents.
+    pub fn same_snapshot(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    fn metadata_lease(budget: &ExpansionBudget) -> Result<ByteLease, TokenError> {
+        Ok(budget.reserve(
+            Storage::Retained,
+            (size_of::<SealedSources>() + 2 * size_of::<usize>()) as u64,
+        )?)
+    }
+
+    fn reserve_payload(
+        lease: &mut ByteLease,
+        base: u64,
+        count: usize,
+        size: usize,
+    ) -> Result<(), TokenError> {
+        let bytes = (count as u64)
+            .checked_mul(size as u64)
+            .and_then(|bytes| base.checked_add(bytes))
+            .ok_or(TokenError::IdExhausted)?;
+        Ok(lease.resize(bytes)?)
+    }
+
+    // On reconciliation failure the local backing drops before the caller's
+    // lease. No allocation survives a failed constructor admission.
+    fn copy_capacity<T>(
+        count: usize,
+        budget: &ExpansionBudget,
+        lease: &mut ByteLease,
+    ) -> Result<Vec<T>, TokenError> {
+        let base = lease.bytes();
+        Self::reserve_payload(lease, base, count, size_of::<T>())?;
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(count)
+            .map_err(|_| budget.poison_allocation())?;
+        Self::reserve_payload(lease, base, values.capacity(), size_of::<T>())?;
+        Ok(values)
+    }
+
+    fn copy_path(
+        path: &Path,
+        budget: &ExpansionBudget,
+        lease: &mut ByteLease,
+    ) -> Result<PathBuf, TokenError> {
+        budget.charge(Counter::Work, path.as_os_str().len() as u64)?;
+        let base = lease.bytes();
+        Self::reserve_payload(lease, base, path.as_os_str().len(), 1)?;
+        let mut copied = std::ffi::OsString::new();
+        copied
+            .try_reserve_exact(path.as_os_str().len())
+            .map_err(|_| budget.poison_allocation())?;
+        Self::reserve_payload(lease, base, copied.capacity(), 1)?;
+        copied.push(path.as_os_str());
+        Ok(PathBuf::from(copied))
+    }
+
+    fn validate_map(map: &SourceMap, budget: Option<&ExpansionBudget>) -> Result<(), TokenError> {
         if map.files.len() > MAX_FILES {
             return Err(TokenError::SourceLimit {
                 resource: SourceLimitResource::Files,
@@ -151,8 +329,17 @@ impl SourceSnapshot {
                 })?;
         }
         u32::try_from(map.files.len()).map_err(|_| TokenError::InvalidRange)?;
+        if let Some(budget) = budget {
+            budget.charge(Counter::Work, map.files.len() as u64)?;
+        }
         for file in &map.files {
             u32::try_from(file.contents.len()).map_err(|_| TokenError::InvalidRange)?;
+            if let Some(budget) = budget {
+                // Metadata may be arbitrarily large even when source bytes fit
+                // their canonical cap. Admit traversal before examining it.
+                budget.charge(Counter::Work, file.contents.len() as u64 + 1)?;
+                budget.charge(Counter::Work, file.line_starts.len() as u64)?;
+            }
             let expected = std::iter::once(0).chain(
                 file.contents
                     .bytes()
@@ -165,19 +352,33 @@ impl SourceSnapshot {
                 ));
             }
         }
+        Ok(())
+    }
+
+    fn seal(storage: SourceStorage, lease: Option<ByteLease>) -> Result<Self, TokenError> {
         static NEXT: AtomicU64 = AtomicU64::new(1);
-        let id = SourceSnapshotId(allocate_identity(&NEXT)?);
+        let id = match allocate_identity(&NEXT) {
+            Ok(id) => SourceSnapshotId(id),
+            Err(error) => {
+                drop(storage);
+                drop(lease);
+                return Err(error);
+            }
+        };
         Ok(Self {
-            inner: Arc::new(SealedSources { id, map }),
+            // Stable std has no fallible Arc control-block constructor. The
+            // small fixed metadata allocation is accounted by budgeted callers;
+            // all variable-sized copied payload allocations are fallible.
+            inner: Arc::new(SealedSources {
+                id,
+                storage,
+                _lease: lease,
+            }),
         })
     }
 
     pub fn file(&self, index: usize) -> Result<SourceFileHandle, TokenError> {
-        self.inner
-            .map
-            .files
-            .get(index)
-            .ok_or(TokenError::InvalidHandle)?;
+        self.inner.storage.view(index)?;
         Ok(SourceFileHandle {
             source: self.inner.id,
             index: u32::try_from(index).map_err(|_| TokenError::InvalidRange)?,
@@ -188,12 +389,7 @@ impl SourceSnapshot {
         if file.source != self.inner.id {
             return Err(TokenError::ForeignHandle);
         }
-        self.inner
-            .map
-            .files
-            .get(file.index as usize)
-            .map(|f| f.contents.as_ref())
-            .ok_or(TokenError::InvalidHandle)
+        Ok(self.inner.storage.view(file.index as usize)?.contents)
     }
 
     pub fn span(
@@ -226,7 +422,21 @@ impl SourceSnapshot {
         span: OriginalSpan,
     ) -> Result<(&std::path::Path, usize, usize), TokenError> {
         let raw = self.render_span(span)?;
-        self.inner.map.location(raw).ok_or(TokenError::InvalidRange)
+        let file = self.inner.storage.view(raw.file.0 as usize)?;
+        let line = file
+            .line_starts
+            .partition_point(|&start| start <= raw.lo)
+            .checked_sub(1)
+            .ok_or(TokenError::InvalidRange)?;
+        let start = file.line_starts[line] as usize;
+        let column = file
+            .contents
+            .get(start..raw.lo as usize)
+            .ok_or(TokenError::InvalidRange)?
+            .chars()
+            .count()
+            + 1;
+        Ok((file.path, line + 1, column))
     }
 }
 
@@ -314,6 +524,7 @@ impl<T> BudgetVec<T> {
 }
 
 struct SymbolEntry {
+    hash: u64,
     text: String,
     _lease: ByteLease,
 }
@@ -327,6 +538,8 @@ pub struct TokenSession {
     sources: SourceSnapshot,
     budget: ExpansionBudget,
     symbols: BudgetVec<SymbolEntry>,
+    symbol_slots: BudgetVec<Option<u32>>,
+    symbol_hasher: std::collections::hash_map::RandomState,
     spans: BudgetVec<SpanData>,
     contexts: BudgetVec<ContextData>,
     expansions: BudgetVec<ExpansionEntry>,
@@ -347,6 +560,8 @@ impl TokenSession {
             id,
             sources,
             symbols: BudgetVec::new(&budget, Storage::Retained)?,
+            symbol_slots: BudgetVec::new(&budget, Storage::Retained)?,
+            symbol_hasher: std::collections::hash_map::RandomState::new(),
             spans: BudgetVec::new(&budget, Storage::Retained)?,
             contexts,
             expansions: BudgetVec::new(&budget, Storage::Retained)?,
@@ -388,21 +603,90 @@ impl TokenSession {
             .map(|s| s.text.as_str())
             .ok_or(TokenError::InvalidHandle)
     }
-    /// Exact byte interning only, with bounded linear lookup for this first slice.
+    /// Exact byte interning with a session-randomized, collision-safe index.
     pub fn intern_symbol(&mut self, text: &str) -> Result<SymbolId, TokenError> {
         self.budget.check()?;
         self.budget.charge(Counter::Work, text.len() as u64 + 1)?;
-        for (index, entry) in self.symbols.as_slice().iter().enumerate() {
-            self.budget
-                .charge(Counter::Work, entry.text.len().max(text.len()) as u64 + 1)?;
-            if entry.text == text {
-                return Ok(SymbolId {
-                    session: self.id,
-                    index: self.index(index)?,
-                });
-            }
+        self.intern_hashed(text, self.symbol_hasher.hash_one(text))
+    }
+
+    fn symbol_slot(
+        &self,
+        text: &str,
+        hash: u64,
+    ) -> Result<Option<(usize, Option<u32>)>, TokenError> {
+        let count = self.symbol_slots.len();
+        if count == 0 {
+            return Ok(None);
         }
+        let mut slot = hash as usize & (count - 1);
+        loop {
+            self.budget.charge(Counter::Work, 1)?;
+            let Some(index) = self.symbol_slots.as_slice()[slot] else {
+                return Ok(Some((slot, None)));
+            };
+            let entry = &self.symbols.as_slice()[index as usize];
+            if entry.hash == hash {
+                self.budget
+                    .charge(Counter::Work, entry.text.len().max(text.len()) as u64 + 1)?;
+                if entry.text == text {
+                    return Ok(Some((slot, Some(index))));
+                }
+            }
+            slot = (slot + 1) & (count - 1);
+        }
+    }
+
+    fn grow_symbol_index(&mut self) -> Result<(), TokenError> {
+        let count = self
+            .symbol_slots
+            .len()
+            .checked_mul(2)
+            .ok_or(TokenError::IdExhausted)?
+            .max(16);
+        // Initialization plus the geometric backing moves while filling this
+        // independently leased table are bounded by twice its slot count.
+        self.budget.charge(
+            Counter::Work,
+            (count as u64)
+                .checked_mul(2)
+                .ok_or(TokenError::IdExhausted)?,
+        )?;
+        let mut slots = BudgetVec::new(&self.budget, Storage::Retained)?;
+        for _ in 0..count {
+            slots.push(None)?;
+        }
+        for (index, entry) in self.symbols.as_slice().iter().enumerate() {
+            let mut slot = entry.hash as usize & (count - 1);
+            loop {
+                self.budget.charge(Counter::Work, 1)?;
+                if slots.as_slice()[slot].is_none() {
+                    break;
+                }
+                slot = (slot + 1) & (count - 1);
+            }
+            slots.values[slot] = Some(self.index(index)?);
+        }
+        self.symbol_slots = slots;
+        Ok(())
+    }
+
+    fn intern_hashed(&mut self, text: &str, hash: u64) -> Result<SymbolId, TokenError> {
+        self.budget.check()?;
+        if let Some((_, Some(index))) = self.symbol_slot(text, hash)? {
+            return Ok(SymbolId {
+                session: self.id,
+                index,
+            });
+        }
+        if self.symbols.len() >= self.symbol_slots.len() / 2 {
+            self.grow_symbol_index()?;
+        }
+        let (slot, _) = self
+            .symbol_slot(text, hash)?
+            .ok_or(TokenError::InvalidHandle)?;
         let index = self.index(self.symbols.len())?;
+        self.budget.charge(Counter::Work, text.len() as u64)?;
         let mut lease = self.budget.reserve(Storage::Retained, text.len() as u64)?;
         let mut owned = String::new();
         if owned.try_reserve_exact(text.len()).is_err() {
@@ -410,10 +694,16 @@ impl TokenSession {
         }
         lease.resize(owned.capacity() as u64)?;
         owned.push_str(text);
+        if self.symbols.len() == self.symbols.values.capacity() {
+            self.budget
+                .charge(Counter::Work, self.symbols.len() as u64)?;
+        }
         self.symbols.push(SymbolEntry {
+            hash,
             text: owned,
             _lease: lease,
         })?;
+        self.symbol_slots.values[slot] = Some(index);
         Ok(SymbolId {
             session: self.id,
             index,
@@ -674,6 +964,203 @@ mod tests {
             defining_crate: krate,
             edition: Edition::E2024,
         }
+    }
+
+    #[test]
+    fn symbol_index_handles_4096_distinct_names_with_bounded_work_and_storage() {
+        let mut counters = ExpansionLimits::default().counters;
+        counters[Counter::Work as usize] = 500_000;
+        let budget = ExpansionBudget::new(ExpansionLimits {
+            counters,
+            ..ExpansionLimits::default()
+        });
+        let mut session = TokenSession::new(sources(), budget.clone()).unwrap();
+        let shared = session.intern_symbol("i32").unwrap();
+        for i in 0..4096 {
+            let name = format!("p{i}");
+            let id = session.intern_symbol(&name).unwrap();
+            assert_eq!(session.symbol(id).unwrap(), name);
+            assert_eq!(session.intern_symbol(&name).unwrap(), id);
+            assert_eq!(session.intern_symbol("i32").unwrap(), shared);
+        }
+        assert_eq!(session.symbols.len(), 4097);
+        assert!(budget.snapshot().retained_bytes > 0);
+        let work = budget.snapshot().counters[Counter::Work as usize];
+        drop(session);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        assert_eq!(budget.snapshot().counters[Counter::Work as usize], work);
+    }
+
+    #[test]
+    fn symbol_index_hash_collisions_never_alias_full_spellings_and_rehash() {
+        let budget = ExpansionBudget::default();
+        let mut session = TokenSession::new(sources(), budget.clone()).unwrap();
+        for i in 0..64 {
+            let name = format!("collision_{i}");
+            let id = session.intern_hashed(&name, 7).unwrap();
+            assert_eq!(id.index as usize, i);
+            assert_eq!(session.symbol(id).unwrap(), name);
+        }
+        for i in 0..64 {
+            let name = format!("collision_{i}");
+            let id = session.intern_hashed(&name, 7).unwrap();
+            assert_eq!(id.index as usize, i);
+        }
+        assert_eq!(session.symbols.len(), 64);
+        drop(session);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+    }
+
+    #[test]
+    fn borrowed_source_copy_shares_contents_but_seals_metadata_and_lease() {
+        let mut map = SourceMap::default();
+        map.add("original.rs".into(), Arc::from("α\r\nx\n"));
+        let budget = ExpansionBudget::default();
+        let snapshot = SourceSnapshot::copy_borrowed(&map, &budget).unwrap();
+        let file = snapshot.file(0).unwrap();
+        let SourceStorage::Map(copied) = &snapshot.inner.storage else {
+            panic!("map backing")
+        };
+        assert!(Arc::ptr_eq(
+            &map.files[0].contents,
+            &copied.files[0].contents
+        ));
+        assert_ne!(
+            map.files[0].line_starts.as_ptr(),
+            copied.files[0].line_starts.as_ptr()
+        );
+        let retained = budget.snapshot().retained_bytes;
+        assert!(retained > 0);
+        let clone = snapshot.clone();
+        assert!(snapshot.same_snapshot(&clone));
+        let independent = SourceSnapshot::copy_borrowed(&map, &ExpansionBudget::default()).unwrap();
+        assert!(!snapshot.same_snapshot(&independent));
+        assert!(matches!(
+            independent.text(file),
+            Err(TokenError::ForeignHandle)
+        ));
+        map.files[0].lexical_path = "changed.rs".into();
+        map.files[0].line_starts.clear();
+        let eof = snapshot.span(file, 6, 6).unwrap();
+        assert_eq!(
+            snapshot.location(eof).unwrap(),
+            (Path::new("original.rs"), 3, 1)
+        );
+        let session = TokenSession::new(snapshot.clone(), ExpansionBudget::default()).unwrap();
+        drop(snapshot);
+        drop(clone);
+        assert_eq!(budget.snapshot().retained_bytes, retained);
+        assert_eq!(session.sources().text(file).unwrap(), "α\r\nx\n");
+        drop(session);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        assert!(budget.snapshot().counters[Counter::Work as usize] > 0);
+    }
+
+    #[test]
+    fn raw_identity_source_preserves_utf8_eof_and_charges_owned_payload() {
+        let budget = ExpansionBudget::default();
+        let snapshot =
+            SourceSnapshot::from_text(Path::new("not-read.rs"), "α\r\nx\n", &budget).unwrap();
+        let file = snapshot.file(0).unwrap();
+        assert_eq!(snapshot.text(file).unwrap(), "α\r\nx\n");
+        assert!(snapshot.file(1).is_err());
+        assert!(matches!(
+            snapshot.span(file, 1, 2),
+            Err(TokenError::InvalidUtf8Boundary)
+        ));
+        assert_eq!(
+            snapshot
+                .location(snapshot.span(file, 6, 6).unwrap())
+                .unwrap(),
+            (Path::new("not-read.rs"), 3, 1)
+        );
+        let moved = sources();
+        assert!(!snapshot.same_snapshot(&moved));
+        assert!(matches!(moved.text(file), Err(TokenError::ForeignHandle)));
+        let retained = budget.snapshot().retained_bytes;
+        assert!(retained >= 6);
+        let clone = snapshot.clone();
+        drop(snapshot);
+        assert_eq!(budget.snapshot().retained_bytes, retained);
+        drop(clone);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        let empty =
+            SourceSnapshot::from_text(Path::new("empty.rs"), "", &ExpansionBudget::default())
+                .unwrap();
+        assert_eq!(
+            empty
+                .location(empty.span(empty.file(0).unwrap(), 0, 0).unwrap())
+                .unwrap()
+                .1,
+            1
+        );
+    }
+
+    #[test]
+    fn source_constructor_failures_release_partial_payload_and_preserve_work() {
+        let mut map = SourceMap::default();
+        map.add("a-long-path-for-copy.rs".into(), Arc::from("a\nb\nc\n"));
+        let healthy = ExpansionBudget::default();
+        let snapshot = SourceSnapshot::copy_borrowed(&map, &healthy).unwrap();
+        let bytes = healthy.snapshot().retained_bytes;
+        drop(snapshot);
+        for cap in [0, 1, bytes / 2, bytes - 1] {
+            let budget = ExpansionBudget::new(ExpansionLimits {
+                bytes: cap,
+                ..ExpansionLimits::default()
+            });
+            assert!(matches!(
+                SourceSnapshot::copy_borrowed(&map, &budget),
+                Err(TokenError::Budget(_))
+            ));
+            assert_eq!(budget.snapshot().retained_bytes, 0);
+            assert!(budget.snapshot().counters[Counter::Work as usize] > 0);
+        }
+        let healthy = ExpansionBudget::default();
+        let snapshot =
+            SourceSnapshot::from_text(Path::new("raw.rs"), "a\nb\nc\n", &healthy).unwrap();
+        let bytes = healthy.snapshot().retained_bytes;
+        drop(snapshot);
+        for cap in [0, bytes / 2, bytes - 1] {
+            let budget = ExpansionBudget::new(ExpansionLimits {
+                bytes: cap,
+                ..ExpansionLimits::default()
+            });
+            assert!(matches!(
+                SourceSnapshot::from_text(Path::new("raw.rs"), "a\nb\nc\n", &budget),
+                Err(TokenError::Budget(_))
+            ));
+            assert_eq!(budget.snapshot().retained_bytes, 0);
+        }
+    }
+
+    #[test]
+    fn borrowed_metadata_traversal_is_budgeted_before_copy() {
+        let mut map = SourceMap::default();
+        map.add("large-metadata.rs".into(), Arc::from(""));
+        map.files[0].line_starts = vec![0; 128];
+        let mut counters = ExpansionLimits::default().counters;
+        counters[Counter::Work as usize] = 8;
+        let budget = ExpansionBudget::new(ExpansionLimits {
+            counters,
+            ..ExpansionLimits::default()
+        });
+        assert!(matches!(
+            SourceSnapshot::copy_borrowed(&map, &budget),
+            Err(TokenError::Budget(_))
+        ));
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        map.files[0].line_starts = vec![0];
+        map.files[0].lexical_path = "x".repeat(128).into();
+        let budget = ExpansionBudget::new(ExpansionLimits {
+            counters,
+            ..ExpansionLimits::default()
+        });
+        assert!(matches!(
+            SourceSnapshot::copy_borrowed(&map, &budget),
+            Err(TokenError::Budget(_))
+        ));
+        assert_eq!(budget.snapshot().retained_bytes, 0);
     }
 
     #[test]

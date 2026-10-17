@@ -60,8 +60,11 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       punctuation views and checked restoration, without macro admission
       (CURSOR-MIGRATION.md).
 - [x] Checked structural token/session/tree/provenance utilities and shared
-      expansion accounting under TOKEN-PRIMITIVES.md, without a native lexer,
+      expansion accounting under TOKEN-PRIMITIVES.md, without claiming a
       hygienic resolver or macro-expansion path.
+- [x] Native edition-aware lexical atoms, exact literals/adjacency/doc records,
+      sealed prepared-source projection and production parser cutover under
+      NATIVE-LEXER.md. New lexical forms do not imply new semantic admission.
 
 ## Remaining implementation program
 
@@ -857,3 +860,29 @@ The complete hosted suite passes 1828 tests in 94 binaries, with public utility,
 foreign-handle, resource, original planning and strict-lint gates. Native lexical
 tokens, prepared-source projection, hygienic AST identifiers, matching and graph
 expansion remain open. Structural tests are not language-support acceptance.
+
+## Native lexical transport checkpoint (2026-10-17)
+
+The production parser now consumes the native lexer through a budgeted immutable
+adapter. Original files are lexically validated with that same scanner before
+configuration and child filesystem discovery. Exact literal spellings, suffixes,
+punctuation adjacency, doc audit records and original/synthetic EOF provenance
+are retained. Source/session/budget owner checks and whole logical-token mapping
+reject invalid transport independently of source syntax. Unicode XID uses the
+pinned minimal Unicode-17 utility and retained notices, not compiler internals.
+
+Fifty-four stock witnesses run under the actual hosted stock compiler at both
+editions 2024 and 2021, with lexical validity separated from expression suffix
+semantics. Native facade checks, original-location/CRLF controls, late lexical
+errors before projection failures, and workers1/8 CHECK/BUILD graph tests pass.
+The unchanged existing source86/native344 and identity18/native72/protocol64
+gates remain passing. Initial quadratic interning and logical-view storage
+regressions were repaired without increasing caps or reducing source fixtures.
+
+The final hosted all-target check, all 1887 tests across 96 binaries, strict
+all-target lint and formatting pass. Twelve successful/failed redacted receipts
+are retained in `data/runs/xps14/2026-10-17-native-lexer.jsonl`; the complete
+test receipt is `20261017-064506676-590807`. See NATIVE-LEXER.md for phase-specific
+corrections and resource evidence. Hygienic semantic identifiers, macro matching,
+transcription, expansion/discovery closure, full literal semantics, core/alloc/std
+and full Rust compatibility remain open. No performance speedup is claimed.

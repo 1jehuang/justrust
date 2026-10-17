@@ -30,3 +30,9 @@ These sources retain their original copyrights, component licenses
 See the LICENSE*, COPYRIGHT, and other attribution files in the respective
 trees. toolchain/sources.json records exact import origins and revisions.
 Other dependencies are obtained under their own licenses.
+
+unicode-ident 1.0.24 supplies Unicode XID classification tables for the native
+lexical scanner. Its license is (MIT OR Apache-2.0) AND Unicode-3.0.
+This distribution uses the MIT alternative and retains both the upstream MIT
+and Unicode data notices in THIRD-PARTY-LICENSES.md. The utility is not a
+vendored compiler or parser implementation.

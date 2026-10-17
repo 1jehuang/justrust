@@ -8,6 +8,8 @@ pub mod frontend;
 mod hygiene;
 mod instances;
 pub mod ir;
+mod lexer;
+mod literal_scan;
 pub mod ownership;
 mod resource_accounting;
 pub mod source;

@@ -2,7 +2,7 @@
 //!
 //! This is not a second lexer or a token-tree/hygiene implementation. Splitting
 //! punctuation changes only cursor state, never the spelling or origin tokens.
-use super::Token;
+use super::{ParserTokenKind, Token};
 use std::ops::Range;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -12,6 +12,23 @@ pub(super) struct TokenView<'input> {
     pub(super) column: usize,
     pub(super) string: bool,
     pub(super) bytes: Range<usize>,
+    pub(super) span: crate::compiler::expansion_span::SpanId,
+    kind: ParserTokenKind,
+}
+
+impl TokenView<'_> {
+    pub(super) fn matches(&self, text: &str) -> bool {
+        if text.is_empty() {
+            self.kind == ParserTokenKind::Eof
+        } else {
+            self.kind != ParserTokenKind::Eof
+                && self.kind != ParserTokenKind::String
+                && self.text == text
+        }
+    }
+    pub(super) fn is_ident(&self) -> bool {
+        self.kind == ParserTokenKind::Ident
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -30,7 +47,7 @@ pub(super) struct TokenCursor<'input> {
 impl<'input> TokenCursor<'input> {
     pub(super) fn new(input: &'input [Token]) -> Self {
         assert!(
-            input.last().is_some_and(|t| !t.string && t.text.is_empty()),
+            input.last().is_some_and(|t| t.kind == ParserTokenKind::Eof),
             "parser input must end with the lexer's EOF token"
         );
         Self {
@@ -85,7 +102,7 @@ impl<'input> TokenCursor<'input> {
 
     pub(super) fn consume_type_gt(&mut self) -> bool {
         let token = self.current();
-        if token.string {
+        if token.kind != ParserTokenKind::Punct {
             return false;
         }
         match token.text {
@@ -102,7 +119,7 @@ impl<'input> TokenCursor<'input> {
 
     pub(super) fn consume_type_amp_prefix(&mut self) -> bool {
         let token = self.current();
-        if token.string || token.text != "&&" {
+        if token.kind != ParserTokenKind::Punct || token.text != "&&" {
             return false;
         }
         self.prefix += 1;
@@ -110,7 +127,9 @@ impl<'input> TokenCursor<'input> {
     }
 
     fn valid_prefix(token: &Token, prefix: usize) -> bool {
-        !token.string
+        token.kind == ParserTokenKind::Punct
+            && prefix > 0
+            && token.suffixes.get(prefix - 1).is_some_and(Option::is_some)
             && matches!(
                 (token.text.as_str(), prefix),
                 ("&&" | ">>" | ">=", 1) | (">>=", 1 | 2)
@@ -120,12 +139,22 @@ impl<'input> TokenCursor<'input> {
     fn view(&self, at: usize, prefix: usize) -> TokenView<'input> {
         let token = &self.input[at];
         debug_assert!(prefix == 0 || Self::valid_prefix(token, prefix));
+        let part = if prefix == 0 {
+            &token.whole
+        } else {
+            token.suffixes[prefix - 1]
+                .as_ref()
+                .expect("validated cursor suffix")
+        };
+        debug_assert!(token.constituents[0].is_some());
         TokenView {
             text: &token.text[prefix..],
             line: token.line,
             column: token.column + prefix,
             string: token.string,
-            bytes: token.bytes.start + prefix..token.bytes.end,
+            bytes: part.bytes(),
+            span: part.span,
+            kind: token.kind,
         }
     }
 }
@@ -246,12 +275,12 @@ mod tests {
         ] {
             let tokens = lex(text).unwrap();
             let mut cursor = TokenCursor::new(&tokens);
-            for token in &tokens {
+            for token in tokens.iter() {
                 let view = cursor.bump();
                 assert_eq!(view.text, token.text);
                 assert_eq!(view.string, token.string);
                 assert_eq!((view.line, view.column), (token.line, token.column));
-                assert_eq!(view.bytes, token.bytes);
+                assert_eq!(view.bytes, token.whole.bytes());
             }
             assert_eq!(cursor.current().bytes, text.len()..text.len());
         }

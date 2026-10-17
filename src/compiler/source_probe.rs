@@ -106,7 +106,8 @@ pub fn prepare_probe_file(
 ) -> Result<super::PreparedSource, SourceError> {
     options.cfg.validate_native().map_err(error)?;
     let verified = verify(request)?;
-    let mut prepared = super::prepare_file(client, options)?;
+    let lexical_budget = crate::compiler::expansion_budget::ExpansionBudget::default();
+    let mut prepared = super::prepare_file_with_budget(client, options, &lexical_budget)?;
     if verified.full_text.len() > super::MAX_BYTES - prepared.source_bytes
         || prepared.files >= super::MAX_FILES
     {
@@ -126,8 +127,10 @@ pub fn prepare_probe_file(
         options,
         reader: None,
         prepared,
+        lexical_budget,
     };
     let result = (|| {
+        loader.validate_original(id, &verified.full_text, 0)?;
         let filtered = super::source_attrs::prepare_verified_identity(
             &verified.context.selected,
             &options.cfg,

@@ -1,9 +1,9 @@
-//! Unstable checked structural token utilities for the native compiler.
+//! Unstable checked lexical and structural token utilities for the native compiler.
 //!
-//! These APIs validate ownership, ranges, storage and resource accounting.
-//! They do not establish Rust lexical validity, hygienic name resolution,
-//! semantic authority, or a production macro-expansion path. The production
-//! parser still consumes its existing lexer through the immutable cursor.
+//! Structural constructors validate ownership, ranges, storage and resource
+//! accounting, not lexical validity. `lex_prepared` performs native lexical
+//! validation over a checked source projection. Neither path grants hygienic
+//! name resolution, semantic authority, or a macro-expansion implementation.
 
 pub use super::expansion_budget::{
     BudgetFailure, BudgetFailureKind, BudgetResource, BudgetSnapshot, ByteLease, Counter, Depth,
@@ -14,6 +14,10 @@ pub use super::expansion_span::{
     TraceFrame,
 };
 pub use super::hygiene::{ContextData, SyntaxContextId, Transparency};
+pub use super::lexer::{
+    DecodedString, DocComment, DocStyle, LexError, LexedEof, LexedEvent, LexedTokens, LiteralInfo,
+    decode_normal_string, lex_prepared,
+};
 pub use super::resource_accounting::ReservationAccounting;
 pub use super::source::source_map::{SourceFile, SourceMap, SourceSpan};
 pub use super::token::{

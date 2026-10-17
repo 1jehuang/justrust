@@ -1,5 +1,36 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Native lexical transport replaces the production scanner
+
+NATIVE-LEXER.md records the native scanner, literal validation, sealed prepared
+source projection and immutable parser adapter. Original source is validated
+before cfg and child filesystem observations. The stock-first suite distinguishes
+lexical validity from downstream expression suffix semantics, compares 54 cases
+at editions 2024/2021, and retains exact toolchain identities. Existing source,
+unchanged identity, ownership, replay and workers1/8 graph gates remain intact.
+
+The first library run `20261017-063135348-529966` passed655/658. Linear symbol
+lookup exhausted16M shared work on the unchanged4096-parameter positive source.
+A charged collision-safe open-address index restores that source without a cap
+increase. The next run `20261017-063447029-544223` passed678/679. The remaining
+unchanged65537-import negative reached256MiB lexical/logical storage before its
+parser count fence: `20261017-063723396-556062` observed231736373 live bytes plus
+a67108864 request; `20261017-064205524-577483` observed240321465 plus33554432.
+Reusing actual native leaf SpanIds, compact checked ranges and removing duplicate
+constituent ranges restores the intended parser rejection. No source fixture,
+parser guard, thread stack or resource cap was relaxed. Complete library run
+`20261017-064309830-582355` passed684/684.
+
+The final complete run `20261017-064506676-590807` passes1887 tests/96binaries,
+with12.34s test execution and12.15s slowest wide-integer stock-first test. Check
+`20261017-064504065-590678`, strictlint `20261017-064524075-592057`, formatting
+and diff checks pass. Initial typed-expectation failures are also retained,
+including1886/1887 run `20261017-064344985-584789`, not relabeled as first-pass
+success. Twelve redacted receipts are in
+`data/runs/xps14/2026-10-17-native-lexer.jsonl`. These are validation/resource
+observations, not a before/after speedup benchmark. Hygienic semantic identifiers,
+macro execution, complete literal semantics, libraries and full Rust remain open.
+
 ## 2026-10-17: Native two-limb scalars and full-width numeric casts
 
 INTEGER128.md records native i128/u128 semantics and private 16-byte scalar Copy

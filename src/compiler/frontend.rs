@@ -19,6 +19,8 @@ use super::ir;
 use super::traits as tr;
 use std::collections::HashMap;
 
+mod native_adapter;
+use native_adapter::NativeParserInput;
 mod token_cursor;
 use token_cursor::{TokenCursor, TokenView};
 
@@ -3872,22 +3874,69 @@ pub(super) struct ParseError {
     pub(super) kind: super::source::SourceErrorKind,
     pub(super) has_location: bool,
     pub(super) bytes: std::ops::Range<usize>,
+    primary: Option<super::source::SourceSpan>,
     line: usize,
     column: usize,
     pub(super) message: String,
 }
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}: {}", self.line, self.column, self.message)
+        match self.kind {
+            super::source::SourceErrorKind::Contract => write!(f, "contract: {}", self.message),
+            super::source::SourceErrorKind::Infrastructure => {
+                write!(f, "infrastructure: {}", self.message)
+            }
+            _ => write!(f, "{}:{}: {}", self.line, self.column, self.message),
+        }
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ParserTokenKind {
+    Ident,
+    Number,
+    String,
+    Punct,
+    Lifetime,
+    Eof,
+}
 #[derive(Clone, Debug)]
+struct TokenPart {
+    span: super::expansion_span::SpanId,
+    lo: u32,
+    hi: u32,
+}
+impl TokenPart {
+    fn new(
+        span: super::expansion_span::SpanId,
+        bytes: std::ops::Range<usize>,
+    ) -> Result<Self, ParseError> {
+        if bytes.start > bytes.end {
+            return Err(native_adapter::transport_error(
+                super::token_session::TokenError::InvalidRange,
+            ));
+        }
+        let invalid =
+            |_| native_adapter::transport_error(super::token_session::TokenError::InvalidRange);
+        Ok(Self {
+            span,
+            lo: u32::try_from(bytes.start).map_err(invalid)?,
+            hi: u32::try_from(bytes.end).map_err(invalid)?,
+        })
+    }
+    fn bytes(&self) -> std::ops::Range<usize> {
+        self.lo as usize..self.hi as usize
+    }
+}
+#[derive(Debug)]
 struct Token {
     text: String,
     line: usize,
     column: usize,
     string: bool,
-    bytes: std::ops::Range<usize>,
+    kind: ParserTokenKind,
+    whole: TokenPart,
+    constituents: [Option<super::expansion_span::SpanId>; 3],
+    suffixes: [Option<TokenPart>; 2],
 }
 fn compound_operator(token: TokenView<'_>) -> Option<BinaryOp> {
     if token.string {
@@ -3907,389 +3956,29 @@ fn compound_operator(token: TokenView<'_>) -> Option<BinaryOp> {
         _ => return None,
     })
 }
-fn lex(source: &str) -> Result<Vec<Token>, ParseError> {
-    let chars: Vec<char> = source.chars().collect();
-    let offsets: Vec<usize> = source
-        .char_indices()
-        .map(|(i, _)| i)
-        .chain(std::iter::once(source.len()))
-        .collect();
-    let error_at = |index: usize, line, column, message| ParseError {
-        kind: super::source::SourceErrorKind::Syntax,
-        has_location: true,
-        bytes: offsets[index]..offsets.get(index + 1).copied().unwrap_or(source.len()),
-        line,
-        column,
-        message,
-    };
-    let unsupported_at = |index, line, column, message| {
-        let mut error = error_at(index, line, column, message);
-        error.kind = super::source::SourceErrorKind::Unsupported;
-        error
-    };
-    let (mut i, mut line, mut column) = (0, 1, 1);
-    let mut tokens = Vec::new();
-    fn advance(chars: &[char], i: &mut usize, line: &mut usize, column: &mut usize) {
-        if chars[*i] == '\n' {
-            *line += 1;
-            *column = 1;
-        } else {
-            *column += 1;
-        }
-        *i += 1;
-    }
-    while i < chars.len() {
-        let c = chars[i];
-        if matches!(
-            c,
-            ' ' | '\t'
-                | '\n'
-                | '\r'
-                | '\u{000b}'
-                | '\u{000c}'
-                | '\u{0085}'
-                | '\u{200e}'
-                | '\u{200f}'
-                | '\u{2028}'
-                | '\u{2029}'
-        ) {
-            advance(&chars, &mut i, &mut line, &mut column);
-            continue;
-        }
-        if c == '/' && chars.get(i + 1) == Some(&'/') {
-            while i < chars.len() && chars[i] != '\n' {
-                advance(&chars, &mut i, &mut line, &mut column);
-            }
-            continue;
-        }
-        if c == '/' && chars.get(i + 1) == Some(&'*') {
-            let start = (line, column);
-            let begin = i;
-            let mut depth = 1;
-            advance(&chars, &mut i, &mut line, &mut column);
-            advance(&chars, &mut i, &mut line, &mut column);
-            while i < chars.len() && depth > 0 {
-                if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
-                    depth += 1;
-                    advance(&chars, &mut i, &mut line, &mut column);
-                } else if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
-                    depth -= 1;
-                    advance(&chars, &mut i, &mut line, &mut column);
-                }
-                advance(&chars, &mut i, &mut line, &mut column);
-            }
-            if depth != 0 {
-                return Err(error_at(
-                    begin,
-                    start.0,
-                    start.1,
-                    "unterminated comment".into(),
-                ));
-            }
-            continue;
-        }
-        let (sl, sc) = (line, column);
-        let begin = i;
-        let mut text = String::new();
-        if (c == 'r' && matches!(chars.get(i + 1), Some('"' | '#')))
-            || (c == 'b' && matches!(chars.get(i + 1), Some('"' | '\'')))
-            || (c == 'b'
-                && chars.get(i + 1) == Some(&'r')
-                && matches!(chars.get(i + 2), Some('"' | '#')))
-        {
-            return Err(unsupported_at(
-                begin,
-                sl,
-                sc,
-                "raw and byte literals are unsupported".into(),
-            ));
-        }
-        let string = c == '"';
-        if string {
-            advance(&chars, &mut i, &mut line, &mut column);
-            while i < chars.len() && chars[i] != '"' {
-                let mut ch = chars[i];
-                if ch == '\r' {
-                    if chars.get(i + 1) != Some(&'\n') {
-                        return Err(error_at(
-                            i,
-                            line,
-                            column,
-                            "bare carriage return in string".into(),
-                        ));
-                    }
-                    advance(&chars, &mut i, &mut line, &mut column);
-                    ch = '\n';
-                }
-                if ch == '\\' {
-                    advance(&chars, &mut i, &mut line, &mut column);
-                    ch = match chars.get(i) {
-                        Some('n') => '\n',
-                        Some('r') => '\r',
-                        Some('t') => '\t',
-                        Some('0') => '\0',
-                        Some('"') => '"',
-                        Some('\'') => '\'',
-                        Some('\\') => '\\',
-                        Some('x') => {
-                            advance(&chars, &mut i, &mut line, &mut column);
-                            let hi =
-                                chars.get(i).and_then(|c| c.to_digit(16)).ok_or_else(|| {
-                                    error_at(i, line, column, "expected two hex digits".into())
-                                })?;
-                            advance(&chars, &mut i, &mut line, &mut column);
-                            let lo =
-                                chars.get(i).and_then(|c| c.to_digit(16)).ok_or_else(|| {
-                                    error_at(i, line, column, "expected two hex digits".into())
-                                })?;
-                            let value = hi * 16 + lo;
-                            if value > 127 {
-                                return Err(error_at(
-                                    i,
-                                    line,
-                                    column,
-                                    "hex string escape must be ASCII".into(),
-                                ));
-                            }
-                            char::from_u32(value).unwrap()
-                        }
-                        Some('u') => {
-                            advance(&chars, &mut i, &mut line, &mut column);
-                            if chars.get(i) != Some(&'{') {
-                                return Err(error_at(
-                                    i,
-                                    line,
-                                    column,
-                                    "expected unicode escape brace".into(),
-                                ));
-                            }
-                            advance(&chars, &mut i, &mut line, &mut column);
-                            let mut value = 0u32;
-                            let mut digits = 0;
-                            while let Some(&c) = chars.get(i) {
-                                if c == '}' {
-                                    break;
-                                }
-                                if c == '_' && digits > 0 {
-                                    advance(&chars, &mut i, &mut line, &mut column);
-                                    continue;
-                                }
-                                let digit = c.to_digit(16).ok_or_else(|| {
-                                    error_at(i, line, column, "invalid unicode escape".into())
-                                })?;
-                                digits += 1;
-                                if digits > 6 {
-                                    return Err(error_at(
-                                        i,
-                                        line,
-                                        column,
-                                        "unicode escape exceeds six digits".into(),
-                                    ));
-                                }
-                                value = value * 16 + digit;
-                                advance(&chars, &mut i, &mut line, &mut column);
-                            }
-                            if digits == 0 || chars.get(i) != Some(&'}') {
-                                return Err(error_at(
-                                    i,
-                                    line,
-                                    column,
-                                    "unterminated unicode escape".into(),
-                                ));
-                            }
-                            char::from_u32(value).ok_or_else(|| {
-                                error_at(i, line, column, "invalid unicode scalar".into())
-                            })?
-                        }
-                        _ => {
-                            return Err(error_at(
-                                i,
-                                line,
-                                column,
-                                "unsupported string escape".into(),
-                            ));
-                        }
-                    };
-                }
-                text.push(ch);
-                advance(&chars, &mut i, &mut line, &mut column);
-            }
-            if i == chars.len() {
-                return Err(error_at(begin, sl, sc, "unterminated string".into()));
-            }
-            advance(&chars, &mut i, &mut line, &mut column);
-        } else if c == '\'' {
-            text.push(c);
-            advance(&chars, &mut i, &mut line, &mut column);
-            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
-                text.push(chars[i]);
-                advance(&chars, &mut i, &mut line, &mut column);
-            }
-            if text.len() == 1 || chars.get(i) == Some(&'\'') {
-                return Err(unsupported_at(
-                    begin,
-                    sl,
-                    sc,
-                    "character literals are unsupported".into(),
-                ));
-            }
-        } else if c.is_ascii_alphabetic() || c == '_' || c.is_ascii_digit() {
-            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
-                text.push(chars[i]);
-                advance(&chars, &mut i, &mut line, &mut column);
-            }
-            // Decimal float literals: `1.5`, `1.`, `1e-3`, `2.5E+7f32`. A digit
-            // run directly after `.` is a tuple field (`t.0.1`), never a float.
-            let after_dot = tokens
-                .last()
-                .is_some_and(|t: &Token| !t.string && t.text == ".");
-            let decimal = c.is_ascii_digit()
-                && !after_dot
-                && !(text.len() > 1 && matches!(&text[..2], "0x" | "0o" | "0b"));
-            if decimal
-                && chars.get(i) == Some(&'.')
-                && !text.contains(['e', 'E'])
-                && text.bytes().all(|b| b.is_ascii_digit() || b == b'_')
-            {
-                let next = chars.get(i + 1).copied();
-                if next.is_some_and(|n| n.is_ascii_digit()) {
-                    text.push('.');
-                    advance(&chars, &mut i, &mut line, &mut column);
-                    while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
-                        text.push(chars[i]);
-                        advance(&chars, &mut i, &mut line, &mut column);
-                    }
-                } else if !next.is_some_and(|n| n == '.' || n == '_' || n.is_alphabetic()) {
-                    text.push('.');
-                    advance(&chars, &mut i, &mut line, &mut column);
-                }
-            }
-            if decimal
-                && text.ends_with(['e', 'E'])
-                && matches!(chars.get(i), Some('+' | '-'))
-                && chars.get(i + 1).is_some_and(|n| n.is_ascii_digit())
-            {
-                text.push(chars[i]);
-                advance(&chars, &mut i, &mut line, &mut column);
-                while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
-                    text.push(chars[i]);
-                    advance(&chars, &mut i, &mut line, &mut column);
-                }
-            }
-        } else {
-            if !c.is_ascii() {
-                return Err(unsupported_at(
-                    i,
-                    line,
-                    column,
-                    "non-ASCII identifiers are unsupported".into(),
-                ));
-            }
-            text.push(c);
-            advance(&chars, &mut i, &mut line, &mut column);
-            if let Some(&next) = chars.get(i)
-                && matches!(
-                    (c, next),
-                    ('-', '>')
-                        | (':', ':')
-                        | ('=', '=')
-                        | ('!', '=')
-                        | ('<', '=')
-                        | ('>', '=')
-                        | ('<', '<')
-                        | ('>', '>')
-                        | ('&', '&')
-                        | ('|', '|')
-                        | ('=', '>')
-                        | ('%', '=')
-                        | ('+', '=')
-                        | ('-', '=')
-                        | ('*', '=')
-                        | ('/', '=')
-                        | ('&', '=')
-                        | ('|', '=')
-                        | ('^', '=')
-                        | ('.', '.')
-                )
-            {
-                text.push(next);
-                advance(&chars, &mut i, &mut line, &mut column);
-            }
-            if matches!(text.as_str(), "<<" | ">>") && chars.get(i) == Some(&'=') {
-                text.push('=');
-                advance(&chars, &mut i, &mut line, &mut column);
-            }
-            if !matches!(
-                text.as_str(),
-                "(" | ")"
-                    | "{"
-                    | "}"
-                    | "["
-                    | "]"
-                    | ":"
-                    | "::"
-                    | ";"
-                    | ","
-                    | "."
-                    | ".."
-                    | "->"
-                    | "=>"
-                    | "+"
-                    | "-"
-                    | "*"
-                    | "/"
-                    | "%"
-                    | "="
-                    | "!"
-                    | "=="
-                    | "!="
-                    | "<"
-                    | "<="
-                    | ">"
-                    | ">="
-                    | "<<"
-                    | ">>"
-                    | "+="
-                    | "-="
-                    | "*="
-                    | "/="
-                    | "%="
-                    | "&="
-                    | "|="
-                    | "^="
-                    | "<<="
-                    | ">>="
-                    | "&"
-                    | "|"
-                    | "^"
-                    | "&&"
-                    | "||"
-            ) {
-                return Err(if matches!(text.as_str(), "#" | "@" | "?" | "$" | "~") {
-                    unsupported_at(begin, sl, sc, format!("unsupported token {text:?}"))
-                } else {
-                    error_at(begin, sl, sc, format!("invalid token {text:?}"))
-                });
-            }
-        }
-        tokens.push(Token {
-            text,
-            line: sl,
-            column: sc,
-            string,
-            bytes: offsets[begin]..offsets[i],
-        });
-    }
-    tokens.push(Token {
-        text: String::new(),
-        line,
-        column,
-        string: false,
-        bytes: source.len()..source.len(),
-    });
-    Ok(tokens)
+fn lex(source: &str) -> Result<NativeParserInput, ParseError> {
+    let budget = super::expansion_budget::ExpansionBudget::default();
+    let projection = super::source::PreparedLexInput::identity(
+        std::path::Path::new("<syntax>"),
+        source,
+        &budget,
+    )
+    .map_err(native_adapter::source_error)?;
+    native_input(&projection, budget)
+}
+fn native_input(
+    projection: &super::source::PreparedLexInput<'_>,
+    budget: super::expansion_budget::ExpansionBudget,
+) -> Result<NativeParserInput, ParseError> {
+    let mut session =
+        super::token_session::TokenSession::new(projection.snapshot().clone(), budget)
+            .map_err(native_adapter::transport_error)?;
+    let lexed = super::lexer::lex_prepared(projection, super::token::Edition::E2024, &mut session)
+        .map_err(native_adapter::lex_error)?;
+    NativeParserInput::new(lexed, session, projection)
 }
 struct Parser<'input> {
+    input: &'input NativeParserInput,
     alias_target: bool,
     pending_bounds: Vec<TypeBound>,
     cursor: TokenCursor<'input>,
@@ -4300,8 +3989,9 @@ struct Parser<'input> {
     use_expansion_bytes: usize,
 }
 impl<'input> Parser<'input> {
-    fn new(tokens: &'input [Token]) -> Self {
+    fn new(tokens: &'input NativeParserInput) -> Self {
         Self {
+            input: tokens,
             alias_target: false,
             pending_bounds: Vec::new(),
             cursor: TokenCursor::new(tokens),
@@ -4316,7 +4006,7 @@ impl<'input> Parser<'input> {
         self.cursor.current()
     }
     fn is(&self, s: &str) -> bool {
-        !self.token().string && self.token().text == s
+        self.token().matches(s)
     }
     fn eat(&mut self, s: &str) -> bool {
         if self.is(s) {
@@ -4327,7 +4017,12 @@ impl<'input> Parser<'input> {
         }
     }
     fn error(&self, message: &str) -> ParseError {
+        let primary = match self.input.original(self.token().span) {
+            Ok(primary) => Some(primary),
+            Err(error) => return error,
+        };
         ParseError {
+            primary,
             kind: super::source::SourceErrorKind::Syntax,
             has_location: true,
             bytes: self.token().bytes.clone(),
@@ -4368,7 +4063,7 @@ impl<'input> Parser<'input> {
             "do", "final", "macro", "override", "priv", "typeof", "unsized", "virtual", "yield",
             "try", "gen",
         ];
-        if !t.string
+        if t.is_ident()
             && t.text != "_"
             && t.text
                 .chars()
@@ -6432,7 +6127,7 @@ fn literal_format(text: &str) -> Result<String, String> {
 }
 
 /// Parse syntax only, retaining imports and visibility for the signatures phase.
-fn parse_syntax_tokens(tokens: Vec<Token>) -> Result<ParsedProgram, ParseError> {
+fn parse_syntax_tokens(tokens: NativeParserInput) -> Result<ParsedProgram, ParseError> {
     let mut parser = Parser::new(&tokens);
     let mut parsed = ParsedProgram {
         program: Program {
@@ -6454,6 +6149,7 @@ fn parse_syntax_tokens(tokens: Vec<Token>) -> Result<ParsedProgram, ParseError> 
         validate_depth(DepthNode::Block(&function.body)).map_err(|e| ParseError {
             kind: super::source::SourceErrorKind::Limit,
             has_location: false,
+            primary: None,
             bytes: 0..0,
             line: 1,
             column: 1,
@@ -6466,6 +6162,7 @@ fn parse_syntax_tokens(tokens: Vec<Token>) -> Result<ParsedProgram, ParseError> 
                 validate_depth(DepthNode::Block(&default.body)).map_err(|e| ParseError {
                     kind: super::source::SourceErrorKind::Limit,
                     has_location: false,
+                    primary: None,
                     bytes: 0..0,
                     line: 1,
                     column: 1,
@@ -6492,7 +6189,7 @@ pub fn parse_prepared(
     let mapped = |error: ParseError| {
         let mut diagnostic = super::source::SourceError::syntax(
             if error.has_location {
-                source.map_range(error.bytes)
+                error.primary.or_else(|| source.map_range(error.bytes))
             } else {
                 None
             },
@@ -6501,16 +6198,9 @@ pub fn parse_prepared(
         diagnostic.kind = error.kind;
         diagnostic.with_sources(&source.sources)
     };
-    let tokens = lex(&source.text).map_err(mapped)?;
-    for token in &tokens {
-        if source.map_range(token.bytes.clone()).is_none() {
-            return Err(super::source::SourceError::syntax(
-                None,
-                "prepared token crosses or lacks an original source mapping",
-            )
-            .with_sources(&source.sources));
-        }
-    }
+    let budget = super::expansion_budget::ExpansionBudget::default();
+    let projection = super::source::PreparedLexInput::prepared(source, &budget)?;
+    let tokens = native_input(&projection, budget).map_err(mapped)?;
     parse_syntax_tokens(tokens).map_err(mapped)
 }
 
@@ -20123,7 +19813,7 @@ mod typed_tests {
 mod prepared_location_tests {
     use super::*;
 
-    fn parser(tokens: &[Token]) -> Parser<'_> {
+    fn parser(tokens: &NativeParserInput) -> Parser<'_> {
         Parser::new(tokens)
     }
 
@@ -20133,12 +19823,12 @@ mod prepared_location_tests {
         let tokens = lex(text).unwrap();
         let string_start = text.find('"').unwrap();
         let angle_start = text.find(">>=").unwrap();
-        assert_eq!(tokens[0].bytes, string_start..angle_start - 1);
+        assert_eq!(tokens[0].whole.bytes(), string_start..angle_start - 1);
         assert_eq!(tokens[0].text, "é\n水");
         assert_eq!((tokens[0].line, tokens[0].column), (2, 1));
-        assert_eq!(tokens[1].bytes, angle_start..angle_start + 3);
+        assert_eq!(tokens[1].whole.bytes(), angle_start..angle_start + 3);
         assert_eq!((tokens[1].line, tokens[1].column), (3, 4));
-        assert_eq!(tokens[2].bytes, text.len()..text.len());
+        assert_eq!(tokens[2].whole.bytes(), text.len()..text.len());
     }
 
     #[test]
@@ -20170,8 +19860,8 @@ mod prepared_location_tests {
         let tokens = lex("&&&&").unwrap();
         let mut parser = parser(&tokens);
         let error = parser.ty().unwrap_err();
-        assert_eq!(tokens[0].bytes, 0..2);
-        assert_eq!(tokens[1].bytes, 2..4);
+        assert_eq!(tokens[0].whole.bytes(), 0..2);
+        assert_eq!(tokens[1].whole.bytes(), 2..4);
         assert_eq!(error.bytes, 4..4);
     }
 
@@ -20241,7 +19931,8 @@ mod prepared_location_tests {
         prepared.origins = vec![first, second];
         let error = parse_prepared(&prepared).err().unwrap();
         assert!(error.primary.is_none());
-        assert!(error.message.contains("crosses or lacks"));
+        assert_eq!(error.kind, super::super::source::SourceErrorKind::Contract);
+        assert!(error.message.contains("segment boundary"));
     }
 
     #[test]
@@ -20830,11 +20521,8 @@ mod tests {
     #[test]
     fn grouped_use_whole_source_expansion_is_bounded() {
         let many = format!("{}fn main(){{}}", "use a::{};".repeat(65537));
-        assert!(
-            parse_unresolved(&many)
-                .unwrap_err()
-                .contains("count exceeds")
-        );
+        let error = parse_unresolved(&many).unwrap_err();
+        assert!(error.contains("count exceeds"), "{error}");
         let prefix = "a".repeat(40000);
         let expanded = format!(
             "mod {prefix}{{{}}}fn main(){{}}",
