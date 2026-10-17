@@ -1396,6 +1396,44 @@ impl Resolver<'_> {
         }
         Ok(false)
     }
+    fn tuple_variant(&self, path: &AstPath) -> Result<&VariantDecl, String> {
+        let key = self.key(path)?;
+        let owner = path
+            .semantic_parent(self.names())
+            .map_err(native_adapter::name_diagnostic)?;
+        let owner_key = self.key(&owner)?;
+        for declaration in &self.program.enums {
+            self.alias_budget.charge_work(1)?;
+            if self.key(&declaration.name)? != owner_key {
+                continue;
+            }
+            for variant in &declaration.variants {
+                self.alias_budget.charge_work(1)?;
+                let candidate = self.semantic_append(&declaration.name, variant.name)?;
+                if self.key(&candidate)? != key {
+                    continue;
+                }
+                if variant.shape != ir::VariantShape::Tuple {
+                    return Err("positional rest requires an enum tuple variant".into());
+                }
+                if variant.fields.len() > 4096 {
+                    return Err("nominal field resource limit exceeded".into());
+                }
+                for (index, field) in variant.fields.iter().enumerate() {
+                    self.alias_budget.charge_work(1)?;
+                    if !matches!(field.name, FieldName::Tuple(actual) if actual == index) {
+                        return Err(
+                            "enum tuple variant fields must have contiguous numeric identities"
+                                .into(),
+                        );
+                    }
+                }
+                return Ok(variant);
+            }
+            return Err("resolved variant has no checked source variant schema".into());
+        }
+        Err("resolved variant has no checked source enum schema".into())
+    }
     fn positional_constructor_pattern(
         &mut self,
         name: &mut AstPath,
@@ -1408,15 +1446,11 @@ impl Resolver<'_> {
         let item = self
             .path(name, module, false, false)?
             .ok_or("unresolved positional rest constructor")?;
-        if item.kind == ResolvedKind::Variant {
-            return Err(Self::unsupported(
-                "enum tuple payload positional rest patterns are unsupported",
-            ));
-        }
-        if item.kind != ResolvedKind::Struct {
-            return Err("positional rest requires a tuple struct constructor".into());
-        }
-        let arity = self.tuple_struct(item.source()?)?.fields.len();
+        let arity = match item.kind {
+            ResolvedKind::Variant => self.tuple_variant(item.source()?)?.fields.len(),
+            ResolvedKind::Struct => self.tuple_struct(item.source()?)?.fields.len(),
+            _ => return Err("positional rest requires a tuple constructor".into()),
+        };
         let selected = fields
             .prefix
             .len()
@@ -2680,21 +2714,124 @@ mod positional_rest_tests {
     }
 
     #[test]
-    fn tuple_rest_excess_fields_invalid_and_enum_payload_explicitly_unsupported() {
+    fn tuple_rest_excess_fields_remain_invalid() {
         let source = "struct T(i32);fn main(){let T(x,..,y)=T(1);}";
         let error = resolve(&parse_unresolved(source).unwrap()).unwrap_err();
         assert!(
             error.contains("positional rest pattern has too many fields"),
             "{error}"
         );
-        let source = "enum E{V(i32,i32)}fn main(){let E::V(x,..)=E::V(1,2);}";
-        let error = resolve(&parse_unresolved(source).unwrap()).unwrap_err();
-        assert!(
-            error.contains(
-                "unsupported: enum tuple payload positional rest patterns are unsupported"
-            ),
-            "{error}"
+    }
+
+    #[test]
+    fn enum_tuple_rest_certifies_full_constructor_and_preserves_suffix_indices() {
+        let source =
+            "enum E{V(i32,i32,i32),Other}fn main(){let E::V(x,..,y)=E::V(1,2,3);let z=x+y;}";
+        let program = resolve(&parse_unresolved(source).unwrap()).unwrap();
+        let Stmt::LetPattern {
+            pattern: Pattern::VariantRest { name, fields },
+            ..
+        } = &program.functions[0].body.statements[0]
+        else {
+            panic!("enum rest lost actual variant constructor syntax");
+        };
+        assert_eq!(
+            fields
+                .project(3)
+                .unwrap()
+                .iter()
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>(),
+            vec![0, 2]
         );
+        let target = program.enums[0]
+            .name
+            .push(program.names.as_ref(), program.enums[0].variants[0].name)
+            .unwrap();
+        assert_eq!(
+            name_scope::path_key(program.names.as_ref(), name, Namespace::Type).unwrap(),
+            name_scope::path_key(program.names.as_ref(), &target, Namespace::Type).unwrap()
+        );
+        assert!(
+            !name
+                .source_occurrences(program.names.as_ref())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn original_enum_rest_boundary_now_retains_variant_certificate_and_index() {
+        let source = "enum E{V(i32,i32)}fn main(){let E::V(x,..)=E::V(1,2);}";
+        let program = resolve(&parse_unresolved(source).unwrap()).unwrap();
+        let Stmt::LetPattern {
+            pattern: Pattern::VariantRest { name, fields },
+            ..
+        } = &program.functions[0].body.statements[0]
+        else {
+            panic!("enum rest did not retain actual variant syntax");
+        };
+        assert_eq!(fields.prefix.len(), 1);
+        assert!(fields.suffix.is_empty());
+        assert_eq!(
+            fields
+                .project(2)
+                .unwrap()
+                .iter()
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>(),
+            vec![0]
+        );
+        let target = program.enums[0]
+            .name
+            .push(program.names.as_ref(), program.enums[0].variants[0].name)
+            .unwrap();
+        assert_eq!(
+            name_scope::path_key(program.names.as_ref(), name, Namespace::Type).unwrap(),
+            name_scope::path_key(program.names.as_ref(), &target, Namespace::Type).unwrap()
+        );
+        assert!(
+            !name
+                .source_occurrences(program.names.as_ref())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn enum_tuple_rest_imports_aliases_and_generic_schema_keep_existing_resolution() {
+        for source in [
+            "enum E{V(i32,i32,i32)}use E::V as P;fn main(){let P(x,..,y)=P(1,2,3);let z=x+y;}",
+            "enum E<T>{V(T,i32,T)}type A=E<i32>;fn main(){let A::V(x,..,y)=A::V(1,2,3);let z=x+y;}",
+            "enum E{V(i32,i32)}fn main(){let E::V(..)=E::V(1,2);}",
+        ] {
+            resolve(&parse_unresolved(source).unwrap())
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+
+    #[test]
+    fn enum_tuple_rest_wrong_source_shape_and_excess_fields_are_invalid() {
+        for (source, diagnostic) in [
+            (
+                "enum E{V}fn main(){let E::V(..)=E::V;}",
+                "positional rest requires an enum tuple variant",
+            ),
+            (
+                "enum E{V{x:i32}}fn main(){let E::V(..)=E::V{x:1};}",
+                // Record variants are not positional value constructors, so
+                // namespace resolution rejects this before tuple-shape checks.
+                "unresolved positional rest constructor",
+            ),
+            (
+                "enum E{V(i32)}fn main(){let E::V(x,..,y)=E::V(1);}",
+                "positional rest pattern has too many fields",
+            ),
+        ] {
+            let error = resolve(&parse_unresolved(source).unwrap()).unwrap_err();
+            assert!(error.contains(diagnostic), "{source}: {error}");
+            assert!(!error.contains("unsupported:"), "{source}: {error}");
+        }
     }
 }
 

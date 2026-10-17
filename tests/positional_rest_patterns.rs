@@ -1,5 +1,5 @@
 //! Positional rest over exact nonempty tuples and nongeneric tuple structs.
-//! Empty tuples, enum tuple payload rest, and advanced patterns remain boundaries.
+//! Empty tuples and advanced patterns remain boundaries; enum tuple rest is a separate control.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use justrust_engine::compiler::{self, frontend, ir, source};
 use std::fs::{self, OpenOptions};
@@ -129,7 +129,7 @@ fn cases() -> Vec<Case> {
             source: r#"enum Item{Only(i32,i32,i32)}fn main(){let result=match Item::Only(40,7,2){Item::Only(a,..,b)=>a+b};if result==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "empty_tuple_rest",
@@ -360,7 +360,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (17, 7));
-    assert_eq!(partition, (12, 7, 5));
+    assert_eq!(partition, (13, 7, 4));
 }
 #[test]
 fn stock_positional_rest_mapping_privacy_ownership_oracle_edition2024() {
@@ -428,7 +428,45 @@ fn source_positional_rest_ir_uses_actual_field_indexes_without_omitted_bindings(
                 }
             }
         }
-        if case.name == "tuple_struct_let_suffix" {
+        if case.name == "enum_tuple_middle" {
+            assert_eq!(
+                aggregate_arms, 0,
+                "enum rest must preserve genuine variant tag checks"
+            );
+            let mut selected = Vec::new();
+            let mut variants = 0;
+            for expression in &function.exprs {
+                if let ir::ExprKind::Match { arms, .. } = &expression.kind {
+                    for arm in arms {
+                        if let ir::MatchPattern::EnumVariant {
+                            ty,
+                            variant,
+                            bindings,
+                        } = &arm.pattern
+                        {
+                            for binding in bindings {
+                                assert_eq!(binding.projection.len(), 2);
+                                assert_eq!(
+                                    binding.projection[0],
+                                    ir::Projection::Downcast(ir::VariantId {
+                                        owner: ty.def().id,
+                                        index: *variant
+                                    })
+                                );
+                                let ir::Projection::Field(index) = binding.projection[1] else {
+                                    panic!("enum rest missing physical field")
+                                };
+                                selected.push(index);
+                            }
+                            variants += 1;
+                        }
+                    }
+                }
+            }
+            assert_eq!(variants, 1);
+            assert_eq!(selected, vec![0, 2]);
+            counts.1 += 1;
+        } else if case.name == "tuple_struct_let_suffix" {
             assert_eq!(
                 aggregate_arms, 0,
                 "let destructuring is not a fabricated match arm"
@@ -489,7 +527,7 @@ fn source_positional_rest_ir_uses_actual_field_indexes_without_omitted_bindings(
         }
         counts.0 += 1;
     }
-    assert_eq!(counts, (12, 11));
+    assert_eq!(counts, (13, 12));
 }
 
 #[test]
@@ -524,22 +562,6 @@ fn positional_rest_closed_domains_reject_in_their_actual_frontend_phase() {
                     case.name
                 )
             });
-            if case.name == "enum_tuple_middle" {
-                let error = match frontend::resolve(&parsed) {
-                    Err(error) => error,
-                    Ok(_) => {
-                        panic!("enum tuple rest must reject in source resolver before publication")
-                    }
-                };
-                assert!(
-                    error.contains(
-                        "unsupported: enum tuple payload positional rest patterns are unsupported"
-                    ),
-                    "{error}"
-                );
-                counts.2 += 1;
-                continue;
-            }
             frontend::resolve(&parsed).unwrap_or_else(|error| {
                 panic!("{} must resolve before checker boundary:{error}", case.name)
             });
@@ -560,7 +582,7 @@ fn positional_rest_closed_domains_reject_in_their_actual_frontend_phase() {
             counts.1 += 1;
         }
     }
-    assert_eq!(counts, (2, 2, 1));
+    assert_eq!(counts, (2, 2, 0));
 }
 #[test]
 fn native_positional_rest_workers1_8_check_build_no_compiler_fallback() {
@@ -647,8 +669,8 @@ fn native_positional_rest_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 96);
-    assert_eq!(modes, (24, 24, 14, 14, 10, 10));
+    assert_eq!(modes, (26, 26, 14, 14, 8, 8));
     eprintln!(
-        "NATIVE POSITIONAL REST:96 cells, modes{modes:?};24 executed native images;20 Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
+        "NATIVE POSITIONAL REST:96 cells, modes{modes:?};26 executed native images;16 Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
     );
 }

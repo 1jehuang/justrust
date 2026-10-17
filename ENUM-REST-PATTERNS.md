@@ -1,6 +1,6 @@
 # Enum tuple-payload positional rest
 
-Status: **implementation in progress, not accepted**. Full Rust remains open.
+Status: **bounded native slice accepted on October 17, 2026**. Full Rust remains open.
 
 ## Genuine enum authority
 
@@ -53,3 +53,38 @@ fallback, exact executable output, bootstrap debug/release, real nominal
 owner/variant/downcast authority controls, complete hosted tests, strict lint,
 formatting and diff gates. Retain exact failed and passing redacted receipts.
 No full-Rust, performance, public layout or ABI claim follows from this subset.
+
+## Observed acceptance
+
+The exact stock-first corpus has 24 sources: 19 stock-valid and five
+stock-invalid. Native outcomes are 16 runtime, four ordinary-invalid, three
+stock-valid Unsupported and one stock-invalid/native-Unsupported capability
+boundary. The last is a refutable multi-variant let, stock E0005, not a claim of
+ordinary native semantic rejection. Workers1/8 CHECK/BUILD exercise 96 cells and
+32 actual native executable images per bootstrap profile.
+
+Debug and release each passed 35 focused tests, including 27 public authority
+controls built from actual parsed enum owners/variants. These validate genuine
+downcasts, physical suffix fields, exact nominal and variant identity, dead-arm
+metadata, local destinations and foreign source occurrences. The old positional
+corpus retains all 24 exact sources and 96 cells, with only its newly supported
+enum-rest outcome promoted. An older payload-enum source likewise retains its
+exact bytes and now executes its existing stdout oracle.
+
+The complete hosted suite passed 2,348 tests across 118 binaries, no failed,
+ignored or filtered tests (`20261017-113206605-1891781`). Strict lint passed
+`20261017-113222355-1892877`; final release35 passed
+`20261017-113239745-1894112`. Formatting and diff checks passed.
+
+Selected rest plans own an actual-capacity-charged Temporary BudgetVec through
+both lowering consumers. The real denial control passed
+`20261017-113202973-1891536`: the same production selection helper rejects its
+first backing growth and releases temporary storage after poison/drop. An
+earlier whole-entry test was correctly stopped by a transient canonical-path
+metadata allocation before reaching that growth. Its failure is retained, not
+relabelled as backing-allocation coverage. The adjacent whole-entry success
+control verifies the selection lease survives borrowed consumption.
+
+Seventeen exact failed/passing redacted receipts are retained in
+`data/runs/xps14/2026-10-17-enum-rest-patterns.jsonl`. No source witness, resource
+cap, stack setting or fallback requirement was weakened to obtain acceptance.

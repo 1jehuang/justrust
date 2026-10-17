@@ -1,5 +1,36 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: enum positional rest retains genuine variant authority
+
+Accepted tuple-payload positional rest for existing enum matches and
+single-variant irrefutable lets. Exact canonical enum/variant source schemas
+determine payload arity; selected suffix bindings retain actual physical indices
+under genuine owner-qualified Downcast projections. Tag tests, coverage,
+refinement and partial moves use existing EnumVariant IR and CFG, not Aggregate
+catchalls or a new ABI. Omitted payload positions create no bindings or moves.
+
+Stock24 has 19 valid/five invalid. Native16 runtime/four ordinary-invalid/three
+stock-valid Unsupported/one stock-invalid capability boundary exercises 96
+workers1/8 CHECK/BUILD cells and 32 images per profile. Multi-variant let remains
+stock E0005/native Unsupported. Debug/release focused35 and authority27 passed.
+Full `20261017-113206605-1891781` passed 2,348 tests/118 binaries, zero failed,
+ignored or filtered, with 12.45s tests; its 12.24s wide-integer oracle is a
+diagnostic observation, not a speed claim. Strict lint passed
+`20261017-113222355-1892877`, final release35
+`20261017-113239745-1894112`, formatting and diff checks passed.
+
+New selected-plan storage uses actual-capacity-admitted Temporary BudgetVec
+owned through borrowed lowering. The first denial fixture was preempted by a
+160-byte transient canonical-path query, not the intended 64-byte backing
+growth. The same production selection block was extracted, not copied; its
+actual helper denial/drop control passed `20261017-113202973-1891536`, alongside
+a whole-entry lease-lifetime positive. Typed capability diagnostics were repaired
+at exact forbidden-pattern sites, not by classifying strings in transport.
+Exact historical enum-rest sources were promoted without changing source bytes.
+Seventeen failed/passing receipts are in
+`data/runs/xps14/2026-10-17-enum-rest-patterns.jsonl`. Full Rust remains open.
+
+
 ## 2026-10-17: bounded positional rest uses actual selected source children
 
 Accepted nonempty structural-tuple and nongeneric tuple-struct positional rest

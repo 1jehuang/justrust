@@ -167,7 +167,19 @@ pub(super) struct PatternLocal {
     pub(super) mutable: bool,
     pub(super) projection: Vec<ir::Projection>,
 }
-pub(super) type ResolvedVariantPattern<'p> = (ir::EnumTy, usize, Vec<(usize, &'p Pattern)>);
+pub(super) enum SelectedVariantFields<'p> {
+    Legacy(Vec<(usize, &'p Pattern)>),
+    Positional(super::super::token_session::BudgetVec<(usize, &'p Pattern)>),
+}
+impl<'p> SelectedVariantFields<'p> {
+    fn as_slice(&self) -> &[(usize, &'p Pattern)] {
+        match self {
+            Self::Legacy(fields) => fields,
+            Self::Positional(fields) => fields.as_slice(),
+        }
+    }
+}
+pub(super) type ResolvedVariantPattern<'p> = (ir::EnumTy, usize, SelectedVariantFields<'p>);
 
 pub(super) const COUNT_EVAL_WORK: usize = 1_000_000;
 #[derive(Clone, Copy, Debug)]
@@ -1726,7 +1738,18 @@ impl<'a> Checker<'a> {
         pattern: &Pattern,
         expected: &ir::Ty,
     ) -> Result<Option<ir::StructTy>, String> {
-        if matches!(pattern, Pattern::VariantRest { .. }) {
+        if let Pattern::VariantRest { name, .. } = pattern {
+            let plan = self.signatures.plan()?;
+            let key = self.path_key(name, Namespace::Type)?;
+            let Some(declaration) = plan.registry.nominals.get(&key).copied() else {
+                return Ok(None);
+            };
+            if !matches!(
+                self.nominal_source(declaration)?.as_ref(),
+                NominalSchema::Struct(_)
+            ) {
+                return Ok(None);
+            }
             let ir::Ty::Struct(ty) = self.positional_pattern_type(pattern, expected)? else {
                 return Err("contract: tuple struct rest resolved to non-struct".into());
             };
@@ -1779,6 +1802,26 @@ impl<'a> Checker<'a> {
             kind: super::super::source::SourceErrorKind::Unsupported,
             primary: None,
             message: "positional rest requires a nonempty tuple".into(),
+            _diagnostic_lease: None,
+            location: None,
+        }
+        .to_string()
+    }
+    fn refutable_enum_let_unsupported() -> String {
+        super::super::source::SourceError {
+            kind: super::super::source::SourceErrorKind::Unsupported,
+            primary: None,
+            message: "refutable enum patterns in irrefutable positions are unsupported".into(),
+            _diagnostic_lease: None,
+            location: None,
+        }
+        .to_string()
+    }
+    fn nested_refutable_literal_unsupported() -> String {
+        super::super::source::SourceError {
+            kind: super::super::source::SourceErrorKind::Unsupported,
+            primary: None,
+            message: "nested refutable literal patterns are unsupported".into(),
             _diagnostic_lease: None,
             location: None,
         }
@@ -3129,7 +3172,7 @@ impl<'a> Checker<'a> {
             return Err(self.reference_pattern_unsupported());
         }
         match pattern {
-            Pattern::Path(name) | Pattern::Variant { name,.. } => {
+            Pattern::Path(name) | Pattern::Variant { name,.. } | Pattern::VariantRest { name, .. } => {
                 if let Some(tuple) = self.tuple_pattern_type(pattern, ty)? { return Ok(ir::Ty::Struct(tuple)); }
                 let expected = if let ir::Ty::Enum(enumeration) = ty {
                     let (owner, _) = self.split_variant(name)?;
@@ -3141,7 +3184,7 @@ impl<'a> Checker<'a> {
                 Ok(expected)
             }
             Pattern::Apply {..} => self.pattern_ty(self.pattern_source(pattern,ty)?,ty),
-            Pattern::TupleRest(_) | Pattern::VariantRest { .. } => self.positional_pattern_type(pattern, ty),
+            Pattern::TupleRest(_) => self.positional_pattern_type(pattern, ty),
             Pattern::Bool(_) | Pattern::Int { .. } => Err("refutable literal pattern in let binding".into()),
             Pattern::Wildcard | Pattern::Binding { .. } => Ok(ty.clone()),
             Pattern::Tuple(patterns) => match ty {
@@ -3193,7 +3236,7 @@ impl<'a> Checker<'a> {
                 );
             }
             Pattern::Wildcard => {}
-            Pattern::TupleRest(fields) | Pattern::VariantRest { fields, .. } => {
+            Pattern::TupleRest(fields) => {
                 let actual = self.positional_pattern_type(pattern, ty)?;
                 let arity = match &actual {
                     ir::Ty::Tuple(types) => types.len(),
@@ -3215,8 +3258,31 @@ impl<'a> Checker<'a> {
                     path.pop();
                 }
             }
-            Pattern::Path(_) | Pattern::Variant { .. } => {
+            Pattern::Path(_) | Pattern::Variant { .. } | Pattern::VariantRest { .. } => {
                 if let Some(tuple) = self.tuple_pattern_type(pattern, ty)? {
+                    if let Pattern::VariantRest { fields, .. } = pattern {
+                        let projection = fields.project(tuple.def().fields.len())?;
+                        self.signatures.plan()?.budget.charge_work(
+                            fields
+                                .prefix
+                                .len()
+                                .checked_add(fields.suffix.len())
+                                .ok_or("positional rest count overflow")?,
+                        )?;
+                        for (index, pattern) in projection.iter() {
+                            path.push(ir::Projection::Field(index));
+                            self.pattern_locals(
+                                pattern,
+                                &tuple.def().fields[index].ty,
+                                path,
+                                names,
+                                pending,
+                                work,
+                            )?;
+                            path.pop();
+                        }
+                        return Ok(());
+                    }
                     let Pattern::Variant { fields, .. } = pattern else {
                         return Err("contract: tuple pattern normalization".into());
                     };
@@ -3236,11 +3302,9 @@ impl<'a> Checker<'a> {
                 }
                 let (enumeration, variant, fields) = self.variant_pattern(pattern, ty)?;
                 if enumeration.def().variants.len() != 1 {
-                    return Err(
-                        "refutable enum patterns in irrefutable positions are unsupported".into(),
-                    );
+                    return Err(Self::refutable_enum_let_unsupported());
                 }
-                for (index, pattern) in fields {
+                for &(index, pattern) in fields.as_slice() {
                     path.push(ir::Projection::Downcast(ir::VariantId {
                         owner: enumeration.def().id,
                         index: variant,
@@ -3259,7 +3323,7 @@ impl<'a> Checker<'a> {
                 }
             }
             Pattern::Bool(_) | Pattern::Int { .. } => {
-                return Err("nested refutable literal patterns are unsupported".into());
+                return Err(Self::nested_refutable_literal_unsupported());
             }
             Pattern::Binding { name, mutable } => {
                 let key = self
@@ -3384,19 +3448,55 @@ impl<'a> Checker<'a> {
         let index = self.variant_index(ty.def().source_decl, variant)?;
         Ok((ty, index))
     }
+    fn select_enum_rest_fields<'p>(
+        &self,
+        fields: &'p PositionalRest,
+        definition: &ir::VariantDef,
+    ) -> Result<SelectedVariantFields<'p>, String> {
+        if definition.shape != ir::VariantShape::Tuple {
+            return Err("enum positional rest requires a tuple variant".into());
+        }
+        let projection = fields.project(definition.fields.len())?;
+        let count = fields
+            .prefix
+            .len()
+            .checked_add(fields.suffix.len())
+            .ok_or("enum positional rest count overflow")?;
+        if count > ir::MAX_PATTERN_PROJECTION_WORK {
+            return Err("enum positional rest selection exceeds work limit".into());
+        }
+        self.signatures.plan()?.budget.charge_work(count)?;
+        self.infer_storage(count)?;
+        let budget = self.names()?.budget().clone();
+        let mut selected = super::super::token_session::BudgetVec::new(
+            &budget,
+            super::super::expansion_budget::Storage::Temporary,
+        )
+        .map_err(|error| super::super::source::SourceError::from_token(error).to_string())?;
+        for (index, pattern) in projection.iter() {
+            self.accessible(&definition.fields[index].ty)?;
+            selected.push((index, pattern)).map_err(|error| {
+                super::super::source::SourceError::from_token(error).to_string()
+            })?;
+        }
+        Ok(SelectedVariantFields::Positional(selected))
+    }
     pub(super) fn variant_pattern<'p>(
         &self,
         pattern: &'p Pattern,
         expected: &ir::Ty,
     ) -> Result<ResolvedVariantPattern<'p>, String> {
-        let (name, shape, fields, rest) = match pattern {
-            Pattern::Path(name) => (name, ir::VariantShape::Unit, &[][..], false),
+        let (name, shape, fields, rest, positional) = match pattern {
+            Pattern::Path(name) => (name, ir::VariantShape::Unit, &[][..], false, None),
             Pattern::Variant {
                 name,
                 shape,
                 fields,
                 rest,
-            } => (name, *shape, fields.as_slice(), *rest),
+            } => (name, *shape, fields.as_slice(), *rest, None),
+            Pattern::VariantRest { name, fields } => {
+                (name, ir::VariantShape::Tuple, &[][..], true, Some(fields))
+            }
             _ => return Err("expected enum variant pattern".into()),
         };
         let (ty, variant) = if let ir::Ty::Enum(ty) = expected {
@@ -3424,6 +3524,10 @@ impl<'a> Checker<'a> {
                 "variant pattern {name:?} has wrong constructor shape"
             ));
         }
+        if let Some(fields) = positional {
+            let selected = self.select_enum_rest_fields(fields, definition)?;
+            return Ok((ty, variant, selected));
+        }
         let mut seen = std::collections::HashSet::new();
         let mut selected = Vec::new();
         for (selector, pattern) in fields {
@@ -3447,7 +3551,7 @@ impl<'a> Checker<'a> {
         if !rest && seen.len() != definition.fields.len() {
             return Err("missing variant pattern fields".into());
         }
-        Ok((ty, variant, selected))
+        Ok((ty, variant, SelectedVariantFields::Legacy(selected)))
     }
     pub(super) fn compound_value(
         &mut self,
@@ -3668,7 +3772,12 @@ impl<'a> Checker<'a> {
                     let direct_wildcard = matches!(pattern, Pattern::Wildcard);
                     let value = self.expr_expected(value, annotation.as_ref())?;
                     if self.deref_source(value)
-                        && matches!(pattern, Pattern::Path(_) | Pattern::Variant { .. })
+                        && matches!(
+                            pattern,
+                            Pattern::Path(_)
+                                | Pattern::Variant { .. }
+                                | Pattern::VariantRest { .. }
+                        )
                         && self
                             .tuple_pattern_type(pattern, &self.flow(value).ty)?
                             .is_none()
@@ -5116,14 +5225,23 @@ impl<'a> Checker<'a> {
                 let scrutinee = self.expr(scrutinee)?;
                 if self.deref_source(scrutinee)
                     && arms.iter().any(|arm| {
-                        matches!(arm.pattern, Pattern::Path(_) | Pattern::Variant { .. })
+                        matches!(
+                            arm.pattern,
+                            Pattern::Path(_)
+                                | Pattern::Variant { .. }
+                                | Pattern::VariantRest { .. }
+                        )
                     })
                 {
                     for arm in arms {
-                        if matches!(arm.pattern, Pattern::Path(_) | Pattern::Variant { .. })
-                            && self
-                                .tuple_pattern_type(&arm.pattern, &self.flow(scrutinee).ty)?
-                                .is_none()
+                        if matches!(
+                            arm.pattern,
+                            Pattern::Path(_)
+                                | Pattern::Variant { .. }
+                                | Pattern::VariantRest { .. }
+                        ) && self
+                            .tuple_pattern_type(&arm.pattern, &self.flow(scrutinee).ty)?
+                            .is_none()
                         {
                             return Err(
                                 "enum downcasts after a dereference are unsupported in B1".into()
@@ -5138,10 +5256,12 @@ impl<'a> Checker<'a> {
                 if domain == ir::Ty::Never {
                     for arm in arms {
                         let hint = match &arm.pattern {
-                            Pattern::VariantRest { .. } | Pattern::TupleRest(_) => {
+                            Pattern::TupleRest(_) => {
                                 Some(self.positional_pattern_type(&arm.pattern, &ir::Ty::Never)?)
                             }
-                            Pattern::Path(name) | Pattern::Variant { name, .. } => {
+                            Pattern::Path(name)
+                            | Pattern::Variant { name, .. }
+                            | Pattern::VariantRest { name, .. } => {
                                 if let Some(tuple) =
                                     self.tuple_pattern_type(&arm.pattern, &ir::Ty::Never)?
                                 {
@@ -5213,19 +5333,21 @@ impl<'a> Checker<'a> {
                             }
                             (ir::MatchPattern::Unit, Some(0))
                         }
-                        Pattern::Variant { .. }
+                        Pattern::Variant { .. } | Pattern::VariantRest { .. }
                             if self.tuple_pattern_type(arm_pattern, &domain)?.is_some() =>
                         {
                             (self.aggregate_match_pattern(arm_pattern, &domain)?, None)
                         }
-                        Pattern::Path(_) | Pattern::Variant { .. } => {
+                        Pattern::Path(_)
+                        | Pattern::Variant { .. }
+                        | Pattern::VariantRest { .. } => {
                             let (ty, variant, fields) =
                                 self.variant_pattern(arm_pattern, &domain)?;
                             let mut names = std::collections::HashSet::new();
                             let mut pending = Vec::new();
                             let mut work = 0;
                             let mut bindings = Vec::new();
-                            for (index, pattern) in fields {
+                            for &(index, pattern) in fields.as_slice() {
                                 let mut path = vec![
                                     ir::Projection::Downcast(ir::VariantId {
                                         owner: ty.def().id,
@@ -5265,10 +5387,7 @@ impl<'a> Checker<'a> {
                         Pattern::TupleRest(_) if domain == ir::Ty::Unit => {
                             return Err(Self::empty_tuple_rest_unsupported());
                         }
-                        Pattern::Struct { .. }
-                        | Pattern::Tuple(_)
-                        | Pattern::TupleRest(_)
-                        | Pattern::VariantRest { .. } => {
+                        Pattern::Struct { .. } | Pattern::Tuple(_) | Pattern::TupleRest(_) => {
                             (self.aggregate_match_pattern(arm_pattern, &domain)?, None)
                         }
                     };
@@ -6277,6 +6396,114 @@ mod checked_identity_tests {
     use super::*;
 
     #[test]
+    fn enum_rest_selection_retains_actual_backing_through_consumption_and_drop() {
+        let program = parse("enum Item{Only(i32,i32,i32)}fn value(item:Item)->i32{match item{Item::Only(a,..,z)=>a+z}}fn main(){}").unwrap();
+        let function = &program.functions[0];
+        let Expr::Match { arms, .. } = function.body.tail.as_deref().unwrap() else {
+            panic!("expected source match");
+        };
+        let pattern = &arms[0].pattern;
+        let Pattern::VariantRest { name, .. } = pattern else {
+            panic!("expected source enum rest");
+        };
+        let signatures = signature_table(&program).unwrap();
+        let checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+        let (ty, _) = checker.enum_variant(name).unwrap();
+        let budget = program.names.budget();
+        let before = budget.snapshot().temporary_bytes;
+        let (_, variant, fields) = checker.variant_pattern(pattern, &ir::Ty::Enum(ty)).unwrap();
+        assert_eq!(variant, 0);
+        assert!(matches!(&fields, SelectedVariantFields::Positional(_)));
+        let held = budget.snapshot().temporary_bytes;
+        assert!(held >= before + (2 * std::mem::size_of::<(usize, &Pattern)>()) as u64);
+        let selected = fields.as_slice();
+        assert_eq!(selected.len(), 2);
+        assert_eq!((selected[0].0, selected[1].0), (0, 2));
+        for (_, pattern) in selected {
+            assert!(matches!(pattern, Pattern::Binding { .. }));
+            assert_eq!(budget.snapshot().temporary_bytes, held);
+        }
+        drop(fields);
+        assert_eq!(budget.snapshot().temporary_bytes, before);
+    }
+
+    #[test]
+    fn enum_rest_selection_denies_bytes_before_backing_growth_and_cleans_up_after_poison() {
+        use super::super::super::expansion_budget::{BudgetFailureKind, BudgetResource, Storage};
+        let program = parse("enum Item{Only(i32,i32,i32)}fn value(item:Item)->i32{match item{Item::Only(a,..,z)=>a+z}}fn main(){}").unwrap();
+        let function = &program.functions[0];
+        let Expr::Match { arms, .. } = function.body.tail.as_deref().unwrap() else {
+            panic!("expected source match");
+        };
+        let pattern = &arms[0].pattern;
+        let Pattern::VariantRest { name, .. } = pattern else {
+            panic!("expected source enum rest");
+        };
+        let signatures = signature_table(&program).unwrap();
+        let checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+        let (ty, variant) = checker.enum_variant(name).unwrap();
+        let definition = &ty.def().variants[variant];
+        let Pattern::VariantRest { fields, .. } = pattern else {
+            panic!("expected source enum rest");
+        };
+        let domain = ir::Ty::Enum(ty.clone());
+        drop(checker.variant_pattern(pattern, &domain).unwrap());
+        let budget = program.names.budget();
+        let before = budget.snapshot();
+        let remaining = budget.limits().bytes - before.retained_bytes - before.temporary_bytes;
+        let saturation = budget.reserve(Storage::Temporary, remaining).unwrap();
+        assert!(checker.select_enum_rest_fields(fields, definition).is_err());
+        let failed = budget.snapshot();
+        let failure = failed.failure.as_ref().unwrap();
+        assert_eq!(failure.kind, BudgetFailureKind::Limit);
+        assert_eq!(failure.resource, BudgetResource::Bytes);
+        assert_eq!(failure.used, budget.limits().bytes);
+        assert_eq!(
+            failure.requested,
+            (4 * std::mem::size_of::<(usize, &Pattern)>()) as u64
+        );
+        assert_eq!(failed.temporary_bytes, before.temporary_bytes + remaining);
+        drop(saturation);
+        assert_eq!(budget.snapshot().temporary_bytes, before.temporary_bytes);
+    }
+
+    #[test]
+    fn enum_tuple_rest_preserves_variant_coverage_and_single_variant_let_rules() {
+        let program = parse("enum Item{A(i32,i32,i32),B}fn value(item:Item)->i32{match item{Item::A(a,..,z)=>a+z,Item::B=>0}}fn main(){}").unwrap();
+        check(&program).unwrap();
+        let program = parse("enum Item{A(i32,i32,i32),B}fn value(item:Item)->i32{match item{Item::A(a,..,z)=>a+z}}fn main(){}").unwrap();
+        assert!(check(&program).unwrap_err().contains("non-exhaustive"));
+        let program = parse(
+            "enum Item{A(i32,i32,i32),B}fn value(item:Item){let Item::A(a,..,z)=item;}fn main(){}",
+        )
+        .unwrap();
+        assert!(
+            check(&program)
+                .unwrap_err()
+                .contains("unsupported: refutable enum patterns")
+        );
+    }
+
+    #[test]
+    fn enum_tuple_rest_uses_existing_generic_and_zero_tuple_schemas() {
+        let program = parse("enum Item<T>{Only(T,i32,T)}fn value()->i32{let item:Item<i32> = Item::Only(1,2,3);let Item::Only(a,..,z)=item;a+z}fn main(){}").unwrap();
+        check(&program).unwrap();
+        let program = parse(
+            "enum Item{Zero()}fn value()->i32{match Item::Zero(){Item::Zero(..)=>42}}fn main(){}",
+        )
+        .unwrap();
+        check(&program).unwrap();
+    }
+
+    #[test]
+    fn enum_tuple_rest_moves_only_selected_noncopy_payloads() {
+        let program = parse("struct Token;enum Item{Only(Token,Token,Token)}fn take(x:Token){}fn value(){let item=Item::Only(Token,Token,Token);match item{Item::Only(first,..)=>take(first)};match item{Item::Only(..,last)=>take(last)};}fn main(){}").unwrap();
+        check(&program).unwrap();
+        let program = parse("struct Token;enum Item{Only(Token,Token,Token)}fn take(x:Token){}fn value(){let item=Item::Only(Token,Token,Token);match item{Item::Only(first,..)=>take(first)};match item{Item::Only(first,..)=>take(first)};}fn main(){}").unwrap();
+        assert!(check(&program).is_err());
+    }
+
+    #[test]
     fn positional_rest_maps_real_prefix_and_suffix_fields() {
         let program = parse("struct Pack(i32,i32,i32);fn value()->i32{let (first,..,last)=(1,2,3,4);match Pack(first,9,last){Pack(a,..,z)=>a+z}}fn main(){}").unwrap();
         check(&program).unwrap();
@@ -6308,10 +6535,10 @@ mod checked_identity_tests {
     }
 
     #[test]
-    fn positional_rest_preserves_tuple_constructor_privacy_and_enum_boundary() {
+    fn positional_rest_preserves_tuple_constructor_privacy_and_admits_enum_payloads() {
         assert!(parse("mod m{pub struct Pack(pub i32,i32,pub i32);pub fn make()->Pack{Pack(1,2,3)}}fn value()->i32{match m::make(){m::Pack(a,..,z)=>a+z}}fn main(){}").and_then(|program| check(&program)).is_err());
-        let error = parse("enum Item{Only(i32,i32,i32)}fn value()->i32{match Item::Only(1,2,3){Item::Only(a,..,z)=>a+z}}fn main(){}").and_then(|program| check(&program)).unwrap_err();
-        assert!(error.contains("unsupported"));
+        let program = parse("enum Item{Only(i32,i32,i32)}fn value()->i32{match Item::Only(1,2,3){Item::Only(a,..,z)=>a+z}}fn main(){}").unwrap();
+        check(&program).unwrap();
     }
 
     #[test]

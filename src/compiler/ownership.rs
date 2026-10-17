@@ -7239,6 +7239,83 @@ mod tests {
     }
 
     #[test]
+    fn enum_tuple_rest_selected_moves_preserve_omitted_payload_under_refinement() {
+        let (_module_names, modules) = fixture_modules();
+        let child = nominal(&modules, vec![]);
+        let ty = payload_enum(
+            &modules,
+            vec![vec![child.clone(), child.clone(), child.clone()], vec![]],
+        );
+        let mut f = payload_fixture(&ty);
+        f.locals[2].ty = child.clone();
+        f.locals.push(local(child));
+        split_payload(&mut f, &ty);
+        f.blocks[1].statements.extend([
+            located(Statement::StorageLive(LocalId(3))),
+            located(Statement::Assign {
+                destination: place(2),
+                value: Rvalue::Use(Operand::Move(payload_field(&ty, 0, 0))),
+            }),
+            located(Statement::Assign {
+                destination: place(3),
+                value: Rvalue::Use(Operand::Move(payload_field(&ty, 0, 2))),
+            }),
+            located(Statement::Inspect(payload_field(&ty, 0, 1))),
+            located(Statement::Inspect(place(2))),
+            located(Statement::Inspect(place(3))),
+        ]);
+        let result = analyze(&f);
+        assert!(result.passed(), "{:?}", result.diagnostics);
+        for invalid in [payload_field(&ty, 0, 0), payload_field(&ty, 0, 2), place(1)] {
+            let mut malformed = f.clone();
+            malformed.blocks[1]
+                .statements
+                .push(located(Statement::Inspect(invalid.clone())));
+            let result = analyze(&malformed);
+            assert!(result.complete);
+            assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+            assert_eq!(result.diagnostics[0].place, Some(invalid));
+            assert_eq!(
+                result.diagnostics[0].kind,
+                ErrorKind::ReadNotDefinitelyInitialized
+            );
+        }
+        let mut unrefined = f.clone();
+        unrefined.blocks[2]
+            .statements
+            .push(located(Statement::Inspect(payload_field(&ty, 0, 1))));
+        let result = analyze(&unrefined);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.kind == ErrorKind::VariantNotDefinitelySelected)
+        );
+    }
+
+    #[test]
+    fn enum_tuple_rest_source_single_variant_bindings_and_rest_only_keep_move_rules() {
+        for source in [
+            "struct Cell{n:i32} enum E{A(Cell,Cell,Cell)} fn f(p:E)->i32{let E::A(first,..,last)=p;first.n+last.n}",
+            "struct Cell{n:i32} enum E{A(Cell,Cell,Cell)} fn f(p:E)->E{let E::A(..)=p;p}",
+            "struct Cell{n:i32} enum E{A(Cell,Cell,Cell),B} fn f(p:E)->E{match p{E::A(..)=>(),E::B=>()};p}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+        let result = analyze(&borrowed_source(
+            "struct Cell{n:i32} enum E{A(Cell,Cell,Cell)} fn f(p:E)->E{let E::A(first,..,last)=p;let n=first.n+last.n;p}",
+        ));
+        assert!(result.complete);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.kind == ErrorKind::ReadNotDefinitelyInitialized)
+        );
+    }
+
+    #[test]
     fn positional_rest_preserves_middle_and_rejects_selected_or_parent_reuse() {
         for source in [
             "struct Cell{n:i32} struct Trio(Cell,Cell,Cell); fn f(p:Trio)->Cell{let n=match p{Trio(first,..,last)=>first.n+last.n};p.1}",

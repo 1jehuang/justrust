@@ -36,6 +36,10 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       28 public malformed-IR controls and complete 2,247-test / 112-binary gates.
       Refutable aggregate leaves, guards, or-patterns and implicit reference
       ergonomics remain unsupported. Positional rest is admitted below.
+- [x] Enum tuple-payload positional rest with genuine variant coverage,
+  exact-owner Downcast/physical Field plans and single-variant irrefutable lets.
+  See `ENUM-REST-PATTERNS.md` for stock24/native96, public authority27 and
+  complete 2,348-test / 118-binary acceptance. Refutable payload matrices remain open.
 - [x] Positional rest in nonempty structural tuples and nongeneric tuple structs,
   with honest prefix/suffix source nodes, checked selected-field projections,
   constructor privacy and partial moves. See `POSITIONAL-REST-PATTERNS.md`.

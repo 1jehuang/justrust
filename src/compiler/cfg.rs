@@ -6740,6 +6740,145 @@ mod tests {
     }
 
     #[test]
+    fn enum_tuple_rest_bindings_keep_actual_downcast_and_physical_field_indices() {
+        for matching in [false, true] {
+            let text = if matching {
+                "struct Cell{n:i32} enum E{A(Cell,Cell,Cell),B} fn f(p:E)->i32{match p{E::A(first,..,last)=>first.n+last.n,E::B=>0}} fn main(){}"
+            } else {
+                "struct Cell{n:i32} enum E{A(Cell,Cell,Cell)} fn f(p:E)->i32{let E::A(first,..,last)=p;first.n+last.n} fn main(){}"
+            };
+            let function = nominal_lowered(&checked(text, 0));
+            let root = function.params[0];
+            let Ty::Enum(ty) = &function.locals[root.0].ty else {
+                unreachable!()
+            };
+            let variant = ir::VariantId {
+                owner: ty.def().id,
+                index: 0,
+            };
+            let reads: Vec<_> = function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .filter_map(|statement| match &statement.value {
+                    Statement::Assign {
+                        value: Rvalue::Use(operand @ (Operand::Copy(place) | Operand::Move(place))),
+                        ..
+                    } if place.local == root => Some(operand),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(reads.len(), 2);
+            for index in [0, 2] {
+                assert_eq!(reads.iter().filter(|operand| matches!(operand, Operand::Move(place) if place.projection == [Projection::Downcast(variant), Projection::Field(index)])).count(), 1);
+            }
+            assert_eq!(
+                function.blocks.iter().any(|block| matches!(
+                    block.terminator.value,
+                    Terminator::SwitchVariant { .. }
+                )),
+                matching
+            );
+            assert!(super::super::ownership::analyze(&function).passed());
+        }
+    }
+
+    #[test]
+    fn enum_rest_only_matches_inspect_tags_but_single_variant_let_does_not_move() {
+        for matching in [false, true] {
+            let text = if matching {
+                "struct Cell{n:i32} enum E{A(Cell,Cell,Cell),B} fn f(p:E)->E{match p{E::A(..)=>(),E::B=>()};p} fn main(){}"
+            } else {
+                "struct Cell{n:i32} enum E{A(Cell,Cell,Cell)} fn f(p:E)->E{let E::A(..)=p;p} fn main(){}"
+            };
+            let function = nominal_lowered(&checked(text, 0));
+            let root = function.params[0];
+            let reads: Vec<_> = function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .filter_map(|statement| match &statement.value {
+                    Statement::Assign {
+                        value: Rvalue::Use(operand @ (Operand::Copy(place) | Operand::Move(place))),
+                        ..
+                    } if place.local == root => Some(operand),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(reads.len(), 1);
+            assert!(matches!(reads[0], Operand::Move(place) if place.projection.is_empty()));
+            assert_eq!(
+                function.blocks.iter().any(|block| matches!(
+                    block.terminator.value,
+                    Terminator::SwitchVariant { .. }
+                )),
+                matching
+            );
+            assert!(super::super::ownership::analyze(&function).passed());
+        }
+    }
+
+    #[test]
+    fn dead_enum_rest_arm_still_rejects_invalid_physical_payload_projection() {
+        let mut source = checked(
+            "enum E{A(i32,i32,i32),B} fn f(p:E)->i32{match p{_=>0,E::A(first,..,last)=>first+last,E::B=>0}} fn main(){}",
+            0,
+        );
+        nominal_lowered(&source);
+        let bindings = source
+            .exprs
+            .iter_mut()
+            .find_map(|expression| match &mut expression.kind {
+                ir::ExprKind::Match { arms, .. } => {
+                    arms.iter_mut().find_map(|arm| match &mut arm.pattern {
+                        ir::MatchPattern::EnumVariant { bindings, .. } if !bindings.is_empty() => {
+                            Some(bindings)
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .unwrap();
+        bindings[0].projection[1] = Projection::Field(usize::MAX);
+        assert!(source.validate().is_err());
+        assert!(lower(&source).is_err());
+    }
+
+    #[test]
+    fn enum_tuple_rest_temporary_scrutinee_is_evaluated_once() {
+        let function = nominal_lowered(&checked(
+            "enum E{A(i32,i32,i32),B} fn make()->E{E::A(1,2,3)} fn f()->i32{match make(){E::A(first,..,last)=>first+last,E::B=>0}} fn main(){}",
+            1,
+        ));
+        assert_eq!(
+            function
+                .blocks
+                .iter()
+                .filter(|block| matches!(block.terminator.value, Terminator::Call { .. }))
+                .count(),
+            1
+        );
+        assert!(super::super::ownership::analyze(&function).passed());
+    }
+
+    #[test]
+    fn divergent_single_variant_rest_let_does_not_load_payload_or_test_tag() {
+        let function = nominal_lowered(&checked(
+            "enum E{A(i32,i32,i32)} fn f(){let E::A(first,..,last):E={return;};} fn main(){}",
+            0,
+        ));
+        assert!(
+            !function
+                .blocks
+                .iter()
+                .any(|block| matches!(block.terminator.value, Terminator::SwitchVariant { .. }))
+        );
+        assert!(!function.blocks.iter().flat_map(|block| &block.statements).any(|statement| matches!(&statement.value, Statement::Assign { destination, .. } if matches!(function.locals[destination.local.0].name.as_str(), "first" | "last"))));
+        assert!(super::super::ownership::analyze(&function).passed());
+    }
+
+    #[test]
     fn positional_rest_emits_only_actual_prefix_and_suffix_field_moves() {
         for structural in [false, true] {
             for matching in [false, true] {

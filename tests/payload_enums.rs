@@ -198,13 +198,12 @@ fn main() { if run() == 6 { println!("payload oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_tuple_rest() {
-    // Stock accepts this tuple-variant rest pattern, deferred in this native slice.
-    rejects(
-        "tuple_rest",
+fn accepts_positional_tuple_rest() {
+    runs(
         r#"enum E{A(i32,i32,i32,i32),B} fn run()->i32{match E::A(1,2,3,4){E::A(a,..,d)=>a*10+d,E::B=>0}}
 fn main() { if run() == 14 { println!("payload oracle ok"); } }
 "#,
+        "payload oracle ok\n",
     );
 }
 
