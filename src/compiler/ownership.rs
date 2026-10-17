@@ -7239,6 +7239,41 @@ mod tests {
     }
 
     #[test]
+    fn if_let_selected_moves_preserve_failed_edges_omitted_fields_and_divergent_joins() {
+        for source in [
+            "struct Cell{n:i32} enum E{A(Cell,i32),B} fn f(p:E)->i32{if let E::A(cell,..)=p{return cell.n;}else{match p{E::A(..)=>0,E::B=>1}}}",
+            "struct Cell{n:i32} enum E{A(Cell,i32),B} fn f(p:E)->E{if let E::A(..)=p{}p}",
+            "struct Cell{n:i32} enum E{A(Cell,i32),B} fn f(p:E)->E{if let E::A(cell,..)=p{return E::B;}p}",
+            "struct Cell{n:i32} fn f(p:(Cell,i32))->i32{if let (cell,_)=p{cell.n+p.1}else{0}}",
+            "fn f(p:[i32;3])->[i32;3]{let n=if let [first,..,last]=p{first+last}else{0};p}",
+            "struct Cell{n:i32} fn f(p:[Cell;3])->[Cell;3]{if let [..]=p{}p}",
+            "fn f(n:i32)->i32{let a=if let n=n{n}else{n};a+n}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.passed(), "{source}: {:?}", result.diagnostics);
+        }
+    }
+
+    #[test]
+    fn if_let_conditional_noncopy_move_prevents_whole_parent_reuse_after_join() {
+        for source in [
+            "struct Cell{n:i32} enum E{A(Cell,i32),B} fn f(p:E)->E{if let E::A(cell,..)=p{let n=cell.n;}p}",
+            "struct Cell{n:i32} fn f(p:(Cell,i32))->(Cell,i32){if let (cell,_)=p{let n=cell.n;}p}",
+        ] {
+            let result = analyze(&borrowed_source(source));
+            assert!(result.complete);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.kind == ErrorKind::ReadNotDefinitelyInitialized),
+                "{source}: {:?}",
+                result.diagnostics
+            );
+        }
+    }
+
+    #[test]
     fn array_patterns_copy_selected_leaves_and_bindingless_noncopy_patterns_do_not_move() {
         for source in [
             "fn f(p:[i32;3])->[i32;3]{let [first,middle,last]=p;let n=first+middle+last;p}",

@@ -6829,6 +6829,110 @@ mod tests {
     }
 
     #[test]
+    fn if_let_payload_move_is_confined_to_the_actual_selected_variant_edge() {
+        let function = nominal_lowered(&checked(
+            "struct Cell{n:i32} enum E{A(Cell,i32,Cell),B} fn f(p:E)->i32{if let E::A(first,..)=p{first.n}else{0}} fn main(){}",
+            0,
+        ));
+        let root = function.params[0];
+        let Ty::Enum(ty) = &function.locals[root.0].ty else {
+            unreachable!()
+        };
+        let variant = ir::VariantId {
+            owner: ty.def().id,
+            index: 0,
+        };
+        let (selected, rejected) = function
+            .blocks
+            .iter()
+            .find_map(|block| match &block.terminator.value {
+                Terminator::SwitchVariant {
+                    place,
+                    variant: actual,
+                    then_block,
+                    else_block,
+                } if place.local == root && *actual == variant => Some((*then_block, *else_block)),
+                _ => None,
+            })
+            .unwrap();
+        let moves: Vec<_> = function
+            .blocks
+            .iter()
+            .enumerate()
+            .flat_map(|(index, block)| {
+                block
+                    .statements
+                    .iter()
+                    .filter_map(move |statement| match &statement.value {
+                        Statement::Assign {
+                            value: Rvalue::Use(Operand::Move(place)),
+                            ..
+                        } if place.local == root => Some((index, place)),
+                        _ => None,
+                    })
+            })
+            .collect();
+        assert_eq!(moves.len(), 1);
+        assert_eq!(moves[0].0, selected.0);
+        assert_ne!(moves[0].0, rejected.0);
+        assert_eq!(
+            moves[0].1.projection,
+            [Projection::Downcast(variant), Projection::Field(0)]
+        );
+        assert!(super::super::ownership::analyze(&function).passed());
+    }
+
+    #[test]
+    fn if_let_scrutinee_call_is_evaluated_once_for_refutable_and_irrefutable_patterns() {
+        for text in [
+            "fn make()->bool{true} fn f()->i32{if let true=make(){1}else{2}} fn main(){}",
+            "fn make()->i32{7} fn f()->i32{if let 7=make(){1}else{2}} fn main(){}",
+            "enum E{A(i32),B} fn make()->E{E::A(7)} fn f()->i32{if let E::A(n)=make(){n}else{0}} fn main(){}",
+            "fn make()->(i32,i32){(1,2)} fn f()->i32{if let (first,last)=make(){first+last}else{0}} fn main(){}",
+        ] {
+            let function = nominal_lowered(&checked(text, 1));
+            assert_eq!(
+                function
+                    .blocks
+                    .iter()
+                    .filter(|block| matches!(block.terminator.value, Terminator::Call { .. }))
+                    .count(),
+                1,
+                "{text}"
+            );
+            assert!(
+                super::super::ownership::analyze(&function).passed(),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn if_let_dead_selected_pattern_keeps_full_ir_projection_validation() {
+        let mut source = checked(
+            "enum E{A(i32),B} fn f()->i32{if let E::A(n)=E::B{n}else{0}} fn main(){}",
+            0,
+        );
+        nominal_lowered(&source);
+        let binding = source
+            .exprs
+            .iter_mut()
+            .find_map(|expression| match &mut expression.kind {
+                ir::ExprKind::Match { arms, .. } => {
+                    arms.iter_mut().find_map(|arm| match &mut arm.pattern {
+                        ir::MatchPattern::EnumVariant { bindings, .. } => bindings.first_mut(),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .unwrap();
+        binding.projection[1] = Projection::Field(usize::MAX);
+        assert!(source.validate().is_err());
+        assert!(lower(&source).is_err());
+    }
+
+    #[test]
     fn array_rest_patterns_copy_only_actual_indices_and_nested_copy_fields() {
         for matching in [false, true] {
             for nested in [false, true] {

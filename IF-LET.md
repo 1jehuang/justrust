@@ -1,6 +1,6 @@
 # Honest native if-let contract
 
-Status: **implementation in progress, not accepted**. Full Rust remains open.
+Status: **bounded native slice accepted**. Full Rust remains open.
 
 ## Source and binding authority
 
@@ -42,7 +42,48 @@ An omitted else contributes genuine Unit semantics. Require exact branch type
 joins and divergence, including dead branch checking. Evaluate the scrutinee
 once and do not consume omitted fields or bindings on a failed pattern edge.
 
-## Acceptance gates
+## Measured bounded evidence
+
+The retained corpus contains 27 exact stock-first sources: 20 stock-valid and
+seven stock-invalid, with native outcomes of 18 runtime successes, seven
+ordinary rejections and two explicit unsupported boundaries. Workers 1 and 8
+exercise CHECK and BUILD for 108 cells per bootstrap profile. The runtime
+cases execute 36 real native images per profile, including macro-introduced
+and captured binders, imported and generic variants, else-if syntax, outer
+shadowing, conditional non-Copy moves and once-only scrutinees. Bootstrap
+debug/release are not a claim of a native optimization-profile interface.
+
+Twenty public authority controls use actual parsed owners and genuine checked
+plans. The original two then-reference transplants into else/following code
+initially passed planning incorrectly. Universal admission now tracks actual
+sealed BindingIds in a charged temporary live-declaration environment, with
+source-ordered initializers/declarations and block/arm/then restoration. Older
+live shadowed IDs remain available to real definition-site macro captures.
+No spelling fallback, duplicate-occurrence heuristic or reconstructed frontier
+is used. Unused functions and dead branches receive the same checks.
+
+New parser boxes admit exact fixed Layout<T> storage before fallible global
+allocation and retain conservative accounting with the final NameStore owner.
+Alignment/drop, pre-allocation byte denial, zero-size allocation avoidance and
+last-owner release are tested. Allocator-null behavior is checked in code, not
+claimed as an injected runtime experiment. Clone preflight separately admits
+the new boxes and actual written pattern-child vectors before copying.
+
+## Accepted frozen gates
+
+All-target check `20261017-120523973-2041306`, release native/authority25
+`20261017-120526163-2041393`, strict all-target clippy with `-D warnings`
+`20261017-120541569-2041171`, formatting and diff checks passed. The final
+complete hosted suite `20261017-120554793-2043511` passed **2,447 tests in
+122 binaries**, with zero failures, ignored or filtered tests, including
+973 library tests and unchanged nesting/cast/macro resource witnesses.
+Sixteen exact failed and passing redacted summaries are retained in
+`data/runs/xps14/2026-10-17-if-let.jsonl`. The earlier authority failure
+`20261017-115958716-2017571` is retained alongside its unchanged passing
+controls `20261017-120319513-2032373`. No old source corpus was promoted or
+weakened for this milestone.
+
+## Continuing regression requirements
 
 Require stock-first exact sources, native workers1/8 CHECK/BUILD without compiler
 fallback, exact executable outputs and bootstrap debug/release. Cover outer-name

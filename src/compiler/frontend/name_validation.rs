@@ -3,7 +3,9 @@
 use super::*;
 use crate::compiler::expansion_budget::{Counter, Storage};
 use crate::compiler::module_identity::ModuleError;
-use crate::compiler::semantic_scope::{OccurrenceRole, ScopeError, ScopeId, scope_diagnostic};
+use crate::compiler::semantic_scope::{
+    BindingId, OccurrenceRole, ScopeError, ScopeId, scope_diagnostic,
+};
 use crate::compiler::token_session::{BudgetVec, TokenError};
 
 fn transport(error: TokenError) -> String {
@@ -64,6 +66,9 @@ pub(super) fn validate_function_head_names(
 enum Visit<'a> {
     Function(&'a Function, Option<ModuleId>),
     RestoreScope(Option<ScopeId>, ModuleId),
+    RestoreBindings(usize),
+    MatchArm(&'a MatchArm),
+    IfLetThen(&'a Pattern, &'a Block),
     Import(ModuleId, &'a TraitPath),
     Head(&'a FunctionHead),
     Struct(&'a StructDecl),
@@ -102,6 +107,9 @@ struct Validator<'a> {
     scope: Option<ScopeId>,
     module: ModuleId,
     generated: BudgetVec<ScopeId>,
+    // All still-live declaration identities, including shadowed bindings that
+    // a definition-site macro capture may legitimately reference.
+    bindings: BudgetVec<BindingId>,
     require_coverage: bool,
 }
 impl<'a> Validator<'a> {
@@ -127,6 +135,7 @@ impl<'a> Validator<'a> {
             scope: None,
             module: root,
             generated: BudgetVec::new(names.budget(), Storage::Temporary).map_err(transport)?,
+            bindings: BudgetVec::new(names.budget(), Storage::Temporary).map_err(transport)?,
             require_coverage: false,
         })
     }
@@ -388,16 +397,30 @@ impl<'a> Validator<'a> {
                     self.declaration_path_in(&function.name, function.module, declaration_role)?;
                     self.enter_scope(function.lexical_scope, function.module)?;
                 }
+                self.push(Visit::RestoreBindings(self.bindings.len()))?;
+                // LIFO tasks: signature declarations precede the body, whose
+                // own restore marker leaves parameters live until this marker.
+                self.push(Visit::Block(&function.body))?;
                 self.push(Visit::Regions(&function.regions))?;
                 self.identifiers(&function.type_params, LookupClass::TypeParameter)?;
                 self.many(&function.bounds, Visit::Bound)?;
                 self.parameters(&function.params)?;
                 self.push(Visit::Type(&function.result))?;
-                self.push(Visit::Block(&function.body))?;
             }
             Visit::RestoreScope(scope, module) => {
                 self.scope = scope;
                 self.module = module;
+            }
+            Visit::RestoreBindings(len) => self.bindings.truncate(len),
+            Visit::MatchArm(arm) => {
+                self.push(Visit::RestoreBindings(self.bindings.len()))?;
+                self.push(Visit::Expr(&arm.body))?;
+                self.push(Visit::Pattern(&arm.pattern))?;
+            }
+            Visit::IfLetThen(pattern, block) => {
+                self.push(Visit::RestoreBindings(self.bindings.len()))?;
+                self.push(Visit::Block(block))?;
+                self.push(Visit::Pattern(pattern))?;
             }
             Visit::Import(module, path) => {
                 self.enter_scope(None, module)?;
@@ -562,9 +585,13 @@ impl<'a> Validator<'a> {
                 ) => (),
             },
             Visit::Block(block) => {
-                self.many(&block.statements, Visit::Stmt)?;
+                self.push(Visit::RestoreBindings(self.bindings.len()))?;
                 if let Some(tail) = &block.tail {
                     self.push(Visit::Expr(tail))?;
+                }
+                self.work(block.statements.len())?;
+                for statement in block.statements.iter().rev() {
+                    self.push(Visit::Stmt(statement))?;
                 }
             }
             Visit::Stmt(statement) => match statement {
@@ -627,8 +654,8 @@ impl<'a> Validator<'a> {
                     if let Some(label) = label {
                         self.push(Visit::Ident(*label, LookupClass::Label))?;
                     }
-                    self.push(Visit::Expr(condition))?;
                     self.push(Visit::Block(body))?;
+                    self.push(Visit::Expr(condition))?;
                 }
             },
             Visit::Expr(expression) => match expression {
@@ -698,12 +725,11 @@ impl<'a> Validator<'a> {
                     self.expression_fields(fields)?;
                 }
                 Expr::Match { scrutinee, arms } => {
-                    self.push(Visit::Expr(scrutinee))?;
                     self.work(arms.len())?;
-                    for arm in arms {
-                        self.push(Visit::Pattern(&arm.pattern))?;
-                        self.push(Visit::Expr(&arm.body))?;
+                    for arm in arms.iter().rev() {
+                        self.push(Visit::MatchArm(arm))?;
                     }
+                    self.push(Visit::Expr(scrutinee))?;
                 }
                 Expr::TupleStruct { name, fields } => {
                     self.push(Visit::Path(name))?;
@@ -744,14 +770,26 @@ impl<'a> Validator<'a> {
                     }
                     self.many(args, Visit::Expr)?;
                 }
+                Expr::IfLet {
+                    pattern,
+                    scrutinee,
+                    then_block,
+                    else_branch,
+                } => {
+                    if let Some(branch) = else_branch {
+                        self.push(Visit::Expr(branch))?;
+                    }
+                    self.push(Visit::IfLetThen(pattern, then_block))?;
+                    self.push(Visit::Expr(scrutinee))?;
+                }
                 Expr::If {
                     condition,
                     then_block,
                     else_block,
                 } => {
-                    self.push(Visit::Expr(condition))?;
-                    self.push(Visit::Block(then_block))?;
                     self.push(Visit::Block(else_block))?;
+                    self.push(Visit::Block(then_block))?;
+                    self.push(Visit::Expr(condition))?;
                 }
                 Expr::Block(block) => self.push(Visit::Block(block))?,
                 Expr::LabeledBlock { label, body } => {
@@ -858,7 +896,11 @@ impl<'a> Validator<'a> {
                 LocalName::Receiver => (),
             },
             Visit::LocalDeclaration(name) => {
-                self.push(Visit::Ident(name, LookupClass::Local))?;
+                self.program
+                    .names
+                    .key(name, LookupClass::Local)
+                    .map_err(native_adapter::name_diagnostic)?;
+                self.occurrence(name)?;
                 if let Some(scope) = self.scope {
                     let scopes = self
                         .program
@@ -871,10 +913,16 @@ impl<'a> Validator<'a> {
                     if scopes.binding_function(binding).map_err(scope_diagnostic)? != scope {
                         return Err(scope_diagnostic(ScopeError::FunctionMismatch));
                     }
+                    self.work(1)?;
+                    self.bindings.push(binding).map_err(transport)?;
                 }
             }
             Visit::LocalReference(name) => {
-                self.push(Visit::Ident(name, LookupClass::Local))?;
+                self.program
+                    .names
+                    .key(name, LookupClass::Local)
+                    .map_err(native_adapter::name_diagnostic)?;
+                self.occurrence(name)?;
                 if let Some(scope) = self.scope {
                     let scopes = self
                         .program
@@ -891,9 +939,14 @@ impl<'a> Validator<'a> {
                     if let Some(binding) = scopes
                         .reference_for(self.program.names.as_ref(), name)
                         .map_err(scope_diagnostic)?
-                        && scopes.binding_function(binding).map_err(scope_diagnostic)? != scope
                     {
-                        return Err(scope_diagnostic(ScopeError::FunctionMismatch));
+                        if scopes.binding_function(binding).map_err(scope_diagnostic)? != scope {
+                            return Err(scope_diagnostic(ScopeError::FunctionMismatch));
+                        }
+                        self.work(self.bindings.len())?;
+                        if !self.bindings.as_slice().contains(&binding) {
+                            return Err(scope_diagnostic(ScopeError::UnrecordedOccurrence));
+                        }
                     }
                 }
             }
@@ -1193,6 +1246,190 @@ mod tests {
                 .starts_with("contract:")
         );
     }
+    #[test]
+    fn lexical_liveness_keeps_outer_hygienic_ids_and_source_order_bindings() {
+        for source in [
+            "fn f(p:i32)->i32{let x=p;macro_rules! old{()=>{x}}let x=2;old!()+x}fn main(){}",
+            "fn f(p:i32)->i32{macro_rules! marker{()=>{0}}let x=p;if let x=x{let y=x;y}else{x}}fn main(){}",
+            "enum E{A(i32),B}fn f(p:E)->i32{macro_rules! marker{()=>{0}}match p{E::A(x)=>{let y=x;y},E::B=>0}}fn main(){}",
+            "fn f(p:i32)->i32{macro_rules! marker{()=>{0}}let x:i32; x=p;{let y=x;let (a,b)=(y,x);a+b}}fn main(){}",
+        ] {
+            let input = parse(source).unwrap();
+            validate_program_names(&input).unwrap();
+            validate_function_names(&input, &input.functions[0], None).unwrap();
+        }
+    }
+
+    #[test]
+    fn moved_if_let_reference_requires_actual_live_pattern_not_occurrence_uniqueness() {
+        let source = "enum E{A(i32),B}fn f(p:E)->i32{macro_rules! marker{()=>{0}}if let E::A(n)=p{n}else{0}}fn main(){}";
+        for target in 0..4 {
+            let mut input = parse(source).unwrap();
+            let expression = input.functions[0].body.tail.as_deref_mut().unwrap();
+            let Expr::IfLet {
+                pattern,
+                scrutinee,
+                then_block,
+                else_branch,
+            } = expression
+            else {
+                unreachable!()
+            };
+            // Move the only use, rather than duplicating an occurrence. A
+            // uniqueness check cannot establish branch-local binding authority.
+            if target == 3 {
+                **pattern = Pattern::Wildcard;
+            } else {
+                let donor = then_block.tail.take().unwrap();
+                match target {
+                    0 => {
+                        *else_branch = Some(Box::new(Expr::Block(Block {
+                            statements: Vec::new(),
+                            tail: Some(donor),
+                        })))
+                    }
+                    1 => {
+                        let original = input.functions[0].body.tail.take().unwrap();
+                        input.functions[0]
+                            .body
+                            .statements
+                            .push(Stmt::Expr(*original));
+                        input.functions[0].body.tail = Some(donor);
+                    }
+                    2 => *scrutinee = donor,
+                    _ => unreachable!(),
+                }
+            }
+            let budget = input.names.budget();
+            let before = budget.snapshot();
+            assert!(
+                validate_program_names(&input)
+                    .unwrap_err()
+                    .starts_with("contract:")
+            );
+            assert!(
+                validate_function_names(&input, &input.functions[0], None)
+                    .unwrap_err()
+                    .starts_with("contract:")
+            );
+            let after = budget.snapshot();
+            assert!(after.failure.is_none());
+            assert_eq!(after.temporary_bytes, before.temporary_bytes);
+            assert_eq!(after.retained_bytes, before.retained_bytes);
+        }
+    }
+
+    #[test]
+    fn moved_match_arm_and_nested_block_references_cannot_escape_their_bindings() {
+        for matching in [false, true] {
+            let source = if matching {
+                "enum E{A(i32),B}fn f(p:E)->i32{macro_rules! marker{()=>{0}}match p{E::A(x)=>x,E::B=>0}}fn main(){}"
+            } else {
+                "fn f()->i32{macro_rules! marker{()=>{0}}{let x=1;x}}fn main(){}"
+            };
+            let mut input = parse(source).unwrap();
+            let expression = input.functions[0].body.tail.as_deref_mut().unwrap();
+            let donor = match expression {
+                Expr::Match { arms, .. } => {
+                    Box::new(std::mem::replace(&mut arms[0].body, Expr::Bool(false)))
+                }
+                Expr::Block(block) => block.tail.take().unwrap(),
+                _ => unreachable!(),
+            };
+            let original = input.functions[0].body.tail.take().unwrap();
+            input.functions[0]
+                .body
+                .statements
+                .push(Stmt::Expr(*original));
+            input.functions[0].body.tail = Some(donor);
+            assert!(
+                validate_program_names(&input)
+                    .unwrap_err()
+                    .starts_with("contract:")
+            );
+            assert!(validate_function_names(&input, &input.functions[0], None).is_err());
+        }
+    }
+
+    #[test]
+    fn live_binding_storage_is_released_on_exact_latched_resource_failure() {
+        let input = parse("fn f(p:i32)->i32{macro_rules! marker{()=>{0}}p}fn main(){}").unwrap();
+        let budget = input.names.budget();
+        let baseline = budget.snapshot().temporary_bytes;
+        let mut validator = Validator::new(&input).unwrap();
+        validator.scope = input.functions[0].lexical_scope;
+        validator.module = input.functions[0].module;
+        let BindingName::Named(name) = input.functions[0].params[0].0 else {
+            unreachable!()
+        };
+        validator.visit(Visit::LocalDeclaration(name)).unwrap();
+        assert_eq!(validator.bindings.len(), 1);
+        assert!(budget.snapshot().temporary_bytes > baseline);
+        validator
+            .push(Visit::Block(&input.functions[0].body))
+            .unwrap();
+        let used = budget.snapshot().counters[Counter::Work as usize];
+        let limit = budget.limits().counters[Counter::Work as usize];
+        budget.charge(Counter::Work, limit - used).unwrap();
+        let error = validator.run().unwrap_err();
+        let failure = budget.snapshot().failure.unwrap();
+        assert_eq!(error, transport(TokenError::Budget(failure)));
+        assert_eq!(budget.snapshot().temporary_bytes, baseline);
+    }
+
+    #[test]
+    fn unused_if_let_checks_pattern_scrutinee_then_and_actual_else_names() {
+        let mut foreign = builder();
+        let foreign_name = foreign.ident("foreign").unwrap();
+        let foreign_path = foreign.path("crate::Foreign").unwrap();
+        let _foreign = foreign.finish().unwrap();
+        for has_else in [false, true] {
+            let mut valid = program();
+            valid.functions[0]
+                .body
+                .statements
+                .push(Stmt::Expr(Expr::IfLet {
+                    pattern: Box::new(Pattern::Wildcard),
+                    scrutinee: Box::new(Expr::Bool(true)),
+                    then_block: Block {
+                        statements: Vec::new(),
+                        tail: None,
+                    },
+                    else_branch: has_else.then(|| Box::new(Expr::Bool(false))),
+                }));
+            validate_program_names(&valid).unwrap();
+            validate_function_names(&valid, &valid.functions[0], None).unwrap();
+            for child in 0..if has_else { 4 } else { 3 } {
+                let mut malformed = valid.clone();
+                let Stmt::Expr(Expr::IfLet {
+                    pattern,
+                    scrutinee,
+                    then_block,
+                    else_branch,
+                }) = malformed.functions[0].body.statements.last_mut().unwrap()
+                else {
+                    unreachable!()
+                };
+                match child {
+                    0 => {
+                        **pattern = Pattern::Binding {
+                            name: foreign_name,
+                            mutable: false,
+                        }
+                    }
+                    1 => **scrutinee = Expr::Var(foreign_path.clone()),
+                    2 => then_block.tail = Some(Box::new(Expr::Var(foreign_path.clone()))),
+                    3 => **else_branch.as_mut().unwrap() = Expr::Var(foreign_path.clone()),
+                    _ => unreachable!(),
+                }
+                assert!(validate_program_names(&malformed).is_err());
+                assert!(
+                    validate_function_names(&malformed, &malformed.functions[0], None).is_err()
+                );
+            }
+        }
+    }
+
     #[test]
     fn unused_array_patterns_check_every_explicit_child_including_rest_suffix() {
         let mut foreign = builder();

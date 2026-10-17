@@ -1,6 +1,20 @@
 //! Source checking, local inference and checked body construction.
 use super::*;
 
+/// Borrowed source bodies and the semantic unit value of an absent else.
+#[derive(Clone, Copy)]
+enum MatchBody<'a> {
+    Expr(&'a Expr),
+    Block(&'a Block),
+    ImplicitUnit,
+}
+#[derive(Clone, Copy)]
+struct BorrowedMatchArm<'a> {
+    /// None is an internal fallback, never a fabricated source pattern.
+    pattern: Option<&'a Pattern>,
+    body: MatchBody<'a>,
+}
+
 const UNEXPANDED_MACRO_CHECK_ERROR: &str =
     "unsupported: unexpanded macro syntax cannot enter active checking";
 
@@ -5023,6 +5037,284 @@ impl<'a> Checker<'a> {
             },
         ))
     }
+    #[inline(never)]
+    fn match_arm_body(
+        &mut self,
+        body: MatchBody<'_>,
+        reachable: bool,
+        expected: Option<&ir::Ty>,
+    ) -> Result<ir::ExprId, String> {
+        let (kind, flow) = match body {
+            MatchBody::Expr(expr) => return self.expr_expected_when(expr, reachable, expected),
+            MatchBody::Block(block) => {
+                let (block, flow) = self.block_expected_when(block, reachable, expected)?;
+                (ir::ExprKind::Block(block), flow)
+            }
+            MatchBody::ImplicitUnit => (
+                ir::ExprKind::Block(ir::Block {
+                    statements: Vec::new(),
+                    tail: None,
+                }),
+                Flow::value(ir::Ty::Unit),
+            ),
+        };
+        self.accessible(&flow.ty)?;
+        admit_slice_value(&flow.ty)?;
+        if matches!(flow.ty, ir::Ty::Array { .. } | ir::Ty::Tuple(_)) {
+            self.validate_value_carriers(&flow.ty)?;
+        }
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: flow.ty,
+            completion: if flow.completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            },
+            kind,
+        });
+        Ok(id)
+    }
+    #[inline(never)]
+    fn lower_match<'source>(
+        &mut self,
+        scrutinee: &Expr,
+        arms: impl ExactSizeIterator<Item = BorrowedMatchArm<'source>> + Clone,
+        expected: Option<&ir::Ty>,
+    ) -> Result<(ir::ExprKind, Flow), String> {
+        if arms.len() > 4096 {
+            return Err("match arm count exceeds limit 4096".into());
+        }
+        let scrutinee = self.expr(scrutinee)?;
+        if self.deref_source(scrutinee) {
+            for arm in arms.clone() {
+                if let Some(pattern) = arm.pattern
+                    && matches!(
+                        pattern,
+                        Pattern::Path(_) | Pattern::Variant { .. } | Pattern::VariantRest { .. }
+                    )
+                    && self
+                        .tuple_pattern_type(pattern, &self.flow(scrutinee).ty)?
+                        .is_none()
+                {
+                    return Err("enum downcasts after a dereference are unsupported in B1".into());
+                }
+            }
+        }
+        let source = self.flow(scrutinee);
+        let mut domain = source.ty.clone();
+        // A divergent operand can coerce to the concrete type named by
+        // a pattern without inventing a general inference variable.
+        if domain == ir::Ty::Never {
+            for arm in arms.clone() {
+                let Some(source_pattern) = arm.pattern else {
+                    continue;
+                };
+                let hint = match source_pattern {
+                    Pattern::TupleRest(_) => {
+                        Some(self.positional_pattern_type(source_pattern, &ir::Ty::Never)?)
+                    }
+                    Pattern::Path(name)
+                    | Pattern::Variant { name, .. }
+                    | Pattern::VariantRest { name, .. } => {
+                        if let Some(tuple) =
+                            self.tuple_pattern_type(source_pattern, &ir::Ty::Never)?
+                        {
+                            Some(ir::Ty::Struct(tuple))
+                        } else {
+                            Some(ir::Ty::Enum(self.enum_variant(name)?.0))
+                        }
+                    }
+                    Pattern::Bool(_) => Some(ir::Ty::Bool),
+                    Pattern::Int { literal, .. } => {
+                        Some(ir::Ty::Int(literal.suffix.unwrap_or(ir::IntTy::I32)))
+                    }
+                    Pattern::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
+                    Pattern::Struct { .. } | Pattern::Tuple(_) => {
+                        Some(self.pattern_ty(source_pattern, &ir::Ty::Never)?)
+                    }
+                    _ => None,
+                };
+                if let Some(hint) = hint {
+                    domain = hint;
+                    break;
+                }
+            }
+        }
+        self.accessible(&domain)?;
+        if matches!(domain, ir::Ty::Ref { .. })
+            && arms.clone().any(|arm| {
+                arm.pattern.is_some_and(|pattern| {
+                    !matches!(pattern, Pattern::Wildcard | Pattern::Binding { .. })
+                })
+            })
+        {
+            return Err(self.reference_pattern_unsupported());
+        }
+        let mut catchall = false;
+        let mut covered = std::collections::HashSet::<u128>::new();
+        let mut checked = Vec::with_capacity(arms.len());
+        let mut result = ir::Ty::Never;
+        let mut completes = false;
+        for arm in arms.clone() {
+            let scope_depth = self.scopes.len();
+            self.scopes.push(HashMap::new());
+            let arm_result = (|| {
+                let arm_pattern = arm
+                    .pattern
+                    .map(|pattern| self.pattern_source(pattern, &domain))
+                    .transpose()?;
+                let (pattern, key) = match arm_pattern {
+                    None => (ir::MatchPattern::Wildcard, None),
+                    Some(arm_pattern) => match arm_pattern {
+                        Pattern::Wildcard => (ir::MatchPattern::Wildcard, None),
+                        Pattern::Binding { name, mutable } => {
+                            let local = self.local(name, domain.clone(), *mutable)?;
+                            (ir::MatchPattern::Binding(local), None)
+                        }
+                        Pattern::Bool(value) => {
+                            if domain != ir::Ty::Bool {
+                                return Err(format!(
+                                    "bool match pattern does not match {domain:?}"
+                                ));
+                            }
+                            (ir::MatchPattern::Bool(*value), Some(u128::from(*value)))
+                        }
+                        Pattern::Int { literal, negative } => {
+                            if !matches!(domain, ir::Ty::Int(_)) {
+                                return Err(format!(
+                                    "integer match pattern does not match {domain:?}"
+                                ));
+                            }
+                            let value = resolve_integer(literal, *negative, Some(&domain))?;
+                            (ir::MatchPattern::Int(value), Some(value.bits))
+                        }
+                        Pattern::Tuple(fields) if fields.is_empty() => {
+                            if domain != ir::Ty::Unit {
+                                return Err(format!(
+                                    "unit match pattern does not match {domain:?}"
+                                ));
+                            }
+                            (ir::MatchPattern::Unit, Some(0))
+                        }
+                        Pattern::Variant { .. } | Pattern::VariantRest { .. }
+                            if self.tuple_pattern_type(arm_pattern, &domain)?.is_some() =>
+                        {
+                            (self.aggregate_match_pattern(arm_pattern, &domain)?, None)
+                        }
+                        Pattern::Path(_)
+                        | Pattern::Variant { .. }
+                        | Pattern::VariantRest { .. } => {
+                            let (ty, variant, fields) =
+                                self.variant_pattern(arm_pattern, &domain)?;
+                            let mut names = std::collections::HashSet::new();
+                            let mut pending = Vec::new();
+                            let mut work = 0;
+                            let mut bindings = Vec::new();
+                            for &(index, pattern) in fields.as_slice() {
+                                let mut path = vec![
+                                    ir::Projection::Downcast(ir::VariantId {
+                                        owner: ty.def().id,
+                                        index: variant,
+                                    }),
+                                    ir::Projection::Field(index),
+                                ];
+                                self.pattern_locals(
+                                    pattern,
+                                    &ty.def().variants[variant].fields[index].ty,
+                                    &mut path,
+                                    &mut names,
+                                    &mut pending,
+                                    &mut work,
+                                )?;
+                            }
+                            for binding in pending {
+                                let local =
+                                    self.local(binding.name, binding.ty, binding.mutable)?;
+                                bindings.push(ir::PatternBinding {
+                                    local,
+                                    projection: binding.projection,
+                                });
+                            }
+                            (
+                                ir::MatchPattern::EnumVariant {
+                                    ty,
+                                    variant,
+                                    bindings,
+                                },
+                                Some(variant as u128),
+                            )
+                        }
+                        Pattern::Apply { .. } => {
+                            return Err("pattern application normalization invariant".into());
+                        }
+                        Pattern::TupleRest(_) if domain == ir::Ty::Unit => {
+                            return Err(Self::empty_tuple_rest_unsupported());
+                        }
+                        Pattern::Array(_) | Pattern::ArrayRest(_) => {
+                            self.array_pattern_type(arm_pattern, &domain)?;
+                            (self.aggregate_match_pattern(arm_pattern, &domain)?, None)
+                        }
+                        Pattern::Struct { .. } | Pattern::Tuple(_) | Pattern::TupleRest(_) => {
+                            (self.aggregate_match_pattern(arm_pattern, &domain)?, None)
+                        }
+                    },
+                };
+                let fully_covered = match &domain {
+                    ir::Ty::Bool => covered.len() == 2,
+                    ir::Ty::Unit => covered.len() == 1,
+                    ir::Ty::Enum(ty) => covered.len() == ty.def().variants.len(),
+                    ir::Ty::Int(ty) => {
+                        ty.bits() < 64 && covered.len() as u64 == (1u64 << ty.bits())
+                    }
+                    _ => false,
+                };
+                let useful =
+                    !catchall && !fully_covered && key.is_none_or(|key| !covered.contains(&key));
+                let body = self.match_arm_body(
+                    arm.body,
+                    self.reachable && source.completes && useful,
+                    expected,
+                )?;
+                Ok::<_, String>((pattern, key, body, useful))
+            })();
+            self.scopes.truncate(scope_depth);
+            let (pattern, key, body, useful) = arm_result?;
+            let arm_flow = self.flow(body);
+            // Even unreachable arms impose their source type obligation.
+            result = self.join(&result, &arm_flow.ty, "match arms")?;
+            completes |= useful && arm_flow.completes;
+            if let Some(key) = key {
+                covered.insert(key);
+            } else {
+                catchall = true;
+            }
+            checked.push(ir::MatchArm { pattern, body });
+        }
+        let exhaustive = catchall
+            || match &domain {
+                ir::Ty::Never => true,
+                ir::Ty::Bool => covered.len() == 2,
+                ir::Ty::Unit => covered.len() == 1,
+                ir::Ty::Enum(ty) => covered.len() == ty.def().variants.len(),
+                ir::Ty::Int(ty) => ty.bits() < 64 && covered.len() as u64 == (1u64 << ty.bits()),
+                _ => false,
+            };
+        if !exhaustive {
+            return Err(format!("non-exhaustive match on {domain:?}"));
+        }
+        Ok((
+            ir::ExprKind::Match {
+                scrutinee,
+                arms: checked,
+            },
+            Flow {
+                ty: result,
+                completes: source.completes && completes,
+            },
+        ))
+    }
     pub(super) fn expr_without_cast(
         &mut self,
         e: &Expr,
@@ -5330,237 +5622,36 @@ impl<'a> Checker<'a> {
                     },
                 )
             }
-            Expr::Match { scrutinee, arms } => {
-                if arms.len() > 4096 {
-                    return Err("match arm count exceeds limit 4096".into());
-                }
-                let scrutinee = self.expr(scrutinee)?;
-                if self.deref_source(scrutinee)
-                    && arms.iter().any(|arm| {
-                        matches!(
-                            arm.pattern,
-                            Pattern::Path(_)
-                                | Pattern::Variant { .. }
-                                | Pattern::VariantRest { .. }
-                        )
-                    })
-                {
-                    for arm in arms {
-                        if matches!(
-                            arm.pattern,
-                            Pattern::Path(_)
-                                | Pattern::Variant { .. }
-                                | Pattern::VariantRest { .. }
-                        ) && self
-                            .tuple_pattern_type(&arm.pattern, &self.flow(scrutinee).ty)?
-                            .is_none()
-                        {
-                            return Err(
-                                "enum downcasts after a dereference are unsupported in B1".into()
-                            );
-                        }
-                    }
-                }
-                let source = self.flow(scrutinee);
-                let mut domain = source.ty.clone();
-                // A divergent operand can coerce to the concrete type named by
-                // a pattern without inventing a general inference variable.
-                if domain == ir::Ty::Never {
-                    for arm in arms {
-                        let hint = match &arm.pattern {
-                            Pattern::TupleRest(_) => {
-                                Some(self.positional_pattern_type(&arm.pattern, &ir::Ty::Never)?)
-                            }
-                            Pattern::Path(name)
-                            | Pattern::Variant { name, .. }
-                            | Pattern::VariantRest { name, .. } => {
-                                if let Some(tuple) =
-                                    self.tuple_pattern_type(&arm.pattern, &ir::Ty::Never)?
-                                {
-                                    Some(ir::Ty::Struct(tuple))
-                                } else {
-                                    Some(ir::Ty::Enum(self.enum_variant(name)?.0))
-                                }
-                            }
-                            Pattern::Bool(_) => Some(ir::Ty::Bool),
-                            Pattern::Int { literal, .. } => {
-                                Some(ir::Ty::Int(literal.suffix.unwrap_or(ir::IntTy::I32)))
-                            }
-                            Pattern::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
-                            Pattern::Struct { .. } | Pattern::Tuple(_) => {
-                                Some(self.pattern_ty(&arm.pattern, &ir::Ty::Never)?)
-                            }
-                            _ => None,
-                        };
-                        if let Some(hint) = hint {
-                            domain = hint;
-                            break;
-                        }
-                    }
-                }
-                self.accessible(&domain)?;
-                if matches!(domain, ir::Ty::Ref { .. })
-                    && arms.iter().any(|arm| {
-                        !matches!(arm.pattern, Pattern::Wildcard | Pattern::Binding { .. })
-                    })
-                {
-                    return Err(self.reference_pattern_unsupported());
-                }
-                let mut catchall = false;
-                let mut covered = std::collections::HashSet::<u128>::new();
-                let mut checked = Vec::with_capacity(arms.len());
-                let mut result = ir::Ty::Never;
-                let mut completes = false;
-                for arm in arms {
-                    self.scopes.push(HashMap::new());
-                    let arm_pattern = self.pattern_source(&arm.pattern, &domain)?;
-                    let (pattern, key) = match arm_pattern {
-                        Pattern::Wildcard => (ir::MatchPattern::Wildcard, None),
-                        Pattern::Binding { name, mutable } => {
-                            let local = self.local(name, domain.clone(), *mutable)?;
-                            (ir::MatchPattern::Binding(local), None)
-                        }
-                        Pattern::Bool(value) => {
-                            if domain != ir::Ty::Bool {
-                                return Err(format!(
-                                    "bool match pattern does not match {domain:?}"
-                                ));
-                            }
-                            (ir::MatchPattern::Bool(*value), Some(u128::from(*value)))
-                        }
-                        Pattern::Int { literal, negative } => {
-                            if !matches!(domain, ir::Ty::Int(_)) {
-                                return Err(format!(
-                                    "integer match pattern does not match {domain:?}"
-                                ));
-                            }
-                            let value = resolve_integer(literal, *negative, Some(&domain))?;
-                            (ir::MatchPattern::Int(value), Some(value.bits))
-                        }
-                        Pattern::Tuple(fields) if fields.is_empty() => {
-                            if domain != ir::Ty::Unit {
-                                return Err(format!(
-                                    "unit match pattern does not match {domain:?}"
-                                ));
-                            }
-                            (ir::MatchPattern::Unit, Some(0))
-                        }
-                        Pattern::Variant { .. } | Pattern::VariantRest { .. }
-                            if self.tuple_pattern_type(arm_pattern, &domain)?.is_some() =>
-                        {
-                            (self.aggregate_match_pattern(arm_pattern, &domain)?, None)
-                        }
-                        Pattern::Path(_)
-                        | Pattern::Variant { .. }
-                        | Pattern::VariantRest { .. } => {
-                            let (ty, variant, fields) =
-                                self.variant_pattern(arm_pattern, &domain)?;
-                            let mut names = std::collections::HashSet::new();
-                            let mut pending = Vec::new();
-                            let mut work = 0;
-                            let mut bindings = Vec::new();
-                            for &(index, pattern) in fields.as_slice() {
-                                let mut path = vec![
-                                    ir::Projection::Downcast(ir::VariantId {
-                                        owner: ty.def().id,
-                                        index: variant,
-                                    }),
-                                    ir::Projection::Field(index),
-                                ];
-                                self.pattern_locals(
-                                    pattern,
-                                    &ty.def().variants[variant].fields[index].ty,
-                                    &mut path,
-                                    &mut names,
-                                    &mut pending,
-                                    &mut work,
-                                )?;
-                            }
-                            for binding in pending {
-                                let local =
-                                    self.local(binding.name, binding.ty, binding.mutable)?;
-                                bindings.push(ir::PatternBinding {
-                                    local,
-                                    projection: binding.projection,
-                                });
-                            }
-                            (
-                                ir::MatchPattern::EnumVariant {
-                                    ty,
-                                    variant,
-                                    bindings,
-                                },
-                                Some(variant as u128),
-                            )
-                        }
-                        Pattern::Apply { .. } => {
-                            return Err("pattern application normalization invariant".into());
-                        }
-                        Pattern::TupleRest(_) if domain == ir::Ty::Unit => {
-                            return Err(Self::empty_tuple_rest_unsupported());
-                        }
-                        Pattern::Array(_) | Pattern::ArrayRest(_) => {
-                            self.array_pattern_type(arm_pattern, &domain)?;
-                            (self.aggregate_match_pattern(arm_pattern, &domain)?, None)
-                        }
-                        Pattern::Struct { .. } | Pattern::Tuple(_) | Pattern::TupleRest(_) => {
-                            (self.aggregate_match_pattern(arm_pattern, &domain)?, None)
-                        }
-                    };
-                    let fully_covered = match &domain {
-                        ir::Ty::Bool => covered.len() == 2,
-                        ir::Ty::Unit => covered.len() == 1,
-                        ir::Ty::Enum(ty) => covered.len() == ty.def().variants.len(),
-                        ir::Ty::Int(ty) => {
-                            ty.bits() < 64 && covered.len() as u64 == (1u64 << ty.bits())
-                        }
-                        _ => false,
-                    };
-                    let useful = !catchall
-                        && !fully_covered
-                        && key.is_none_or(|key| !covered.contains(&key));
-                    let body = self.expr_expected_when(
-                        &arm.body,
-                        self.reachable && source.completes && useful,
-                        expected,
-                    )?;
-                    self.scopes.pop();
-                    let arm_flow = self.flow(body);
-                    // Even unreachable arms impose their source type obligation.
-                    result = self.join(&result, &arm_flow.ty, "match arms")?;
-                    completes |= useful && arm_flow.completes;
-                    if let Some(key) = key {
-                        covered.insert(key);
-                    } else {
-                        catchall = true;
-                    }
-                    checked.push(ir::MatchArm { pattern, body });
-                }
-                let exhaustive = catchall
-                    || match &domain {
-                        ir::Ty::Never => true,
-                        ir::Ty::Bool => covered.len() == 2,
-                        ir::Ty::Unit => covered.len() == 1,
-                        ir::Ty::Enum(ty) => covered.len() == ty.def().variants.len(),
-                        ir::Ty::Int(ty) => {
-                            ty.bits() < 64 && covered.len() as u64 == (1u64 << ty.bits())
-                        }
-                        _ => false,
-                    };
-                if !exhaustive {
-                    return Err(format!("non-exhaustive match on {domain:?}"));
-                }
-                (
-                    ir::ExprKind::Match {
-                        scrutinee,
-                        arms: checked,
+            Expr::Match { scrutinee, arms } => self.lower_match(
+                scrutinee,
+                arms.iter().map(|arm| BorrowedMatchArm {
+                    pattern: Some(&arm.pattern),
+                    body: MatchBody::Expr(&arm.body),
+                }),
+                expected,
+            )?,
+            Expr::IfLet {
+                pattern,
+                scrutinee,
+                then_block,
+                else_branch,
+            } => self.lower_match(
+                scrutinee,
+                [
+                    BorrowedMatchArm {
+                        pattern: Some(pattern.as_ref()),
+                        body: MatchBody::Block(then_block),
                     },
-                    Flow {
-                        ty: result,
-                        completes: source.completes && completes,
+                    BorrowedMatchArm {
+                        pattern: None,
+                        body: else_branch
+                            .as_deref()
+                            .map_or(MatchBody::ImplicitUnit, MatchBody::Expr),
                     },
-                )
-            }
+                ]
+                .into_iter(),
+                expected,
+            )?,
             Expr::Tuple(fields) => {
                 if fields.is_empty() {
                     return Err("empty tuples must use ()".into());
@@ -6629,6 +6720,36 @@ mod checked_identity_tests {
         ] {
             let program = parse(source).unwrap();
             check(&program).unwrap();
+        }
+    }
+
+    #[test]
+    fn if_let_keeps_real_then_bindings_and_joins_actual_else_branches() {
+        for source in [
+            "enum Item{Some(i32),None}fn value(item:Item)->i32{let x=7;if let Item::Some(x)=item{x}else{x}}fn main(){}",
+            "fn value()->i32{if let true=false{1}else if let 2=2{42}else{0}}fn main(){}",
+            "fn value()->i32{if let [first,..,last]=[1,2,3]{first+last}else{0}}fn main(){}",
+            "fn value()->i32{if let true=(loop{}){42}else{7}}fn main(){}",
+            "fn value(){if let _=1{loop{}}}fn main(){}",
+            "struct Token;enum Item{Some(Token),None}fn take(t:Token){}fn other(t:Item){}fn value(item:Item){if let Item::Some(t)=item{take(t);}else{other(item);}}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            check(&program).unwrap();
+        }
+    }
+
+    #[test]
+    fn if_let_checks_dead_branches_missing_else_and_binding_escape() {
+        for source in [
+            "fn value(){if let x=1{42}}fn main(){}",
+            "fn value()->i32{if let x=1{x}else{true}}fn main(){}",
+            "fn value()->i32{if let true=false{missing}else{42}}fn main(){}",
+            "enum Item{Some(i32),None}fn value(item:Item)->i32{if let Item::Some(x)=item{x}else{x}}fn main(){}",
+            "fn value()->i32{if let x=1{};x}fn main(){}",
+            "struct Token;enum Item{Some(Token),None}fn take(t:Token){}fn other(t:Item){}fn value(item:Item){if let Item::Some(t)=item{take(t);}other(item);}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            assert!(check(&program).is_err(), "accepted {source}");
         }
     }
 

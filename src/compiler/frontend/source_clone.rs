@@ -189,6 +189,19 @@ pub(super) fn preflight_clone_node(
             }
             Expr::Field { field, .. } => clone_selector(field, budget)?,
             Expr::Match { arms, .. } => clone_vector(arms, budget)?,
+            Expr::IfLet { else_branch, .. } => {
+                let boxes = std::mem::size_of::<Pattern>()
+                    .checked_add(std::mem::size_of::<Expr>())
+                    .and_then(|bytes| {
+                        if else_branch.is_some() {
+                            bytes.checked_add(std::mem::size_of::<Expr>())
+                        } else {
+                            Some(bytes)
+                        }
+                    })
+                    .ok_or("if-let source box bytes overflow")?;
+                budget.retain_bytes(boxes)?;
+            }
             _ => {}
         },
         DepthNode::Block(block) => {
@@ -410,6 +423,48 @@ mod tests {
         assert_eq!(failure.requested, required);
         assert_eq!(budget.usage_snapshot().bytes, 1024);
         assert!(!failure.arithmetic_overflow);
+    }
+
+    #[test]
+    fn if_let_clone_admits_boxes_and_written_pattern_children_before_copy() {
+        let program =
+            super::super::parse("fn main(){if let [a,..,z]=[1,2,3]{let _=a+z;}else{}}").unwrap();
+        let expr = program.functions[0]
+            .body
+            .tail
+            .as_deref()
+            .expect("actual conditional tail");
+        let Expr::IfLet {
+            pattern,
+            else_branch,
+            ..
+        } = expr
+        else {
+            panic!("expected actual conditional-pattern source node");
+        };
+        assert!(else_branch.is_some());
+        let boxes = std::mem::size_of::<Pattern>() + 2 * std::mem::size_of::<Expr>();
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: 1024 + boxes - 1,
+            ..Default::default()
+        });
+        assert!(preflight_clone_node(&DepthNode::Expr(expr), &budget).is_err());
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.used, 1024);
+        assert_eq!(failure.requested, boxes);
+        let Pattern::ArrayRest(fields) = pattern.as_ref() else {
+            panic!("expected actual written prefix and suffix");
+        };
+        let prefix = std::mem::size_of_val(fields.prefix.as_slice()) * 2 + 128;
+        let suffix = std::mem::size_of_val(fields.suffix.as_slice()) * 2 + 128;
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: 1024 + prefix + suffix - 1,
+            ..Default::default()
+        });
+        assert!(preflight_clone_node(&DepthNode::Pattern(pattern), &budget).is_err());
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.used, 1024 + prefix);
+        assert_eq!(failure.requested, suffix);
     }
 
     #[test]

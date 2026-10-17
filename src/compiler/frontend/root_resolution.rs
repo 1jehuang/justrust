@@ -1795,6 +1795,48 @@ impl Resolver<'_> {
     }
 
     #[inline(never)]
+    fn if_let(
+        &mut self,
+        expression: &mut Expr,
+        module: ModuleId,
+        locals: &mut Vec<std::collections::HashSet<LocalKey>>,
+    ) -> Result<(), String> {
+        let Expr::IfLet {
+            pattern,
+            scrutinee,
+            then_block,
+            else_branch,
+        } = expression
+        else {
+            return Err("if-let bypassed resolver expression dispatcher".into());
+        };
+        // The scrutinee sees only the preceding lexical environment.
+        let previous_depth = locals.len();
+        let result = self.expr(scrutinee, module, locals);
+        locals.truncate(previous_depth);
+        result?;
+        let mut names = std::collections::HashSet::new();
+        self.pattern(pattern, module, &mut names)?;
+        self.charge_entries::<std::collections::HashSet<LocalKey>>(1)?;
+        locals
+            .try_reserve(1)
+            .map_err(|_| "if-let scope stack allocation failed")?;
+        locals.push(names);
+        let result = self.block(then_block, module, locals);
+        // A failed nested block may itself leave scopes on the stack. Restore
+        // the entire preceding environment, not merely its topmost scope.
+        locals.truncate(previous_depth);
+        result?;
+        let result = if let Some(branch) = else_branch {
+            self.expr(branch, module, locals)
+        } else {
+            Ok(())
+        };
+        locals.truncate(previous_depth);
+        result
+    }
+
+    #[inline(never)]
     fn ordinary_expr(
         &mut self,
         expr: &mut Expr,
@@ -2150,6 +2192,7 @@ impl Resolver<'_> {
                 self.expr(left, module, locals)?;
                 self.expr(right, module, locals)?;
             }
+            Expr::IfLet { .. } => self.if_let(expr, module, locals)?,
             Expr::If {
                 condition,
                 then_block,
@@ -2650,6 +2693,83 @@ mod tuple_shape_tests {
             resolve(&parsed).unwrap_err(),
             "in function crate::main: unsupported: first-class tuple struct constructors are unsupported"
         );
+    }
+}
+
+#[cfg(test)]
+mod if_let_tests {
+    use super::*;
+
+    #[test]
+    fn if_let_keeps_actual_constructor_certificate_and_absent_else() {
+        let source = "mod a{pub struct Pair(pub i32);}use a::Pair as P;fn main(){if let P(x)=P(1){let z=x;}let after=1;}";
+        let program = resolve(&parse_unresolved(source).unwrap()).unwrap();
+        let Stmt::ImplicitExpr(Expr::IfLet {
+            pattern,
+            scrutinee,
+            else_branch,
+            ..
+        }) = &program.functions[0].body.statements[0]
+        else {
+            panic!("if-let was replaced by fabricated source match syntax");
+        };
+        assert!(else_branch.is_none());
+        let Pattern::Variant { name, fields, .. } = pattern.as_ref() else {
+            panic!("if-let lost its actual constructor pattern");
+        };
+        assert_eq!(fields.len(), 1);
+        assert!(matches!(scrutinee.as_ref(), Expr::TupleStruct { .. }));
+        assert_eq!(
+            name_scope::path_key(program.names.as_ref(), name, Namespace::Type).unwrap(),
+            name_scope::path_key(
+                program.names.as_ref(),
+                &program.structs[0].name,
+                Namespace::Type
+            )
+            .unwrap()
+        );
+        assert!(
+            !name
+                .source_occurrences(program.names.as_ref())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn if_let_scrutinee_else_and_following_code_see_outer_callable_not_pattern_binder() {
+        for source in [
+            "struct P(i32);fn x()->i32{7}fn main(){if let P(x)=P(x()){let z=x;}else{let z=x();}let after=x();}",
+            "struct P(i32);fn x()->i32{7}fn main(){macro_rules! n{()=>{1};}if let P(x)=P(x()){let z=x+n!();}else{let z=x();}let after=x();}",
+        ] {
+            resolve(&parse_unresolved(source).unwrap())
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+        let source =
+            "struct P(i32);fn x()->i32{7}fn main(){if let P(x)=P(x()){let z=x();}else{let z=x();}}";
+        let error = resolve(&parse_unresolved(source).unwrap()).unwrap_err();
+        assert!(error.contains("local binding is not callable"), "{error}");
+    }
+
+    #[test]
+    fn if_let_else_if_retains_genuine_expression_without_source_wrapper() {
+        let source = "fn main(){if let true=false{}else if let false=false{}else{}let after=1;}";
+        let program = resolve(&parse_unresolved(source).unwrap()).unwrap();
+        let Stmt::ImplicitExpr(Expr::IfLet {
+            else_branch: Some(branch),
+            ..
+        }) = &program.functions[0].body.statements[0]
+        else {
+            panic!("if-let did not retain its actual else expression");
+        };
+        let Expr::IfLet {
+            else_branch: Some(last),
+            ..
+        } = branch.as_ref()
+        else {
+            panic!("else-if-let acquired a fabricated source block");
+        };
+        assert!(matches!(last.as_ref(), Expr::Block(_)));
     }
 }
 

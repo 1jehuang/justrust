@@ -1,5 +1,37 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: genuine if-let with checked then-only binding visibility
+
+- Accepted only the bounded IF-LET.md slice: honest boxed source pattern and
+  scrutinee, genuine then block and optional real else/else-if, without parser
+  desugaring to invented Match syntax or new body/binder identities.
+- Shared borrowed match lowering evaluates the scrutinee once, checks both
+  branch obligations, joins omitted else as Unit and preserves genuine enum
+  Downcast/physical-field success-edge moves and existing array Copy fences.
+- Actual public authority run 20261017-115958716-2017571 passed 18 controls
+  but exposed two same-owner then-reference transplants accepted in else/after.
+  The parser frontier was correct. Universal validation checked only function
+  membership, not actual live declaration identity. A charged temporary
+  BindingId environment now validates source-ordered declarations and restores
+  block/arm/then visibility before sibling/outer uses, retaining older live
+  definition-site bindings rather than falling back to spelling. Original
+  twenty controls pass unchanged in 20261017-120319513-2032373 and the full gate.
+- New fixed-layout parser boxes charge storage before fallible allocation and
+  retain conservative accounting with the source owner. Alignment64, input
+  drop, byte denial before allocation, ZST no-allocation and final-owner cleanup
+  are tested. No injected allocator-null runtime result is claimed.
+- Stock27 contains 20 valid/seven invalid sources; native18 runtime/seven
+  ordinary invalid/two Unsupported outcomes cover 108 workers1/8 CHECK/BUILD
+  cells and 36 executed images per bootstrap profile, debug and release.
+- Final check 20261017-120523973-2041306, release authority/native25
+  20261017-120526163-2041393, strict lint 20261017-120541569-2041171, fmt and
+  diff checks pass. Complete 20261017-120554793-2043511 passes 2,447 tests in
+  122 binaries (973 library), zero failures/ignored/filtered. All old corpus
+  sources remain unchanged. Sixteen failed/passing summaries are retained in
+  data/runs/xps14/2026-10-17-if-let.jsonl, including fixture/lifetime/lint fixes.
+- Full suite test time 12.86s has no speedup implication. Full Rust, if-let
+  chains, while-let and general refutable payload matrices remain open.
+
 ## 2026-10-17: fixed-array patterns with Copy-only selected index plans
 
 Accepted honest Array/ArrayRest source syntax and genuine typed ConstantIndex

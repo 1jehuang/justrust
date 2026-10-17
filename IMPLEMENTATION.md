@@ -48,6 +48,12 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       RECORD-REST-MATCHES.md records stock27/native108 debug/release cells, twelve
       public selector controls and complete 2,268-test / 114-binary hosted gates.
 - [x] Irrefutable tuple/struct let patterns with selective moves and wildcards.
+- [x] Genuine if-let conditional patterns with then-only checked binding scopes,
+      actual source identity and shared genuine match-IR lowering. IF-LET.md
+      records stock27/native108 debug/release cells, twenty public authority
+      controls and the complete 2,447-test / 122-binary hosted gate. Universal
+      source admission checks live sealed BindingIds before planning; chains,
+      while-let and refutable payload matrices remain explicit open boundaries.
 - [x] Fieldless nominal enums and scalar/enum match with exhaustive coverage.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
 - [x] Payload enums, typed downcasts, bounded selection proofs and native tagged values.

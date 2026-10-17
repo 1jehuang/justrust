@@ -195,6 +195,31 @@ impl NameStoreBuilder {
         self.retain_parser_bytes(bytes)
     }
 
+    /// Allocate one fixed-layout parser value after retained storage admission.
+    /// The conservative lease stays with the final NameStore owner, like other
+    /// parser containers. This grants no name or source occurrence authority.
+    pub(crate) fn try_parser_box<T>(&mut self, value: T) -> Result<Box<T>, NameError> {
+        let layout = std::alloc::Layout::new::<T>();
+        self.retain_parser_storage(layout.size())?;
+        if layout.size() == 0 {
+            return Ok(Box::new(value));
+        }
+        // SAFETY: layout is nonzero and valid for T. The global allocator is
+        // also Box<T>'s allocator, so its eventual deallocation uses this same
+        // exact layout. No slice-capacity shrink or reallocation is involved.
+        let allocation = unsafe { std::alloc::alloc(layout) }.cast::<T>();
+        if allocation.is_null() {
+            return Err(self.budget().poison_allocation().into());
+        }
+        // SAFETY: the fresh allocation is aligned and large enough for T and
+        // has no other owner. Writing moves value exactly once. Box assumes
+        // sole ownership only after initialization and drops/deallocates T.
+        unsafe {
+            allocation.write(value);
+            Ok(Box::from_raw(allocation))
+        }
+    }
+
     fn retain_parser_bytes(&mut self, bytes: usize) -> Result<(), NameError> {
         self.budget().check()?;
         let additional = u64::try_from(bytes).map_err(|_| TokenError::IdExhausted)?;
@@ -695,6 +720,93 @@ mod tests {
         drop(builder);
         assert_eq!(budget.snapshot().retained_bytes, 0);
         assert_eq!(budget.snapshot().temporary_bytes, 0);
+    }
+
+    #[test]
+    fn parser_box_preserves_alignment_drop_and_final_owner_storage() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        #[repr(align(64))]
+        struct Aligned {
+            value: u8,
+            drops: Arc<AtomicUsize>,
+        }
+        impl Drop for Aligned {
+            fn drop(&mut self) {
+                self.drops.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let budget = ExpansionBudget::default();
+        let (session, _, _) = fixture(budget.clone());
+        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let baseline = budget.snapshot().retained_bytes;
+        let drops = Arc::new(AtomicUsize::new(0));
+        let value = builder
+            .try_parser_box(Aligned {
+                value: 42,
+                drops: drops.clone(),
+            })
+            .unwrap();
+        assert_eq!(value.value, 42);
+        assert_eq!((&*value as *const Aligned as usize) % 64, 0);
+        let retained = baseline + std::mem::size_of::<Aligned>() as u64;
+        assert_eq!(budget.snapshot().retained_bytes, retained);
+        drop(value);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(budget.snapshot().retained_bytes, retained);
+        let owner = builder.freeze().unwrap();
+        let last = owner.clone();
+        drop(owner);
+        assert_eq!(budget.snapshot().retained_bytes, retained);
+        drop(last);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+    }
+
+    #[test]
+    fn parser_box_denies_storage_before_allocation_and_drops_input_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Dropped(Arc<AtomicUsize>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let budget = ExpansionBudget::default();
+        let (session, _, _) = fixture(budget.clone());
+        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let snapshot = budget.snapshot();
+        let lease_before = builder.store._lease.bytes();
+        let available = budget.limits().bytes - snapshot.retained_bytes - snapshot.temporary_bytes;
+        let occupied = budget.reserve(Storage::Temporary, available).unwrap();
+        let drops = Arc::new(AtomicUsize::new(0));
+        let failure = match builder.try_parser_box(Dropped(drops.clone())) {
+            Err(NameError::Token(TokenError::Budget(failure))) => failure,
+            _ => panic!("expected parser box storage denial before allocation"),
+        };
+        assert_eq!(
+            failure.resource,
+            super::super::expansion_budget::BudgetResource::Bytes
+        );
+        assert_eq!(failure.requested, std::mem::size_of::<Dropped>() as u64);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(builder.store._lease.bytes(), lease_before);
+        drop(occupied);
+        drop(builder);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        assert_eq!(budget.snapshot().temporary_bytes, 0);
+    }
+
+    #[test]
+    fn parser_box_zero_size_has_no_allocation_charge() {
+        let budget = ExpansionBudget::default();
+        let (session, _, _) = fixture(budget.clone());
+        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let baseline = budget.snapshot().retained_bytes;
+        let value = builder.try_parser_box(()).unwrap();
+        assert_eq!(std::mem::size_of_val(&*value), 0);
+        assert_eq!(budget.snapshot().retained_bytes, baseline);
+        drop(value);
+        drop(builder);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
     }
 
     #[test]

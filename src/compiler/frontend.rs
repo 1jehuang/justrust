@@ -1550,6 +1550,48 @@ impl SourceInventory {
                     self.scopes.pop();
                 }
             }
+            Expr::IfLet {
+                pattern,
+                scrutinee,
+                then_block,
+                else_branch,
+            } => {
+                self.expr(
+                    scrutinee,
+                    &node.child(21, 0, budget)?,
+                    None,
+                    None,
+                    budget,
+                    depth + 1,
+                )?;
+                sr::retain(budget, 128)?;
+                self.scopes
+                    .try_reserve(1)
+                    .map_err(|_| FactsError::resource(budget, "source if-let scope allocation"))?;
+                self.scopes.push(HashMap::new());
+                let then_result = (|| {
+                    self.shadow_pattern(pattern, &node.child(21, 1, budget)?, budget, depth + 1)?;
+                    self.block(
+                        then_block,
+                        &node.child(21, 2, budget)?,
+                        false,
+                        budget,
+                        depth + 1,
+                    )
+                })();
+                self.scopes.pop();
+                then_result?;
+                if let Some(branch) = else_branch {
+                    self.expr(
+                        branch,
+                        &node.child(21, 3, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
+            }
             Expr::If {
                 condition,
                 then_block,
@@ -4390,6 +4432,12 @@ pub enum Expr {
         then_block: Block,
         else_block: Block,
     },
+    IfLet {
+        pattern: Box<Pattern>,
+        scrutinee: Box<Expr>,
+        then_block: Block,
+        else_branch: Option<Box<Expr>>,
+    },
     Block(Block),
     /// `'label: { ... }`. Only labeled breaks may target it (E0695/E0696).
     LabeledBlock {
@@ -5014,6 +5062,12 @@ fn scope_parse_error(error: super::semantic_scope::ScopeError) -> ParseError {
         message: error.message,
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConditionPurpose {
+    Ordinary,
+    IfCondition,
+}
+
 struct Parser<'input, 'names> {
     input: &'input NativeTokenBuffer,
     names: &'names mut NameStoreBuilder,
@@ -5030,6 +5084,7 @@ struct Parser<'input, 'names> {
     cursor: TokenCursor<'input>,
     nesting: usize,
     allow_struct: bool,
+    condition_purpose: ConditionPurpose,
     type_params: Vec<AstIdent>,
     use_expansions: usize,
     use_expansion_bytes: usize,
@@ -5197,6 +5252,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             cursor: TokenCursor::new(&buffer),
             nesting: self.nesting,
             allow_struct: true,
+            condition_purpose: ConditionPurpose::Ordinary,
             type_params: Vec::new(),
             use_expansions: self.use_expansions,
             use_expansion_bytes: self.use_expansion_bytes,
@@ -5688,6 +5744,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             cursor: TokenCursor::new(buffer),
             nesting: self.nesting,
             allow_struct: self.allow_struct,
+            condition_purpose: self.condition_purpose,
             type_params: std::mem::take(&mut self.type_params),
             use_expansions: self.use_expansions,
             use_expansion_bytes: self.use_expansion_bytes,
@@ -6013,6 +6070,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             cursor: TokenCursor::new(tokens),
             nesting: 0,
             allow_struct: true,
+            condition_purpose: ConditionPurpose::Ordinary,
             type_params: Vec::new(),
             use_expansions: 0,
             use_expansion_bytes: 0,
@@ -7587,11 +7645,14 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         self.nesting += 1;
         let previous = self.allow_struct;
+        let previous_purpose = self.condition_purpose;
         self.allow_struct = true;
+        self.condition_purpose = ConditionPurpose::Ordinary;
         let frontier = self.enter_lexical()?;
         let result = self.block_inner();
         self.restore_frontier(frontier);
         self.allow_struct = previous;
+        self.condition_purpose = previous_purpose;
         self.nesting -= 1;
         result
     }
@@ -7960,6 +8021,9 @@ impl<'input, 'names> Parser<'input, 'names> {
                     Some(label)
                 };
                 self.expect("while")?;
+                if self.is("let") {
+                    return Err(self.unsupported("while let is unsupported"));
+                }
                 let condition = self.condition()?;
                 let body = self.block()?;
                 statements.push(Stmt::While {
@@ -8017,6 +8081,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 } else if matches!(
                     expr,
                     Expr::If { .. }
+                        | Expr::IfLet { .. }
                         | Expr::Block(_)
                         | Expr::LabeledBlock { .. }
                         | Expr::Loop { .. }
@@ -8048,16 +8113,25 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     fn nested_expr(&mut self) -> Result<Expr, ParseError> {
         let previous = self.allow_struct;
+        let previous_purpose = self.condition_purpose;
         self.allow_struct = true;
+        self.condition_purpose = ConditionPurpose::Ordinary;
         let result = self.expr(0);
         self.allow_struct = previous;
+        self.condition_purpose = previous_purpose;
         result
     }
     fn condition(&mut self) -> Result<Expr, ParseError> {
+        self.condition_with(0, ConditionPurpose::Ordinary)
+    }
+    fn condition_with(&mut self, min: u8, purpose: ConditionPurpose) -> Result<Expr, ParseError> {
         let previous = self.allow_struct;
+        let previous_purpose = self.condition_purpose;
         self.allow_struct = false;
-        let result = self.expr(0);
+        self.condition_purpose = purpose;
+        let result = self.expr(min);
         self.allow_struct = previous;
+        self.condition_purpose = previous_purpose;
         result
     }
     fn expr(&mut self, min: u8) -> Result<Expr, ParseError> {
@@ -8462,7 +8536,10 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     #[inline(never)]
     fn if_prefix(&mut self, statement: bool) -> Result<Expr, ParseError> {
-        let condition = Box::new(self.condition()?);
+        if self.eat("let") {
+            return self.if_let_prefix(statement);
+        }
+        let condition = Box::new(self.condition_with(0, ConditionPurpose::IfCondition)?);
         let then_block = self.block()?;
         let else_block = if self.eat("else") {
             if self.is("if") {
@@ -8487,6 +8564,61 @@ impl<'input, 'names> Parser<'input, 'names> {
             condition,
             then_block,
             else_block,
+        })
+    }
+    #[inline(never)]
+    fn if_let_prefix(&mut self, statement: bool) -> Result<Expr, ParseError> {
+        let pattern = self.pattern()?;
+        if self.is("|") || self.is("@") || self.is("if") {
+            return Err(
+                self.unsupported("if let guards, or-patterns and @ patterns are unsupported")
+            );
+        }
+        self.expect("=")?;
+        // Do not consume a let-chain into the scrutinee or publish its bindings.
+        let scrutinee = self.condition_with(3, ConditionPurpose::IfCondition)?;
+        if self.is("&&") || self.is("||") {
+            return Err(self.unsupported("if let chains are unsupported"));
+        }
+        let pattern = self
+            .names
+            .try_parser_box(pattern)
+            .map_err(native_adapter::name_error)?;
+        let scrutinee = self
+            .names
+            .try_parser_box(scrutinee)
+            .map_err(native_adapter::name_error)?;
+        let frontier = self.enter_lexical()?;
+        let then_result = (|| {
+            self.bind_pattern_lexical(&pattern)?;
+            self.block()
+        })();
+        // A failed then parse must not leave a usable binding/macro frontier.
+        self.restore_frontier(frontier);
+        let then_block = then_result?;
+        let else_branch = if self.eat("else") {
+            let branch = if self.is("if") {
+                if statement {
+                    self.statement_expr()?
+                } else {
+                    self.expr(0)?
+                }
+            } else {
+                Expr::Block(self.block()?)
+            };
+            Some(
+                self.names
+                    .try_parser_box(branch)
+                    .map_err(native_adapter::name_error)?,
+            )
+        } else {
+            None
+        };
+        Ok(Expr::IfLet {
+            pattern,
+            scrutinee,
+            then_block,
+            else_branch,
         })
     }
     #[inline(never)]
@@ -8524,7 +8656,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             let blocklike = !direct_return
                 && matches!(
                     body,
-                    Expr::Block(_) | Expr::If { .. } | Expr::Loop { .. } | Expr::Match { .. }
+                    Expr::Block(_)
+                        | Expr::If { .. }
+                        | Expr::IfLet { .. }
+                        | Expr::Loop { .. }
+                        | Expr::Match { .. }
                 );
             arms.push(MatchArm { pattern, body });
             self.restore_frontier(frontier);
@@ -8547,6 +8683,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 && matches!(
                     left,
                     Expr::If { .. }
+                        | Expr::IfLet { .. }
                         | Expr::Match { .. }
                         | Expr::Loop { .. }
                         | Expr::LabeledBlock { .. }
@@ -8603,6 +8740,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 && matches!(
                     left,
                     Expr::If { .. }
+                        | Expr::IfLet { .. }
                         | Expr::Match { .. }
                         | Expr::Loop { .. }
                         | Expr::LabeledBlock { .. }
@@ -8641,6 +8779,15 @@ impl<'input, 'names> Parser<'input, 'names> {
             };
             if self.token().string || precedence < min {
                 break;
+            }
+            if self.condition_purpose == ConditionPurpose::IfCondition
+                && self.is("&&")
+                && self
+                    .cursor
+                    .peek(1)
+                    .is_some_and(|token| token.matches("let"))
+            {
+                return Err(self.unsupported("if let chains are unsupported"));
             }
             if matches!(
                 op,
@@ -9269,6 +9416,120 @@ mod inactive_item_syntax_tests {
     }
 
     #[test]
+    fn if_let_keeps_absent_else_and_real_else_expression_shapes() {
+        let parsed = parse_unresolved("fn main(){if let true=true {} if let true=false {} else if let false=false {} else {}}")
+            .unwrap();
+        let body = &parsed.program.functions[0].body;
+        assert!(matches!(
+            &body.statements[0],
+            Stmt::ImplicitExpr(Expr::IfLet {
+                else_branch: None,
+                ..
+            })
+        ));
+        let Expr::IfLet {
+            else_branch: Some(branch),
+            ..
+        } = body.tail.as_deref().unwrap()
+        else {
+            panic!("expected actual if-let tail");
+        };
+        let Expr::IfLet {
+            else_branch: Some(branch),
+            ..
+        } = branch.as_ref()
+        else {
+            panic!("expected actual else-if-let, not a wrapping block");
+        };
+        assert!(matches!(branch.as_ref(), Expr::Block(_)));
+    }
+
+    #[test]
+    fn if_let_chain_and_while_boundaries_are_typed_at_written_tokens() {
+        for (source, token) in [
+            ("fn main(){if let true=true && true {}}", "&&"),
+            ("fn main(){if true && let true=true {}}", "&&"),
+            ("fn main(){if let true=true || false {}}", "||"),
+            ("fn main(){while let true=true {}}", "let"),
+        ] {
+            let error = parse_syntax_unprepared(source).unwrap_err();
+            assert_eq!(
+                error.kind,
+                super::super::source::SourceErrorKind::Unsupported
+            );
+            let at = source.find(token).unwrap();
+            assert_eq!(error.bytes, at..at + token.len());
+        }
+        parse_unresolved("fn main(){if let true=(true && false) {} else {} if true && false {}}")
+            .unwrap();
+    }
+
+    #[test]
+    fn if_let_scrutinee_and_else_keep_outer_binding_and_inventory_identity() {
+        let program = parse("fn main(){macro_rules! marker{()=>{42}}let x=40;if let x=x {let y=x;} else {let z=x;}let w=x;}").unwrap();
+        let function = &program.functions[0];
+        let scope = function.lexical_scope.unwrap();
+        let scopes = program.scopes.as_ref().unwrap();
+        let Stmt::Let {
+            name: BindingName::Named(outer),
+            ..
+        } = &function.body.statements[0]
+        else {
+            panic!("outer binding")
+        };
+        let Stmt::ImplicitExpr(Expr::IfLet {
+            pattern,
+            scrutinee,
+            then_block,
+            else_branch,
+        }) = &function.body.statements[1]
+        else {
+            panic!("if-let statement")
+        };
+        let Pattern::Binding { name: inner, .. } = pattern.as_ref() else {
+            panic!("pattern binding")
+        };
+        let outer_id = scopes
+            .declaration_for(program.names.as_ref(), *outer)
+            .unwrap();
+        let inner_id = scopes
+            .declaration_for(program.names.as_ref(), *inner)
+            .unwrap();
+        assert_ne!(outer_id, inner_id);
+        assert_eq!(scopes.binding_function(inner_id).unwrap(), scope);
+        let reference = |value: &Expr| {
+            let Expr::Var(path) = value else {
+                panic!("reference")
+            };
+            scopes
+                .reference_for(program.names.as_ref(), path.single().unwrap())
+                .unwrap()
+        };
+        assert_eq!(reference(scrutinee), Some(outer_id));
+        let Stmt::Let { value, .. } = &then_block.statements[0] else {
+            panic!("then binding")
+        };
+        assert_eq!(reference(value), Some(inner_id));
+        let Expr::Block(block) = else_branch.as_deref().unwrap() else {
+            panic!("else block")
+        };
+        let Stmt::Let { value, .. } = &block.statements[0] else {
+            panic!("else binding")
+        };
+        assert_eq!(reference(value), Some(outer_id));
+        let Stmt::Let { value, .. } = &function.body.statements[2] else {
+            panic!("after binding")
+        };
+        assert_eq!(reference(value), Some(outer_id));
+        let budget = ir::PlanBudget::default();
+        let identity = sr::OriginalBodyId::new(&budget).unwrap();
+        let inventory = SourceInventory::build(&program, function, identity, &budget).unwrap();
+        assert_eq!(inventory.bindings.len(), 5);
+        assert!(inventory.calls.is_empty());
+        assert_ne!(inventory.bindings[0].node, inventory.bindings[1].node);
+    }
+
+    #[test]
     fn item_publication_denies_before_container_allocation_and_releases() {
         use super::super::expansion_budget::{BudgetResource, Storage};
         let (tokens, session) = lex("fn main(){}").unwrap().into_parts();
@@ -9626,6 +9887,19 @@ fn walk_depth_checked(
                 Expr::Call { args, .. } => {
                     for arg in args {
                         push(DepthNode::Expr(arg))?;
+                    }
+                }
+                Expr::IfLet {
+                    pattern,
+                    scrutinee,
+                    then_block,
+                    else_branch,
+                } => {
+                    push(DepthNode::Pattern(pattern))?;
+                    push(DepthNode::Expr(scrutinee))?;
+                    push(DepthNode::Block(then_block))?;
+                    if let Some(branch) = else_branch {
+                        push(DepthNode::Expr(branch))?;
                     }
                 }
                 Expr::If {

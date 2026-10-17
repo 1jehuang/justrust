@@ -420,6 +420,18 @@ pub(super) fn inventory(
                     expr(&a.body, ds, b, d + 1)?;
                 }
             }
+            Expr::IfLet {
+                scrutinee,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                expr(scrutinee, ds, b, d + 1)?;
+                block(then_block, ds, b, d + 1)?;
+                if let Some(branch) = else_branch {
+                    expr(branch, ds, b, d + 1)?;
+                }
+            }
             Expr::If {
                 condition,
                 then_block,
