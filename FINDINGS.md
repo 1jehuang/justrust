@@ -7539,3 +7539,17 @@ The candidate measurement is withheld pending a usable baseline, and the
 comprehensive comparison remains blocked rather than replaced by a narrow
 fixture. No speedup, zero default overhead, full CPU/span or useful-thread
 ceiling follows. See `docs/dispatch-result-provenance-results-20261015.md`.
+
+## 2026-10-16: Desktop scripts invalidate a large UI build unit
+
+Desktop Windows acceptance script-only validation run
+`20261016-182406835-2625400` used hosted `justrust test --workspace`:
+29.1 s wall, 20.91 s compile, 3.04 s tests, 1,855 passed. The report
+attributed 9.6 s to the 125k-line `jcode_desktop_ui` units (6.85 s test,
+2.79 s library) and noted that `scripts` is a UI build-script input, so
+script edits invalidate the large UI crate and one dependent. It estimated
+1.4 s per edit across six recorded runs. Concurrent runtime changes also
+invalidated 32 local units, so this run is not an isolated script benchmark.
+Potential project-side follow-up: narrow the build script's tracked inputs
+or move embedded script data into a leaf crate. No crate restructuring or
+speedup is claimed for the Windows release validation task.
