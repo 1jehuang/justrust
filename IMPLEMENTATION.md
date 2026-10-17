@@ -303,6 +303,11 @@ iteration and suspended-state destruction each have executable oracle cases.
       parent-proof ownership. NESTED-SOURCE-MACROS.md records 17 added stock
       sources / 68 native cells, unchanged earlier corpora, actual stack-frame
       repair and the complete 2,105-test / 104-binary hosted gate.
+- [ ] Admit original module-level definitions and item-position calls emitting
+      one supported free function, with explicit module proof, real generated
+      function scopes, sealed inactive syntax and retained source publication.
+      ITEM-SOURCE-MACROS.md defines this next unimplemented acceptance contract;
+      generated cfg/modules, exports and general item expansion remain outside it.
 - [ ] Generalize nested/recursive expansion and namespace-specific hygiene,
       generated declarations, cfg-before-child-IO and graph discovery closure.
       Add real item/export/import/cross-crate clients and remaining fragment/AST
