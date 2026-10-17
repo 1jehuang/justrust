@@ -1,0 +1,24 @@
+{"functions": 4, "workers": 1, "mode": "check", "repeat": 0, "total_ns": 22762045}
+{"functions": 4, "workers": 1, "mode": "build", "repeat": 0, "total_ns": 22972849}
+{"functions": 4, "workers": 8, "mode": "check", "repeat": 0, "total_ns": 28859889}
+{"functions": 4, "workers": 8, "mode": "build", "repeat": 0, "total_ns": 26701607}
+{"functions": 4, "workers": 8, "mode": "check", "repeat": 1, "total_ns": 25866717}
+{"functions": 4, "workers": 8, "mode": "build", "repeat": 1, "total_ns": 27533052}
+{"functions": 4, "workers": 1, "mode": "check", "repeat": 1, "total_ns": 22255720}
+{"functions": 4, "workers": 1, "mode": "build", "repeat": 1, "total_ns": 22837870}
+{"functions": 4, "workers": 1, "mode": "check", "repeat": 2, "total_ns": 22316933}
+{"functions": 4, "workers": 1, "mode": "build", "repeat": 2, "total_ns": 22678217}
+{"functions": 4, "workers": 8, "mode": "check", "repeat": 2, "total_ns": 26132078}
+{"functions": 4, "workers": 8, "mode": "build", "repeat": 2, "total_ns": 26886918}
+[stderr] Traceback (most recent call last):
+[stderr]   File "/home/jeremy/justrust-clean-room/experiments/compiler.py", line 106, in <module>
+[stderr]     main()
+[stderr]     ~~~~^^
+[stderr]   File "/home/jeremy/justrust-clean-room/experiments/compiler.py", line 86, in main
+[stderr]     result = run(command)
+[stderr]   File "/home/jeremy/justrust-clean-room/experiments/compiler.py", line 17, in run
+[stderr]     raise RuntimeError(f"command failed {argv!r}: {result.stdout!r}\n{result.stderr!r}")
+[stderr] RuntimeError: command failed ['/home/jeremy/justrust-clean-room/target/debug/jr-rust', '/home/jeremy/.jcode/scratch/intermediate-bench-20261017/tmp/jr-compiler-mwa41dzr/functions-256.rs', '--workers', '1', '--check']: b''
+[stderr] b'jr-rust: /home/jeremy/.jcode/scratch/intermediate-bench-20261017/tmp/jr-compiler-mwa41dzr/functions-256.rs: instance 6: initialization/move analysis (complete=false): [Diagnostic { kind: ResourceLimit, block: BlockId(0), statement: None, origin: None, place: None }]\nnote: filesystem modules use temporary inline expansion; frontend line/column positions refer to expanded source, not original module files\n'
+
+--- Command finished with exit code: 1 ---

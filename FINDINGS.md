@@ -9805,3 +9805,26 @@ checks, mutable CFG snapshot checks and raw legacy validation. The unchanged
 wrapper also required mapping its original method occurrence to its actual tail
 call while retaining the single-evaluation wrapper. Public typed errors now
 retain their Unsupported/ResourceLimit category through bounded rendering.
+
+### Intermediate compiler benchmarks expose size ceiling, 2026-10-17
+
+At revision b4b5028ac and native binary SHA256 50677dcc0cff723228bef7c43af26bcc29a2c09f48d8ffc291e77f73e54a1b91,
+all 33 unchanged top-level compiler examples passed actual native CHECK/BUILD
+at workers 1/8 and matched stock runtime output/status. Another 32 scalar and
+32 loop/control-transfer generated differential cases matched stock. This is
+bounded program evidence, not arbitrary Cargo/ecosystem support.
+
+The existing 4/256 source-to-ELF benchmark stopped at 256 with ResourceLimit.
+A failure-preserving flat/module ladder then measured 4,16,64,128,256 functions,
+three repeats, CHECK/BUILD, workers 1/8. All 72 native invocations through 64
+passed; all 48 native 128/256 invocations failed resource checks with no artifact.
+All 30 corresponding stock builds passed. Warm-machine uncontrolled median flat
+64-function BUILD was 538.97 ms with one native worker versus 64.30 ms stock;
+eight native workers took 810.61 ms. Module 64 was 579.91 ms native versus
+60.53 ms stock. No overall speedup
+claim or causal attribution follows. Prioritize repeated analysis/allocation
+scaling under unchanged caps, then rerun identical128/256 sources.
+
+Full method, raw receipts and reproduction commands:
+`docs/intermediate-compiler-benchmarks-20261017.md`. Compiler source and frozen
+fixtures were not changed or repaired for this experiment.
