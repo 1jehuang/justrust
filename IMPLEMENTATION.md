@@ -17,6 +17,10 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Explicit cached CFG facts shared by check and native emission, with provenance.
 - [x] Cached storage/initialization/move-path dataflow shared by check and emission.
 - [x] Nonempty nominal structs, field privacy and source-level whole/partial moves.
+- [ ] Admit nongeneric unit-struct constructors/patterns and native nominal
+      transport with an explicit initialized private carrier. UNIT-STRUCTS.md
+      defines the in-progress stock/native/debug/release gates and scoped bare
+      pattern boundary. Full zero-sized public layout/FFI remains separate.
 - [x] Irrefutable tuple/struct let patterns with selective moves and wildcards.
 - [x] Fieldless nominal enums and scalar/enum match with exhaustive coverage.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
