@@ -682,7 +682,11 @@ impl Resolver<'_> {
                 ItemKind::Module(_) if namespace => Some(ResolvedKind::Module),
                 ItemKind::Function if !namespace => Some(ResolvedKind::Function),
                 ItemKind::Trait if namespace => Some(ResolvedKind::Trait),
-                ItemKind::Struct if namespace => Some(ResolvedKind::Struct),
+                ItemKind::Struct
+                    if namespace || self.source_struct(&item.path)?.shape == StructShape::Tuple =>
+                {
+                    Some(ResolvedKind::Struct)
+                }
                 ItemKind::Enum if namespace => Some(ResolvedKind::Enum),
                 ItemKind::Variant(shape) if namespace || *shape != ir::VariantShape::Struct => {
                     Some(ResolvedKind::Variant)
@@ -700,6 +704,23 @@ impl Resolver<'_> {
                 })
             };
             if let Some(resolved) = &mut resolved {
+                if resolved.kind == ResolvedKind::Struct && !namespace {
+                    let declaration = self.tuple_struct(resolved.source()?)?;
+                    for field in &declaration.fields {
+                        self.alias_budget.charge_work(1)?;
+                        field
+                            .visibility
+                            .validate_for(&self.program.modules, declaration.module)
+                            .map_err(module_diagnostic)?;
+                        if !field
+                            .visibility
+                            .allows_reexport(&self.program.modules, &resolved.visibility)
+                            .map_err(module_diagnostic)?
+                        {
+                            resolved.visibility = field.visibility.clone();
+                        }
+                    }
+                }
                 if matches!(item.kind, ItemKind::Variant(_)) {
                     let owner = item
                         .path
@@ -1214,15 +1235,53 @@ impl Resolver<'_> {
         }
         Err("resolved struct has no checked source schema".into())
     }
+    fn source_struct(&self, path: &AstPath) -> Result<&StructDecl, String> {
+        let key = self.key(path)?;
+        for declaration in &self.program.structs {
+            self.alias_budget.charge_work(1)?;
+            if self.key(&declaration.name)? == key {
+                return Ok(declaration);
+            }
+        }
+        Err("resolved struct has no checked source schema".into())
+    }
+    fn tuple_struct(&self, path: &AstPath) -> Result<&StructDecl, String> {
+        let declaration = self.source_struct(path)?;
+        if declaration.shape != StructShape::Tuple {
+            return Err("tuple constructor requires a tuple struct source schema".into());
+        }
+        if declaration.fields.is_empty() {
+            return Err(Self::unsupported(
+                "zero-field tuple structs are unsupported",
+            ));
+        }
+        if !declaration.type_params.is_empty() {
+            return Err(Self::unsupported("generic tuple structs are unsupported"));
+        }
+        if declaration.fields.len() > 4096 {
+            return Err("nominal field resource limit exceeded".into());
+        }
+        for (index, field) in declaration.fields.iter().enumerate() {
+            self.alias_budget.charge_work(1)?;
+            if !matches!(field.name, FieldName::Tuple(actual) if actual == index) {
+                return Err("tuple struct fields must have contiguous numeric identities".into());
+            }
+        }
+        Ok(declaration)
+    }
     fn zero_constructor(
         &mut self,
         path: &AstPath,
         module: ModuleId,
     ) -> Result<Option<ResolvedItem>, String> {
-        if let Some(item) = self.path(path, module, false, false)?
-            && item.kind == ResolvedKind::Variant
-        {
-            return Ok(Some(item));
+        if let Some(item) = self.path(path, module, false, false)? {
+            if item.kind == ResolvedKind::Variant {
+                return Ok(Some(item));
+            }
+            if item.kind == ResolvedKind::Struct {
+                self.tuple_struct(item.source()?)?;
+                return Err("E0530: bindings cannot shadow tuple struct constructors".into());
+            }
         }
         if let Some(item) = self.path(path, module, true, false)?
             && self.is_unit_struct(&item)?
@@ -1429,11 +1488,30 @@ impl Resolver<'_> {
                     self.pattern(field, module, names)?;
                 }
             }
-            Pattern::Variant { name, fields, .. } => {
+            Pattern::Variant {
+                name,
+                shape,
+                fields,
+                rest,
+            } => {
                 let item = self
                     .path(name, module, false, false)?
                     .ok_or("unresolved enum variant")?;
-                if item.kind != ResolvedKind::Variant {
+                if item.kind == ResolvedKind::Struct {
+                    let declaration = self.tuple_struct(item.source()?)?;
+                    if *shape != ir::VariantShape::Tuple
+                        || *rest
+                        || fields.len() != declaration.fields.len()
+                    {
+                        return Err("tuple struct pattern arity or shape mismatch".into());
+                    }
+                    for (index, (selector, _)) in fields.iter().enumerate() {
+                        self.alias_budget.charge_work(1)?;
+                        if !matches!(selector, FieldSelector::Tuple(actual) if *actual == index) {
+                            return Err("tuple struct pattern fields must be contiguous".into());
+                        }
+                    }
+                } else if item.kind != ResolvedKind::Variant {
                     return Err("resolved declaration is not a variant".into());
                 }
                 *name = self.resolved_use(item.source()?, name)?;
@@ -1608,6 +1686,22 @@ impl Resolver<'_> {
         Ok(())
     }
     fn expr(
+        &mut self,
+        expr: &mut Expr,
+        module: ModuleId,
+        locals: &mut Vec<std::collections::HashSet<LocalKey>>,
+    ) -> Result<(), String> {
+        // Keep recursive cast chains out of the constructor dispatch frame.
+        // Resolve the operand before its target, preserving source validation order.
+        if let Expr::Cast { value, target } = expr {
+            self.expr(value, module, locals)?;
+            return self.ty(target, module);
+        }
+        self.ordinary_expr(expr, module, locals)
+    }
+
+    #[inline(never)]
+    fn ordinary_expr(
         &mut self,
         expr: &mut Expr,
         module: ModuleId,
@@ -1788,9 +1882,8 @@ impl Resolver<'_> {
                     self.expr(value, module, locals)?;
                 }
             }
-            Expr::Cast { value, target } => {
-                self.expr(value, module, locals)?;
-                self.ty(target, module)?;
+            Expr::Cast { .. } => {
+                return Err("cast bypassed resolver expression dispatcher".into());
             }
             Expr::Deref { value }
             | Expr::Repeat { value, .. }
@@ -1802,7 +1895,16 @@ impl Resolver<'_> {
                 self.expr(index, module, locals)?;
             }
             Expr::Var(name) => {
-                if let Some(item) = self.path(name, module, false, false)?
+                let value_item = self.path(name, module, false, false)?;
+                if value_item
+                    .as_ref()
+                    .is_some_and(|item| item.kind == ResolvedKind::Struct)
+                {
+                    return Err(Self::unsupported(
+                        "first-class tuple struct constructors are unsupported",
+                    ));
+                }
+                if let Some(item) = value_item
                     && item.kind == ResolvedKind::Variant
                 {
                     *expr = Expr::EnumVariant {
@@ -1878,9 +1980,32 @@ impl Resolver<'_> {
                     };
                 } else if resolved.kind == ResolvedKind::Function {
                     *name = self.resolved_use(resolved.source()?, name)?;
+                } else if resolved.kind == ResolvedKind::Struct {
+                    let expected = self.tuple_struct(resolved.source()?)?.fields.len();
+                    if args.len() != expected {
+                        return Err("tuple struct constructor arity mismatch".into());
+                    }
+                    *expr = Expr::TupleStruct {
+                        name: self.resolved_use(resolved.source()?, name)?,
+                        fields: std::mem::take(args),
+                    };
                 } else {
                     return Err("resolved declaration is not callable".into());
                 }
+            }
+            Expr::TupleStruct { name, fields } => {
+                let item = self
+                    .path(name, module, false, false)?
+                    .ok_or("unresolved tuple struct constructor")?;
+                if item.kind != ResolvedKind::Struct
+                    || fields.len() != self.tuple_struct(item.source()?)?.fields.len()
+                {
+                    return Err("tuple struct constructor arity or shape mismatch".into());
+                }
+                for field in fields {
+                    self.expr(field, module, locals)?;
+                }
+                *name = self.resolved_use(item.source()?, name)?;
             }
             Expr::Struct { name, fields }
                 if name.anchor() == PathAnchor::SelfType && name.is_empty() =>
@@ -2319,6 +2444,119 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     }
     program.validate_name_handles()?;
     Ok(program)
+}
+
+#[cfg(test)]
+mod tuple_shape_tests {
+    use super::*;
+
+    #[test]
+    fn tuple_constructor_and_let_pattern_retain_nominal_syntax_and_numeric_selectors() {
+        let parsed =
+            parse_unresolved("struct Pair(i32,i32);fn main(){let p=Pair(1,2);let Pair(x,y)=p;}")
+                .unwrap();
+        let program = resolve(&parsed).unwrap();
+        let statements = &program.functions[0].body.statements;
+        let Stmt::Let {
+            value: Expr::TupleStruct { name, fields },
+            ..
+        } = &statements[0]
+        else {
+            panic!("tuple constructor became a callable or ordinary record");
+        };
+        assert_eq!(fields.len(), 2);
+        assert_eq!(
+            name_scope::path_key(program.names.as_ref(), name, Namespace::Type).unwrap(),
+            name_scope::path_key(
+                program.names.as_ref(),
+                &program.structs[0].name,
+                Namespace::Type
+            )
+            .unwrap()
+        );
+        let Stmt::LetPattern {
+            pattern:
+                Pattern::Variant {
+                    shape,
+                    fields,
+                    rest,
+                    ..
+                },
+            ..
+        } = &statements[1]
+        else {
+            panic!("tuple let pattern lost explicit source constructor shape");
+        };
+        assert_eq!(*shape, ir::VariantShape::Tuple);
+        assert!(!rest);
+        assert!(matches!(fields[0].0, FieldSelector::Tuple(0)));
+        assert!(matches!(fields[1].0, FieldSelector::Tuple(1)));
+    }
+
+    #[test]
+    fn imported_constructor_and_scoped_explicit_child_bindings_resolve() {
+        for source in [
+            "mod a{pub struct Pair(pub i32,pub i32);}use a::Pair as P;fn main(){let p=P(1,2);let P(x,y)=p;}",
+            "struct Pair(i32,i32);fn main(){macro_rules! n{()=>{1};}let p=Pair(n!(),2);let Pair(x,y)=p;let z=x+y;}",
+        ] {
+            resolve(&parse_unresolved(source).unwrap())
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+
+    #[test]
+    fn stock_confirmed_tuple_constructor_shadow_is_rejected_but_type_names_can_bind() {
+        for source in [
+            "struct Pair(i32);fn main(){let Pair=7;}",
+            "struct Pair(i32);fn main(){let mut Pair=7;}",
+            "struct Pair(i32);fn f(Pair:i32){}fn main(){}",
+            "struct Pair(i32);use Pair as P;fn main(){let P=7;}",
+        ] {
+            let error = resolve(&parse_unresolved(source).unwrap()).unwrap_err();
+            assert!(
+                error.contains("E0530: bindings cannot shadow tuple struct constructors"),
+                "{source}: {error}"
+            );
+        }
+        for source in [
+            "struct Pair{x:i32}fn main(){let Pair=7;}",
+            "struct Pair(i32);type A=Pair;fn main(){let A=7;}",
+        ] {
+            resolve(&parse_unresolved(source).unwrap())
+                .unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+
+    #[test]
+    fn alias_call_wrong_arity_and_private_constructor_remain_invalid() {
+        for (source, diagnostic) in [
+            (
+                "struct Pair(i32);type A=Pair;fn main(){let p=A(1);}",
+                "unresolved function",
+            ),
+            (
+                "struct Pair(i32,i32);fn main(){let p=Pair(1);}",
+                "tuple struct constructor arity mismatch",
+            ),
+            (
+                "mod a{pub struct Pair(pub i32,i32);}fn main(){let p=a::Pair(1,2);}",
+                "private item",
+            ),
+        ] {
+            let error = resolve(&parse_unresolved(source).unwrap()).unwrap_err();
+            assert!(error.contains(diagnostic), "{source}: {error}");
+            assert!(!error.contains("unsupported:"), "{source}: {error}");
+        }
+    }
+
+    #[test]
+    fn first_class_tuple_constructor_is_explicitly_unsupported() {
+        let parsed = parse_unresolved("struct Pair(i32);fn main(){let p=Pair;}").unwrap();
+        assert_eq!(
+            resolve(&parsed).unwrap_err(),
+            "in function crate::main: unsupported: first-class tuple struct constructors are unsupported"
+        );
+    }
 }
 
 #[cfg(test)]

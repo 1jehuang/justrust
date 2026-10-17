@@ -145,7 +145,7 @@ pub(super) fn preflight_clone_node(
             Expr::Var(path) => clone_ast_path(path, budget)?,
             Expr::Println(text) => clone_text(text, budget)?,
             Expr::Float(literal) => clone_text(&literal.digits, budget)?,
-            Expr::Call { name, args } => {
+            Expr::Call { name, args } | Expr::TupleStruct { name, fields: args } => {
                 clone_ast_path(name, budget)?;
                 clone_vector(args, budget)?;
             }
@@ -374,6 +374,33 @@ mod tests {
             before.retained_bytes
         );
         assert!(budget.usage_snapshot().bytes >= std::mem::size_of::<Program>());
+    }
+
+    #[test]
+    fn tuple_constructor_argument_storage_is_admitted_before_clone() {
+        let source_budget = ExpansionBudget::default();
+        let mut builder =
+            ProgramBuilder::new(Path::new("tuple-clone.rs"), "", &source_budget).unwrap();
+        let name = builder.path("crate::Pair").unwrap();
+        let expr = Expr::TupleStruct {
+            name,
+            fields: vec![Expr::Bool(true), Expr::Bool(false)],
+        };
+        let Expr::TupleStruct { fields, .. } = &expr else {
+            unreachable!()
+        };
+        let required = std::mem::size_of_val(fields.as_slice()) * 2 + 128;
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: 1024 + required - 1,
+            ..Default::default()
+        });
+        assert!(preflight_clone_node(&DepthNode::Expr(&expr), &budget).is_err());
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
+        assert_eq!(failure.used, 1024);
+        assert_eq!(failure.requested, required);
+        assert_eq!(budget.usage_snapshot().bytes, 1024);
+        assert!(!failure.arithmetic_overflow);
     }
 
     #[test]

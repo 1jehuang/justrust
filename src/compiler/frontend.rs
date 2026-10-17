@@ -1443,11 +1443,16 @@ impl SourceInventory {
                 budget,
                 depth + 1,
             )?,
-            Expr::Array(fields) | Expr::Tuple(fields) => {
+            Expr::Array(fields) | Expr::Tuple(fields) | Expr::TupleStruct { fields, .. } => {
+                let tag = if matches!(expr, Expr::TupleStruct { .. }) {
+                    14
+                } else {
+                    12
+                };
                 for (i, e) in fields.iter().enumerate() {
                     self.expr(
                         e,
-                        &node.child(12, i, budget)?,
+                        &node.child(tag, i, budget)?,
                         None,
                         None,
                         budget,
@@ -3789,6 +3794,7 @@ pub struct StructDecl {
 pub enum StructShape {
     Record,
     Unit,
+    Tuple,
 }
 #[derive(Clone, Debug)]
 pub struct EnumDecl {
@@ -4301,6 +4307,10 @@ pub enum Expr {
     Struct {
         name: AstPath,
         fields: Vec<(AstIdent, Expr)>,
+    },
+    TupleStruct {
+        name: AstPath,
+        fields: Vec<Expr>,
     },
     Field {
         base: Box<Expr>,
@@ -6934,6 +6944,28 @@ impl<'input, 'names> Parser<'input, 'names> {
             let mut fields = Vec::new();
             let shape = if self.eat(";") {
                 StructShape::Unit
+            } else if self.eat("(") {
+                if self.is(")") {
+                    return Err(self.unsupported("empty tuple structs are unsupported"));
+                }
+                if !type_params.is_empty() {
+                    return Err(self.unsupported("generic tuple structs are unsupported"));
+                }
+                loop {
+                    let (visibility, _) = self.visibility(module)?;
+                    let ty = self.ty()?;
+                    fields.push(FieldDecl {
+                        name: FieldName::Tuple(fields.len()),
+                        ty,
+                        visibility,
+                    });
+                    if !self.eat(",") || self.is(")") {
+                        break;
+                    }
+                }
+                self.expect(")")?;
+                self.expect(";")?;
+                StructShape::Tuple
             } else {
                 self.expect("{")?;
                 while !self.is("}") {
@@ -7431,6 +7463,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         if !self.is(")") {
             loop {
                 let n = self.binding()?;
+                if self.is("(") || self.is("{") || self.is("::") {
+                    return Err(self.unsupported("constructor parameter patterns are unsupported"));
+                }
                 self.expect(":")?;
                 params.push((n, self.ty()?));
                 if !self.eat(",") || self.is(")") {
@@ -7606,6 +7641,10 @@ impl<'input, 'names> Parser<'input, 'names> {
                 break;
             }
             let mutable = self.eat("mut");
+            let token = self.token();
+            if token.matches(token.text) && token.text.starts_with(|c: char| c.is_ascii_digit()) {
+                return Err(self.unsupported("numeric braced constructor patterns are unsupported"));
+            }
             let field = self.ident()?;
             let pattern = if self.eat(":") {
                 if mutable {
@@ -7907,6 +7946,13 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else if self.allow_struct && self.eat("{") {
             let mut fields = Vec::new();
             while !self.is("}") {
+                let token = self.token();
+                if token.matches(token.text) && token.text.starts_with(|c: char| c.is_ascii_digit())
+                {
+                    return Err(
+                        self.unsupported("numeric braced constructor fields are unsupported")
+                    );
+                }
                 let field = self.ident()?;
                 let value = if self.eat(":") {
                     self.expr(0)?
@@ -8781,6 +8827,71 @@ mod inactive_item_syntax_tests {
     }
 
     #[test]
+    fn tuple_struct_parser_retains_indexed_fields_and_visibility() {
+        let parsed = parse_unresolved("pub struct Pair(pub i32,bool,);fn main(){}").unwrap();
+        let declaration = &parsed.program.structs[0];
+        assert_eq!(declaration.shape, StructShape::Tuple);
+        assert_eq!(declaration.fields.len(), 2);
+        for (index, field) in declaration.fields.iter().enumerate() {
+            assert!(matches!(field.name, FieldName::Tuple(actual) if actual == index));
+        }
+        assert!(matches!(
+            declaration.fields[0].visibility,
+            ir::Visibility::Public
+        ));
+        assert!(matches!(declaration.fields[1].visibility,
+            ir::Visibility::Restricted(module) if module == declaration.module));
+    }
+
+    #[test]
+    fn tuple_struct_parser_preserves_explicit_unadmitted_syntax_boundaries() {
+        for source in [
+            "struct Empty();fn main(){}",
+            "struct Generic<T>(T);fn main(){}",
+            "struct Pair(i32);fn main(){let p=Pair{0:42};}",
+            "struct Pair(i32);fn main(){let Pair{0:x}=Pair(42);}",
+        ] {
+            let error = parse_unresolved(source).unwrap_err();
+            assert!(error.contains("unsupported"), "{source}: {error}");
+            assert!(!error.contains("contract violation"), "{source}: {error}");
+        }
+        let source = "struct Pair(i32) fn main(){}";
+        let error = parse_syntax_unprepared(source).unwrap_err();
+        assert_eq!(error.kind, super::super::source::SourceErrorKind::Syntax);
+        assert_eq!(
+            error.bytes,
+            source.find("fn").unwrap()..source.find("fn").unwrap() + 2
+        );
+        assert_eq!(&source[error.bytes.clone()], "fn");
+        let primary = error.primary.unwrap();
+        assert_eq!(primary.lo as usize, error.bytes.start);
+        assert_eq!(primary.hi as usize, error.bytes.end);
+    }
+
+    #[test]
+    fn tuple_struct_inventory_retains_child_calls_but_not_constructor_calls() {
+        let program =
+            parse("struct Pair(i32,i32);fn value()->i32{42}fn main(){let p=Pair(value(),1);}")
+                .unwrap();
+        let budget = ir::PlanBudget::default();
+        let identity = sr::OriginalBodyId::new(&budget).unwrap();
+        let inventory = SourceInventory::build(
+            &program,
+            program.functions.last().unwrap(),
+            identity,
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(inventory.calls.len(), 1);
+        let actual = inventory.calls[0].ordinary.as_ref().unwrap();
+        let expected = &program.functions[0].name;
+        assert_eq!(
+            name_scope::path_key(program.names.as_ref(), actual, Namespace::Value).unwrap(),
+            name_scope::path_key(program.names.as_ref(), expected, Namespace::Value).unwrap()
+        );
+    }
+
+    #[test]
     fn item_publication_denies_before_container_allocation_and_releases() {
         use super::super::expansion_budget::{BudgetResource, Storage};
         let (tokens, session) = lex("fn main(){}").unwrap().into_parts();
@@ -9112,7 +9223,7 @@ fn walk_depth_checked(
                         push(DepthNode::Expr(&arm.body))?;
                     }
                 }
-                Expr::Tuple(fields) => {
+                Expr::Tuple(fields) | Expr::TupleStruct { fields, .. } => {
                     for field in fields {
                         push(DepthNode::Expr(field))?;
                     }
@@ -9529,13 +9640,21 @@ impl PlanCtx {
     ) -> Result<Self, String> {
         let program = shared.as_ref();
         program.validate_name_handles()?;
-        // Source unit constructors retain nominal identity. Generic unit
+        // Source constructors retain nominal identity. Generic unit and tuple
         // declarations remain outside the initial source-shape admission.
         budget.charge_work(program.structs.len())?;
-        if program.structs.iter().any(|declaration| {
-            declaration.shape == StructShape::Unit && !declaration.type_params.is_empty()
-        }) {
-            return Err("unsupported: generic unit structs are unsupported".into());
+        for declaration in &program.structs {
+            if !declaration.type_params.is_empty() {
+                match declaration.shape {
+                    StructShape::Unit => {
+                        return Err("unsupported: generic unit structs are unsupported".into());
+                    }
+                    StructShape::Tuple => {
+                        return Err("unsupported: generic tuple structs are unsupported".into());
+                    }
+                    StructShape::Record => {}
+                }
+            }
         }
         // Signature construction sees all source declarations, not just demanded
         // instances. Unsupported unused const bodies cannot escape publication.

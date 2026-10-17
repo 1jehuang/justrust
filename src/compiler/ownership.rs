@@ -7239,6 +7239,47 @@ mod tests {
     }
 
     #[test]
+    fn tuple_struct_carrier_partial_move_preserves_only_unmoved_sibling() {
+        let (_module_names, modules) = fixture_modules();
+        let child = nominal(&modules, vec![]);
+        let ty = nominal(&modules, vec![child.clone(), Ty::Int(IntTy::I32)]);
+        let mut f = fixture();
+        f.locals.extend([local(ty), local(child)]);
+        f.params.push(LocalId(1));
+        let selected = Place {
+            local: LocalId(1),
+            projection: vec![Projection::Field(0)],
+        };
+        let sibling = Place {
+            local: LocalId(1),
+            projection: vec![Projection::Field(1)],
+        };
+        f.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(2))),
+            located(Statement::Assign {
+                destination: place(2),
+                value: Rvalue::Use(Operand::Move(selected.clone())),
+            }),
+            located(Statement::Inspect(sibling)),
+            located(Statement::Inspect(place(2))),
+        ]);
+        assert!(analyze(&f).passed());
+        for invalid in [selected, place(1)] {
+            let mut invalid_read = f.clone();
+            invalid_read.blocks[0]
+                .statements
+                .push(located(Statement::Inspect(invalid.clone())));
+            let result = analyze(&invalid_read);
+            assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+            assert_eq!(result.diagnostics[0].place, Some(invalid));
+            assert_eq!(
+                result.diagnostics[0].kind,
+                ErrorKind::ReadNotDefinitelyInitialized
+            );
+        }
+    }
+
+    #[test]
     fn zero_field_nominal_has_one_owned_path_and_whole_move_clears_it() {
         let (_module_names, modules) = fixture_modules();
         let ty = nominal(&modules, vec![]);

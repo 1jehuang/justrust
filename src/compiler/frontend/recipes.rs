@@ -382,7 +382,7 @@ pub(super) fn inventory(
                     expr(e, ds, b, d + 1)?;
                 }
             }
-            Expr::Call { args, .. } => {
+            Expr::Call { args, .. } | Expr::TupleStruct { fields: args, .. } => {
                 for e in args {
                     expr(e, ds, b, d + 1)?;
                 }

@@ -6738,6 +6738,56 @@ mod tests {
     }
 
     #[test]
+    fn tuple_struct_pattern_kernel_moves_only_selected_plain_fields() {
+        let (_module_names, modules) = fixture_modules();
+        let child = Ty::Struct(nominal(&modules, vec![]));
+        let ty = Ty::Struct(nominal(&modules, vec![child.clone(), Ty::Int(IntTy::I32)]));
+        let mut source = with_root(
+            ty.clone(),
+            vec![
+                expr(ty.clone(), ir::ExprKind::Local(LocalId(0))),
+                expr(
+                    Ty::Int(IntTy::I32),
+                    ir::ExprKind::Field {
+                        base: ExprId(0),
+                        index: 1,
+                    },
+                ),
+                expr(child.clone(), ir::ExprKind::Local(LocalId(1))),
+            ],
+            vec![
+                ir::Stmt::LetPattern {
+                    value: ExprId(0),
+                    ty,
+                    bindings: vec![ir::PatternBinding {
+                        local: LocalId(1),
+                        projection: vec![Projection::Field(0)],
+                    }],
+                },
+                ir::Stmt::Expr(ExprId(1)),
+                ir::Stmt::Expr(ExprId(2)),
+            ],
+        );
+        source.locals.push(ir::LocalDecl {
+            name: "selected".into(),
+            ty: child,
+            mutable: false,
+        });
+        let function = nominal_lowered(&source);
+        let reads = root_reads(&function);
+        assert_eq!(reads.len(), 2);
+        assert!(
+            matches!(reads[0], Operand::Move(place) if place.projection == [Projection::Field(0)])
+        );
+        assert!(
+            matches!(reads[1], Operand::Copy(place) if place.projection == [Projection::Field(1)])
+        );
+        assert!(super::super::ownership::analyze(&function).passed());
+        source.body.statements.push(ir::Stmt::Expr(ExprId(0)));
+        assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
+    }
+
+    #[test]
     fn scalar_field_reads_copy_only_the_projection_before_whole_struct_move() {
         let (_module_names, modules) = fixture_modules();
         let root = Ty::Struct(nominal(&modules, vec![Ty::Int(IntTy::I32)]));

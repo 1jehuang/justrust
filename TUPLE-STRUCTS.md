@@ -1,6 +1,7 @@
 # Native tuple structs: bounded implementation contract
 
-Status: **in progress, not accepted**. Full Rust compatibility remains open.
+Status: **accepted bounded milestone, October 17, 2026**. Full Rust compatibility
+remains open.
 The accepted nominal unit-struct milestone is `e6e9386fd`, documented in
 `UNIT-STRUCTS.md`. This milestone must preserve that contract and its tests.
 
@@ -62,4 +63,30 @@ close this milestone. Record and unit construction retain their separate rules.
 - Complete hosted all-target check, unchanged full regression, strict lint,
   formatting and diff checks. Retain exact failed and successful run receipts.
 
-No acceptance or performance claim is made until those gates execute.
+## Executed acceptance
+
+The stock-first corpus has 36 sources: 19 stock-valid and 17 stock-invalid.
+Native classification is 11 runtime, 17 ordinary invalid and eight explicit
+Unsupported boundaries, yielding 144 CHECK/BUILD cells at workers 1 and 8.
+Debug `20261017-104643024-1684824` and release bootstrap
+`20261017-104950079-1698972` each pass 14 public tests, including eleven public
+schema mutation/clone controls. Valid BUILD cells execute real native outputs
+with exact stdout and exit checks, without compiler fallback.
+
+An unchanged 120-cast test exposed a deterministic ordinary-stack abort. A
+temporary same-source public-interface diagnostic measured successful parsing
+followed by resolver overflow. Tiny cast dispatch now keeps constructor scratch
+outside recursive cast frames, preserving operand-before-type resolution and
+all caps. The diagnostic passed `20261017-104919040-1696804`, the original exact
+regression passed `20261017-104922214-1696929`, and all 894 library tests passed
+`20261017-104926107-1697375`. The temporary diagnostic file was removed, not
+substituted for the original regression.
+
+Final all-target check `20261017-105006278-1700363`, complete regression
+`20261017-105009592-1700931` (2,209 tests, 110 binaries, zero failed/ignored/filtered),
+strict lint `20261017-105023598-1701755`, formatting and diff checks pass.
+Independent read-only review found no concrete bounded schema, privacy, source
+identity, plain-field projection or frame-dispatch blocker. Sixteen exact
+redacted failed/successful summaries are retained in
+`data/runs/xps14/2026-10-17-tuple-structs.jsonl`. No full-Rust, public layout or
+compiler speedup claim follows.

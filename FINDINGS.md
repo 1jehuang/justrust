@@ -1,5 +1,46 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Nominal tuple structs with exact source shape and positional privacy
+
+Nonempty nongeneric tuple structs now use actual indexed source fields and a
+distinct constructor AST, not fabricated identifier names or callable bodies.
+Exact source declaration/schema authority gates construction, positional access
+and let-pattern projections. Constructors evaluate arguments once in source
+order, enforce all field restrictions, retain nominal non-Copy semantics and
+reuse the existing native aggregate transport. Type aliases remain nonconstructors
+while checked import aliases work. Tuple-struct match, empty/generic forms,
+first-class constructors and numeric brace syntax remain explicit boundaries.
+
+The stock-first corpus preserves 36 exact sources (19 valid, 17 invalid). Native
+classification gives 11 runtime, 17 ordinary invalid and eight Unsupported cases,
+144 workers-1/8 CHECK/BUILD cells. Debug `20261017-104643024-1684824` and release
+bootstrap `20261017-104950079-1698972` each pass 14 public tests, including eleven
+malformed-schema authority controls. Backend runtime tests preserve nested
+aggregate returns and exact first/second argument effects. These profiles are
+bootstrap profiles, not a new native optimization option.
+
+The unchanged 120-cast regression exposed a deterministic ordinary-stack abort
+in full-library `20261017-104547463-1680776` and exact
+`20261017-104616403-1683048`. Initial checker/inventory frame cuts were insufficient
+(`20261017-104735641-1689076`). Same-source public phase markers measured parsing
+success then resolver overflow in `20261017-104822527-1692376`. A tiny cast
+dispatch now preserves operand-before-target validation outside the enlarged
+constructor frame, without changing caps, stack settings or witnesses. The
+diagnostic passed `20261017-104919040-1696804`, original exact regression passed
+`20261017-104922214-1696929`, and complete 894-library tests passed
+`20261017-104926107-1697375`. The temporary diagnostic was removed.
+
+Final check `20261017-105006278-1700363`, complete regression
+`20261017-105009592-1700931` (2,209 tests, 110 binaries, zero failed/ignored/filtered),
+strict lint `20261017-105023598-1701755`, fmt and diff checks pass. Independent
+review found no concrete bounded source identity, privacy, plain-field pattern
+or frame-dispatch blocker. Sixteen exact redacted summaries are retained in
+`data/runs/xps14/2026-10-17-tuple-structs.jsonl`; TUPLE-STRUCTS.md records scope.
+
+Release engine compilation took 11.62s in its focused run; the full suite remains
+limited by a 12.40s wide-integer oracle. These diagnose agent wait and are not
+before/after speed claims. Full Rust and public platform layout remain open.
+
 ## 2026-10-17: Native nominal unit structs with an explicit private carrier
 
 Nongeneric unit structs now retain nominal identity through constructors,

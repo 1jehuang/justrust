@@ -5755,6 +5755,17 @@ mod tests {
     }
 
     #[test]
+    fn tuple_nominal_transport_preserves_nested_fields_and_argument_effects() {
+        let program = frontend::parse(
+            "struct Marker;struct Pair(i32,i32);struct Packet(Pair,Marker,i32);fn left()->i32{println!(\"first\");2}fn right()->i32{println!(\"second\");40}fn swap(p:Pair)->Pair{let Pair(a,b)=p;Pair(b,a)}fn pass(p:Packet)->Packet{p}fn main(){let packet=pass(Packet(swap(Pair(left(),right())),Marker,7));let Packet(pair,marker,n)=packet;let Pair(a,b)=pair;let Marker=marker;if a==40{if b==2{if n==7{println!(\"tuple\");}}}}",
+        )
+        .unwrap();
+        let output = run(&program);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, b"first\nsecond\ntuple\n");
+    }
+
+    #[test]
     fn nominal_aggregate_abi_handles_one_field_nested_unit_and_recursive_returns() {
         let p = frontend::parse(
             r#"

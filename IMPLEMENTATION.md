@@ -23,6 +23,12 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       profiles, five schema authority controls and the complete 2,179-test /
       108-binary hosted gate. Scoped bare constructor patterns and full zero-sized
       public layout/FFI remain separate open work.
+- [x] Nongeneric nonempty tuple structs with certified constructors, positional
+      privacy, nominal let patterns and existing native aggregate transport.
+      TUPLE-STRUCTS.md records stock36/native144 debug/release bootstrap cells,
+      eleven public schema controls and complete 2,209-test / 110-binary gates.
+      Tuple-struct match, generic/empty forms, constructor values and numeric
+      brace syntax remain explicit unsupported boundaries.
 - [x] Irrefutable tuple/struct let patterns with selective moves and wildcards.
 - [x] Fieldless nominal enums and scalar/enum match with exhaustive coverage.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
@@ -176,6 +182,8 @@ missing-file changes invalidate only justified consumers without stale lookup.
       with platform layout or profile-correct arithmetic behavior.
 - [ ] Complete empty/unit/tuple structs, construction/update forms, unions,
       discriminants, recursive types, alignment/layout and repr attributes.
+      Bounded nongeneric unit and nonempty tuple forms are delivered under
+      UNIT-STRUCTS.md and TUPLE-STRUCTS.md, not full aggregate compatibility.
 - [ ] Generalize slices/DST metadata, array/slice coercions and indexing beyond
       delivered shared `&[u8]`; retain bounds/evaluation order and size limits.
 - [ ] Complete nested/or/range/ref/@/slice patterns, guards, match ergonomics,

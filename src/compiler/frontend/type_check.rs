@@ -12,7 +12,9 @@ pub(super) fn application_namespace(value: &Expr) -> Result<Namespace, String> {
     match value {
         Expr::UnexpandedMacro(_) => Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
         Expr::Call { .. } => Ok(Namespace::Value),
-        Expr::Struct { .. } | Expr::EnumVariant { .. } => Ok(Namespace::Type),
+        Expr::Struct { .. } | Expr::TupleStruct { .. } | Expr::EnumVariant { .. } => {
+            Ok(Namespace::Type)
+        }
         _ => Err("unsupported generic application expression".into()),
     }
 }
@@ -783,7 +785,9 @@ impl Checker<'_> {
                     self.infer_node(InferKind::Unknown(false))?
                 }
             }
-            Expr::Struct { name, .. } | Expr::EnumVariant { name, .. } => {
+            Expr::Struct { name, .. }
+            | Expr::TupleStruct { name, .. }
+            | Expr::EnumVariant { name, .. } => {
                 let owner = if matches!(expr, Expr::EnumVariant { .. }) {
                     name.semantic_parent(&*plan.program.names)
                         .map_err(native_adapter::name_diagnostic)?
@@ -827,7 +831,7 @@ impl Checker<'_> {
                         )?
                         .result
                     }
-                    Expr::Struct { name, .. } => {
+                    Expr::Struct { name, .. } | Expr::TupleStruct { name, .. } => {
                         let decl = *plan
                             .registry
                             .nominals
@@ -1697,7 +1701,72 @@ impl<'a> Checker<'a> {
                 Err("unsupported: empty record structs".into())
             }
             StructShape::Record => Ok(StructShape::Record),
+            StructShape::Tuple => {
+                if !source.type_params.is_empty() || !ty.def().type_args.is_empty() {
+                    return Err("unsupported: generic tuple structs".into());
+                }
+                if source.fields.is_empty() {
+                    return Err("unsupported: zero-field tuple structs".into());
+                }
+                if source.fields.len() != ty.def().fields.len() {
+                    return Err("contract: tuple struct field schema length mismatch".into());
+                }
+                for (index, field) in source.fields.iter().enumerate() {
+                    self.infer_work(0)?;
+                    if !matches!(field.name, FieldName::Tuple(actual) if actual == index) {
+                        return Err("contract: noncontiguous tuple struct field schema".into());
+                    }
+                }
+                Ok(StructShape::Tuple)
+            }
         }
+    }
+    fn tuple_pattern_type(
+        &self,
+        pattern: &Pattern,
+        expected: &ir::Ty,
+    ) -> Result<Option<ir::StructTy>, String> {
+        let Pattern::Variant {
+            name,
+            shape,
+            fields,
+            rest,
+        } = pattern
+        else {
+            return Ok(None);
+        };
+        let plan = self.signatures.plan()?;
+        let key = self.path_key(name, Namespace::Type)?;
+        let Some(declaration) = plan.registry.nominals.get(&key).copied() else {
+            return Ok(None);
+        };
+        let schema = self.nominal_source(declaration)?;
+        let NominalSchema::Struct(source) = schema.as_ref() else {
+            return Ok(None);
+        };
+        if source.shape != StructShape::Tuple {
+            return Err("wrong struct constructor pattern shape".into());
+        }
+        let actual = self.nominal(name, Some(expected))?;
+        let ir::Ty::Struct(ty) = &actual else {
+            return Err("contract: tuple struct resolved to non-struct".into());
+        };
+        self.checked_struct_shape(ty)?;
+        self.accessible(&actual)?;
+        if !coerces(expected, &actual) {
+            return Err("tuple struct pattern nominal mismatch".into());
+        }
+        if *shape != ir::VariantShape::Tuple || *rest || fields.len() != ty.def().fields.len() {
+            return Err("unsupported: tuple struct pattern shape, rest or arity".into());
+        }
+        for (index, (selector, _)) in fields.iter().enumerate() {
+            self.infer_work(0)?;
+            if !matches!(selector, FieldSelector::Tuple(actual) if *actual == index) {
+                return Err("contract: tuple struct pattern selectors are not contiguous".into());
+            }
+            self.field_type(&actual, selector)?;
+        }
+        Ok(Some(ty.clone()))
     }
     fn unit_pattern(&self, pattern: &Pattern, ty: &ir::Ty) -> Result<ir::Ty, String> {
         let Pattern::Struct { fields, rest, .. } = pattern else {
@@ -2591,7 +2660,7 @@ impl<'a> Checker<'a> {
                     None
                 }
             }
-            Expr::Struct { .. } | Expr::EnumVariant { .. } => {
+            Expr::Struct { .. } | Expr::TupleStruct { .. } | Expr::EnumVariant { .. } => {
                 let evidence = self.inference_evidence(e, 0)?;
                 Inference::empty(self)?.resolve(&evidence, false, 0)?
             }
@@ -2748,6 +2817,9 @@ impl<'a> Checker<'a> {
                     )
                 }),
             (ir::Ty::Struct(ty), FieldSelector::Named(name)) => {
+                if self.checked_struct_shape(ty)? != StructShape::Record {
+                    return Err("named field projection requires a record struct".into());
+                }
                 let key = self
                     .names()?
                     .key(*name, LookupClass::Member)
@@ -2790,6 +2862,20 @@ impl<'a> Checker<'a> {
                 }
                 Ok((index, field.ty.clone()))
             }
+            (ir::Ty::Struct(ty), FieldSelector::Tuple(index)) => {
+                if self.checked_struct_shape(ty)? != StructShape::Tuple {
+                    return Err("numeric field projection requires a tuple struct".into());
+                }
+                let field = ty
+                    .def()
+                    .fields
+                    .get(*index)
+                    .ok_or("tuple struct field out of bounds")?;
+                if !self.visible(&field.visibility)? {
+                    return Err("private tuple struct field".into());
+                }
+                Ok((*index, field.ty.clone()))
+            }
             _ => Err(format!("invalid field projection {field:?} on {ty:?}")),
         }?;
         self.accessible(&projected)?;
@@ -2806,6 +2892,7 @@ impl<'a> Checker<'a> {
         }
         match pattern {
             Pattern::Path(name) | Pattern::Variant { name,.. } => {
+                if let Some(tuple) = self.tuple_pattern_type(pattern, ty)? { return Ok(ir::Ty::Struct(tuple)); }
                 let expected = if let ir::Ty::Enum(enumeration) = ty {
                     let (owner, _) = self.split_variant(name)?;
                     let actual = self.nominal(&owner, Some(ty))?;
@@ -2832,7 +2919,9 @@ impl<'a> Checker<'a> {
             Pattern::Struct { name, fields, rest } => {
                 let expected = self.nominal(name,Some(ty))?;
                 let ir::Ty::Struct(structure) = &expected else { return Err("expected struct pattern".into()); };
-                if self.checked_struct_shape(structure)? == StructShape::Unit && (!fields.is_empty() || *rest) {
+                let shape = self.checked_struct_shape(structure)?;
+                if shape == StructShape::Tuple { return Err("unsupported: braced tuple struct patterns".into()); }
+                if shape == StructShape::Unit && (!fields.is_empty() || *rest) {
                     return Err("unsupported: unit struct pattern fields or rest".into());
                 }
                 self.accessible(&expected)?;
@@ -2866,6 +2955,24 @@ impl<'a> Checker<'a> {
             }
             Pattern::Wildcard => {}
             Pattern::Path(_) | Pattern::Variant { .. } => {
+                if let Some(tuple) = self.tuple_pattern_type(pattern, ty)? {
+                    let Pattern::Variant { fields, .. } = pattern else {
+                        return Err("contract: tuple pattern normalization".into());
+                    };
+                    for (index, (_, pattern)) in fields.iter().enumerate() {
+                        path.push(ir::Projection::Field(index));
+                        self.pattern_locals(
+                            pattern,
+                            &tuple.def().fields[index].ty,
+                            path,
+                            names,
+                            pending,
+                            work,
+                        )?;
+                        path.pop();
+                    }
+                    return Ok(());
+                }
                 let (enumeration, variant, fields) = self.variant_pattern(pattern, ty)?;
                 if enumeration.def().variants.len() != 1 {
                     return Err(
@@ -3301,6 +3408,9 @@ impl<'a> Checker<'a> {
                     let value = self.expr_expected(value, annotation.as_ref())?;
                     if self.deref_source(value)
                         && matches!(pattern, Pattern::Path(_) | Pattern::Variant { .. })
+                        && self
+                            .tuple_pattern_type(pattern, &self.flow(value).ty)?
+                            .is_none()
                     {
                         return Err(
                             "enum downcasts after a dereference are unsupported in B1".into()
@@ -4384,6 +4494,53 @@ impl<'a> Checker<'a> {
         });
         Ok(id)
     }
+    #[inline(never)]
+    fn tuple_struct_value(
+        &mut self,
+        name: &AstPath,
+        fields: &[Expr],
+        expected: Option<&ir::Ty>,
+    ) -> Result<(ir::ExprKind, Flow), String> {
+        self.infer_storage(fields.len())?;
+        let evidence_fields = fields
+            .iter()
+            .enumerate()
+            .map(|(index, value)| (InferField::Tuple(index), value))
+            .collect::<Vec<_>>();
+        let ir::Ty::Struct(ty) = self.constructor_type(name, None, &evidence_fields, expected)?
+        else {
+            return Err("expected tuple struct constructor".into());
+        };
+        if self.checked_struct_shape(&ty)? != StructShape::Tuple {
+            return Err("tuple constructor requires a tuple struct".into());
+        }
+        let actual = ir::Ty::Struct(ty.clone());
+        self.accessible(&actual)?;
+        if !self.visible(&ty.def().visibility)? {
+            return Err("private tuple struct constructor".into());
+        }
+        if fields.len() != ty.def().fields.len() {
+            return Err("tuple struct constructor arity mismatch".into());
+        }
+        let mut values = Vec::with_capacity(fields.len());
+        let mut completes = true;
+        for (index, field) in fields.iter().enumerate() {
+            let (_, field_ty) = self.field_type(&actual, &FieldSelector::Tuple(index))?;
+            let value =
+                self.expr_expected_when(field, self.reachable && completes, Some(&field_ty))?;
+            let flow = self.flow(value);
+            self.require(&flow, &field_ty)?;
+            completes &= flow.completes;
+            values.push((index, value));
+        }
+        Ok((
+            ir::ExprKind::Struct { ty, fields: values },
+            Flow {
+                ty: actual,
+                completes,
+            },
+        ))
+    }
     pub(super) fn expr_without_cast(
         &mut self,
         e: &Expr,
@@ -4711,6 +4868,12 @@ impl<'a> Checker<'a> {
                     for arm in arms {
                         let hint = match &arm.pattern {
                             Pattern::Path(name) | Pattern::Variant { name, .. } => {
+                                if self
+                                    .tuple_pattern_type(&arm.pattern, &ir::Ty::Never)?
+                                    .is_some()
+                                {
+                                    return Err("unsupported: tuple struct match patterns".into());
+                                }
                                 Some(ir::Ty::Enum(self.enum_variant(name)?.0))
                             }
                             Pattern::Bool(_) => Some(ir::Ty::Bool),
@@ -4780,6 +4943,9 @@ impl<'a> Checker<'a> {
                             (ir::MatchPattern::Unit, Some(0))
                         }
                         Pattern::Path(_) | Pattern::Variant { .. } => {
+                            if self.tuple_pattern_type(arm_pattern, &domain)?.is_some() {
+                                return Err("unsupported: tuple struct match patterns".into());
+                            }
                             let (ty, variant, fields) =
                                 self.variant_pattern(arm_pattern, &domain)?;
                             let mut names = std::collections::HashSet::new();
@@ -4920,6 +5086,9 @@ impl<'a> Checker<'a> {
             | Expr::AssociatedCall { .. } => {
                 return Err("application dispatcher invariant".into());
             }
+            Expr::TupleStruct { name, fields } => {
+                self.tuple_struct_value(name, fields, expected)?
+            }
             Expr::Struct { name, fields } => {
                 self.infer_storage(fields.len())?;
                 let evidence_fields = fields
@@ -4931,7 +5100,9 @@ impl<'a> Checker<'a> {
                 else {
                     return Err("expected struct constructor".into());
                 };
-                self.checked_struct_shape(&ty)?;
+                if self.checked_struct_shape(&ty)? == StructShape::Tuple {
+                    return Err("unsupported: braced tuple struct construction".into());
+                }
                 if !self.visible(&ty.def().visibility)? {
                     return Err(format!("private struct {name:?}"));
                 }
@@ -5831,6 +6002,27 @@ pub fn check(program: &Program) -> Result<(), String> {
 #[cfg(test)]
 mod checked_identity_tests {
     use super::*;
+
+    #[test]
+    fn tuple_struct_let_patterns_and_numeric_fields_remain_nominal() {
+        let program = parse("struct Pair(i32,bool);fn value()->i32{let p=Pair(7,true);let n=p.0;let Pair(x,_)=p;x+n}fn main(){}").unwrap();
+        check(&program).unwrap();
+        let program = parse("struct Pair(i32,bool);struct Other(i32,bool);fn value(){let Other(x,_)=Pair(7,true);}fn main(){}").unwrap();
+        assert!(check(&program).is_err());
+    }
+
+    #[test]
+    fn tuple_struct_match_destructuring_stays_unsupported() {
+        let program = parse(
+            "struct Pair(i32,bool);fn value()->i32{match Pair(7,true){Pair(x,_)=>x}}fn main(){}",
+        )
+        .unwrap();
+        assert!(
+            check(&program)
+                .unwrap_err()
+                .contains("tuple struct match patterns")
+        );
+    }
 
     #[test]
     fn unit_struct_patterns_preserve_nominal_domains() {

@@ -406,9 +406,19 @@ impl<'a> Validator<'a> {
                 })?;
             }
             Visit::StructShape(declaration) => {
+                self.work(declaration.fields.len())?;
                 let valid = match declaration.shape {
                     StructShape::Unit => declaration.fields.is_empty(),
-                    StructShape::Record => !declaration.fields.is_empty(),
+                    StructShape::Record => {
+                        !declaration.fields.is_empty()
+                            && declaration.fields.iter().all(|field| matches!(field.name, FieldName::Named(_)))
+                    }
+                    StructShape::Tuple => {
+                        !declaration.fields.is_empty()
+                            && declaration.fields.iter().enumerate().all(|(index, field)| {
+                                matches!(field.name, FieldName::Tuple(actual) if actual == index)
+                            })
+                    }
                 };
                 if !valid {
                     return Err(transport(TokenError::InvalidInput(
@@ -676,6 +686,10 @@ impl<'a> Validator<'a> {
                         self.push(Visit::Pattern(&arm.pattern))?;
                         self.push(Visit::Expr(&arm.body))?;
                     }
+                }
+                Expr::TupleStruct { name, fields } => {
+                    self.push(Visit::Path(name))?;
+                    self.many(fields, Visit::Expr)?;
                 }
                 Expr::Struct { name, fields } => {
                     self.push(Visit::Path(name))?;
@@ -1152,6 +1166,87 @@ mod tests {
                 .starts_with("contract:")
         );
     }
+    #[test]
+    fn tuple_struct_shape_requires_contiguous_real_tuple_fields() {
+        let mut input = builder();
+        let module = input.module_root().unwrap();
+        let name = input.path("crate::Pair").unwrap();
+        input.structs.push(StructDecl {
+            module,
+            shape: StructShape::Tuple,
+            type_params: Vec::new(),
+            name,
+            visibility: ir::Visibility::Public,
+            fields: (0..2)
+                .map(|index| FieldDecl {
+                    name: FieldName::Tuple(index),
+                    ty: Type::Unit,
+                    visibility: ir::Visibility::Public,
+                })
+                .collect(),
+        });
+        let valid = input.finish().unwrap();
+        validate_program_names(&valid).unwrap();
+        for index in [0, 2, usize::MAX] {
+            let mut malformed = valid.clone();
+            malformed.structs[0].fields[1].name = FieldName::Tuple(index);
+            assert!(
+                validate_program_names(&malformed)
+                    .unwrap_err()
+                    .starts_with("contract:")
+            );
+        }
+        let mut malformed = valid.clone();
+        malformed.structs[0].shape = StructShape::Record;
+        assert!(
+            validate_program_names(&malformed)
+                .unwrap_err()
+                .starts_with("contract:")
+        );
+        let mut malformed = valid.clone();
+        malformed.structs[0].fields.clear();
+        assert!(
+            validate_program_names(&malformed)
+                .unwrap_err()
+                .starts_with("contract:")
+        );
+    }
+
+    #[test]
+    fn unused_tuple_constructor_checks_path_and_every_child() {
+        let mut input = builder();
+        let declaration = function(&mut input);
+        let path = input.path("crate::Pair").unwrap();
+        input.functions.push(declaration);
+        let mut valid = input.finish().unwrap();
+        valid.functions[0]
+            .body
+            .statements
+            .push(Stmt::Expr(Expr::TupleStruct {
+                name: path,
+                fields: vec![Expr::Bool(true), Expr::Bool(false)],
+            }));
+        validate_program_names(&valid).unwrap();
+        let mut foreign = builder();
+        let foreign_path = foreign.path("crate::Foreign").unwrap();
+        let _foreign = foreign.finish().unwrap();
+        let mut malformed = valid.clone();
+        let Stmt::Expr(Expr::TupleStruct { fields, .. }) =
+            malformed.functions[0].body.statements.last_mut().unwrap()
+        else {
+            unreachable!()
+        };
+        fields.push(Expr::Var(foreign_path.clone()));
+        assert!(validate_program_names(&malformed).is_err());
+        let Stmt::Expr(Expr::TupleStruct { name, .. }) =
+            valid.functions[0].body.statements.last_mut().unwrap()
+        else {
+            unreachable!()
+        };
+        *name = foreign_path;
+        assert!(validate_program_names(&valid).is_err());
+    }
+
     #[test]
     fn canonical_prefix_cannot_be_paired_with_another_source_module() {
         let mut input = builder();

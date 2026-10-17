@@ -456,6 +456,25 @@ impl PlanState {
                                 );
                             }
                         }
+                        StructShape::Tuple => {
+                            if d.fields.is_empty() {
+                                return Err(
+                                    "unsupported: zero-field tuple structs are unsupported".into(),
+                                );
+                            }
+                            if !d.type_params.is_empty() || !args.is_empty() {
+                                return Err(
+                                    "unsupported: generic tuple structs are unsupported".into()
+                                );
+                            }
+                            for (index, field) in d.fields.iter().enumerate() {
+                                budget.charge_work(1)?;
+                                if !matches!(field.name, FieldName::Tuple(actual) if actual == index)
+                                {
+                                    return Err("tuple struct fields must have contiguous numeric identities".into());
+                                }
+                            }
+                        }
                         StructShape::Record => {}
                     }
                     let fields = make_fields(self, &d.fields, d.module)?;
