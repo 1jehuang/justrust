@@ -9828,3 +9828,28 @@ scaling under unchanged caps, then rerun identical128/256 sources.
 Full method, raw receipts and reproduction commands:
 `docs/intermediate-compiler-benchmarks-20261017.md`. Compiler source and frozen
 fixtures were not changed or repaired for this experiment.
+
+### Hosted release rerun and detailed trace, 2026-10-17
+
+The requested metered m8a.24xlarge host was verified as 96 physical EPYC 9R45
+cores. Both stock rustc 1.99.0 and the native release compiler ran there. The
+earlier local native compiler was a debug build, an important qualification.
+On the same flat 64-function workload, hosted release native BUILD at one
+worker took a 98.08 ms median versus stock 45.19 ms; native 96 workers took
+176.07 ms. Tiny 4/16-function workloads favor native release, but 128/256 still
+fail resource checks at all worker counts. All 33 examples and 64 generated
+differential cases match stock. Hosted debug was measured separately.
+
+Built-in traces show the 64-function main instance's analysis occupying
+68.23 ms of a 94.32 ms engine run. All analysis nodes total 75.61 ms; parsing
+is 0.37 ms. The 128-function trace fails in analysis. No events were dropped.
+Graph execution sums at 96 workers are concurrent intervals, not CPU samples.
+The trace reports resource_sampling_available=false, so the exact exhausted
+budget/allocator stack remains a needed diagnostic, not a measured conclusion.
+Verbose CFG/proof dumping emits about 150 MB and adds about 8.6 seconds; trace
+runs are kept separate from benchmark timing.
+
+See `docs/hosted-intermediate-compiler-benchmarks-20261017.md` and hashed raw
+receipts/traces under `experiments/results/hosted-intermediate-20261017/`.
+Charged runs 0150/0151/0152/0154 under the compiler-intermediate-hosted-20261017
+prefix preserve a harness error, daemon interruption, and successful followups.

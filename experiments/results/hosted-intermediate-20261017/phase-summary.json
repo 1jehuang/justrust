@@ -1,0 +1,618 @@
+[
+  {
+    "trace": "trace-128-1.txt",
+    "header": {
+      "nodes": 566,
+      "tasks": 566,
+      "polls": 848,
+      "failures": 2,
+      "events_dropped": 0,
+      "queue_ns": 5551763447,
+      "execution_ns": 120891318,
+      "wait_ns": 1423509941,
+      "elapsed_ns": 121688473,
+      "workers": 1
+    },
+    "summed_intervals_ns": 121188321,
+    "phase_intervals_ns": {
+      "analyze": 66124243,
+      "template-body": 25897270,
+      "lower": 17134656,
+      "mono-plan": 3880880,
+      "body": 2798675,
+      "signatures": 1984891,
+      "parse": 1288156,
+      "effects-ready": 571623,
+      "resolve": 499413,
+      "universal-analyze": 449823,
+      "source": 213091,
+      "universal-lower": 176750,
+      "check-root": 168850
+    },
+    "top_nodes": [
+      {
+        "node": 306,
+        "kind": 109,
+        "params": "[129]",
+        "label": "analyze",
+        "interval_ns": 48271913
+      },
+      {
+        "node": 137,
+        "kind": 110,
+        "params": "[129]",
+        "label": "template-body",
+        "interval_ns": 8291172
+      },
+      {
+        "node": 2,
+        "kind": 113,
+        "params": "[]",
+        "label": "mono-plan",
+        "interval_ns": 3880880
+      },
+      {
+        "node": 436,
+        "kind": 108,
+        "params": "[129]",
+        "label": "lower",
+        "interval_ns": 3671869
+      },
+      {
+        "node": 4,
+        "kind": 101,
+        "params": "[]",
+        "label": "signatures",
+        "interval_ns": 1984891
+      },
+      {
+        "node": 6,
+        "kind": 100,
+        "params": "[]",
+        "label": "parse",
+        "interval_ns": 1288156
+      },
+      {
+        "node": 3,
+        "kind": 115,
+        "params": "[]",
+        "label": "effects-ready",
+        "interval_ns": 571623
+      },
+      {
+        "node": 5,
+        "kind": 106,
+        "params": "[]",
+        "label": "resolve",
+        "interval_ns": 499413
+      }
+    ],
+    "events": {
+      "discovered": 566,
+      "queued": 848,
+      "demand": 1,
+      "running": 848,
+      "evaluate": 566,
+      "suspended": 282,
+      "publish": 564,
+      "completed": 564,
+      "task-done": 566,
+      "intern-hit": 572,
+      "failed": 2,
+      "producer-finished-failed": 2
+    },
+    "resource_sampling_available": false
+  },
+  {
+    "trace": "trace-128-96.txt",
+    "header": {
+      "nodes": 566,
+      "tasks": 566,
+      "polls": 890,
+      "failures": 2,
+      "events_dropped": 0,
+      "queue_ns": 5798669480,
+      "execution_ns": 19314364038,
+      "wait_ns": 11083441231,
+      "elapsed_ns": 291339627,
+      "workers": 96
+    },
+    "summed_intervals_ns": 19325114254,
+    "phase_intervals_ns": {
+      "analyze": 7449409579,
+      "lower": 6588466189,
+      "template-body": 3871752888,
+      "body": 1246493023,
+      "universal-lower": 79788060,
+      "universal-analyze": 73371916,
+      "effects-ready": 4230530,
+      "check-root": 4097152,
+      "mono-plan": 4014140,
+      "parse": 1525157,
+      "signatures": 1259516,
+      "resolve": 535113,
+      "source": 170991
+    },
+    "top_nodes": [
+      {
+        "node": 549,
+        "kind": 108,
+        "params": "[129]",
+        "label": "lower",
+        "interval_ns": 114098074
+      },
+      {
+        "node": 179,
+        "kind": 109,
+        "params": "[2]",
+        "label": "analyze",
+        "interval_ns": 86771168
+      },
+      {
+        "node": 222,
+        "kind": 109,
+        "params": "[17]",
+        "label": "analyze",
+        "interval_ns": 86465795
+      },
+      {
+        "node": 203,
+        "kind": 109,
+        "params": "[12]",
+        "label": "analyze",
+        "interval_ns": 85819203
+      },
+      {
+        "node": 191,
+        "kind": 109,
+        "params": "[8]",
+        "label": "analyze",
+        "interval_ns": 83233230
+      },
+      {
+        "node": 178,
+        "kind": 109,
+        "params": "[1]",
+        "label": "analyze",
+        "interval_ns": 82258934
+      },
+      {
+        "node": 257,
+        "kind": 109,
+        "params": "[29]",
+        "label": "analyze",
+        "interval_ns": 81193938
+      },
+      {
+        "node": 204,
+        "kind": 109,
+        "params": "[13]",
+        "label": "analyze",
+        "interval_ns": 81094689
+      }
+    ],
+    "events": {
+      "discovered": 566,
+      "queued": 890,
+      "demand": 1,
+      "running": 890,
+      "evaluate": 566,
+      "suspended": 324,
+      "publish": 564,
+      "completed": 564,
+      "task-done": 566,
+      "intern-hit": 572,
+      "failed": 2,
+      "producer-finished-failed": 2
+    },
+    "resource_sampling_available": false
+  },
+  {
+    "trace": "trace-4-1.txt",
+    "header": {
+      "nodes": 70,
+      "tasks": 70,
+      "polls": 104,
+      "failures": 0,
+      "events_dropped": 0,
+      "queue_ns": 23760515,
+      "execution_ns": 3235606,
+      "wait_ns": 9014067,
+      "elapsed_ns": 3452357,
+      "workers": 1
+    },
+    "summed_intervals_ns": 3271057,
+    "phase_intervals_ns": {
+      "analyze": 1092285,
+      "universal-analyze": 480253,
+      "template-body": 443922,
+      "lower": 417983,
+      "signatures": 252563,
+      "universal-lower": 193051,
+      "mono-plan": 82930,
+      "parse": 80620,
+      "effects-ready": 63710,
+      "source": 43890,
+      "body": 43170,
+      "check-root": 38760,
+      "resolve": 37920
+    },
+    "top_nodes": [
+      {
+        "node": 58,
+        "kind": 109,
+        "params": "[5]",
+        "label": "analyze",
+        "interval_ns": 627653
+      },
+      {
+        "node": 4,
+        "kind": 101,
+        "params": "[]",
+        "label": "signatures",
+        "interval_ns": 252563
+      },
+      {
+        "node": 13,
+        "kind": 110,
+        "params": "[5]",
+        "label": "template-body",
+        "interval_ns": 143211
+      },
+      {
+        "node": 64,
+        "kind": 108,
+        "params": "[5]",
+        "label": "lower",
+        "interval_ns": 137021
+      },
+      {
+        "node": 53,
+        "kind": 109,
+        "params": "[0]",
+        "label": "analyze",
+        "interval_ns": 107470
+      },
+      {
+        "node": 55,
+        "kind": 109,
+        "params": "[2]",
+        "label": "analyze",
+        "interval_ns": 106170
+      },
+      {
+        "node": 15,
+        "kind": 112,
+        "params": "[6]",
+        "label": "universal-analyze",
+        "interval_ns": 95761
+      },
+      {
+        "node": 54,
+        "kind": 109,
+        "params": "[1]",
+        "label": "analyze",
+        "interval_ns": 95101
+      }
+    ],
+    "events": {
+      "discovered": 70,
+      "queued": 104,
+      "demand": 1,
+      "running": 104,
+      "evaluate": 70,
+      "suspended": 34,
+      "publish": 70,
+      "completed": 70,
+      "task-done": 70,
+      "intern-hit": 76
+    },
+    "resource_sampling_available": false
+  },
+  {
+    "trace": "trace-4-96.txt",
+    "header": {
+      "nodes": 70,
+      "tasks": 70,
+      "polls": 119,
+      "failures": 0,
+      "events_dropped": 0,
+      "queue_ns": 1281076,
+      "execution_ns": 68173375,
+      "wait_ns": 44761465,
+      "elapsed_ns": 11129676,
+      "workers": 96
+    },
+    "summed_intervals_ns": 69084239,
+    "phase_intervals_ns": {
+      "universal-analyze": 17360557,
+      "template-body": 16230614,
+      "universal-lower": 13928520,
+      "analyze": 9750478,
+      "lower": 9380578,
+      "body": 934825,
+      "effects-ready": 736933,
+      "signatures": 273072,
+      "check-root": 177700,
+      "mono-plan": 106111,
+      "parse": 87731,
+      "resolve": 75320,
+      "source": 41800
+    },
+    "top_nodes": [
+      {
+        "node": 13,
+        "kind": 110,
+        "params": "[5]",
+        "label": "template-body",
+        "interval_ns": 3230547
+      },
+      {
+        "node": 65,
+        "kind": 108,
+        "params": "[5]",
+        "label": "lower",
+        "interval_ns": 2993145
+      },
+      {
+        "node": 10,
+        "kind": 110,
+        "params": "[2]",
+        "label": "template-body",
+        "interval_ns": 2267242
+      },
+      {
+        "node": 9,
+        "kind": 110,
+        "params": "[1]",
+        "label": "template-body",
+        "interval_ns": 2249581
+      },
+      {
+        "node": 53,
+        "kind": 109,
+        "params": "[0]",
+        "label": "analyze",
+        "interval_ns": 2014941
+      },
+      {
+        "node": 56,
+        "kind": 109,
+        "params": "[3]",
+        "label": "analyze",
+        "interval_ns": 1884769
+      },
+      {
+        "node": 11,
+        "kind": 110,
+        "params": "[3]",
+        "label": "template-body",
+        "interval_ns": 1876100
+      },
+      {
+        "node": 54,
+        "kind": 109,
+        "params": "[1]",
+        "label": "analyze",
+        "interval_ns": 1850839
+      }
+    ],
+    "events": {
+      "discovered": 70,
+      "queued": 119,
+      "demand": 1,
+      "running": 119,
+      "evaluate": 70,
+      "suspended": 49,
+      "publish": 70,
+      "completed": 70,
+      "task-done": 70,
+      "intern-hit": 76
+    },
+    "resource_sampling_available": false
+  },
+  {
+    "trace": "trace-64-1.txt",
+    "header": {
+      "nodes": 310,
+      "tasks": 310,
+      "polls": 464,
+      "failures": 0,
+      "events_dropped": 0,
+      "queue_ns": 1156435987,
+      "execution_ns": 93844528,
+      "wait_ns": 301134629,
+      "elapsed_ns": 94320400,
+      "workers": 1
+    },
+    "summed_intervals_ns": 93972238,
+    "phase_intervals_ns": {
+      "analyze": 75611044,
+      "template-body": 7227367,
+      "lower": 6841145,
+      "mono-plan": 1351917,
+      "body": 916585,
+      "signatures": 579103,
+      "universal-analyze": 439513,
+      "parse": 366242,
+      "effects-ready": 174321,
+      "universal-lower": 173370,
+      "resolve": 134461,
+      "check-root": 97340,
+      "source": 59830
+    },
+    "top_nodes": [
+      {
+        "node": 178,
+        "kind": 109,
+        "params": "[65]",
+        "label": "analyze",
+        "interval_ns": 68227387
+      },
+      {
+        "node": 73,
+        "kind": 110,
+        "params": "[65]",
+        "label": "template-body",
+        "interval_ns": 2896935
+      },
+      {
+        "node": 244,
+        "kind": 108,
+        "params": "[65]",
+        "label": "lower",
+        "interval_ns": 1703449
+      },
+      {
+        "node": 2,
+        "kind": 113,
+        "params": "[]",
+        "label": "mono-plan",
+        "interval_ns": 1351917
+      },
+      {
+        "node": 4,
+        "kind": 101,
+        "params": "[]",
+        "label": "signatures",
+        "interval_ns": 579103
+      },
+      {
+        "node": 6,
+        "kind": 100,
+        "params": "[]",
+        "label": "parse",
+        "interval_ns": 366242
+      },
+      {
+        "node": 3,
+        "kind": 115,
+        "params": "[]",
+        "label": "effects-ready",
+        "interval_ns": 174321
+      },
+      {
+        "node": 159,
+        "kind": 109,
+        "params": "[46]",
+        "label": "analyze",
+        "interval_ns": 135661
+      }
+    ],
+    "events": {
+      "discovered": 310,
+      "queued": 464,
+      "demand": 1,
+      "running": 464,
+      "evaluate": 310,
+      "suspended": 154,
+      "publish": 310,
+      "completed": 310,
+      "task-done": 310,
+      "intern-hit": 316
+    },
+    "resource_sampling_available": false
+  },
+  {
+    "trace": "trace-64-96.txt",
+    "header": {
+      "nodes": 310,
+      "tasks": 310,
+      "polls": 493,
+      "failures": 0,
+      "events_dropped": 0,
+      "queue_ns": 5395838,
+      "execution_ns": 5115971101,
+      "wait_ns": 2623176405,
+      "elapsed_ns": 162952030,
+      "workers": 96
+    },
+    "summed_intervals_ns": 5124190157,
+    "phase_intervals_ns": {
+      "analyze": 2086048581,
+      "lower": 1812930587,
+      "template-body": 828552475,
+      "body": 277454926,
+      "universal-analyze": 66759317,
+      "universal-lower": 44217241,
+      "effects-ready": 2361482,
+      "check-root": 2150170,
+      "mono-plan": 1433347,
+      "signatures": 978385,
+      "parse": 882125,
+      "resolve": 343221,
+      "source": 78300
+    },
+    "top_nodes": [
+      {
+        "node": 298,
+        "kind": 109,
+        "params": "[65]",
+        "label": "analyze",
+        "interval_ns": 69131337
+      },
+      {
+        "node": 308,
+        "kind": 108,
+        "params": "[65]",
+        "label": "lower",
+        "interval_ns": 59796431
+      },
+      {
+        "node": 114,
+        "kind": 109,
+        "params": "[1]",
+        "label": "analyze",
+        "interval_ns": 43532820
+      },
+      {
+        "node": 113,
+        "kind": 109,
+        "params": "[0]",
+        "label": "analyze",
+        "interval_ns": 42992687
+      },
+      {
+        "node": 115,
+        "kind": 109,
+        "params": "[2]",
+        "label": "analyze",
+        "interval_ns": 41939790
+      },
+      {
+        "node": 116,
+        "kind": 109,
+        "params": "[3]",
+        "label": "analyze",
+        "interval_ns": 41427997
+      },
+      {
+        "node": 128,
+        "kind": 109,
+        "params": "[10]",
+        "label": "analyze",
+        "interval_ns": 40898526
+      },
+      {
+        "node": 293,
+        "kind": 108,
+        "params": "[59]",
+        "label": "lower",
+        "interval_ns": 39749771
+      }
+    ],
+    "events": {
+      "discovered": 310,
+      "queued": 493,
+      "demand": 1,
+      "running": 493,
+      "evaluate": 310,
+      "suspended": 181,
+      "publish": 310,
+      "completed": 310,
+      "task-done": 310,
+      "intern-hit": 316
+    },
+    "resource_sampling_available": false
+  }
+]

@@ -1,0 +1,20 @@
+{
+  "run_id": "compiler-intermediate-hosted-20261017-0150",
+  "client": "experiment-v1",
+  "project": "justrust-clean-room",
+  "session": "experiment:compiler-intermediate-hosted-20261017-0150",
+  "cmd": "revision=83ed321eff772ab5a13cd4aabc2a8d7e13d0aff2 workers=96 measurement=contended/uncontrolled exec=ssh",
+  "revision": "83ed321eff772ab5a13cd4aabc2a8d7e13d0aff2",
+  "workers": 96,
+  "instance_type": "m8a.24xlarge",
+  "instance_id": "i-0e052af0d41ab457e",
+  "region": "us-west-2",
+  "command_label": "ssh",
+  "functional_only": false,
+  "measurement": "contended/uncontrolled",
+  "timeout_s": 900.0,
+  "outcome": "done",
+  "exit_code": 1,
+  "wall_s": 16.22279220604105,
+  "lifecycle_ok": true
+}

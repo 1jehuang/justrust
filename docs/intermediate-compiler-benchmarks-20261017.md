@@ -2,6 +2,11 @@
 
 ## Scope and identity
 
+**These are local-machine measurements of a debug-built compiler, not the
+96-core hosted release results.** See
+`hosted-intermediate-compiler-benchmarks-20261017.md` for the requested hosted
+comparison and detailed phase diagnostics.
+
 This is a progress checkpoint, not a Full Rust completion claim or a general
 speedup claim. Revision `b4b5028ace7d3640b931dec604a978f7bd482251`, native binary
 SHA-256 `50677dcc0cff723228bef7c43af26bcc29a2c09f48d8ffc291e77f73e54a1b91`.

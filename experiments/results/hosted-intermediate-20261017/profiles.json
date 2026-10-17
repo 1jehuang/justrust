@@ -1,0 +1,77 @@
+{
+  "binary_sha256": "5c9067abe355d7490c0c9c4cc4fa4f10d24127567d4bada21168f7c3542710f2",
+  "runs": [
+    {
+      "count": 4,
+      "workers": 1,
+      "source_sha256": "673a42d857334f56eb9bf5386d2b9e94c86008ef2335053a724059544e990980",
+      "exit": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"check\",\"source_bytes\":391,\"source_files\":1,\"functions\":6,\"structs\":0,\"enums\":0,\"cfg_blocks\":38,\"cfg_edges\":40,\"cfg_locals\":80,\"analysis_worklist_pops\":38,\"analysis_move_paths\":80,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":0,\"total_ns\":75793695,\"engine_ns\":3452357,\"nodes\":70,\"edges\":145,\"intern_hits\":76,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "wall_ns": 76923171,
+      "trace": "trace-4-1.txt",
+      "trace_bytes": 1281836,
+      "trace_sha256": "35f6885d1da6d149c321deb53feaad4f63892420410e9a188437b2e2222abcf1"
+    },
+    {
+      "count": 4,
+      "workers": 96,
+      "source_sha256": "673a42d857334f56eb9bf5386d2b9e94c86008ef2335053a724059544e990980",
+      "exit": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"check\",\"source_bytes\":391,\"source_files\":1,\"functions\":6,\"structs\":0,\"enums\":0,\"cfg_blocks\":38,\"cfg_edges\":40,\"cfg_locals\":80,\"analysis_worklist_pops\":38,\"analysis_move_paths\":80,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":96,\"executable_bytes\":0,\"total_ns\":84397358,\"engine_ns\":11129676,\"nodes\":70,\"edges\":145,\"intern_hits\":76,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "wall_ns": 85721176,
+      "trace": "trace-4-96.txt",
+      "trace_bytes": 1294067,
+      "trace_sha256": "8303963482c0f63c3c686999f6678a759cad4c2fd97d760728dc42fec265dedf"
+    },
+    {
+      "count": 64,
+      "workers": 1,
+      "source_sha256": "a8c89741d9241517f028b55b91a7f1ae491d51b81294ec83129601656eb73b7a",
+      "exit": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"check\",\"source_bytes\":5409,\"source_files\":1,\"functions\":66,\"structs\":0,\"enums\":0,\"cfg_blocks\":578,\"cfg_edges\":640,\"cfg_locals\":1160,\"analysis_worklist_pops\":578,\"analysis_move_paths\":1160,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":0,\"total_ns\":8729770306,\"engine_ns\":94320400,\"nodes\":310,\"edges\":625,\"intern_hits\":316,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "wall_ns": 8731876207,
+      "trace": "trace-64-1.txt",
+      "trace_bytes": 150311350,
+      "trace_sha256": "6510eb36ab951da79200b5d579735dbb9c3907b92106274528cb3124f5037b78"
+    },
+    {
+      "count": 64,
+      "workers": 96,
+      "source_sha256": "a8c89741d9241517f028b55b91a7f1ae491d51b81294ec83129601656eb73b7a",
+      "exit": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"check\",\"source_bytes\":5409,\"source_files\":1,\"functions\":66,\"structs\":0,\"enums\":0,\"cfg_blocks\":578,\"cfg_edges\":640,\"cfg_locals\":1160,\"analysis_worklist_pops\":578,\"analysis_move_paths\":1160,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":96,\"executable_bytes\":0,\"total_ns\":8759749484,\"engine_ns\":162952030,\"nodes\":310,\"edges\":625,\"intern_hits\":316,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "wall_ns": 8762176327,
+      "trace": "trace-64-96.txt",
+      "trace_bytes": 150334800,
+      "trace_sha256": "d6746fd7a3ff1682974e8d4864e12ecec8cb473685927bbede69ce210da63fd1"
+    },
+    {
+      "count": 128,
+      "workers": 1,
+      "source_sha256": "a465dd7f854d3a6cfd0830e2574bc65d4ca4ba74205e993c465170bdc52edcd7",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "jr-rust: /home/ubuntu/justrust-experiments/receipts/compiler-intermediate-hosted-20261017-0152/functions-128.rs: analysis diagnostic resource limit exceeded\nnote: filesystem modules use temporary inline expansion; frontend line/column positions refer to expanded source, not original module files\n",
+      "wall_ns": 216568611,
+      "trace": "trace-128-1.txt",
+      "trace_bytes": 1628096,
+      "trace_sha256": "cbf89e1a74271cbfb9c26f764699da6dd9cbb41a3a5a5eb135ae7426eeec9aaa"
+    },
+    {
+      "count": 128,
+      "workers": 96,
+      "source_sha256": "a465dd7f854d3a6cfd0830e2574bc65d4ca4ba74205e993c465170bdc52edcd7",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "jr-rust: /home/ubuntu/justrust-experiments/receipts/compiler-intermediate-hosted-20261017-0152/functions-128.rs: analysis diagnostic resource limit exceeded\nnote: filesystem modules use temporary inline expansion; frontend line/column positions refer to expanded source, not original module files\n",
+      "wall_ns": 389591541,
+      "trace": "trace-128-96.txt",
+      "trace_bytes": 1663567,
+      "trace_sha256": "a380952ff0b352f9f251cd95c6a8a1c9734ef64e55a86536ad5f298397be4efd"
+    }
+  ]
+}

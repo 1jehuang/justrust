@@ -1,0 +1,8 @@
+{
+  "run_id": "compiler-intermediate-hosted-20261017-0151",
+  "outcome": "abandoned",
+  "exit_code": 143,
+  "observed_local_task_duration_s": 36.91,
+  "recovery": "normal authenticated terminal event after daemon reload; remote process absence verified",
+  "lifecycle_ok": true
+}
