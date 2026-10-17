@@ -33,8 +33,8 @@ with args.output.open('x') as out,tempfile.TemporaryDirectory(prefix='jr-interme
     if repeat%2:configs.reverse()
     for tool,workers,mode in configs:
      exe=d/f'{shape}{count}-{repeat}-{tool}-{workers}-{mode}'
-     args=([str(binary),str(src),'--workers',str(workers)]+(['--check'] if mode=='check' else ['-o',str(exe)])) if tool=='native' else [str(args.rustc),'--edition=2024','--crate-name','reference','-C','opt-level=0','-C','overflow-checks=yes',str(src),'-o',str(exe)]
-     row={'record':'sample','shape':shape,'functions':count,'repeat':repeat,'tool':tool,'workers':workers,'mode':mode,'source':text,'source_sha256':hashlib.sha256(text.encode()).hexdigest(),'compile':run(args),'artifact':exe.exists()}
+     command=([str(binary),str(src),'--workers',str(workers)]+(['--check'] if mode=='check' else ['-o',str(exe)])) if tool=='native' else [str(args.rustc),'--edition=2024','--crate-name','reference','-C','opt-level=0','-C','overflow-checks=yes',str(src),'-o',str(exe)]
+     row={'record':'sample','shape':shape,'functions':count,'repeat':repeat,'tool':tool,'workers':workers,'mode':mode,'source':text,'source_sha256':hashlib.sha256(text.encode()).hexdigest(),'compile':run(command),'artifact':exe.exists()}
      if row['compile'].get('exit')==0 and mode=='build':
       row['runtime']=run([exe]);row['correct']=row['runtime'].get('exit')==0 and row['runtime']['stdout']=='compiled correctly\n' and row['runtime']['stderr']==''
      elif row['compile'].get('exit')==0:row['correct']=not exe.exists()
