@@ -3,7 +3,7 @@
 use super::*;
 use crate::compiler::ir::{BinderId, BorrowKind, IntTy};
 
-pub const CATALOG_VERSION: u32 = 2;
+pub const CATALOG_VERSION: u32 = 3;
 const BASE_COUNT: u32 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -325,7 +325,7 @@ impl CoreCatalogBuilder {
                 env: env.clone(),
                 owner,
                 module: Arc::from([]),
-                public: true,
+                visibility: crate::compiler::ir::Visibility::Public,
                 receiver,
                 region_contract_mode: RegionContractMode::Positioned,
             };
@@ -550,7 +550,7 @@ impl CoreCatalogBuilder {
                 env: s.env.clone(),
                 owner: None,
                 module: Arc::from([]),
-                public: true,
+                visibility: crate::compiler::ir::Visibility::Public,
                 receiver: ReceiverMode::Borrowed {
                     kind: BorrowKind::Shared,
                 },

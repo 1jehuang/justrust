@@ -41,6 +41,8 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       empty prefixes, with global logical expansion bounds.
 - [x] Named public reexports with canonical identity, inherited variant export
       eligibility and namespace-specific original/intermediary visibility.
+- [x] Normalized lexical restricted visibility for supported declarations,
+      nominal/field/method access and non-widening named reexports (VISIBILITY.md).
 
 ## Remaining implementation program
 
@@ -114,8 +116,9 @@ cases. An empty discovery queue or a long checklist is not proof of exhaustivene
 
 - [ ] Preserve original file/expansion spans, source maps and stable declaration
       provenance instead of relying on concatenated source positions.
-- [ ] Complete glob imports, restricted visibility, namespaces, block-local
-      items/imports, cross-crate paths and edition-specific resolution. Bounded
+- [ ] Complete glob imports, namespaces, block-local items/imports, cross-crate
+      paths and edition-specific resolution. Bounded restricted visibility is
+      delivered under VISIBILITY.md with stock/native scope acceptance. Bounded
       grouped use trees are delivered under GROUPED-IMPORTS.md. Named public
       reexports are delivered under REEXPORTS.md with stock/native privacy and
       identity acceptance.
@@ -370,6 +373,20 @@ and measured integration throughput after each accepted slice.
 
 ## Active work and evidence limits
 
+The restricted-visibility checkpoint passes all 1,641 hosted tests in 84 binaries
+(`20261017-041943076-4105659`), all-target checking
+(`20261017-041939306-4105527`), strict all-target lint
+(`20261017-041953248-4107714`) and formatting. Its executable stock corpus has
+25 supported valid sources, 43 invalid sources and one explicitly legal but
+unsupported type alias. All 69 sources run native CHECK/BUILD at workers 1 and 8.
+Three graph tests check canonical image identity, nested trait implementation
+owner scope and unused invalid declarations. A filesystem stock/native test
+covers restricted module/type/field access across real external files. Ordinary
+test-thread stack checks accept module depth 128 and reject 129/300. Scope
+clone budgets and path normalization bounds have direct regressions. Both
+unchanged historical restricted-visibility sources are promoted only after
+exact-source stock/native execution. VISIBILITY.md defines the bounded contract.
+
 The named public reexport checkpoint passes all 1,630 hosted tests in 82
 binaries (`20261017-040632890-4019165`), all-target checking
 (`20261017-040631810-4019111`), strict all-target lint
@@ -394,8 +411,8 @@ use-group braces. The two unchanged historical grouped sources now execute
 natively after separate exact-source stock execution. Normal-stack resource
 tests exercise per-tree and global expansion limits. GROUPED-IMPORTS.md defines
 the bounded contract. Named reexports are the following delivered slice above.
-Source maps, glob resolution, restricted visibility, anonymous imports, full
-source organization and full Rust stay open.
+Source maps, glob resolution, anonymous imports, full source organization and
+full Rust stay open. Restricted visibility is the later bounded slice above.
 
 The full requested outcome is not reached. The native float and labeled-control
 checkpoint passes all 1,576 hosted tests (`20261017-031332671-3543206`), all-target

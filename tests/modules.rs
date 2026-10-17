@@ -491,11 +491,6 @@ fn explicit_module_milestone_boundaries_reject_without_output() {
             "glob import",
             "mod a { pub fn f() {} } use a::*; fn main() {}",
         ),
-        ("restricted visibility", "pub(crate) mod a {} fn main() {}"),
-        (
-            "restricted function visibility",
-            "mod a { pub(super) fn f() {} } fn main() {}",
-        ),
     ] {
         rejects(label, source);
     }

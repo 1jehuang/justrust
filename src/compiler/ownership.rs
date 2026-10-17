@@ -6019,14 +6019,14 @@ mod tests {
             type_args: Arc::from([]),
             name: "Paths".into(),
             module: String::new(),
-            public: false,
+            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
             fields: fields
                 .into_iter()
                 .enumerate()
                 .map(|(index, ty)| FieldDef {
                     name: format!("f{index}"),
                     ty,
-                    public: false,
+                    visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
                 })
                 .collect::<Vec<_>>()
                 .into(),
@@ -6067,7 +6067,7 @@ mod tests {
             type_args: Arc::from([]),
             name: "Tag".into(),
             module: String::new(),
-            public: false,
+            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
             variants: ["A", "B"]
                 .into_iter()
                 .map(|name| VariantDef {
@@ -6109,7 +6109,7 @@ mod tests {
             type_args: Arc::from([]),
             name: "Payload".into(),
             module: String::new(),
-            public: false,
+            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
             variants: variants
                 .into_iter()
                 .enumerate()
@@ -6122,7 +6122,7 @@ mod tests {
                         .map(|(index, ty)| FieldDef {
                             name: index.to_string(),
                             ty,
-                            public: false,
+                            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
                         })
                         .collect::<Vec<_>>()
                         .into(),

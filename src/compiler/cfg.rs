@@ -4076,7 +4076,7 @@ mod tests {
                 type_args: arguments,
                 name: "UnitEnum".into(),
                 module: String::new(),
-                public: false,
+                visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
                 variants: vec![ir::VariantDef {
                     name: "A".into(),
                     shape: ir::VariantShape::Unit,
@@ -4890,14 +4890,14 @@ mod tests {
             },
             name: "S".into(),
             module: String::new(),
-            public: false,
+            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
             fields: fields
                 .into_iter()
                 .enumerate()
                 .map(|(index, ty)| ir::FieldDef {
                     name: format!("f{index}"),
                     ty,
-                    public: false,
+                    visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
                 })
                 .collect::<Vec<_>>()
                 .into(),
@@ -6653,7 +6653,7 @@ mod tests {
             },
             name: "E".into(),
             module: String::new(),
-            public: false,
+            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
             variants: vec![
                 ir::VariantDef {
                     name: "A".into(),
@@ -6662,12 +6662,12 @@ mod tests {
                         ir::FieldDef {
                             name: "a".into(),
                             ty: Ty::Int(IntTy::I32),
-                            public: true,
+                            visibility: crate::compiler::ir::Visibility::Public,
                         },
                         ir::FieldDef {
                             name: "b".into(),
                             ty: Ty::Int(IntTy::I32),
-                            public: true,
+                            visibility: crate::compiler::ir::Visibility::Public,
                         },
                     ]
                     .into(),

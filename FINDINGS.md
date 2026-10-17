@@ -1,5 +1,43 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Restricted visibility is lexical scope authority, not a boolean
+
+Supported declarations now carry Public or a canonical Restricted module scope
+through source resolution, nominal/field facts, callable registries and schema
+metadata. Crate-local scope is not globally public. Named reexports cannot
+widen either originals or intermediary bindings, and mixed namespace aliases
+retain each namespace's effective scope. Trait implementation callables retain
+the exact lexical owner-private scope. Nested implementation metadata now uses
+the full containing module, not its parent. Catalog metadata is version 3.
+
+New scope strings required clone/publication heap accounting beyond the former
+booleans. Direct regressions check retained scope bytes, lexical path work guards
+and module boundaries. Extracting a non-inlined nonrecursive declaration parser
+keeps the ordinary recursive module frame small. Normal test-thread stacks
+accept module depth 128 and reject 129/300, rather than hiding overflow with
+a larger test stack or reducing the supported boundary.
+
+The independent 69-source executable stock corpus classifies 25 supported valid,
+43 invalid and one legal-but-unsupported type alias, then checks native
+CHECK/BUILD at workers 1/8 (276 cells). Both historical restricted-visibility
+sources are promoted unchanged after exact-source stock/native execution.
+Three graph tests and a real multi-file stock/native module/type/field fixture
+cover canonical identity, nested trait owner visibility and unused invalid scope.
+Read-only independent review found no remaining concrete bounded privacy blocker.
+One review corpus invocation encountered spawn ENOENT while concurrent builds
+were active and passed on isolated rerun. Its infrastructure cause is not proved
+or fixed by this compiler change. The final frozen full gate passes.
+
+Hosted check `20261017-041939306-4105527`, full test
+`20261017-041943076-4105659` and strict all-target lint
+`20261017-041953248-4107714` pass, with formatting and diff checks.
+The full test reports 1,641 tests in 84 binaries and 5.62s test phase. The slowest
+restricted-visibility oracle test is 5.05s, a sequential correctness oracle
+including stock compilation, not native compiler throughput evidence. These
+measurements establish neither a speedup nor full Rust compatibility. Retained
+receipts: `data/runs/xps14/2026-10-17-visibility.jsonl`. VISIBILITY.md scopes
+the delivered contract and remaining unsupported declaration kinds.
+
 ## 2026-10-17: Named public reexports preserve namespace-specific visibility
 
 Named and grouped public aliases retain canonical identities without cloning

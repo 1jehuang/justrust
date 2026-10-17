@@ -239,8 +239,10 @@ imports, named aliases, type-only terminal self leaves and validated empty
 prefixes through the same resolver, including explicit global expansion guards.
 `REEXPORTS.md` adds named public reexports with original and alias-binding
 visibility, canonical identity and eager unused-import validation. Continue to
-reject glob imports, anonymous `as _` imports, restricted `pub(...)`, block-local
-imports/items and unsupported namespaces.
+reject glob imports, anonymous `as _` imports, block-local imports/items and
+unsupported namespaces. `VISIBILITY.md` adds normalized lexical `pub(crate)`,
+`pub(super)`, `pub(self)` and `pub(in ancestor)` scopes for supported declaration
+kinds. Type aliases and other unsupported declarations remain separate work.
 Existing expression/type restrictions remain in COMPILER.md. Source loading is
 bounded and observable but currently expands into one coarse source snapshot;
 original per-file semantic/syntax spans remain a following source-map slice.

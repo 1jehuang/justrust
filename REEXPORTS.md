@@ -29,5 +29,6 @@ public alias calls, and reject unused public aliases of private declarations.
 Filesystem tests cover public function/module/type reexports from a private
 external source module.
 
-Globs, restricted visibility, anonymous imports, full external-crate and edition
+Restricted visibility is extended in VISIBILITY.md. Globs, anonymous imports,
+full external-crate and edition
 resolution, source maps and the rest of full Rust remain separate open work.

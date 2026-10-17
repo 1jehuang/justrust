@@ -586,6 +586,45 @@ fn public_reexports_preserve_external_private_module_identity() {
 }
 
 #[test]
+fn restricted_visibility_preserves_external_lexical_scopes() {
+    let files = [
+        (
+            "src/input.rs",
+            "mod outer;fn main(){if outer::run()==7{println!(\"external scopes ok\");}}",
+        ),
+        (
+            "src/outer.rs",
+            "pub(super) mod inner;mod sibling;pub(crate) fn run()->i32{sibling::read()}",
+        ),
+        (
+            "src/outer/inner.rs",
+            "pub(in crate::outer) struct S{pub(super) x:i32}pub(in crate::outer) fn value()->S{S{x:7}}",
+        ),
+        (
+            "src/outer/sibling.rs",
+            "pub(super) fn read()->i32{let s=super::inner::value();s.x}",
+        ),
+    ];
+    let scratch = fixture(&files);
+    let stock = scratch.path("stock");
+    capture(
+        Command::new("rustc")
+            .arg("--edition=2021")
+            .arg(scratch.path("src/input.rs"))
+            .arg("-o")
+            .arg(&stock),
+        &scratch,
+        COMPILE_TIMEOUT,
+    )
+    .success();
+    let result = capture(&mut Command::new(&stock), &scratch, RUN_TIMEOUT);
+    result.success();
+    assert_eq!(result.stdout, b"external scopes ok\n");
+    assert!(result.stderr.is_empty());
+    runs(&files, "external scopes ok\n");
+}
+
+#[test]
 fn external_missing_module_cannot_be_created_by_trace_publication() {
     for workers in [1, 8] {
         for check in [false, true] {

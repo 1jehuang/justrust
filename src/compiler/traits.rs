@@ -274,7 +274,7 @@ pub struct SchemaDecl {
     pub env: Arc<GenericEnv>,
     pub owner: Option<DeclId>,
     pub module: Arc<[String]>,
-    pub public: bool,
+    pub visibility: super::ir::Visibility,
     pub receiver: ReceiverMode,
     pub region_contract_mode: RegionContractMode,
 }
@@ -1137,7 +1137,7 @@ impl ValidatedTraitWorld {
             if info.kind != c.kind
                 || info.owner != c.owner
                 || info.receiver != c.receiver
-                || info.public != c.public
+                || info.visibility != c.visibility
                 || info.region_contract_mode != c.region_contract_mode
                 || !self.same_env(&info.env, &c.env)?
                 || info.own_env.binder() != c.own_env.binder()
@@ -2406,10 +2406,21 @@ impl ValidatedTraitWorld {
             let item = self.item_header(*item_id)?;
             let target = self.callable_header(*callable_id)?;
             let target_info = self.info(*callable_id)?;
+            let owner_info = self.info(h.declaration)?;
+            let private_visibility = match &target_info.visibility {
+                super::ir::Visibility::Public => false,
+                super::ir::Visibility::Restricted(scope) => {
+                    (scope.is_empty() && owner_info.module.is_empty())
+                        || (!scope.is_empty()
+                            && scope
+                                .split("::")
+                                .eq(owner_info.module.iter().map(String::as_str)))
+                }
+            };
             if item.trait_decl != h.trait_ref.declaration
                 || target_info.owner != Some(h.declaration)
                 || target_info.receiver != item.receiver
-                || target_info.public
+                || !private_visibility
             {
                 return Err(FactsError::invalid(
                     &self.budget,
@@ -5608,7 +5619,7 @@ pub(crate) mod test_support {
                     env,
                     owner,
                     module: Arc::from([]),
-                    public: false,
+                    visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
                     receiver,
                     region_contract_mode: RegionContractMode::Positioned,
                 },
@@ -6206,7 +6217,7 @@ mod tests {
             type_args: args.into(),
             name: "fixture".into(),
             module: String::new(),
-            public: false,
+            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
             fields: Arc::<[FieldDef]>::from([]),
         }))
     }

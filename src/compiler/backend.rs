@@ -1785,6 +1785,7 @@ mod tests {
     }
     fn function(name: &str, params: Vec<(String, Type)>, result: Type, body: Block) -> Function {
         Function {
+            visibility: ir::Visibility::Public,
             name: name.into(),
             regions: Default::default(),
             type_params: vec![],
@@ -4100,14 +4101,14 @@ mod tests {
             type_args: [].into(),
             name: "Singleton".into(),
             module: String::new(),
-            public: false,
+            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
             variants: vec![ir::VariantDef {
                 name: "Only".into(),
                 shape: ir::VariantShape::Tuple,
                 fields: vec![ir::FieldDef {
                     name: "0".into(),
                     ty: ir::Ty::Int(ir::IntTy::I32),
-                    public: true,
+                    visibility: crate::compiler::ir::Visibility::Public,
                 }]
                 .into(),
             }]
@@ -4240,7 +4241,7 @@ mod tests {
         let field = |name: &str| ir::FieldDef {
             name: name.into(),
             ty: ir::Ty::Int(ir::IntTy::I32),
-            public: true,
+            visibility: crate::compiler::ir::Visibility::Public,
         };
         let snapshot = ir::SnapshotId::allocate().unwrap();
         let ty = ir::EnumTy::new(ir::EnumDef {
@@ -4249,7 +4250,7 @@ mod tests {
             type_args: [].into(),
             name: "Backing".into(),
             module: String::new(),
-            public: false,
+            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
             variants: vec![
                 ir::VariantDef {
                     name: "Empty".into(),

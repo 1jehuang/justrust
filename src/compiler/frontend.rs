@@ -12,8 +12,8 @@
 //! bindings/wildcards with finite exhaustiveness. Nested enum patterns require
 //! a single-variant enum. Tuple-variant rest patterns remain unsupported.
 //! Move checking belongs to CFG analysis, not
-//! this semantic checker. External modules, restricted
-//! visibility, glob imports, and block-local items are not
+//! this semantic checker. Restricted visibility names lexical ancestor modules.
+//! External modules, glob imports, and block-local items are not
 //! supported. An executable requires a declared root main, not an imported alias.
 use super::ir;
 use super::traits as tr;
@@ -2772,7 +2772,7 @@ pub struct ParsedProgram {
 }
 #[derive(Clone, Debug)]
 struct Item {
-    public: bool,
+    visibility: ir::Visibility,
     kind: ItemKind,
 }
 #[derive(Clone, Debug)]
@@ -2798,6 +2798,7 @@ fn parent(path: &str) -> &str {
 }
 #[derive(Clone, Debug)]
 pub struct Function {
+    pub visibility: ir::Visibility,
     pub bounds: Vec<TypeBound>,
     pub name: String,
     pub regions: RegionDecls,
@@ -2830,7 +2831,7 @@ pub struct TypeBound {
 pub struct TraitDecl {
     pub supertraits: Vec<String>,
     pub name: String,
-    pub public: bool,
+    pub visibility: ir::Visibility,
     pub items: Vec<TraitItemDecl>,
 }
 #[derive(Clone, Debug)]
@@ -2854,7 +2855,7 @@ pub struct FunctionHead {
 pub struct AssociatedFunction {
     pub function: Function,
     pub receiver: ReceiverKind,
-    pub public: bool,
+    pub visibility: ir::Visibility,
 }
 #[derive(Clone, Debug)]
 pub struct CallableContext {
@@ -2882,14 +2883,14 @@ pub struct RegionDecls {
 pub struct StructDecl {
     pub type_params: Vec<String>,
     pub name: String,
-    pub public: bool,
+    pub visibility: ir::Visibility,
     pub fields: Vec<FieldDecl>,
 }
 #[derive(Clone, Debug)]
 pub struct EnumDecl {
     pub type_params: Vec<String>,
     pub name: String,
-    pub public: bool,
+    pub visibility: ir::Visibility,
     pub variants: Vec<VariantDecl>,
 }
 #[derive(Clone, Debug)]
@@ -2902,7 +2903,7 @@ pub struct VariantDecl {
 pub struct FieldDecl {
     pub name: String,
     pub ty: Type,
-    pub public: bool,
+    pub visibility: ir::Visibility,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FieldSelector {
@@ -4186,17 +4187,68 @@ impl Parser {
         }
         Ok(number)
     }
+    /// Visibility paths are lexical ancestors, never general name-resolution
+    /// paths. Checking the canonical spelling here prevents aliases from
+    /// masquerading as ancestor modules, even before those aliases resolve.
+    fn visibility(&mut self, module: &str) -> Result<(ir::Visibility, bool), String> {
+        if !self.eat("pub") {
+            return Ok((ir::Visibility::Restricted(module.into()), false));
+        }
+        if !self.eat("(") {
+            return Ok((ir::Visibility::Public, true));
+        }
+        let scope = if self.eat("in") {
+            let path = self.path()?;
+            let parts: Vec<_> = path.split("::").collect();
+            if parts.len() > 129 {
+                return Err(self.error("visibility path nesting exceeds limit 129"));
+            }
+            let (mut scope, mut at) = match parts[0] {
+                "crate" => (String::new(), 1),
+                "self" => (module.to_owned(), 1),
+                "super" => (module.to_owned(), 0),
+                _ => return Err(self.error("pub(in) paths must start with crate, self or super")),
+            };
+            while parts[0] == "super" && parts.get(at) == Some(&"super") {
+                if scope.is_empty() {
+                    return Err(self.error("visibility path escapes crate root"));
+                }
+                scope = parent(&scope).into();
+                at += 1;
+            }
+            for name in &parts[at..] {
+                if matches!(*name, "crate" | "self" | "super") {
+                    return Err(self.error("invalid visibility path segment"));
+                }
+                scope = qualify(&scope, name);
+            }
+            if !visible_from(&scope, module) {
+                return Err(self.error("visibility path must name a lexical ancestor module"));
+            }
+            scope
+        } else if self.eat("crate") {
+            String::new()
+        } else if self.eat("self") {
+            module.to_owned()
+        } else if self.eat("super") {
+            if module.is_empty() {
+                return Err(self.error("visibility path escapes crate root"));
+            }
+            parent(module).to_owned()
+        } else {
+            return Err(self.error("expected crate, self, super or in in restricted visibility"));
+        };
+        self.expect(")")?;
+        Ok((ir::Visibility::Restricted(scope), true))
+    }
     fn items(&mut self, module: &str, parsed: &mut ParsedProgram) -> Result<(), String> {
-        if self.nesting >= 128 {
+        if self.nesting > 128 {
             return Err(self.error("module nesting exceeds limit 128"));
         }
         self.nesting += 1;
         while !self.is("") && !self.is("}") {
-            let public = self.eat("pub");
-            if public && self.is("(") {
-                return Err(self.error("restricted pub visibility is unsupported"));
-            }
-            let (name, kind) = if self.eat("mod") {
+            let (visibility, explicit_visibility) = self.visibility(module)?;
+            if self.eat("mod") {
                 let name = self.ident()?;
                 let full = qualify(module, &name);
                 if self.eat(";") {
@@ -4204,114 +4256,133 @@ impl Parser {
                 }
                 self.expect("{")?;
                 // Register before parsing descendants, including empty modules.
-                self.insert_item(parsed, &full, public, ItemKind::Module)?;
+                self.insert_item(parsed, &full, visibility, ItemKind::Module)?;
                 self.items(&full, parsed)?;
                 self.expect("}")?;
                 continue;
-            } else if self.eat("use") {
-                let mut imports = Vec::new();
-                let mut work = 0;
-                let mut bytes = 0;
-                self.use_tree(&[], 0, &mut work, &mut bytes, &mut imports)?;
-                self.expect(";")?;
-                for (name, path, type_only) in imports {
-                    // Bound logical retained expansion across the entire source,
-                    // not just each tree. This is not an allocator-byte charge.
-                    self.use_expansions += 1;
-                    self.use_expansion_bytes +=
-                        path.len() + module.len() + name.as_ref().map_or(0, String::len) + 2;
-                    if self.use_expansions > 65536 {
-                        return Err(self.error("source use expansion count exceeds limit 65536"));
-                    }
-                    if self.use_expansion_bytes > 16 * 1024 * 1024 {
-                        return Err(
-                            self.error("source use logical expansion exceeds limit 16777216")
-                        );
-                    }
-                    let Some(name) = name else {
-                        parsed.empty_use_prefixes.push((module.into(), path));
-                        continue;
-                    };
-                    self.insert_item(
-                        parsed,
-                        &qualify(module, &name),
-                        public,
-                        ItemKind::Import(path, type_only),
-                    )?;
+            }
+            self.nonmodule_item(module, parsed, visibility, explicit_visibility)?;
+        }
+        self.nesting -= 1;
+        Ok(())
+    }
+    // Keep the large nonrecursive declaration parser frame off the recursive
+    // inline-module path, including on ordinary 2 MiB test-thread stacks.
+    #[inline(never)]
+    fn nonmodule_item(
+        &mut self,
+        module: &str,
+        parsed: &mut ParsedProgram,
+        visibility: ir::Visibility,
+        explicit_visibility: bool,
+    ) -> Result<(), String> {
+        let (name, kind) = if self.eat("use") {
+            let mut imports = Vec::new();
+            let mut work = 0;
+            let mut bytes = 0;
+            self.use_tree(&[], 0, &mut work, &mut bytes, &mut imports)?;
+            self.expect(";")?;
+            for (name, path, type_only) in imports {
+                // Bound logical retained expansion across the entire source,
+                // not just each tree. This is not an allocator-byte charge.
+                self.use_expansions += 1;
+                self.use_expansion_bytes +=
+                    path.len() + module.len() + name.as_ref().map_or(0, String::len) + 2;
+                if self.use_expansions > 65536 {
+                    return Err(self.error("source use expansion count exceeds limit 65536"));
                 }
-                continue;
-            } else if self.eat("trait") {
-                let name = self.ident()?;
-                if self.is("<") {
-                    return Err(self.error("trait generics are unsupported"));
+                if self.use_expansion_bytes > 16 * 1024 * 1024 {
+                    return Err(self.error("source use logical expansion exceeds limit 16777216"));
                 }
-                let mut supertraits = Vec::new();
-                if self.eat(":") {
-                    loop {
-                        if supertraits.len() >= 256 {
-                            return Err(self.error("supertrait limit exceeded"));
-                        }
-                        supertraits.push(self.path()?);
-                        if !self.eat("+") {
-                            break;
-                        }
+                let Some(name) = name else {
+                    parsed.empty_use_prefixes.push((module.into(), path));
+                    continue;
+                };
+                self.insert_item(
+                    parsed,
+                    &qualify(module, &name),
+                    visibility.clone(),
+                    ItemKind::Import(path, type_only),
+                )?;
+            }
+            return Ok(());
+        } else if self.eat("trait") {
+            let name = self.ident()?;
+            if self.is("<") {
+                return Err(self.error("trait generics are unsupported"));
+            }
+            let mut supertraits = Vec::new();
+            if self.eat(":") {
+                loop {
+                    if supertraits.len() >= 256 {
+                        return Err(self.error("supertrait limit exceeded"));
+                    }
+                    supertraits.push(self.path()?);
+                    if !self.eat("+") {
+                        break;
                     }
                 }
-                self.expect("{")?;
-                let mut items = Vec::new();
-                let mut item_names = std::collections::HashSet::new();
-                while !self.is("}") {
-                    if items.len() >= 4096 {
-                        return Err(self.error("trait item limit exceeded"));
-                    }
-                    let (signature, receiver) = self.function_head(&[], true)?;
-                    if !item_names.insert(signature.name.clone()) {
-                        return Err(self.error("duplicate required trait item"));
-                    }
-                    if !signature.type_params.is_empty() {
-                        return Err(self.error("generic trait methods are unsupported"));
-                    }
-                    let default = if self.is("{") {
-                        Some(Function {
-                            bounds: signature.bounds.clone(),
-                            name: signature.name.clone(),
-                            regions: signature.regions.clone(),
-                            type_params: signature.type_params.clone(),
-                            params: signature.params.clone(),
-                            result: signature.result.clone(),
-                            body: self.block()?,
-                        })
-                    } else {
-                        self.expect(";")?;
-                        None
-                    };
-                    items.push(TraitItemDecl {
-                        signature,
-                        receiver,
-                        default,
-                    });
+            }
+            self.expect("{")?;
+            let mut items = Vec::new();
+            let mut item_names = std::collections::HashSet::new();
+            while !self.is("}") {
+                if items.len() >= 4096 {
+                    return Err(self.error("trait item limit exceeded"));
                 }
-                self.expect("}")?;
-                parsed.program.traits.push(TraitDecl {
-                    supertraits,
-                    name: qualify(module, &name),
-                    public,
-                    items,
+                if self.is("pub") {
+                    return Err(self.error("trait items cannot declare visibility"));
+                }
+                let (signature, receiver) = self.function_head(&[], true)?;
+                if !item_names.insert(signature.name.clone()) {
+                    return Err(self.error("duplicate required trait item"));
+                }
+                if !signature.type_params.is_empty() {
+                    return Err(self.error("generic trait methods are unsupported"));
+                }
+                let default = if self.is("{") {
+                    Some(Function {
+                        visibility: visibility.clone(),
+                        bounds: signature.bounds.clone(),
+                        name: signature.name.clone(),
+                        regions: signature.regions.clone(),
+                        type_params: signature.type_params.clone(),
+                        params: signature.params.clone(),
+                        result: signature.result.clone(),
+                        body: self.block()?,
+                    })
+                } else {
+                    self.expect(";")?;
+                    None
+                };
+                items.push(TraitItemDecl {
+                    signature,
+                    receiver,
+                    default,
                 });
-                (name, ItemKind::Trait)
-            } else if self.eat("enum") {
-                let name = self.ident()?;
-                let type_params = self.type_parameters()?;
-                if !self.pending_bounds.is_empty() {
-                    return Err(self.error("bounds on nominal declarations are unsupported"));
-                }
-                self.type_params = type_params.clone();
-                self.expect("{")?;
-                let mut variants: Vec<VariantDecl> = Vec::new();
-                while !self.is("}") {
-                    let variant = self.ident()?;
-                    let mut fields = Vec::new();
-                    let shape = if self.eat("(") {
+            }
+            self.expect("}")?;
+            parsed.program.traits.push(TraitDecl {
+                supertraits,
+                name: qualify(module, &name),
+                visibility: visibility.clone(),
+                items,
+            });
+            (name, ItemKind::Trait)
+        } else if self.eat("enum") {
+            let name = self.ident()?;
+            let type_params = self.type_parameters()?;
+            if !self.pending_bounds.is_empty() {
+                return Err(self.error("bounds on nominal declarations are unsupported"));
+            }
+            self.type_params = type_params.clone();
+            self.expect("{")?;
+            let mut variants: Vec<VariantDecl> = Vec::new();
+            while !self.is("}") {
+                let variant = self.ident()?;
+                let mut fields = Vec::new();
+                let shape =
+                    if self.eat("(") {
                         while !self.is(")") {
                             if fields.len() >= 4096 {
                                 return Err(self.error("variant field count exceeds limit 4096"));
@@ -4323,7 +4394,7 @@ impl Parser {
                             fields.push(FieldDecl {
                                 name: fields.len().to_string(),
                                 ty: self.ty()?,
-                                public: true,
+                                visibility: ir::Visibility::Public,
                             });
                             if !self.eat(",") {
                                 break;
@@ -4345,7 +4416,7 @@ impl Parser {
                             fields.push(FieldDecl {
                                 name,
                                 ty: self.ty()?,
-                                public: true,
+                                visibility: ir::Visibility::Public,
                             });
                             if !self.eat(",") {
                                 break;
@@ -4356,154 +4427,153 @@ impl Parser {
                     } else {
                         ir::VariantShape::Unit
                     };
-                    if self.is("=") {
-                        return Err(self.error("explicit enum discriminants are unsupported"));
-                    }
-                    if variants.iter().any(|v| v.name == variant) {
-                        return Err(self.error("duplicate enum variant"));
-                    }
-                    if variants.len() >= 4096 {
-                        return Err(self.error("enum variant count exceeds limit 4096"));
-                    }
-                    self.insert_item(
-                        parsed,
-                        &qualify(&qualify(module, &name), &variant),
-                        true,
-                        ItemKind::Variant(shape),
-                    )?;
-                    variants.push(VariantDecl {
-                        name: variant,
-                        shape,
-                        fields,
-                    });
-                    if !self.eat(",") {
-                        break;
-                    }
+                if self.is("=") {
+                    return Err(self.error("explicit enum discriminants are unsupported"));
                 }
-                self.expect("}")?;
-                if variants.is_empty() {
-                    return Err(self.error("empty enums are unsupported"));
+                if variants.iter().any(|v| v.name == variant) {
+                    return Err(self.error("duplicate enum variant"));
                 }
-                parsed.program.enums.push(EnumDecl {
-                    type_params,
-                    name: qualify(module, &name),
-                    public,
-                    variants,
-                });
-                (name, ItemKind::Enum)
-            } else if self.eat("struct") {
-                let name = self.ident()?;
-                let type_params = self.type_parameters()?;
-                if !self.pending_bounds.is_empty() {
-                    return Err(self.error("bounds on nominal declarations are unsupported"));
+                if variants.len() >= 4096 {
+                    return Err(self.error("enum variant count exceeds limit 4096"));
                 }
-                self.type_params = type_params.clone();
-                self.expect("{")?;
-                let mut fields = Vec::new();
-                while !self.is("}") {
-                    let public = self.eat("pub");
-                    if public && self.is("(") {
-                        return Err(self.error("restricted field visibility is unsupported"));
-                    }
-                    let name = self.ident()?;
-                    self.expect(":")?;
-                    fields.push(FieldDecl {
-                        name,
-                        ty: self.ty()?,
-                        public,
-                    });
-                    if !self.eat(",") {
-                        break;
-                    }
-                }
-                self.expect("}")?;
-                if fields.is_empty() {
-                    return Err(self.error("empty structs are unsupported"));
-                }
-                parsed.program.structs.push(StructDecl {
-                    type_params,
-                    name: qualify(module, &name),
-                    public,
+                self.insert_item(
+                    parsed,
+                    &qualify(&qualify(module, &name), &variant),
+                    ir::Visibility::Public,
+                    ItemKind::Variant(shape),
+                )?;
+                variants.push(VariantDecl {
+                    name: variant,
+                    shape,
                     fields,
                 });
-                (name, ItemKind::Struct)
-            } else if self.eat("impl") {
-                if public {
-                    return Err(self.error("pub impl is invalid"));
+                if !self.eat(",") {
+                    break;
                 }
-                let type_params = self.type_parameters()?;
-                self.type_params = type_params.clone();
-                let mut bounds = std::mem::take(&mut self.pending_bounds);
-                let first_ty = self.ty()?;
-                let (trait_path, self_ty) = if self.eat("for") {
-                    let Type::Named(name) = first_ty else {
-                        return Err(self.error("trait arguments are unsupported"));
-                    };
-                    (Some(name), self.ty()?)
-                } else {
-                    (None, first_ty)
-                };
-                if self.eat("where") {
-                    loop {
-                        if !self.token().string && self.token().text.starts_with('\'') {
-                            return Err(
-                                self.error("lifetime where predicates on impls are unsupported")
-                            );
-                        }
-                        self.where_type_predicate(&mut bounds)?;
-                        if !self.eat(",") || self.is("{") {
-                            break;
-                        }
-                    }
-                }
-                self.expect("{")?;
-                let mut items = Vec::new();
-                while !self.is("}") {
-                    if items.len() >= 4096 {
-                        return Err(self.error("associated item limit exceeded"));
-                    }
-                    let public = self.eat("pub");
-                    if public && trait_path.is_some() {
-                        return Err(self.error("trait impl items cannot declare pub"));
-                    }
-                    let (function, receiver) = self.function_scoped(&type_params, true)?;
-                    items.push(AssociatedFunction {
-                        function,
-                        receiver,
-                        public,
-                    });
-                }
-                self.expect("}")?;
-                parsed.program.impls.push(ImplDecl {
-                    trait_path,
-                    bounds,
-                    module: module.into(),
-                    type_params,
-                    self_ty,
-                    items,
+            }
+            self.expect("}")?;
+            if variants.is_empty() {
+                return Err(self.error("empty enums are unsupported"));
+            }
+            parsed.program.enums.push(EnumDecl {
+                type_params,
+                name: qualify(module, &name),
+                visibility: visibility.clone(),
+                variants,
+            });
+            (name, ItemKind::Enum)
+        } else if self.eat("struct") {
+            let name = self.ident()?;
+            let type_params = self.type_parameters()?;
+            if !self.pending_bounds.is_empty() {
+                return Err(self.error("bounds on nominal declarations are unsupported"));
+            }
+            self.type_params = type_params.clone();
+            self.expect("{")?;
+            let mut fields = Vec::new();
+            while !self.is("}") {
+                let (visibility, _) = self.visibility(module)?;
+                let name = self.ident()?;
+                self.expect(":")?;
+                fields.push(FieldDecl {
+                    name,
+                    ty: self.ty()?,
+                    visibility,
                 });
-                self.type_params.clear();
-                continue;
-            } else if self.is("fn") {
-                let mut function = self.function()?;
-                let name = function.name.clone();
-                function.name = qualify(module, &name);
-                parsed.program.functions.push(function);
-                (name, ItemKind::Function)
+                if !self.eat(",") {
+                    break;
+                }
+            }
+            self.expect("}")?;
+            if fields.is_empty() {
+                return Err(self.error("empty structs are unsupported"));
+            }
+            parsed.program.structs.push(StructDecl {
+                type_params,
+                name: qualify(module, &name),
+                visibility: visibility.clone(),
+                fields,
+            });
+            (name, ItemKind::Struct)
+        } else if self.eat("impl") {
+            if explicit_visibility {
+                return Err(self.error("pub impl is invalid"));
+            }
+            let type_params = self.type_parameters()?;
+            self.type_params = type_params.clone();
+            let mut bounds = std::mem::take(&mut self.pending_bounds);
+            let first_ty = self.ty()?;
+            let (trait_path, self_ty) = if self.eat("for") {
+                let Type::Named(name) = first_ty else {
+                    return Err(self.error("trait arguments are unsupported"));
+                };
+                (Some(name), self.ty()?)
             } else {
-                return Err(self.error("expected fn, inline mod or simple use item"));
+                (None, first_ty)
             };
+            if self.eat("where") {
+                loop {
+                    if !self.token().string && self.token().text.starts_with('\'') {
+                        return Err(
+                            self.error("lifetime where predicates on impls are unsupported")
+                        );
+                    }
+                    self.where_type_predicate(&mut bounds)?;
+                    if !self.eat(",") || self.is("{") {
+                        break;
+                    }
+                }
+            }
+            self.expect("{")?;
+            let mut items = Vec::new();
+            while !self.is("}") {
+                if items.len() >= 4096 {
+                    return Err(self.error("associated item limit exceeded"));
+                }
+                let (visibility, explicit_visibility) = self.visibility(module)?;
+                if explicit_visibility && trait_path.is_some() {
+                    return Err(self.error("trait impl items cannot declare pub"));
+                }
+                let (mut function, receiver) = self.function_scoped(&type_params, true)?;
+                function.visibility = visibility.clone();
+                items.push(AssociatedFunction {
+                    function,
+                    receiver,
+                    visibility,
+                });
+            }
+            self.expect("}")?;
+            parsed.program.impls.push(ImplDecl {
+                trait_path,
+                bounds,
+                module: module.into(),
+                type_params,
+                self_ty,
+                items,
+            });
             self.type_params.clear();
-            self.insert_item(parsed, &qualify(module, &name), public, kind)?;
-        }
-        self.nesting -= 1;
+            return Ok(());
+        } else if self.is("fn") {
+            let mut function = self.function()?;
+            function.visibility = visibility.clone();
+            let name = function.name.clone();
+            function.name = qualify(module, &name);
+            parsed.program.functions.push(function);
+            (name, ItemKind::Function)
+        } else if self.is("type") {
+            return Err(self.error("type aliases are unsupported"));
+        } else {
+            return Err(self.error("expected fn, inline mod or simple use item"));
+        };
+        self.type_params.clear();
+        self.insert_item(parsed, &qualify(module, &name), visibility, kind)?;
         Ok(())
     }
     fn insert_item(
         &self,
         parsed: &mut ParsedProgram,
         path: &str,
-        public: bool,
+        visibility: ir::Visibility,
         kind: ItemKind,
     ) -> Result<(), String> {
         let bindings = parsed.items.entry(path.to_owned()).or_default();
@@ -4529,7 +4599,7 @@ impl Parser {
         }) {
             return Err(self.error(&format!("duplicate item {path}")));
         }
-        bindings.push(Item { public, kind });
+        bindings.push(Item { visibility, kind });
         Ok(())
     }
     fn lifetime(&mut self) -> Result<String, String> {
@@ -4634,6 +4704,7 @@ impl Parser {
         let (head, receiver) = self.function_head(inherited, associated)?;
         Ok((
             Function {
+                visibility: ir::Visibility::Public,
                 name: head.name,
                 regions: head.regions,
                 type_params: head.type_params,
@@ -5743,7 +5814,7 @@ struct ResolvedItem {
     // Publicly exportable original and final alias binding. Containing module
     // visibility is deliberately excluded. Variants inherit their enum's export
     // eligibility, independently of their ordinary in-crate accessibility.
-    reexportable: bool,
+    visibility: ir::Visibility,
     path: String,
     module: bool,
     kind: ResolvedKind,
@@ -5806,7 +5877,7 @@ impl Resolver<'_> {
                     && path.contains("::")
                 {
                     return Ok(Some(ResolvedItem {
-                        reexportable: true,
+                        visibility: ir::Visibility::Public,
                         path: canonical.into(),
                         module: true,
                         kind: ResolvedKind::Trait,
@@ -5824,7 +5895,7 @@ impl Resolver<'_> {
                         | "std::ops"
                 ) {
                     return Ok(Some(ResolvedItem {
-                        reexportable: true,
+                        visibility: ir::Visibility::Public,
                         path: path.into(),
                         module: true,
                         kind: ResolvedKind::Module,
@@ -5833,52 +5904,53 @@ impl Resolver<'_> {
             }
             return Ok(None);
         };
-        let owner = parent(path);
-        let descendant = owner.is_empty()
-            || requester == owner
-            || requester
-                .strip_prefix(owner)
-                .is_some_and(|s| s.starts_with("::"));
         let mut result = None;
         for (index, item) in bindings.iter().enumerate() {
             let resolved = match &item.kind {
                 ItemKind::Module if module => Some(ResolvedItem {
-                    reexportable: true,
+                    visibility: ir::Visibility::Public,
                     path: path.into(),
                     module: true,
                     kind: ResolvedKind::Module,
                 }),
                 ItemKind::Function if !module => Some(ResolvedItem {
-                    reexportable: true,
+                    visibility: ir::Visibility::Public,
                     path: path.into(),
                     module: false,
                     kind: ResolvedKind::Function,
                 }),
                 ItemKind::Trait if module => Some(ResolvedItem {
-                    reexportable: true,
+                    visibility: ir::Visibility::Public,
                     path: path.into(),
                     module: true,
                     kind: ResolvedKind::Trait,
                 }),
                 ItemKind::Struct if module => Some(ResolvedItem {
-                    reexportable: true,
+                    visibility: ir::Visibility::Public,
                     path: path.into(),
                     module: true,
                     kind: ResolvedKind::Struct,
                 }),
                 ItemKind::Enum if module => Some(ResolvedItem {
-                    reexportable: true,
+                    visibility: ir::Visibility::Public,
                     path: path.into(),
                     module: true,
                     kind: ResolvedKind::Enum,
                 }),
                 ItemKind::Variant(shape) if module || *shape != ir::VariantShape::Struct => {
                     Some(ResolvedItem {
-                        reexportable: self.items.get(parent(path)).is_some_and(|items| {
-                            items
-                                .iter()
-                                .any(|item| matches!(item.kind, ItemKind::Enum) && item.public)
-                        }),
+                        visibility: self
+                            .items
+                            .get(parent(path))
+                            .and_then(|items| {
+                                items
+                                    .iter()
+                                    .find(|item| matches!(item.kind, ItemKind::Enum))
+                            })
+                            .map_or_else(
+                                || ir::Visibility::Restricted(parent(parent(path)).into()),
+                                |item| item.visibility.clone(),
+                            ),
                         path: path.into(),
                         module,
                         kind: ResolvedKind::Variant,
@@ -5888,10 +5960,13 @@ impl Resolver<'_> {
                 _ => None,
             };
             if let Some(mut resolved) = resolved {
-                let public_binding = item.public
-                    && (!matches!(item.kind, ItemKind::Import(_, _)) || resolved.reexportable);
-                resolved.reexportable &= item.public;
-                if !public_binding && !descendant {
+                // A mixed-namespace import may legally widen one namespace
+                // while retaining a narrower binding in the other namespace.
+                // Never erase that original scope when publishing the alias.
+                if resolved.visibility.allows_reexport(&item.visibility) {
+                    resolved.visibility = item.visibility.clone();
+                }
+                if !resolved.visibility.accessible_from(requester) {
                     if visible_only {
                         continue;
                     }
@@ -5963,7 +6038,7 @@ impl Resolver<'_> {
             "crate" => {
                 at = 1;
                 ResolvedItem {
-                    reexportable: true,
+                    visibility: ir::Visibility::Public,
                     path: String::new(),
                     module: true,
                     kind: ResolvedKind::Module,
@@ -5972,12 +6047,15 @@ impl Resolver<'_> {
             "self" => {
                 at = 1;
                 ResolvedItem {
-                    reexportable: from.is_empty()
-                        || self.items.get(from).is_some_and(|items| {
+                    visibility: self
+                        .items
+                        .get(from)
+                        .and_then(|items| {
                             items
                                 .iter()
-                                .any(|item| matches!(item.kind, ItemKind::Module) && item.public)
-                        }),
+                                .find(|item| matches!(item.kind, ItemKind::Module))
+                        })
+                        .map_or(ir::Visibility::Public, |item| item.visibility.clone()),
                     path: from.into(),
                     module: true,
                     kind: ResolvedKind::Module,
@@ -5993,12 +6071,15 @@ impl Resolver<'_> {
                     at += 1;
                 }
                 ResolvedItem {
-                    reexportable: module.is_empty()
-                        || self.items.get(module).is_some_and(|items| {
+                    visibility: self
+                        .items
+                        .get(module)
+                        .and_then(|items| {
                             items
                                 .iter()
-                                .any(|item| matches!(item.kind, ItemKind::Module) && item.public)
-                        }),
+                                .find(|item| matches!(item.kind, ItemKind::Module))
+                        })
+                        .map_or(ir::Visibility::Public, |item| item.visibility.clone()),
                     path: module.into(),
                     module: true,
                     kind: ResolvedKind::Module,
@@ -6626,11 +6707,14 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                     return Err(format!("unresolved or cyclic import {path}"));
                 }
                 // A named import can bind both namespaces. Rust permits a
-                // public alias when at least one binding is public, but its
+                // public alias when at least one binding allows it, but its
                 // private namespace must not become visible outside the owner.
-                if item.public
-                    && !m.as_ref().is_some_and(|item| item.reexportable)
-                    && !f.as_ref().is_some_and(|item| item.reexportable)
+                if !m
+                    .as_ref()
+                    .is_some_and(|target| target.visibility.allows_reexport(&item.visibility))
+                    && !f
+                        .as_ref()
+                        .is_some_and(|target| target.visibility.allows_reexport(&item.visibility))
                 {
                     return Err(format!(
                         "private item or import cannot be publicly reexported as {path}"
@@ -7022,7 +7106,7 @@ pub struct DeclInfo {
     pub param_env: Arc<ir::ParamEnv>,
     pub type_params: Arc<[String]>,
     pub env: Arc<ir::GenericEnv>,
-    pub public: bool,
+    pub visibility: ir::Visibility,
 }
 #[derive(Debug)]
 pub struct DeclRegistry {
@@ -7125,6 +7209,12 @@ fn schema_fields_storage(fields: &[FieldDecl], budget: &ir::PlanBudget) -> Resul
     for field in fields {
         bytes = bytes
             .checked_add(field.name.len())
+            .and_then(|n| {
+                n.checked_add(match &field.visibility {
+                    ir::Visibility::Public => 0,
+                    ir::Visibility::Restricted(scope) => scope.len(),
+                })
+            })
             .and_then(|n| n.checked_add(source_type_storage(&field.ty, budget, 0).ok()?))
             .ok_or("generic schema allocation overflow")?;
     }
@@ -7182,7 +7272,9 @@ impl PlanCtx {
             if entry.declaration.index as usize != registry.declarations.len() {
                 return Err("catalog prefix identity mismatch".into());
             }
-            registry.declarations.push(catalog_decl_info(entry));
+            registry
+                .declarations
+                .push(catalog_decl_info(entry, budget)?);
             if let Some(schema) = &entry.schema {
                 state.functions.insert(entry.declaration, schema.clone());
             }
@@ -7304,12 +7396,16 @@ impl PlanCtx {
                 params.len(),
             )?);
             let path = DeclSemanticPath {
-                module: parent(name)
-                    .split("::")
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>()
-                    .into(),
+                module: (if matches!(kind, ir::DeclKind::Impl | ir::DeclKind::TraitImpl) {
+                    name
+                } else {
+                    parent(name)
+                })
+                .split("::")
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+                .into(),
                 item: name.rsplit("::").next().unwrap_or(name).into(),
                 kind,
                 associated: None,
@@ -7341,19 +7437,21 @@ impl PlanCtx {
                 source_index,
                 param_env,
                 env,
-                public: true,
+                visibility: ir::Visibility::Public,
                 type_params: params.to_vec().into(),
             });
             Ok(id)
         };
         for (index, d) in program.structs.iter().enumerate() {
             let id = insert(&d.name, &d.type_params, ir::DeclKind::Struct, index)?;
+            clone_visibility(&d.visibility, budget)?;
             state
                 .schemas
                 .insert(id, Arc::new(NominalSchema::Struct(d.clone())));
         }
         for (index, d) in program.enums.iter().enumerate() {
             let id = insert(&d.name, &d.type_params, ir::DeclKind::Enum, index)?;
+            clone_visibility(&d.visibility, budget)?;
             state
                 .schemas
                 .insert(id, Arc::new(NominalSchema::Enum(d.clone())));
@@ -7444,15 +7542,32 @@ impl PlanCtx {
                     .collect(),
             );
         }
+        for declaration in &program.structs {
+            clone_visibility(&declaration.visibility, budget)?;
+            let id = registry.nominals[&declaration.name];
+            registry.declarations[id.index as usize].visibility = declaration.visibility.clone();
+        }
+        for declaration in &program.enums {
+            clone_visibility(&declaration.visibility, budget)?;
+            let id = registry.nominals[&declaration.name];
+            registry.declarations[id.index as usize].visibility = declaration.visibility.clone();
+        }
+        for (index, function) in program.functions.iter().enumerate() {
+            clone_visibility(&function.visibility, budget)?;
+            let id = registry.function_ids[index];
+            registry.declarations[id.index as usize].visibility = function.visibility.clone();
+        }
         for (index, declaration) in program.traits.iter().enumerate() {
             let id = registry.trait_ids[index];
-            registry.declarations[id.index as usize].public = declaration.public;
+            clone_visibility(&declaration.visibility, budget)?;
+            registry.declarations[id.index as usize].visibility = declaration.visibility.clone();
             let trait_env = registry.declarations[id.index as usize].param_env.clone();
             for (ii, item) in registry.trait_items[index].iter().enumerate() {
+                clone_visibility(&declaration.visibility, budget)?;
                 let info = &mut registry.declarations[item.index as usize];
                 info.receiver = declaration.items[ii].receiver;
                 info.owner = Some(id);
-                info.public = declaration.public;
+                info.visibility = declaration.visibility.clone();
                 info.env = Arc::new(ir::GenericEnv::new(
                     &[trait_env.clone(), info.param_env.clone()],
                     budget,
@@ -7486,7 +7601,8 @@ impl PlanCtx {
             let info = &mut registry.declarations[id.index as usize];
             info.owner = Some(owner);
             info.receiver = program.traits[trait_index].items[item].receiver;
-            info.public = program.traits[trait_index].public;
+            clone_visibility(&program.traits[trait_index].visibility, budget)?;
+            info.visibility = program.traits[trait_index].visibility.clone();
             info.env = Arc::new(ir::GenericEnv::new(
                 &[trait_env.clone(), info.param_env.clone()],
                 budget,
@@ -7516,7 +7632,13 @@ impl PlanCtx {
                 )?);
                 info.receiver = program.impls[implementation].items[info.source_index].receiver;
                 info.owner = Some(registry.impl_ids[implementation]);
-                info.public = program.impls[implementation].items[info.source_index].public;
+                clone_visibility(
+                    &program.impls[implementation].items[info.source_index].visibility,
+                    budget,
+                )?;
+                info.visibility = program.impls[implementation].items[info.source_index]
+                    .visibility
+                    .clone();
             }
         }
         let mut registry = Arc::new(registry);
@@ -7874,7 +7996,9 @@ impl PlanCtx {
             if entry.declaration.index as usize != registry_mut.declarations.len() {
                 return Err("recipe suffix identity mismatch".into());
             }
-            registry_mut.declarations.push(catalog_decl_info(entry));
+            registry_mut
+                .declarations
+                .push(catalog_decl_info(entry, budget)?);
             if let Some(schema) = &entry.schema {
                 state.functions.insert(entry.declaration, schema.clone());
             }
@@ -8651,6 +8775,7 @@ impl tr::SchemaCx for SchemaAdapter {
     fn declaration_info(&self, id: ir::DeclId) -> Result<tr::SchemaDecl, tr::FactsError> {
         self.budget.charge_work(1).map_err(|e| self.error(e))?;
         let d = self.registry.declaration(id).map_err(|e| self.error(e))?;
+        clone_visibility(&d.visibility, &self.budget).map_err(|e| self.error(e))?;
         let receiver = receiver_mode(d.receiver);
         Ok(tr::SchemaDecl {
             declaration: id,
@@ -8659,7 +8784,7 @@ impl tr::SchemaCx for SchemaAdapter {
             env: d.env.clone(),
             owner: d.owner,
             module: d.path.module.clone(),
-            public: d.public,
+            visibility: d.visibility.clone(),
             receiver,
             region_contract_mode: self
                 .state
@@ -9287,8 +9412,7 @@ impl PlanCtx {
             if info.param_env.arity() != method_args.len() {
                 return Err("unsupported omitted or partial method type arguments; use all explicit method arguments".into());
             }
-            let definition_module = info.path.module.join("::");
-            if !info.public && !visible_from(&definition_module, module) {
+            if !info.visibility.accessible_from(module) {
                 return Err(format!("private associated item {name}"));
             }
             budget.retain_bytes(32 * std::mem::size_of::<ir::Ty>() + 128)?;
@@ -9953,6 +10077,7 @@ impl PlanState {
                     let mut names = std::collections::HashSet::new();
                     let mut result = Vec::new();
                     for field in fields {
+                        clone_visibility(&field.visibility, budget)?;
                         state.retain(budget, field.name.len())?;
                         if !names.insert(&field.name) {
                             return Err(format!("duplicate field {}", field.name));
@@ -9970,7 +10095,7 @@ impl PlanState {
                         result.push(ir::FieldDef {
                             name: field.name.clone(),
                             ty,
-                            public: field.public,
+                            visibility: field.visibility.clone(),
                         });
                     }
                     Ok(result.into())
@@ -9985,6 +10110,7 @@ impl PlanState {
             )?;
             let ty = match schema.as_ref() {
                 NominalSchema::Struct(d) => {
+                    clone_visibility(&d.visibility, budget)?;
                     if d.fields.is_empty() {
                         return Err("empty structs are unsupported".into());
                     }
@@ -9999,11 +10125,12 @@ impl PlanState {
                         type_args: args.to_vec().into(),
                         name: d.name.clone(),
                         module: parent(&d.name).into(),
-                        public: d.public,
+                        visibility: d.visibility.clone(),
                         fields,
                     }))
                 }
                 NominalSchema::Enum(d) => {
+                    clone_visibility(&d.visibility, budget)?;
                     if d.variants.is_empty() || d.variants.len() > 4096 {
                         return Err("enum variant count exceeds supported limits".into());
                     }
@@ -10054,7 +10181,7 @@ impl PlanState {
                         type_args: args.to_vec().into(),
                         name: d.name.clone(),
                         module: parent(&d.name).into(),
-                        public: d.public,
+                        visibility: d.visibility.clone(),
                         variants: variants.into(),
                     }))
                 }
@@ -11909,18 +12036,14 @@ impl<'a> Checker<'a> {
                         visit(checker, field, depth + 1)?;
                     }
                 }
-                ir::Ty::Enum(ty)
-                    if !ty.def().public && !visible_from(&ty.def().module, &checker.module) =>
-                {
+                ir::Ty::Enum(ty) if !ty.def().visibility.accessible_from(&checker.module) => {
                     return Err(format!(
                         "private type {} is inaccessible from module {}",
                         ty.def().name,
                         checker.module
                     ));
                 }
-                ir::Ty::Struct(ty)
-                    if !ty.def().public && !visible_from(&ty.def().module, &checker.module) =>
-                {
+                ir::Ty::Struct(ty) if !ty.def().visibility.accessible_from(&checker.module) => {
                     return Err(format!(
                         "private type {} is inaccessible from module {}",
                         ty.def().name,
@@ -12269,7 +12392,7 @@ impl<'a> Checker<'a> {
                         .ok_or_else(|| format!("unknown field {name} in {}", ty.def().name))?
                 };
                 let field = &ty.def().fields[index];
-                if !field.public && !visible_from(&ty.def().module, &self.module) {
+                if !field.visibility.accessible_from(&self.module) {
                     return Err(format!("private field {name} in {}", ty.def().name));
                 }
                 Ok((index, field.ty.clone()))
@@ -14382,7 +14505,7 @@ impl<'a> Checker<'a> {
                 else {
                     return Err("expected struct constructor".into());
                 };
-                if !ty.def().public && !visible_from(&ty.def().module, &self.module) {
+                if !ty.def().visibility.accessible_from(&self.module) {
                     return Err(format!("private struct {name}"));
                 }
                 let mut seen = std::collections::HashSet::new();
@@ -18716,6 +18839,102 @@ mod tests {
         good("mod a{pub enum E{A}}pub use a::E::A;fn main(){let x=A;}");
     }
     #[test]
+    fn restricted_visibility_normalizes_ast_and_registry_scopes() {
+        let program = parse(
+            "mod a{pub(crate) struct S{pub(super) x:i32}pub(in crate::a) enum E{A}pub(self) trait T{fn f(self);}mod b{pub(in super::super) fn f(){}}}fn main(){}",
+        ).unwrap();
+        assert_eq!(
+            program.structs[0].visibility,
+            ir::Visibility::Restricted(String::new())
+        );
+        assert_eq!(
+            program.structs[0].fields[0].visibility,
+            ir::Visibility::Restricted(String::new())
+        );
+        assert_eq!(
+            program.enums[0].visibility,
+            ir::Visibility::Restricted("a".into())
+        );
+        assert_eq!(
+            program.traits[0].visibility,
+            ir::Visibility::Restricted("a".into())
+        );
+        assert_eq!(
+            program.functions[0].visibility,
+            ir::Visibility::Restricted(String::new())
+        );
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        for info in &plan.registry.declarations {
+            match info.name.as_str() {
+                "a::S" | "a::b::f" => {
+                    assert_eq!(info.visibility, ir::Visibility::Restricted(String::new()))
+                }
+                "a::E" | "a::T" => {
+                    assert_eq!(info.visibility, ir::Visibility::Restricted("a".into()))
+                }
+                _ => {}
+            }
+        }
+    }
+    #[test]
+    fn restricted_visibility_rejects_unused_nonlexical_paths_and_explicit_trait_items() {
+        for source in [
+            "mod a{}mod b{pub(in crate::a) fn f(){}}fn main(){}",
+            "mod a{use crate::a as alias;mod b{pub(in crate::a::alias) fn f(){}}}fn main(){}",
+            "mod a{pub(in self::super) fn f(){}}fn main(){}",
+            "pub(super) fn f(){}fn main(){}",
+            "trait T{pub(self) fn f(self);}fn main(){}",
+            "trait T{fn f(self);}struct S{x:i32}impl T for S{pub(self) fn f(self){}}fn main(){}",
+            "enum E{A{pub(self) x:i32}}fn main(){}",
+        ] {
+            assert!(parse_unresolved(source).is_err(), "accepted {source}");
+        }
+        let oversized = format!(
+            "pub(in crate::{}) fn f(){{}}fn main(){{}}",
+            "a::".repeat(1024) + "a"
+        );
+        assert!(
+            parse_unresolved(&oversized)
+                .unwrap_err()
+                .contains("visibility path nesting")
+        );
+    }
+    #[test]
+    fn restricted_visibility_scope_heap_is_charged_before_program_clones() {
+        let public = parse("pub fn main(){}").unwrap();
+        let baseline = ir::PlanBudget::default();
+        preflight_program_clone(&public, &baseline).unwrap();
+        let bytes = baseline.usage_snapshot().bytes;
+        let mut restricted = public.clone();
+        restricted.functions[0].visibility = ir::Visibility::Restricted("a".repeat(4096));
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: bytes + 4095,
+            ..Default::default()
+        });
+        assert!(preflight_program_clone(&restricted, &budget).is_err());
+    }
+    #[test]
+    fn module_parser_depth_limit_uses_an_ordinary_stack() {
+        for depth in [128, 129, 300] {
+            let source = format!(
+                "{}{}fn main(){{}}",
+                "mod a{".repeat(depth),
+                "}".repeat(depth)
+            );
+            let result = parse_unresolved(&source);
+            if depth == 128 {
+                assert!(result.is_ok(), "{result:?}");
+            } else {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .contains("module nesting exceeds limit 128")
+                );
+            }
+        }
+    }
+    #[test]
     fn public_reexports_validate_unused_originals_and_aliases() {
         for source in [
             "enum E{A}pub use E::A;fn main(){}",
@@ -18755,7 +18974,7 @@ mod tests {
     fn unsupported_module_forms_are_rejected_explicitly() {
         for (source, message) in [
             ("mod a; fn main(){}", "external module"),
-            ("pub(crate) fn main(){}", "restricted pub"),
+            ("type Alias=i32;fn main(){}", "type aliases are unsupported"),
             ("use crate::a::*; fn main(){}", "glob imports"),
             ("pub use crate::a::*; fn main(){}", "glob imports"),
             ("mod a{} mod a{} fn main(){}", "duplicate item"),
@@ -18872,14 +19091,15 @@ fn canonical_trait_spelling(path: &str) -> Option<&'static str> {
         _ => None,
     }
 }
-fn catalog_decl_info(entry: &tr::CatalogDecl) -> DeclInfo {
+fn catalog_decl_info(entry: &tr::CatalogDecl, budget: &ir::PlanBudget) -> Result<DeclInfo, String> {
     let info = &entry.info;
+    clone_visibility(&info.visibility, budget)?;
     let receiver = match info.receiver {
         ir::ReceiverMode::None => ReceiverKind::None,
         ir::ReceiverMode::Value => ReceiverKind::Value { mutable: false },
         ir::ReceiverMode::Borrowed { kind } => ReceiverKind::Borrowed { kind },
     };
-    DeclInfo {
+    Ok(DeclInfo {
         receiver,
         owner: info.owner,
         id: entry.declaration,
@@ -18898,8 +19118,8 @@ fn catalog_decl_info(entry: &tr::CatalogDecl) -> DeclInfo {
             .collect::<Vec<_>>()
             .into(),
         env: info.env.clone(),
-        public: info.public,
-    }
+        visibility: info.visibility.clone(),
+    })
 }
 fn clone_text(text: &str, budget: &ir::PlanBudget) -> Result<(), String> {
     budget.charge_work(
@@ -18965,6 +19185,7 @@ fn clone_parameters(params: &[(String, Type)], budget: &ir::PlanBudget) -> Resul
 fn clone_fields(fields: &[FieldDecl], budget: &ir::PlanBudget) -> Result<(), String> {
     clone_vector(fields, budget)?;
     for field in fields {
+        clone_visibility(&field.visibility, budget)?;
         clone_text(&field.name, budget)?;
         walk_depth(DepthNode::Type(&field.ty), Some(budget))?;
     }
@@ -19116,17 +19337,20 @@ fn preflight_program_clone(program: &Program, budget: &ir::PlanBudget) -> Result
         walk_depth(DepthNode::Type(&implementation.self_ty), Some(budget))?;
         clone_vector(&implementation.items, budget)?;
         for item in &implementation.items {
+            clone_visibility(&item.visibility, budget)?;
             preflight_function_clone(&item.function, budget)?;
         }
     }
     clone_vector(&program.structs, budget)?;
     for declaration in &program.structs {
+        clone_visibility(&declaration.visibility, budget)?;
         clone_text(&declaration.name, budget)?;
         clone_names(&declaration.type_params, budget)?;
         clone_fields(&declaration.fields, budget)?;
     }
     clone_vector(&program.enums, budget)?;
     for declaration in &program.enums {
+        clone_visibility(&declaration.visibility, budget)?;
         clone_text(&declaration.name, budget)?;
         clone_names(&declaration.type_params, budget)?;
         clone_vector(&declaration.variants, budget)?;
@@ -19137,6 +19361,7 @@ fn preflight_program_clone(program: &Program, budget: &ir::PlanBudget) -> Result
     }
     clone_vector(&program.traits, budget)?;
     for declaration in &program.traits {
+        clone_visibility(&declaration.visibility, budget)?;
         clone_text(&declaration.name, budget)?;
         clone_names(&declaration.supertraits, budget)?;
         clone_vector(&declaration.items, budget)?;
@@ -19161,6 +19386,7 @@ fn preflight_program_clone(program: &Program, budget: &ir::PlanBudget) -> Result
     Ok(())
 }
 fn preflight_function_clone(function: &Function, budget: &ir::PlanBudget) -> Result<(), String> {
+    clone_visibility(&function.visibility, budget)?;
     clone_text(&function.name, budget)?;
     clone_names(&function.type_params, budget)?;
     clone_bounds(&function.bounds, budget)?;
@@ -19168,6 +19394,13 @@ fn preflight_function_clone(function: &Function, budget: &ir::PlanBudget) -> Res
     clone_parameters(&function.params, budget)?;
     walk_depth(DepthNode::Type(&function.result), Some(budget))?;
     walk_depth(DepthNode::Block(&function.body), Some(budget))
+}
+
+fn clone_visibility(visibility: &ir::Visibility, budget: &ir::PlanBudget) -> Result<(), String> {
+    if let ir::Visibility::Restricted(scope) = visibility {
+        clone_text(scope, budget)?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]

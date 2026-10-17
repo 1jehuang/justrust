@@ -2992,6 +2992,44 @@ impl Hash for EnumTy {
     }
 }
 
+/// Source visibility normalized to a canonical module subtree. The empty
+/// restricted scope denotes the current crate, not unrestricted external use.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Visibility {
+    Public,
+    Restricted(String),
+}
+
+impl Visibility {
+    pub fn is_public(&self) -> bool {
+        matches!(self, Self::Public)
+    }
+
+    pub fn accessible_from(&self, module: &str) -> bool {
+        match self {
+            Self::Public => true,
+            Self::Restricted(scope) => Self::within(scope, module),
+        }
+    }
+
+    /// Whether the alias's entire audience is permitted by this original.
+    pub fn allows_reexport(&self, alias: &Self) -> bool {
+        match (self, alias) {
+            (Self::Public, _) => true,
+            (Self::Restricted(_), Self::Public) => false,
+            (Self::Restricted(scope), Self::Restricted(alias)) => Self::within(scope, alias),
+        }
+    }
+
+    fn within(scope: &str, module: &str) -> bool {
+        scope.is_empty()
+            || module == scope
+            || module
+                .strip_prefix(scope)
+                .is_some_and(|rest| rest.starts_with("::"))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EnumDef {
     pub id: NominalAppId,
@@ -2999,7 +3037,7 @@ pub struct EnumDef {
     pub type_args: Arc<[Ty]>,
     pub name: String,
     pub module: String,
-    pub public: bool,
+    pub visibility: Visibility,
     pub variants: Arc<[VariantDef]>,
 }
 
@@ -3147,7 +3185,7 @@ pub struct StructDef {
     pub name: String,
     /// Defining module, used for owner/descendant field visibility checks.
     pub module: String,
-    pub public: bool,
+    pub visibility: Visibility,
     /// Declaration order. No layout offsets or implicit Copy permission.
     pub fields: Arc<[FieldDef]>,
 }
@@ -3156,7 +3194,7 @@ pub struct StructDef {
 pub struct FieldDef {
     pub name: String,
     pub ty: Ty,
-    pub public: bool,
+    pub visibility: Visibility,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -3164,7 +3202,7 @@ pub struct LocalId(pub usize);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ExprId(pub usize);
 /// Resolved control-flow target, allocated monotonically within one function.
-/// Labels are not represented by this milestone's source language.
+/// Source labels resolve to these function-local targets before CFG lowering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LoopId(pub usize);
 
@@ -5986,6 +6024,38 @@ mod original_replay_transport_tests {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn visibility_scopes_use_module_boundaries_and_cannot_widen() {
+        let public = super::Visibility::Public;
+        let krate = super::Visibility::Restricted(String::new());
+        let a = super::Visibility::Restricted("a".into());
+        let ab = super::Visibility::Restricted("a::b".into());
+        let sibling = super::Visibility::Restricted("a::c".into());
+        for module in ["", "a", "a::b", "a::b::child", "ab", "other"] {
+            assert!(public.accessible_from(module));
+            assert!(krate.accessible_from(module));
+        }
+        for module in ["a", "a::b", "a::b::child", "a::c"] {
+            assert!(a.accessible_from(module));
+        }
+        for module in ["", "ab", "a_b", "other", "a::bc"] {
+            assert!(!ab.accessible_from(module));
+        }
+        assert!(ab.accessible_from("a::b"));
+        assert!(ab.accessible_from("a::b::child"));
+        assert!(public.allows_reexport(&krate));
+        assert!(public.allows_reexport(&ab));
+        assert!(krate.allows_reexport(&ab));
+        assert!(a.allows_reexport(&ab));
+        assert!(ab.allows_reexport(&ab));
+        assert!(!ab.allows_reexport(&a));
+        assert!(!ab.allows_reexport(&sibling));
+        assert!(!krate.allows_reexport(&public));
+        assert!(!a.allows_reexport(&public));
+        assert!(public.is_public());
+        assert!(!krate.is_public());
+    }
+
+    #[test]
     fn trait_default_self_place_is_not_owned_value_authority() {
         for sized in [false, true] {
             let source = if sized {
@@ -7792,14 +7862,14 @@ mod tests {
             id: NominalAppId { snapshot, index: 7 },
             name: "E".into(),
             module: String::new(),
-            public: false,
+            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
             variants: Arc::from([VariantDef {
                 name: "V".into(),
                 shape: VariantShape::Tuple,
                 fields: Arc::from([FieldDef {
                     name: "0".into(),
                     ty: Ty::Int(IntTy::I32),
-                    public: false,
+                    visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
                 }]),
             }]),
         });
@@ -8469,7 +8539,7 @@ mod tests {
             id,
             name: "E".into(),
             module: String::new(),
-            public: false,
+            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
             variants: vec![
                 VariantDef {
                     name: "A".into(),
@@ -8477,7 +8547,7 @@ mod tests {
                     fields: vec![FieldDef {
                         name: "0".into(),
                         ty: Ty::Tuple(vec![Ty::Int(IntTy::I32)].into()),
-                        public: true,
+                        visibility: crate::compiler::ir::Visibility::Public,
                     }]
                     .into(),
                 },
@@ -8530,7 +8600,7 @@ mod tests {
             id,
             name: "Empty".into(),
             module: String::new(),
-            public: false,
+            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
             variants: vec![VariantDef {
                 name: "A".into(),
                 shape: VariantShape::Struct,
@@ -8576,7 +8646,7 @@ mod tests {
             id,
             name: "é".repeat(1000),
             module: String::new(),
-            public: false,
+            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
             variants: vec![unit_variant("A")].into(),
         });
         let same_id = EnumTy::new(EnumDef {
@@ -8585,7 +8655,7 @@ mod tests {
             id,
             name: "Other".into(),
             module: String::new(),
-            public: true,
+            visibility: crate::compiler::ir::Visibility::Public,
             variants: vec![unit_variant("B")].into(),
         });
         assert_eq!(handle, same_id);
@@ -8616,7 +8686,7 @@ mod tests {
                 id,
                 name: "Invalid".into(),
                 module: String::new(),
-                public: false,
+                visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
                 variants: vec![unit_variant(""); count].into(),
             });
             assert!(invalid.validate().is_err());
@@ -8827,14 +8897,14 @@ mod tests {
             id,
             name: name.into(),
             module: String::new(),
-            public: false,
+            visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
             fields: fields
                 .into_iter()
                 .enumerate()
                 .map(|(index, ty)| FieldDef {
                     name: format!("f{index}"),
                     ty,
-                    public: false,
+                    visibility: crate::compiler::ir::Visibility::Restricted(String::new()),
                 })
                 .collect::<Vec<_>>()
                 .into(),

@@ -30,8 +30,9 @@ change source-loader module boundaries. No external compiler participates in
 native compilation; stock Rust is only the test oracle.
 
 Named public reexports are a following slice documented in REEXPORTS.md.
-The grouped-import milestone itself does not implement glob resolution, restricted
-visibility, anonymous `as _` imports, external-crate namespace/edition behavior or
+Restricted visibility follows in VISIBILITY.md. The grouped-import milestone
+itself does not implement glob resolution, anonymous `as _` imports,
+external-crate namespace/edition behavior or
 all source maps.
 Existing generic, trait, data and expression boundaries continue to apply.
 Full source organization and full Rust support remain open in IMPLEMENTATION.md.
