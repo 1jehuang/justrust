@@ -203,7 +203,8 @@ pub(super) fn preflight_program_clone(
     budget: &ir::PlanBudget,
 ) -> Result<(), String> {
     // Program's Arc fields are included inline. Their name/module/symbol/path
-    // payloads are shared under their original leases, never deep-cloned here.
+    // payloads, including an optional lexical-scope arena, are shared under
+    // their original leases, never deep-cloned here.
     budget.retain_bytes(std::mem::size_of::<Program>())?;
     clone_vector(&program.functions, budget)?;
     for function in &program.functions {
@@ -344,10 +345,16 @@ mod tests {
     #[test]
     fn program_clone_keeps_exact_name_module_and_closed_symbol_owners() {
         let source_budget = ExpansionBudget::default();
-        let program = ProgramBuilder::new(Path::new("clone-owners.rs"), "", &source_budget)
+        let mut program = ProgramBuilder::new(Path::new("clone-owners.rs"), "", &source_budget)
             .unwrap()
             .finish()
             .unwrap();
+        let scopes =
+            crate::compiler::semantic_scope::ScopeArenaBuilder::for_names(program.names.as_ref())
+                .unwrap()
+                .freeze()
+                .unwrap();
+        program.scopes = Some(scopes);
         let before = source_budget.snapshot();
         let budget = ir::PlanBudget::new(ir::PlanLimits::default());
         preflight_program_clone(&program, &budget).unwrap();
@@ -355,6 +362,10 @@ mod tests {
         assert!(Arc::ptr_eq(&program.names, &copied.names));
         assert!(Arc::ptr_eq(&program.modules, &copied.modules));
         assert!(Arc::ptr_eq(&program.symbols, &copied.symbols));
+        assert!(Arc::ptr_eq(
+            program.scopes.as_ref().unwrap(),
+            copied.scopes.as_ref().unwrap()
+        ));
         assert_eq!(
             source_budget.snapshot().retained_bytes,
             before.retained_bytes
@@ -381,5 +392,34 @@ mod tests {
         assert_eq!(failure.used, 1024);
         assert_eq!(budget.usage_snapshot().bytes, 1024);
         assert!(!failure.arithmetic_overflow);
+    }
+
+    #[test]
+    fn lexical_scope_storage_survives_program_clone_until_last_owner() {
+        let source_budget = ExpansionBudget::default();
+        let mut program = ProgramBuilder::new(Path::new("clone-scope.rs"), "", &source_budget)
+            .unwrap()
+            .finish()
+            .unwrap();
+        let baseline = source_budget.snapshot().retained_bytes;
+        let mut scopes =
+            crate::compiler::semantic_scope::ScopeArenaBuilder::for_names(program.names.as_ref())
+                .unwrap();
+        scopes.function_root(program.names.as_ref()).unwrap();
+        program.scopes = Some(scopes.freeze().unwrap());
+        let retained = source_budget.snapshot().retained_bytes;
+        assert!(retained > baseline);
+        let copied = program.clone();
+        assert_eq!(source_budget.snapshot().retained_bytes, retained);
+        drop(program);
+        assert_eq!(source_budget.snapshot().retained_bytes, retained);
+        copied
+            .scopes
+            .as_ref()
+            .unwrap()
+            .check_names(copied.names.as_ref())
+            .unwrap();
+        drop(copied);
+        assert_eq!(source_budget.snapshot().retained_bytes, 0);
     }
 }

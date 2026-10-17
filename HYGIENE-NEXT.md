@@ -1,10 +1,12 @@
 # Next bounded source-macro / mixed-site slice
 
-**Status: UNIMPLEMENTED next slice after accepted A1 commit `12826bfe3`.**
-This document is not acceptance evidence or authorization to widen the current
-root-only name gate. Accepted A1 evidence is in `MODULE-IDENTITY.md`: 2,020 tests
-across 100 binaries, strict all-target lint, check and formatting passed.
-Full Rust support and general source-macro support remain open.
+**Historical plan after A1 commit `12826bfe3`; the bounded first slice is now
+implemented and accepted under `SOURCE-MACROS.md`.** That document records the
+actual scope, private admission gates, 17 stock / 48 native worker-mode matrix
+and final 2,070-test / 102-binary frozen acceptance. The blockers below describe
+the pre-implementation baseline, not the current implementation. This plan is
+not authorization to generalize the bounded gate. Full Rust, nested/general
+hygiene, item generation and broader source macros remain open.
 
 ## Exact first vertical slice
 

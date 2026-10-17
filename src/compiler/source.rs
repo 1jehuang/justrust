@@ -55,11 +55,14 @@ pub struct SourceLocation {
     pub line: usize,
     pub column: usize,
 }
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct SourceError {
     pub kind: SourceErrorKind,
     pub primary: Option<SourceSpan>,
     pub message: String,
+    // Variable-size expanded diagnostics keep their original storage lease.
+    // This field follows the String so payload destruction precedes release.
+    pub(crate) _diagnostic_lease: Option<super::expansion_budget::ByteLease>,
     pub location: Option<SourceLocation>,
 }
 impl SourceError {
@@ -86,6 +89,7 @@ impl SourceError {
             kind,
             primary: None,
             message: error.to_string(),
+            _diagnostic_lease: None,
             location: None,
         }
     }
@@ -94,6 +98,7 @@ impl SourceError {
             kind: SourceErrorKind::Syntax,
             primary,
             message: message.into(),
+            _diagnostic_lease: None,
             location: None,
         }
     }
@@ -301,6 +306,7 @@ impl<'a> Loader<'a> {
             kind,
             primary,
             message: message.into(),
+            _diagnostic_lease: None,
             location: None,
         }
     }

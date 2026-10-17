@@ -2,6 +2,7 @@
 //! No display spelling is used as a lookup key or reconstructed into an AST.
 use super::super::module_identity::{CatalogModule, ModuleSegment};
 use super::super::semantic_name::BuiltinAtom;
+use super::super::semantic_scope::{BindingId, ScopeId, scope_diagnostic};
 use super::*;
 
 #[derive(Clone, Debug)]
@@ -47,6 +48,7 @@ enum ResolvedKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum LocalKey {
     Named(NameKey),
+    Anchored(BindingId),
     Receiver,
 }
 
@@ -63,6 +65,7 @@ struct Resolver<'a> {
     imports: HashMap<(PathKey, usize, bool), Option<ResolvedItem>>,
     active: std::collections::HashSet<(PathKey, usize, bool)>,
     type_params: Vec<AstIdent>,
+    lexical_function: Option<ScopeId>,
 }
 impl Resolver<'_> {
     fn names(&self) -> &NameStore {
@@ -1120,13 +1123,57 @@ impl Resolver<'_> {
         scope
             .try_reserve(1)
             .map_err(|_| "local scope allocation failed")?;
-        Ok(scope.insert(LocalKey::Named(self.ident_key(name, LookupClass::Local)?)))
+        let key = if let Some(function) = self.lexical_function {
+            let arena = self
+                .program
+                .scopes
+                .as_ref()
+                .ok_or("macro function has no lexical scope arena")?;
+            let binding = arena
+                .declaration_for(self.names(), name)
+                .map_err(scope_diagnostic)?;
+            if arena.binding_function(binding).map_err(scope_diagnostic)? != function {
+                return Err("binding declaration belongs to another function".into());
+            }
+            LocalKey::Anchored(binding)
+        } else {
+            LocalKey::Named(self.ident_key(name, LookupClass::Local)?)
+        };
+        Ok(scope.insert(key))
     }
     fn local_path(&self, path: &AstPath) -> Result<Option<LocalKey>, String> {
         path.check(self.names())
             .map_err(native_adapter::name_diagnostic)?;
         if path.anchor() == PathAnchor::SelfModule && path.is_empty() {
             return Ok(Some(LocalKey::Receiver));
+        }
+        if let Some(function) = self.lexical_function
+            && let Some(ident) = path.single()
+        {
+            let arena = self
+                .program
+                .scopes
+                .as_ref()
+                .ok_or("macro function has no lexical scope arena")?;
+            if arena
+                .reference_function(self.names(), ident)
+                .map_err(scope_diagnostic)?
+                != function
+            {
+                return Err("binding reference belongs to another function".into());
+            }
+            let binding = arena
+                .reference_for(self.names(), ident)
+                .map_err(scope_diagnostic)?;
+            if let Some(binding) = binding {
+                if arena.binding_function(binding).map_err(scope_diagnostic)? != function {
+                    return Err("resolved local belongs to another function".into());
+                }
+                return Ok(Some(LocalKey::Anchored(binding)));
+            }
+            // Recorded unresolved is a genuine item candidate. Missing or
+            // foreign associations are errors above, never a name-key retry.
+            return Ok(None);
         }
         path.single()
             .map(|ident| {
@@ -1754,10 +1801,23 @@ impl Resolver<'_> {
         Ok(())
     }
     fn function_locals(
-        &self,
+        &mut self,
         function: &Function,
         receiver: ReceiverKind,
     ) -> Result<std::collections::HashSet<LocalKey>, String> {
+        self.lexical_function = function.lexical_scope;
+        if let Some(function) = self.lexical_function {
+            let arena = self
+                .program
+                .scopes
+                .as_ref()
+                .ok_or("macro function has no lexical scope arena")?;
+            arena.check_names(self.names()).map_err(scope_diagnostic)?;
+            arena.check_function(function).map_err(scope_diagnostic)?;
+            if receiver != ReceiverKind::None {
+                return Err("unsupported: lexical macro bindings for method receivers".into());
+            }
+        }
         let mut locals = std::collections::HashSet::new();
         self.charge_entries::<LocalKey>(
             function.params.len() + usize::from(receiver != ReceiverKind::None),
@@ -1862,6 +1922,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         imports: HashMap::new(),
         active: std::collections::HashSet::new(),
         type_params: Vec::new(),
+        lexical_function: None,
     };
     for (bucket, items) in &parsed.items {
         for item in items {

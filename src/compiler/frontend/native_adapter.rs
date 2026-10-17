@@ -15,6 +15,7 @@ pub(super) struct NativeParserInput {
     session: TokenSession,
     text_leases: BudgetVec<crate::compiler::expansion_budget::ByteLease>,
     names: BudgetVec<AdmittedRootName>,
+    macro_source: Option<crate::compiler::token_tree::TokenStream>,
 }
 /// Issued only after the native identifier's context, rawness and spelling have
 /// passed the bounded root-only ingress gate. This is not a hygiene projection.
@@ -28,8 +29,21 @@ struct AdmittedRootName {
 /// so parsing may mint semantic identifiers while holding token views.
 pub(super) struct NativeTokenBuffer {
     tokens: BudgetVec<Token>,
-    names: BudgetVec<AdmittedRootName>,
+    names: AdmittedNames,
     _text_leases: BudgetVec<crate::compiler::expansion_budget::ByteLease>,
+    macro_source: Option<crate::compiler::token_tree::TokenStream>,
+}
+enum AdmittedNames {
+    Root(BudgetVec<AdmittedRootName>),
+    Expanded {
+        names: BudgetVec<AdmittedExpandedName>,
+        admission: crate::compiler::semantic_scope::ExpansionAdmission,
+    },
+}
+struct AdmittedExpandedName {
+    token: crate::compiler::token::Token,
+    edition: crate::compiler::token::Edition,
+    logical: u32,
 }
 impl Deref for NativeTokenBuffer {
     type Target = [Token];
@@ -43,6 +57,131 @@ impl std::fmt::Debug for NativeTokenBuffer {
     }
 }
 impl NativeTokenBuffer {
+    pub(super) fn macro_source(&self) -> Option<&crate::compiler::token_tree::TokenStream> {
+        self.macro_source.as_ref()
+    }
+    pub(super) fn expanded(
+        session: &TokenSession,
+        admission: &crate::compiler::semantic_scope::ExpansionAdmission,
+    ) -> Result<Self, ParseError> {
+        admission.validate_session(session).map_err(scope_error)?;
+        let budget = session.budget();
+        Ok(Self {
+            tokens: BudgetVec::new(budget, Storage::Retained).map_err(transport_error)?,
+            names: AdmittedNames::Expanded {
+                names: BudgetVec::new(budget, Storage::Retained).map_err(transport_error)?,
+                admission: *admission,
+            },
+            _text_leases: BudgetVec::new(budget, Storage::Retained).map_err(transport_error)?,
+            macro_source: None,
+        })
+    }
+
+    pub(super) fn push_expanded(
+        &mut self,
+        session: &TokenSession,
+        text: &str,
+        kind: ParserTokenKind,
+        parts: &[TokenPart],
+        name: Option<(
+            crate::compiler::token::Token,
+            crate::compiler::token::Edition,
+        )>,
+    ) -> Result<(), ParseError> {
+        use crate::compiler::expansion_budget::Counter;
+        let AdmittedNames::Expanded { admission, .. } = &self.names else {
+            return Err(transport_error(TokenError::InvalidHandle));
+        };
+        admission.validate_session(session).map_err(scope_error)?;
+        let whole = parts
+            .first()
+            .ok_or_else(|| transport_error(TokenError::InvalidRange))?
+            .clone();
+        if parts.len() > 3 {
+            return Err(transport_error(TokenError::InvalidRange));
+        }
+        for part in parts {
+            session.span(part.span).map_err(transport_error)?;
+            if part.provenance() != super::TokenProvenance::Expanded {
+                return Err(transport_error(TokenError::InvalidHandle));
+            }
+            admission
+                .validate_span(session, part.span)
+                .map_err(scope_error)?;
+        }
+        let budget = session.budget();
+        budget
+            .charge(Counter::Work, text.len() as u64 + 1)
+            .map_err(|error| transport_error(error.into()))?;
+        let mut lease = budget
+            .reserve(Storage::Retained, text.len() as u64)
+            .map_err(|error| transport_error(error.into()))?;
+        let mut owned = String::new();
+        owned
+            .try_reserve_exact(text.len())
+            .map_err(|_| transport_error(TokenError::Budget(budget.poison_allocation())))?;
+        lease
+            .resize(owned.capacity() as u64)
+            .map_err(|error| transport_error(error.into()))?;
+        owned.push_str(text);
+        let mut constituents = [None; 3];
+        for (slot, part) in constituents.iter_mut().zip(parts) {
+            *slot = Some(part.span);
+        }
+        let mut suffixes = std::array::from_fn(|_| None);
+        if kind == ParserTokenKind::Punct && matches!(text, ">>" | ">=" | ">>=" | "&&") {
+            for prefix in 1..text.len() {
+                suffixes[prefix - 1] = Some(
+                    parts
+                        .get(prefix)
+                        .ok_or_else(|| transport_error(TokenError::InvalidRange))?
+                        .clone(),
+                );
+            }
+        }
+        let (line, column) = whole.position(1, 1, 0);
+        let index = if let Some((token, edition)) = name {
+            admission
+                .validate_token(session, token)
+                .map_err(scope_error)?;
+            let AdmittedNames::Expanded { names, .. } = &mut self.names else {
+                return Err(transport_error(TokenError::InvalidHandle));
+            };
+            let index = names
+                .len()
+                .checked_add(1)
+                .and_then(|value| u32::try_from(value).ok())
+                .and_then(std::num::NonZeroU32::new)
+                .ok_or_else(|| transport_error(TokenError::IdExhausted))?;
+            let logical = u32::try_from(self.tokens.len())
+                .map_err(|_| transport_error(TokenError::IdExhausted))?;
+            names
+                .push(AdmittedExpandedName {
+                    token,
+                    edition,
+                    logical,
+                })
+                .map_err(transport_error)?;
+            Some(index)
+        } else {
+            None
+        };
+        self._text_leases.push(lease).map_err(transport_error)?;
+        self.tokens
+            .push(Token {
+                text: owned,
+                line,
+                column,
+                string: kind == ParserTokenKind::String,
+                kind,
+                whole,
+                constituents,
+                suffixes,
+                name: index,
+            })
+            .map_err(transport_error)
+    }
+
     pub(super) fn mint_name(
         &self,
         token: &super::TokenView<'_>,
@@ -51,8 +190,10 @@ impl NativeTokenBuffer {
         let index = token
             .name
             .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
-        let admitted = self
-            .names
+        let AdmittedNames::Root(root_names) = &self.names else {
+            return self.mint_expanded_name(token, names);
+        };
+        let admitted = root_names
             .as_slice()
             .get(index.get() as usize - 1)
             .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
@@ -65,6 +206,7 @@ impl NativeTokenBuffer {
             || logical.name != Some(index)
             || token.span != logical.whole.span
             || token.bytes != logical.whole.bytes()
+            || token.provenance != logical.whole.provenance()
         {
             return Err(transport_error(TokenError::ForeignHandle));
         }
@@ -78,6 +220,44 @@ impl NativeTokenBuffer {
         };
         names
             .from_token(token, admitted.edition)
+            .map_err(name_error)
+    }
+
+    fn mint_expanded_name(
+        &self,
+        view: &super::TokenView<'_>,
+        names: &mut crate::compiler::semantic_name::NameStoreBuilder,
+    ) -> Result<crate::compiler::semantic_name::AstIdent, ParseError> {
+        let AdmittedNames::Expanded {
+            names: admitted,
+            admission,
+        } = &self.names
+        else {
+            return Err(transport_error(TokenError::InvalidHandle));
+        };
+        let index = view
+            .name
+            .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+        let record = admitted
+            .as_slice()
+            .get(index.get() as usize - 1)
+            .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+        let logical = self
+            .tokens
+            .as_slice()
+            .get(record.logical as usize)
+            .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+        if !std::ptr::eq(logical.text.as_str(), view.text)
+            || logical.name != Some(index)
+            || view.span != logical.whole.span
+            || view.provenance != super::TokenProvenance::Expanded
+            || logical.whole.provenance() != super::TokenProvenance::Expanded
+            || view.bytes != logical.whole.bytes()
+        {
+            return Err(transport_error(TokenError::ForeignHandle));
+        }
+        names
+            .admit_expanded_token(record.token, record.edition, admission)
             .map_err(name_error)
     }
 }
@@ -97,6 +277,7 @@ pub(super) fn name_error(error: crate::compiler::semantic_name::NameError) -> Pa
 pub(super) fn name_diagnostic(error: crate::compiler::semantic_name::NameError) -> String {
     let error = name_error(error);
     let mut diagnostic = SourceError::syntax(error.primary, error.message);
+    diagnostic._diagnostic_lease = error._diagnostic_lease;
     diagnostic.kind = error.kind;
     diagnostic.to_string()
 }
@@ -116,8 +297,9 @@ impl NativeParserInput {
         (
             NativeTokenBuffer {
                 tokens: self.tokens,
-                names: self.names,
+                names: AdmittedNames::Root(self.names),
                 _text_leases: self.text_leases,
+                macro_source: self.macro_source,
             },
             self.session,
         )
@@ -148,11 +330,72 @@ impl NativeParserInput {
         }
         let budget = session.budget().clone();
         let edition = lexed.edition();
+        // Native ordinary sources pay only the bounded audit scan. No second
+        // token arena is retained unless an actual macro_rules! pair occurs.
+        budget
+            .charge(
+                crate::compiler::expansion_budget::Counter::Work,
+                lexed.events().len() as u64,
+            )
+            .map_err(|error| transport_error(error.into()))?;
+        let mut macro_bearing = false;
+        for pair in lexed.events().windows(2) {
+            if let [
+                LexedEvent {
+                    token:
+                        InputToken::Leaf(crate::compiler::token::Token {
+                            kind: TokenKind::Ident(ident),
+                            ..
+                        }),
+                    ..
+                },
+                LexedEvent {
+                    token:
+                        InputToken::Leaf(crate::compiler::token::Token {
+                            kind: TokenKind::Punct { ch: '!', .. },
+                            ..
+                        }),
+                    ..
+                },
+            ] = pair
+                && !ident.raw
+                && session.symbol(ident.symbol).map_err(transport_error)? == "macro_rules"
+            {
+                macro_bearing = true;
+                break;
+            }
+        }
+        let macro_source = if macro_bearing {
+            if let Some(doc) = lexed.docs().first() {
+                return Err(expanded_error(
+                    &session,
+                    doc.span,
+                    SourceErrorKind::Unsupported,
+                    "documentation comments in macro-bearing input require token-tree doc lowering",
+                ));
+            }
+            let mut events =
+                BudgetVec::new(&budget, Storage::Temporary).map_err(transport_error)?;
+            for event in lexed.events() {
+                events.push(event.token).map_err(transport_error)?;
+            }
+            Some(
+                crate::compiler::token_tree::group(
+                    &session,
+                    events.as_slice(),
+                    crate::compiler::token_tree::GroupPolicy::OriginalSource,
+                )
+                .map_err(transport_error)?,
+            )
+        } else {
+            None
+        };
         let mut input = Self {
             tokens: BudgetVec::new(&budget, Storage::Retained).map_err(transport_error)?,
             text_leases: BudgetVec::new(&budget, Storage::Retained).map_err(transport_error)?,
             session,
             names: BudgetVec::new(&budget, Storage::Retained).map_err(transport_error)?,
+            macro_source,
         };
         let events = lexed.events();
         let mut at = 0;
@@ -370,7 +613,7 @@ impl NativeParserInput {
                                 "invalid punctuation range",
                             )
                         })?;
-                        if !punctuation(text) {
+                        if !punctuation(text) && !(text == "$" && input.macro_source.is_some()) {
                             return Err(event_error(
                                 event,
                                 if matches!(text, "#" | "@" | "?" | "$" | "~") {
@@ -718,7 +961,8 @@ fn native_part(event: &LexedEvent) -> Result<TokenPart, ParseError> {
 fn compound(s: &str) -> bool {
     matches!(
         s,
-        "->" | "::"
+        "->" | "<-"
+            | "::"
             | "=="
             | "!="
             | "<="
@@ -741,7 +985,7 @@ fn compound(s: &str) -> bool {
             | ">>="
     )
 }
-fn punctuation(s: &str) -> bool {
+pub(super) fn punctuation(s: &str) -> bool {
     compound(s)
         || matches!(
             s,
@@ -768,6 +1012,128 @@ fn punctuation(s: &str) -> bool {
                 | "^"
         )
 }
+/// Expanded coordinates are rendered only from checked occurrence provenance.
+/// The zero byte range below is deliberately not a prepared-source location.
+pub(super) fn expanded_error(
+    session: &TokenSession,
+    span: SpanId,
+    kind: SourceErrorKind,
+    message: &str,
+) -> ParseError {
+    match expanded_diagnostic(session, span, message) {
+        Ok((primary, line, column, message, lease)) => ParseError {
+            kind,
+            has_location: false,
+            bytes: 0..0,
+            primary: Some(primary),
+            line,
+            column,
+            message,
+            _diagnostic_lease: Some(lease),
+        },
+        Err(error) => error,
+    }
+}
+
+fn expanded_diagnostic(
+    session: &TokenSession,
+    span: SpanId,
+    message: &str,
+) -> Result<
+    (
+        crate::compiler::source::SourceSpan,
+        usize,
+        usize,
+        String,
+        crate::compiler::expansion_budget::ByteLease,
+    ),
+    ParseError,
+> {
+    use std::fmt::Write;
+    let source = session.original(span, 512).map_err(transport_error)?;
+    let primary = session
+        .sources()
+        .render_span(source)
+        .map_err(transport_error)?;
+    let (_, line, column) = session
+        .sources()
+        .location(source)
+        .map_err(transport_error)?;
+    let budget = session.budget();
+    budget
+        .charge(
+            crate::compiler::expansion_budget::Counter::Work,
+            (message.len() as u64)
+                .checked_add(1)
+                .ok_or_else(|| transport_error(TokenError::IdExhausted))?,
+        )
+        .map_err(|error| transport_error(error.into()))?;
+    let mut lease = budget
+        .reserve(Storage::Retained, message.len() as u64)
+        .map_err(|error| transport_error(error.into()))?;
+    let mut text = String::new();
+    text.try_reserve_exact(message.len())
+        .map_err(|_| transport_error(TokenError::Budget(budget.poison_allocation())))?;
+    lease
+        .resize(text.capacity() as u64)
+        .map_err(|error| transport_error(error.into()))?;
+    text.push_str(message);
+    let mut trace = session
+        .trace(
+            session.span(span).map_err(transport_error)?.expansion,
+            budget.limits().backtrace_frames,
+        )
+        .map_err(transport_error)?;
+    for frame in trace.by_ref() {
+        let frame = frame.map_err(transport_error)?;
+        budget
+            .charge(crate::compiler::expansion_budget::Counter::Work, 192)
+            .map_err(|error| transport_error(error.into()))?;
+        let call = original(session, frame.record.call)?;
+        let definition = original(session, frame.record.definition)?;
+        let required = text
+            .len()
+            .checked_add(192)
+            .ok_or_else(|| transport_error(TokenError::IdExhausted))?;
+        lease
+            .resize(required.max(text.capacity()) as u64)
+            .map_err(|error| transport_error(error.into()))?;
+        text.try_reserve_exact(192)
+            .map_err(|_| transport_error(TokenError::Budget(budget.poison_allocation())))?;
+        lease
+            .resize(text.capacity() as u64)
+            .map_err(|error| transport_error(error.into()))?;
+        write!(
+            text,
+            "\n  expanded at file {}:{}..{}, defined at file {}:{}..{}",
+            call.file.0, call.lo, call.hi, definition.file.0, definition.lo, definition.hi
+        )
+        .map_err(|_| transport_error(TokenError::InvalidHandle))?;
+    }
+    if trace.truncated() {
+        const NOTE: &str = "\n  expansion backtrace truncated";
+        let required = text
+            .len()
+            .checked_add(NOTE.len())
+            .ok_or_else(|| transport_error(TokenError::IdExhausted))?;
+        lease
+            .resize(required.max(text.capacity()) as u64)
+            .map_err(|error| transport_error(error.into()))?;
+        text.try_reserve_exact(NOTE.len())
+            .map_err(|_| transport_error(TokenError::Budget(budget.poison_allocation())))?;
+        lease
+            .resize(text.capacity() as u64)
+            .map_err(|error| transport_error(error.into()))?;
+        text.push_str(NOTE);
+    }
+    budget
+        .charge(
+            crate::compiler::expansion_budget::Counter::DiagnosticBytes,
+            text.capacity() as u64,
+        )
+        .map_err(|error| transport_error(error.into()))?;
+    Ok((primary, line, column, text, lease))
+}
 fn simple_error(kind: SourceErrorKind, message: &str) -> ParseError {
     ParseError {
         kind,
@@ -776,6 +1142,7 @@ fn simple_error(kind: SourceErrorKind, message: &str) -> ParseError {
         line: 1,
         column: 1,
         message: message.into(),
+        _diagnostic_lease: None,
         primary: None,
     }
 }
@@ -787,6 +1154,7 @@ fn event_error(event: &LexedEvent, kind: SourceErrorKind, message: &str) -> Pars
         line: event.line,
         column: event.column,
         message: message.into(),
+        _diagnostic_lease: None,
         primary: None,
     }
 }
@@ -798,9 +1166,14 @@ pub(super) fn source_error(error: SourceError) -> ParseError {
         line: 1,
         column: 1,
         message: error.message,
+        _diagnostic_lease: error._diagnostic_lease,
         primary: error.primary,
     }
 }
+pub(super) fn scope_error(error: crate::compiler::semantic_scope::ScopeError) -> ParseError {
+    source_error(error.source_error())
+}
+
 pub(super) fn transport_error(error: TokenError) -> ParseError {
     source_error(SourceError::from_token(error))
 }
@@ -819,6 +1192,7 @@ pub(super) fn lex_error(error: LexError) -> ParseError {
             line,
             column,
             message: message.into(),
+            _diagnostic_lease: None,
             primary: None,
         },
         LexError::Projection(error) => source_error(error),
@@ -832,6 +1206,34 @@ mod tests {
     use crate::compiler::expansion_budget::ExpansionBudget;
     use crate::compiler::source::{OriginSegment, SourceOptions, SourceSpan, prepare_text};
     use std::path::Path;
+
+    #[test]
+    fn joint_less_minus_is_transportable_but_not_an_expression() {
+        let direct = "fn main(){let x=0;let _=x<-1;}";
+        let input = super::super::lex(direct).unwrap();
+        assert!(
+            input
+                .tokens
+                .as_slice()
+                .iter()
+                .any(|token| token.text == "<-")
+        );
+        let error = super::super::parse_syntax_unprepared(direct).err().unwrap();
+        assert_eq!(error.kind, SourceErrorKind::Syntax);
+        super::super::parse_syntax_unprepared("fn main(){let x=0;let _=x < -1;}").unwrap();
+
+        // A joint operator is still a legal token-tree matcher token.
+        let input = super::super::lex("fn main(){macro_rules! fixed{(<-)=>{0};}let _=fixed!(<-);}")
+            .unwrap();
+        assert!(input.macro_source.is_some());
+        assert!(
+            input
+                .tokens
+                .as_slice()
+                .iter()
+                .any(|token| token.text == "<-")
+        );
+    }
 
     fn split_source(text: &str, boundary: usize) -> crate::compiler::source::PreparedSource {
         let mut source = prepare_text("split.rs", text, &SourceOptions::default()).unwrap();
@@ -1089,5 +1491,46 @@ mod tests {
         assert!(!cursor.consume_type_amp_prefix());
         cursor.bump();
         assert!(cursor.current().matches(""));
+    }
+
+    #[test]
+    fn macro_inventory_is_typed_optional_and_dollar_transport_is_conditional() {
+        let ordinary = super::super::lex("fn main(){}").unwrap();
+        assert!(ordinary.macro_source.is_none());
+        let quoted = super::super::lex("\"macro_rules!\"").unwrap();
+        assert!(quoted.macro_source.is_none());
+        assert_eq!(
+            super::super::lex("$").unwrap_err().kind,
+            SourceErrorKind::Unsupported
+        );
+        let input = super::super::lex("macro_rules! m { ($x:ident)=>{$x}; }").unwrap();
+        assert!(input.macro_source.is_some());
+        assert!(input.iter().any(|token| token.text == "$"));
+        let (buffer, session) = input.into_parts();
+        let stream = buffer.macro_source().unwrap();
+        let roots = stream.roots(&session).unwrap();
+        assert!(!stream.children(&session, &roots).unwrap().is_empty());
+    }
+
+    #[test]
+    fn macro_inventory_never_silently_drops_doc_audit_records() {
+        for text in [
+            "/// audit\nmacro_rules! m {()=>{1};}",
+            "macro_rules! m {()=>{/** audit */1};}",
+        ] {
+            let error = super::super::lex(text).unwrap_err();
+            assert_eq!(error.kind, SourceErrorKind::Unsupported);
+            assert!(error.message.contains("doc lowering"));
+            assert!(error.primary.is_some());
+            assert!(!error.has_location);
+        }
+        assert!(super::super::lex("/// audit\nfn main(){}").is_ok());
+        // Complete lexical validation precedes the legal unsupported doc gate.
+        assert_eq!(
+            super::super::lex("macro_rules! m {()=>{1};} /// audit\n\"unterminated")
+                .unwrap_err()
+                .kind,
+            SourceErrorKind::Syntax
+        );
     }
 }

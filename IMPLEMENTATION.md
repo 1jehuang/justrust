@@ -284,9 +284,18 @@ iteration and suspended-state destruction each have executable oracle cases.
       public tests include 81 stock cases and 14 utility tests; complete
       coordinated acceptance is 1,951 tests/98 binaries with strict lint/fmt.
       Utility output alone is not native source macro acceptance.
-- [ ] Integrate namespace-specific mixed-site scope anchors, lexical expansion
-      discovery, generated cfg-before-child-IO and complete-unit publication,
-      then run actual worker-1/8 CHECK/BUILD/executable macro clients.
+- [x] Deliver the bounded function-local `tt`/`ident` expression client with
+      owner-checked definition/invocation frontiers, actual lexical BindingId
+      resolution, expanded token ingress and retained original-source replay.
+      SOURCE-MACROS.md records 17 stock cases / 48 native workers-1/8 CHECK/BUILD
+      cells, including real introduced/captured binders. The complete frozen
+      hosted suite passes 2,070 tests / 102 binaries, strict lint and formatting.
+      Root public admission stays closed; private expansion proofs do not grant
+      body or publication authority.
+- [ ] Generalize nested/recursive expansion and namespace-specific hygiene,
+      generated declarations, cfg-before-child-IO and graph discovery closure.
+      Add real item/export/import/cross-crate clients and opaque literal AST
+      consumption before claiming general macro support.
 
 The macro specification input is Rust Reference commit
 `f1e8ba23e46236877fe90c86e4cb7075ad37b776`,

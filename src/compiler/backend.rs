@@ -1982,6 +1982,7 @@ mod tests {
             constness: crate::compiler::frontend::Constness::Runtime,
             visibility: ir::Visibility::Public,
             module: builder.module_root().unwrap(),
+            lexical_scope: None,
             name: builder.path(&format!("crate::{name}")).unwrap(),
             regions: Default::default(),
             type_params: vec![],

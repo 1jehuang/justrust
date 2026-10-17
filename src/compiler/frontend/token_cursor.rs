@@ -14,6 +14,7 @@ pub(super) struct TokenView<'input> {
     pub(super) bytes: Range<usize>,
     pub(super) span: crate::compiler::expansion_span::SpanId,
     pub(super) name: Option<std::num::NonZeroU32>,
+    pub(super) provenance: super::TokenProvenance,
     kind: ParserTokenKind,
 }
 
@@ -148,14 +149,16 @@ impl<'input> TokenCursor<'input> {
                 .expect("validated cursor suffix")
         };
         debug_assert!(token.constituents[0].is_some());
+        let (line, column) = part.position(token.line, token.column, prefix);
         TokenView {
             text: &token.text[prefix..],
-            line: token.line,
-            column: token.column + prefix,
+            line,
+            column,
             string: token.string,
             bytes: part.bytes(),
             span: part.span,
             name: token.name,
+            provenance: part.provenance(),
             kind: token.kind,
         }
     }

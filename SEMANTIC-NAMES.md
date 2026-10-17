@@ -4,9 +4,10 @@ This historical checkpoint implements reusable checked name/path storage and the
 actual AST integration: loop labels. It does not complete the name-bearing AST,
 root resolver migration, mixed-site hygiene, Unicode semantic identifiers, or
 native macro execution. The later actual root-context AST/resolver/checker/replay
-migration is accepted under `MODULE-IDENTITY.md`. Mixed-site hygiene, Unicode
-semantic identifiers and native source macro execution remain explicit work in
-`IMPLEMENTATION.md`.
+migration is accepted under `MODULE-IDENTITY.md`. A later bounded function-local
+source macro client and checked mixed-site lexical bindings are accepted under
+`SOURCE-MACROS.md`. General hygiene, Unicode semantic identifiers and broader
+source macro execution remain explicit work in `IMPLEMENTATION.md`.
 
 ## One owner, real occurrences
 

@@ -177,6 +177,73 @@ impl fmt::Debug for NameStore {
 }
 
 impl NameStoreBuilder {
+    /// Compiler-only ingress after the source driver binds actual lexical sites.
+    /// This is not the public root-name constructor and grants no replay proof.
+    pub(crate) fn admit_expanded_token(
+        &mut self,
+        token: Token,
+        lexical_edition: Edition,
+        admission: &super::semantic_scope::ExpansionAdmission,
+    ) -> Result<AstIdent, NameError> {
+        admission
+            .validate_token(self.session(), token)
+            .map_err(|error| match error {
+                super::semantic_scope::ScopeError::Token(error) => NameError::Token(error),
+                super::semantic_scope::ScopeError::UnsupportedProjection => {
+                    NameError::Unsupported(UnsupportedName::NonRootContext)
+                }
+                _ => NameError::Token(TokenError::InvalidInput(
+                    "invalid lexical expansion admission",
+                )),
+            })?;
+        let TokenKind::Ident(ident) = token.kind else {
+            return Err(NameError::ExpectedIdentifier);
+        };
+        if ident.raw {
+            return Err(NameError::Unsupported(UnsupportedName::RawIdentifier));
+        }
+        Self::check_ascii(self.session().symbol(ident.symbol)?, self.budget())?;
+        self.append(NameData {
+            atom: NameAtomId(ident.symbol),
+            spelling: ident.symbol,
+            context: ident.context,
+            span: token.span,
+            raw: ident.raw,
+            edition: lexical_edition,
+        })
+    }
+
+    pub(crate) fn compile_local_rules(
+        &mut self,
+        body: super::macro_cursor::TokenSlice,
+        site: super::macro_rules::DefinitionSite,
+    ) -> Result<super::macro_rules::RulesDef, super::macro_rules::MacroError> {
+        super::macro_rules::compile_rules(body, site, &mut self.store.session)
+    }
+    pub(crate) fn expand_local_rules(
+        &mut self,
+        definition: &super::macro_rules::RulesDef,
+        args: super::macro_cursor::TokenSlice,
+        call: super::macro_rules::CallSite,
+    ) -> Result<super::macro_rules::ExpandedTokens, super::macro_rules::MacroError> {
+        super::macro_rules::expand_rules(definition, args, call, &mut self.store.session)
+    }
+    pub(crate) fn register_crate_root(
+        &mut self,
+        file: super::token_session::SourceFileHandle,
+    ) -> Result<super::token_session::CrateId, TokenError> {
+        self.store.session.register_crate_root(file)
+    }
+    pub(crate) fn expansion_eof(
+        &mut self,
+        proof: &super::semantic_scope::ExpansionAdmission,
+    ) -> Result<SpanId, super::semantic_scope::ScopeError> {
+        proof.check_names(self)?;
+        let expansion = proof.expansion(self)?;
+        let call = self.session().expansion(expansion)?.call;
+        let context = self.session().root_context();
+        Ok(self.store.session.reissue_span(call, context, expansion)?)
+    }
     /// Closed catalog member identity, never a source occurrence or provenance.
     pub fn catalog_member_key(&mut self, atom: BuiltinAtom) -> Result<NameKey, NameError> {
         if !matches!(
@@ -371,9 +438,41 @@ impl NameStore {
     }
     pub fn key(&self, ident: AstIdent, class: LookupClass) -> Result<NameKey, NameError> {
         let record = self.record(ident)?;
+        if record.context != self.session.root_context()
+            && matches!(
+                class,
+                LookupClass::Label | LookupClass::TypeParameter | LookupClass::LifetimeParameter
+            )
+        {
+            return Err(NameError::Unsupported(UnsupportedName::NonRootContext));
+        }
+        // Only the compiler-private, driver-proof-checked ingress can append
+        // nonroot records. The first slice admits one semi-transparent mark;
+        // item/member references use its checked invocation (root) context.
+        // Local keys retain their mark and resolve through lexical frontiers.
+        let context = if record.context == self.session.root_context()
+            || !matches!(class, LookupClass::Item(_) | LookupClass::Member)
+        {
+            record.context
+        } else {
+            match *self.session.context(record.context)? {
+                super::hygiene::ContextData::Mark {
+                    parent,
+                    transparency: super::hygiene::Transparency::SemiTransparent,
+                    ..
+                } if matches!(
+                    self.session.context(parent)?,
+                    super::hygiene::ContextData::Root
+                ) =>
+                {
+                    parent
+                }
+                _ => record.context,
+            }
+        };
         Ok(NameKey {
             atom: record.atom,
-            context: record.context,
+            context,
             class,
         })
     }
@@ -399,6 +498,32 @@ impl NameStore {
     pub fn edition(&self) -> Edition {
         self.unit_edition
     }
+}
+
+/// Internal occurrence association identity, not semantic identifier equality.
+pub(super) fn occurrence_index(
+    names: &impl super::semantic_path::NameAccess,
+    ident: AstIdent,
+) -> Result<u32, NameError> {
+    names.check(ident)?;
+    Ok(ident.index)
+}
+pub(super) fn name_context(
+    names: &impl super::semantic_path::NameAccess,
+    ident: AstIdent,
+) -> Result<SyntaxContextId, NameError> {
+    Ok(names.key(ident, LookupClass::Local)?.context)
+}
+pub(super) fn key_at_context(
+    names: &impl super::semantic_path::NameAccess,
+    ident: AstIdent,
+    class: LookupClass,
+    context: SyntaxContextId,
+) -> Result<NameKey, NameError> {
+    names.session().context(context)?;
+    let mut key = names.key(ident, class)?;
+    key.context = context;
+    Ok(key)
 }
 
 #[cfg(test)]

@@ -82,6 +82,36 @@ pub struct RulesDef {
     site: DefinitionSite,
     arms: BudgetVec<Arm>,
 }
+impl RulesDef {
+    /// The first source client has no opaque literal AST consumer. Keep that
+    /// client's admission gate separate from this utility's wider grammar.
+    pub(crate) fn supports_local_fragments(
+        &self,
+        session: &TokenSession,
+    ) -> Result<bool, MacroError> {
+        session.budget().check()?;
+        if self.owner != session.id() {
+            return Err(TokenError::ForeignHandle.into());
+        }
+        let mut supported = true;
+        for arm in self.arms.as_slice() {
+            work(session)?;
+            for node in arm.matcher.nodes.as_slice() {
+                work(session)?;
+                if matches!(
+                    node,
+                    Element::Bind {
+                        kind: FragmentKind::Literal,
+                        ..
+                    }
+                ) {
+                    supported = false;
+                }
+            }
+        }
+        Ok(supported)
+    }
+}
 impl std::fmt::Debug for RulesDef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RulesDef")
@@ -668,6 +698,35 @@ mod tests {
             };
             self.session.symbol(ident.symbol).unwrap().to_owned()
         }
+    }
+
+    #[test]
+    fn source_fragment_gate_checks_all_arms_owner_and_resource_latch() {
+        let mut simple = Fixture::new("{ () => {1}; ($x:ident, $y:tt) => {$x} }");
+        let supported = simple.definition(0).unwrap();
+        assert!(supported.supports_local_fragments(&simple.session).unwrap());
+        let mut literal = Fixture::new("{ () => {1}; ($x:literal) => {2} }");
+        let wider_utility = literal.definition(0).unwrap();
+        assert!(
+            !wider_utility
+                .supports_local_fragments(&literal.session)
+                .unwrap()
+        );
+        assert!(matches!(
+            supported.supports_local_fragments(&literal.session),
+            Err(MacroError::Contract(TokenError::ForeignHandle))
+        ));
+        let budget = simple.session.budget();
+        let failure = budget
+            .charge(
+                Counter::Work,
+                budget.limits().counters[Counter::Work as usize] + 1,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(supported.supports_local_fragments(&simple.session),
+            Err(MacroError::Resource(error)) if error == failure)
+        );
     }
 
     #[test]

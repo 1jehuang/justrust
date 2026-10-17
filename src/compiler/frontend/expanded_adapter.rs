@@ -1,0 +1,676 @@
+//! Expanded token ingress. No printing, relexing, source-range fabrication or
+//! semantic identity issuance occurs here. The parser owns expression admission.
+use super::native_adapter::{self, NativeTokenBuffer, scope_error, transport_error};
+use super::{ParseError, ParserTokenKind, TokenPart};
+use crate::compiler::expansion_budget::{Counter, Storage};
+use crate::compiler::expansion_span::SpanId;
+use crate::compiler::macro_cursor::{LogicalToken, MacroCursor, TokenSlice};
+use crate::compiler::semantic_name::NameStoreBuilder;
+use crate::compiler::semantic_scope::ExpansionAdmission;
+use crate::compiler::source::SourceErrorKind;
+use crate::compiler::token::{Delimiter, Edition, LiteralKind, Token, TokenKind};
+use crate::compiler::token_session::{BudgetVec, TokenError, TokenSession};
+use crate::compiler::token_tree::Node;
+
+struct Frame {
+    cursor: MacroCursor,
+    close: Option<(Delimiter, SpanId)>,
+}
+
+/// A private anchor proof is required even for empty or punctuation-only output.
+/// The buffer is independent of the mutable name owner used by the parser.
+pub(super) fn lower(
+    slice: TokenSlice,
+    names: &mut NameStoreBuilder,
+    edition: Edition,
+    eof: SpanId,
+    admission: &ExpansionAdmission,
+) -> Result<NativeTokenBuffer, ParseError> {
+    let session = names.session();
+    session
+        .budget()
+        .check()
+        .map_err(|error| transport_error(error.into()))?;
+    slice.len(session).map_err(transport_error)?;
+    session.span(eof).map_err(transport_error)?;
+    admission.validate_session(session).map_err(scope_error)?;
+    admission.validate_span(session, eof).map_err(scope_error)?;
+    validate_slice(session, &slice, admission)?;
+    let mut output = NativeTokenBuffer::expanded(session, admission)?;
+    let mut frames =
+        BudgetVec::new(session.budget(), Storage::Temporary).map_err(transport_error)?;
+    frames
+        .push(Frame {
+            cursor: MacroCursor::new(session, slice).map_err(transport_error)?,
+            close: None,
+        })
+        .map_err(transport_error)?;
+    while let Some(mut frame) = frames.pop() {
+        let next = frame.cursor.bump(session).map_err(transport_error)?;
+        match next {
+            None => {
+                if let Some((delimiter, span)) = frame.close {
+                    let (_, close) = delimiters(delimiter);
+                    output.push_expanded(
+                        session,
+                        close,
+                        ParserTokenKind::Punct,
+                        &[part(session, span)?],
+                        None,
+                    )?;
+                }
+            }
+            Some(LogicalToken::Group {
+                kind,
+                open,
+                children,
+                close,
+            }) => {
+                session.span(open).map_err(transport_error)?;
+                session.span(close).map_err(transport_error)?;
+                let (start, _) = delimiters(kind);
+                output.push_expanded(
+                    session,
+                    start,
+                    ParserTokenKind::Punct,
+                    &[part(session, open)?],
+                    None,
+                )?;
+                frames.push(frame).map_err(transport_error)?;
+                frames
+                    .push(Frame {
+                        cursor: MacroCursor::new(session, children).map_err(transport_error)?,
+                        close: Some((kind, close)),
+                    })
+                    .map_err(transport_error)?;
+            }
+            Some(logical) => {
+                push_logical(&mut output, session, logical, edition)?;
+                frames.push(frame).map_err(transport_error)?;
+            }
+        }
+    }
+    output.push_expanded(
+        session,
+        "",
+        ParserTokenKind::Eof,
+        &[part(session, eof)?],
+        None,
+    )?;
+    Ok(output)
+}
+
+fn validate_slice(
+    session: &TokenSession,
+    slice: &TokenSlice,
+    admission: &ExpansionAdmission,
+) -> Result<(), ParseError> {
+    let mut pending =
+        BudgetVec::new(session.budget(), Storage::Temporary).map_err(transport_error)?;
+    pending.push(slice.clone()).map_err(transport_error)?;
+    while let Some(slice) = pending.pop() {
+        let count = slice.len(session).map_err(transport_error)?;
+        session
+            .budget()
+            .charge(Counter::Work, count as u64)
+            .map_err(|error| transport_error(error.into()))?;
+        for index in 0..count {
+            match slice.node(session, index).map_err(transport_error)? {
+                Node::Leaf(token) => admission
+                    .validate_token(session, *token)
+                    .map_err(scope_error)?,
+                Node::Delimited { open, close, .. } => {
+                    admission
+                        .validate_span(session, *open)
+                        .map_err(scope_error)?;
+                    admission
+                        .validate_span(session, *close)
+                        .map_err(scope_error)?;
+                    let children = slice
+                        .children(session, index)
+                        .map_err(transport_error)?
+                        .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+                    pending.push(children).map_err(transport_error)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn delimiters(delimiter: Delimiter) -> (&'static str, &'static str) {
+    match delimiter {
+        Delimiter::Parenthesis => ("(", ")"),
+        Delimiter::Brace => ("{", "}"),
+        Delimiter::Bracket => ("[", "]"),
+    }
+}
+
+fn part(session: &TokenSession, span: SpanId) -> Result<TokenPart, ParseError> {
+    let original = session.original(span, 512).map_err(transport_error)?;
+    let (_, line, column) = session
+        .sources()
+        .location(original)
+        .map_err(transport_error)?;
+    TokenPart::expanded(span, line, column)
+}
+
+fn failure(session: &TokenSession, span: SpanId, message: &str) -> ParseError {
+    native_adapter::expanded_error(session, span, SourceErrorKind::Unsupported, message)
+}
+
+fn push_logical(
+    output: &mut NativeTokenBuffer,
+    session: &TokenSession,
+    logical: LogicalToken,
+    edition: Edition,
+) -> Result<(), ParseError> {
+    match logical {
+        LogicalToken::Leaf(token) => {
+            token.validate(session).map_err(transport_error)?;
+            match token.kind {
+                TokenKind::Ident(ident) => {
+                    let text = session.symbol(ident.symbol).map_err(transport_error)?;
+                    if ident.raw || !text.is_ascii() {
+                        return Err(failure(
+                            session,
+                            token.span,
+                            "raw and non-ASCII identifiers are unsupported",
+                        ));
+                    }
+                    if text == "self" {
+                        return Err(failure(
+                            session,
+                            token.span,
+                            "expanded receiver self is unsupported",
+                        ));
+                    }
+                    output.push_expanded(
+                        session,
+                        text,
+                        ParserTokenKind::Ident,
+                        &[part(session, token.span)?],
+                        Some((token, edition)),
+                    )
+                }
+                TokenKind::Literal {
+                    kind: LiteralKind::Integer | LiteralKind::Float,
+                    spelling,
+                } => {
+                    if matches!(
+                        token.kind,
+                        TokenKind::Literal {
+                            kind: LiteralKind::Float,
+                            ..
+                        }
+                    ) && output.last().is_some_and(|previous| {
+                        previous.kind == ParserTokenKind::Punct && previous.text == "."
+                    }) {
+                        return Err(failure(
+                            session,
+                            token.span,
+                            "expanded tuple float projections require constituent source metadata",
+                        ));
+                    }
+                    let text = session.symbol(spelling).map_err(transport_error)?;
+                    output.push_expanded(
+                        session,
+                        text,
+                        ParserTokenKind::Number,
+                        &[part(session, token.span)?],
+                        None,
+                    )
+                }
+                TokenKind::Literal {
+                    kind: LiteralKind::String,
+                    spelling,
+                } => {
+                    let text = session.symbol(spelling).map_err(transport_error)?;
+                    session
+                        .budget()
+                        .charge(Counter::Work, text.len() as u64)
+                        .map_err(|error| transport_error(error.into()))?;
+                    // Classify only an existing string's continuation metadata.
+                    // Skip escape pairs so an escaped backslash cannot create one.
+                    let mut at = 0;
+                    while at < text.len() {
+                        if text.as_bytes()[at] == b'\\' {
+                            at += 1;
+                            if matches!(text.as_bytes().get(at), Some(b'\n' | b'\r')) {
+                                return Err(failure(
+                                    session,
+                                    token.span,
+                                    "string continuation escapes are unsupported",
+                                ));
+                            }
+                        }
+                        at += 1;
+                    }
+                    let decoded =
+                        crate::compiler::lexer::decode_normal_string(text, session.budget())
+                            .map_err(native_adapter::lex_error)?;
+                    output.push_expanded(
+                        session,
+                        decoded.as_str(),
+                        ParserTokenKind::String,
+                        &[part(session, token.span)?],
+                        None,
+                    )
+                }
+                TokenKind::Literal { .. } => Err(failure(
+                    session,
+                    token.span,
+                    "raw, byte, character and C literals are unsupported",
+                )),
+                TokenKind::Opaque(_) => Err(failure(
+                    session,
+                    token.span,
+                    "opaque literal fragments are unsupported by the expression parser",
+                )),
+                TokenKind::DollarCrate(_) => Err(failure(
+                    session,
+                    token.span,
+                    "$crate is unsupported by the expression parser",
+                )),
+                TokenKind::Punct { ch, .. } => {
+                    let mut bytes = [0; 4];
+                    let text = ch.encode_utf8(&mut bytes);
+                    push_punctuation(output, session, text, &[part(session, token.span)?])
+                }
+            }
+        }
+        LogicalToken::Operator { chars, spans, len } => {
+            let len = usize::from(len);
+            let mut bytes = [0; 3];
+            let mut parts: [Option<TokenPart>; 3] = std::array::from_fn(|_| None);
+            if len == 0 || len > bytes.len() {
+                return Err(transport_error(TokenError::InvalidRange));
+            }
+            for index in 0..len {
+                bytes[index] = u8::try_from(chars[index])
+                    .map_err(|_| transport_error(TokenError::InvalidRange))?;
+                let span =
+                    spans[index].ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+                parts[index] = Some(part(session, span)?);
+            }
+            let text = std::str::from_utf8(&bytes[..len])
+                .map_err(|_| transport_error(TokenError::InvalidRange))?;
+            let first = parts[0]
+                .take()
+                .ok_or_else(|| transport_error(TokenError::InvalidHandle))?;
+            let second = parts[1].take().unwrap_or_else(|| first.clone());
+            let third = parts[2].take().unwrap_or_else(|| second.clone());
+            let parts = [first, second, third];
+            push_punctuation(output, session, text, &parts[..len])
+        }
+        LogicalToken::Lifetime { quote, ident, span } => {
+            let token = Token {
+                kind: TokenKind::Ident(ident),
+                span,
+            };
+            token.validate(session).map_err(transport_error)?;
+            // Only Local/Item/Member projection has an anchored contract.
+            Err(failure(
+                session,
+                quote,
+                "expanded lifetimes and labels are unsupported",
+            ))
+        }
+        LogicalToken::Group { .. } => Err(transport_error(TokenError::InvalidInput(
+            "group must be lowered by the iterative adapter",
+        ))),
+    }
+}
+
+fn push_punctuation(
+    output: &mut NativeTokenBuffer,
+    session: &TokenSession,
+    text: &str,
+    parts: &[TokenPart],
+) -> Result<(), ParseError> {
+    if text == "<-" {
+        return Err(native_adapter::expanded_error(
+            session,
+            parts[0].span,
+            SourceErrorKind::Syntax,
+            "unexpected token: <-",
+        ));
+    }
+    if !native_adapter::punctuation(text) {
+        return Err(failure(
+            session,
+            parts[0].span,
+            "unsupported expanded punctuation",
+        ));
+    }
+    output.push_expanded(session, text, ParserTokenKind::Punct, parts, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compiler::expansion_budget::ExpansionBudget;
+    use crate::compiler::macro_rules::{CallSite, DefinitionSite};
+    use crate::compiler::semantic_scope::ScopeArenaBuilder;
+    use crate::compiler::source::PreparedLexInput;
+    use crate::compiler::token_tree::{GroupPolicy, group};
+    use std::path::Path;
+
+    struct Fixture {
+        names: NameStoreBuilder,
+        tokens: TokenSlice,
+        eof: SpanId,
+        original_eof: SpanId,
+        admission: ExpansionAdmission,
+        _scopes: ScopeArenaBuilder,
+    }
+    fn fixture_rules(rules: &str, args: &str) -> Fixture {
+        let budget = ExpansionBudget::default();
+        let text = format!("{rules} {args}");
+        let input = PreparedLexInput::identity(Path::new("expanded.rs"), &text, &budget).unwrap();
+        let mut session = TokenSession::new(input.snapshot().clone(), budget.clone()).unwrap();
+        let lexed =
+            crate::compiler::lexer::lex_prepared(&input, Edition::E2024, &mut session).unwrap();
+        let original_eof = lexed.eof().span;
+        let definition = lexed.events()[0].token.span();
+        let mut events = BudgetVec::new(&budget, Storage::Temporary).unwrap();
+        for event in lexed.events() {
+            events.push(event.token).unwrap();
+        }
+        let stream = group(&session, events.as_slice(), GroupPolicy::OriginalSource).unwrap();
+        let root = TokenSlice::roots(&session, stream).unwrap();
+        let last = root.len(&session).unwrap() - 1;
+        let Node::Delimited { open: call, .. } = root.node(&session, last).unwrap() else {
+            panic!("invocation argument group expected")
+        };
+        let call = *call;
+        let args = root.children(&session, last).unwrap().unwrap();
+        let body = root.subslice(&session, 0..last).unwrap();
+        let file = session.sources().file(0).unwrap();
+        let mut names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let defining_crate = names.register_crate_root(file).unwrap();
+        let rules = names
+            .compile_local_rules(
+                body,
+                DefinitionSite {
+                    span: definition,
+                    edition: Edition::E2024,
+                    defining_crate,
+                },
+            )
+            .unwrap();
+        let expanded = names
+            .expand_local_rules(
+                &rules,
+                args,
+                CallSite {
+                    span: call,
+                    parent: None,
+                },
+            )
+            .unwrap();
+        let expansion = expanded.expansion(names.session()).unwrap();
+        let tokens = expanded.tokens(names.session()).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
+        let frontier = scopes.function_root(&names).unwrap();
+        let admission = scopes
+            .anchor_expansion(&names, expansion, frontier, frontier)
+            .unwrap();
+        let eof = names.expansion_eof(&admission).unwrap();
+        Fixture {
+            names,
+            tokens,
+            eof,
+            original_eof,
+            admission,
+            _scopes: scopes,
+        }
+    }
+    fn fixture(output: &str) -> Fixture {
+        fixture_rules(&format!("()=>{{{output}}};"), "()")
+    }
+    fn run(fixture: &mut Fixture) -> Result<NativeTokenBuffer, ParseError> {
+        lower(
+            fixture.tokens.clone(),
+            &mut fixture.names,
+            Edition::E2024,
+            fixture.eof,
+            &fixture.admission,
+        )
+    }
+
+    #[test]
+    fn joint_less_minus_is_syntax_while_spaced_tokens_remain_distinct() {
+        let mut joint = fixture("x<-1");
+        let error = run(&mut joint).unwrap_err();
+        assert_eq!(error.kind, SourceErrorKind::Syntax);
+        assert!(error.message.contains("unexpected token: <-"));
+        assert!(error.primary.is_some());
+        assert!(!error.has_location);
+        let mut spaced = fixture("x < -1");
+        let buffer = run(&mut spaced).unwrap();
+        assert_eq!(
+            buffer
+                .iter()
+                .map(|token| token.text.as_str())
+                .collect::<Vec<_>>(),
+            ["x", "<", "-", "1", ""]
+        );
+
+        let joint = "fn main(){let x=0;macro_rules! compare{()=>{x<-1};}let _=compare!();}";
+        let error = super::super::parse_syntax_unprepared(joint).err().unwrap();
+        assert_eq!(error.kind, SourceErrorKind::Syntax);
+        super::super::parse_syntax_unprepared(
+            "fn main(){let x=0;macro_rules! compare{()=>{x < -1};}let _=compare!();}",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn normal_float_string_and_nested_groups_keep_native_literal_kinds() {
+        let mut source = fixture("((1.25 + 2))");
+        let buffer = run(&mut source).unwrap();
+        assert_eq!(
+            buffer
+                .iter()
+                .map(|token| token.text.as_str())
+                .collect::<Vec<_>>(),
+            ["(", "(", "1.25", "+", "2", ")", ")", ""]
+        );
+        assert_eq!(buffer[2].kind, ParserTokenKind::Number);
+        assert!(
+            buffer
+                .iter()
+                .all(|token| token.whole.provenance() == super::super::TokenProvenance::Expanded)
+        );
+        let mut source = fixture(r#""ok\n""#);
+        let buffer = run(&mut source).unwrap();
+        assert_eq!(buffer[0].text, "ok\n");
+        assert_eq!(buffer[0].kind, ParserTokenKind::String);
+    }
+
+    #[test]
+    fn unsupported_expanded_namespaces_literals_and_tuple_metadata_are_explicit() {
+        for output in ["(1,2).0.1", "'a", "self", "r\"raw\"", "b'x'", "\"a\\\nb\""] {
+            let mut source = fixture(output);
+            let error = run(&mut source).unwrap_err();
+            assert_eq!(
+                error.kind,
+                SourceErrorKind::Unsupported,
+                "{output}: {error}"
+            );
+            assert!(error.primary.is_some());
+            assert!(!error.has_location);
+        }
+        let mut source = fixture_rules("($x:literal)=>{$x};", "(1)");
+        assert_eq!(
+            run(&mut source).unwrap_err().kind,
+            SourceErrorKind::Unsupported
+        );
+    }
+
+    #[test]
+    fn expanded_suffixes_select_actual_constituent_spans_and_restore_exactly() {
+        let mut source = fixture(">>= &&");
+        let buffer = run(&mut source).unwrap();
+        let spans = buffer[0].constituents;
+        let mut cursor = super::super::TokenCursor::new(&buffer);
+        let start = cursor.checkpoint();
+        assert!(cursor.consume_type_gt());
+        let suffix = cursor.current();
+        assert_eq!(suffix.text, ">=");
+        assert_eq!(suffix.span, spans[1].unwrap());
+        assert_eq!(suffix.bytes, 0..0);
+        assert_eq!(suffix.provenance, super::super::TokenProvenance::Expanded);
+        let original = source.names.session().original(suffix.span, 512).unwrap();
+        let (_, line, column) = source.names.session().sources().location(original).unwrap();
+        assert_eq!((suffix.line, suffix.column), (line, column));
+        assert!(cursor.consume_type_gt());
+        assert_eq!(cursor.current().span, spans[2].unwrap());
+        assert!(cursor.restore(start));
+        assert_eq!(cursor.current().text, ">>=");
+        cursor.bump();
+        assert!(cursor.consume_type_amp_prefix());
+        assert_eq!(cursor.current().span, buffer[1].constituents[1].unwrap());
+    }
+
+    #[test]
+    fn same_session_unrelated_eof_and_foreign_proofs_reject_even_empty_output() {
+        let mut source = fixture("");
+        let error = lower(
+            source.tokens.clone(),
+            &mut source.names,
+            Edition::E2024,
+            source.original_eof,
+            &source.admission,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, SourceErrorKind::Contract);
+        let other = fixture("");
+        let error = lower(
+            source.tokens.clone(),
+            &mut source.names,
+            Edition::E2024,
+            source.eof,
+            &other.admission,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, SourceErrorKind::Contract);
+        let buffer = run(&mut source).unwrap();
+        assert_eq!(buffer.len(), 1);
+        assert_eq!(buffer[0].kind, ParserTokenKind::Eof);
+    }
+
+    #[test]
+    fn captured_joint_operator_suffix_can_precede_its_whole_in_original_source() {
+        let mut source = fixture_rules("($a:tt $discard:tt)=>{$a=};", "(>>+)");
+        let buffer = run(&mut source).unwrap();
+        assert_eq!(buffer[0].text, ">>=");
+        let mut cursor = super::super::TokenCursor::new(&buffer);
+        let whole = cursor.current();
+        assert!(cursor.consume_type_gt());
+        assert!(cursor.consume_type_gt());
+        let suffix = cursor.current();
+        assert_eq!(suffix.text, "=");
+        let whole_source = source.names.session().original(whole.span, 512).unwrap();
+        let suffix_source = source.names.session().original(suffix.span, 512).unwrap();
+        let whole_source = source
+            .names
+            .session()
+            .sources()
+            .render_span(whole_source)
+            .unwrap();
+        let suffix_source = source
+            .names
+            .session()
+            .sources()
+            .render_span(suffix_source)
+            .unwrap();
+        assert!(suffix_source.lo < whole_source.lo);
+        assert_eq!(suffix.span, buffer[0].constituents[2].unwrap());
+        assert_ne!(suffix.column, whole.column + 2);
+        assert_eq!(whole.bytes, 0..0);
+        assert_eq!(suffix.bytes, 0..0);
+    }
+
+    #[test]
+    fn minted_expanded_identifier_keeps_original_context_and_checked_buffer_owner() {
+        let mut source = fixture("local");
+        let buffer = run(&mut source).unwrap();
+        let view = super::super::TokenCursor::new(&buffer).current();
+        let ident = buffer.mint_name(&view, &mut source.names).unwrap();
+        let data = source.names.data(ident).unwrap();
+        assert_eq!(data.span, view.span);
+        assert_ne!(data.context, source.names.session().root_context());
+        let mut other = fixture("local");
+        assert_eq!(
+            buffer.mint_name(&view, &mut other.names).unwrap_err().kind,
+            SourceErrorKind::Contract
+        );
+        let other_buffer = run(&mut other).unwrap();
+        let other_view = super::super::TokenCursor::new(&other_buffer).current();
+        assert_eq!(
+            buffer
+                .mint_name(&other_view, &mut source.names)
+                .unwrap_err()
+                .kind,
+            SourceErrorKind::Contract
+        );
+    }
+
+    #[test]
+    fn expanded_diagnostic_owns_actual_capacity_through_final_error_transfer() {
+        let source = fixture("1");
+        let budget = source.names.budget().clone();
+        let before = budget.snapshot();
+        let error = native_adapter::expanded_error(
+            source.names.session(),
+            source.eof,
+            SourceErrorKind::Syntax,
+            "expected expression",
+        );
+        assert!(error.message.contains("expanded at file"));
+        let capacity = error.message.capacity() as u64;
+        assert_eq!(
+            budget.snapshot().retained_bytes,
+            before.retained_bytes + capacity
+        );
+        assert_eq!(
+            budget.snapshot().counters[Counter::DiagnosticBytes as usize],
+            before.counters[Counter::DiagnosticBytes as usize] + capacity
+        );
+        let mut final_error =
+            crate::compiler::source::SourceError::syntax(error.primary, error.message);
+        final_error._diagnostic_lease = error._diagnostic_lease;
+        assert_eq!(
+            budget.snapshot().retained_bytes,
+            before.retained_bytes + capacity
+        );
+        assert!(final_error.to_string().contains("expanded at file"));
+        drop(final_error);
+        assert_eq!(budget.snapshot().retained_bytes, before.retained_bytes);
+        assert_eq!(budget.snapshot().temporary_bytes, before.temporary_bytes);
+    }
+
+    #[test]
+    fn diagnostic_exhaustion_stays_typed_and_drops_partial_message_storage() {
+        let source = fixture("1");
+        let budget = source.names.budget().clone();
+        budget
+            .charge(
+                Counter::DiagnosticBytes,
+                budget.limits().counters[Counter::DiagnosticBytes as usize],
+            )
+            .unwrap();
+        let before = budget.snapshot();
+        let error = native_adapter::expanded_error(
+            source.names.session(),
+            source.eof,
+            SourceErrorKind::Syntax,
+            "expected expression",
+        );
+        assert_eq!(error.kind, SourceErrorKind::Limit);
+        assert_eq!(budget.snapshot().retained_bytes, before.retained_bytes);
+        assert_eq!(budget.snapshot().temporary_bytes, before.temporary_bytes);
+    }
+}

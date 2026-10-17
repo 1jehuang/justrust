@@ -3,6 +3,7 @@
 use super::*;
 use crate::compiler::expansion_budget::{Counter, Storage};
 use crate::compiler::module_identity::ModuleError;
+use crate::compiler::semantic_scope::{ScopeError, ScopeId, scope_diagnostic};
 use crate::compiler::token_session::{BudgetVec, TokenError};
 
 fn transport(error: TokenError) -> String {
@@ -56,6 +57,7 @@ pub(super) fn validate_function_head_names(
 
 enum Visit<'a> {
     Function(&'a Function, Option<ModuleId>),
+    RestoreScope(Option<ScopeId>),
     Head(&'a FunctionHead),
     Struct(&'a StructDecl),
     Enum(&'a EnumDecl),
@@ -82,11 +84,14 @@ enum Visit<'a> {
     Binding(BindingName),
     FieldName(FieldName),
     LocalName(LocalName),
+    LocalDeclaration(AstIdent),
+    LocalReference(AstIdent),
 }
 struct Validator<'a> {
     program: &'a Program,
     root: ModuleId,
     pending: BudgetVec<Visit<'a>>,
+    scope: Option<ScopeId>,
 }
 impl<'a> Validator<'a> {
     fn new(program: &'a Program) -> Result<Self, String> {
@@ -97,10 +102,17 @@ impl<'a> Validator<'a> {
         if !modules.budget().same_authority(names.budget()) {
             return Err(module_diagnostic(ModuleError::ForeignNames));
         }
+        if let Some(scopes) = &program.scopes {
+            scopes.check_names(names).map_err(scope_diagnostic)?;
+            if !scopes.budget().same_authority(names.budget()) {
+                return Err(scope_diagnostic(ScopeError::ForeignNames));
+            }
+        }
         Ok(Self {
             program,
             root: modules.source_root().map_err(module_diagnostic)?,
             pending: BudgetVec::new(names.budget(), Storage::Temporary).map_err(transport)?,
+            scope: None,
         })
     }
     fn run(mut self) -> Result<(), String> {
@@ -151,10 +163,37 @@ impl<'a> Validator<'a> {
             .validate_for(self.program.modules.as_ref(), module)
             .map_err(module_diagnostic)
     }
+    fn occurrence(&self, name: AstIdent) -> Result<(), String> {
+        if let Some(scopes) = &self.program.scopes {
+            scopes
+                .check_occurrence(self.program.names.as_ref(), name, self.scope)
+                .map_err(scope_diagnostic)?;
+        } else {
+            let data = self
+                .program
+                .names
+                .data(name)
+                .map_err(native_adapter::name_diagnostic)?;
+            let session = self.program.names.session();
+            if data.context != session.root_context()
+                || session
+                    .span(data.span)
+                    .map_err(transport)?
+                    .expansion
+                    .is_some()
+            {
+                return Err(scope_diagnostic(ScopeError::UnregisteredExpansion));
+            }
+        }
+        Ok(())
+    }
     fn declaration_path(&self, path: &AstPath, module: ModuleId) -> Result<(), String> {
         self.work(path.len())?;
         path.check(self.program.names.as_ref())
             .map_err(native_adapter::name_diagnostic)?;
+        for segment in path.segments() {
+            self.occurrence(*segment)?;
+        }
         if path.is_empty() || path.anchor() != PathAnchor::Crate {
             return Err(module_diagnostic(ModuleError::InvalidParent));
         }
@@ -184,6 +223,15 @@ impl<'a> Validator<'a> {
         }
         Ok(())
     }
+    fn local(&mut self, name: AstIdent, declaration: bool) -> Result<(), String> {
+        if self.scope.is_none() {
+            self.push(Visit::Ident(name, LookupClass::Local))
+        } else if declaration {
+            self.push(Visit::LocalDeclaration(name))
+        } else {
+            self.push(Visit::LocalReference(name))
+        }
+    }
     fn identifiers(&mut self, values: &'a [AstIdent], class: LookupClass) -> Result<(), String> {
         self.many(values, |name| Visit::Ident(*name, class))
     }
@@ -206,6 +254,18 @@ impl<'a> Validator<'a> {
     fn visit(&mut self, node: Visit<'a>) -> Result<(), String> {
         match node {
             Visit::Function(function, containing_module) => {
+                if let Some(scope) = function.lexical_scope {
+                    self.program
+                        .scopes
+                        .as_ref()
+                        .ok_or_else(|| scope_diagnostic(ScopeError::InvalidHandle))?
+                        .check_function(scope)
+                        .map_err(scope_diagnostic)?;
+                }
+                if function.lexical_scope.is_some() || self.scope.is_some() {
+                    self.push(Visit::RestoreScope(self.scope))?;
+                    self.scope = function.lexical_scope;
+                }
                 self.visibility(&function.visibility, function.module)?;
                 if let Some(module) = containing_module {
                     self.source_module(module)?;
@@ -225,6 +285,7 @@ impl<'a> Validator<'a> {
                 self.push(Visit::Type(&function.result))?;
                 self.push(Visit::Block(&function.body))?;
             }
+            Visit::RestoreScope(scope) => self.scope = scope,
             Visit::Head(head) => {
                 self.push(Visit::Ident(head.name, LookupClass::Member))?;
                 self.push(Visit::Regions(&head.regions))?;
@@ -497,13 +558,27 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Expr(base))?;
                     self.push(Visit::Selector(field))?;
                 }
-                Expr::Var(path) => self.push(Visit::Path(path))?,
+                Expr::Var(path) => {
+                    self.push(Visit::Path(path))?;
+                    if self.scope.is_some()
+                        && path.anchor() == PathAnchor::Relative
+                        && path.len() == 1
+                    {
+                        self.push(Visit::LocalReference(path.segments()[0]))?;
+                    }
+                }
                 Expr::Binary { left, right, .. } => {
                     self.push(Visit::Expr(left))?;
                     self.push(Visit::Expr(right))?;
                 }
                 Expr::Call { name, args } => {
                     self.push(Visit::Path(name))?;
+                    if self.scope.is_some()
+                        && name.anchor() == PathAnchor::Relative
+                        && name.len() == 1
+                    {
+                        self.push(Visit::LocalReference(name.segments()[0]))?;
+                    }
                     self.many(args, Visit::Expr)?;
                 }
                 Expr::If {
@@ -551,9 +626,7 @@ impl<'a> Validator<'a> {
                     self.pattern_fields(fields)?;
                 }
                 Pattern::Path(path) => self.push(Visit::Path(path))?,
-                Pattern::Binding { name, .. } => {
-                    self.push(Visit::Ident(*name, LookupClass::Local))?
-                }
+                Pattern::Binding { name, .. } => self.local(*name, true)?,
                 Pattern::Tuple(elements) => self.many(elements, Visit::Pattern)?,
                 Pattern::Struct { name, fields, .. } => {
                     self.push(Visit::Path(name))?;
@@ -581,12 +654,16 @@ impl<'a> Validator<'a> {
                 self.work(path.len())?;
                 path.check(self.program.names.as_ref())
                     .map_err(native_adapter::name_diagnostic)?;
+                for segment in path.segments() {
+                    self.occurrence(*segment)?;
+                }
             }
             Visit::Ident(name, class) => {
                 self.program
                     .names
                     .key(name, class)
                     .map_err(native_adapter::name_diagnostic)?;
+                self.occurrence(name)?;
             }
             Visit::Region(region) => match region {
                 RegionName::Named(name) => {
@@ -595,7 +672,7 @@ impl<'a> Validator<'a> {
                 RegionName::Static | RegionName::Infer => (),
             },
             Visit::Binding(binding) => match binding {
-                BindingName::Named(name) => self.push(Visit::Ident(name, LookupClass::Local))?,
+                BindingName::Named(name) => self.local(name, true)?,
                 BindingName::Wildcard => (),
             },
             Visit::FieldName(field) => match field {
@@ -603,9 +680,49 @@ impl<'a> Validator<'a> {
                 FieldName::Tuple(_) => (),
             },
             Visit::LocalName(local) => match local {
-                LocalName::Named(name) => self.push(Visit::Ident(name, LookupClass::Local))?,
+                LocalName::Named(name) => self.local(name, false)?,
                 LocalName::Receiver => (),
             },
+            Visit::LocalDeclaration(name) => {
+                self.push(Visit::Ident(name, LookupClass::Local))?;
+                if let Some(scope) = self.scope {
+                    let scopes = self
+                        .program
+                        .scopes
+                        .as_ref()
+                        .ok_or_else(|| scope_diagnostic(ScopeError::InvalidHandle))?;
+                    let binding = scopes
+                        .declaration_for(self.program.names.as_ref(), name)
+                        .map_err(scope_diagnostic)?;
+                    if scopes.binding_function(binding).map_err(scope_diagnostic)? != scope {
+                        return Err(scope_diagnostic(ScopeError::FunctionMismatch));
+                    }
+                }
+            }
+            Visit::LocalReference(name) => {
+                self.push(Visit::Ident(name, LookupClass::Local))?;
+                if let Some(scope) = self.scope {
+                    let scopes = self
+                        .program
+                        .scopes
+                        .as_ref()
+                        .ok_or_else(|| scope_diagnostic(ScopeError::InvalidHandle))?;
+                    if scopes
+                        .reference_function(self.program.names.as_ref(), name)
+                        .map_err(scope_diagnostic)?
+                        != scope
+                    {
+                        return Err(scope_diagnostic(ScopeError::FunctionMismatch));
+                    }
+                    if let Some(binding) = scopes
+                        .reference_for(self.program.names.as_ref(), name)
+                        .map_err(scope_diagnostic)?
+                        && scopes.binding_function(binding).map_err(scope_diagnostic)? != scope
+                    {
+                        return Err(scope_diagnostic(ScopeError::FunctionMismatch));
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -626,6 +743,7 @@ mod tests {
     }
     fn function(builder: &mut ProgramBuilder) -> Function {
         Function {
+            lexical_scope: None,
             module: builder.module_root().unwrap(),
             constness: Constness::Runtime,
             visibility: ir::Visibility::Public,
@@ -851,5 +969,86 @@ mod tests {
         head.result = Type::Unit;
         head.params.push((BindingName::Named(name), Type::Unit));
         assert!(validate_function_head_names(&input, &head).is_err());
+    }
+
+    #[test]
+    fn empty_program_checks_optional_scope_owner_before_any_occurrence_use() {
+        use crate::compiler::semantic_scope::ScopeArenaBuilder;
+        let mut input = builder().finish().unwrap();
+        let foreign = builder().finish().unwrap();
+        input.scopes = Some(
+            ScopeArenaBuilder::for_names(foreign.names.as_ref())
+                .unwrap()
+                .freeze()
+                .unwrap(),
+        );
+        assert!(validate_program_names(&input).is_err());
+        input.scopes = Some(
+            ScopeArenaBuilder::for_names(input.names.as_ref())
+                .unwrap()
+                .freeze()
+                .unwrap(),
+        );
+        validate_program_names(&input).unwrap();
+        let clone = input.clone();
+        assert!(Arc::ptr_eq(
+            input.scopes.as_ref().unwrap(),
+            clone.scopes.as_ref().unwrap()
+        ));
+        validate_program_names(&clone).unwrap();
+    }
+
+    #[test]
+    fn unused_function_scope_checks_all_declaration_and_reference_associations() {
+        use crate::compiler::semantic_scope::ScopeArenaBuilder;
+        let mut source = builder();
+        let mut declaration = function(&mut source);
+        let binder = source.ident("local").unwrap();
+        let reference = source.path("local").unwrap();
+        let unrecorded = source.path("local").unwrap();
+        let unresolved_elsewhere = source.path("missing").unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(source.names()).unwrap();
+        let root = scopes.function_root(source.names()).unwrap();
+        let function_scope = scopes.function(root).unwrap();
+        let nested = scopes.enter(source.names(), root).unwrap();
+        let (frontier, _) = scopes.bind(source.names(), nested, binder).unwrap();
+        assert!(
+            scopes
+                .resolve_reference(source.names(), frontier, reference.segments()[0])
+                .unwrap()
+                .is_some()
+        );
+        let other_function = scopes.function_root(source.names()).unwrap();
+        assert!(
+            scopes
+                .resolve_reference(
+                    source.names(),
+                    other_function,
+                    unresolved_elsewhere.segments()[0]
+                )
+                .unwrap()
+                .is_none()
+        );
+        declaration.body.statements.push(Stmt::Declare {
+            name: BindingName::Named(binder),
+            ty: Type::Unit,
+            mutable: false,
+        });
+        declaration.body.tail = Some(Box::new(Expr::Var(reference)));
+        source.functions.push(declaration);
+        let mut input = source.finish().unwrap();
+        input.scopes = Some(scopes.freeze().unwrap());
+        input.functions[0].lexical_scope = Some(function_scope);
+        validate_program_names(&input).unwrap();
+        validate_function_names(&input, &input.functions[0], None).unwrap();
+        input.functions[0].body.tail = Some(Box::new(Expr::Var(unrecorded)));
+        assert!(validate_program_names(&input).is_err());
+        assert!(validate_function_names(&input, &input.functions[0], None).is_err());
+        input.functions[0].body.tail = Some(Box::new(Expr::Var(unresolved_elsewhere)));
+        assert!(validate_program_names(&input).is_err());
+        assert!(validate_function_names(&input, &input.functions[0], None).is_err());
+        input.functions[0].body.tail = None;
+        input.scopes = None;
+        assert!(validate_program_names(&input).is_err());
     }
 }

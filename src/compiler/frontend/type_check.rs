@@ -1,6 +1,10 @@
 //! Source checking, local inference and checked body construction.
 use super::*;
 
+pub(super) fn scope_diagnostic(error: super::super::semantic_scope::ScopeError) -> String {
+    super::super::semantic_scope::scope_diagnostic(error)
+}
+
 pub(super) fn application_namespace(value: &Expr) -> Result<Namespace, String> {
     match value {
         Expr::Call { .. } => Ok(Namespace::Value),
@@ -12,14 +16,19 @@ pub(super) fn application_namespace(value: &Expr) -> Result<Namespace, String> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum LocalKey {
     Named(NameKey),
+    Anchored(super::super::semantic_scope::BindingId),
     Receiver,
 }
 
 pub(super) trait LocalInput {
     fn checked_key(&self, names: &NameStore) -> Result<Option<LocalKey>, String>;
+    fn occurrence(&self, names: &NameStore) -> Result<Option<AstIdent>, String>;
     fn diagnostic(&self, names: &NameStore) -> Result<String, String>;
 }
 impl<T: LocalInput + ?Sized> LocalInput for &T {
+    fn occurrence(&self, names: &NameStore) -> Result<Option<AstIdent>, String> {
+        (**self).occurrence(names)
+    }
     fn checked_key(&self, names: &NameStore) -> Result<Option<LocalKey>, String> {
         (**self).checked_key(names)
     }
@@ -28,6 +37,12 @@ impl<T: LocalInput + ?Sized> LocalInput for &T {
     }
 }
 impl LocalInput for AstIdent {
+    fn occurrence(&self, names: &NameStore) -> Result<Option<AstIdent>, String> {
+        names
+            .check(*self)
+            .map_err(native_adapter::name_diagnostic)?;
+        Ok(Some(*self))
+    }
     fn checked_key(&self, names: &NameStore) -> Result<Option<LocalKey>, String> {
         Ok(Some(LocalKey::Named(
             names
@@ -43,6 +58,12 @@ impl LocalInput for AstIdent {
     }
 }
 impl LocalInput for BindingName {
+    fn occurrence(&self, names: &NameStore) -> Result<Option<AstIdent>, String> {
+        match self {
+            Self::Named(name) => name.occurrence(names),
+            Self::Wildcard => Ok(None),
+        }
+    }
     fn checked_key(&self, names: &NameStore) -> Result<Option<LocalKey>, String> {
         match self {
             Self::Named(name) => name.checked_key(names),
@@ -57,6 +78,12 @@ impl LocalInput for BindingName {
     }
 }
 impl LocalInput for LocalName {
+    fn occurrence(&self, names: &NameStore) -> Result<Option<AstIdent>, String> {
+        match self {
+            Self::Named(name) => name.occurrence(names),
+            Self::Receiver => Ok(None),
+        }
+    }
     fn checked_key(&self, names: &NameStore) -> Result<Option<LocalKey>, String> {
         match self {
             Self::Named(name) => name.checked_key(names),
@@ -71,6 +98,14 @@ impl LocalInput for LocalName {
     }
 }
 impl LocalInput for AstPath {
+    fn occurrence(&self, names: &NameStore) -> Result<Option<AstIdent>, String> {
+        self.check(names).map_err(native_adapter::name_diagnostic)?;
+        match (self.anchor(), self.segments()) {
+            (PathAnchor::SelfModule, []) => Ok(None),
+            (PathAnchor::Relative, [name]) => Ok(Some(*name)),
+            _ => Err("expected a local-root path".into()),
+        }
+    }
     fn checked_key(&self, names: &NameStore) -> Result<Option<LocalKey>, String> {
         self.check(names).map_err(native_adapter::name_diagnostic)?;
         match (self.anchor(), self.segments()) {
@@ -1002,6 +1037,7 @@ pub(super) struct Checker<'a> {
     pub(super) signatures: &'a Signatures,
     pub(super) canonical: Option<&'a CanonicalSourceCapability>,
     pub(super) scopes: Vec<HashMap<LocalKey, ir::LocalId>>,
+    lexical_scope: Option<super::super::semantic_scope::ScopeId>,
     pub(super) pending_references: Vec<PendingReferenceDecl>,
     pub(super) locals: Vec<ir::LocalDecl>,
     pub(super) exprs: Vec<ir::TypedExpr>,
@@ -1739,6 +1775,7 @@ impl<'a> Checker<'a> {
         Self {
             signatures,
             scopes: vec![HashMap::new()],
+            lexical_scope: None,
             pending_references: Vec::new(),
             locals: Vec::new(),
             exprs: Vec::new(),
@@ -2039,6 +2076,101 @@ impl<'a> Checker<'a> {
         }
         Ok(index)
     }
+    fn install_lexical_scope(
+        &mut self,
+        scope: Option<super::super::semantic_scope::ScopeId>,
+    ) -> Result<(), String> {
+        if let Some(scope) = scope {
+            let plan = self.signatures.plan()?;
+            let arena = plan.program.scopes.as_ref().ok_or_else(|| {
+                scope_diagnostic(super::super::semantic_scope::ScopeError::InvalidHandle)
+            })?;
+            arena
+                .check_names(&*plan.program.names)
+                .map_err(scope_diagnostic)?;
+            arena.check_function(scope).map_err(scope_diagnostic)?;
+        }
+        self.lexical_scope = scope;
+        Ok(())
+    }
+    fn local_key(
+        &self,
+        input: &impl LocalInput,
+        declaration: bool,
+    ) -> Result<Option<LocalKey>, String> {
+        let names = self.names()?;
+        let Some(function) = self.lexical_scope else {
+            let key = input.checked_key(names)?;
+            if key.is_none() && !declaration {
+                return Err("wildcard is not a local reference".into());
+            }
+            return Ok(key);
+        };
+        let Some(occurrence) = input.occurrence(names)? else {
+            return match input.checked_key(names)? {
+                None if declaration => Ok(None),
+                None => Err("wildcard is not a local reference".into()),
+                Some(LocalKey::Receiver) => {
+                    Err("unsupported: lexical macro receiver binding".into())
+                }
+                _ => Err(scope_diagnostic(
+                    super::super::semantic_scope::ScopeError::UnrecordedOccurrence,
+                )),
+            };
+        };
+        let arena = self
+            .signatures
+            .plan()?
+            .program
+            .scopes
+            .as_ref()
+            .ok_or_else(|| {
+                scope_diagnostic(super::super::semantic_scope::ScopeError::InvalidHandle)
+            })?;
+        let binding = if declaration {
+            Some(
+                arena
+                    .declaration_for(names, occurrence)
+                    .map_err(scope_diagnostic)?,
+            )
+        } else {
+            if arena
+                .reference_function(names, occurrence)
+                .map_err(scope_diagnostic)?
+                != function
+            {
+                return Err(scope_diagnostic(
+                    super::super::semantic_scope::ScopeError::FunctionMismatch,
+                ));
+            }
+            arena
+                .reference_for(names, occurrence)
+                .map_err(scope_diagnostic)?
+        };
+        if let Some(binding) = binding {
+            if arena.binding_function(binding).map_err(scope_diagnostic)? != function {
+                return Err(scope_diagnostic(
+                    super::super::semantic_scope::ScopeError::FunctionMismatch,
+                ));
+            }
+            Ok(Some(LocalKey::Anchored(binding)))
+        } else {
+            Ok(None)
+        }
+    }
+    fn reserve_scoped_local(&mut self, scope: usize) -> Result<(), String> {
+        if self.lexical_scope.is_none() {
+            return Ok(());
+        }
+        self.charge_node(std::mem::size_of::<(LocalKey, ir::LocalId)>() * 4)?;
+        let budget = self.names()?.budget().clone();
+        self.scopes[scope].try_reserve(1).map_err(|_| {
+            super::super::source::SourceError::from_token(
+                super::super::token_session::TokenError::Budget(budget.poison_allocation()),
+            )
+            .to_string()
+        })
+    }
     pub(super) fn local(
         &mut self,
         name: impl LocalInput,
@@ -2046,8 +2178,11 @@ impl<'a> Checker<'a> {
         mutable: bool,
     ) -> Result<ir::LocalId, String> {
         let names = &self.signatures.plan()?.program.names;
-        let key = name.checked_key(names)?;
+        let key = self.local_key(&name, true)?;
         let text = name.diagnostic(names)?;
+        if self.lexical_scope.is_some() && key.is_some() {
+            self.reserve_scoped_local(self.scopes.len() - 1)?;
+        }
         let local = self.temporary(&text, ty, mutable)?;
         if let Some(key) = key {
             self.scopes.last_mut().unwrap().insert(key, local);
@@ -2076,7 +2211,7 @@ impl<'a> Checker<'a> {
         ty: ir::Ty,
     ) -> Result<ir::LocalId, String> {
         let names = &self.signatures.plan()?.program.names;
-        if let Some(key) = name.checked_key(names)?
+        if let Some(key) = self.local_key(&name, true)?
             && self.scopes.last().unwrap().contains_key(&key)
         {
             return Err(format!("duplicate parameter {}", name.diagnostic(names)?));
@@ -2096,9 +2231,9 @@ impl<'a> Checker<'a> {
         Ok(())
     }
     pub(super) fn pending_reference(&self, n: impl LocalInput) -> Result<Option<usize>, String> {
-        let key = n
-            .checked_key(&self.signatures.plan()?.program.names)?
-            .ok_or("wildcard is not a local reference")?;
+        let Some(key) = self.local_key(&n, false)? else {
+            return Ok(None);
+        };
         self.charge_pending_lookup()?;
         for scope in (0..self.scopes.len()).rev() {
             if self.scopes[scope].contains_key(&key) {
@@ -2107,14 +2242,16 @@ impl<'a> Checker<'a> {
             for (index, pending) in self.pending_references.iter().enumerate().rev() {
                 if pending.scope == scope
                     && pending.local.is_none()
-                    && pending
-                        .name
-                        .checked_key(&self.signatures.plan()?.program.names)?
-                        == Some(key)
+                    && self.local_key(&pending.name, true)? == Some(key)
                 {
                     return Ok(Some(index));
                 }
             }
+        }
+        if matches!(key, LocalKey::Anchored(_)) {
+            return Err(scope_diagnostic(
+                super::super::semantic_scope::ScopeError::UnrecordedOccurrence,
+            ));
         }
         Ok(None)
     }
@@ -2123,9 +2260,9 @@ impl<'a> Checker<'a> {
         n: impl LocalInput,
     ) -> Result<Option<ir::LocalId>, String> {
         let names = &self.signatures.plan()?.program.names;
-        let key = n
-            .checked_key(names)?
-            .ok_or("wildcard is not a local reference")?;
+        let Some(key) = self.local_key(&n, false)? else {
+            return Ok(None);
+        };
         self.charge_pending_lookup()?;
         for scope in (0..self.scopes.len()).rev() {
             if let Some(local) = self.scopes[scope].get(&key) {
@@ -2134,7 +2271,7 @@ impl<'a> Checker<'a> {
             for pending in &self.pending_references {
                 if pending.scope == scope
                     && pending.local.is_none()
-                    && pending.name.checked_key(names)? == Some(key)
+                    && self.local_key(&pending.name, true)? == Some(key)
                 {
                     return Err(format!(
                         "deferred local {} requires an independently typed reference assignment before use",
@@ -2142,6 +2279,11 @@ impl<'a> Checker<'a> {
                     ));
                 }
             }
+        }
+        if matches!(key, LocalKey::Anchored(_)) {
+            return Err(scope_diagnostic(
+                super::super::semantic_scope::ScopeError::UnrecordedOccurrence,
+            ));
         }
         Ok(None)
     }
@@ -3047,9 +3189,7 @@ impl<'a> Checker<'a> {
                         let BindingName::Named(name) = name else {
                             return Err("untyped wildcard declarations are unsupported".into());
                         };
-                        let key = name
-                            .checked_key(self.names()?)?
-                            .ok_or("missing local key")?;
+                        let key = self.local_key(name, true)?.ok_or("missing local key")?;
                         self.charge_node(std::mem::size_of::<PendingReferenceDecl>() * 4)?;
                         self.scopes.last_mut().unwrap().remove(&key);
                         self.pending_references.push(PendingReferenceDecl {
@@ -3185,13 +3325,17 @@ impl<'a> Checker<'a> {
                             return Err("untyped deferred declarations require an independently known reference or scalar dereference type; general backward inference is unsupported".into());
                         }
                         let local = ir::LocalId(self.locals.len());
-                        let key = name
-                            .checked_key(self.names()?)?
+                        let key = self
+                            .local_key(name, false)?
                             .ok_or("missing assignment local key")?;
                         let text = name.diagnostic(self.names()?)?;
                         self.charge_node(
                             std::mem::size_of::<ir::LocalDecl>() + text.len() * 2 + 128,
                         )?;
+                        if self.lexical_scope.is_some() {
+                            let scope = self.pending_references[pending].scope;
+                            self.reserve_scoped_local(scope)?;
+                        }
                         let declaration = &mut self.pending_references[pending];
                         declaration.local = Some(local);
                         self.locals.push(ir::LocalDecl {
@@ -5389,6 +5533,11 @@ pub(super) fn type_callable_source(
     budget.charge_work(1)?;
     if !Arc::ptr_eq(&program.names, &plan.program.names)
         || !Arc::ptr_eq(&program.modules, &plan.program.modules)
+        || match (&program.scopes, &plan.program.scopes) {
+            (None, None) => false,
+            (Some(actual), Some(original)) => !Arc::ptr_eq(actual, original),
+            _ => true,
+        }
     {
         return Err(super::super::source::SourceError::from_token(
             super::super::token_session::TokenError::ForeignHandle,
@@ -5422,6 +5571,7 @@ pub(super) fn type_callable_source(
         == name_scope::path_key(&*program.names, &original.name, Namespace::Value)?;
     if !same_name
         || f.module != original.module
+        || f.lexical_scope != original.lexical_scope
         || f.visibility != original.visibility
         || !signature_source_equal(plan, f.into(), original.into())?
     {
@@ -5459,6 +5609,7 @@ pub(super) fn type_callable_source(
     walk_depth_checked(DepthNode::Block(&f.body), None, Some(&program.names))?;
     let module = context.module;
     let mut c = Checker::new(&signatures, signature.result.clone(), module);
+    c.install_lexical_scope(f.lexical_scope)?;
     c.declaration = Some(declaration);
     c.canonical = canonical;
     let mut params = Vec::new();
@@ -5577,6 +5728,7 @@ pub fn type_function_with_env(
         ));
     }
     let mut c = Checker::new(signatures, signature.result.clone(), f.module);
+    c.install_lexical_scope(f.lexical_scope)?;
     let mut params = Vec::with_capacity(f.params.len());
     for ((n, _), t) in f.params.iter().zip(&signature.params) {
         params.push(
@@ -5630,6 +5782,109 @@ mod checked_identity_tests {
             &super::super::super::expansion_budget::ExpansionBudget::default(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn anchored_local_references_retain_definition_frontier_across_shadowing() {
+        use super::super::super::semantic_scope::ScopeArenaBuilder;
+        let mut builder = builder("anchored-locals.rs");
+        let main = builder.path("crate::main").unwrap();
+        let module = builder.module_root().unwrap();
+        builder.functions.push(Function {
+            lexical_scope: None,
+            module,
+            constness: Constness::Runtime,
+            visibility: ir::Visibility::Public,
+            bounds: Vec::new(),
+            name: main,
+            regions: RegionDecls {
+                receiver: None,
+                params: Vec::new(),
+                outlives: Vec::new(),
+            },
+            type_params: Vec::new(),
+            params: Vec::new(),
+            result: Type::Unit,
+            body: Block {
+                statements: Vec::new(),
+                tail: None,
+            },
+        });
+        let outer = builder.ident("x").unwrap();
+        let inner = builder.ident("x").unwrap();
+        let definition_reference = builder.ident("x").unwrap();
+        let call_reference = builder.ident("x").unwrap();
+        let unresolved = builder.ident("missing").unwrap();
+        let unrecorded = builder.ident("x").unwrap();
+        let foreign_function_reference = builder.ident("missing").unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(builder.names()).unwrap();
+        let root = scopes.function_root(builder.names()).unwrap();
+        let function = scopes.function(root).unwrap();
+        let (definition, outer_binding) = scopes.bind(builder.names(), root, outer).unwrap();
+        let nested = scopes.enter(builder.names(), definition).unwrap();
+        let (call, inner_binding) = scopes.bind(builder.names(), nested, inner).unwrap();
+        assert_ne!(outer_binding, inner_binding);
+        assert_eq!(
+            scopes
+                .resolve_reference(builder.names(), definition, definition_reference)
+                .unwrap(),
+            Some(outer_binding)
+        );
+        assert_eq!(
+            scopes
+                .resolve_reference(builder.names(), call, call_reference)
+                .unwrap(),
+            Some(inner_binding)
+        );
+        assert_eq!(
+            scopes
+                .resolve_reference(builder.names(), call, unresolved)
+                .unwrap(),
+            None
+        );
+        let other = scopes.function_root(builder.names()).unwrap();
+        scopes
+            .resolve_reference(builder.names(), other, foreign_function_reference)
+            .unwrap();
+        let arena = scopes.freeze().unwrap();
+        let mut program = builder.finish().unwrap();
+        program.scopes = Some(arena);
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let env = plan.environment(None).unwrap();
+        let mut checker = Checker::new(&env, ir::Ty::Unit, program.modules.source_root().unwrap());
+        checker.install_lexical_scope(Some(function)).unwrap();
+        assert!(
+            checker
+                .lookup_optional(definition_reference)
+                .unwrap_err()
+                .contains("contract:")
+        );
+        assert!(
+            checker
+                .pending_reference(definition_reference)
+                .unwrap_err()
+                .contains("contract:")
+        );
+        let outer_local = checker.local(outer, ir::Ty::Bool, false).unwrap();
+        checker.scopes.push(HashMap::new());
+        let inner_local = checker.local(inner, ir::Ty::Bool, false).unwrap();
+        assert_ne!(outer_local, inner_local);
+        assert_eq!(checker.lookup(definition_reference).unwrap(), outer_local);
+        assert_eq!(checker.lookup(call_reference).unwrap(), inner_local);
+        assert_eq!(checker.lookup_optional(unresolved).unwrap(), None);
+        assert!(
+            checker
+                .lookup_optional(unrecorded)
+                .unwrap_err()
+                .contains("contract:")
+        );
+        assert!(
+            checker
+                .lookup_optional(foreign_function_reference)
+                .unwrap_err()
+                .contains("contract:")
+        );
     }
 
     #[test]

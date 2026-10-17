@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
 
-use super::super::expansion_budget::{Counter, ExpansionBudget};
+use super::super::expansion_budget::{BudgetFailure, Counter, ExpansionBudget};
 use super::super::token_session::{OriginalSpan, SourceSnapshot, TokenSession, allocate_identity};
 use super::{
     MAX_BYTES, MAX_ORIGINS, OriginSegment, PreparedSource, SourceError, SourceErrorKind,
@@ -31,13 +31,19 @@ pub struct ProjectedSpan {
     pub synthetic: bool,
 }
 
+#[derive(Clone)]
+enum StructureFailure {
+    Budget(BudgetFailure),
+    Contract(&'static str),
+}
+
 pub struct PreparedLexInput<'a> {
     text: &'a str,
     origins: Option<&'a [OriginSegment]>,
     snapshot: SourceSnapshot,
     view: PreparedViewId,
     budget: ExpansionBudget,
-    structure: OnceLock<Result<(), SourceError>>,
+    structure: OnceLock<Result<(), StructureFailure>>,
 }
 impl<'a> PreparedLexInput<'a> {
     pub fn prepared(
@@ -197,9 +203,11 @@ impl<'a> PreparedLexInput<'a> {
                 };
                 self.budget
                     .charge(Counter::Work, segments.len() as u64)
-                    .map_err(|error| SourceError::from_token(error.into()))?;
+                    .map_err(StructureFailure::Budget)?;
                 if segments.is_empty() {
-                    return Err(Self::contract("prepared source has no origin segments"));
+                    return Err(StructureFailure::Contract(
+                        "prepared source has no origin segments",
+                    ));
                 }
                 let mut end = 0;
                 for segment in segments {
@@ -213,20 +221,24 @@ impl<'a> PreparedLexInput<'a> {
                             && segment.prepared.len()
                                 != (segment.origin.hi - segment.origin.lo) as usize)
                     {
-                        return Err(Self::contract(
+                        return Err(StructureFailure::Contract(
                             "invalid, overlapping or incomplete prepared origin segments",
                         ));
                     }
                     end = segment.prepared.end;
                 }
                 if end != self.text.len() {
-                    return Err(Self::contract(
+                    return Err(StructureFailure::Contract(
                         "prepared origin segments do not cover the filtered source",
                     ));
                 }
                 Ok(())
             })
             .clone()
+            .map_err(|error| match error {
+                StructureFailure::Budget(error) => SourceError::from_token(error.into()),
+                StructureFailure::Contract(message) => Self::contract(message),
+            })
     }
     pub fn render(&self, span: OriginalSpan) -> Result<SourceSpan, SourceError> {
         self.snapshot
@@ -265,6 +277,7 @@ impl<'a> PreparedLexInput<'a> {
             kind,
             primary: Some(raw),
             message: message.into(),
+            _diagnostic_lease: None,
             location: Some(location),
         }
     }
@@ -276,6 +289,7 @@ impl<'a> PreparedLexInput<'a> {
             kind,
             primary: None,
             message: message.into(),
+            _diagnostic_lease: None,
             location: None,
         }
     }
@@ -379,6 +393,45 @@ mod tests {
             input.project(0..2).unwrap_err().kind,
             SourceErrorKind::Contract
         );
+    }
+    #[test]
+    fn cached_structure_errors_recreate_unleased_diagnostics_without_repeating_work() {
+        let mut source =
+            prepare_text("cache.rs", "fn main(){}", &SourceOptions::default()).unwrap();
+        source.origins[0].prepared.start = 1;
+        let budget = ExpansionBudget::default();
+        let input = PreparedLexInput::prepared(&source, &budget).unwrap();
+        let first = input.validate_structure().unwrap_err();
+        let work = budget.snapshot().counters[Counter::Work as usize];
+        let second = input.validate_structure().unwrap_err();
+        assert_eq!(first.kind, SourceErrorKind::Contract);
+        assert_eq!(first.kind, second.kind);
+        assert_eq!(first.message, second.message);
+        assert!(first._diagnostic_lease.is_none());
+        assert!(second._diagnostic_lease.is_none());
+        assert_eq!(budget.snapshot().counters[Counter::Work as usize], work);
+    }
+
+    #[test]
+    fn cached_structure_budget_failure_keeps_the_exact_latched_cause() {
+        let source = prepare_text("cache.rs", "fn main(){}", &SourceOptions::default()).unwrap();
+        let budget = ExpansionBudget::default();
+        let input = PreparedLexInput::prepared(&source, &budget).unwrap();
+        let failure = budget
+            .charge(
+                Counter::Work,
+                budget.limits().counters[Counter::Work as usize] + 1,
+            )
+            .unwrap_err();
+        let first = input.validate_structure().unwrap_err();
+        let second = input.validate_structure().unwrap_err();
+        assert_eq!(first.kind, SourceErrorKind::Limit);
+        assert_eq!(
+            first.message,
+            TokenError::Budget(failure.clone()).to_string()
+        );
+        assert_eq!(second.message, first.message);
+        assert_eq!(budget.check().unwrap_err(), failure);
     }
     #[test]
     fn complete_logical_tokens_cannot_cross_segments_even_with_equal_bytes() {

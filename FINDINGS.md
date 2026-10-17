@@ -1,5 +1,44 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: First real function-local source macro and mixed-site locals
+
+The bounded native client now accepts one function-local `tt`/`ident` macro and
+expression-position invocation, retaining exact canonical tokens and checked
+source-order definition/call frontiers. Generated and captured binders resolve
+through real lexical BindingIds in the checker and original source inventory.
+Expanded ingress does not print/relex, strip marks globally, invoke stock tools,
+or grant verified body/publication authority. SOURCE-MACROS.md records the full
+bounded contract and explicitly unimplemented general-macro/library features.
+
+The strengthened stock-first corpus has 17 cases and 48 native workers-1/8
+CHECK/BUILD cells, including two real generated/captured binder runtime clients.
+It passed in `20261017-090119390-1209633`. The final frozen all-target check
+`20261017-090525946-1227837`, complete 2,070-test / 102-binary suite
+`20261017-090528020-1227907`, strict all-target lint
+`20261017-090544741-1229123`, formatting and whitespace checks all passed.
+The full test receipt reports zero failed, ignored or filtered tests. Eighteen
+public scope controls and private owner/function/projection/resource mutations
+are included. The final suite reports a 12.3-second wide-integer oracle test as
+its slowest workload, not a source-macro speedup or a reason to omit regressions.
+
+Earlier failed receipts are retained rather than presented as acceptance:
+false-cfg unknown invocation was initially misclassified as Unsupported; new
+fixture ownership and canonical `crate::main` mistakes failed correctly; the
+last all-target failure was two BudgetVec test iterator API uses. Review also
+caught cross-function root-context captures, marked class admission, missing
+anchored-local fallback and expansion-ledger resource errors being flattened
+through a legacy String boundary. Those paths now validate real associations
+and preserve typed causes. A measured stock distinction additionally prevents
+joint `<-` being falsely accepted as comparison plus negation in original or
+expanded expressions, while keeping its legal single macro-tt representation.
+All 18 exact failed/successful records are retained in
+`data/runs/xps14/2026-10-17-source-macros.jsonl`.
+
+No performance speedup or full Rust claim follows. Nested/recursive and
+item-generating expansion, general hygiene, richer fragments and opaque literal
+AST consumption, cross-crate macros, procedural macros and graph discovery
+closure remain open. Existing caps and stable installed client are unchanged.
+
 ## 2026-10-17: Accepted root-context typed source identity migration
 
 The actual root-context AST, resolver, checker and retained source replay now use

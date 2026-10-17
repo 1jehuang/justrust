@@ -11,7 +11,7 @@ use super::expansion_budget::{ByteLease, Counter, ExpansionBudget, Storage};
 use super::semantic_name::{
     AstIdent, LookupClass, NameError, NameKey, NameStore, NameStoreBuilder, Namespace,
 };
-use super::token_session::{BudgetVec, SessionId, TokenError, TokenSession};
+use super::token_session::{BudgetVec, SessionId, SpanId, TokenError, TokenSession};
 
 mod sealed {
     pub trait Sealed {}
@@ -24,6 +24,7 @@ pub trait NameAccess: sealed::Sealed {
     fn check(&self, ident: AstIdent) -> Result<(), NameError>;
     fn key(&self, ident: AstIdent, class: LookupClass) -> Result<NameKey, NameError>;
     fn spelling(&self, ident: AstIdent) -> Result<&str, NameError>;
+    fn span(&self, ident: AstIdent) -> Result<SpanId, NameError>;
     fn budget(&self) -> &ExpansionBudget;
     fn session(&self) -> &TokenSession;
 }
@@ -38,6 +39,9 @@ macro_rules! name_access {
             }
             fn spelling(&self, ident: AstIdent) -> Result<&str, NameError> {
                 <$ty>::spelling(self, ident)
+            }
+            fn span(&self, ident: AstIdent) -> Result<SpanId, NameError> {
+                <$ty>::span(self, ident)
             }
             fn budget(&self) -> &ExpansionBudget {
                 <$ty>::budget(self)
