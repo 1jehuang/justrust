@@ -462,6 +462,24 @@ pub enum Rvalue {
         fields: Vec<Operand>,
     },
     Println(String),
+    /// Unsizes exactly shared `&[u8; N]` to shared `&[u8]`. N comes from the
+    /// operand's validated type. The operand is evaluated once and its loan
+    /// and origin set is the only storage authority of the result.
+    ArrayToSlice {
+        reference: Operand,
+    },
+    /// Builtin length of exactly shared `&[u8]`, result `usize`. Grants no
+    /// storage authority and performs no read through the reference.
+    SliceLen {
+        slice: Operand,
+    },
+    /// Runtime bounds-checked `u8` copy through exactly shared `&[u8]` at a
+    /// `usize` index. Requires a live shared-origin read. No slice place or
+    /// mutable index exists.
+    SliceIndex {
+        slice: Operand,
+        index: Operand,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
