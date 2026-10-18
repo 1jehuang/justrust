@@ -1,6 +1,10 @@
 # Bounded divergent builtin macros
 
-Status: implementation in progress. Full Rust remains open.
+Status: delivered bounded divergent builtins. Full Rust remains open.
+
+The original 24-source stock receipt is `207a0d998f3135e0045c773be69d49590be97ebd0e5fddd3a2e780f671959525`; all source bytes and order remain unchanged. Three separate function-local shadow controls use append receipt `11400249fae3a4cc7fcf930850f330c78755ede37e65a4ff08188019447dc5af`. The resulting 27 cases contain 15 native aborts, six native live cases, five explicit unsupported cases and one invalid case. The original module-level shadows remain unsupported rather than being mistaken for function-local macro coverage. The original nonliteral case reaches an earlier string-binding syntax boundary.
+
+Debug and release acceptance pass 108 CLI and 108 observed-graph CHECK/BUILD cells, with 42 runtime executions in each path. The complete local suite passed 3,103 tests across 156 binaries (`20261017-184810023-1044720`). Hosted all-target check and strict lint passed. Fifteen exact failed and successful receipts are retained in `data/runs/xps14/2026-10-18-divergent-macros.jsonl`; stock-abort gates use the documented local exception. Six public authority tests and five private test groups cover checked locations, exact Never/completion, unused rows, metadata ownership, literal prefixes and grammar. Raw/byte literals, formatting and qualified/module macro execution remain outside this slice.
 
 Add `unreachable!`, `todo!`, and `unimplemented!` through the existing checked literal panic path. Admit empty and single string-literal forms, optional trailing comma and all three delimiters. Preserve stock default/custom message prefixes as independently measured on the installed stock compiler. No formatting arguments or nonliteral message expressions in this slice.
 

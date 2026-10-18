@@ -5967,8 +5967,10 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return self.output_expression(spelling);
             }
         }
-        if self.builtin_panic_ahead()? {
-            return self.panic_expression();
+        for spelling in ["panic", "unreachable", "todo", "unimplemented"] {
+            if self.builtin_macro_ahead(spelling)? {
+                return self.panic_expression(spelling);
+            }
         }
         if self.builtin_macro_ahead("assert")? {
             return self.assert_expression();
@@ -5988,9 +5990,6 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.isolated_expression_at(&buffer, Some(admission), depth)
     }
     /// Select the builtin only after checked lexical and module lookup miss.
-    fn builtin_panic_ahead(&mut self) -> Result<bool, ParseError> {
-        self.builtin_macro_ahead("panic")
-    }
     fn builtin_macro_ahead(&mut self, spelling: &str) -> Result<bool, ParseError> {
         let token = self.token();
         let name = self.input.mint_name(&token, self.names)?;
@@ -6095,7 +6094,38 @@ impl<'input, 'names> Parser<'input, 'names> {
             .map_err(native_adapter::name_error)?;
         Ok(Expr::Output(payload))
     }
-    fn panic_expression(&mut self) -> Result<Expr, ParseError> {
+    fn panic_expression(&mut self, spelling: &'static str) -> Result<Expr, ParseError> {
+        let (default, delimiter, nonliteral, placeholders, arguments) = match spelling {
+            "panic" => (
+                "explicit panic",
+                "expected a panic! delimiter",
+                "panic! nonliteral arguments are unsupported",
+                "panic! formatting placeholders are unsupported",
+                "panic! formatting arguments are unsupported",
+            ),
+            "unreachable" => (
+                "internal error: entered unreachable code",
+                "expected an unreachable! delimiter",
+                "unreachable! nonliteral arguments are unsupported",
+                "unreachable! formatting placeholders are unsupported",
+                "unreachable! formatting arguments are unsupported",
+            ),
+            "todo" => (
+                "not yet implemented",
+                "expected a todo! delimiter",
+                "todo! nonliteral arguments are unsupported",
+                "todo! formatting placeholders are unsupported",
+                "todo! formatting arguments are unsupported",
+            ),
+            "unimplemented" => (
+                "not implemented",
+                "expected an unimplemented! delimiter",
+                "unimplemented! nonliteral arguments are unsupported",
+                "unimplemented! formatting placeholders are unsupported",
+                "unimplemented! formatting arguments are unsupported",
+            ),
+            _ => unreachable!("checked panic builtin"),
+        };
         let site = self.token().span;
         let original = self
             .names
@@ -6120,23 +6150,21 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else if self.eat("{") {
             "}"
         } else {
-            return Err(self.error("expected a panic! delimiter"));
+            return Err(self.error(delimiter));
         };
         let message = if self.is(close) {
-            self.names
-                .retain_parser_text("explicit panic".len())
-                .map_err(native_adapter::name_error)?;
-            "explicit panic".to_owned()
+            self.prefixed_panic_message(default, None)?
         } else {
-            if !self.token().string && !self.token().is_opaque_literal() {
-                return Err(self.unsupported("panic! nonliteral arguments are unsupported"));
-            }
-            let text = self.panic_literal()?;
+            let text = self.literal_message(nonliteral, placeholders)?;
             self.eat(",");
             if !self.is(close) {
-                return Err(self.unsupported("panic! formatting arguments are unsupported"));
+                return Err(self.unsupported(arguments));
             }
-            text
+            if spelling == "panic" {
+                text
+            } else {
+                self.prefixed_panic_message(default, Some(&text))?
+            }
         };
         self.expect(close)?;
         let payload = self
@@ -6484,11 +6512,42 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.cursor.bump();
         Ok(value)
     }
-    fn panic_literal(&mut self) -> Result<String, ParseError> {
-        self.literal_message(
-            "panic! nonliteral arguments are unsupported",
-            "panic! formatting placeholders are unsupported",
-        )
+    /// Charge the complete new allocation, including any allocator rounding.
+    /// The decoded literal remains separately charged by `literal_message`.
+    fn prefixed_panic_message(
+        &mut self,
+        prefix: &str,
+        custom: Option<&str>,
+    ) -> Result<String, ParseError> {
+        let capacity = custom
+            .map_or(Some(prefix.len()), |text| {
+                prefix.len().checked_add(2)?.checked_add(text.len())
+            })
+            .ok_or_else(|| {
+                native_adapter::transport_error(self.names.budget().poison_allocation().into())
+            })?;
+        self.names
+            .budget()
+            .charge(super::expansion_budget::Counter::Work, capacity as u64)
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        self.names
+            .retain_parser_text(capacity)
+            .map_err(native_adapter::name_error)?;
+        let mut message = String::new();
+        message.try_reserve_exact(capacity).map_err(|_| {
+            native_adapter::transport_error(self.names.budget().poison_allocation().into())
+        })?;
+        if message.capacity() > capacity {
+            self.names
+                .retain_parser_text(message.capacity() - capacity)
+                .map_err(native_adapter::name_error)?;
+        }
+        message.push_str(prefix);
+        if let Some(text) = custom {
+            message.push_str(": ");
+            message.push_str(text);
+        }
+        Ok(message)
     }
     fn literal_message(
         &mut self,

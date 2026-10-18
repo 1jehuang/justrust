@@ -449,6 +449,12 @@ host macro and compiles its generated target source.
 
 ### G6. Runtime, FFI, linking and target expansion
 
+- [x] Bounded `unreachable!`, `todo!`, and `unimplemented!` reuse checked literal
+      panic lowering with exact default/custom prefixes, source locations and
+      Never control flow. Frozen 27-source debug/release CLI/graph matrices and
+      complete 3,103-test/156-binary suite passed. See `DIVERGENT-MACROS.md`;
+      formatting, qualified/module macro execution and unwinding remain open.
+
 - [x] Bounded literal `print!`, `eprint!`, and `eprintln!` preserve exact separate
       stdout/stderr bytes with checked macro/source authority and metered payloads.
       Frozen 20-source debug/release CLI and graph matrices, seven public authority

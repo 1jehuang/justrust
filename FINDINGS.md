@@ -11282,3 +11282,35 @@ The stock-abort environment still requires the documented local test exception.
 Seventeen exact failed and successful gate receipts are retained in
 `data/runs/xps14/2026-10-18-literal-output.jsonl`. No speed claim follows from
 these correctness tests. Full Rust support remains open.
+
+## 2026-10-18: bounded unreachable, todo and unimplemented builtins
+
+Implemented all three through checked macro lookup and the existing literal
+panic source/IR/CFG/backend path. Empty and single normal-string literal forms
+retain stock-measured default/custom prefixes, invocation location, exact Never
+type/completion, terminal control flow and no result write. New prefix storage
+uses fallible reservation and charges copied bytes and work. No new runtime
+or IR variant, formatting machinery, or unwinding claim is introduced.
+
+The original24 source strings and receipt
+`207a0d998f3135e0045c773be69d49590be97ebd0e5fddd3a2e780f671959525` remain
+byte-identical. Three separately measured local-shadow controls use receipt
+`11400249fae3a4cc7fcf930850f330c78755ede37e65a4ff08188019447dc5af`.
+The27-case partition is15 abort,6 live,5 unsupported,1 invalid. Module-level
+shadow originals remain explicitly unsupported, while appended function-local
+controls demonstrate real shadowing. The nonliteral original stops at its
+earlier string-binding parser boundary. Raw/byte literal and match separator
+expectation mistakes in new private tests were corrected without expanding
+the language or weakening source/IR authority.
+
+Debug `20261017-184732474-1037458` and release
+`20261017-184737475-1040006` each passed10 corpus/authority tests, including
+108 CLI and108 observed-graph cells with42 runtime executions per path.
+Six public authority tests and five private test groups passed both profiles.
+Final full local run `20261017-184810023-1044720` passed3,103 tests across156
+binaries in125.5 seconds. Hosted all-target check
+`20261017-184741656-1040998`, strict lint `20261017-184744164-1037448`, and
+format checks passed. Reload-interrupted gates were rerun. Fifteen exact
+failed and successful receipts are retained in
+`data/runs/xps14/2026-10-18-divergent-macros.jsonl`. Stock-abort acceptance
+uses the documented local exception. Full Rust support remains open.

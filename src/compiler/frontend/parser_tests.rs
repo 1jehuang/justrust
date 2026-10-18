@@ -1097,6 +1097,187 @@ fn literal_panic_delimiters_and_checked_locations() {
 }
 
 #[test]
+fn bounded_panic_family_literals_delimiters_and_locations() {
+    for (name, default) in [
+        ("unreachable", "internal error: entered unreachable code"),
+        ("todo", "not yet implemented"),
+        ("unimplemented", "not implemented"),
+    ] {
+        for (open, close) in [("(", ")"), ("[", "]"), ("{", "}")] {
+            for (input, suffix) in [
+                ("", ""),
+                ("\"message\"", ": message"),
+                ("\"message\",", ": message"),
+                ("\"\"", ": "),
+                ("\"{{ok}}\\n\",", ": {ok}\n"),
+                ("\"\\u{1f980}\\n\",", ": 🦀\n"),
+            ] {
+                let source = format!("fn main(){{\n{name}!{open}{input}{close}\n}}");
+                let program = parse(&source).unwrap_or_else(|error| panic!("{source}: {error}"));
+                let Some(Expr::Panic(panic)) = program.functions[0].body.tail.as_deref() else {
+                    panic!("expected source panic: {source}")
+                };
+                assert_eq!(panic.message, format!("{default}{suffix}"));
+                validate_panic_site(panic, &program.names).unwrap();
+                let original = program.names.session().original(panic.site, 512).unwrap();
+                let (_, line, column) = program
+                    .names
+                    .session()
+                    .sources()
+                    .location(original)
+                    .unwrap();
+                assert_eq!((line, column), (2, 1));
+                let env = type_env(&program).unwrap();
+                let checked = type_function_with_env(&program, 0, &env).unwrap();
+                let expression = checked
+                    .exprs
+                    .iter()
+                    .find(|expr| matches!(expr.kind, ir::ExprKind::Panic(_)))
+                    .unwrap();
+                assert_eq!(expression.ty, ir::Ty::Never);
+                assert_eq!(expression.completion, ir::Completion::Never);
+            }
+        }
+    }
+}
+
+#[test]
+fn bounded_panic_family_exact_grammar_and_diagnostics() {
+    for name in ["unreachable", "todo", "unimplemented"] {
+        for (input, diagnostic) in [
+            ("42", "nonliteral arguments"),
+            ("message", "nonliteral arguments"),
+            ("\"{}\"", "formatting placeholders"),
+            ("\"{name}\"", "formatting placeholders"),
+            ("\"message\", 42", "formatting arguments"),
+            ("\"message\",,", "formatting arguments"),
+            ("\"message\" \"extra\"", "formatting arguments"),
+        ] {
+            for (open, close) in [("(", ")"), ("[", "]"), ("{", "}")] {
+                let source = format!("fn main(){{{name}!{open}{input}{close}}}");
+                let error = parse(&source).unwrap_err();
+                assert!(
+                    error.contains(&format!("{name}! {diagnostic} are unsupported")),
+                    "{source}: {error}"
+                );
+            }
+        }
+        for input in [
+            ",",
+            ",,",
+            "\"message\";",
+            "(\"message\")",
+            "r#\"raw\"#",
+            "b\"bytes\"",
+        ] {
+            assert!(parse(&format!("fn main(){{{name}!({input})}}")).is_err());
+        }
+        good(&format!(
+            "#[cfg(any())]fn absent(){{{name}!(unknown + 2);}}fn main(){{}}"
+        ));
+    }
+}
+
+#[test]
+fn bounded_panic_family_shadowing_never_falls_back() {
+    for name in ["unreachable", "todo", "unimplemented"] {
+        let program = parse(&format!(
+            "fn main(){{macro_rules! {name}{{()=>{{42}};}}{name}!()}}"
+        ))
+        .unwrap();
+        assert!(matches!(
+            program.functions[0].body.tail.as_deref(),
+            Some(Expr::Integer(_))
+        ));
+        for source in [
+            format!("fn main(){{macro_rules! {name}{{(other)=>{{42}};}}{name}!()}}"),
+            format!("macro_rules! {name}{{()=>{{42}};}}fn main(){{{name}!()}}"),
+            format!("fn main(){{std::{name}!()}}"),
+        ] {
+            assert!(parse(&source).is_err(), "{source}");
+        }
+        good(&format!(
+            "fn main(){{{name}!();{{macro_rules! {name}{{()=>{{42}};}}let x:i32={name}!();}}{name}!();}}"
+        ));
+    }
+}
+
+#[test]
+fn bounded_panic_family_expansion_and_unused_metadata() {
+    for (name, default) in [
+        ("unreachable", "internal error: entered unreachable code"),
+        ("todo", "not yet implemented"),
+        ("unimplemented", "not implemented"),
+    ] {
+        let source = format!(
+            "fn unused(){{\nmacro_rules! fail{{($s:literal)=>{{{name}![$s,]}};}}\nfail!(\"message\")\n}}fn main(){{}}"
+        );
+        let mut program = parse(&source).unwrap();
+        let Some(Expr::Panic(panic)) = program.functions[0].body.tail.as_deref() else {
+            panic!("expected expanded panic")
+        };
+        assert_eq!(panic.message, format!("{default}: message"));
+        let env = type_env(&program).unwrap();
+        let checked = type_function_with_env(&program, 0, &env).unwrap();
+        let message = checked
+            .exprs
+            .iter()
+            .find_map(|expr| match &expr.kind {
+                ir::ExprKind::Panic(message) => Some(message),
+                _ => None,
+            })
+            .unwrap();
+        assert!(message.location.ends_with(":3:1"), "{}", message.location);
+        program.validate_name_handles().unwrap();
+        let foreign = parse(&source).unwrap();
+        let Some(Expr::Panic(other)) = foreign.functions[0].body.tail.as_deref() else {
+            panic!("expected foreign panic")
+        };
+        let Some(Expr::Panic(panic)) = program.functions[0].body.tail.as_deref_mut() else {
+            panic!("expected panic")
+        };
+        panic.site = other.site;
+        assert!(program.validate_name_handles().is_err());
+        assert!(preflight_program_clone(&program, &ir::PlanBudget::default()).is_err());
+        assert!(recipes::inventory(&program, &ir::PlanBudget::default()).is_err());
+    }
+}
+
+#[test]
+fn bounded_panic_family_preserves_written_separators() {
+    for name in ["unreachable", "todo", "unimplemented"] {
+        for invocation in [
+            format!("{name}!()"),
+            format!("{name}![]"),
+            format!("({name}!{{}})"),
+        ] {
+            assert!(parse(&format!("fn main(){{{invocation} let x=1;}}")).is_err());
+            assert!(
+                parse(&format!(
+                    "fn main(){{match true{{true=>{invocation} false=>0}}}}"
+                ))
+                .is_err()
+            );
+        }
+        good(&format!("fn main(){{{name}!{{}} let x=1;}}"));
+        good(&format!("fn main(){{{name}!();let x=1;}}"));
+        // Panic lowering remains an expression, not a block-like match arm.
+        assert!(
+            parse(&format!(
+                "fn main(){{match true{{true=>{name}!{{}} false=>0}}}}"
+            ))
+            .is_err()
+        );
+        good(&format!(
+            "fn main(){{match true{{true=>{name}!{{}},false=>0}};}}"
+        ));
+        let program = parse(&format!("fn main(){{{name}!{{}} let x:bool=1;}}")).unwrap();
+        let env = type_env(&program).unwrap();
+        assert!(type_function_with_env(&program, 0, &env).is_err());
+    }
+}
+
+#[test]
 fn panic_shadowing_and_unsupported_arguments_are_not_builtin_fallbacks() {
     let program = parse("fn main(){macro_rules! panic{()=>{42};}panic!()}").unwrap();
     assert!(matches!(
