@@ -1466,6 +1466,8 @@ impl SourceInventory {
                     "unexpanded macro syntax cannot enter active source inventory",
                 ));
             }
+            Expr::Output(output) => validate_output_site(output, &self.names)
+                .map_err(|message| source_error(budget, &message))?,
             Expr::Panic(panic) => validate_panic_site(panic, &self.names)
                 .map_err(|message| source_error(budget, &message))?,
             Expr::Apply { path, value } => {
@@ -4657,6 +4659,12 @@ impl std::fmt::Debug for UnexpandedMacroSyntax {
     }
 }
 #[derive(Clone, Debug)]
+pub struct SourceOutput {
+    pub output: ir::LiteralOutput,
+    pub site: super::expansion_span::SpanId,
+}
+
+#[derive(Clone, Debug)]
 pub struct SourcePanic {
     pub message: String,
     pub site: super::expansion_span::SpanId,
@@ -4677,7 +4685,18 @@ fn panic_callsite(
 }
 
 fn validate_panic_site(panic: &SourcePanic, names: &NameStore) -> Result<(), String> {
-    let site = panic_callsite(names.session(), panic.site)
+    validate_source_site(panic.site, names)
+}
+
+fn validate_output_site(output: &SourceOutput, names: &NameStore) -> Result<(), String> {
+    validate_source_site(output.site, names)
+}
+
+fn validate_source_site(
+    site: super::expansion_span::SpanId,
+    names: &NameStore,
+) -> Result<(), String> {
+    let site = panic_callsite(names.session(), site)
         .map_err(|error| super::source::SourceError::from_token(error).to_string())?;
     let original = names
         .session()
@@ -4809,6 +4828,7 @@ pub enum Expr {
         label: Option<AstIdent>,
     },
     Println(String),
+    Output(Box<SourceOutput>),
     Panic(Box<SourcePanic>),
 }
 #[derive(Clone, Debug)]
@@ -5942,6 +5962,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.expect("!")?;
             return Ok(Expr::UnexpandedMacro(self.inactive_invocation(path, span)?));
         }
+        for spelling in ["print", "eprint", "eprintln"] {
+            if self.builtin_macro_ahead(spelling)? {
+                return self.output_expression(spelling);
+            }
+        }
         if self.builtin_panic_ahead()? {
             return self.panic_expression();
         }
@@ -5996,6 +6021,79 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Ok(false);
         }
         Ok(!self.known_module_macro(name)?)
+    }
+    fn output_expression(&mut self, spelling: &'static str) -> Result<Expr, ParseError> {
+        let site = self.token().span;
+        let original = self
+            .names
+            .session()
+            .original(
+                panic_callsite(self.names.session(), site)
+                    .map_err(native_adapter::transport_error)?,
+                512,
+            )
+            .map_err(native_adapter::transport_error)?;
+        self.names
+            .session()
+            .sources()
+            .location(original)
+            .map_err(native_adapter::transport_error)?;
+        self.ident()?;
+        self.expect("!")?;
+        let close = if self.eat("(") {
+            ")"
+        } else if self.eat("[") {
+            "]"
+        } else if self.eat("{") {
+            "}"
+        } else {
+            return Err(self.error("expected an output macro delimiter"));
+        };
+        let (nonliteral, placeholders, arguments) = match spelling {
+            "print" => (
+                "print! nonliteral arguments are unsupported",
+                "print! formatting placeholders are unsupported",
+                "print! formatting arguments are unsupported",
+            ),
+            "eprint" => (
+                "eprint! nonliteral arguments are unsupported",
+                "eprint! formatting placeholders are unsupported",
+                "eprint! formatting arguments are unsupported",
+            ),
+            "eprintln" => (
+                "eprintln! nonliteral arguments are unsupported",
+                "eprintln! formatting placeholders are unsupported",
+                "eprintln! formatting arguments are unsupported",
+            ),
+            _ => unreachable!("checked output builtin"),
+        };
+        let text = if self.is(close) && spelling == "eprintln" {
+            String::new()
+        } else {
+            let text = self.literal_message(nonliteral, placeholders)?;
+            self.eat(",");
+            if !self.is(close) {
+                return Err(self.unsupported(arguments));
+            }
+            text
+        };
+        self.expect(close)?;
+        let payload = self
+            .names
+            .try_parser_box(SourceOutput {
+                output: ir::LiteralOutput {
+                    text,
+                    stream: if spelling == "print" {
+                        ir::OutputStream::Stdout
+                    } else {
+                        ir::OutputStream::Stderr
+                    },
+                    newline: spelling == "eprintln",
+                },
+                site,
+            })
+            .map_err(native_adapter::name_error)?;
+        Ok(Expr::Output(payload))
     }
     fn panic_expression(&mut self) -> Result<Expr, ParseError> {
         let site = self.token().span;
@@ -9177,7 +9275,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 } else if self.is("}") {
                     tail = Some(Box::new(expr));
                     break;
-                } else if (brace_macro && matches!(expr, Expr::Panic(_)))
+                } else if (brace_macro && matches!(expr, Expr::Panic(_) | Expr::Output(_)))
                     || ((source_blocklike || brace_macro)
                         && matches!(
                             expr,
@@ -11374,6 +11472,7 @@ fn walk_depth_inspecting(
                         check(*label)?;
                     }
                 }
+                DepthNode::Expr(Expr::Output(output)) => validate_output_site(output, names)?,
                 DepthNode::Expr(Expr::Panic(panic)) => validate_panic_site(panic, names)?,
                 DepthNode::Expr(Expr::LabeledBlock { label, .. }) => check(*label)?,
                 _ => {}

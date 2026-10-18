@@ -176,6 +176,10 @@ pub(super) fn preflight_clone_node(
             }
             Expr::Var(path) => clone_ast_path(path, budget)?,
             Expr::Println(text) => clone_text(text, budget)?,
+            Expr::Output(output) => {
+                budget.retain_bytes(std::mem::size_of::<SourceOutput>())?;
+                clone_text(&output.output.text, budget)?;
+            }
             Expr::Panic(panic) => {
                 budget.retain_bytes(std::mem::size_of::<SourcePanic>())?;
                 clone_text(&panic.message, budget)?;
@@ -671,6 +675,32 @@ mod tests {
         assert_eq!(failure.requested, required);
         assert_eq!(budget.usage_snapshot().bytes, 1024);
         assert!(!failure.arithmetic_overflow);
+    }
+
+    #[test]
+    fn output_clone_admits_box_and_text_before_copy() {
+        let program = super::super::parse("fn main(){eprint!(\"payload\")}").unwrap();
+        let expression = program.functions[0].body.tail.as_deref().unwrap();
+        let Expr::Output(output) = expression else {
+            panic!("expected output")
+        };
+        let boxed = std::mem::size_of::<SourceOutput>();
+        let text = output.output.text.len() + 32;
+        for (limit, used, requested) in [
+            (1024 + boxed - 1, 1024, boxed),
+            (1024 + boxed + text - 1, 1024 + boxed, text),
+        ] {
+            let budget = ir::PlanBudget::new(ir::PlanLimits {
+                bytes: limit,
+                ..Default::default()
+            });
+            assert!(preflight_clone_node(&DepthNode::Expr(expression), &budget).is_err());
+            let failure = budget.first_resource_failure().unwrap();
+            assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
+            assert_eq!(failure.used, used);
+            assert_eq!(failure.requested, requested);
+            assert_eq!(budget.usage_snapshot().bytes, used);
+        }
     }
 
     #[test]

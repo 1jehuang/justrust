@@ -11249,3 +11249,36 @@ Initial API/test expectation failures and successful results are preserved in
 were rerun. Full/stock-abort gates use the documented local exception. The
 slow oracle and compiler-crate waste remain follow-up work, not a performance
 claim. Full Rust support and complete canonical flow replay remain open.
+
+## 2026-10-18: bounded literal stdout and stderr output
+
+Implemented checked `print!`, `eprint!`, and `eprintln!` source selection,
+Unit/Returns IR and CFG payloads, and fixed stdout/stderr native writes. Literal
+Unicode, escaped braces, empty output and newline behavior preserve separate
+stream bytes. Existing partial-write/EINTR and terminal error policy remain;
+empty no-newline output performs no write. This is not general formatting or
+full std IO compatibility.
+
+The independently measured 20-source corpus retains exact source hashes and
+stock receipt `fc6e2ce07ef6f51abdfa87952c6b6a51ee965eeab1925a59573de897bd0aba4b`: 16
+stock successes and four rejections, with 13 native live and seven unsupported
+cases. Debug and release CLI/observed-graph workers1/8 CHECK/BUILD passed, with
+exact stdout/stderr. Seven public authority tests and eleven private controls
+passed both profiles, including malformed unused rows, source ownership,
+budget exhaustion, /dev/full and large stderr drain behavior.
+
+The first integration check exposed a source-site builder mismatch, repaired
+before acceptance. Historical panic cases 15/16 now execute their unchanged
+source bytes natively: exactly one before marker, no after marker, and SIGABRT.
+Two unchanged Drop controls remain unsupported at their now-visible canonical
+Drop boundary. All 47 historical panic source strings were verified unchanged.
+
+Final complete local run `20261017-184057464-868264` passed 3,088 tests across
+154 binaries in 111.2 seconds. Optimized output/authority/panic run
+`20261017-184051437-867806` passed 15 tests; debug output/authority
+`20261017-184043042-865406` passed 11. Hosted all-target check
+`20261017-184048190-867634` and strict lint `20261017-184048927-865394` passed.
+The stock-abort environment still requires the documented local test exception.
+Seventeen exact failed and successful gate receipts are retained in
+`data/runs/xps14/2026-10-18-literal-output.jsonl`. No speed claim follows from
+these correctness tests. Full Rust support remains open.

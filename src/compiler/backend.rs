@@ -1208,8 +1208,48 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
     fn println(&mut self, text: &str) -> Result<(), String> {
-        let mut bytes = text.as_bytes().to_vec();
-        bytes.push(b'\n');
+        self.literal_output(text, ir::OutputStream::Stdout, true)
+    }
+    fn literal_output(
+        &mut self,
+        text: &str,
+        stream: ir::OutputStream,
+        newline: bool,
+    ) -> Result<(), String> {
+        let length = text
+            .len()
+            .checked_add(usize::from(newline))
+            .ok_or("literal output storage overflow")?;
+        if length == 0 {
+            self.immediate(0);
+            return Ok(());
+        }
+        let budget = self.concrete.facts().budget().clone();
+        budget.charge_work(length)?;
+        budget.retain_bytes(length)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(length)
+            .map_err(|_| "literal output allocation failed")?;
+        budget.retain_bytes(bytes.capacity().saturating_sub(length))?;
+        bytes.extend_from_slice(text.as_bytes());
+        if newline {
+            bytes.push(b'\n');
+        }
+        if self.object.strings.len() == self.object.strings.capacity() {
+            let old = self.object.strings.capacity();
+            let entry = std::mem::size_of::<(usize, Vec<u8>)>();
+            budget.retain_bytes(entry)?;
+            self.object
+                .strings
+                .try_reserve_exact(1)
+                .map_err(|_| "literal output relocation allocation failed")?;
+            let extra = (self.object.strings.capacity() - old)
+                .checked_sub(1)
+                .and_then(|count| count.checked_mul(entry))
+                .ok_or("literal output relocation storage overflow")?;
+            budget.retain_bytes(extra)?;
+        }
         self.bytes(&[0x48, 0xbe]);
         let at = self.position();
         self.bytes(&[0; 8]);
@@ -1218,7 +1258,11 @@ impl<'a> Emitter<'a> {
         self.bytes(&[0x48, 0xba]);
         self.bytes(&length.to_le_bytes());
         let retry = self.position();
-        self.bytes(&[0xb8, 1, 0, 0, 0, 0xbf, 1, 0, 0, 0, 0x0f, 0x05]);
+        let descriptor = match stream {
+            ir::OutputStream::Stdout => 1,
+            ir::OutputStream::Stderr => 2,
+        };
+        self.bytes(&[0xb8, 1, 0, 0, 0, 0xbf, descriptor, 0, 0, 0, 0x0f, 0x05]);
         self.bytes(&[0x48, 0x83, 0xf8, 0xfc]);
         let interrupted = self.jump(&[0x0f, 0x84]);
         self.patch(interrupted, retry)?;
@@ -1486,6 +1530,9 @@ impl<'a> Emitter<'a> {
                 self.address(self.aggregate_scratch);
             }
             cfg::Rvalue::Println(text) => self.println(text)?,
+            cfg::Rvalue::Output(output) => {
+                self.literal_output(&output.text, output.stream, output.newline)?;
+            }
             cfg::Rvalue::ArrayToSlice { reference } => {
                 // N comes only from the validated operand type. The operand is
                 // the thin array pointer (the dummy word address for N == 0).
@@ -5810,6 +5857,78 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(path.parent().unwrap()).unwrap();
         assert_eq!(status.code(), Some(101));
+    }
+
+    #[test]
+    fn literal_output_streams_newlines_empty_and_unicode() {
+        let p = frontend::parse(
+            r#"fn main() {
+                print!("");
+                eprint!("");
+                print!("out 世界 🦀");
+                eprint!("err λ 🦀");
+                println!(" legacy");
+                eprintln!(" line");
+                eprintln!();
+                print!("tail\n");
+                eprint!("tail\n");
+            }"#,
+        )
+        .unwrap();
+        let output = run(&p);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert_eq!(output.stdout, "out 世界 🦀 legacy\ntail\n".as_bytes());
+        assert_eq!(output.stderr, "err λ 🦀 line\n\ntail\n".as_bytes());
+    }
+
+    #[test]
+    fn literal_output_errors_are_terminal_but_empty_output_does_not_write() {
+        use std::os::unix::process::CommandExt;
+
+        unsafe extern "C" {
+            fn syscall(number: std::ffi::c_long, ...) -> std::ffi::c_long;
+        }
+        for (source, expected) in [
+            ("fn main(){print!(\"\");eprint!(\"\");}", 0),
+            ("fn main(){print!(\"x\");}", 101),
+            ("fn main(){eprint!(\"x\");}", 101),
+            ("fn main(){eprintln!();}", 101),
+        ] {
+            let p = frontend::parse(source).unwrap();
+            let path = executable(&p);
+            let full = std::fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/full")
+                .unwrap();
+            let mut command = Command::new(&path);
+            command.stdout(Stdio::from(full));
+            // SAFETY: only the forked child redirects stderr to the already
+            // installed stdout descriptor. dup2 uses no allocation or locks.
+            unsafe {
+                command.pre_exec(|| {
+                    if syscall(33, 1usize, 2usize) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let output = execute(&mut command);
+            std::fs::remove_file(&path).unwrap();
+            std::fs::remove_dir(path.parent().unwrap()).unwrap();
+            assert_eq!(output.status.code(), Some(expected), "{source}: {output:?}");
+            assert!(output.stdout.is_empty());
+            assert!(output.stderr.is_empty());
+        }
+    }
+
+    #[test]
+    fn literal_output_large_stderr_drains_without_pipe_deadlock() {
+        let literal = "🦀abcdefgh".repeat(8192);
+        let source = format!("fn main(){{eprint!(\"{literal}\");}}");
+        let output = run(&frontend::parse(&source).unwrap());
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stdout.is_empty());
+        assert_eq!(output.stderr, literal.as_bytes());
     }
 
     #[test]

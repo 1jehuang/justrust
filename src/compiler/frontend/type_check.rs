@@ -905,6 +905,10 @@ impl<'s> Checker<'s> {
             .ok_or("inference requires planning context")?;
         let term = match expr {
             Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
+            Expr::Output(output) => {
+                validate_output_site(output, self.names()?)?;
+                self.infer_node(InferKind::Rigid(ir::Ty::Unit))?
+            }
             Expr::Panic(panic) => {
                 validate_panic_site(panic, self.names()?)?;
                 self.infer_node(InferKind::Rigid(ir::Ty::Never))?
@@ -3760,6 +3764,10 @@ impl<'a> Checker<'a> {
     pub(super) fn scalar_hint(&self, e: &Expr) -> Result<Option<ir::Ty>, String> {
         Ok(match e {
             Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
+            Expr::Output(output) => {
+                validate_output_site(output, self.names()?)?;
+                Some(ir::Ty::Unit)
+            }
             Expr::Panic(panic) => {
                 validate_panic_site(panic, self.names()?)?;
                 Some(ir::Ty::Never)
@@ -7020,6 +7028,21 @@ impl<'a> Checker<'a> {
                         location,
                     })),
                     Flow::never(),
+                )
+            }
+            Expr::Output(output) => {
+                validate_output_site(output, self.names()?)?;
+                self.charge_node(
+                    output
+                        .output
+                        .text
+                        .len()
+                        .checked_add(32)
+                        .ok_or("output text storage overflow")?,
+                )?;
+                (
+                    ir::ExprKind::Output(output.output.clone()),
+                    Flow::value(ir::Ty::Unit),
                 )
             }
             Expr::Println(text) => (

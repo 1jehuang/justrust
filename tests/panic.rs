@@ -410,8 +410,8 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_bytes: 131,
             source_fingerprint: 14559607051701409597,
             source_sha256: r###"02078a6b396ae9257267b67af1562c2018f8828178939efe776b5f37e09c363c"###,
-            native: Native::Unsupported,
-            boundary: r###"unknown function-local macro"###,
+            native: Native::Abort,
+            boundary: r###""###,
             stock_compile_code: 0,
             stock_code: Some(-6),
             stock_stdout: r###""###,
@@ -434,8 +434,8 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_bytes: 93,
             source_fingerprint: 7000963985933209928,
             source_sha256: r###"c5ed4b35ea55891ba375a2021bd53d860e09c75917de8e85a0504ddf451ff965"###,
-            native: Native::Unsupported,
-            boundary: r###"unknown function-local macro"###,
+            native: Native::Abort,
+            boundary: r###""###,
             stock_compile_code: 0,
             stock_code: Some(-6),
             stock_stdout: r###""###,
@@ -514,7 +514,7 @@ error: aborting due to 1 previous error
             source_fingerprint: 320947439098334438,
             source_sha256: r###"772a046b47d4afe5407292161ed9492d75a743e2f2bf089e7f4c47428fb1aaeb"###,
             native: Native::Unsupported,
-            boundary: r###"unknown function-local macro"###,
+            boundary: r###"unsupported: canonical Drop destructor execution"###,
             stock_compile_code: 0,
             stock_code: Some(-6),
             stock_stdout: r###""###,
@@ -537,7 +537,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_fingerprint: 320947439098334438,
             source_sha256: r###"772a046b47d4afe5407292161ed9492d75a743e2f2bf089e7f4c47428fb1aaeb"###,
             native: Native::Unsupported,
-            boundary: r###"unknown function-local macro"###,
+            boundary: r###"unsupported: canonical Drop destructor execution"###,
             stock_compile_code: 0,
             stock_code: Some(101),
             stock_stdout: r###""###,
@@ -1377,12 +1377,10 @@ fn panic_runtime(case: &Case, result: &Captured, source: &Path, stock: bool) {
             "{}: later stderr executed: {result:?}",
             case.name
         );
-        if stock
-            && matches!(
-                case.name,
-                "15_evaluation_order" | "16_initializer_side_effect"
-            )
-        {
+        if matches!(
+            case.name,
+            "15_evaluation_order" | "16_initializer_side_effect"
+        ) {
             assert_eq!(stderr.matches("before\n").count(), 1, "{result:?}");
         }
         if stock && case.name == "control_unwind_drop" {
@@ -1515,7 +1513,7 @@ fn frozen_panic_source_and_receipt_partitions() {
     assert_eq!(stock_core, [3, 10, 3]);
     assert_eq!(
         native,
-        [[0, 7, 3, 6], [6, 0, 0, 1], [0, 0, 0, 6], [6, 10, 2, 0]]
+        [[0, 9, 3, 4], [6, 0, 0, 1], [0, 0, 0, 6], [6, 10, 2, 0]]
     );
 }
 fn stock_all() {
@@ -1764,7 +1762,7 @@ fn cli_all() {
         }
     }
     assert_eq!(cells, 188);
-    failures.check("runtime count", || assert_eq!(runtimes, 58));
+    failures.check("runtime count", || assert_eq!(runtimes, 62));
     failures.finish();
 }
 fn graph_all() {
@@ -1827,7 +1825,7 @@ fn graph_all() {
         }
     }
     assert_eq!(cells, 188);
-    failures.check("graph runtime count", || assert_eq!(runtimes, 58));
+    failures.check("graph runtime count", || assert_eq!(runtimes, 62));
     failures.finish();
 }
 fn isolated(name: &str, marker: &str, run: fn()) {

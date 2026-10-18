@@ -2394,6 +2394,7 @@ pub fn instantiate_checked(
             | ExprKind::Binary { .. }
             | ExprKind::Break { .. }
             | ExprKind::Continue { .. }
+            | ExprKind::Output(_)
             | ExprKind::Println(_)
             | ExprKind::Panic(_) => {}
         }
@@ -5538,6 +5539,21 @@ pub struct PanicMessage {
     pub location: String,
 }
 
+/// A fixed standard output stream, never an arbitrary file descriptor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputStream {
+    Stdout,
+    Stderr,
+}
+
+/// Decoded literal bytes and their exact output operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LiteralOutput {
+    pub text: String,
+    pub stream: OutputStream,
+    pub newline: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExprKind {
     IntCast {
@@ -5655,6 +5671,7 @@ pub enum ExprKind {
     Continue {
         target: LoopId,
     },
+    Output(LiteralOutput),
     Println(String),
     Panic(Box<PanicMessage>),
 }
@@ -6207,6 +6224,7 @@ impl CheckedFunction {
                 ExprKind::Tuple(values) | ExprKind::Array(values) => {
                     storage(budget, values.len(), std::mem::size_of::<ExprId>())?
                 }
+                ExprKind::Output(output) => storage(budget, output.text.len(), 1)?,
                 ExprKind::Println(text) => storage(budget, text.len(), 1)?,
                 ExprKind::Panic(payload) => {
                     storage(budget, 1, std::mem::size_of::<PanicMessage>())?;
@@ -7222,6 +7240,14 @@ impl CheckedFunction {
                     if value.ty != Ty::Never || value.completion != Completion::Never {
                         return Err(
                             "panic requires exact Never type and nonreturning completion".into(),
+                        );
+                    }
+                }
+                ExprKind::Output(_) => {
+                    if value.ty != Ty::Unit || value.completion != Completion::Returns {
+                        return Err(
+                            "literal output requires exact Unit type and returning completion"
+                                .into(),
                         );
                     }
                 }

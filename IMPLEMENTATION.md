@@ -449,6 +449,13 @@ host macro and compiles its generated target source.
 
 ### G6. Runtime, FFI, linking and target expansion
 
+- [x] Bounded literal `print!`, `eprint!`, and `eprintln!` preserve exact separate
+      stdout/stderr bytes with checked macro/source authority and metered payloads.
+      Frozen 20-source debug/release CLI and graph matrices, seven public authority
+      controls, eleven private controls and complete 3,088-test/154-binary suite
+      passed. See `LITERAL-OUTPUT.md`; general formatting, buffering and platform
+      IO compatibility remain open.
+
 - [x] Bounded `assert_eq!`/`assert_ne!` use existing Unit/Bool/integer/float
       comparisons, evaluate operands once in source order, and retain checked
       literal panic locations. Stock-first 27-source debug/release CLI and graph

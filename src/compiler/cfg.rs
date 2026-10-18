@@ -481,6 +481,7 @@ pub enum Rvalue {
         ty: Ty,
         fields: Vec<Operand>,
     },
+    Output(ir::LiteralOutput),
     Println(String),
     /// Unsizes exactly shared `&[u8; N]` to shared `&[u8]`. N comes from the
     /// operand's validated type. The operand is evaluated once and its loan
@@ -557,7 +558,7 @@ impl Rvalue {
                 }
             }
             Self::IndexCopy { index, .. } => visit(index)?,
-            Self::Borrow(_) | Self::Discriminant(_) | Self::Println(_) => {}
+            Self::Borrow(_) | Self::Discriminant(_) | Self::Println(_) | Self::Output(_) => {}
         }
         Ok(())
     }
@@ -989,6 +990,9 @@ impl Function {
                                 std::mem::size_of::<Operand>(),
                                 budget,
                             )?,
+                            Rvalue::Output(output) => {
+                                add(&mut bytes, output.text.len(), 1, budget)?
+                            }
                             Rvalue::Println(text) => add(&mut bytes, text.len(), 1, budget)?,
                             Rvalue::IndexCopy { array, .. } | Rvalue::Discriminant(array) => {
                                 path(&mut bytes, array, budget)?
@@ -1547,7 +1551,7 @@ impl Function {
                                 operand(index, budget, facts)?;
                             }
                             Rvalue::Discriminant(place) => path(place, budget)?,
-                            Rvalue::Borrow(_) | Rvalue::Println(_) => {}
+                            Rvalue::Borrow(_) | Rvalue::Println(_) | Rvalue::Output(_) => {}
                         }
                     }
                 }
@@ -1920,7 +1924,7 @@ impl Function {
                 }
                 Ok(element.clone())
             }
-            Rvalue::Println(_) => Ok(Ty::Unit),
+            Rvalue::Println(_) | Rvalue::Output(_) => Ok(Ty::Unit),
             Rvalue::Unary { op, value } => {
                 let ty = self.operand_ty_with_facts(value, facts)?;
                 match (op, &ty) {
@@ -3681,6 +3685,14 @@ impl Lowerer<'_> {
                 self.terminate(Terminator::Panic(payload.clone()), origin)?;
                 self.disconnected();
             }
+            ir::ExprKind::Output(output) => {
+                // Each materialization owns fresh literal storage, including
+                // repeated uses of a shared expression arena row.
+                if !self.allocate(0, output.text.len()) {
+                    return Err(self.resource_error.clone().unwrap());
+                }
+                self.assign(destination.clone(), Rvalue::Output(output.clone()), origin)
+            }
             ir::ExprKind::Println(text) => {
                 self.assign(destination.clone(), Rvalue::Println(text.clone()), origin)
             }
@@ -3693,6 +3705,132 @@ impl Lowerer<'_> {
 /// or Move from its projected type. The result still requires ownership analysis.
 pub fn lower(source: &ir::CheckedFunction) -> Result<Function, String> {
     lower_internal(source, ir::FactsCtx::Concrete, None)
+}
+
+#[cfg(test)]
+mod literal_output_tests {
+    use super::*;
+
+    fn fixture(output: ir::LiteralOutput) -> ir::CheckedFunction {
+        ir::CheckedFunction {
+            call_evidence: std::sync::Arc::from([]),
+            body_substitution: None,
+            ref_contract: Default::default(),
+            name: "literal_output".into(),
+            params: vec![],
+            result: Ty::Unit,
+            locals: vec![],
+            exprs: vec![ir::TypedExpr {
+                ty: Ty::Unit,
+                completion: ir::Completion::Returns,
+                kind: ir::ExprKind::Output(output),
+            }],
+            body: ir::Block {
+                statements: vec![ir::Stmt::Expr(ExprId(0))],
+                tail: None,
+            },
+        }
+    }
+
+    #[test]
+    fn output_preserves_payload_and_has_no_operands() {
+        for stream in [ir::OutputStream::Stdout, ir::OutputStream::Stderr] {
+            for newline in [false, true] {
+                for text in ["", "λ\0{}\n"] {
+                    let output = ir::LiteralOutput {
+                        text: text.into(),
+                        stream,
+                        newline,
+                    };
+                    let source = fixture(output.clone());
+                    let cfg = lower(&source).unwrap();
+                    cfg.validate().unwrap();
+                    let outputs: Vec<_> = cfg
+                        .blocks
+                        .iter()
+                        .flat_map(|b| &b.statements)
+                        .filter_map(|statement| match &statement.value {
+                            Statement::Assign {
+                                value: Rvalue::Output(output),
+                                ..
+                            } => Some(output),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(outputs, vec![&output]);
+                    let mut operands = 0;
+                    Rvalue::Output(output)
+                        .visit_operands(&mut |_| {
+                            operands += 1;
+                            Ok(())
+                        })
+                        .unwrap();
+                    assert_eq!(operands, 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn output_storage_and_each_materialization_are_metered() {
+        let mut measurements = Vec::new();
+        for text in [String::new(), "x".repeat(4096)] {
+            let mut source = fixture(ir::LiteralOutput {
+                text,
+                stream: ir::OutputStream::Stdout,
+                newline: false,
+            });
+            source.body.statements.push(ir::Stmt::Expr(ExprId(0)));
+            let budget = ir::PlanBudget::default();
+            let cfg = lower_with_budget(&source, &budget).unwrap();
+            let snapshot_bytes = cfg.snapshot_storage(&ir::PlanBudget::default()).unwrap();
+            measurements.push((budget.usage_snapshot().bytes, snapshot_bytes));
+        }
+        // The arena retains one payload, and both evaluations clone it.
+        assert_eq!(measurements[1].0 - measurements[0].0, 3 * 4096);
+        // A CFG snapshot retains both independently emitted payloads.
+        assert_eq!(measurements[1].1 - measurements[0].1, 2 * 4096);
+    }
+
+    #[test]
+    fn unused_output_requires_exact_unit_and_returns() {
+        let mut source = fixture(ir::LiteralOutput {
+            text: "unused".into(),
+            stream: ir::OutputStream::Stderr,
+            newline: false,
+        });
+        source.body.statements.clear();
+        source.validate().unwrap();
+        assert!(
+            !lower(&source)
+                .unwrap()
+                .blocks
+                .iter()
+                .flat_map(|b| &b.statements)
+                .any(|statement| matches!(
+                    &statement.value,
+                    Statement::Assign {
+                        value: Rvalue::Output(_),
+                        ..
+                    }
+                ))
+        );
+        for (ty, completion) in [
+            (Ty::Bool, ir::Completion::Returns),
+            (Ty::Unit, ir::Completion::Never),
+            (Ty::Never, ir::Completion::Never),
+        ] {
+            source.exprs[0].ty = ty;
+            source.exprs[0].completion = completion;
+            assert!(
+                source
+                    .validate()
+                    .unwrap_err()
+                    .contains("literal output requires exact Unit")
+            );
+            assert!(lower(&source).is_err());
+        }
+    }
 }
 pub fn lower_with_budget(
     source: &ir::CheckedFunction,
@@ -9563,7 +9701,7 @@ mod tests {
                             Rvalue::Discriminant(place) => {
                                 assert!(live[place.local.0], "discriminant reads dead storage");
                             }
-                            Rvalue::Println(_) => {}
+                            Rvalue::Println(_) | Rvalue::Output(_) => {}
                         }
                     }
                 }

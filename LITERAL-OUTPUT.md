@@ -1,6 +1,8 @@
 # Literal stdout/stderr macros
 
-Status: implementation in progress, not delivered. Full Rust remains open.
+Status: delivered bounded Linux x86-64 literal output. Full Rust remains open.
+
+The frozen 20-source corpus has 13 native runtime cases and 7 explicit unsupported cases. Independent stock compilation accepts 16 and rejects 4. Its exact receipt SHA256 is `fc6e2ce07ef6f51abdfa87952c6b6a51ee965eeab1925a59573de897bd0aba4b`. Debug CLI and observed graph workers1/8 CHECK/BUILD gates pass with exact stdout and stderr. Seven public authority tests and eleven focused private tests pass in debug and release. The optimized combined output/authority/panic gate passed 15 tests. The final complete local suite passed 3,088 tests across 154 binaries (`20261017-184057464-868264`), with hosted all-target check and strict lint passing. Exact failed and successful receipts are retained in `data/runs/xps14/2026-10-18-literal-output.jsonl`. Stock-abort gates use the documented local exception.
 
 Add checked builtin `print!`, `eprint!`, and `eprintln!` for a single string literal with optional trailing comma and all three delimiters. Empty `eprintln!()` emits a newline. Empty print/eprint are rejected consistently with stock. Reuse literal escape/escaped-brace decoding; reject interpolation, extra formatting arguments and nonliteral inputs explicitly. Builtins are selected only after authoritative lexical/module macro lookup misses, with checked invocation identity and source ownership. Existing `println!` behavior and its historical source fixtures stay unchanged in this slice.
 

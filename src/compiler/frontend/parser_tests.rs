@@ -1,5 +1,129 @@
 use super::*;
 
+#[test]
+fn literal_output_delimiters_decode_and_lower_to_unit() {
+    for (name, stream, newline) in [
+        ("print", ir::OutputStream::Stdout, false),
+        ("eprint", ir::OutputStream::Stderr, false),
+        ("eprintln", ir::OutputStream::Stderr, true),
+    ] {
+        for (open, close) in [("(", ")"), ("[", "]"), ("{", "}")] {
+            for comma in ["", ","] {
+                let source = format!(
+                    "fn main(){{\n{name}!{open}\"\\u{{1f980}}\\n{{{{ok}}}}\"{comma}{close}\n}}"
+                );
+                let program = parse(&source).unwrap();
+                let Some(Expr::Output(output)) = program.functions[0].body.tail.as_deref() else {
+                    panic!("expected output: {source}")
+                };
+                assert_eq!(output.output.text, "🦀\n{ok}");
+                assert_eq!(output.output.stream, stream);
+                assert_eq!(output.output.newline, newline);
+                validate_output_site(output, &program.names).unwrap();
+                let original = program.names.session().original(output.site, 512).unwrap();
+                let (_, line, column) = program
+                    .names
+                    .session()
+                    .sources()
+                    .location(original)
+                    .unwrap();
+                assert_eq!((line, column), (2, 1));
+                let env = type_env(&program).unwrap();
+                let checked = type_function_with_env(&program, 0, &env).unwrap();
+                let expr = checked
+                    .exprs
+                    .iter()
+                    .find(|e| matches!(e.kind, ir::ExprKind::Output(_)))
+                    .unwrap();
+                assert_eq!(expr.ty, ir::Ty::Unit);
+                assert_eq!(expr.completion, ir::Completion::Returns);
+            }
+        }
+    }
+}
+
+#[test]
+fn literal_output_empty_and_unsupported_arguments_are_explicit() {
+    for name in ["print", "eprint", "eprintln"] {
+        for (open, close) in [("(", ")"), ("[", "]"), ("{", "}")] {
+            let source = format!("fn main(){{{name}!{open}{close}}}");
+            if name == "eprintln" {
+                let program = parse(&source).unwrap();
+                let Some(Expr::Output(output)) = program.functions[0].body.tail.as_deref() else {
+                    panic!("expected empty output")
+                };
+                assert!(output.output.text.is_empty());
+                assert!(output.output.newline);
+            } else {
+                assert!(parse(&source).is_err(), "{source}");
+            }
+        }
+        for (args, label) in [
+            ("42", "nonliteral arguments"),
+            ("\"{}\"", "formatting placeholders"),
+            ("\"{name}\"", "formatting placeholders"),
+            ("\"literal\", 42", "formatting arguments"),
+            ("\"literal\",,", "formatting arguments"),
+        ] {
+            let source = format!("fn main(){{{name}!({args})}}");
+            let error = parse(&source).unwrap_err();
+            assert!(error.to_string().contains(label), "{source}: {error}");
+        }
+    }
+}
+
+#[test]
+fn literal_output_lexical_shadowing_never_falls_back_to_builtin() {
+    for name in ["print", "eprint", "eprintln"] {
+        let source = format!("fn main(){{macro_rules! {name}{{()=>{{42}};}}{name}!()}}");
+        let program = parse(&source).unwrap();
+        assert!(matches!(
+            program.functions[0].body.tail.as_deref(),
+            Some(Expr::Integer(_))
+        ));
+        let source =
+            format!("fn main(){{macro_rules! {name}{{(x)=>{{42}};}}{name}!(\"literal\")}}");
+        assert!(parse(&source).is_err(), "{source}");
+        // Module macros remain authoritative even where this slice cannot expand them.
+        let source = format!("macro_rules! {name}{{()=>{{42}};}}fn main(){{{name}!()}}");
+        assert!(parse(&source).is_err(), "{source}");
+    }
+}
+
+#[test]
+fn literal_output_expansion_braces_and_late_type_errors() {
+    let program =
+        parse("fn main(){macro_rules! emit{($s:literal)=>{eprint![$s]};}emit!(\"{{ok}}\")}")
+            .unwrap();
+    let Some(Expr::Output(output)) = program.functions[0].body.tail.as_deref() else {
+        panic!("expected expanded output")
+    };
+    assert_eq!(output.output.text, "{ok}");
+    validate_output_site(output, &program.names).unwrap();
+    for name in ["print", "eprint", "eprintln"] {
+        let source = format!("fn main(){{{name}!{{\"ok\"}} let x:bool=1;}}");
+        let program = parse(&source).unwrap();
+        let env = type_env(&program).unwrap();
+        assert!(type_function_with_env(&program, 0, &env).is_err());
+    }
+}
+
+#[test]
+fn literal_output_foreign_unused_site_is_rejected_before_clone_and_inventory() {
+    let mut program = parse("fn unused(){eprint!(\"x\")}fn main(){}").unwrap();
+    let foreign = parse("fn main(){print!(\"x\")}").unwrap();
+    let Some(Expr::Output(other)) = foreign.functions[0].body.tail.as_deref() else {
+        panic!("expected output")
+    };
+    let Some(Expr::Output(output)) = program.functions[0].body.tail.as_deref_mut() else {
+        panic!("expected output")
+    };
+    output.site = other.site;
+    assert!(program.validate_name_handles().is_err());
+    assert!(preflight_program_clone(&program, &ir::PlanBudget::default()).is_err());
+    assert!(recipes::inventory(&program, &ir::PlanBudget::default()).is_err());
+}
+
 fn fixture_key(program: &Program, path: &AstPath, namespace: Namespace) -> PathKey {
     name_scope::path_key(program.names.as_ref(), path, namespace).unwrap()
 }
