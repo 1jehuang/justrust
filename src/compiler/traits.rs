@@ -1142,6 +1142,9 @@ pub struct ValidatedTraitWorld {
     origins: Vec<(DeclId, Arc<ir::SignatureOriginSchema>)>,
     carriers: Vec<DeclarationCarriers>,
     normalized_callables: Vec<CallableHeader>,
+    /// `(declaration, first position)` sorted by declaration, rebuilt with
+    /// `normalized_callables`. Replaces a linear scan per header lookup.
+    normalized_callable_index: Vec<(DeclId, usize)>,
     projection_memo: Mutex<Vec<associated_types::NormalizationMemo>>,
     owner_normalization_ready: bool,
     owner_normalization_finalized: bool,
@@ -1286,6 +1289,7 @@ impl ValidatedTraitWorld {
             origins: Vec::new(),
             carriers: Vec::new(),
             normalized_callables: Vec::new(),
+            normalized_callable_index: Vec::new(),
             projection_memo: Mutex::new(Vec::new()),
             owner_normalization_ready: false,
             owner_normalization_finalized: false,
@@ -1474,11 +1478,14 @@ impl ValidatedTraitWorld {
         ))
     }
     fn callable_header(&self, id: DeclId) -> Result<&CallableHeader> {
-        for h in &self.normalized_callables {
-            charged(&self.budget, self.budget.charge_work(1))?;
-            if h.declaration == id {
-                return Ok(h);
-            }
+        charged(&self.budget, self.budget.charge_work(1))?;
+        let first = self
+            .normalized_callable_index
+            .partition_point(|(declaration, _)| *declaration < id);
+        if let Some((declaration, position)) = self.normalized_callable_index.get(first)
+            && *declaration == id
+        {
+            return Ok(&self.normalized_callables[*position]);
         }
         for h in self.headers.callables.iter() {
             charged(&self.budget, self.budget.charge_work(1))?;

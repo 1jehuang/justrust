@@ -1142,15 +1142,33 @@ impl Function {
         if let Some(proof) = &self.body_substitution {
             proof.validate_cfg(self, facts, budget)?;
         }
+        // One sorted index replaces a per-block linear scan of all evidence,
+        // which was O(blocks * evidence) on every validation. The first
+        // evidence with a given call id wins, exactly like the previous find.
+        budget.charge_work(self.call_evidence.len().saturating_add(1))?;
+        let mut evidence_index: Vec<(usize, usize)> = Vec::new();
+        evidence_index
+            .try_reserve_exact(self.call_evidence.len())
+            .map_err(|_| "CFG call evidence index allocation limit exceeded")?;
+        evidence_index.extend(
+            self.call_evidence
+                .iter()
+                .enumerate()
+                .map(|(position, evidence)| (evidence.call().0, position)),
+        );
+        evidence_index.sort_unstable();
         for block in &self.blocks {
-            budget.charge_work(self.call_evidence.len().saturating_add(1))?;
+            budget.charge_work(1)?;
             let Terminator::Call { target, args, .. } = &block.terminator.value else {
                 continue;
             };
-            let capsule = self
-                .call_evidence
-                .iter()
-                .find(|evidence| Some(evidence.call()) == block.terminator.origin);
+            let capsule = block.terminator.origin.and_then(|origin| {
+                let first = evidence_index.partition_point(|(call, _)| *call < origin.0);
+                evidence_index
+                    .get(first)
+                    .filter(|(call, _)| *call == origin.0)
+                    .map(|(_, position)| &self.call_evidence[*position])
+            });
             let ordinary_actuals: &[Ty] = match target {
                 ir::Callee::Direct(target) => &target.type_args,
                 ir::Callee::TraitItem(call) => &call.method_args,

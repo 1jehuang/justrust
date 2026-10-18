@@ -950,6 +950,23 @@ impl ValidatedTraitWorld {
                 },
             )?;
         }
+        let mut index = Vec::new();
+        index
+            .try_reserve_exact(normalized.len())
+            .map_err(|_| FactsError::resource(&self.budget, "callable header index allocation"))?;
+        self.budget
+            .charge_work(normalized.len())
+            .map_err(|message| FactsError::resource(&self.budget, &message))?;
+        index.extend(
+            normalized
+                .iter()
+                .enumerate()
+                .map(|(position, header)| (header.declaration, position)),
+        );
+        // Stable sort keeps the first header for a declaration first, which
+        // matches the previous first-match linear scan.
+        index.sort_by_key(|(declaration, _)| *declaration);
+        self.normalized_callable_index = index;
         self.normalized_callables = normalized;
         Ok(())
     }
