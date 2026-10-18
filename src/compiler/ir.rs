@@ -1723,6 +1723,8 @@ impl PlanUsageSnapshot {
 #[derive(Debug, Default)]
 struct PlanUsage {
     applications: usize,
+    nodes: usize,
+    work: usize,
     bytes: usize,
     obligations: usize,
     diagnostic_bytes: usize,
@@ -1730,166 +1732,14 @@ struct PlanUsage {
     reservations: ReservationAccounting,
     first_failure: Option<ResourceBudgetFailure>,
 }
-/// An exact, contention-free bounded counter. A single shared counter
-/// serialized every worker on one cache line, so usage is striped: each thread
-/// spends from a lease in its own padded stripe, refilled from `granted` in
-/// chunks. `granted` never exceeds the limit. Leases are revocable: an
-/// admission that cannot be satisfied reclaims every outstanding lease before
-/// deciding, so rejection happens exactly when consumed usage plus the request
-/// exceeds the limit, as with a single counter. `used()` is exactly the
-/// consumed total.
-#[derive(Debug)]
-struct StripedCounter {
-    granted: std::sync::atomic::AtomicUsize,
-    stripes: Box<[CounterStripe]>,
-    revoke: std::sync::Mutex<()>,
-}
-#[derive(Debug, Default)]
-#[repr(align(128))]
-struct CounterStripe {
-    lease: std::sync::atomic::AtomicUsize,
-    consumed: std::sync::atomic::AtomicUsize,
-}
-const COUNTER_STRIPES: usize = 64;
-const COUNTER_GRANT_CHUNK: usize = 4096;
-static NEXT_STRIPE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-thread_local! {
-    static COUNTER_STRIPE: usize =
-        NEXT_STRIPE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % COUNTER_STRIPES;
-}
-impl Default for StripedCounter {
-    fn default() -> Self {
-        Self {
-            granted: std::sync::atomic::AtomicUsize::new(0),
-            stripes: (0..COUNTER_STRIPES)
-                .map(|_| CounterStripe::default())
-                .collect(),
-            revoke: std::sync::Mutex::new(()),
-        }
-    }
-}
-impl StripedCounter {
-    /// Exactly the consumed total, independent of outstanding leases.
-    fn used(&self) -> usize {
-        self.stripes
-            .iter()
-            .map(|stripe| stripe.consumed.load(std::sync::atomic::Ordering::Acquire))
-            .fold(0usize, |total, n| total.saturating_add(n))
-    }
-    /// Test support: make the counter look exactly `used` consumed.
-    #[cfg(test)]
-    fn set_used(&self, used: usize) {
-        use std::sync::atomic::Ordering;
-        for stripe in self.stripes.iter() {
-            stripe.lease.store(0, Ordering::Relaxed);
-            stripe.consumed.store(0, Ordering::Relaxed);
-        }
-        self.stripes[0].consumed.store(used, Ordering::Relaxed);
-        self.granted.store(used, Ordering::Release);
-    }
-    /// Reserve exactly `take` from the shared grant, never exceeding `limit`.
-    fn grant(&self, take: usize, limit: usize) -> bool {
-        use std::sync::atomic::Ordering;
-        let mut granted = self.granted.load(Ordering::Relaxed);
-        loop {
-            if limit.saturating_sub(granted) < take {
-                return false;
-            }
-            match self.granted.compare_exchange_weak(
-                granted,
-                granted + take,
-                Ordering::AcqRel,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return true,
-                Err(actual) => granted = actual,
-            }
-        }
-    }
-    /// Admit `amount` or return the observed consumed total.
-    fn admit(&self, amount: usize, limit: usize) -> Result<(), usize> {
-        use std::sync::atomic::Ordering;
-        let stripe = &self.stripes[COUNTER_STRIPE.with(|stripe| *stripe)];
-        let mut lease = stripe.lease.load(Ordering::Relaxed);
-        while lease >= amount {
-            match stripe.lease.compare_exchange_weak(
-                lease,
-                lease - amount,
-                Ordering::AcqRel,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => {
-                    stripe.consumed.fetch_add(amount, Ordering::AcqRel);
-                    return Ok(());
-                }
-                Err(actual) => lease = actual,
-            }
-        }
-        // Refill. Lease extra only while far from the limit, so leases can
-        // never strand a meaningful share of the remaining allowance.
-        let remaining = limit.saturating_sub(self.granted.load(Ordering::Relaxed));
-        let extra = if remaining >= 4 * COUNTER_STRIPES * COUNTER_GRANT_CHUNK {
-            COUNTER_GRANT_CHUNK
-        } else {
-            0
-        };
-        if let Some(take) = amount.checked_add(extra)
-            && self.grant(take, limit)
-        {
-            stripe.lease.fetch_add(extra, Ordering::AcqRel);
-            stripe.consumed.fetch_add(amount, Ordering::AcqRel);
-            return Ok(());
-        }
-        // Exhausted grant: reclaim every outstanding lease, then decide
-        // exactly. Revokers serialize so reclaimed allowance is not raced.
-        let _revoking = self.revoke.lock().unwrap_or_else(|p| p.into_inner());
-        for other in self.stripes.iter() {
-            let unused = other.lease.swap(0, Ordering::AcqRel);
-            if unused > 0 {
-                self.granted.fetch_sub(unused, Ordering::AcqRel);
-            }
-        }
-        if self.grant(amount, limit) {
-            stripe.consumed.fetch_add(amount, Ordering::AcqRel);
-            return Ok(());
-        }
-        Err(self.used())
-    }
-}
-/// Usage shared by every clone of one planning ledger. Work and nodes are by
-/// far the most frequent charges (one per inspected element), so they are
-/// exact striped counters. Every other counter and all failure evidence stay
-/// under the mutex. The 128-byte alignment keeps every field off the `Arc`
-/// header line: `PlanBudget` clones write the refcount constantly, and sharing
-/// that line with the stripe pointer read on every charge bounced it between
-/// cores.
-#[derive(Debug, Default)]
-#[repr(align(128))]
-struct PlanLedger {
-    work: StripedCounter,
-    nodes: StripedCounter,
-    locked: std::sync::Mutex<PlanUsage>,
-}
-impl PlanLedger {
-    fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, PlanUsage>> {
-        self.locked.lock()
-    }
-    fn work(&self) -> usize {
-        self.work.used()
-    }
-    #[cfg(test)]
-    fn set_work(&self, used: usize) {
-        self.work.set_used(used)
-    }
-}
 #[derive(Clone, Debug)]
 pub struct PlanBudget {
     limits: PlanLimits,
-    usage: Arc<PlanLedger>,
+    usage: Arc<std::sync::Mutex<PlanUsage>>,
 }
 #[derive(Debug)]
 pub struct PlanReservation {
-    usage: Arc<PlanLedger>,
+    usage: Arc<std::sync::Mutex<PlanUsage>>,
     bytes: usize,
 }
 impl Drop for PlanReservation {
@@ -1918,7 +1768,7 @@ impl PlanBudget {
         };
         Self {
             limits,
-            usage: Arc::new(PlanLedger::default()),
+            usage: Arc::new(std::sync::Mutex::new(PlanUsage::default())),
         }
     }
     pub fn limits(&self) -> PlanLimits {
@@ -1936,8 +1786,8 @@ impl PlanBudget {
         };
         PlanUsageSnapshot {
             applications: usage.applications,
-            nodes: self.usage.nodes.used(),
-            work: self.usage.work(),
+            nodes: usage.nodes,
+            work: usage.work,
             bytes: usage.bytes,
             obligations: usage.obligations,
             diagnostic_bytes: usage.diagnostic_bytes,
@@ -1995,46 +1845,22 @@ impl PlanBudget {
     }
     #[track_caller]
     pub fn charge_work(&self, amount: usize) -> Result<(), String> {
-        self.charge_striped(
-            &self.usage.work,
+        self.charge(
             amount,
+            |u| &mut u.work,
             self.limits.work,
             ResourceBudgetKind::Work,
+            None,
         )
-    }
-    /// Charge an exact striped counter. Failure, which is rare, records the
-    /// same evidence as every locked counter. A poisoned ledger stays an
-    /// error without taking the lock on the hot path.
-    #[track_caller]
-    fn charge_striped(
-        &self,
-        counter: &StripedCounter,
-        amount: usize,
-        limit: usize,
-        kind: ResourceBudgetKind,
-    ) -> Result<(), String> {
-        if let Err(used) = counter.admit(amount, limit) {
-            let mut usage = self
-                .usage
-                .lock()
-                .map_err(|_| "generic planning budget poisoned")?;
-            usage.resource_failed = true;
-            let failure = ResourceBudgetFailure::new(kind, amount, used, limit);
-            usage.first_failure.get_or_insert(failure);
-            return Err("generic planning resource limit exceeded".into());
-        }
-        if self.usage.locked.is_poisoned() {
-            return Err("generic planning budget poisoned".into());
-        }
-        Ok(())
     }
     #[track_caller]
     pub fn charge_nodes(&self, amount: usize) -> Result<(), String> {
-        self.charge_striped(
-            &self.usage.nodes,
+        self.charge(
             amount,
+            |u| &mut u.nodes,
             self.limits.nodes,
             ResourceBudgetKind::Nodes,
+            None,
         )
     }
     #[track_caller]
@@ -5495,10 +5321,11 @@ impl RefContract {
                     .into(),
             );
         }
-        if budget.usage.locked.is_poisoned() {
-            return Err("generic planning budget poisoned".into());
-        }
-        let work = budget.usage.work();
+        let work = budget
+            .usage
+            .lock()
+            .map_err(|_| "generic planning budget poisoned")?
+            .work;
         Ok(work)
     }
 }
@@ -7945,7 +7772,7 @@ mod original_replay_transport_tests {
         assert!(depth.clone().check_depth(depth.limits().depth + 1).is_err());
         assert!(depth.has_resource_failure());
         let overflow = PlanBudget::default();
-        overflow.usage.set_work(usize::MAX);
+        overflow.usage.lock().unwrap().work = usize::MAX;
         assert!(overflow.clone().charge_work(1).is_err());
         assert!(overflow.has_resource_failure());
         let poisoned = PlanBudget::default();
@@ -7992,7 +7819,7 @@ mod original_replay_transport_tests {
             );
             let (used_nodes, used_bytes, used_work) = {
                 let used = limited.usage.lock().unwrap();
-                (limited.usage.nodes.used(), used.bytes, limited.usage.work())
+                (used.nodes, used.bytes, used.work)
             };
             match exhausted {
                 0 => limited
@@ -8080,7 +7907,7 @@ mod original_replay_transport_tests {
         );
         publication.validate_source(source, facts, &budget).unwrap();
         // Exhaust this exact ledger, not a fresh low-budget foreign authority.
-        let used = budget.usage.work();
+        let used = budget.usage.lock().unwrap().work;
         budget.charge_work(budget.limits().work - used).unwrap();
         let error = publication
             .validate_source(source, facts, &budget)
@@ -8091,61 +7918,6 @@ mod original_replay_transport_tests {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn striped_work_ledger_admits_exactly_the_limit_across_threads() {
-        // Large enough that leases are in play, then exhausted exactly.
-        let limit = 5_000_000;
-        let budget = super::PlanBudget::new(super::PlanLimits {
-            work: limit,
-            ..super::PlanLimits::default()
-        });
-        let admitted = std::sync::atomic::AtomicUsize::new(0);
-        std::thread::scope(|scope| {
-            for thread in 0..16 {
-                let budget = budget.clone();
-                let admitted = &admitted;
-                scope.spawn(move || {
-                    let amount = 1 + thread % 7;
-                    while budget.charge_work(amount).is_ok() {
-                        admitted.fetch_add(amount, std::sync::atomic::Ordering::Relaxed);
-                    }
-                });
-            }
-        });
-        let admitted = admitted.load(std::sync::atomic::Ordering::Relaxed);
-        let snapshot = budget.usage_snapshot();
-        assert_eq!(snapshot.work, admitted);
-        assert!(admitted <= limit);
-        // Every thread stopped on a rejection, so at most its own amount
-        // (< 7) can remain unadmitted: no lease strands allowance.
-        assert!(limit - admitted < 7, "stranded {}", limit - admitted);
-        let failure = snapshot.first_failure.expect("exhaustion is recorded");
-        assert_eq!(failure.kind, super::ResourceBudgetKind::Work);
-        assert!(budget.has_resource_failure());
-        // A request that exactly fits the remainder is still admitted.
-        let rest = limit - budget.usage_snapshot().work;
-        if rest > 0 {
-            budget.charge_work(rest).unwrap();
-        }
-        assert_eq!(budget.usage_snapshot().work, limit);
-        assert!(budget.charge_work(1).is_err());
-    }
-    #[test]
-    fn striped_work_ledger_is_exact_for_one_thread_near_the_limit() {
-        let budget = super::PlanBudget::new(super::PlanLimits {
-            work: 10,
-            ..super::PlanLimits::default()
-        });
-        budget.charge_work(4).unwrap();
-        budget.charge_work(6).unwrap();
-        assert_eq!(budget.usage_snapshot().work, 10);
-        assert!(budget.charge_work(1).is_err());
-        assert_eq!(budget.usage_snapshot().work, 10);
-        let separate = super::PlanBudget::default();
-        separate.charge_work(3).unwrap();
-        assert_eq!(separate.usage_snapshot().work, 3);
-        assert_eq!(budget.usage_snapshot().work, 10);
-    }
     fn fixture_modules() -> std::sync::Arc<super::super::module_identity::ModuleArena> {
         super::super::module_identity::ModuleArenaBuilder::for_catalog(
             super::super::expansion_budget::ExpansionBudget::default(),

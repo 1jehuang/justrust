@@ -12562,7 +12562,7 @@ fn retained_function_projection(
     found |= retained_node_projection(names, DepthNode::Block(&function.body), projection, budget)?;
     Ok(found)
 }
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Copy, Debug)]
 pub enum DeclItemName {
@@ -12610,9 +12610,10 @@ pub struct DeclRegistry {
     trait_associated_types: Vec<Vec<ir::DeclId>>,
     associated_type_bounds: HashMap<ir::DeclId, FrozenAssociatedBounds>,
     trait_imports: Vec<(ModuleId, TraitPath)>,
-    /// First position of each callable in `function_ids`, built on first use
-    /// after the registry is sealed. Replaces O(callables) scans per lookup.
-    function_positions: OnceLock<HashMap<ir::DeclId, usize>>,
+    /// First position of each callable in `function_ids`, built once when the
+    /// registry is sealed. Replaces O(callables) scans per lookup.
+    function_positions: HashMap<ir::DeclId, usize>,
+    function_positions_sealed: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum TraitLookupKey {
@@ -12636,19 +12637,13 @@ enum CallableSource {
     TraitDefault { trait_index: usize, item: usize },
 }
 impl DeclRegistry {
-    /// First `function_ids` position for `decl`. Only valid once the registry
-    /// is sealed: every caller reaches it through a shared `Arc` after seal.
+    /// First `function_ids` position for `decl`. Uses the sealed index; during
+    /// registry construction (before the seal) it falls back to a scan.
     fn function_position(&self, decl: ir::DeclId) -> Option<usize> {
-        self.function_positions
-            .get_or_init(|| {
-                let mut positions = HashMap::with_capacity(self.function_ids.len());
-                for (index, id) in self.function_ids.iter().enumerate() {
-                    positions.entry(*id).or_insert(index);
-                }
-                positions
-            })
-            .get(&decl)
-            .copied()
+        if self.function_positions_sealed {
+            return self.function_positions.get(&decl).copied();
+        }
+        self.function_ids.iter().position(|id| *id == decl)
     }
     fn source_type_context(&self, declaration: ir::DeclId) -> Result<SourceTypeContext, String> {
         let info = self.declaration(declaration)?;
@@ -13029,10 +13024,10 @@ pub struct PlanCtx {
     registry: Arc<DeclRegistry>,
     state: Arc<Mutex<PlanState>>,
     /// Immutable whole-program signature and nominal lookup maps, built once
-    /// after the trait world is published and shared by every body check.
+    /// when the trait world is published and shared by every body check.
     /// Previously each body copied every signature, which made checking
     /// quadratic in program size in both time and retained bytes.
-    shared_env: Arc<OnceLock<SharedTypeEnv>>,
+    shared_env: Option<Arc<SharedTypeEnv>>,
     pub budget: ir::PlanBudget,
 }
 /// Shared read-only part of a [`TypeEnv`].
@@ -13364,7 +13359,8 @@ impl PlanCtx {
             trait_associated_types: Vec::new(),
             associated_type_bounds: HashMap::new(),
             trait_imports: program.trait_imports.clone(),
-            function_positions: OnceLock::new(),
+            function_positions: HashMap::new(),
+            function_positions_sealed: false,
         };
         reserve_registry_map(&mut registry.functions, program.functions.len(), budget)?;
         let nominal_count = program
@@ -14483,9 +14479,17 @@ impl PlanCtx {
                 registry_mut.function_ids.push(entry.declaration);
             }
         }
-        // Any position cache built during construction predates the final
-        // recipe suffix. Reset it so sealed lookups see every callable.
-        registry_mut.function_positions = OnceLock::new();
+        // Seal the callable position index after the final recipe suffix.
+        let mut positions = HashMap::new();
+        positions
+            .try_reserve(registry_mut.function_ids.len())
+            .map_err(|_| "callable position index allocation limit exceeded")?;
+        budget.charge_work(registry_mut.function_ids.len())?;
+        for (index, id) in registry_mut.function_ids.iter().enumerate() {
+            positions.entry(*id).or_insert(index);
+        }
+        registry_mut.function_positions = positions;
+        registry_mut.function_positions_sealed = true;
         let mut plan = Self {
             program: shared.clone(),
             catalog,
@@ -14493,7 +14497,7 @@ impl PlanCtx {
             validated: Arc::new(HashMap::new()),
             registry,
             state: Arc::new(Mutex::new(state)),
-            shared_env: Arc::new(OnceLock::new()),
+            shared_env: None,
             budget: budget.clone(),
         };
         plan.validate_inherent_overlaps(budget)?;
@@ -14769,7 +14773,7 @@ impl PlanCtx {
         }
         self.validated = Arc::new(validated);
         self.world = Some(world);
-        self.shared_env = Arc::new(OnceLock::new());
+        self.shared_env = Some(Arc::new(self.build_shared_env()?));
         Ok(())
     }
     pub fn trait_world(&self) -> Result<Arc<tr::ValidatedTraitWorld>, String> {
@@ -15255,23 +15259,11 @@ impl PlanCtx {
         })
     }
     fn environment(&self, decl: Option<ir::DeclId>) -> Result<TypeEnv, String> {
-        let shared = match self.shared_env.get() {
-            Some(shared) if self.world.is_some() => shared,
-            _ => {
-                let built = self.build_shared_env()?;
-                if self.world.is_some() {
-                    // A concurrent builder may win. Both values are identical
-                    // functions of the same immutable published world.
-                    let _ = self.shared_env.set(built);
-                    self.shared_env
-                        .get()
-                        .ok_or("shared body environment was not published")?
-                } else {
-                    return self.finish_environment(&built, decl);
-                }
-            }
-        };
-        self.finish_environment(shared, decl)
+        match &self.shared_env {
+            Some(shared) => self.finish_environment(shared, decl),
+            // Before the trait world is published there is no shared fact.
+            None => self.finish_environment(&self.build_shared_env()?, decl),
+        }
     }
     #[expect(
         clippy::mutable_key_type,
@@ -15806,7 +15798,7 @@ impl SchemaAdapter {
             budget: self.budget.clone(),
             world: None,
             validated: Arc::new(HashMap::new()),
-            shared_env: Arc::new(OnceLock::new()),
+            shared_env: None,
         })
     }
     fn error(&self, e: String) -> tr::FactsError {

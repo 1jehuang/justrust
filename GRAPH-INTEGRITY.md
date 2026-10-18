@@ -67,8 +67,8 @@ may only move toward the target:
 | Out-of-graph state primitives | `out_of_graph_state.baseline` (42 `OnceLock` in `mod.rs`, global budget mutexes, ID counters) | none |
 | Whole-program nodes | `source`, `parse`, `resolve`, `signatures`, `effects_ready`, `mono_plan`, `concrete_proofs` | only `check`, `build` |
 | Leaf closure growth 16 to 32 | 1.481 (ceiling 1.50) | 1.0 |
-| Work growth 16 to 32 | 3.807 (ceiling 3.85) | about 2.0 |
-| Largest compiling flat program | 64 functions (100 fails) | no fixed ceiling |
+| Work growth 16 to 32 | 1.997 (ceiling 2.05, was 3.807) | about 2.0 |
+| Largest compiling flat program | 350 functions (400 fails, was 64/100) | no fixed ceiling |
 
 When a change improves a number, the tests fail until it is recorded:
 

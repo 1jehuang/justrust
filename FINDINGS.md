@@ -11543,3 +11543,44 @@ error at `tests/assertions.rs:902`. They pass locally, and my commit touches
 no source. A parent-commit hosted comparison was blocked because build.jcode.sh
 stopped responding (sync not acknowledged, then a connection timeout), so the
 hosted spawn failure is unconfirmed rather than ruled out.
+
+## 2026-10-18: quadratic planning work removed, program-size ceiling 64 -> 350
+
+Branch `graph-unification`. Profiling the 128-function failure (exact first
+budget failure via `--profile`, plus a call-site histogram of ledger charges)
+showed the size ceiling and most single-worker time were algorithmic, not
+architectural: per-function work grew 3.8x per program doubling.
+
+- Borrow planning revalidated the caller's whole CFG provenance on every call
+  (twice: bind_call and the effect-table lookup), each O(blocks x evidence),
+  making `main` cubic. Now validated once per plan for the exact Arc pair, and
+  evidence is found through a sorted index. Capsule-source dedupe uses a set.
+- Every body check copied every program signature into its TypeEnv. The maps
+  are now built once when the trait world is published and shared by Arc.
+- Trait-world tables (environments, requirements, origins, carriers, declared
+  callable contexts), normalized callable headers and registry callable
+  positions were linear scans charging the shared ledger per row. Now indexed
+  (first-match semantics kept), built eagerly while sealing, no new
+  out-of-graph primitives. Origin-declaration dedupe uses a set.
+
+Gates: `tests/graph_integrity.rs` work growth 16->32 is 1.997 (was 3.807);
+ceilings tightened to WORK_GROWTH_CEILING 2.05, REQUIRED_FUNCTIONS 350,
+KNOWN_FAILING 400. Full local suite 3224 tests pass; strict clippy clean.
+
+Ladder (`experiments/intermediate_ladder.py`, xps14, warm/uncontrolled,
+median ms, baseline HEAD 83769aee2 vs final; raw in
+`experiments/results/graph-unification-20261018/`): flat 64 BUILD 1w
+172 -> 38, 8w 419 -> 121; flat 128 BUILD 1w FAIL -> 68; flat 256 BUILD 1w
+FAIL -> 155, 8w FAIL -> 533. Stock rustc on the same 256 source: ~83-108 ms.
+
+Still open, measured: more workers remain slower than one. A prototype that
+striped the shared PlanBudget work/node counters (exact revocable leases) cut
+256-function 8-worker check from ~500 to ~150 ms, proving the global ledger is
+the remaining contention point. It adds atomics/thread_local to compiler code,
+which GRAPH-INTEGRITY.md forbids without approval, so it is parked on branch
+`ledger-striping-pending-approval`. The rule-conformant fix is per-task
+budgets owned by graph nodes. Remaining whole-program nodes (source, parse,
+resolve, signatures, effects_ready, mono_plan, concrete_proofs) and the 42
+OnceLock side slots in compiler/mod.rs are unchanged. Hybrid P/E-core layout
+of this laptop also inflates multi-worker CPU; hosted measurement pending.
+No speedup versus stock and no full-Rust claim.
