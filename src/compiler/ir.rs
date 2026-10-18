@@ -1859,8 +1859,12 @@ impl StripedCounter {
 /// Usage shared by every clone of one planning ledger. Work and nodes are by
 /// far the most frequent charges (one per inspected element), so they are
 /// exact striped counters. Every other counter and all failure evidence stay
-/// under the mutex.
+/// under the mutex. The 128-byte alignment keeps every field off the `Arc`
+/// header line: `PlanBudget` clones write the refcount constantly, and sharing
+/// that line with the stripe pointer read on every charge bounced it between
+/// cores.
 #[derive(Debug, Default)]
+#[repr(align(128))]
 struct PlanLedger {
     work: StripedCounter,
     nodes: StripedCounter,
