@@ -167,7 +167,8 @@ billing, private caches) and never weaken the security invariants in
 
 ## Git workflow
 
-- Work directly on `main`. No feature branches.
+- In this clean-room worktree, work on `clean-room-rewrite` (see the top
+  section). Elsewhere, work directly on `main`. No other feature branches.
 - **Commit and push as you go.** Each working improvement gets its own commit,
   pushed right away. Do not batch up a session of changes into one push.
 - Commit only your own changes.
