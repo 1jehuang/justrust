@@ -2383,7 +2383,9 @@ pub fn instantiate_checked(
             ExprKind::Block(block)
             | ExprKind::Loop { body: block, .. }
             | ExprKind::LabeledBlock { body: block, .. } => visitor.block(block, 0)?,
-            ExprKind::LeadingZeros { .. }
+            ExprKind::CharToInt { .. }
+            | ExprKind::U8ToChar { .. }
+            | ExprKind::LeadingZeros { .. }
             | ExprKind::IntCast { .. }
             | ExprKind::FloatCast { .. }
             | ExprKind::Char(_)
@@ -5616,6 +5618,13 @@ pub enum ExprKind {
     LeadingZeros {
         value: ExprId,
     },
+    CharToInt {
+        value: ExprId,
+        to: IntTy,
+    },
+    U8ToChar {
+        value: ExprId,
+    },
     IntCast {
         value: ExprId,
         to: IntTy,
@@ -6291,7 +6300,9 @@ impl CheckedFunction {
                     storage(budget, payload.message.len(), 1)?;
                     storage(budget, payload.location.len(), 1)?;
                 }
-                ExprKind::LeadingZeros { .. }
+                ExprKind::CharToInt { .. }
+                | ExprKind::U8ToChar { .. }
+                | ExprKind::LeadingZeros { .. }
                 | ExprKind::IntCast { .. }
                 | ExprKind::FloatCast { .. }
                 | ExprKind::Char(_)
@@ -6766,6 +6777,32 @@ impl CheckedFunction {
             .map_or(&fallback_budget, |authority| authority.budget());
         for (borrow_index, value) in self.exprs.iter().enumerate() {
             match &value.kind {
+                ExprKind::CharToInt { value: source, to } => {
+                    expr(*source)?;
+                    let source = &self.exprs[source.0];
+                    if source.ty != Ty::Char {
+                        return Err("character cast requires char source".into());
+                    }
+                    if value.ty != Ty::Int(*to) {
+                        return Err("character cast result type mismatch".into());
+                    }
+                    if value.completion != source.completion {
+                        return Err("character cast completion mismatch".into());
+                    }
+                }
+                ExprKind::U8ToChar { value: source } => {
+                    expr(*source)?;
+                    let source = &self.exprs[source.0];
+                    if source.ty != Ty::Int(IntTy::U8) {
+                        return Err("character cast requires u8 source".into());
+                    }
+                    if value.ty != Ty::Char {
+                        return Err("character cast result type mismatch".into());
+                    }
+                    if value.completion != source.completion {
+                        return Err("character cast completion mismatch".into());
+                    }
+                }
                 ExprKind::LeadingZeros { value: source } => {
                     expr(*source)?;
                     let source = &self.exprs[source.0];
@@ -7346,7 +7383,7 @@ impl CheckedFunction {
                 }
                 ExprKind::Int(integer) => {
                     integer.validate()?;
-                    if value.ty != Ty::Int(integer.ty) {
+                    if value.ty != Ty::Int(integer.ty) || value.completion != Completion::Returns {
                         return Err("integer expression type mismatch".into());
                     }
                 }
@@ -9665,6 +9702,21 @@ mod tests {
         };
         function.exprs[0].kind = ExprKind::Int(IntValue::i32(32));
         assert!(function.validate().unwrap_err().contains("shift count"));
+        let tail = ExprId(function.exprs.len());
+        function.exprs.push(function.exprs[0].clone());
+        let panic = ExprId(function.exprs.len());
+        function.exprs.push(TypedExpr {
+            ty: Ty::Never,
+            completion: Completion::Never,
+            kind: ExprKind::Panic(Box::new(PanicMessage {
+                message: "stop".into(),
+                location: "fixture".into(),
+            })),
+        });
+        function.exprs[0].kind = ExprKind::Block(Block {
+            statements: vec![Stmt::Expr(panic)],
+            tail: Some(tail),
+        });
         function.exprs[0].completion = Completion::Never;
         function.validate().unwrap();
         let Stmt::AssignIndexOp { index, .. } = &mut function.body.statements[1] else {
@@ -9876,11 +9928,27 @@ mod tests {
                     assert!(function.validate().is_err());
                     function.exprs[2].ty = Ty::Int(left);
                     for endpoint in [0, 1] {
+                        let saved = function.exprs[endpoint].clone();
+                        let tail = ExprId(function.exprs.len());
+                        function.exprs.push(saved.clone());
+                        let panic = ExprId(function.exprs.len());
+                        function.exprs.push(TypedExpr {
+                            ty: Ty::Never,
+                            completion: Completion::Never,
+                            kind: ExprKind::Panic(Box::new(PanicMessage {
+                                message: "stop".into(),
+                                location: "fixture".into(),
+                            })),
+                        });
+                        function.exprs[endpoint].kind = ExprKind::Block(Block {
+                            statements: vec![Stmt::Expr(panic)],
+                            tail: Some(tail),
+                        });
                         function.exprs[endpoint].completion = Completion::Never;
                         assert!(function.validate().unwrap_err().contains("completion"));
                         function.exprs[2].completion = Completion::Never;
                         function.validate().unwrap();
-                        function.exprs[endpoint].completion = Completion::Returns;
+                        function.exprs[endpoint] = saved;
                         function.exprs[2].completion = Completion::Returns;
                     }
                     for endpoint in [0, 1] {
@@ -10050,6 +10118,155 @@ mod tests {
         );
         assert_ne!(FloatValue::f32(0.0), FloatValue::f32(-0.0));
         assert_eq!(FloatValue::f64(f64::NAN), FloatValue::f64(f64::NAN));
+    }
+
+    #[test]
+    fn character_casts_validate_exact_endpoints_dead_constants_and_completion() {
+        let types = [
+            IntTy::I8,
+            IntTy::I16,
+            IntTy::I32,
+            IntTy::I64,
+            IntTy::I128,
+            IntTy::Isize,
+            IntTy::U8,
+            IntTy::U16,
+            IntTy::U32,
+            IntTy::U64,
+            IntTy::U128,
+            IntTy::Usize,
+        ];
+        for to in types {
+            let mut function = fixture();
+            function.exprs[0] = TypedExpr {
+                ty: Ty::Char,
+                completion: Completion::Returns,
+                kind: ExprKind::Char(CharValue { value: 0x10ffff }),
+            };
+            function.exprs.push(TypedExpr {
+                ty: Ty::Int(to),
+                completion: Completion::Returns,
+                kind: ExprKind::CharToInt {
+                    value: ExprId(0),
+                    to,
+                },
+            });
+            function.validate().unwrap();
+            for scalar in [0xd800, 0xdfff, 0x110000, u32::MAX] {
+                let mut invalid = function.clone();
+                invalid.exprs[0].kind = ExprKind::Char(CharValue { value: scalar });
+                assert!(invalid.validate().is_err());
+            }
+            let mut invalid = function.clone();
+            invalid.exprs[1].ty = Ty::Char;
+            assert!(
+                invalid
+                    .validate()
+                    .unwrap_err()
+                    .contains("result type mismatch")
+            );
+            invalid = function.clone();
+            invalid.exprs[1].completion = Completion::Never;
+            assert!(
+                invalid
+                    .validate()
+                    .unwrap_err()
+                    .contains("completion mismatch")
+            );
+            invalid = function.clone();
+            invalid.exprs[1].kind = ExprKind::CharToInt {
+                value: ExprId(99),
+                to,
+            };
+            assert!(
+                invalid
+                    .validate()
+                    .unwrap_err()
+                    .contains("invalid expression 99")
+            );
+            function.exprs[0].kind = ExprKind::Block(Block {
+                statements: vec![Stmt::Return(None)],
+                tail: None,
+            });
+            function.exprs[0].completion = Completion::Never;
+            function.exprs[1].completion = Completion::Never;
+            function.validate().unwrap();
+        }
+        let mut function = fixture();
+        function.exprs[0] = TypedExpr {
+            ty: Ty::Int(IntTy::U8),
+            completion: Completion::Returns,
+            kind: ExprKind::Int(IntValue {
+                ty: IntTy::U8,
+                bits: 255,
+            }),
+        };
+        function.exprs.push(TypedExpr {
+            ty: Ty::Char,
+            completion: Completion::Returns,
+            kind: ExprKind::U8ToChar { value: ExprId(0) },
+        });
+        function.validate().unwrap();
+        for source in types.into_iter().map(Ty::Int).chain([
+            Ty::Bool,
+            Ty::Char,
+            Ty::Unit,
+            Ty::Never,
+            Ty::Float(FloatTy::F32),
+            Ty::Float(FloatTy::F64),
+            Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: Arc::new(Ty::Int(IntTy::U8)),
+            },
+        ]) {
+            if source == Ty::Int(IntTy::U8) {
+                continue;
+            }
+            let mut invalid = function.clone();
+            invalid.exprs[0].ty = source;
+            assert!(invalid.validate().is_err());
+        }
+        let mut invalid = function.clone();
+        invalid.exprs[0].kind = ExprKind::Int(IntValue {
+            ty: IntTy::U8,
+            bits: 256,
+        });
+        assert!(invalid.validate().unwrap_err().contains("noncanonical"));
+        invalid = function.clone();
+        invalid.exprs[0].completion = Completion::Never;
+        invalid.exprs[1].completion = Completion::Never;
+        assert!(invalid.validate().is_err());
+        invalid = function.clone();
+        invalid.exprs[1].ty = Ty::Int(IntTy::U8);
+        assert!(
+            invalid
+                .validate()
+                .unwrap_err()
+                .contains("result type mismatch")
+        );
+        invalid = function.clone();
+        invalid.exprs[1].completion = Completion::Never;
+        assert!(
+            invalid
+                .validate()
+                .unwrap_err()
+                .contains("completion mismatch")
+        );
+        invalid = function.clone();
+        invalid.exprs[1].kind = ExprKind::U8ToChar { value: ExprId(99) };
+        assert!(
+            invalid
+                .validate()
+                .unwrap_err()
+                .contains("invalid expression 99")
+        );
+        function.exprs[0].kind = ExprKind::Block(Block {
+            statements: vec![Stmt::Return(None)],
+            tail: None,
+        });
+        function.exprs[0].completion = Completion::Never;
+        function.exprs[1].completion = Completion::Never;
+        function.validate().unwrap();
     }
 
     #[test]
