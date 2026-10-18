@@ -2168,7 +2168,11 @@ impl Resolver<'_> {
                     self.pattern(pattern, module, names)?;
                 }
             }
-            Pattern::Wildcard | Pattern::Bool(_) | Pattern::Int { .. } => {}
+            Pattern::Wildcard
+            | Pattern::Bool(_)
+            | Pattern::Int { .. }
+            | Pattern::Char(_)
+            | Pattern::Range { .. } => {}
             Pattern::Path(name) if name.anchor() == PathAnchor::SelfType && self.self_allowed => {}
             Pattern::Path(name) => {
                 let item = self

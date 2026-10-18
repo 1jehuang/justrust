@@ -49,8 +49,8 @@ fn cases() -> Vec<Case> {
 "###, source_sha256: r###"5d04230af0ceae5528997c93994cf068be7f917db2d8d6bfecb89866f28217d3"###, boundary: r###""###, phase: r###"check"###, stock_stdout: r###"bool
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""###, source_bytes: 61, source_fingerprint: 18265286624080065559, native: Native::Live, stock_compile_code: 0, stock_code: Some(0), },
         Case { name: r###"character"###, source: r###"fn main(){ if matches!('x', 'x') { println!("char"); } }
-"###, source_sha256: r###"91b1bcbac76b43555449dd67711895003afa1b8492e68d89ad74733f5b05be09"###, boundary: r###"character literal and range patterns are unsupported"###, phase: r###"parse"###, stock_stdout: r###"char
-"###, stock_stderr: r###""###, stock_compile_stderr: r###""###, source_bytes: 57, source_fingerprint: 14947838046542800197, native: Native::Unsupported, stock_compile_code: 0, stock_code: Some(0), },
+"###, source_sha256: r###"91b1bcbac76b43555449dd67711895003afa1b8492e68d89ad74733f5b05be09"###, boundary: r###""###, phase: r###"check"###, stock_stdout: r###"char
+"###, stock_stderr: r###""###, stock_compile_stderr: r###""###, source_bytes: 57, source_fingerprint: 14947838046542800197, native: Native::Live, stock_compile_code: 0, stock_code: Some(0), },
         Case { name: r###"negative"###, source: r###"fn main(){ if matches!(-3, -3) { println!("negative"); } }
 "###, source_sha256: r###"afc027825c31f8c35a7946d9b99e5c3ecb4a6e01c8c3e37944d2130af643ef30"###, boundary: r###""###, phase: r###"check"###, stock_stdout: r###"negative
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""###, source_bytes: 59, source_fingerprint: 14223120719545479342, native: Native::Live, stock_compile_code: 0, stock_code: Some(0), },
@@ -122,8 +122,8 @@ For more information about this error, try `rustc --explain E0308`.
 "###, source_sha256: r###"5875421359eba37b761e61cddb3b94a904ecce723b5df8d0b06e15950ff17edb"###, boundary: r###""###, phase: r###"check"###, stock_stdout: r###"guard
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""###, source_bytes: 64, source_fingerprint: 13549839185063572285, native: Native::Live, stock_compile_code: 0, stock_code: Some(0), },
         Case { name: r###"range"###, source: r###"fn main(){ if matches!(2, 1..=3) { println!("range"); } }
-"###, source_sha256: r###"71e1655e7716bc7b55e1e4a6fa148c1f797f44011139d518b51d3d3a89d85b28"###, boundary: r###"expected ")""###, phase: r###"parse"###, stock_stdout: r###"range
-"###, stock_stderr: r###""###, stock_compile_stderr: r###""###, source_bytes: 58, source_fingerprint: 10514283390403151409, native: Native::Syntax, stock_compile_code: 0, stock_code: Some(0), },
+"###, source_sha256: r###"71e1655e7716bc7b55e1e4a6fa148c1f797f44011139d518b51d3d3a89d85b28"###, boundary: r###""###, phase: r###"check"###, stock_stdout: r###"range
+"###, stock_stderr: r###""###, stock_compile_stderr: r###""###, source_bytes: 58, source_fingerprint: 10514283390403151409, native: Native::Live, stock_compile_code: 0, stock_code: Some(0), },
         Case { name: r###"or_pattern"###, source: r###"fn main(){ if matches!(2, 1 | 2) { println!("or"); } }
 "###, source_sha256: r###"01a3675c88f71c8098daee3b1b0943f4de8d3a6bd765585c5783a397aafad098"###, boundary: r###"or-patterns and @ patterns are unsupported"###, phase: r###"parse"###, stock_stdout: r###"or
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""###, source_bytes: 55, source_fingerprint: 15071238497542704403, native: Native::Unsupported, stock_compile_code: 0, stock_code: Some(0), },
@@ -373,7 +373,8 @@ fn frozen_matches_macro_sources_and_strict_phases() {
             }
         });
     }
-    assert_eq!(partition, [15, 3, 2, 1]);
+    // character and range became Live with SCALAR-PATTERNS.md (sources unchanged).
+    assert_eq!(partition, [17, 2, 2, 0]);
     failures.finish();
 }
 fn stock_all() {

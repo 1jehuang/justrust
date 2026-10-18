@@ -2459,9 +2459,11 @@ impl<'a> Checker<'a> {
                 }
                 Ok(())
             }
-            Pattern::Path(_) | Pattern::Bool(_) | Pattern::Int { .. } => {
-                Err("unsupported: refutable aggregate match leaf".into())
-            }
+            Pattern::Path(_)
+            | Pattern::Bool(_)
+            | Pattern::Int { .. }
+            | Pattern::Char(_)
+            | Pattern::Range { .. } => Err("unsupported: refutable aggregate match leaf".into()),
             Pattern::Apply { .. } => Err("pattern application normalization invariant".into()),
         }
     }
@@ -2647,6 +2649,24 @@ impl<'a> Checker<'a> {
                     path,
                     ir::PatternTestKind::Int(resolve_integer(literal, *negative, Some(ty))?),
                 )?;
+            }
+            Pattern::Char(value) => {
+                if *ty != ir::Ty::Char {
+                    return Err("character decision pattern type mismatch".into());
+                }
+                pending.refutable_payload = true;
+                self.decision_test(
+                    pending,
+                    path,
+                    ir::PatternTestKind::Char(ir::CharValue {
+                        value: u32::from(*value),
+                    }),
+                )?;
+            }
+            Pattern::Range { lo, hi, inclusive } => {
+                let kind = range_pattern_test(lo.as_ref(), hi.as_ref(), *inclusive, ty)?;
+                pending.refutable_payload = true;
+                self.decision_test(pending, path, kind)?;
             }
             Pattern::Tuple(fields) => {
                 if fields.is_empty() && *ty == ir::Ty::Unit {
@@ -4252,7 +4272,9 @@ impl<'a> Checker<'a> {
                 Ok(ty.clone())
             }
             Pattern::TupleRest(_) => self.positional_pattern_type(pattern, ty),
-            Pattern::Bool(_) | Pattern::Int { .. } => Err("refutable literal pattern in let binding".into()),
+            Pattern::Bool(_) | Pattern::Int { .. } | Pattern::Char(_) | Pattern::Range { .. } => {
+                Err("refutable literal pattern in let binding".into())
+            }
             Pattern::Wildcard | Pattern::Binding { .. } => Ok(ty.clone()),
             Pattern::Tuple(patterns) => match ty {
                 ir::Ty::Unit if patterns.is_empty() => Ok(ir::Ty::Unit),
@@ -4405,7 +4427,7 @@ impl<'a> Checker<'a> {
                     path.pop();
                 }
             }
-            Pattern::Bool(_) | Pattern::Int { .. } => {
+            Pattern::Bool(_) | Pattern::Int { .. } | Pattern::Char(_) | Pattern::Range { .. } => {
                 return Err(Self::nested_refutable_literal_unsupported());
             }
             Pattern::Binding { name, mutable } => {
@@ -6364,6 +6386,8 @@ impl<'a> Checker<'a> {
             }
             Pattern::Bool(_) => ir::Ty::Bool,
             Pattern::Int { literal, .. } => ir::Ty::Int(literal.suffix.unwrap_or(ir::IntTy::I32)),
+            Pattern::Char(_) => ir::Ty::Char,
+            Pattern::Range { lo, hi, .. } => range_pattern_hint(lo.as_ref().or(hi.as_ref())),
             Pattern::Tuple(fields) if fields.is_empty() => ir::Ty::Unit,
             Pattern::Struct { .. } | Pattern::Tuple(_) => self.pattern_ty(pattern, ty)?,
             _ => ty.clone(),
@@ -6466,6 +6490,10 @@ impl<'a> Checker<'a> {
                     Pattern::Bool(_) => Some(ir::Ty::Bool),
                     Pattern::Int { literal, .. } => {
                         Some(ir::Ty::Int(literal.suffix.unwrap_or(ir::IntTy::I32)))
+                    }
+                    Pattern::Char(_) => Some(ir::Ty::Char),
+                    Pattern::Range { lo, hi, .. } => {
+                        Some(range_pattern_hint(lo.as_ref().or(hi.as_ref())))
                     }
                     Pattern::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
                     Pattern::Struct { .. } | Pattern::Tuple(_) => {
@@ -8078,6 +8106,131 @@ pub fn check(program: &Program) -> Result<(), String> {
         check_function_with_signatures(program, i, &signatures)?;
     }
     Ok(())
+}
+
+/// Default type of a range pattern from its first endpoint, before checking.
+fn range_pattern_hint(bound: Option<&super::RangeBound>) -> ir::Ty {
+    match bound {
+        Some(super::RangeBound::Char(_)) => ir::Ty::Char,
+        Some(super::RangeBound::IntLimit { ty, .. }) => ir::Ty::Int(*ty),
+        Some(super::RangeBound::Int { literal, .. }) => {
+            ir::Ty::Int(literal.suffix.unwrap_or(ir::IntTy::I32))
+        }
+        None => ir::Ty::Int(ir::IntTy::I32),
+    }
+}
+
+/// Resolve a source range pattern against its exact scalar domain into one
+/// inclusive test. Half-open upper bounds subtract one; an empty range is E0579.
+pub(super) fn range_pattern_test(
+    lo: Option<&super::RangeBound>,
+    hi: Option<&super::RangeBound>,
+    inclusive: bool,
+    ty: &ir::Ty,
+) -> Result<ir::PatternTestKind, String> {
+    use super::RangeBound;
+    if inclusive && hi.is_none() {
+        return Err("inclusive range pattern requires an upper bound".into());
+    }
+    match ty {
+        ir::Ty::Char => {
+            let scalar = |bound: &RangeBound| match bound {
+                RangeBound::Char(value) => Ok(u32::from(*value)),
+                RangeBound::Int { .. } | RangeBound::IntLimit { .. } => {
+                    Err("mismatched types: integer range bound in a character pattern".to_string())
+                }
+            };
+            let low = lo.map(scalar).transpose()?.unwrap_or(0);
+            let high = match hi {
+                Some(bound) => {
+                    let value = scalar(bound)?;
+                    if inclusive {
+                        value
+                    } else {
+                        // Step back over the surrogate gap so the bound stays a scalar.
+                        match value {
+                            0 => return Err("lower range bound must be less than upper".into()),
+                            0xe000 => 0xd7ff,
+                            other => other - 1,
+                        }
+                    }
+                }
+                None => 0x10ffff,
+            };
+            if low > high {
+                return Err("lower range bound must be less than or equal to upper".into());
+            }
+            Ok(ir::PatternTestKind::CharRange {
+                lo: ir::CharValue { value: low },
+                hi: ir::CharValue { value: high },
+            })
+        }
+        ir::Ty::Int(int) => {
+            let value = |bound: &RangeBound| match bound {
+                RangeBound::Int { literal, negative } => {
+                    resolve_integer(literal, *negative, Some(ty))
+                }
+                RangeBound::IntLimit { ty: limit, max } => {
+                    if limit != int {
+                        return Err("mismatched types: integer range bound type".to_string());
+                    }
+                    let min = if int.is_signed() {
+                        1u128 << (int.bits() - 1)
+                    } else {
+                        0
+                    };
+                    Ok(ir::IntValue {
+                        ty: *int,
+                        bits: if *max {
+                            min.wrapping_sub(1) & int.mask()
+                        } else {
+                            min
+                        },
+                    })
+                }
+                RangeBound::Char(_) => {
+                    Err("mismatched types: character range bound in an integer pattern".to_string())
+                }
+            };
+            let min = if int.is_signed() {
+                1u128 << (int.bits() - 1)
+            } else {
+                0
+            };
+            let low = match lo {
+                Some(bound) => value(bound)?,
+                None => ir::IntValue {
+                    ty: *int,
+                    bits: min,
+                },
+            };
+            let high = match hi {
+                Some(bound) => {
+                    let high = value(bound)?;
+                    if inclusive {
+                        high
+                    } else {
+                        if high.ordinal() == 0 || high.ordinal() <= low.ordinal() {
+                            return Err("lower range bound must be less than upper".into());
+                        }
+                        ir::IntValue {
+                            ty: *int,
+                            bits: high.bits.wrapping_sub(1) & int.mask(),
+                        }
+                    }
+                }
+                None => ir::IntValue {
+                    ty: *int,
+                    bits: min.wrapping_sub(1) & int.mask(),
+                },
+            };
+            if low.ordinal() > high.ordinal() {
+                return Err("lower range bound must be less than or equal to upper".into());
+            }
+            Ok(ir::PatternTestKind::IntRange { lo: low, hi: high })
+        }
+        _ => Err(format!("range pattern does not match {ty:?}")),
+    }
 }
 
 #[cfg(test)]

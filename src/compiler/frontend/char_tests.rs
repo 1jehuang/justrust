@@ -87,14 +87,8 @@ fn char_wildcard_binding_patterns_and_repeat_are_admitted() {
         "fn identity(x:char)->char{match x{value=>value}}fn main(){let values=['水';2];let [first,..]=values;let _=identity(first);}",
         1,
     );
-    let error = parse_syntax_unprepared("fn main(){let x='a';match x{'a'=>{},_=>{}}}")
-        .err()
-        .unwrap();
-    assert_eq!(
-        error.kind,
-        super::super::source::SourceErrorKind::Unsupported
-    );
-    assert!(error.message.contains("character literal"));
+    // Character literal patterns are admitted since SCALAR-PATTERNS.md.
+    parse_syntax_unprepared("fn main(){let x='a';match x{'a'=>{},_=>{}}}").unwrap();
 }
 
 #[test]

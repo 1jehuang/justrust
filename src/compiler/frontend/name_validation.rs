@@ -946,7 +946,11 @@ impl<'a> Validator<'a> {
                         self.push(Visit::Pattern(pattern))?;
                     }
                 }
-                Pattern::Bool(_) | Pattern::Int { .. } | Pattern::Wildcard => (),
+                Pattern::Bool(_)
+                | Pattern::Int { .. }
+                | Pattern::Char(_)
+                | Pattern::Range { .. }
+                | Pattern::Wildcard => (),
             },
             Visit::Place(place) => {
                 self.push(Visit::LocalName(place.local))?;

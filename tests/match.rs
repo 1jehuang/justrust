@@ -677,13 +677,13 @@ fn main() { if run() == 3 { println!("match oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_range_pattern() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "range_pattern",
+fn accepts_historical_range_pattern() {
+    // Exact historical stock-valid source, admitted since SCALAR-PATTERNS.md.
+    runs(
         r#"fn run()->i32{match 2{1..=3=>4,_=>5}}
 fn main() { if run() == 4 { println!("match oracle ok"); } }
 "#,
+        "match oracle ok\n",
     );
 }
 

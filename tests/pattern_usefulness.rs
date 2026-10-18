@@ -510,6 +510,12 @@ fn check_decision(
                 value.validate().unwrap();
                 assert_eq!(projected, ir::Ty::Int(value.ty));
             }
+            kind @ (ir::PatternTestKind::Char(_)
+            | ir::PatternTestKind::IntRange { .. }
+            | ir::PatternTestKind::CharRange { .. }) => {
+                kind.scalar_interval().unwrap().unwrap();
+                assert_eq!(Some(projected), kind.scalar_ty());
+            }
             ir::PatternTestKind::EnumVariant {
                 ty: enumeration,
                 variant,

@@ -357,6 +357,8 @@ pub(super) fn inventory(
             Pattern::Path(_)
             | Pattern::Bool(_)
             | Pattern::Int { .. }
+            | Pattern::Char(_)
+            | Pattern::Range { .. }
             | Pattern::Wildcard
             | Pattern::Binding { .. } => {}
         }

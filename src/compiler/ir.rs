@@ -3086,6 +3086,15 @@ impl IntValue {
         }
     }
 
+    /// Order-preserving unsigned image: signed values flip their sign bit.
+    pub const fn ordinal(self) -> u128 {
+        if self.ty.is_signed() {
+            self.bits ^ (1u128 << (self.ty.bits() - 1))
+        } else {
+            self.bits
+        }
+    }
+
     pub const fn i32(value: i32) -> Self {
         Self {
             ty: IntTy::I32,
@@ -5652,7 +5661,64 @@ pub struct PatternTest {
 pub enum PatternTestKind {
     Bool(bool),
     Int(IntValue),
-    EnumVariant { ty: EnumTy, variant: usize },
+    Char(CharValue),
+    /// Inclusive `lo..=hi` over one integer type, `lo <= hi` in its signedness.
+    IntRange {
+        lo: IntValue,
+        hi: IntValue,
+    },
+    /// Inclusive `lo..=hi` over Unicode scalars, `lo <= hi`.
+    CharRange {
+        lo: CharValue,
+        hi: CharValue,
+    },
+    EnumVariant {
+        ty: EnumTy,
+        variant: usize,
+    },
+}
+
+impl PatternTestKind {
+    /// Exact inclusive scalar interval in order-preserving ordinal space, or
+    /// None for non-scalar tests. Validates every scalar endpoint.
+    pub fn scalar_interval(&self) -> Result<Option<(u128, u128)>, String> {
+        let interval = match self {
+            Self::Int(value) => {
+                value.validate()?;
+                (value.ordinal(), value.ordinal())
+            }
+            Self::Char(value) => {
+                value.validate()?;
+                (u128::from(value.value), u128::from(value.value))
+            }
+            Self::IntRange { lo, hi } => {
+                lo.validate()?;
+                hi.validate()?;
+                if lo.ty != hi.ty || lo.ordinal() > hi.ordinal() {
+                    return Err("integer range pattern bounds are mistyped or reversed".into());
+                }
+                (lo.ordinal(), hi.ordinal())
+            }
+            Self::CharRange { lo, hi } => {
+                lo.validate()?;
+                hi.validate()?;
+                if lo.value > hi.value {
+                    return Err("character range pattern bounds are reversed".into());
+                }
+                (u128::from(lo.value), u128::from(hi.value))
+            }
+            Self::Bool(_) | Self::EnumVariant { .. } => return Ok(None),
+        };
+        Ok(Some(interval))
+    }
+    /// Scalar domain type tested by this kind, when scalar.
+    pub fn scalar_ty(&self) -> Option<Ty> {
+        match self {
+            Self::Int(value) | Self::IntRange { lo: value, .. } => Some(Ty::Int(value.ty)),
+            Self::Char(_) | Self::CharRange { .. } => Some(Ty::Char),
+            Self::Bool(_) | Self::EnumVariant { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -6627,7 +6693,7 @@ impl CheckedFunction {
         parameters: &std::collections::HashSet<LocalId>,
     ) -> Result<(), String> {
         let admitted = match domain {
-            Ty::Bool | Ty::Int(_) | Ty::Unit | Ty::Struct(_) | Ty::Enum(_) => true,
+            Ty::Bool | Ty::Int(_) | Ty::Char | Ty::Unit | Ty::Struct(_) | Ty::Enum(_) => true,
             Ty::Tuple(fields) => !fields.is_empty(),
             Ty::Array { len, .. } => *len > 0 && *len <= MAX_ARRAY_LEN,
             _ => false,
@@ -6653,9 +6719,12 @@ impl CheckedFunction {
             let actual = projected_ty(domain, &test.projection)?;
             let valid = match &test.kind {
                 PatternTestKind::Bool(_) => *actual == Ty::Bool,
-                PatternTestKind::Int(value) => {
-                    value.validate()?;
-                    *actual == Ty::Int(value.ty)
+                PatternTestKind::Int(_)
+                | PatternTestKind::Char(_)
+                | PatternTestKind::IntRange { .. }
+                | PatternTestKind::CharRange { .. } => {
+                    test.kind.scalar_interval()?;
+                    test.kind.scalar_ty().as_ref() == Some(actual)
                 }
                 PatternTestKind::EnumVariant { ty, variant } => {
                     ty.validate()?;
@@ -10559,6 +10628,112 @@ mod tests {
                 .validate()
                 .is_err()
             );
+        }
+    }
+
+    #[test]
+    fn scalar_range_decisions_reject_reversed_mistyped_and_invalid_endpoints() {
+        let decide = |domain: Ty, kind: PatternTestKind| {
+            let mut function = fixture();
+            function.exprs[0].ty = domain.clone();
+            function.exprs[0].kind = match &domain {
+                Ty::Char => ExprKind::Char(CharValue { value: 97 }),
+                Ty::Int(ty) => ExprKind::Int(IntValue { ty: *ty, bits: 0 }),
+                _ => unreachable!(),
+            };
+            function.validate().unwrap();
+            let arms = [
+                MatchArm {
+                    pattern: MatchPattern::Decision {
+                        ty: domain,
+                        tests: vec![PatternTest {
+                            projection: vec![],
+                            kind,
+                        }],
+                        bindings: vec![],
+                    },
+                    body: ExprId(0),
+                },
+                MatchArm {
+                    pattern: MatchPattern::Wildcard,
+                    body: ExprId(0),
+                },
+            ];
+            function.validate_match(ExprId(0), &arms, &Default::default())
+        };
+        let ch = |value| CharValue { value };
+        let i8v = |value: i8| IntValue {
+            ty: IntTy::I8,
+            bits: value as u8 as u128,
+        };
+        decide(Ty::Char, PatternTestKind::Char(ch(97))).unwrap();
+        decide(
+            Ty::Char,
+            PatternTestKind::CharRange {
+                lo: ch(97),
+                hi: ch(122),
+            },
+        )
+        .unwrap();
+        decide(
+            Ty::Int(IntTy::I8),
+            PatternTestKind::IntRange {
+                lo: i8v(-128),
+                hi: i8v(-1),
+            },
+        )
+        .unwrap();
+        for (domain, kind) in [
+            // Signed order, not raw bits: -1 (0xff) is below 1.
+            (
+                Ty::Int(IntTy::I8),
+                PatternTestKind::IntRange {
+                    lo: i8v(1),
+                    hi: i8v(-1),
+                },
+            ),
+            (
+                Ty::Char,
+                PatternTestKind::CharRange {
+                    lo: ch(122),
+                    hi: ch(97),
+                },
+            ),
+            (
+                Ty::Char,
+                PatternTestKind::CharRange {
+                    lo: ch(0xd800),
+                    hi: ch(0xdfff),
+                },
+            ),
+            (Ty::Char, PatternTestKind::Char(ch(0x110000))),
+            (Ty::Int(IntTy::I8), PatternTestKind::Char(ch(97))),
+            (
+                Ty::Char,
+                PatternTestKind::IntRange {
+                    lo: i8v(0),
+                    hi: i8v(1),
+                },
+            ),
+            (
+                Ty::Int(IntTy::U8),
+                PatternTestKind::IntRange {
+                    lo: i8v(0),
+                    hi: i8v(1),
+                },
+            ),
+            (
+                Ty::Int(IntTy::I8),
+                PatternTestKind::IntRange {
+                    lo: i8v(0),
+                    hi: IntValue {
+                        ty: IntTy::I8,
+                        bits: 256,
+                    },
+                },
+            ),
+        ] {
+            assert!(decide(domain, kind.clone()).is_err(), "{kind:?}");
         }
     }
 

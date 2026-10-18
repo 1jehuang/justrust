@@ -471,6 +471,14 @@ impl<T> BudgetVec<T> {
     pub fn truncate(&mut self, len: usize) {
         self.values.truncate(len);
     }
+    /// In-place sort and duplicate removal. Never allocates or grows the lease.
+    pub fn sort_unstable_dedup(&mut self)
+    where
+        T: Ord,
+    {
+        self.values.sort_unstable();
+        self.values.dedup();
+    }
     pub fn push(&mut self, value: T) -> Result<(), TokenError> {
         self.budget.check()?;
         if self.values.len() == self.values.capacity() {

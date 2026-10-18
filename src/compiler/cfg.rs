@@ -2559,10 +2559,15 @@ impl Lowerer<'_> {
             )?;
         } else {
             for test in tests {
-                if matches!(
-                    test.kind,
-                    ir::PatternTestKind::Bool(_) | ir::PatternTestKind::Int(_)
-                ) {
+                let comparisons = match test.kind {
+                    ir::PatternTestKind::Bool(_)
+                    | ir::PatternTestKind::Int(_)
+                    | ir::PatternTestKind::Char(_) => 1,
+                    ir::PatternTestKind::IntRange { .. }
+                    | ir::PatternTestKind::CharRange { .. } => 2,
+                    ir::PatternTestKind::EnumVariant { .. } => 0,
+                };
+                for _ in 0..comparisons {
                     self.temporary(Ty::Bool, Some(id));
                 }
             }
@@ -2574,9 +2579,22 @@ impl Lowerer<'_> {
                     self.block()
                 };
                 let inspected = self.decision_place(source, &test.projection)?;
-                let right = match &test.kind {
-                    ir::PatternTestKind::Bool(value) => Constant::Bool(*value),
-                    ir::PatternTestKind::Int(value) => Constant::Int(*value),
+                let comparisons = match &test.kind {
+                    ir::PatternTestKind::Bool(value) => {
+                        vec![(BinaryOp::Eq, Constant::Bool(*value))]
+                    }
+                    ir::PatternTestKind::Int(value) => vec![(BinaryOp::Eq, Constant::Int(*value))],
+                    ir::PatternTestKind::Char(value) => {
+                        vec![(BinaryOp::Eq, Constant::Char(*value))]
+                    }
+                    ir::PatternTestKind::IntRange { lo, hi } => vec![
+                        (BinaryOp::Ge, Constant::Int(*lo)),
+                        (BinaryOp::Le, Constant::Int(*hi)),
+                    ],
+                    ir::PatternTestKind::CharRange { lo, hi } => vec![
+                        (BinaryOp::Ge, Constant::Char(*lo)),
+                        (BinaryOp::Le, Constant::Char(*hi)),
+                    ],
                     ir::PatternTestKind::EnumVariant { ty, variant } => {
                         // Retain singleton tag edges too: the true edge proves
                         // the exact downcast prerequisite for subsequent tests.
@@ -2596,26 +2614,34 @@ impl Lowerer<'_> {
                         continue;
                     }
                 };
-                let local = self.scopes.last().unwrap()[scalar];
-                scalar += 1;
-                self.assign(
-                    place(local),
-                    Rvalue::Binary {
-                        op: BinaryOp::Eq,
-                        left: Operand::Copy(inspected),
-                        right: Operand::Constant(right),
-                    },
-                    Some(id),
-                );
-                self.terminate(
-                    Terminator::Switch {
-                        condition: Operand::Copy(place(local)),
-                        then_block: target,
-                        else_block: rejected,
-                    },
-                    Some(id),
-                )?;
-                self.current = target;
+                let count = comparisons.len();
+                for (step, (op, right)) in comparisons.into_iter().enumerate() {
+                    let next = if step + 1 == count {
+                        target
+                    } else {
+                        self.block()
+                    };
+                    let local = self.scopes.last().unwrap()[scalar];
+                    scalar += 1;
+                    self.assign(
+                        place(local),
+                        Rvalue::Binary {
+                            op,
+                            left: Operand::Copy(inspected.clone()),
+                            right: Operand::Constant(right),
+                        },
+                        Some(id),
+                    );
+                    self.terminate(
+                        Terminator::Switch {
+                            condition: Operand::Copy(place(local)),
+                            then_block: next,
+                            else_block: rejected,
+                        },
+                        Some(id),
+                    )?;
+                    self.current = next;
+                }
             }
         }
         Ok(PatternTest {

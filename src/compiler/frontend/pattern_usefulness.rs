@@ -56,8 +56,9 @@ fn push<T>(values: &mut BudgetVec<T>, value: T) -> Result<(), String> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Cell {
     Bool(bool),
-    Integer(u128),
-    OtherInteger,
+    /// First ordinal of one elementary scalar segment. Every test interval on
+    /// the split path either contains the whole segment or is disjoint from it.
+    Scalar(u128),
     Variant(usize),
 }
 struct Assignment<'a> {
@@ -72,10 +73,10 @@ enum State<'a> {
 enum ChoiceKind {
     Bool,
     Enum(usize),
-    Integer { other: bool },
+    Scalar,
 }
 struct Frame<'a> {
-    // Integer backing is released before its lease by BudgetVec itself.
+    // Segment starts, ascending. Backing is released before its lease by BudgetVec.
     integers: BudgetVec<u128>,
     test: &'a Test,
     kind: ChoiceKind,
@@ -87,11 +88,8 @@ impl Frame<'_> {
         let result = match self.kind {
             ChoiceKind::Bool if self.next < 2 => Some(Cell::Bool(self.next != 0)),
             ChoiceKind::Enum(count) if self.next < count => Some(Cell::Variant(self.next)),
-            ChoiceKind::Integer { .. } if self.next < self.integers.len() => {
-                Some(Cell::Integer(self.integers.as_slice()[self.next]))
-            }
-            ChoiceKind::Integer { other: true } if self.next == self.integers.len() => {
-                Some(Cell::OtherInteger)
+            ChoiceKind::Scalar if self.next < self.integers.len() => {
+                Some(Cell::Scalar(self.integers.as_slice()[self.next]))
             }
             _ => None,
         };
@@ -285,8 +283,13 @@ impl<'facts> CoverageMatrix<'facts> {
             let actual = ir::projected_ty(&self.domain, source.projection)?;
             match source.kind {
                 PatternTestKind::Bool(_) if matches!(actual, Ty::Bool) => {}
-                PatternTestKind::Int(value) if matches!(actual, Ty::Int(ty) if *ty == value.ty) => {
-                    value.validate()?;
+                PatternTestKind::Int(_)
+                | PatternTestKind::Char(_)
+                | PatternTestKind::IntRange { .. }
+                | PatternTestKind::CharRange { .. }
+                    if source.kind.scalar_ty().as_ref() == Some(actual) =>
+                {
+                    source.kind.scalar_interval()?;
                 }
                 PatternTestKind::EnumVariant { ty, variant } => {
                     self.work(ty.def().variants.len())?;
@@ -424,8 +427,12 @@ impl<'facts> CoverageMatrix<'facts> {
             };
             let matches = match (&test.kind, value) {
                 (PatternTestKind::Bool(a), Cell::Bool(b)) => *a == b,
-                (PatternTestKind::Int(a), Cell::Integer(b)) => a.bits == b,
-                (PatternTestKind::Int(_), Cell::OtherInteger) => false,
+                (kind, Cell::Scalar(point)) if kind.scalar_ty().is_some() => {
+                    let (lo, hi) = kind
+                        .scalar_interval()?
+                        .ok_or("coverage scalar interval invariant")?;
+                    lo <= point && point <= hi
+                }
                 (PatternTestKind::EnumVariant { variant, .. }, Cell::Variant(b)) => *variant == b,
                 _ => return Err("coverage assignment domain mismatch".into()),
             };
@@ -472,25 +479,49 @@ impl<'facts> CoverageMatrix<'facts> {
         let kind = match &test.kind {
             PatternTestKind::Bool(_) => ChoiceKind::Bool,
             PatternTestKind::EnumVariant { ty, .. } => ChoiceKind::Enum(ty.def().variants.len()),
-            PatternTestKind::Int(value) => {
+            kind => {
+                let domain = kind.scalar_ty().ok_or("coverage scalar domain invariant")?;
+                let (max, gap) = match domain {
+                    Ty::Int(ty) => (ty.mask(), None),
+                    Ty::Char => (0x10ffff, Some((0xd800u128, 0xdfffu128))),
+                    _ => return Err("coverage scalar domain invariant".into()),
+                };
+                let mut starts = temporary(&self.expansion)?;
+                push(&mut starts, 0)?;
+                if let Some((lo, hi)) = gap {
+                    push(&mut starts, lo)?;
+                    push(&mut starts, hi + 1)?;
+                }
                 for row in self.rows.as_slice().iter().chain(std::iter::once(query)) {
                     for candidate in row.tests.as_slice() {
                         if self.same_path(
                             candidate.projection.as_slice(),
                             test.projection.as_slice(),
-                        )? && let PatternTestKind::Int(candidate) = candidate.kind
+                        )? && let Some((lo, hi)) = candidate.kind.scalar_interval()?
                         {
-                            self.work(integers.len())?;
-                            if !integers.as_slice().contains(&candidate.bits) {
-                                push(&mut integers, candidate.bits)?;
+                            self.work(2)?;
+                            push(&mut starts, lo)?;
+                            if hi < max {
+                                push(&mut starts, hi + 1)?;
                             }
                         }
                     }
                 }
-                let count = u128::try_from(integers.len()).map_err(|_| overflow())?;
-                // No shift by 128, cardinality truncation, or fake default value.
-                let other = value.ty.bits() == 128 || count < (1u128 << value.ty.bits());
-                ChoiceKind::Integer { other }
+                let count = starts.len();
+                self.work(
+                    count
+                        .checked_mul(usize::BITS as usize)
+                        .ok_or_else(overflow)?,
+                )?;
+                starts.sort_unstable_dedup();
+                for &start in starts.as_slice() {
+                    // Surrogates are not scalar values: that segment is uninhabited.
+                    if gap.is_some_and(|(lo, _)| lo == start) {
+                        continue;
+                    }
+                    push(&mut integers, start)?;
+                }
+                ChoiceKind::Scalar
             }
         };
         Ok(Frame {
@@ -536,8 +567,10 @@ impl<'facts> CoverageMatrix<'facts> {
             self.check_runtime_path(test, trail.as_slice())?;
             let value = match &test.kind {
                 PatternTestKind::Bool(value) => Cell::Bool(*value),
-                PatternTestKind::Int(value) => Cell::Integer(value.bits),
                 PatternTestKind::EnumVariant { variant, .. } => Cell::Variant(*variant),
+                // A scalar constraint may straddle other rows' segments. It
+                // stays open, so the search splits on it and prunes outside cells.
+                _ => continue,
             };
             push(&mut trail, Assignment { test, value })?;
         }
@@ -685,11 +718,100 @@ mod tests {
         };
         let selector = &matrix.rows.as_slice()[0].tests.as_slice()[0];
         let mut frame = matrix.frame(selector, &query, 0).unwrap();
-        assert!(matches!(frame.kind, ChoiceKind::Integer { other: false }));
+        assert!(matches!(frame.kind, ChoiceKind::Scalar));
         for bits in 0..256 {
-            assert!(frame.next_cell() == Some(Cell::Integer(bits)));
+            assert!(frame.next_cell() == Some(Cell::Scalar(bits)));
         }
         assert!(frame.next_cell().is_none());
+    }
+
+    fn scalar(kind: PatternTestKind) -> ir::PatternTest {
+        ir::PatternTest {
+            projection: vec![],
+            kind,
+        }
+    }
+    fn chars(lo: u32, hi: u32) -> PatternTestKind {
+        PatternTestKind::CharRange {
+            lo: ir::CharValue { value: lo },
+            hi: ir::CharValue { value: hi },
+        }
+    }
+    fn ints(ty: ir::IntTy, lo: u128, hi: u128) -> PatternTestKind {
+        PatternTestKind::IntRange {
+            lo: ir::IntValue { ty, bits: lo },
+            hi: ir::IntValue { ty, bits: hi },
+        }
+    }
+
+    #[test]
+    fn char_intervals_skip_the_surrogate_gap_and_detect_one_missing_scalar() {
+        let mut full = matrix(Ty::Char);
+        assert!(insert(&mut full, &[scalar(chars(0, 0xd7ff))]).unwrap());
+        assert!(!full.exhaustive().unwrap());
+        assert!(insert(&mut full, &[scalar(chars(0xe000, 0x10ffff))]).unwrap());
+        assert!(full.exhaustive().unwrap());
+        assert!(
+            !insert(
+                &mut full,
+                &[scalar(PatternTestKind::Char(ir::CharValue { value: 97 }))]
+            )
+            .unwrap()
+        );
+        let mut short = matrix(Ty::Char);
+        insert(&mut short, &[scalar(chars(0, 0xd7ff))]).unwrap();
+        insert(&mut short, &[scalar(chars(0xe000, 0x10fffe))]).unwrap();
+        assert!(!short.exhaustive().unwrap());
+        assert!(
+            insert(
+                &mut short,
+                &[scalar(PatternTestKind::Char(ir::CharValue {
+                    value: 0x10ffff
+                }))]
+            )
+            .unwrap()
+        );
+        assert!(short.exhaustive().unwrap());
+    }
+
+    #[test]
+    fn signed_and_wide_integer_intervals_use_value_order() {
+        // i8: -128..=-1 is bits 0x80..=0xff, 0..=127 is 0x00..=0x7f.
+        let mut signed = matrix(Ty::Int(ir::IntTy::I8));
+        assert!(insert(&mut signed, &[scalar(ints(ir::IntTy::I8, 0x80, 0xff))]).unwrap());
+        assert!(!signed.exhaustive().unwrap());
+        assert!(insert(&mut signed, &[scalar(ints(ir::IntTy::I8, 0, 0x7f))]).unwrap());
+        assert!(signed.exhaustive().unwrap());
+        // -2..=1 straddles zero in value order and is dead after both rows.
+        assert!(!insert(&mut signed, &[scalar(ints(ir::IntTy::I8, 0xfe, 0x01))]).unwrap());
+        let mut wide = matrix(Ty::Int(ir::IntTy::U128));
+        assert!(insert(&mut wide, &[scalar(ints(ir::IntTy::U128, 0, 5))]).unwrap());
+        assert!(!insert(&mut wide, &[scalar(ints(ir::IntTy::U128, 2, 3))]).unwrap());
+        assert!(
+            insert(
+                &mut wide,
+                &[scalar(ints(ir::IntTy::U128, 3, u128::MAX - 1))]
+            )
+            .unwrap()
+        );
+        assert!(!wide.exhaustive().unwrap());
+        assert!(
+            insert(
+                &mut wide,
+                &[scalar(ints(ir::IntTy::U128, u128::MAX, u128::MAX))]
+            )
+            .unwrap()
+        );
+        assert!(wide.exhaustive().unwrap());
+    }
+
+    #[test]
+    fn reversed_interval_rows_are_rejected_before_commit() {
+        let mut matrix = matrix(Ty::Int(ir::IntTy::U8));
+        assert!(insert(&mut matrix, &[scalar(ints(ir::IntTy::U8, 9, 1))]).is_err());
+        assert!(insert(&mut matrix, &[scalar(ints(ir::IntTy::I8, 0, 1))]).is_err());
+        assert!(insert(&mut matrix, &[scalar(chars(0, 1))]).is_err());
+        assert!(matrix.rows.values.is_empty());
     }
 
     #[test]

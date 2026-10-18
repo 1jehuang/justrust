@@ -55,12 +55,13 @@ fn builtin_matches_bounded_grammar_and_late_invalid() {
         "fn main(){let b:bool=matches!([1,2],[1,..]);}",
         "fn main(){let b:bool=matches!(1,binding);}",
         "struct S{x:i32}fn main(){if matches!(S{x:1},S{x:1}) {}}",
+        "fn main(){let b:bool=matches!(1,1..=2);}",
+        "fn main(){let b:bool=matches!(1,1..2);}",
+        "fn main(){let b:bool=matches!('a','a'..='z');}",
     ] {
         good(source);
     }
-    for args in [
-        "", "1", "1,", ",_", "1,1,,", "1,1,2", "1,1 2", "1,1..=2", "1,1..2",
-    ] {
+    for args in ["", "1", "1,", ",_", "1,1,,", "1,1,2", "1,1 2"] {
         assert!(
             parse(&format!("fn main(){{matches!({args})}}")).is_err(),
             "{args}"

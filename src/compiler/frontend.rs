@@ -1820,6 +1820,19 @@ fn slice_len_candidate(expr: &Expr, names: &NameStore) -> Result<bool, String> {
     }
 }
 
+/// Stock E0658: `X..` directly inside a slice or array pattern is feature-gated.
+fn reject_slice_half_open(pattern: &Pattern) -> Result<(), &'static str> {
+    if let Pattern::Range {
+        lo: Some(_),
+        hi: None,
+        ..
+    } = pattern
+    {
+        return Err("`X..` patterns in slices are experimental");
+    }
+    Ok(())
+}
+
 /// Syntax alone never grants integer-method authority.
 fn leading_zeros_candidate(expr: &Expr, names: &NameStore) -> Result<bool, String> {
     if let Expr::MethodCall {
@@ -4494,6 +4507,14 @@ pub enum Pattern {
         literal: IntegerLiteral,
         negative: bool,
     },
+    Char(char),
+    /// Scalar range pattern. Missing bounds are the domain extreme; `inclusive`
+    /// applies to the upper bound only and requires one when set.
+    Range {
+        lo: Option<RangeBound>,
+        hi: Option<RangeBound>,
+        inclusive: bool,
+    },
     Wildcard,
     Binding {
         name: AstIdent,
@@ -4511,6 +4532,20 @@ pub enum Pattern {
         name: AstPath,
         fields: Vec<(AstIdent, Pattern)>,
         rest: bool,
+    },
+}
+/// One literal endpoint of a range pattern.
+#[derive(Clone, Debug)]
+pub enum RangeBound {
+    Int {
+        literal: IntegerLiteral,
+        negative: bool,
+    },
+    Char(char),
+    /// `<integer type>::MIN` or `::MAX`, written as a path endpoint.
+    IntLimit {
+        ty: ir::IntTy,
+        max: bool,
     },
 }
 /// Only patterns actually written around one positional `..` occurrence.
@@ -9346,6 +9381,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         let result = result.and_then(|pattern| {
             if self.is("|") || self.is("@") {
                 Err(self.unsupported("or-patterns and @ patterns are unsupported"))
+            } else if self.is("..=") || self.is("..") {
+                // Literal endpoints were consumed by pattern_inner already.
+                Err(self.unsupported("path and constant range pattern bounds are unsupported"))
             } else {
                 Ok(pattern)
             }
@@ -9404,6 +9442,9 @@ impl<'input, 'names> Parser<'input, 'names> {
                 if self.is("@") {
                     return Err(self.unsupported("@ positional rest patterns are unsupported"));
                 }
+                if close == "]" {
+                    reject_slice_half_open(&pattern).map_err(|e| self.error(e))?;
+                }
                 self.reserve_rest_patterns(&mut suffix, 1)?;
                 suffix.push(pattern);
                 if !self.eat(",") {
@@ -9430,6 +9471,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             if self.is("@") {
                 return Err(self.unsupported("@ array rest patterns are unsupported"));
             }
+            reject_slice_half_open(&pattern).map_err(|e| self.error(e))?;
             self.reserve_rest_patterns(&mut prefix, 1)?;
             prefix.push(pattern);
             if !self.eat(",") {
@@ -9439,9 +9481,113 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.expect("]")?;
         Ok(Pattern::Array(prefix))
     }
-    fn pattern_inner(&mut self) -> Result<Pattern, ParseError> {
+    fn range_bound_start(&self) -> bool {
+        !self.token().string
+            && (self.token().is_char()
+                || self.is("-")
+                || self.token().text.starts_with(|c: char| c.is_ascii_digit())
+                || self.int_limit_start())
+    }
+    /// `i32::MAX` style endpoint: a primitive integer name, `::`, MIN or MAX.
+    fn int_limit_start(&self) -> bool {
+        self.token().is_ident()
+            && integer_type(self.token().text).is_some()
+            && self.cursor.peek(1).is_some_and(|t| t.matches("::"))
+            && self
+                .cursor
+                .peek(2)
+                .is_some_and(|t| t.matches("MAX") || t.matches("MIN"))
+    }
+    /// One literal range or scalar pattern endpoint: char, or optionally negated integer.
+    fn range_bound(&mut self) -> Result<RangeBound, ParseError> {
         if self.token().is_char() {
-            return Err(self.unsupported("character literal and range patterns are unsupported"));
+            self.names
+                .budget()
+                .charge(
+                    super::expansion_budget::Counter::Work,
+                    self.token().text.len() as u64,
+                )
+                .map_err(|error| native_adapter::transport_error(error.into()))?;
+            let value = parse_char_literal(self.token().text).map_err(|e| self.error(e))?;
+            self.cursor.bump();
+            return Ok(RangeBound::Char(value));
+        }
+        if self.int_limit_start() {
+            let ty = integer_type(self.token().text).ok_or_else(|| self.error("integer type"))?;
+            self.cursor.bump();
+            self.expect("::")?;
+            let max = self.is("MAX");
+            self.cursor.bump();
+            return Ok(RangeBound::IntLimit { ty, max });
+        }
+        let negative = self.eat("-");
+        if self.token().string || !self.token().text.starts_with(|c: char| c.is_ascii_digit()) {
+            return Err(self.error("expected an integer literal after minus"));
+        }
+        let literal = parse_integer_literal(self.token().text).map_err(|e| self.error(&e))?;
+        self.cursor.bump();
+        Ok(RangeBound::Int { literal, negative })
+    }
+    /// Literal and range patterns, kept out of the recursive pattern frame.
+    #[inline(never)]
+    fn scalar_pattern(&mut self) -> Result<Pattern, ParseError> {
+        if self.is("..=") || self.is("..") {
+            let inclusive = self.is("..=");
+            self.cursor.bump();
+            if !self.range_bound_start() {
+                return Err(if self.token().is_ident() {
+                    self.unsupported("path and constant range pattern bounds are unsupported")
+                } else {
+                    self.error("expected a range pattern upper bound")
+                });
+            }
+            let hi = self.range_bound()?;
+            return Ok(Pattern::Range {
+                lo: None,
+                hi: Some(hi),
+                inclusive,
+            });
+        }
+        if self.range_bound_start() {
+            if self.token().string {
+                return Err(self.unsupported("string literal patterns are unsupported"));
+            }
+            let lo = self.range_bound()?;
+            if self.is("..=") || self.is("..") {
+                let inclusive = self.is("..=");
+                self.cursor.bump();
+                let hi = if self.range_bound_start() {
+                    Some(self.range_bound()?)
+                } else if self.token().is_ident() {
+                    return Err(
+                        self.unsupported("path and constant range pattern bounds are unsupported")
+                    );
+                } else if inclusive {
+                    return Err(self.error("inclusive range pattern requires an upper bound"));
+                } else {
+                    None
+                };
+                return Ok(Pattern::Range {
+                    lo: Some(lo),
+                    hi,
+                    inclusive,
+                });
+            }
+            return match lo {
+                RangeBound::Int { literal, negative } => Ok(Pattern::Int { literal, negative }),
+                RangeBound::Char(value) => Ok(Pattern::Char(value)),
+                RangeBound::IntLimit { ty, max } => Ok(Pattern::Range {
+                    lo: Some(RangeBound::IntLimit { ty, max }),
+                    hi: Some(RangeBound::IntLimit { ty, max }),
+                    inclusive: true,
+                }),
+            };
+        }
+        Err(self.error("expected a literal or range pattern"))
+    }
+    fn pattern_inner(&mut self) -> Result<Pattern, ParseError> {
+        if self.is("..=") || self.is("..") || self.range_bound_start() {
+            return self.scalar_pattern();
         }
         if self.token().string {
             return Err(self.unsupported("string literal patterns are unsupported"));
@@ -9459,15 +9605,6 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         if self.eat("false") {
             return Ok(Pattern::Bool(false));
-        }
-        if self.is("-") || self.token().text.starts_with(|c: char| c.is_ascii_digit()) {
-            let negative = self.eat("-");
-            if self.token().string {
-                return Err(self.error("expected an integer literal after minus"));
-            }
-            let literal = parse_integer_literal(self.token().text).map_err(|e| self.error(&e))?;
-            self.cursor.bump();
-            return Ok(Pattern::Int { literal, negative });
         }
         if self.eat("_") {
             return Ok(Pattern::Wildcard);
@@ -9714,7 +9851,13 @@ impl<'input, 'names> Parser<'input, 'names> {
                     None
                 };
                 if self.eat(";") {
-                    if matches!(pattern, Pattern::Bool(_) | Pattern::Int { .. }) {
+                    if matches!(
+                        pattern,
+                        Pattern::Bool(_)
+                            | Pattern::Int { .. }
+                            | Pattern::Char(_)
+                            | Pattern::Range { .. }
+                    ) {
                         return Err(self.error("refutable literal pattern in let binding"));
                     }
                     let Pattern::Binding { name, mutable } = pattern else {
@@ -9758,7 +9901,13 @@ impl<'input, 'names> Parser<'input, 'names> {
                     });
                     continue;
                 }
-                if matches!(pattern, Pattern::Bool(_) | Pattern::Int { .. }) {
+                if matches!(
+                    pattern,
+                    Pattern::Bool(_)
+                        | Pattern::Int { .. }
+                        | Pattern::Char(_)
+                        | Pattern::Range { .. }
+                ) {
                     return Err(self.error("refutable literal pattern in let binding"));
                 }
                 self.expect(";")?;
