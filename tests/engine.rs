@@ -325,3 +325,57 @@ fn invalid_worker_count_and_repeat_run_rejected() {
     assert_eq!(root.result(0).unwrap(), 1);
     assert!(engine.run(1).is_err());
 }
+
+struct Facts;
+impl Provider for Facts {
+    fn outputs(&self, _: &Key) -> usize {
+        1
+    }
+    fn start(&self, cx: Context, k: Key) -> TaskFuture {
+        Box::pin(async move {
+            match k.kind {
+                // Leaf publishes a typed fact.
+                0 => cx.publish_fact(0, vec![k.params[0]; 3]),
+                // Consumer reads two typed facts through recorded edges.
+                1 => {
+                    let a = cx.request(Key::new(0, vec![2]));
+                    let b = cx.request(Key::new(0, vec![5]));
+                    let a: Arc<Vec<u64>> = cx.read_fact(a.get(0)).await?;
+                    let b: Arc<Vec<u64>> = cx.read_fact(b.get(0)).await?;
+                    cx.publish_fact(0, a.iter().chain(b.iter()).sum::<u64>())
+                }
+                // Wrong-type and missing-fact reads are explicit errors.
+                2 => {
+                    let a = cx.request(Key::new(0, vec![1]));
+                    match cx.read_fact::<String>(a.get(0)).await {
+                        Err(error) if error.0.contains("different type") => {}
+                        other => return Err(Error::new(format!("unexpected {:?}", other.err()))),
+                    }
+                    let plain = cx.request(Key::new(3, vec![]));
+                    match cx.read_fact::<u64>(plain.get(0)).await {
+                        Err(error) if error.0.contains("no fact") => cx.publish(0, 1),
+                        other => Err(Error::new(format!("unexpected {:?}", other.err()))),
+                    }
+                }
+                3 => cx.publish(0, 9),
+                _ => Err(Error::new("unknown")),
+            }
+        })
+    }
+}
+
+#[test]
+fn typed_facts_flow_through_recorded_dependency_edges() {
+    for workers in [1, 4] {
+        let engine = Engine::new(Facts);
+        let sum = engine.request(Key::new(1, vec![]));
+        let checks = engine.request(Key::new(2, vec![]));
+        let report = engine.run(workers).unwrap();
+        assert_eq!(*sum.fact::<u64>(0).unwrap(), 21);
+        assert_eq!(checks.result(0).unwrap(), 1);
+        assert!(checks.completion().is_ok());
+        // Two fact reads by the consumer are visible as graph edges.
+        assert!(report.edges >= 2);
+        assert!(sum.fact::<String>(0).is_err());
+    }
+}

@@ -213,8 +213,14 @@ struct NodeState {
 #[derive(Default)]
 struct Slot {
     result: Option<Result<u64, Error>>,
+    /// Typed immutable fact published with the output, readable by consumers
+    /// through the same dependency-recording read as the `u64` value.
+    fact: Option<Fact>,
     waiters: HashMap<(u64, u64), Waker>,
 }
+
+/// A typed, immutable, shareable compiler fact carried by a graph output.
+pub type Fact = Arc<dyn Any + Send + Sync>;
 
 struct Task {
     id: u64,
@@ -375,6 +381,17 @@ impl Engine {
             id,
             cancelled: AtomicBool::new(false),
         }
+    }
+
+    /// Inspect a typed fact of an already-discovered node without demanding
+    /// it. Returns `None` for an undiscovered key or an output with no fact.
+    /// For post-run reporting of what the graph actually computed.
+    pub fn fact_of<T: Any + Send + Sync>(&self, key: &Key, index: usize) -> Option<Arc<T>> {
+        let hash = self.shared.hash(key);
+        let node = lock(&self.shared.index[hash as usize % SHARDS])
+            .get(&hash)
+            .and_then(|bucket| bucket.iter().find(|node| &node.key == key).cloned())?;
+        node.fact(index).ok()
     }
 
     /// Run exactly once. Provider failures are represented in the returned report
@@ -562,9 +579,28 @@ impl Demand {
         }
         self.outputs.node.result(index)
     }
+
+    /// Nonblocking typed fact of a finalized output.
+    pub fn fact<T: Any + Send + Sync>(&self, index: usize) -> Result<Arc<T>, Error> {
+        self.result(index)?;
+        self.outputs.node.fact(index)
+    }
 }
 
 impl Node {
+    fn fact<T: Any + Send + Sync>(&self, index: usize) -> Result<Arc<T>, Error> {
+        let fact = self
+            .slots
+            .get(index)
+            .and_then(|slot| lock(slot).fact.clone())
+            .ok_or_else(|| Error::new(format!("node {} output {index} has no fact", self.id)))?;
+        fact.downcast::<T>().map_err(|_| {
+            Error::new(format!(
+                "node {} output {index} fact has a different type",
+                self.id
+            ))
+        })
+    }
     fn result(&self, index: usize) -> Result<u64, Error> {
         match self.slots.get(index) {
             Some(slot) => lock(slot)
@@ -640,6 +676,27 @@ impl Context {
     }
 
     pub fn publish(&self, index: usize, value: u64) -> Result<(), Error> {
+        self.publish_with_fact(index, value, None)
+    }
+
+    /// Await a producer output and return its typed fact. Records the same
+    /// dependency edge and suspension behavior as [`Context::read`]. Fails if
+    /// the output carries no fact or a fact of another type.
+    pub async fn read_fact<T: Any + Send + Sync>(&self, handle: Handle) -> Result<Arc<T>, Error> {
+        let node = handle.node.clone();
+        let index = handle.index;
+        self.read(handle).await?;
+        node.fact(index)
+    }
+
+    /// Publish a typed fact as this output. Consumers obtain it with
+    /// [`Context::read_fact`], which records the dependency edge exactly like
+    /// [`Context::read`]. The fact is immutable once published.
+    pub fn publish_fact<T: Any + Send + Sync>(&self, index: usize, fact: T) -> Result<(), Error> {
+        self.publish_with_fact(index, 1, Some(Arc::new(fact)))
+    }
+
+    fn publish_with_fact(&self, index: usize, value: u64, fact: Option<Fact>) -> Result<(), Error> {
         let state = lock(&self.node.state);
         if let Some(error) = &state.error {
             return Err(error.clone());
@@ -655,6 +712,7 @@ impl Context {
             return Err(Error::new(format!("output {index} already finalized")));
         }
         slot.result = Some(Ok(value));
+        slot.fact = fact;
         let waiters: Vec<_> = slot.waiters.drain().map(|(_, waker)| waker).collect();
         // The slot guard is the visibility boundary for both read() and
         // Demand::result(). Record the proof before either can observe success.
