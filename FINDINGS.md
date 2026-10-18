@@ -11442,3 +11442,36 @@ Implemented distinct char source/IR/CFG/native values with Unicode scalar valida
 Stock receipt SHA256 `7bc819a16b51543c63923f0f0f6f54de9b9820fd7519789e2e7c09f4c5b12e53` freezes 36 sources: 10 accepted, 26 rejected. Native CLI and observed graph each verify 144 worker1/8 CHECK/BUILD cells and 20 executable results. Historical source bytes remain unchanged; lexical char/Unicode-char and disabled-char expectations advance to accepted, while char-pattern rejection moves to its precise unsupported boundary.
 
 Retained failures include stale private lexical/macro fixtures, invalid public-test assumptions about closed facts versus rigid callable publication, a CLI harness assuming empty stdout instead of the report, and stale historical character expectations. They were corrected without raising budgets or weakening scalar validation. The final suite passes 3179 tests across 164 binaries in run `20261017-193351333-2275251`; its predecessor `20261017-193120629-2107016` passed 3178 with one stale lexical expectation. Optimized char-filter tests pass 27 in `20261017-192557320-1980319`, optimized corpus/authority pass eight in `20261017-193130640-2129445`, and hosted strict lint passes `20261017-193350613-2275382`. All-target check and cargo fmt pass. The 24 exact failed/successful receipts are retained in `data/runs/xps14/2026-10-18-chars.jsonl`. Native full/executable gates use the documented local path; hosted checks/lints remain enabled. No speedup or full Rust compatibility claim.
+
+## 2026-10-18: actual algorithm program timing checkpoint
+
+Compared identical source bytes on release-built committed native compiler
+`af3eb295fae9` and stock rustc 1.98.1. A newly authored standalone Mandelbrot
+renderer produces a complete 120x40 ASCII image matching an independent Python
+oracle. The existing adapted Adler2 serial recurrence computes the full expected
+32-bit checksum on 5,553 bytes, independently checked against zlib. Neither is
+unchanged external-project compatibility. No compiler changes or cap changes
+were needed, and ongoing character-cast work was excluded using an isolated
+committed bootstrap snapshot.
+
+Initial unrestricted timings had substantial variance and are retained. A
+follow-up pins both compilers and programs to performance core 3, with 21 fresh
+build processes and 31 runtime samples per configuration, rotating order and
+validating every complete output. Mandelbrot median build/run milliseconds:
+native 6.383/5.389, rustc O0 36.978/1.655, rustc O3 46.807/1.011. Adapted Adler32:
+native 8.208/0.250, rustc O0 36.833/0.378, rustc O3 45.212/0.365. Native emits the
+image correctly but executes it substantially slower. Rendering includes print
+IO, and sub-millisecond checksum runtime is startup-sensitive, not a throughput
+claim. These warm-page-cache single-core standalone measurements do not replace
+the comprehensive Cargo suite, establish a general speedup, or close full Rust.
+
+All 228 events per controlled follow-up receipt pass. Raw initial/follow-up
+receipts and actual image are retained under `experiments/results/20261018-*`;
+methodology and reproduction are in `docs/real-program-benchmarks-20261018.md`.
+The harness passes 16 Python tests. Hosted snapshot check
+`20261018-015859161-324456`, strict lint `20261018-015906849-324454`, and three CLI
+tests `20261018-015955324-327462` pass. Bootstrap
+`20261018-015714350-320588` used local fallback. An initial hosted invocation
+`20261018-015802650-322591` failed because an absolute snapshot manifest was not
+mirrored from the original cwd; rerunning inside the snapshot fixed it. All five
+exported receipts are in `data/runs/xps14/2026-10-18-real-program-benchmark.jsonl`.

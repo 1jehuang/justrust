@@ -1,0 +1,3871 @@
+{
+  "schema_version": 1,
+  "ok": true,
+  "measurement": "warm-page-cache fresh processes; not cold or incremental; subprocess timings include process startup",
+  "comparability": "native has no optimizer comparable to stock O3",
+  "runtime_caveat": "Mandelbrot runtime includes per-pixel print IO; stock and native runtime libraries differ, so this is not a pure compute/codegen benchmark",
+  "events": [
+    {
+      "phase": "metadata",
+      "config": null,
+      "command": [
+        "/usr/bin/rustc",
+        "--version",
+        "--verbose"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+      "stderr": ""
+    },
+    {
+      "phase": "metadata",
+      "config": null,
+      "command": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "af3eb295fae95ae10a3f8225af3af917b97aee8c\n",
+      "stderr": ""
+    },
+    {
+      "phase": "metadata",
+      "config": null,
+      "command": [
+        "git",
+        "status",
+        "--porcelain",
+        "--untracked-files=all"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": " M src/compiler/backend.rs\n M src/compiler/borrow.rs\n M src/compiler/cfg.rs\n M src/compiler/frontend.rs\n M src/compiler/frontend/char_tests.rs\n M src/compiler/frontend/type_check.rs\n M src/compiler/ir.rs\n M src/compiler/ownership.rs\n?? experiments/programs/mandelbrot.rs\n?? experiments/real_program_bench.py\n?? experiments/results/20261018-mandelbrot.txt\n?? experiments/results/20261018-real-adler2-adapted-pcore.json\n?? experiments/results/20261018-real-adler2-adapted.json\n?? experiments/results/20261018-real-mandelbrot-pcore.json\n?? experiments/results/20261018-real-mandelbrot.json\n?? experiments/test_real_program_bench.py\n?? tests/char_cast_authority.rs\n?? tests/char_casts.rs\n",
+      "stderr": ""
+    },
+    {
+      "phase": "warmup-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-warmup-0"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7699887,\"engine_ns\":7511895,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": ""
+    },
+    {
+      "phase": "warmup-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-warmup-0"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "warmup-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-warmup-0"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "phase": "warmup-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-warmup-0"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "warmup-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-warmup-0"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "phase": "warmup-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-warmup-0"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-0"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7633779,\"engine_ns\":7457147,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8203549
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-0"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-0"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 34960669
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-0"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-0"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 46827140
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-0"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-1"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 36724424
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-1"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-1"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45065558
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-1"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-1"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7742797,\"engine_ns\":7564384,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8339792
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-1"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-2"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45060641
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-2"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-2"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7711287,\"engine_ns\":7530878,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8261405
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-2"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-2"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 37119025
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-2"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-3"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7600771,\"engine_ns\":7424789,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8203308
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-3"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-3"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 36909331
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-3"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-3"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45077835
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-3"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-4"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 36934317
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-4"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-4"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45123993
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-4"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-4"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7643445,\"engine_ns\":7459904,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8267456
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-4"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-5"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45194135
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-5"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-5"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7701131,\"engine_ns\":7515542,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8309860
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-5"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-5"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 36450930
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-5"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-6"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7566578,\"engine_ns\":7376449,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8128481
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-6"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-6"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 35740467
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-6"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-6"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 47297335
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-6"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-7"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 36941304
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-7"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-7"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45197958
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-7"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-7"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7657912,\"engine_ns\":7465099,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8254835
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-7"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-8"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45408046
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-8"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-8"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7556911,\"engine_ns\":7379451,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8122323
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-8"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-8"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 36830433
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-8"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-9"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7574948,\"engine_ns\":7352865,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8143469
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-9"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-9"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 36711466
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-9"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-9"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45761176
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-9"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-10"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 37245803
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-10"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-10"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45348301
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-10"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-10"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7766283,\"engine_ns\":7587146,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8333601
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-10"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-11"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45168877
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-11"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-11"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7631528,\"engine_ns\":7453430,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8207762
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-11"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-11"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 36754388
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-11"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-12"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7643073,\"engine_ns\":7462248,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8207377
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-12"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-12"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 36832825
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-12"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-12"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45323520
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-12"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-13"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 36883029
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-13"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-13"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45779532
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-13"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-13"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7714935,\"engine_ns\":7528139,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8334876
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-13"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-14"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45512813
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-14"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-14"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7656604,\"engine_ns\":7479689,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8208022
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-14"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-14"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 37389587
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-14"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-15"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7628124,\"engine_ns\":7426389,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8183064
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-15"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-15"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 36599085
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-15"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-15"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45240555
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-15"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-16"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 36914637
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-16"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-16"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45201920
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-16"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-16"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7642479,\"engine_ns\":7462138,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8201538
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-16"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-17"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45370783
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-17"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-17"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7621442,\"engine_ns\":7439505,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8179152
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-17"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-17"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 35794183
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-17"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-18"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":9571673,\"engine_ns\":9362540,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 10210885
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-18"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-18"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 37460009
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-18"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-18"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45047805
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-18"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-19"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 36908628
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-19"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-19"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45092930
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-19"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-19"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7645252,\"engine_ns\":7462784,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8215299
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-19"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-release",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=3",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 45211641
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "native",
+      "command": [
+        "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "--workers",
+        "1",
+        "--debug-assertions",
+        "yes",
+        "-o",
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "{\"schema\":1,\"mode\":\"build\",\"source_bytes\":817,\"source_files\":1,\"functions\":2,\"structs\":0,\"enums\":0,\"cfg_blocks\":10,\"cfg_edges\":10,\"cfg_locals\":54,\"analysis_worklist_pops\":14,\"analysis_move_paths\":11161,\"analysis_moves\":0,\"analysis_variant_proof_checks\":0,\"analysis_variant_refinements\":0,\"analysis_variant_proofs_killed\":0,\"workers\":1,\"executable_bytes\":8229,\"total_ns\":7754479,\"engine_ns\":7569273,\"nodes\":73,\"edges\":161,\"intern_hits\":90,\"failures\":0,\"events_dropped\":0,\"capture_complete\":true,\"measurement\":\"contended/uncontrolled\"}\n",
+      "stderr": "",
+      "elapsed_ns": 8334615
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "measurement-compile",
+      "config": "stock-debug",
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "-C",
+        "opt-level=0",
+        "-C",
+        "overflow-checks=yes",
+        "-C",
+        "debug-assertions=yes",
+        "-C",
+        "panic=abort",
+        "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+        "-o",
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "elapsed_ns": 36460247
+    },
+    {
+      "phase": "measurement-validate",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": ""
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 276300
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 429006
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 408438
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 398345
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 380453
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 251257
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 364299
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 248433
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 377574
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 255206
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 369603
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 376453
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 386644
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 413848
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 306911
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 360522
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 250393
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 367724
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 248676
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 384414
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 368819
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 378294
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 385772
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 258027
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 358347
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 269040
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 387650
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 253361
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 370880
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 365552
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 374460
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 374637
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 252197
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 356422
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 265580
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 383721
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 250387
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 414678
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 389260
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 397969
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 364290
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 243463
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 350745
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 249769
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 365587
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 242526
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 374864
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 357589
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 419105
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 378611
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 243577
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 357850
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 241582
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 356017
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 246221
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 362763
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 355790
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 385221
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 363174
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 247393
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 376939
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 265595
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 362516
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 250860
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 352926
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 357362
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 373794
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 351299
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 244512
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 364598
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 244936
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 388709
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 276339
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 364708
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 366908
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 385715
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 365566
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 247724
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 383166
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 251132
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 378267
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 265321
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 389871
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 375356
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 426289
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 354714
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 246448
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 343264
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 241794
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 359640
+    },
+    {
+      "phase": "runtime",
+      "config": "native",
+      "command": [
+        "<scratch>/native-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 253233
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-debug",
+      "command": [
+        "<scratch>/stock-debug-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 363118
+    },
+    {
+      "phase": "runtime",
+      "config": "stock-release",
+      "command": [
+        "<scratch>/stock-release-measurement-20"
+      ],
+      "timed": true,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "ff_5553:2385091723\n",
+      "stderr": "",
+      "elapsed_ns": 360467
+    }
+  ],
+  "metadata": {
+    "recorded_at": "2026-10-18T09:01:07.417273+00:00",
+    "runner_sha256": "dcebe6f89cd08428f80a58399f115af8bf1857900d04c7459542e59a3002c442",
+    "compiler_revision": "af3eb295fae9",
+    "oracle": "adler2-ff5553",
+    "source": "<repo>/fixtures/adler2_adapted/cases/ff_5553.rs",
+    "source_sha256": "2624671a724beb1d317111b5893f077112181705ff7466554f1df536742de1f1",
+    "binary": "<home>/.jcode/scratch/real-program-compiler-af3eb295f-1792313834/target/release/jr-rust",
+    "binary_sha256": "59eaaa6bb98c405471bac949f5a6dbc76fb0aea8ac919f0c724c0b4c5ed23d63",
+    "rustc": "/usr/bin/rustc",
+    "hostname": "xps14",
+    "platform": "Linux-7.2.3-arch1-2-x86_64-with-glibc2.44",
+    "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+    "cpu_count": 16,
+    "cpu_affinity": [
+      3
+    ],
+    "workers": 1,
+    "repeats": 21,
+    "runtime_repeats": 31,
+    "timeout_seconds": 120,
+    "rustc_verbose_version": {
+      "phase": "metadata",
+      "config": null,
+      "command": [
+        "/usr/bin/rustc",
+        "--version",
+        "--verbose"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+      "stderr": ""
+    },
+    "git_revision": {
+      "phase": "metadata",
+      "config": null,
+      "command": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": "af3eb295fae95ae10a3f8225af3af917b97aee8c\n",
+      "stderr": ""
+    },
+    "git_dirty_names": {
+      "phase": "metadata",
+      "config": null,
+      "command": [
+        "git",
+        "status",
+        "--porcelain",
+        "--untracked-files=all"
+      ],
+      "timed": false,
+      "ok": true,
+      "returncode": 0,
+      "stdout": " M src/compiler/backend.rs\n M src/compiler/borrow.rs\n M src/compiler/cfg.rs\n M src/compiler/frontend.rs\n M src/compiler/frontend/char_tests.rs\n M src/compiler/frontend/type_check.rs\n M src/compiler/ir.rs\n M src/compiler/ownership.rs\n?? experiments/programs/mandelbrot.rs\n?? experiments/real_program_bench.py\n?? experiments/results/20261018-mandelbrot.txt\n?? experiments/results/20261018-real-adler2-adapted-pcore.json\n?? experiments/results/20261018-real-adler2-adapted.json\n?? experiments/results/20261018-real-mandelbrot-pcore.json\n?? experiments/results/20261018-real-mandelbrot.json\n?? experiments/test_real_program_bench.py\n?? tests/char_cast_authority.rs\n?? tests/char_casts.rs\n",
+      "stderr": ""
+    }
+  },
+  "oracle_sha256": "f8e39883607dd77d95b47b48b0b00e860e898f0625f33d8af6253a7dc14b4c3a",
+  "results": {
+    "native": {
+      "compile": {
+        "samples_ns": [
+          8203549,
+          8339792,
+          8261405,
+          8203308,
+          8267456,
+          8309860,
+          8128481,
+          8254835,
+          8122323,
+          8143469,
+          8333601,
+          8207762,
+          8207377,
+          8334876,
+          8208022,
+          8183064,
+          8201538,
+          8179152,
+          10210885,
+          8215299,
+          8334615
+        ],
+        "count": 21,
+        "median_ns": 8208022,
+        "min_ns": 8122323,
+        "max_ns": 10210885
+      },
+      "runtime": {
+        "samples_ns": [
+          276300,
+          251257,
+          248433,
+          255206,
+          306911,
+          250393,
+          248676,
+          258027,
+          269040,
+          253361,
+          252197,
+          265580,
+          250387,
+          243463,
+          249769,
+          242526,
+          243577,
+          241582,
+          246221,
+          247393,
+          265595,
+          250860,
+          244512,
+          244936,
+          276339,
+          247724,
+          251132,
+          265321,
+          246448,
+          241794,
+          253233
+        ],
+        "count": 31,
+        "median_ns": 250393,
+        "min_ns": 241582,
+        "max_ns": 306911
+      },
+      "executable_size_bytes": 8229
+    },
+    "stock-debug": {
+      "compile": {
+        "samples_ns": [
+          34960669,
+          36724424,
+          37119025,
+          36909331,
+          36934317,
+          36450930,
+          35740467,
+          36941304,
+          36830433,
+          36711466,
+          37245803,
+          36754388,
+          36832825,
+          36883029,
+          37389587,
+          36599085,
+          36914637,
+          35794183,
+          37460009,
+          36908628,
+          36460247
+        ],
+        "count": 21,
+        "median_ns": 36832825,
+        "min_ns": 34960669,
+        "max_ns": 37460009
+      },
+      "runtime": {
+        "samples_ns": [
+          429006,
+          398345,
+          377574,
+          369603,
+          386644,
+          367724,
+          384414,
+          378294,
+          387650,
+          370880,
+          374460,
+          383721,
+          414678,
+          397969,
+          365587,
+          374864,
+          419105,
+          356017,
+          362763,
+          385221,
+          362516,
+          352926,
+          373794,
+          388709,
+          364708,
+          385715,
+          378267,
+          389871,
+          426289,
+          359640,
+          363118
+        ],
+        "count": 31,
+        "median_ns": 378267,
+        "min_ns": 352926,
+        "max_ns": 429006
+      },
+      "executable_size_bytes": 457912
+    },
+    "stock-release": {
+      "compile": {
+        "samples_ns": [
+          46827140,
+          45065558,
+          45060641,
+          45077835,
+          45123993,
+          45194135,
+          47297335,
+          45197958,
+          45408046,
+          45761176,
+          45348301,
+          45168877,
+          45323520,
+          45779532,
+          45512813,
+          45240555,
+          45201920,
+          45370783,
+          45047805,
+          45092930,
+          45211641
+        ],
+        "count": 21,
+        "median_ns": 45211641,
+        "min_ns": 45047805,
+        "max_ns": 47297335
+      },
+      "runtime": {
+        "samples_ns": [
+          408438,
+          380453,
+          364299,
+          376453,
+          413848,
+          360522,
+          368819,
+          385772,
+          358347,
+          365552,
+          374637,
+          356422,
+          389260,
+          364290,
+          350745,
+          357589,
+          378611,
+          357850,
+          355790,
+          363174,
+          376939,
+          357362,
+          351299,
+          364598,
+          366908,
+          365566,
+          383166,
+          375356,
+          354714,
+          343264,
+          360467
+        ],
+        "count": 31,
+        "median_ns": 364598,
+        "min_ns": 343264,
+        "max_ns": 413848
+      },
+      "executable_size_bytes": 455800
+    }
+  }
+}
