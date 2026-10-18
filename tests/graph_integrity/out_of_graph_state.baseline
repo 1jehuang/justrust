@@ -10,8 +10,6 @@
 1 static src/compiler/ir.rs
 3 Atomic src/compiler/macro_cursor.rs
 1 static src/compiler/macro_cursor.rs
-2 Mutex src/compiler/mod.rs
-42 OnceLock src/compiler/mod.rs
 3 Atomic src/compiler/module_identity.rs
 1 static src/compiler/module_identity.rs
 3 Atomic src/compiler/semantic_scope.rs

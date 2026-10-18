@@ -11584,3 +11584,19 @@ resolve, signatures, effects_ready, mono_plan, concrete_proofs) and the 42
 OnceLock side slots in compiler/mod.rs are unchanged. Hybrid P/E-core layout
 of this laptop also inflates multi-worker CPU; hosted measurement pending.
 No speedup versus stock and no full-Rust claim.
+
+### Compiler facts are graph outputs (2026-10-18)
+
+The engine now carries typed immutable facts with outputs (`publish_fact`,
+`read_fact`, `Demand::fact`, non-demanding `Engine::fact_of`). Every
+compiler/mod.rs side slot is gone: 42 `OnceLock` and 2 `Mutex` removed and the
+graph-integrity baseline shrunk. Each key publishes its result as a fact
+(PreparedSource, ParsedProgram, Program, PlanCtx, template bodies, universal
+proofs, effect table, instance plan, closed bodies, CFGs, concrete proofs,
+objects, executable), and consumers read only through recorded edges. Analysis
+nodes publish the full analysis as a second output, including on failure, so
+diagnostics and `Failure::analyses` come from the graph. Root keys and the
+remaining whole-program joins are unchanged in this step. All 3225 local tests
+pass, clippy is strict-clean, and graph_integrity passes. Flat 256 check at one
+worker is 122 ms (unchanged). Eight workers take 372 ms, still slower than one
+because of the shared PlanBudget ledger (see above).
