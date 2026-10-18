@@ -996,7 +996,7 @@ fn assert_native_diagnostic(case: &Case, diagnostic: &str) {
     );
     let expected = match case.phase {
         Phase::ExternalExit => "unresolved function",
-        Phase::ArrayComparison => "CFG binary operator requires compatible integer operands",
+        Phase::ArrayComparison => "aggregate operators and comparisons are unsupported",
         Phase::ParseProjection => {
             "unsupported: associated type projections are unsupported, found \"::\""
         }

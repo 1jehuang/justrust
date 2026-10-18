@@ -7124,9 +7124,13 @@ impl<'a> Checker<'a> {
                 if matches!(l.ty, ir::Ty::Ref { .. }) || matches!(r.ty, ir::Ty::Ref { .. }) {
                     return Err("reference comparisons and arithmetic are unsupported in B1".into());
                 }
-                if matches!(l.ty, ir::Ty::Tuple(_) | ir::Ty::Struct(_))
-                    || matches!(r.ty, ir::Ty::Tuple(_) | ir::Ty::Struct(_))
-                {
+                if matches!(
+                    l.ty,
+                    ir::Ty::Tuple(_) | ir::Ty::Struct(_) | ir::Ty::Array { .. }
+                ) || matches!(
+                    r.ty,
+                    ir::Ty::Tuple(_) | ir::Ty::Struct(_) | ir::Ty::Array { .. }
+                ) {
                     return Err("aggregate operators and comparisons are unsupported".into());
                 }
                 let numeric = if matches!(l.ty, ir::Ty::Int(_) | ir::Ty::Float(_)) {

@@ -11206,3 +11206,46 @@ checks, and a needless-borrow lint. Stock/native corpus bytes were not changed
 to fix expectations. Full and stock-abort tests used the previously documented
 local exception; an optimized hosted attempt additionally lost its remote
 connection. No hosted full-suite or performance improvement is claimed.
+
+### 2026-10-18: bounded equality assertions and binary metadata validation
+
+Implemented `assert_eq!` and `assert_ne!` over the existing Unit/Bool/integer/float
+comparison domain. Exact macro lookup preserves lexical/module shadowing.
+Operands occur once in the lowered source and execute left-to-right; success
+is Unit and failure uses the checked literal-panic location. Parentheses,
+brackets, braces, optional trailing commas and literal messages share the
+existing assertion grammar and resource accounting. This does not implement
+implicit assertion borrows, general PartialEq/Debug, reference/aggregate
+comparison or value pretty-printing.
+
+Four implementation lanes delivered source lowering, stock/native acceptance,
+public authority controls and binary IR hardening. The latter now rejects
+forged Eq/Ne result/operand/completion metadata and invalid logical rows,
+including unused arena entries, after the existing metadata prepass. Array
+comparisons now reject during source typing rather than reaching invalid CFG
+construction. One historical zero-array test was updated to assert that exact
+earlier diagnostic; all 46 historical equality sources and 33 assertion sources
+remain byte-identical. The existing frozen `assert_eq!(1, 2)` assertion source
+now aborts as supported instead of being an unknown-macro boundary.
+
+The 26 original equality-assertion sources are unchanged; one separately
+stock-measured `tt` macro-shadow control was appended. The 27-source native
+partition is 18 successful, 3 aborting, 1 invalid and 5 earlier unsupported
+programs. CLI and observed-graph matrices each cover 108 worker1/8 CHECK/BUILD
+cells and 42 native executions. Debug corpus/authority/historical assertion
+acceptance passed 15 tests (20261017-182853901-470111), and optimized acceptance
+passed the same 15 tests (20261017-182857609-475615). Seven public authority
+controls also passed on hosted (20261017-182702252-434463). Optimized equality
+and logical private filters passed 40 and 8 tests respectively
+(20261017-182705198-436257, 20261017-182727673-436256).
+
+Final complete local regression passed 3,065 tests in 152 binaries in 98.0s
+(20261017-183034633-539661). Hosted all-target check and strict lint passed
+20261017-182743066-441141 and 20261017-182743474-441173; formatting and whitespace
+checks passed. The failed first full run (20261017-182906420-482977) retains the
+old diagnostic expectation failure, not a changed source or weakened bound.
+Initial API/test expectation failures and successful results are preserved in
+`data/runs/xps14/2026-10-18-equality-assertions.jsonl`. Reload-interrupted gates
+were rerun. Full/stock-abort gates use the documented local exception. The
+slow oracle and compiler-crate waste remain follow-up work, not a performance
+claim. Full Rust support and complete canonical flow replay remain open.

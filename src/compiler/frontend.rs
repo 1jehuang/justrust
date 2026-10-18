@@ -5948,6 +5948,12 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.builtin_macro_ahead("assert")? {
             return self.assert_expression();
         }
+        if self.builtin_macro_ahead("assert_eq")? {
+            return self.assertion_expression(Some(BinaryOp::Eq));
+        }
+        if self.builtin_macro_ahead("assert_ne")? {
+            return self.assertion_expression(Some(BinaryOp::Ne));
+        }
         if self.item_expansion.is_some() {
             return Err(self.unsupported(
                 "user macro expressions in item-generated functions are unsupported",
@@ -6045,6 +6051,29 @@ impl<'input, 'names> Parser<'input, 'names> {
     /// occurrence and the failure uses the checked assertion invocation site.
     #[inline(never)]
     fn assert_expression(&mut self) -> Result<Expr, ParseError> {
+        self.assertion_expression(None)
+    }
+    fn assertion_expression(&mut self, comparison: Option<BinaryOp>) -> Result<Expr, ParseError> {
+        let (delimiter, operand, right_operand, separator) = match comparison {
+            Some(BinaryOp::Eq) => (
+                "expected an assert_eq! delimiter",
+                "assert_eq! requires a left operand",
+                "assert_eq! requires a right operand",
+                "expected comma or closing assert_eq! delimiter",
+            ),
+            Some(BinaryOp::Ne) => (
+                "expected an assert_ne! delimiter",
+                "assert_ne! requires a left operand",
+                "assert_ne! requires a right operand",
+                "expected comma or closing assert_ne! delimiter",
+            ),
+            _ => (
+                "expected an assert! delimiter",
+                "assert! requires a condition",
+                "assert! requires a condition",
+                "expected comma or closing assert! delimiter",
+            ),
+        };
         let site = self.token().span;
         let original = self
             .names
@@ -6069,32 +6098,74 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else if self.eat("{") {
             "}"
         } else {
-            return Err(self.error("expected an assert! delimiter"));
+            return Err(self.error(delimiter));
         };
         if self.is(close) || self.is(",") {
-            return Err(self.error("assert! requires a condition"));
+            return Err(self.error(operand));
         }
         // Macro arguments are ordinary expressions, even inside an outer if
         // condition. In particular, do not inherit its struct-literal fence.
         let condition = self.nested_expr()?;
-        let message = if self.eat(",") && !self.is(close) {
-            if !self.token().string && !self.token().is_opaque_literal() {
-                return Err(self.unsupported("assert! nonliteral messages are unsupported"));
+        let condition = if let Some(op) = comparison {
+            self.expect(",")?;
+            if self.is(close) || self.is(",") {
+                return Err(self.error(right_operand));
             }
-            let message = self.literal_message(
+            let right = self.nested_expr()?;
+            self.names
+                .budget()
+                .charge(super::expansion_budget::Counter::Work, 1)
+                .map_err(|error| native_adapter::transport_error(error.into()))?;
+            Expr::Binary {
+                op,
+                left: self
+                    .names
+                    .try_parser_box(condition)
+                    .map_err(native_adapter::name_error)?,
+                right: self
+                    .names
+                    .try_parser_box(right)
+                    .map_err(native_adapter::name_error)?,
+            }
+        } else {
+            condition
+        };
+        let (nonliteral, placeholders, arguments) = match comparison {
+            Some(BinaryOp::Eq) => (
+                "assert_eq! nonliteral messages are unsupported",
+                "assert_eq! formatting placeholders are unsupported",
+                "assert_eq! formatting arguments are unsupported",
+            ),
+            Some(BinaryOp::Ne) => (
+                "assert_ne! nonliteral messages are unsupported",
+                "assert_ne! formatting placeholders are unsupported",
+                "assert_ne! formatting arguments are unsupported",
+            ),
+            _ => (
                 "assert! nonliteral messages are unsupported",
                 "assert! formatting placeholders are unsupported",
-            )?;
+                "assert! formatting arguments are unsupported",
+            ),
+        };
+        let message = if self.eat(",") && !self.is(close) {
+            if !self.token().string && !self.token().is_opaque_literal() {
+                return Err(self.unsupported(nonliteral));
+            }
+            let message = self.literal_message(nonliteral, placeholders)?;
             self.eat(",");
             if !self.is(close) {
-                return Err(self.unsupported("assert! formatting arguments are unsupported"));
+                return Err(self.unsupported(arguments));
             }
             message
         } else {
             if !self.is(close) {
-                return Err(self.error("expected comma or closing assert! delimiter"));
+                return Err(self.error(separator));
             }
-            let message = "assertion failed";
+            let message = match comparison {
+                Some(BinaryOp::Eq) => "assertion failed: left == right",
+                Some(BinaryOp::Ne) => "assertion failed: left != right",
+                _ => "assertion failed",
+            };
             self.names
                 .retain_parser_text(message.len())
                 .map_err(native_adapter::name_error)?;

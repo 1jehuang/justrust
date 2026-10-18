@@ -664,8 +664,8 @@ error: aborting due to 1 previous error
             source_bytes: 32,
             source_fingerprint: 183170034912364134,
             source_sha256: r###"af1558356f25a6b49dc26e190e80e6d47894746e81658852a57a92714e3f3221"###,
-            native: Native::Unsupported,
-            boundary: r###"unknown function-local macro"###,
+            native: Native::Abort,
+            boundary: r###""###,
             stock_compile_code: 0,
             stock_code: Some(-6),
             stock_stdout: r###""###,
@@ -966,7 +966,9 @@ fn panic_runtime(case: &Case, result: &Captured, source: &Path, stock: bool) {
         assert!(stderr.is_empty(), "{}: {result:?}", case.name);
     } else {
         assert!(
-            stderr.contains(if !stock && case.message.starts_with("assertion failed") {
+            stderr.contains(if !stock && case.name == "deferred_assert_eq" {
+                "assertion failed: left == right"
+            } else if !stock && case.message.starts_with("assertion failed") {
                 "assertion failed"
             } else {
                 case.message
@@ -1102,7 +1104,7 @@ fn frozen_assertion_sources_and_phase_partitions() {
         }
     }
     assert_eq!(groups, [30, 3]);
-    assert_eq!(partition, [10, 11, 4, 8]);
+    assert_eq!(partition, [10, 12, 4, 7]);
     assert_eq!(stock, [14, 14, 5]);
     let joined: String = all.iter().map(|case| case.source).collect();
     assert_eq!(fingerprint(&joined), 6894148404861029812);
@@ -1349,7 +1351,7 @@ fn cli_all() {
         }
     }
     assert_eq!(cells, 132);
-    failures.check("runtime count", || assert_eq!(runtimes, 42));
+    failures.check("runtime count", || assert_eq!(runtimes, 44));
     failures.finish();
 }
 fn graph_all() {
@@ -1412,7 +1414,7 @@ fn graph_all() {
         }
     }
     assert_eq!(cells, 132);
-    failures.check("graph runtime count", || assert_eq!(runtimes, 42));
+    failures.check("graph runtime count", || assert_eq!(runtimes, 44));
     failures.finish();
 }
 fn isolated(name: &str, marker: &str, run: fn()) {

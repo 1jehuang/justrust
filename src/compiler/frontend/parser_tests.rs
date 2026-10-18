@@ -1164,7 +1164,6 @@ fn builtin_assert_does_not_reinterpret_shadowing_or_unsupported_messages() {
         "fn main(){assert!(true,\"{name}\")}",
         "fn main(){assert!(true,\"message\",42)}",
         "fn main(){assert!(true,,)}",
-        "fn main(){assert_eq!(1,1)}",
         "fn main(){debug_assert!(true)}",
     ] {
         assert!(parse(source).is_err(), "{source}");
@@ -1302,4 +1301,177 @@ fn builtin_assert_storage_failure_is_poisoned_and_released() {
     drop(tokens);
     assert_eq!(budget.snapshot().retained_bytes, 0);
     assert_eq!(budget.snapshot().temporary_bytes, 0);
+}
+
+#[test]
+fn comparison_assertions_delimiters_messages_and_source_order() {
+    for (name, op, default) in [
+        ("assert_eq", BinaryOp::Eq, "assertion failed: left == right"),
+        ("assert_ne", BinaryOp::Ne, "assertion failed: left != right"),
+    ] {
+        for (open, close) in [("(", ")"), ("[", "]"), ("{", "}")] {
+            for suffix in ["", ",", ",\"custom\"", ",\"custom\","] {
+                let source = format!(
+                    "fn left()->i32{{1}}fn right()->i32{{2}}fn main(){{\n{name}!{open}left(),right(){suffix}{close}\n}}"
+                );
+                let program = parse(&source).unwrap();
+                let expression = program.functions[2].body.tail.as_deref().unwrap();
+                let failure = assertion_failure(expression);
+                assert_eq!(
+                    failure.message,
+                    if suffix.contains("custom") {
+                        "custom"
+                    } else {
+                        default
+                    }
+                );
+                validate_panic_site(failure, &program.names).unwrap();
+                let original = program.names.session().original(failure.site, 512).unwrap();
+                let (_, line, column) = program
+                    .names
+                    .session()
+                    .sources()
+                    .location(original)
+                    .unwrap();
+                assert_eq!((line, column), (2, 1));
+                let Expr::If { condition, .. } = expression else {
+                    unreachable!()
+                };
+                let Expr::Binary {
+                    op: actual,
+                    left,
+                    right,
+                } = condition.as_ref()
+                else {
+                    panic!("expected comparison")
+                };
+                assert_eq!(*actual, op);
+                // Each operand remains one source call, in written order.
+                let Expr::Call {
+                    name: left_name, ..
+                } = left.as_ref()
+                else {
+                    panic!("left call")
+                };
+                let Expr::Call {
+                    name: right_name, ..
+                } = right.as_ref()
+                else {
+                    panic!("right call")
+                };
+                assert!(canonical_path_matches(&program, left_name, "left"));
+                assert!(canonical_path_matches(&program, right_name, "right"));
+                let budget = ir::PlanBudget::default();
+                let identity = sr::OriginalBodyId::new(&budget).unwrap();
+                let inventory =
+                    SourceInventory::build(&program, &program.functions[2], identity, &budget)
+                        .unwrap();
+                assert_eq!(inventory.calls.len(), 2);
+                let env = type_env(&program).unwrap();
+                let checked = type_function_with_env(&program, 2, &env).unwrap();
+                assert_eq!(
+                    checked
+                        .exprs
+                        .iter()
+                        .filter(|expr| matches!(expr.kind, ir::ExprKind::Call { .. }))
+                        .count(),
+                    2
+                );
+                assert_eq!(
+                    checked
+                        .exprs
+                        .iter()
+                        .filter(|expr| matches!(expr.kind, ir::ExprKind::Panic(_)))
+                        .count(),
+                    1
+                );
+                program.validate_name_handles().unwrap();
+                preflight_program_clone(&program, &budget).unwrap();
+                recipes::inventory(&program, &budget).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn comparison_assertions_shadowing_syntax_and_operand_boundaries() {
+    for name in ["assert_eq", "assert_ne"] {
+        let program = parse(&format!(
+            "fn main(){{macro_rules! {name}{{()=>{{42}};}}{name}!()}}"
+        ))
+        .unwrap();
+        assert!(matches!(
+            program.functions[0].body.tail.as_deref(),
+            Some(Expr::Integer(_))
+        ));
+        for source in [
+            format!("macro_rules! {name}{{()=>{{42}};}}fn main(){{{name}!()}}"),
+            format!("fn main(){{macro_rules! {name}{{(other)=>{{42}};}}{name}!(1,1)}}"),
+        ] {
+            assert!(parse(&source).is_err(), "{source}");
+        }
+        for arguments in ["", "1", "1,", ",1", "1,,2", "1 2", "1,2,,"] {
+            assert!(
+                parse(&format!("fn main(){{{name}!({arguments})}}")).is_err(),
+                "{name}: {arguments}"
+            );
+        }
+        for arguments in ["1,2,42", "1,2,message", "1,2,\"{}\"", "1,2,\"literal\",42"] {
+            let error = parse(&format!("fn main(){{{name}!({arguments})}}")).unwrap_err();
+            assert!(error.contains("unsupported"), "{error}");
+        }
+        for operands in ["&1,&1", "(1,true),(1,true)", "[1],[1]", "1,true"] {
+            let source = format!("fn main(){{{name}!({operands});}}");
+            assert!(
+                parse(&source).and_then(|program| check(&program)).is_err(),
+                "{source}"
+            );
+        }
+        for invocation in [
+            format!("{name}!(1,2)"),
+            format!("{name}![1,2]"),
+            format!("({name}!{{1,2}})"),
+        ] {
+            assert!(parse(&format!("fn main(){{{invocation} let x=1;}}")).is_err());
+        }
+        good(&format!(
+            "fn main(){{{name}!(1,2);{{macro_rules! {name}{{()=>{{42}};}}let x:i32={name}!();}}{name}!(1,2);}}"
+        ));
+        good(&format!("fn main(){{{name}!{{1,2}} let x=1;}}"));
+    }
+}
+
+#[test]
+fn comparison_assertions_expanded_and_foreign_metadata() {
+    for name in ["assert_eq", "assert_ne"] {
+        let source = format!(
+            "fn main(){{\nmacro_rules! compare{{($a:literal,$b:literal,$m:literal)=>{{{name}!($a,$b,$m)}};}}\ncompare!(1,2,\"message\")\n}}"
+        );
+        let mut program = parse(&source).unwrap();
+        let env = type_env(&program).unwrap();
+        let checked = type_function_with_env(&program, 0, &env).unwrap();
+        let message = checked
+            .exprs
+            .iter()
+            .find_map(|expr| match &expr.kind {
+                ir::ExprKind::Panic(message) => Some(message),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(message.message, "message");
+        assert!(message.location.ends_with(":3:1"), "{}", message.location);
+        let foreign = parse(&source).unwrap();
+        let site = assertion_failure(foreign.functions[0].body.tail.as_deref().unwrap()).site;
+        let Expr::If { else_block, .. } = program.functions[0].body.tail.as_deref_mut().unwrap()
+        else {
+            unreachable!()
+        };
+        let Some(Expr::Panic(panic)) = else_block.tail.as_deref_mut() else {
+            unreachable!()
+        };
+        panic.site = site;
+        assert!(program.validate_name_handles().is_err());
+        assert!(preflight_program_clone(&program, &ir::PlanBudget::default()).is_err());
+        assert!(recipes::inventory(&program, &ir::PlanBudget::default()).is_err());
+    }
 }

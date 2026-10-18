@@ -7005,6 +7005,56 @@ impl CheckedFunction {
                     expr(*right)?;
                     let lhs = &self.exprs[left.0];
                     let rhs = &self.exprs[right.0];
+                    if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+                        // Metadata for the entire arena was validated above. Equality
+                        // remains a closed scalar operation, not structural/trait equality.
+                        if !matches!(lhs.ty, Ty::Unit | Ty::Bool | Ty::Int(_) | Ty::Float(_))
+                            || !ref_types_equal(&lhs.ty, &rhs.ty, conditional_budget, 0)?
+                            || !ref_types_equal(&value.ty, &Ty::Bool, conditional_budget, 0)?
+                        {
+                            return Err(
+                                "equality requires identical admitted scalar types and bool result"
+                                    .into(),
+                            );
+                        }
+                        let completion = if lhs.completion == Completion::Returns
+                            && rhs.completion == Completion::Returns
+                        {
+                            Completion::Returns
+                        } else {
+                            Completion::Never
+                        };
+                        if value.completion != completion {
+                            return Err("equality completion mismatch".into());
+                        }
+                    }
+                    if matches!(op, BinaryOp::And | BinaryOp::Or) {
+                        // Only logical operators admit semantic Never coercion.
+                        // A nonreturning Bool is also legal. Short-circuit flow
+                        // depends on the LHS, not on whether the RHS returns.
+                        for operand in [lhs, rhs] {
+                            if !ref_types_equal(&operand.ty, &Ty::Bool, conditional_budget, 0)?
+                                && !(ref_types_equal(
+                                    &operand.ty,
+                                    &Ty::Never,
+                                    conditional_budget,
+                                    0,
+                                )? && operand.completion == Completion::Never)
+                            {
+                                return Err(
+                                    "logical operator requires bool or diverging never operands"
+                                        .into(),
+                                );
+                            }
+                        }
+                        if !ref_types_equal(&value.ty, &Ty::Bool, conditional_budget, 0)?
+                            || value.completion != lhs.completion
+                        {
+                            return Err(
+                                "logical operator result type or completion mismatch".into()
+                            );
+                        }
+                    }
                     if matches!(lhs.ty, Ty::Float(_)) || matches!(rhs.ty, Ty::Float(_)) {
                         let comparison = matches!(
                             op,
@@ -9382,6 +9432,164 @@ mod tests {
         };
         *index = ExprId(usize::MAX);
         assert!(function.validate().is_err());
+    }
+
+    fn unused_binary_fixture(op: BinaryOp, left: Ty, right: Ty) -> CheckedFunction {
+        let mut function = fixture();
+        function.locals = [left.clone(), right.clone()]
+            .into_iter()
+            .enumerate()
+            .map(|(index, ty)| LocalDecl {
+                name: format!("operand{index}"),
+                ty,
+                mutable: false,
+            })
+            .collect();
+        function.params.clear();
+        function.exprs = vec![
+            TypedExpr {
+                ty: left,
+                completion: Completion::Returns,
+                kind: ExprKind::Local(LocalId(0)),
+            },
+            TypedExpr {
+                ty: right,
+                completion: Completion::Returns,
+                kind: ExprKind::Local(LocalId(1)),
+            },
+            TypedExpr {
+                ty: Ty::Bool,
+                completion: Completion::Returns,
+                kind: ExprKind::Binary {
+                    op,
+                    left: ExprId(0),
+                    right: ExprId(1),
+                },
+            },
+        ];
+        // None of these rows is reachable from the body.
+        function.body = Block {
+            statements: vec![],
+            tail: None,
+        };
+        function
+    }
+
+    #[test]
+    fn equality_validates_unused_rows_exact_domains_results_and_eager_completion() {
+        for op in [BinaryOp::Eq, BinaryOp::Ne] {
+            for ty in [
+                Ty::Unit,
+                Ty::Bool,
+                Ty::Int(IntTy::I32),
+                Ty::Int(IntTy::U64),
+                Ty::Float(FloatTy::F32),
+                Ty::Float(FloatTy::F64),
+            ] {
+                let function = unused_binary_fixture(op, ty.clone(), ty);
+                function.validate().unwrap();
+                let mut wrong_result = function.clone();
+                wrong_result.exprs[2].ty = Ty::Int(IntTy::I32);
+                assert!(wrong_result.validate().is_err());
+                for left in [Completion::Returns, Completion::Never] {
+                    for right in [Completion::Returns, Completion::Never] {
+                        let mut flow = function.clone();
+                        flow.exprs[0].completion = left;
+                        flow.exprs[1].completion = right;
+                        let expected =
+                            if left == Completion::Returns && right == Completion::Returns {
+                                Completion::Returns
+                            } else {
+                                Completion::Never
+                            };
+                        flow.exprs[2].completion = expected;
+                        flow.validate().unwrap();
+                        flow.exprs[2].completion = if expected == Completion::Returns {
+                            Completion::Never
+                        } else {
+                            Completion::Returns
+                        };
+                        assert!(flow.validate().is_err());
+                    }
+                }
+            }
+            for (left, right) in [
+                (Ty::Int(IntTy::I32), Ty::Unit),
+                (Ty::Unit, Ty::Int(IntTy::I32)),
+                (Ty::Int(IntTy::I32), Ty::Int(IntTy::U32)),
+                (Ty::Int(IntTy::U64), Ty::Int(IntTy::Usize)),
+                (Ty::Float(FloatTy::F32), Ty::Float(FloatTy::F64)),
+                (Ty::Bool, Ty::Int(IntTy::I32)),
+            ] {
+                assert!(unused_binary_fixture(op, left, right).validate().is_err());
+            }
+            for ty in [
+                Ty::Never,
+                Ty::Tuple(Arc::from([Ty::Bool])),
+                Ty::Array {
+                    element: Arc::new(Ty::Bool),
+                    len: 1,
+                },
+                Ty::Ref {
+                    kind: BorrowKind::Shared,
+                    referent: Arc::new(Ty::Bool),
+                },
+            ] {
+                let mut function = unused_binary_fixture(op, ty.clone(), ty);
+                function.exprs[0].completion = Completion::Never;
+                function.exprs[1].completion = Completion::Never;
+                function.exprs[2].completion = Completion::Never;
+                assert!(function.validate().is_err());
+            }
+            let mut bad_child = unused_binary_fixture(op, Ty::Bool, Ty::Bool);
+            let ExprKind::Binary { right, .. } = &mut bad_child.exprs[2].kind else {
+                unreachable!()
+            };
+            *right = ExprId(usize::MAX);
+            assert!(bad_child.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn logical_validates_unused_rows_and_preserves_short_circuit_never_coercion() {
+        for op in [BinaryOp::And, BinaryOp::Or] {
+            for left in [Ty::Bool, Ty::Never] {
+                for right in [Ty::Bool, Ty::Never] {
+                    for left_completion in [Completion::Returns, Completion::Never] {
+                        for right_completion in [Completion::Returns, Completion::Never] {
+                            let mut function =
+                                unused_binary_fixture(op, left.clone(), right.clone());
+                            function.exprs[0].completion = left_completion;
+                            function.exprs[1].completion = right_completion;
+                            function.exprs[2].completion = left_completion;
+                            let admitted = (left != Ty::Never
+                                || left_completion == Completion::Never)
+                                && (right != Ty::Never || right_completion == Completion::Never);
+                            assert_eq!(function.validate().is_ok(), admitted);
+                            if admitted {
+                                function.exprs[2].completion =
+                                    if left_completion == Completion::Returns {
+                                        Completion::Never
+                                    } else {
+                                        Completion::Returns
+                                    };
+                                assert!(function.validate().is_err());
+                            }
+                        }
+                    }
+                }
+            }
+            for ty in [Ty::Int(IntTy::I32), Ty::Unit, Ty::Float(FloatTy::F32)] {
+                assert!(
+                    unused_binary_fixture(op, ty.clone(), ty)
+                        .validate()
+                        .is_err()
+                );
+            }
+            let mut wrong_result = unused_binary_fixture(op, Ty::Bool, Ty::Bool);
+            wrong_result.exprs[2].ty = Ty::Unit;
+            assert!(wrong_result.validate().is_err());
+        }
     }
 
     #[test]
