@@ -7696,3 +7696,16 @@ any non-target input's mtime is at or after the compile start. Regression
 test `source_changed_during_compile_is_not_stored` fails before, passes
 after. A scratch 2-crate concurrent repro (8 rounds) did not hit the race,
 so the end-to-end trigger is inferred from the run records, not reproduced.
+
+## 2026-10-18: hosted build host disk full from never-evicted mirrored target dirs
+
+The flagship hosted host (m8a.24xlarge, 484G root) hit 100% disk and builds
+failed with "No space left on device" while writing target fingerprints. The
+remote mirror keeps a `target/` per synced root forever: 373G sat under
+/home/jeremy, with 180G in mirrored `~/.jcode/scratch/*` worktrees, many of
+which no longer exist locally (deleted review/validation worktrees). Manually
+removing 18 stale scratch `target/` dirs freed 67G (100% to 87%). Fix needed
+in the client/host: evict remote `target/` for roots whose local directory is
+gone or idle beyond N days, plus an LRU sweep with a free-space floor before
+each build. Report disk-full as an explicit hosted failure that falls back to
+local instead of a cargo I/O error.
