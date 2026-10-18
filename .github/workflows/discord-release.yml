@@ -1,0 +1,56 @@
+name: Announce justrust release on Discord
+
+on:
+  release:
+    types: [published]
+  # GITHUB_TOKEN-created releases do not emit follow-up release events.
+  # Existing tag-driven publishing is covered without changing its workflow.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing public release tag to announce
+        required: true
+        type: string
+
+concurrency:
+  group: justrust-discord-${{ inputs.tag || github.event.release.tag_name || github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  announce:
+    needs: test
+    if: >-
+      github.repository == '1jehuang/justrust' &&
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        startsWith(github.event.workflow_run.head_branch, 'v')))
+    runs-on: ubuntu-latest
+    steps:
+      # Always use trusted default-branch code, never the triggering run's code.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Post release notes if not already announced
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISCORD_RELEASE_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name || github.event.workflow_run.head_branch }}
+        run: python3 scripts/post_discord_release.py --tag "$TAG"
+
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - run: python3 -m unittest -v scripts/test_post_discord_release.py
