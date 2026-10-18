@@ -866,6 +866,11 @@ impl ValidatedTraitWorld {
             self.close_predicates(&mut rows, &callable.schema.env)?;
             self.validate_declared_equality_domains(&rows, &callable.schema.env)?;
             retain::<DeclaredCallableContext>(&self.budget, 1)?;
+            self.declared_callable_index.note(
+                &self.budget,
+                callable.declaration,
+                self.declared_callables.len(),
+            )?;
             push(
                 &self.budget,
                 &mut self.declared_callables,
@@ -887,11 +892,11 @@ impl ValidatedTraitWorld {
         &self,
         declaration: DeclId,
     ) -> Result<&DeclaredCallableContext> {
-        for context in &self.declared_callables {
-            charged(&self.budget, self.budget.charge_work(1))?;
-            if context.declaration == declaration {
-                return Ok(context);
-            }
+        if let Some(position) = self
+            .declared_callable_index
+            .get(&self.budget, declaration)?
+        {
+            return Ok(&self.declared_callables[position]);
         }
         Err(FactsError::invalid(
             &self.budget,

@@ -12610,6 +12610,9 @@ pub struct DeclRegistry {
     trait_associated_types: Vec<Vec<ir::DeclId>>,
     associated_type_bounds: HashMap<ir::DeclId, FrozenAssociatedBounds>,
     trait_imports: Vec<(ModuleId, TraitPath)>,
+    /// First position of each callable in `function_ids`, built on first use
+    /// after the registry is sealed. Replaces O(callables) scans per lookup.
+    function_positions: OnceLock<HashMap<ir::DeclId, usize>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum TraitLookupKey {
@@ -12633,6 +12636,20 @@ enum CallableSource {
     TraitDefault { trait_index: usize, item: usize },
 }
 impl DeclRegistry {
+    /// First `function_ids` position for `decl`. Only valid once the registry
+    /// is sealed: every caller reaches it through a shared `Arc` after seal.
+    fn function_position(&self, decl: ir::DeclId) -> Option<usize> {
+        self.function_positions
+            .get_or_init(|| {
+                let mut positions = HashMap::with_capacity(self.function_ids.len());
+                for (index, id) in self.function_ids.iter().enumerate() {
+                    positions.entry(*id).or_insert(index);
+                }
+                positions
+            })
+            .get(&decl)
+            .copied()
+    }
     fn source_type_context(&self, declaration: ir::DeclId) -> Result<SourceTypeContext, String> {
         let info = self.declaration(declaration)?;
         self.modules
@@ -12725,14 +12742,10 @@ impl DeclRegistry {
                 found
             }
             ir::DeclKind::Function | ir::DeclKind::AssociatedFunction => {
-                let mut source = None;
-                for (index, id) in self.function_ids.iter().enumerate() {
-                    budget.charge_work(1)?;
-                    if *id == info.id {
-                        source = self.callable_sources.get(index).copied();
-                        break;
-                    }
-                }
+                budget.charge_work(1)?;
+                let source = self
+                    .function_position(info.id)
+                    .and_then(|index| self.callable_sources.get(index).copied());
                 let function = match source.ok_or("missing retained projection callable")? {
                     CallableSource::Free(index) => self.program.functions.get(index),
                     CallableSource::Associated {
@@ -13351,6 +13364,7 @@ impl PlanCtx {
             trait_associated_types: Vec::new(),
             associated_type_bounds: HashMap::new(),
             trait_imports: program.trait_imports.clone(),
+            function_positions: OnceLock::new(),
         };
         reserve_registry_map(&mut registry.functions, program.functions.len(), budget)?;
         let nominal_count = program
@@ -14469,6 +14483,9 @@ impl PlanCtx {
                 registry_mut.function_ids.push(entry.declaration);
             }
         }
+        // Any position cache built during construction predates the final
+        // recipe suffix. Reset it so sealed lookups see every callable.
+        registry_mut.function_positions = OnceLock::new();
         let mut plan = Self {
             program: shared.clone(),
             catalog,
@@ -14846,13 +14863,10 @@ impl PlanCtx {
     }
     pub fn callable_index(&self, decl: ir::DeclId) -> Result<usize, String> {
         self.declaration(decl)?;
-        for (index, id) in self.registry.function_ids.iter().enumerate() {
-            self.budget.charge_work(1)?;
-            if *id == decl {
-                return Ok(index);
-            }
-        }
-        Err("declaration is not callable".into())
+        self.budget.charge_work(1)?;
+        self.registry
+            .function_position(decl)
+            .ok_or_else(|| "declaration is not callable".into())
     }
     pub fn callable_body<'p>(
         &self,
@@ -15259,6 +15273,10 @@ impl PlanCtx {
         };
         self.finish_environment(shared, decl)
     }
+    #[expect(
+        clippy::mutable_key_type,
+        reason = "PathKey hashes immutable owner/anchor/namespace/name keys only; its shared resource ledger is not semantic identity"
+    )]
     fn build_shared_env(&self) -> Result<SharedTypeEnv, String> {
         let state = self
             .state
