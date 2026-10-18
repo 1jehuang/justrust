@@ -2426,6 +2426,7 @@ mod tests {
                 .collect(),
             param_mut: Vec::new(),
             result,
+            impl_params: 0,
             body,
         }
     }

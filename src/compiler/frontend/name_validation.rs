@@ -1232,6 +1232,7 @@ mod tests {
             params: Vec::new(),
             param_mut: Vec::new(),
             result: Type::Unit,
+            impl_params: 0,
             body: Block {
                 statements: Vec::new(),
                 tail: None,
@@ -2289,6 +2290,7 @@ mod tests {
             params: Vec::new(),
             param_mut: Vec::new(),
             result: Type::Unit,
+            impl_params: 0,
         };
         validate_function_head_names(&input, &head).unwrap();
         let mut foreign = builder();

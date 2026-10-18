@@ -4214,6 +4214,9 @@ pub struct Function {
     /// parameters are immutable (synthetic and test-built functions).
     pub param_mut: Vec<bool>,
     pub result: Type,
+    /// Trailing `type_params` minted for argument-position `impl Trait`.
+    /// They are never nameable by explicit generic arguments (E0107/E0632).
+    pub impl_params: usize,
     pub body: Block,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4290,6 +4293,8 @@ pub struct FunctionHead {
     pub params: Vec<(BindingName, Type)>,
     pub param_mut: Vec<bool>,
     pub result: Type,
+    /// Trailing `type_params` minted for argument-position `impl Trait`.
+    pub impl_params: usize,
 }
 #[derive(Clone, Debug)]
 pub struct AssociatedFunction {
@@ -5667,6 +5672,9 @@ struct Parser<'input, 'names> {
     module: ModuleId,
     alias_target: bool,
     pending_bounds: Vec<TypeBound>,
+    /// Anonymous parameters minted for argument-position `impl Trait` while a
+    /// function parameter list is parsed. `None` forbids `impl Trait` (E0562).
+    impl_trait_params: Option<Vec<AstIdent>>,
     cursor: TokenCursor<'input>,
     nesting: usize,
     allow_struct: bool,
@@ -5836,6 +5844,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             module,
             alias_target: false,
             pending_bounds: Vec::new(),
+            impl_trait_params: None,
             cursor: TokenCursor::new(&buffer),
             nesting: self.nesting,
             allow_struct: true,
@@ -6883,6 +6892,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             module: self.module,
             alias_target: false,
             pending_bounds: Vec::new(),
+            impl_trait_params: None,
             cursor: TokenCursor::new(buffer),
             nesting: self.nesting,
             allow_struct: self.allow_struct,
@@ -7274,6 +7284,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             module,
             alias_target: false,
             pending_bounds: Vec::new(),
+            impl_trait_params: None,
             cursor: TokenCursor::new(tokens),
             nesting: 0,
             allow_struct: true,
@@ -7471,6 +7482,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.is("<") || self.is("<<") || self.is("<<=") {
             return self.qualified_type_projection();
         }
+        if self.is("impl") {
+            return self.impl_trait_param();
+        }
         if self.eat("[") {
             let element = self.ty()?;
             if self.eat("]") {
@@ -7535,6 +7549,65 @@ impl<'input, 'names> Parser<'input, 'names> {
                 ))
             }
         }
+    }
+    /// Argument-position `impl Bound + ...`: an anonymous, unnameable callable
+    /// type parameter carrying the written bounds (stock semantics). Every other
+    /// position is rejected like stock E0562.
+    #[inline(never)]
+    fn impl_trait_param(&mut self) -> Result<Type, ParseError> {
+        let token = self.token();
+        let Some(mut minted) = self.impl_trait_params.take() else {
+            return Err(self.error(
+                "E0562: `impl Trait` is only allowed in function parameter and return types",
+            ));
+        };
+        if minted.len() >= 32 {
+            self.impl_trait_params = Some(minted);
+            return Err(self.limit("generic parameter resource limit 32"));
+        }
+        // The keyword occurrence's own span anchors the anonymous parameter.
+        // Its spelling cannot be written by source as an identifier.
+        let site = panic_callsite(self.names.session(), token.span)
+            .map_err(native_adapter::transport_error)?;
+        let spelling = format!("impl_{}", minted.len());
+        let name = self
+            .names
+            .intern_root(&spelling, site)
+            .map_err(native_adapter::name_error)?;
+        self.cursor.bump();
+        let mut traits = Vec::new();
+        let parsed = (|| {
+            loop {
+                if traits.len() >= 256 {
+                    return Err(self.limit("predicate limit exceeded"));
+                }
+                if self.token().is_lifetime() {
+                    return Err(self.unsupported("lifetime bounds on `impl Trait` are unsupported"));
+                }
+                let path = self.trait_path()?;
+                self.reserve_parser_items(&mut traits, 1)?;
+                traits.push(path);
+                if !self.eat("+") {
+                    break;
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = parsed {
+            self.impl_trait_params = Some(minted);
+            return Err(error);
+        }
+        self.reserve_parser_items(&mut minted, 1)?;
+        minted.push(name);
+        self.impl_trait_params = Some(minted);
+        let mut bounds = std::mem::take(&mut self.pending_bounds);
+        self.reserve_parser_items(&mut bounds, 1)?;
+        bounds.push(TypeBound {
+            parameter: name,
+            traits,
+        });
+        self.pending_bounds = bounds;
+        Ok(Type::Param(name))
     }
     #[inline(never)]
     fn self_type_projection(&mut self, item: AstIdent) -> Result<Type, ParseError> {
@@ -8447,6 +8520,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         params: signature.params.clone(),
                         param_mut: signature.param_mut.clone(),
                         result: signature.result.clone(),
+                        impl_params: signature.impl_params,
                         body,
                     })
                 } else {
@@ -9002,6 +9076,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 params: head.params,
                 param_mut: head.param_mut,
                 result: head.result,
+                impl_params: head.impl_params,
                 body,
             },
             receiver,
@@ -9125,6 +9200,8 @@ impl<'input, 'names> Parser<'input, 'names> {
         let mut params = Vec::new();
         let mut param_mut = Vec::new();
         let mut receiver = ReceiverKind::None;
+        let outer_impl_params = self.impl_trait_params.replace(Vec::new());
+        let outer_pending = std::mem::take(&mut self.pending_bounds);
         if associated && self.eat("&") {
             regions.receiver = if self.token().is_lifetime() {
                 Some(self.lifetime()?)
@@ -9169,13 +9246,43 @@ impl<'input, 'names> Parser<'input, 'names> {
                     return Err(self.unsupported("constructor parameter patterns are unsupported"));
                 }
                 self.expect(":")?;
-                params.push((n, self.ty()?));
+                let ty = self.ty();
+                let ty = match ty {
+                    Ok(ty) => ty,
+                    Err(error) => {
+                        self.impl_trait_params = outer_impl_params;
+                        self.pending_bounds = outer_pending;
+                        return Err(error);
+                    }
+                };
+                params.push((n, ty));
                 param_mut.push(mutable);
                 if !self.eat(",") || self.is(")") {
                     break;
                 }
             }
         }
+        let minted =
+            std::mem::replace(&mut self.impl_trait_params, outer_impl_params).unwrap_or_default();
+        let impl_bounds = std::mem::replace(&mut self.pending_bounds, outer_pending);
+        let mut type_params = type_params;
+        for name in &minted {
+            if self.contains_name(&type_params, *name, LookupClass::TypeParameter)?
+                || self.contains_name(&self.type_params, *name, LookupClass::TypeParameter)?
+            {
+                return Err(self.unsupported(
+                    "a generic parameter spelling collides with an anonymous `impl Trait` parameter",
+                ));
+            }
+        }
+        if type_params.len() + minted.len() > 32 {
+            return Err(self.limit("generic parameter resource limit 32"));
+        }
+        self.reserve_parser_items(&mut type_params, minted.len())?;
+        type_params.extend_from_slice(&minted);
+        let impl_params = minted.len();
+        self.reserve_parser_items(&mut bounds, impl_bounds.len())?;
+        bounds.extend(impl_bounds);
         self.expect(")")?;
         let result = if self.eat("->") {
             self.ty()?
@@ -9208,6 +9315,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 params,
                 param_mut,
                 result,
+                impl_params,
             },
             receiver,
         ))
@@ -12645,6 +12753,53 @@ impl DeclRegistry {
             return self.function_positions.get(&decl).copied();
         }
         self.function_ids.iter().position(|id| *id == decl)
+    }
+    /// Retained source callable for a function declaration, if any.
+    pub(super) fn source_callable(&self, decl: ir::DeclId) -> Option<&Function> {
+        let source = self
+            .function_position(decl)
+            .and_then(|index| self.callable_sources.get(index).copied())?;
+        match source {
+            CallableSource::Free(index) => self.program.functions.get(index),
+            CallableSource::Associated {
+                implementation,
+                item,
+            } => self
+                .program
+                .impls
+                .get(implementation)
+                .and_then(|block| block.items.get(item))
+                .map(|item| &item.function),
+            CallableSource::TraitDefault { trait_index, item } => self
+                .program
+                .traits
+                .get(trait_index)
+                .and_then(|owner| owner.items.get(item))
+                .and_then(|item| item.default.as_ref()),
+        }
+    }
+    /// Explicit generic arguments may name only the written parameters, never
+    /// anonymous argument-position `impl Trait` parameters (stock E0107/E0632).
+    pub(super) fn check_explicit_impl_params(
+        &self,
+        decl: ir::DeclId,
+        written: usize,
+    ) -> Result<(), String> {
+        let Some(function) = self.source_callable(decl) else {
+            return Ok(());
+        };
+        if function.impl_params == 0 {
+            return Ok(());
+        }
+        let explicit = function.type_params.len() - function.impl_params;
+        if written > explicit {
+            return Err(format!(
+                "E0107: function takes {explicit} generic arguments but {written} were supplied"
+            ));
+        }
+        // Stock accepts explicit arguments for the written parameters and infers
+        // the anonymous ones; that needs partial inference, not yet native.
+        Err("unsupported: explicit generic arguments on a function with argument-position `impl Trait` (partial inference)".into())
     }
     fn source_type_context(&self, declaration: ir::DeclId) -> Result<SourceTypeContext, String> {
         let info = self.declaration(declaration)?;

@@ -1125,6 +1125,8 @@ impl<'s> Checker<'s> {
                             .functions
                             .get(&self.path_key(name, Namespace::Value)?)
                             .ok_or("unresolved function declaration in inference")?;
+                        plan.registry
+                            .check_explicit_impl_params(declaration, args.len())?;
                         plan.instantiate_signature(
                             &ir::CallTarget {
                                 declaration,
@@ -3155,6 +3157,12 @@ impl<'a> Checker<'a> {
             &plan.budget,
         )?;
         let (_, source_args) = path.application()?;
+        if namespace == Namespace::Value
+            && let Some(declaration) = plan.registry.functions.get(&app.0)
+        {
+            plan.registry
+                .check_explicit_impl_params(*declaration, source_args.len())?;
+        }
         let regions = self.type_actual_regions(source_args, 0)?;
         self.infer_storage(1)?;
         self.applications.borrow_mut().push((app.0, app.1, regions));
@@ -7422,6 +7430,8 @@ impl<'a> Checker<'a> {
                     .is_some_and(|(owner, _, _)| owner == &key)
                 {
                     let (_, args, regions) = self.applications.borrow_mut().pop().unwrap();
+                    plan.registry
+                        .check_explicit_impl_params(declaration, args.len())?;
                     (args, regions)
                 } else if plan.param_env(declaration)?.arity() > 0 {
                     (self.infer_call_args(declaration,args,expected,true)?.ok_or("unsupported generic inference: insufficient evidence; explicit type arguments required")?, Arc::from([]))
@@ -9247,6 +9257,7 @@ mod checked_identity_tests {
             params: Vec::new(),
             param_mut: Vec::new(),
             result: Type::Unit,
+            impl_params: 0,
             body: Block {
                 statements: Vec::new(),
                 tail: None,
