@@ -221,6 +221,46 @@ must either wait or read only handle-based outputs it introduces itself.
 Design, SSA data structures, hashing, verifier and interpreter are pure
 libraries with no graph state and can proceed independently.
 
+## 8b. Cross-function optimization
+
+Most cross-function optimization is bottom-up and fits the graph directly:
+callees are optimized first, callers inline optimized callee bodies and then
+re-optimize, so constants and facts propagate up the call graph. This matches
+how LLVM's primary inliner works (bottom-up over call-graph SCCs). Calls that
+are not inlined still transfer facts through `SUMMARY` (no side effects,
+non-null or ranged return, does not capture arguments, may panic or diverge).
+
+Bottom-up cannot see facts about a function's callers. Each case gets an
+item-keyed design, never a whole-program node:
+
+1. **Constant arguments: specialization on request.** Adopted. A caller that
+   passes known constants requests `SPECIALIZE(g, args)` keyed by the callee
+   body hash plus canonical constant arguments. Bottom-up, cached, shared by
+   every caller asking for the same specialization. Bounded by a per-callee
+   specialization limit to prevent code explosion.
+2. **Dead code: reachability-driven codegen.** Adopted as a target. Machine
+   code is demanded only for functions reachable from the requested entry
+   points (`main`, selected tests), discovered by following call edges from
+   those roots. **Not current behavior:** today `BUILD` requests `OBJECT` for
+   every planned instance. Unused bodies must still be *checked* (G4 rule).
+   Only their code generation is skipped.
+3. **Devirtualization.**
+   - **3a. Profile-guided speculation:** adopted. Test-run profiles become an
+     explicit input fact. Hot `dyn` call sites get a type guard, a direct
+     (inlinable) call and a virtual fallback. No global knowledge required.
+     Final (reproducible) builds use only profiles committed as inputs.
+   - **3b. Closed-world implementor sets:** deferred. A per-trait fact listing
+     every implementing type grows with the program, so it needs a design
+     check against `GRAPH-INTEGRITY.md` and explicit user approval before
+     implementation. Revisit only if measurements show 3a is insufficient.
+4. **Code layout:** adopted. Part of the incremental linker under the existing
+   `build` root, ordered by test-run profiles for hot/cold placement.
+
+Remaining limits, shared with LLVM: inlining needs a size budget, so some
+calls stay boundaries where only summaries cross. Mutually recursive functions
+are optimized together per SCC. Deep call chains mean deep dependency chains,
+which can lengthen cold final builds.
+
 ## 9. Representation
 
 - SSA CFG with block parameters instead of phi nodes. Simple, cheap to hash

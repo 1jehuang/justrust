@@ -654,7 +654,15 @@ Phase 3 (alongside core/std bring-up):
 - [ ] Function summaries with early cutoff, recorded inlining dependencies,
       recursion fixed-point protocol, generic-template optimization and
       instance folding.
-- [ ] Incremental linker patching per-function fragments.
+- [ ] Incremental linker patching per-function fragments, with profile-guided
+      hot/cold code layout under the `build` root.
+- [ ] Specialization on request: `SPECIALIZE(g, constant args)` nodes keyed by
+      callee body hash plus canonical arguments, with a per-callee limit.
+- [ ] Reachability-driven codegen: demand machine code only for functions
+      reachable from requested entry points (today BUILD emits every planned
+      instance). Unused bodies are still checked.
+- [ ] Profile-guided speculative devirtualization with guard and fallback.
+      Closed-world per-trait implementor sets are deferred and need user approval.
 - [ ] Measure the stock LLVM share of debug/release/cold build time.
 
 Phase 4 (once real crates compile):
