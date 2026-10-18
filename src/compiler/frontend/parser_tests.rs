@@ -1,6 +1,111 @@
 use super::*;
 
 #[test]
+fn builtin_matches_source_shape_and_single_evaluation() {
+    for (open, close) in [("(", ")"), ("[", "]"), ("{", "}")] {
+        for comma in ["", ","] {
+            let source = format!(
+                "fn value()->i32{{1}}fn probe()->bool{{\nmatches!{open}value(),1{comma}{close}\n}}fn main(){{}}"
+            );
+            let program = parse(&source).unwrap();
+            let Expr::Match { scrutinee, arms } =
+                program.functions[1].body.tail.as_deref().unwrap()
+            else {
+                panic!("expected direct source Match")
+            };
+            let Expr::Call { name, .. } = scrutinee.as_ref() else {
+                panic!("expected sole source call")
+            };
+            assert!(canonical_path_matches(&program, name, "value"));
+            assert_eq!(arms.len(), 2);
+            assert!(matches!(arms[0].pattern, Pattern::Int { .. }));
+            assert!(matches!(arms[0].body, Expr::Bool(true)));
+            assert!(matches!(arms[1].pattern, Pattern::Wildcard));
+            assert!(matches!(arms[1].body, Expr::Bool(false)));
+            let budget = ir::PlanBudget::default();
+            let identity = sr::OriginalBodyId::new(&budget).unwrap();
+            let inventory =
+                SourceInventory::build(&program, &program.functions[1], identity, &budget).unwrap();
+            assert_eq!(inventory.calls.len(), 1);
+            let env = type_env(&program).unwrap();
+            let checked = type_function_with_env(&program, 1, &env).unwrap();
+            assert_eq!(
+                checked
+                    .exprs
+                    .iter()
+                    .filter(|expr| matches!(expr.kind, ir::ExprKind::Call { .. }))
+                    .count(),
+                1
+            );
+            program.validate_name_handles().unwrap();
+            preflight_program_clone(&program, &budget).unwrap();
+            recipes::inventory(&program, &budget).unwrap();
+        }
+    }
+}
+
+#[test]
+fn builtin_matches_bounded_grammar_and_late_invalid() {
+    for source in [
+        "fn main(){let b:bool=matches!(1,1);}",
+        "fn main(){let b:bool=matches!(true,false);}",
+        "fn main(){let b:bool=matches!((1,true),(1,_));}",
+        "fn main(){let b:bool=matches!([1,2],[1,..]);}",
+        "fn main(){let b:bool=matches!(1,binding);}",
+        "struct S{x:i32}fn main(){if matches!(S{x:1},S{x:1}) {}}",
+    ] {
+        good(source);
+    }
+    for args in [
+        "", "1", "1,", ",_", "1,1,,", "1,1,2", "1,1 2", "1,1..=2", "1,1..2",
+    ] {
+        assert!(
+            parse(&format!("fn main(){{matches!({args})}}")).is_err(),
+            "{args}"
+        );
+    }
+    for (args, diagnostic) in [
+        ("1,1 if true", "matches! pattern guards are unsupported"),
+        ("1,1|2", "or-patterns and @ patterns are unsupported"),
+        ("1,x @ _", "unsupported token \"@\""),
+    ] {
+        let error = parse(&format!("fn main(){{matches!({args})}}")).unwrap_err();
+        assert!(error.contains(diagnostic), "{error}");
+    }
+    for source in [
+        "fn main(){matches!(1,true);}",
+        "fn main(){return;matches!(1,true);}",
+        "fn main(){let x=false && matches!(1,true);}",
+    ] {
+        bad(source);
+    }
+}
+
+#[test]
+fn builtin_matches_shadowing_and_source_statement_separation() {
+    let program = parse("fn main(){macro_rules! matches{()=>{42};}matches!()}").unwrap();
+    assert!(matches!(
+        program.functions[0].body.tail.as_deref(),
+        Some(Expr::Integer(_))
+    ));
+    for source in [
+        "macro_rules! matches{()=>{42};}fn main(){matches!()}",
+        "fn main(){macro_rules! matches{(other)=>{42};}matches!(1,1)}",
+        "fn main(){matches!(1,1) let x=1;}",
+        "fn main(){matches![1,1] let x=1;}",
+        "fn main(){(matches!{1,1}) let x=1;}",
+        "fn main(){match 1 {1=>matches!(1,1) _=>false}}",
+    ] {
+        assert!(parse(source).is_err(), "{source}");
+    }
+    good("fn main(){matches!{1,1}; let x=1;}");
+    good(
+        "fn main(){matches!(1,1);{macro_rules! matches{()=>{42};}let x:i32=matches!();}matches!(1,1);}",
+    );
+    good("fn main(){let b=match 1 {1=>matches!{1,1} _=>false};}");
+}
+
+#[test]
 fn literal_output_delimiters_decode_and_lower_to_unit() {
     for (name, stream, newline) in [
         ("print", ir::OutputStream::Stdout, false),

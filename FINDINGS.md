@@ -11314,3 +11314,35 @@ format checks passed. Reload-interrupted gates were rerun. Fifteen exact
 failed and successful receipts are retained in
 `data/runs/xps14/2026-10-18-divergent-macros.jsonl`. Stock-abort acceptance
 uses the documented local exception. Full Rust support remains open.
+
+## 2026-10-18: bounded matches macro through checked pattern lowering
+
+Implemented `matches!` through exact builtin macro lookup and the existing
+source Match representation, with one scrutinee occurrence, a true pattern
+arm and a false wildcard arm. The two-arm allocation is fallible and charges
+retained capacity and work. Existing checked match, ownership and CFG paths
+remain authoritative; no new IR or backend operation was introduced.
+
+All21 frozen sources remain byte-identical and in order against stock receipt
+`7a98ef13729f223511d2c0133d68e5f1df35bf692da1297f290cfa42e3ae83d7`.
+Their concatenated SHA256 is
+`429db23ae2d5220b425987d89f3c1f54cbe085cfa4fa93bd9b50a23ecff8f7a7`.
+The native partition is14 live,4 Unsupported,2 Invalid and1 Syntax. The
+character case retains its earlier literal-parser boundary, and ranges,
+guards, or-patterns and module macro use remain outside this slice. The
+function-local macro shadow is a separate positive witness. Initial private
+fixtures omitted main or confused expression statements with Unit results;
+those fixtures were corrected without changing language semantics.
+
+Debug `20261017-185518359-1229619` and optimized
+`20261017-185637543-1251887` each passed10 corpus/authority tests, including
+84 CLI and84 observed graph cells with28 runtime executions per path. Six
+public authority controls cover Bool results, single evaluation, tuple/enum
+patterns, cloning, foreign metadata and retained checked-body immutability.
+Hosted library `20261017-185545794-1234287` passed1,253 tests. All-target check
+`20261017-185543170-1234093`, strict lint
+`20261017-185550975-1233825` and formatting passed. The final full local run
+`20261017-185640503-1254615` passed3,116 tests across158 binaries in119.9
+seconds including compilation. Reload-interrupted gates were rerun; fourteen
+exact failed and successful receipts are retained in
+`data/runs/xps14/2026-10-18-matches-macro.jsonl`. Full Rust support remains open.

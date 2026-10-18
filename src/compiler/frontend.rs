@@ -5972,6 +5972,9 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return self.panic_expression(spelling);
             }
         }
+        if self.builtin_macro_ahead("matches")? {
+            return self.matches_expression();
+        }
         if self.builtin_macro_ahead("assert")? {
             return self.assert_expression();
         }
@@ -6020,6 +6023,72 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Ok(false);
         }
         Ok(!self.known_module_macro(name)?)
+    }
+    /// Lower through the existing bounded pattern grammar and source Match.
+    fn matches_expression(&mut self) -> Result<Expr, ParseError> {
+        let site = self.token().span;
+        let original = self
+            .names
+            .session()
+            .original(
+                panic_callsite(self.names.session(), site)
+                    .map_err(native_adapter::transport_error)?,
+                512,
+            )
+            .map_err(native_adapter::transport_error)?;
+        self.names
+            .session()
+            .sources()
+            .location(original)
+            .map_err(native_adapter::transport_error)?;
+        self.ident()?;
+        self.expect("!")?;
+        let close = if self.eat("(") {
+            ")"
+        } else if self.eat("[") {
+            "]"
+        } else if self.eat("{") {
+            "}"
+        } else {
+            return Err(self.error("expected a matches! delimiter"));
+        };
+        let scrutinee = self.nested_expr()?;
+        self.expect(",")?;
+        let pattern = self.pattern()?;
+        if self.is("if") {
+            return Err(self.unsupported("matches! pattern guards are unsupported"));
+        }
+        self.eat(",");
+        self.expect(close)?;
+        let scrutinee = self
+            .names
+            .try_parser_box(scrutinee)
+            .map_err(native_adapter::name_error)?;
+        let capacity = 2 * std::mem::size_of::<MatchArm>();
+        self.names
+            .budget()
+            .charge(super::expansion_budget::Counter::Work, 2)
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        self.names
+            .retain_parser_text(capacity)
+            .map_err(native_adapter::name_error)?;
+        let mut arms = Vec::new();
+        arms.try_reserve_exact(2).map_err(|_| {
+            native_adapter::transport_error(self.names.budget().poison_allocation().into())
+        })?;
+        let extra = (arms.capacity() - 2) * std::mem::size_of::<MatchArm>();
+        self.names
+            .retain_parser_text(extra)
+            .map_err(native_adapter::name_error)?;
+        arms.push(MatchArm {
+            pattern,
+            body: Expr::Bool(true),
+        });
+        arms.push(MatchArm {
+            pattern: Pattern::Wildcard,
+            body: Expr::Bool(false),
+        });
+        Ok(Expr::Match { scrutinee, arms })
     }
     fn output_expression(&mut self, spelling: &'static str) -> Result<Expr, ParseError> {
         let site = self.token().span;

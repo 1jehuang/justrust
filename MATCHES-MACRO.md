@@ -1,9 +1,11 @@
 # Bounded matches macro
 
-Status: implementation in progress. Full Rust remains open.
+Status: implemented and validated in debug/release, including the complete 3,116-test regression suite. Full Rust remains open.
+
+The independently measured 21-source corpus retains character literals as an earlier parser Unsupported boundary, ranges as an earlier closing-delimiter Syntax boundary, and guards/or-patterns/module macro use as explicit Unsupported cases. These cases do not constitute native pattern execution coverage. Positive witnesses use supported integer/Bool, wildcard, tuple and enum forms and a separate function-local macro shadow.
 
 Add checked builtin `matches!(expression, pattern)` with optional trailing comma and all three delimiters. Reuse existing supported source pattern forms and checked match lowering: evaluate the scrutinee once, yield true for its matching arm and false for the wildcard arm. The result is Bool, subject to ordinary Never coercion/completion rules. Do not add new IR or backend operations, general match guards, range patterns, or-patterns or unsupported pattern forms in this slice.
 
 Builtin selection follows authoritative lexical/module macro lookup. Preserve source occurrence ownership, binding scope and existing pattern metadata/ownership checks. A lowered Match must not make parenthesized/bracket macro syntax implicitly block-like for semicolon/comma omission. Guard and other unsupported syntax must fail explicitly rather than silently ignoring tokens. All original bodies and unused metadata remain validated.
 
-Acceptance uses independently measured frozen stock sources, exact once-only side effects, Bool results, supported literal/tuple/enum/wildcard cases, local macro shadowing, strict unsupported/invalid boundaries, and CLI plus observed graph workers1/8 CHECK/BUILD gates. Public authority controls, debug/release runs, full regressions, strict lint and formatting precede publication. General Rust pattern/macro support remains open.
+Acceptance uses independently measured frozen stock sources, exact once-only side effects, Bool results, supported literal/tuple/enum/wildcard cases, local macro shadowing, strict unsupported/invalid boundaries, and CLI plus observed graph workers1/8 CHECK/BUILD gates. The 21-source partition is 14 live, four Unsupported, two Invalid and one earlier Syntax boundary. Debug and release each pass 84 CLI and 84 graph cells, with 28 runtime executions per path, plus six public authority controls. All-target checks, strict lint, formatting and 3,116 tests across 158 binaries pass. Fourteen exact failed/successful receipts are retained in `data/runs/xps14/2026-10-18-matches-macro.jsonl`. General Rust pattern/macro support remains open.

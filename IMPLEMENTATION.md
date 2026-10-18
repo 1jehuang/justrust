@@ -449,6 +449,13 @@ host macro and compiles its generated target source.
 
 ### G6. Runtime, FFI, linking and target expansion
 
+- [x] Bounded `matches!` lowers once-evaluated scrutinees through existing checked
+      match/pattern machinery, preserving Bool results and macro/source authority.
+      Frozen 21-source debug/release CLI/graph matrices, six public authority
+      controls, and complete 3,116-test/158-binary suite passed. See
+      `MATCHES-MACRO.md`; guards, ranges, character literals and general macro
+      execution remain outside this slice.
+
 - [x] Bounded `unreachable!`, `todo!`, and `unimplemented!` reuse checked literal
       panic lowering with exact default/custom prefixes, source locations and
       Never control flow. Frozen 27-source debug/release CLI/graph matrices and
