@@ -283,6 +283,38 @@ fn retain<T>(b: &PlanBudget, count: usize) -> Result<()> {
         .ok_or_else(|| FactsError::resource(b, "trait allocation header size overflow"))?;
     charged(b, b.retain_bytes(bytes))
 }
+/// First-position index for an append-only declaration table. Lookups were
+/// linear scans charging the shared ledger per element, which made each
+/// lookup O(program) and every body check O(program^2) under one mutex.
+#[derive(Debug, Default)]
+pub(super) struct DeclIndex(std::collections::HashMap<DeclId, usize>);
+impl DeclIndex {
+    /// Record `declaration` at `position` unless an earlier row already has
+    /// it, preserving the previous first-match lookup semantics.
+    fn note(&mut self, b: &PlanBudget, declaration: DeclId, position: usize) -> Result<()> {
+        charged(b, b.charge_work(1))?;
+        self.0
+            .try_reserve(1)
+            .map_err(|_| FactsError::resource(b, "declaration index allocation"))?;
+        self.0.entry(declaration).or_insert(position);
+        Ok(())
+    }
+    fn get(&self, b: &PlanBudget, declaration: DeclId) -> Result<Option<usize>> {
+        charged(b, b.charge_work(1))?;
+        Ok(self.0.get(&declaration).copied())
+    }
+}
+fn push_indexed_environment(
+    b: &PlanBudget,
+    environments: &mut Vec<Arc<PredicateEnv>>,
+    index: &mut DeclIndex,
+    env: Arc<PredicateEnv>,
+) -> Result<()> {
+    if let Some(declaration) = env.declaration {
+        index.note(b, declaration, environments.len())?;
+    }
+    push(b, environments, env)
+}
 fn push<T>(b: &PlanBudget, values: &mut Vec<T>, value: T) -> Result<()> {
     // Retain a conservative old-plus-new relocation peak before Vec growth.
     retain::<T>(b, 2)?;
@@ -1136,11 +1168,15 @@ pub struct ValidatedTraitWorld {
     budget: PlanBudget,
     headers: HeaderSet,
     environments: Vec<Arc<PredicateEnv>>,
+    environment_index: DeclIndex,
     empty: Arc<PredicateEnv>,
     memo: Mutex<Vec<MemoEntry>>,
     requirements: Vec<(DeclId, Arc<[Predicate]>)>,
+    requirement_index: DeclIndex,
     origins: Vec<(DeclId, Arc<ir::SignatureOriginSchema>)>,
+    origin_index: DeclIndex,
     carriers: Vec<DeclarationCarriers>,
+    carrier_index: DeclIndex,
     normalized_callables: Vec<CallableHeader>,
     /// `(declaration, first position)` sorted by declaration, rebuilt with
     /// `normalized_callables`. Replaces a linear scan per header lookup.
@@ -1151,6 +1187,7 @@ pub struct ValidatedTraitWorld {
     has_associated_bounds: bool,
     has_normal_drop: bool,
     declared_callables: Vec<equality::DeclaredCallableContext>,
+    declared_callable_index: DeclIndex,
 }
 
 impl ValidatedTraitWorld {
@@ -1283,11 +1320,15 @@ impl ValidatedTraitWorld {
             budget: budget.clone(),
             headers,
             environments: Vec::new(),
+            environment_index: DeclIndex::default(),
             empty,
             memo: Mutex::new(Vec::new()),
             requirements: Vec::new(),
+            requirement_index: DeclIndex::default(),
             origins: Vec::new(),
+            origin_index: DeclIndex::default(),
             carriers: Vec::new(),
+            carrier_index: DeclIndex::default(),
             normalized_callables: Vec::new(),
             normalized_callable_index: Vec::new(),
             projection_memo: Mutex::new(Vec::new()),
@@ -1296,6 +1337,7 @@ impl ValidatedTraitWorld {
             has_associated_bounds: false,
             has_normal_drop: false,
             declared_callables: Vec::new(),
+            declared_callable_index: DeclIndex::default(),
         };
         world.validate_header_type_metadata()?;
         world.validate_headers()?;
@@ -1499,11 +1541,8 @@ impl ValidatedTraitWorld {
         ))
     }
     fn predicate_env(&self, id: DeclId) -> Result<Arc<PredicateEnv>> {
-        for env in &self.environments {
-            charged(&self.budget, self.budget.charge_work(1))?;
-            if env.declaration == Some(id) {
-                return Ok(env.clone());
-            }
+        if let Some(position) = self.environment_index.get(&self.budget, id)? {
+            return Ok(self.environments[position].clone());
         }
         Err(FactsError::invalid(
             &self.budget,
@@ -2967,9 +3006,10 @@ impl ValidatedTraitWorld {
             self.validate_declared_equality_domains(&predicates, &h.schema_env)?;
             retain::<PredicateEnv>(&self.budget, 1)?;
             let index = self.environments.len();
-            push(
+            push_indexed_environment(
                 &self.budget,
                 &mut self.environments,
+                &mut self.environment_index,
                 Arc::new(PredicateEnv {
                     world: self.id,
                     index,
@@ -3049,12 +3089,10 @@ impl ValidatedTraitWorld {
             ));
         }
         let retained = self.declaration_carriers(declaration)?;
-        charged(&self.budget, self.budget.charge_work(self.origins.len()))?;
         let origin = self
-            .origins
-            .iter()
-            .find(|(id, _)| *id == declaration)
-            .map(|(_, origin)| origin.clone())
+            .origin_index
+            .get(&self.budget, declaration)?
+            .map(|position| self.origins[position].1.clone())
             .ok_or_else(|| {
                 FactsError::invalid(
                     &self.budget,
@@ -3612,11 +3650,10 @@ impl ValidatedTraitWorld {
         Ok(())
     }
     fn declaration_carriers(&self, declaration: DeclId) -> Result<&DeclarationCarriers> {
-        for row in &self.carriers {
-            charged(&self.budget, self.budget.charge_work(1))?;
-            if row.declaration == declaration {
-                return Ok(row);
-            }
+        if let Some(position) = self.carrier_index.get(&self.budget, declaration)?
+            && self.carriers[position].declaration == declaration
+        {
+            return Ok(&self.carriers[position]);
         }
         Err(FactsError::invalid(
             &self.budget,
@@ -4054,6 +4091,7 @@ impl ValidatedTraitWorld {
     }
     fn build_origin_schemas(&mut self) -> Result<()> {
         let mut declarations = Vec::new();
+        let mut seen_declarations = std::collections::HashSet::new();
         for declaration in self
             .headers
             .items
@@ -4061,8 +4099,11 @@ impl ValidatedTraitWorld {
             .map(|h| h.declaration)
             .chain(self.headers.callables.iter().map(|h| h.declaration))
         {
-            charged(&self.budget, self.budget.charge_work(declarations.len()))?;
-            if !declarations.contains(&declaration) {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            seen_declarations
+                .try_reserve(1)
+                .map_err(|_| FactsError::resource(&self.budget, "declaration set allocation"))?;
+            if seen_declarations.insert(declaration) {
                 push(&self.budget, &mut declarations, declaration)?;
             }
         }
@@ -4086,7 +4127,11 @@ impl ValidatedTraitWorld {
             )?;
             let source_regions = self.validate_source_regions(declaration, &raw.signature)?;
             let (contract, regions) = self.derive_carriers(&raw.signature, &source_regions)?;
+            self.origin_index
+                .note(&self.budget, declaration, self.origins.len())?;
             push(&self.budget, &mut self.origins, (declaration, schema))?;
+            self.carrier_index
+                .note(&self.budget, declaration, self.carriers.len())?;
             push(
                 &self.budget,
                 &mut self.carriers,
@@ -4207,7 +4252,12 @@ impl ValidatedTraitWorld {
                 env: item.schema.env.clone(),
                 predicates: predicates.into(),
             });
-            push(&self.budget, &mut self.environments, env)?;
+            push_indexed_environment(
+                &self.budget,
+                &mut self.environments,
+                &mut self.environment_index,
+                env,
+            )?;
         }
         for callable in self.headers.callables.iter() {
             let mut requirements = Vec::new();
@@ -4238,6 +4288,11 @@ impl ValidatedTraitWorld {
             self.close_predicates(&mut requirements, &callable.schema.env)?;
             retain::<Predicate>(&self.budget, requirements.len())?;
             let declared: Arc<[Predicate]> = requirements.clone().into();
+            self.requirement_index.note(
+                &self.budget,
+                callable.declaration,
+                self.requirements.len(),
+            )?;
             push(
                 &self.budget,
                 &mut self.requirements,
@@ -4258,7 +4313,12 @@ impl ValidatedTraitWorld {
                 env: callable.schema.env.clone(),
                 predicates: requirements.into(),
             });
-            push(&self.budget, &mut self.environments, env)?;
+            push_indexed_environment(
+                &self.budget,
+                &mut self.environments,
+                &mut self.environment_index,
+                env,
+            )?;
         }
         Ok(())
     }
@@ -4593,14 +4653,10 @@ impl ValidatedTraitWorld {
     }
     fn callable_schema(&self, id: DeclId) -> Result<GenericSchema> {
         let raw = &self.callable_header(id)?.schema;
-        let mut predicates = None;
-        for (decl, p) in &self.requirements {
-            charged(&self.budget, self.budget.charge_work(1))?;
-            if *decl == id {
-                predicates = Some(p.clone());
-                break;
-            }
-        }
+        let predicates = self
+            .requirement_index
+            .get(&self.budget, id)?
+            .map(|position| self.requirements[position].1.clone());
         let predicates = predicates.ok_or_else(|| {
             FactsError::invalid(&self.budget, "callable requirements not validated")
         })?;
@@ -4993,12 +5049,10 @@ impl ValidatedTraitWorld {
             let application = self.instantiate_projected_item(item, goal, context)?;
             return Ok((application.instantiated, None));
         }
-        charged(&self.budget, self.budget.charge_work(self.origins.len()))?;
         let origin = self
-            .origins
-            .iter()
-            .find(|(d, _)| *d == item.declaration)
-            .map(|(_, s)| s.clone())
+            .origin_index
+            .get(&self.budget, item.declaration)?
+            .map(|position| self.origins[position].1.clone())
             .ok_or_else(|| {
                 FactsError::invalid(
                     &self.budget,
@@ -5292,7 +5346,10 @@ impl ValidatedTraitWorld {
         context: ProofContext<'_>,
     ) -> Result<()> {
         self.check_context(context)?;
-        charged(&self.budget, self.budget.charge_work(self.origins.len()))?;
+        let proof_origin = self
+            .origin_index
+            .get(&self.budget, proof.declaration)?
+            .map(|position| &self.origins[position].1);
         if proof.world != self.id
             || proof.registry != self.registry
             || proof.environment != context.predicates.index
@@ -5304,10 +5361,7 @@ impl ValidatedTraitWorld {
                     .env
                     .total_arity()
             || proof.fixed_regions.len() != usize::from(proof.schema.fixed.region_count)
-            || !self
-                .origins
-                .iter()
-                .any(|(d, s)| *d == proof.declaration && Arc::ptr_eq(s, &proof.schema))
+            || !proof_origin.is_some_and(|origin| Arc::ptr_eq(origin, &proof.schema))
         {
             return Err(FactsError::invalid(
                 &self.budget,
