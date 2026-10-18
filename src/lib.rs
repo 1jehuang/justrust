@@ -6,6 +6,7 @@
 pub mod compiler;
 pub mod engine;
 pub mod fixtures;
+pub mod project;
 
 pub use engine::{
     Context, Demand, Engine, Error, Event, Handle, Key, Outputs, Provider, Report, TaskFuture,

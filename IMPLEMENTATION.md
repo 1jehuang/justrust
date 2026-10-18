@@ -570,6 +570,12 @@ missing native compilation. Catalog Copy/Clone support is not core acceptance.
 - [ ] Keep explicit stock fallback separate and labeled. Never send private
       formats to stock tools or count fallback as native compatibility.
 
+**Progress (2026-10-18):** `src/project/toml.rs` is a native TOML 1.0 reader
+(offsets, line/column errors, duplicate/redefinition/inline-seal rules, bounded
+depth) with unit tests (hosted run `20261018-142549166-1772846`). It is not yet
+checked against an external TOML conformance suite. No manifest, workspace,
+lockfile or feature model exists yet.
+
 **Next:** freeze a tiny unchanged workspace containing path dependencies, features,
 a build script, a proc macro and tests, plus manifest/resolution fixtures that can
 run before native compilation is available. **Acceptance:** lockfile/feature and
