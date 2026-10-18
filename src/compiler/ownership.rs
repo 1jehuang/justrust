@@ -2577,6 +2577,19 @@ impl Transfer<'_> {
         }
         Ok(())
     }
+    fn normal_drop_root(&self, local: LocalId) -> Result<bool, Exhausted> {
+        let Some(facts) = self.facts.validated() else {
+            return Ok(false);
+        };
+        if !facts.has_normal_drop_impls() {
+            return Ok(false);
+        }
+        match facts.normal_drop_plan(&self.f.locals[local.0].ty) {
+            Ok(super::traits::NormalDropPlan::Destructor(_)) => Ok(true),
+            Ok(_) => Ok(false),
+            Err(_) => Err(Exhausted),
+        }
+    }
     fn block(&mut self, state: &mut State) -> Result<(), Exhausted> {
         for (index, item) in self.f.blocks[self.block.0].statements.iter().enumerate() {
             self.budget.spend(1)?;
@@ -2640,6 +2653,16 @@ impl Transfer<'_> {
                     )?;
                 }
                 Statement::StorageDead(local) => {
+                    if self.normal_drop_root(*local)?
+                        && state.may_init.get(self.paths.roots[local.0])
+                    {
+                        self.problem(
+                            Problem::Invalid(
+                                "live Drop owner loses storage without cleanup".into(),
+                            ),
+                            root_place(*local),
+                        );
+                    }
                     self.check_access(
                         &Target {
                             precision: TargetPrecision::Exact,
@@ -2660,6 +2683,17 @@ impl Transfer<'_> {
                 }
                 Statement::Assign { destination, value } => {
                     self.rvalue(state, value)?;
+                    if destination.projection.is_empty()
+                        && self.normal_drop_root(destination.local)?
+                        && state.may_init.get(self.paths.roots[destination.local.0])
+                    {
+                        self.problem(
+                            Problem::Invalid(
+                                "Drop owner overwritten without replacement cleanup".into(),
+                            ),
+                            destination.clone(),
+                        );
+                    }
                     self.phase = Phase::Write;
                     self.write(state, destination)?;
                 }
@@ -2680,6 +2714,29 @@ impl Transfer<'_> {
                 } else {
                     self.read(state, place)?;
                 }
+            }
+            Terminator::Drop { cleanup, .. } => {
+                let place = cleanup.owner();
+                let node = self.paths.roots[place.local.0];
+                // The runtime flag guards the read. A may-initialized root is
+                // deliberately not subjected to an unconditional definite read.
+                if state.may_init.get(node) {
+                    if !state.must_live.get(place.local.0) {
+                        self.diagnostic(ErrorKind::StorageNotDefinitelyLive, place.clone());
+                    }
+                    self.check_access(
+                        &Target {
+                            precision: TargetPrecision::Exact,
+                            place: CanonicalPlace::owned(place),
+                            authority: vec![],
+                        },
+                        Access::MutBorrow,
+                    )?;
+                }
+                // The operation is atomic to caller dataflow. Its private flag
+                // is cleared before invocation; pointee bytes stay initialized
+                // for the callee's &mut Self until invocation returns.
+                self.initialize(state, node, false)?;
             }
             Terminator::Call {
                 args,
@@ -2794,7 +2851,9 @@ fn root_place(local: LocalId) -> Place {
 }
 fn successors(terminator: &Terminator) -> [Option<BlockId>; 2] {
     match terminator {
-        Terminator::Goto(next) | Terminator::Call { next, .. } => [Some(*next), None],
+        Terminator::Goto(next) | Terminator::Call { next, .. } | Terminator::Drop { next, .. } => {
+            [Some(*next), None]
+        }
         Terminator::Switch {
             then_block,
             else_block,

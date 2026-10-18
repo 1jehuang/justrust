@@ -1,6 +1,6 @@
 # DROP-NORMAL: frozen semantic implementation contract
 
-Date: 2026-10-18. Status: semantic contract version 1 approved by coordinator; stock/native acceptance pending. This is not an implementation or compatibility claim. Owner of this document has inspected source only. No compiler, tests, or stock oracle has been executed by this document owner.
+Date: 2026-10-18. Status: version 1 implemented and accepted for its bounded slice (results below). Full Rust Drop remains open.
 
 ## Outcome and non-goals
 
@@ -165,3 +165,17 @@ For D17 the version-1 scalar-field owner cannot itself exercise a non-Copy field
 ## Approved integration constraints; concrete API refinement
 
 Prefer integrating semantic drop elaboration inside the canonical lowering publication, so existing exact shape proof naturally captures the final graph. If source-call replay makes synthetic calls impossible there, add an explicit cleanup evidence variant rather than weakening replay. Assign one owner to shared cfg/ir/ownership proof interfaces. Traits/instance discovery and oracle work can proceed in parallel only after those types are agreed.
+
+## Acceptance results (2026-10-18)
+
+Stock-first corpus `tests/fixtures/drop_normal/receipts-v9`: 56 sources frozen and executed with stock rustc 1.98.1 before native expectations were set. Native classification, enforced by `tests/drop_normal.rs` through public CLI and observed CHECK/BUILD at workers 1 and 8:
+
+- **25 native-positive**: compile and run with byte-identical stdout to stock, in bootstrap debug and release profiles. Covers D02-D16 including declaration vs initialization order, parameter-after-local order, early/fallthrough return, returned and moved ownership, conditional init/move joins, RHS-first replacement and self-move, loop flag reset after a moved iteration, labeled break/continue, break payloads, statement/binding/wildcard temporaries, `if`/`&&`/`||`/`while` condition temporaries, interrupted call arguments, destructor helper chains and observable destructor mutation.
+- **4 semantic rejections** (D18/D19): manual Copy+Drop (E0184), `.drop()` method, concrete `<D as Drop>::drop`, and unused generic `<T as Drop>::drop` (E0040). The last is rejected before the no-destructor fast path.
+- **27 explicit boundaries**, never counted as conformance: 16 legal unsupported owner/position shapes with Drop-specific unsupported diagnostics (generic, nested, array, enum, tuple, borrowed, reference field, dead aggregate/generic, indexed/borrowed replacement, owned pattern/match/if-let/let-else), and 11 sources blocked earlier by unrelated grammar (`#![allow]`, `#[derive]`, unqualified `Trait::method` paths, `mut` by-value parameters, `String::from`, nominal lifetime parameters). Each has a separately frozen in-grammar variant where meaningful.
+
+Defects found and fixed during acceptance: `if` conditions and lazy-boolean left operands held Drop temporaries past the branch (edition 2024 drops them first), an ignored dynamic-index statement leaked a temporary scope, explicit generic destructor calls bypassed rejection when no Drop impl existed, and the no-destructor fast path initially regressed slice validation. Each fix has a frozen stock case or internal regression test.
+
+Internal controls in `src/compiler/{cfg,traits}/normal_drop*/tests.rs` cover cleanup omission, owner transplant, Move/Copy substitution, stale proof, foreign world, StorageLive deletion, Drop successor tamper, canonical target/signature corruption, removed instance demand, live field loan vs certified cleanup, and real budget exhaustion with no CFG publication.
+
+D17 is partial: non-Copy field-move conformance is blocked by the excluded owner shape. D22 is not claimed: no unwind cleanup. The historical canonical-copy X32 witness is promoted from legal-excluded to executed. Two panic controls now expect the explicit unit-struct owner boundary instead of the removed blanket Drop rejection.

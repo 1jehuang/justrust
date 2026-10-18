@@ -580,10 +580,13 @@ fn frozen_canonical_copy_invalid12() {
 fn frozen_canonical_copy_legal_excluded4() {
     for fixture in group("legal-excluded", 4) {
         // Keep the historical group and every other unsupported boundary unchanged.
+        // X32 is promoted by DROP-NORMAL.md: its unchanged source is also the
+        // frozen drop_normal positive/canonical_copy_x32.rs stock-matched case.
         if matches!(
             fixture.name,
             "ordinary_reference_generic_actual_clone_wrapper"
                 | "forced_clone_on_double_shared_reference_requires_depth3_receiver"
+                | "legal_canonical_drop_only_requires_destructor_execution"
         ) {
             runs(fixture.full_source, fixture.expected_stdout);
         } else {

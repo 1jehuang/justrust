@@ -150,9 +150,87 @@ def header_record(path, relative):
                evidence="README historical result table, not a fresh run" if (path.parent / "README.md").is_file() else "unavailable")
 
 
+def drop_receipt_records(root):
+    """Select the highest canonical numeric receipt version, never a stale fallback."""
+    base = root / "tests/fixtures/drop_normal"
+    versions = [(int(match.group(1)), path) for path in base.glob("receipts-v*")
+                if (match := re.fullmatch(r"receipts-v([1-9][0-9]*)", path.name))
+                and path.is_dir() and not path.is_symlink()]
+    if not versions:
+        return []
+    _, selected = max(versions)
+    manifest = selected / "manifest.json"
+    relative = manifest.relative_to(root).as_posix()
+    if not manifest.is_file() or manifest.is_symlink():
+        return [row(relative, "manifest", note="latest Drop manifest missing or symlinked; no fallback")]
+    try:
+        data = json.loads(manifest.read_text())
+        if not isinstance(data, dict) or data.get("schema") != 1 or not isinstance(data.get("sources"), list):
+            raise ValueError("unknown manifest schema")
+    except (ValueError, OSError):
+        return [row(relative, "manifest", note="invalid or unknown latest Drop manifest schema; no fallback")]
+    receipt = selected / "stock.json"
+    observations, linked, receipt_state = [], None, "unavailable"
+    if receipt.is_file() and not receipt.is_symlink():
+        try:
+            stock = json.loads(receipt.read_text())
+            if not isinstance(stock, dict) or stock.get("schema") != 1 or not isinstance(stock.get("observations"), list):
+                raise ValueError("unknown receipt schema")
+            observations = stock["observations"]
+            linked = stock.get("manifest_sha256") == digest(manifest.read_bytes())
+            receipt_state = "receipt-record-missing"
+        except (ValueError, OSError):
+            receipt_state = "receipt-unreadable"
+    if receipt.is_symlink():
+        receipt_state = "receipt-symlink-rejected"
+    records, visited = [], set()
+    for index, item in enumerate(data["sources"]):
+        name = item.get("path") if isinstance(item, dict) else None
+        if (not isinstance(name, str) or not name or Path(name).is_absolute()
+                or ".." in Path(name).parts or "\\" in name):
+            records.append(row(relative, f"sources[{index}]", note="invalid source path or record"))
+            continue
+        source = base / name
+        if not source.resolve().is_relative_to(base.resolve()):
+            records.append(row(relative, f"sources[{index}]", note="source escapes corpus root"))
+            continue
+        source_relative = source.relative_to(root).as_posix()
+        if source_relative in visited:
+            continue
+        visited.add(source_relative)
+        duplicates = sum(isinstance(s, dict) and s.get("path") == name for s in data["sources"])
+        label = item.get("classification")
+        category = {"positive": "declared-valid", "negative": "declared-invalid",
+                    "unsupported": "legal-unsupported"}.get(label, "unknown") if isinstance(label, str) else "unknown"
+        if duplicates != 1:
+            category = "unknown"
+        matches = [o for o in observations if isinstance(o, dict) and o.get("path") == name]
+        evidence, agrees, compile_status, run_status = receipt_state, None, None, None
+        if len(matches) == 1:
+            observed = matches[0]
+            agrees = (observed.get("classification"), observed.get("sha256")) == (label, item.get("sha256"))
+            evidence = "receipt-record-agrees" if agrees and linked else "receipt-record-conflicts"
+            compile_status = observed.get("compile", {}).get("status") if isinstance(observed.get("compile"), dict) else None
+            run_status = observed.get("run", {}).get("status") if isinstance(observed.get("run"), dict) else None
+        elif len(matches) > 1:
+            evidence = "receipt-record-duplicate"
+        records.append(row(source_relative, f"{relative}:sources[{index}]", category,
+                           declared_group=label, contract=relative,
+                           evidence=evidence, evidence_path=receipt.relative_to(root).as_posix() if receipt.is_file() else None,
+                           manifest_hash_match=linked, receipt_record_match=agrees,
+                           source_exists=source.is_file(),
+                           source_hash_match=digest(source.read_bytes()) == item.get("sha256") if source.is_file() else None,
+                           stock_compile_status=compile_status, stock_run_status=run_status,
+                           native_support="unknown; not evaluated",
+                           note="Latest numeric Drop declared labels only; older versions ignored; duplicate declaration" if duplicates != 1 else
+                           "Latest numeric Drop declared labels only; older versions ignored; receipt statuses are historical stock observations"))
+    return records
+
+
 def inventory(root):
     root = Path(root).resolve()
-    records, seen = [], set()
+    records = drop_receipt_records(root)
+    seen = {record["source_path"] for record in records}
     for base in ("fixtures", "tests/fixtures"):
         directory = root / base
         for manifest in sorted(directory.rglob("manifest.tsv")):

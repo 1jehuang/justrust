@@ -4153,6 +4153,20 @@ impl<'a> Checker<'a> {
     }
     /// Recover only concrete pattern shape, without a general inference engine.
     pub(super) fn pattern_ty(&self, pattern: &Pattern, ty: &ir::Ty) -> Result<ir::Ty, String> {
+        if !matches!(
+            pattern,
+            Pattern::Wildcard | Pattern::Binding { .. } | Pattern::Apply { .. }
+        ) && let Some(facts) = self.facts().validated()
+            && facts.has_normal_drop_impls()
+            && matches!(
+                facts
+                    .normal_drop_plan(ty)
+                    .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?,
+                super::super::traits::NormalDropPlan::Destructor(_)
+            )
+        {
+            return Err("unsupported: destructuring a normal Drop owner".into());
+        }
         if matches!(ty, ir::Ty::Ref { .. })
             && !matches!(pattern, Pattern::Wildcard | Pattern::Binding { .. })
         {

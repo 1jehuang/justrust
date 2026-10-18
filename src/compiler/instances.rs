@@ -4,7 +4,7 @@ use super::{frontend, ir, traits};
 use std::sync::Arc;
 
 const SEMANTICS: &[u8] =
-    b"jr-native-generic-carriers-v4/linux-x86_64/checked/carrier-regions-storage-effects/structured-declaration-paths/complete-trait-applications";
+    b"jr-native-normal-drop-v5/linux-x86_64/checked/scalar-root-flags/atomic-canonical-drop/carrier-regions-storage-effects/structured-declaration-paths/complete-trait-applications";
 
 pub(super) struct InstanceIdentity {
     pub symbol: String,
@@ -484,12 +484,33 @@ pub(super) struct Instance {
 
 pub(super) struct Plan {
     pub entries: Vec<Instance>,
+    cleanup_targets: Vec<ir::CallTarget>,
     lookup: HashMap<ir::CallTarget, usize>,
     _reservations: Vec<ir::PlanReservation>,
     budget: ir::PlanBudget,
 }
 
 impl Plan {
+    pub fn validate_cleanup_dependencies(
+        &self,
+        function: &super::cfg::Function,
+    ) -> Result<(), String> {
+        for block in &function.blocks {
+            self.budget.charge_work(1)?;
+            if let super::cfg::Terminator::Drop { cleanup, .. } = &block.terminator.value {
+                let target = cleanup.destructor().target();
+                self.budget.charge_work(self.cleanup_targets.len())?;
+                if !self.cleanup_targets.contains(target) {
+                    return Err("cleanup target lacks sealed implicit instance demand".into());
+                }
+                charge_target_lookup(target, &self.budget)?;
+                if !self.lookup.contains_key(target) {
+                    return Err("cleanup target is absent from executable plan".into());
+                }
+            }
+        }
+        Ok(())
+    }
     pub fn symbol(&self, target: &ir::CallTarget) -> Result<String, String> {
         charge_target_lookup(target, &self.budget)?;
         let index = self
@@ -525,6 +546,7 @@ pub(super) fn build(
     let mut depths = Vec::new();
     let mut reservations = Vec::new();
     let mut canonical_keys = HashMap::new();
+    let mut cleanup_targets = Vec::new();
     let registry_reservation = budget.reserve_bytes(
         context
             .callable_count()
@@ -675,6 +697,52 @@ pub(super) fn build(
         let source = sources
             .get(source_index)
             .ok_or("missing universally checked declaration body")?;
+        // Implicit cleanup is part of the same closed demand frontier as an
+        // explicit call. Do not rely on nongeneric source-root enumeration.
+        if closed_facts.has_normal_drop_impls() {
+            for ty in source
+                .locals
+                .iter()
+                .map(|local| &local.ty)
+                .chain(source.exprs.iter().map(|expr| &expr.ty))
+                .chain(std::iter::once(&source.result))
+            {
+                budget.charge_work(1)?;
+                let ty = ir::substitute_ty(
+                    ty,
+                    &env,
+                    &target.type_args,
+                    ir::FactsCtx::from_validated(&closed_facts),
+                    context,
+                    budget,
+                )?;
+                match closed_facts
+                    .normal_drop_plan(&ty)
+                    .map_err(|e| e.into_legacy_diagnostic(budget))?
+                {
+                    traits::NormalDropPlan::Destructor(destructor) => {
+                        if env.is_generic() {
+                            return Err(
+                                "unsupported: generic function carrying a normal Drop owner".into(),
+                            );
+                        }
+                        budget.charge_work(cleanup_targets.len())?;
+                        if !cleanup_targets.contains(destructor.target()) {
+                            budget.retain_bytes(2 * std::mem::size_of::<ir::CallTarget>())?;
+                            cleanup_targets
+                                .try_reserve(1)
+                                .map_err(|_| "cleanup demand allocation failed")?;
+                            cleanup_targets.push(destructor.target().clone());
+                        }
+                        queue.add(destructor.target().clone(), depth + 1, context, budget)?;
+                    }
+                    traits::NormalDropPlan::Trivial => {}
+                    traits::NormalDropPlan::Unresolved => {
+                        return Err("unsupported: unresolved closed Drop demand".into());
+                    }
+                }
+            }
+        }
         for expression in &source.exprs {
             budget.charge_work(1)?;
             if let ir::ExprKind::Call { target: callee, .. } = &expression.kind {
@@ -729,6 +797,7 @@ pub(super) fn build(
     reservations.push(lookup_reservation);
     Ok(Plan {
         entries,
+        cleanup_targets,
         lookup,
         _reservations: reservations,
         budget: budget.clone(),
@@ -1193,6 +1262,48 @@ mod tests {
     }
 
     #[test]
+    fn normal_drop_demand_is_sealed_even_when_destructor_is_already_a_source_root() {
+        let text =
+            "fn f(){let d=D{v:1};}struct D{v:i32}impl Drop for D{fn drop(&mut self){}}fn main(){}";
+        let program = frontend::parse(text).unwrap();
+        let budget = ir::PlanBudget::default();
+        let mut context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let mut sources = Vec::new();
+        let mut publication = None;
+        for index in 0..context.callable_count() {
+            let declaration = context.callable_decl(index).unwrap();
+            match context.publish_callable_body(declaration, &budget).unwrap() {
+                frontend::PublishedCallableBody::Source(source) => {
+                    if declaration == context.function_decl(0).unwrap() {
+                        publication = Some(source.clone());
+                    }
+                    sources.push(source.source().clone());
+                }
+                frontend::PublishedCallableBody::Recipe(source) => sources.push(source),
+            }
+        }
+        let publication = publication.unwrap();
+        let function = super::super::cfg::lower_source_closed(&publication, &budget).unwrap();
+        let mut plan = build(&mut context, &sources, &budget).unwrap();
+        assert!(!plan.cleanup_targets.is_empty());
+        plan.validate_cleanup_dependencies(&function).unwrap();
+        let demanded = plan.cleanup_targets.clone();
+        plan.cleanup_targets.clear();
+        assert!(
+            plan.symbol(&demanded[0]).is_ok(),
+            "source-root lookup should still succeed"
+        );
+        assert!(
+            plan.validate_cleanup_dependencies(&function)
+                .unwrap_err()
+                .contains("implicit instance demand")
+        );
+        plan.cleanup_targets = demanded.clone();
+        plan.lookup.remove(&demanded[0]);
+        assert!(plan.validate_cleanup_dependencies(&function).is_err());
+    }
+
+    #[test]
     fn relocation_symbol_copies_share_the_plan_byte_limit() {
         let budget = ir::PlanBudget::new(ir::PlanLimits {
             bytes: 12 + 4 * std::mem::size_of::<(usize, String)>(),
@@ -1217,6 +1328,7 @@ mod tests {
                     _reservations: vec![],
                 },
             }],
+            cleanup_targets: vec![],
             lookup,
             _reservations: vec![],
             budget: budget.clone(),

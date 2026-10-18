@@ -3037,6 +3037,9 @@ impl CarrierBuilder<'_, '_> {
                         true,
                     )?;
                 }
+                Terminator::Drop { cleanup, .. } => {
+                    self.used_place(state, cleanup.owner(), &mut used, &mut defs, true)?;
+                }
                 Terminator::Return => self.used_place(
                     state,
                     &Place {
@@ -3986,7 +3989,9 @@ fn mul(a: usize, b: usize) -> Result<usize, Exhausted> {
 }
 fn successors(term: &Terminator) -> [Option<BlockId>; 2] {
     match term {
-        Terminator::Goto(next) | Terminator::Call { next, .. } => [Some(*next), None],
+        Terminator::Goto(next) | Terminator::Call { next, .. } | Terminator::Drop { next, .. } => {
+            [Some(*next), None]
+        }
         Terminator::Switch {
             then_block,
             else_block,

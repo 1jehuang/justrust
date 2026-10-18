@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 mod associated_types;
 mod catalog;
 mod equality;
+mod normal_drop;
 mod parameter_equality;
 mod projected_methods;
 pub use associated_types::NormalizedAssociatedType;
@@ -21,6 +22,7 @@ pub use catalog::{
     RecipeDescriptor, RecipeShapeInventory,
 };
 pub use equality::NormalizedProjectionEquality;
+pub use normal_drop::{NormalDropPlan, ValidatedDestructor};
 
 pub const MAX_PREDICATES: usize = 256;
 const DIAGNOSTIC_LIMIT: usize = 64 * 1024;
@@ -1144,6 +1146,7 @@ pub struct ValidatedTraitWorld {
     owner_normalization_ready: bool,
     owner_normalization_finalized: bool,
     has_associated_bounds: bool,
+    has_normal_drop: bool,
     declared_callables: Vec<equality::DeclaredCallableContext>,
 }
 
@@ -1287,6 +1290,7 @@ impl ValidatedTraitWorld {
             owner_normalization_ready: false,
             owner_normalization_finalized: false,
             has_associated_bounds: false,
+            has_normal_drop: false,
             declared_callables: Vec::new(),
         };
         world.validate_header_type_metadata()?;
@@ -1313,16 +1317,37 @@ impl ValidatedTraitWorld {
         world.build_environments()?;
         world.validate_final_declared_contexts()?;
         world.validate_default_body_signatures()?;
-        if world
-            .headers
-            .impls
-            .iter()
-            .any(|h| h.trait_ref.declaration == world.catalog.id(CatalogItem::Drop))
-        {
-            return Err(FactsError::unsupported(
-                budget,
-                "unsupported: canonical Drop destructor execution",
-            ));
+        for h in world.headers.impls.iter() {
+            if h.trait_ref.declaration != world.catalog.id(CatalogItem::Drop) {
+                continue;
+            }
+            world.has_normal_drop = true;
+            let Ty::Struct(owner) = &h.trait_ref.self_ty else {
+                return Err(FactsError::unsupported(
+                    budget,
+                    "unsupported: normal Drop requires a nongeneric scalar-field struct",
+                ));
+            };
+            if h.schema_env.is_generic()
+                || !owner.def().type_args.is_empty()
+                || owner.def().fields.is_empty()
+                || owner
+                    .def()
+                    .fields
+                    .iter()
+                    .any(|field| field.name.parse::<usize>().is_ok())
+                || owner.def().fields.iter().any(|field| {
+                    !matches!(
+                        field.ty,
+                        Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char | Ty::Unit
+                    )
+                })
+            {
+                return Err(FactsError::unsupported(
+                    budget,
+                    "unsupported: normal Drop requires a nongeneric scalar-field struct",
+                ));
+            }
         }
         world.owner_normalization_finalized = true;
         Ok(Arc::new(world))

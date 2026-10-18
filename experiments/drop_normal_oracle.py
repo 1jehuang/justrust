@@ -38,6 +38,27 @@ def sources():
     return sorted(FIXTURES.glob("*/*.rs"))
 
 
+def validated_sources(manifest):
+    """Validate frozen membership independently of later corpus additions."""
+    seen = set()
+    result = []
+    for item in manifest["sources"]:
+        name = item["path"]
+        relative = pathlib.PurePosixPath(name)
+        if (relative.is_absolute() or len(relative.parts) != 2
+                or relative.parts[0] not in {"positive", "negative", "unsupported"}
+                or relative.suffix != ".rs" or str(relative) != name
+                or item["classification"] != relative.parts[0] or name in seen):
+            raise ValueError("unsafe or duplicate frozen source: " + name)
+        path = FIXTURES / name
+        path.resolve().relative_to(FIXTURES.resolve())
+        if digest(path.read_bytes()) != item["sha256"]:
+            raise ValueError("frozen source changed: " + name)
+        seen.add(name)
+        result.append(path)
+    return result
+
+
 def freeze(directory):
     directory.mkdir(parents=True, exist_ok=True)
     manifest = {
@@ -65,9 +86,9 @@ def observe(directory, verify):
     manifest = json.loads(manifest_path.read_text())
     assert digest(RUSTC.read_bytes()) == manifest["compiler_sha256"], "compiler changed"
     assert manifest["flags"] == FLAGS, "flags changed"
-    assert [str(p.relative_to(FIXTURES)) for p in sources()] == [s["path"] for s in manifest["sources"]], "corpus changed"
-    for item in manifest["sources"]:
-        assert digest((FIXTURES / item["path"]).read_bytes()) == item["sha256"], item["path"] + " changed"
+    frozen = validated_sources(manifest)
+    if not verify:
+        assert sources() == frozen, "corpus changed after freeze"
     observations = []
     with tempfile.TemporaryDirectory(prefix="stock-bin-", dir=directory) as temporary:
         for index, item in enumerate(manifest["sources"]):
@@ -105,6 +126,7 @@ def export(directory):
     manifest_path = directory / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     receipt = json.loads((directory / "stock.json").read_text())
+    validated_sources(manifest)
     assert receipt["manifest_sha256"] == digest(manifest_path.read_bytes())
     assert len(receipt["observations"]) == len(manifest["sources"])
     lines = ["# manifest_sha256=" + receipt["manifest_sha256"] + "\n"]
@@ -126,7 +148,7 @@ def export(directory):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["freeze", "observe", "verify", "export"])
-    parser.add_argument("--receipts", type=pathlib.Path, default=FIXTURES / "receipts-v2")
+    parser.add_argument("--receipts", type=pathlib.Path, default=FIXTURES / "receipts-v9")
     args = parser.parse_args()
     if args.action == "freeze":
         freeze(args.receipts)

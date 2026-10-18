@@ -286,9 +286,20 @@ acceptance.
 - [ ] Extend dynamic borrowed places, temporary scopes/lifetime extension,
       aggregate carrier flows, general reborrows and loop/SCC-carried loans.
       Preserve the delivered current-cell and per-occurrence provenance rules.
+- [x] Normal-path canonical `Drop` for nongeneric scalar-field named structs
+      under DROP-NORMAL.md: runtime drop flags, reverse lexical/parameter order,
+      moves, conditional init/move, RHS-first replacement, loops, labeled exits,
+      statement/`if`/lazy-boolean/`while` condition temporaries, protected
+      return/break values, implicit destructor instance demand and sealed CFG
+      proof. 56 stock-frozen sources: 25 native-positive with exact stock output
+      in debug and release, 4 semantic rejections, 27 explicit boundaries.
+      Aborting panic only; no unwind cleanup, aggregate/generic glue or dropck.
 - [ ] Implement real Drop checking/elaboration, conditional drop flags, partial
       initialization, assignment replacement and exact destruction order across
       returns, branches, loops, breaks, panic/unwind and closure/async captures.
+      The bounded slice above covers only scalar-field nominal owners on normal
+      paths; aggregate/enum/generic/reference-bearing owners, field moves out of
+      Drop owners, owned patterns, unwinding and captures remain open.
 - [ ] Specify unsafe validity, raw-pointer operations, alias/provenance rules,
       interior mutability and UnsafeCell interactions. Track genuinely unresolved
       language-model questions rather than inventing permissive defaults.

@@ -74,6 +74,7 @@ There is no global fixture schema. These formats are handled separately:
 | `experiments/*correctness.py`: `FIXTURES = json.loads(...)` | Literal JSON string or a prior literal constant, as in borrowing and generic-carrier corpora. Read full source and any declared hash without importing the module. |
 | Dynamic `corpus()` functions, local tuple lists, calculated sources | Explicit unknown record per runner. No execution or pretend interpretation of loops, conditionals, promotions, formatting, and wrappers. The tuple corpus, for example, conditionally promotes a historical boundary; static declaration records cannot establish effective current classification. |
 | `fixtures/adler2_adapted/stock-evidence.json` | Match named case and source/oracle hash for sibling `cases/*.rs`. Evidence availability is reported, but absent explicit per-case classifications remain unknown. Adapted recurrence evidence does not imply unchanged-crate or native acceptance. |
+| `tests/fixtures/drop_normal/receipts-vN/manifest.json` and `stock.json` | Select the highest canonical positive numeric N, not lexicographic order; ignore symlinked directories and noncanonical names. Validate version-1 JSON schemas, read declared source paths/classifications, verify source hashes and stock receipt's manifest hash. This format's `unsupported` label means legal Rust outside the native candidate slice. Ignore older versions and emit one record per declared source. |
 | Other `.rs` files under `fixtures/` and `tests/fixtures/` | Explicit unknown, nearest supported README location when available. An `unsupported` filename alone never establishes classification. |
 
 The slice runtime/rejection and leading-zero runner scripts are separately listed
@@ -110,13 +111,28 @@ implicitly supported or invalid. Grouped fragments may still need runner-added
 `main` functions, and dynamic runners can override groups, so the tool emits an
 additional unknown `corpus()` record even when static fixtures were extracted.
 
+For the Drop adapter, labels come from manifest records, never from `positive/`,
+`negative/`, or `unsupported/` source directory names. Receipt directories must
+match `receipts-v[1-9][0-9]*` exactly, be real directories, and not be symlinks.
+Selection is numeric, so v10 wins over v9. Only the selected latest version is
+read. A missing, invalid, or symlinked latest manifest is reported unknown without
+falling back to older evidence; a valid manifest with a missing receipt still
+emits its declarations with evidence unavailable. Symlinked receipts are rejected.
+Missing or malformed receipts, manifest linkage conflicts, source drift, duplicate
+source declarations, duplicate observations and unknown classifications are exposed
+explicitly. Unlisted source files remain unknown. Recorded stock compile/run
+statuses are historical observations, not current success claims or native
+verification; stdout bytes and compiler identity are not replayed by this tool.
+
 ## Validation and follow-up
 
 Unittest exercises TSV/receipt agreement and conflict, missing source/evidence,
 malformed rows and JSON, independent header semantics, duplicate headers,
 literal dictionaries, embedded JSON and named JSON constants, source-hash drift,
 unknown groups (including ambiguous `boundary`), missing root directories, dynamic
-corpora, nonexecution, deterministic walks, Adler evidence,
+corpora, nonexecution, deterministic walks, Adler evidence, Drop numeric latest
+selection, incomplete latest versions, symlink rejection, one-record-per-source
+behavior, source/manifest/receipt drift, path traversal rejection, missing receipts,
 and actual checkout boundary groups. No Rust compilation or native tests were
 run. `/usr/bin/rustc -vV` was identity inspection only.
 

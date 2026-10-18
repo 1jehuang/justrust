@@ -5,6 +5,8 @@
 //! dataflow is established separately by the analyzer before native emission.
 use super::frontend::{BinaryOp, UnaryOp};
 use super::ir::{self, ExprId, IntTy, IntValue, LocalId, LoopId, Place, Projection, Ty};
+mod drop_normal;
+pub use drop_normal::ValidatedCleanupCall;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BlockId(pub usize);
@@ -511,6 +513,12 @@ pub enum Rvalue {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Terminator {
+    /// Runtime-guarded, canonically authorized exclusive destructor invocation.
+    /// Storage stays live; ownership ends on the normal continuation.
+    Drop {
+        cleanup: std::sync::Arc<ValidatedCleanupCall>,
+        next: BlockId,
+    },
     SwitchVariant {
         place: Place,
         variant: ir::VariantId,
@@ -599,7 +607,8 @@ impl Terminator {
                 }
             }
             Self::Switch { condition, .. } => visit(condition)?,
-            Self::SwitchVariant { .. }
+            Self::Drop { .. }
+            | Self::SwitchVariant { .. }
             | Self::Goto(_)
             | Self::Return
             | Self::Panic(_)
@@ -1050,6 +1059,15 @@ impl Function {
                     add(&mut bytes, payload.message.len(), 1, budget)?;
                     add(&mut bytes, payload.location.len(), 1, budget)?;
                 }
+                Terminator::Drop { cleanup, .. } => {
+                    path(&mut bytes, cleanup.owner(), budget)?;
+                    add(
+                        &mut bytes,
+                        1,
+                        std::mem::size_of::<ValidatedCleanupCall>(),
+                        budget,
+                    )?;
+                }
                 Terminator::SwitchVariant { place, .. } => path(&mut bytes, place, budget)?,
                 _ => {}
             }
@@ -1106,6 +1124,15 @@ impl Function {
             return Err(
                 "reference-valued instance requires its exact verified-template body proof".into(),
             );
+        }
+        if self.lowering_proof.is_none() {
+            for local in &self.locals {
+                if drop_normal::descriptor(&local.ty, ir::FactsCtx::from_validated(facts))?
+                    .is_some()
+                {
+                    return Err("owning Drop CFG requires exact canonical lowering proof".into());
+                }
+            }
         }
         if let Some(shape) = &self.lowering_proof {
             shape.validate(self, facts, budget)?;
@@ -1387,6 +1414,7 @@ impl Function {
                         ..
                     }
                     | Terminator::SwitchVariant { place, .. } => check_place(place)?,
+                    Terminator::Drop { cleanup, .. } => check_place(cleanup.owner())?,
                     Terminator::Goto(_)
                     | Terminator::Switch { .. }
                     | Terminator::Return
@@ -1435,7 +1463,9 @@ impl Function {
                         }
                     };
                     match self.blocks[current.0].terminator.value {
-                        Terminator::Goto(next) | Terminator::Call { next, .. } => push(next),
+                        Terminator::Goto(next)
+                        | Terminator::Call { next, .. }
+                        | Terminator::Drop { next, .. } => push(next),
                         Terminator::Switch {
                             then_block,
                             else_block,
@@ -1590,6 +1620,13 @@ impl Function {
                         operand(value, budget, facts)?;
                     }
                     path(destination, budget)?;
+                }
+                Terminator::Drop { cleanup, .. } => {
+                    path(cleanup.owner(), budget)?;
+                    let authority = facts
+                        .validated()
+                        .ok_or("cleanup requires validated canonical facts")?;
+                    cleanup.validate(self, authority)?;
                 }
                 Terminator::Switch { condition, .. } => operand(condition, budget, facts)?,
                 Terminator::SwitchVariant { place, .. } => path(place, budget)?,
@@ -2195,6 +2232,16 @@ impl Function {
                     block(*then_block)?;
                     block(*else_block)?;
                 }
+                Terminator::Drop { cleanup, next } => {
+                    let authority = facts
+                        .validated()
+                        .ok_or("cleanup requires validated canonical facts")?;
+                    if self.lowering_proof.is_none() {
+                        return Err("cleanup requires exact canonical lowering proof".into());
+                    }
+                    cleanup.validate(self, authority)?;
+                    block(*next)?;
+                }
                 Terminator::Goto(next) => block(*next)?,
                 Terminator::Switch {
                     condition,
@@ -2213,6 +2260,13 @@ impl Function {
                     next,
                     ..
                 } => {
+                    if let Some(authority) = facts.validated()
+                        && authority
+                            .is_canonical_drop_call(target)
+                            .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?
+                    {
+                        return Err("canonical destructor invocation requires an authorized cleanup operation".into());
+                    }
                     ir::validate_callee(target, signature, facts)?;
                     if target.type_arguments().len() > 32 {
                         return Err("generic call argument limit exceeded".into());
@@ -2312,6 +2366,7 @@ struct Lowerer<'a> {
     parameters: std::collections::HashSet<LocalId>,
     blocks: Vec<PendingBlock>,
     current: BlockId,
+    drop_enabled: bool,
     scopes: Vec<Vec<LocalId>>,
     loops: Vec<LoopTarget>,
 }
@@ -2648,7 +2703,7 @@ impl Lowerer<'_> {
             } = self.pattern_test(id, &source, &arm.pattern, completes)?;
             self.current = selected;
             for local in test_scope.iter().rev() {
-                self.statement(Statement::StorageDead(*local), Some(id));
+                self.end_storage(*local, Some(id));
             }
             self.scopes.push(Vec::new());
             self.initialize_pattern_bindings(id, &source, &arm.pattern, completes)?;
@@ -2661,7 +2716,7 @@ impl Lowerer<'_> {
             self.terminate(Terminator::Goto(join), Some(id))?;
             self.current = next;
             for local in test_scope.iter().rev() {
-                self.statement(Statement::StorageDead(*local), Some(id));
+                self.end_storage(*local, Some(id));
             }
         }
         self.terminate(Terminator::Unreachable, Some(id))?;
@@ -2762,7 +2817,11 @@ impl Lowerer<'_> {
                 .as_ref()
                 .map(|term| &term.value)
             {
-                Some(Terminator::Goto(next) | Terminator::Call { next, .. }) => [Some(*next), None],
+                Some(
+                    Terminator::Goto(next)
+                    | Terminator::Call { next, .. }
+                    | Terminator::Drop { next, .. },
+                ) => [Some(*next), None],
                 Some(Terminator::Switch {
                     condition: Operand::Constant(Constant::Bool(value)),
                     then_block,
@@ -2829,7 +2888,7 @@ impl Lowerer<'_> {
         } = self.pattern_test(value, &source, pattern, completes)?;
         self.current = rejected;
         for local in temporaries.iter().rev() {
-            self.statement(Statement::StorageDead(*local), Some(value));
+            self.end_storage(*local, Some(value));
         }
         self.scopes.push(Vec::new());
         self.expression(else_branch)?;
@@ -2839,7 +2898,7 @@ impl Lowerer<'_> {
         self.terminate(Terminator::Unreachable, Some(else_branch))?;
         self.current = selected;
         for local in temporaries.iter().rev() {
-            self.statement(Statement::StorageDead(*local), Some(value));
+            self.end_storage(*local, Some(value));
         }
         self.initialize_pattern_bindings(value, &source, pattern, completes)
     }
@@ -2895,7 +2954,7 @@ impl Lowerer<'_> {
             .flat_map(|scope| scope.iter().rev().copied())
             .collect();
         for local in locals {
-            self.statement(Statement::StorageDead(local), origin);
+            self.end_storage(local, origin);
         }
     }
 
@@ -3025,6 +3084,9 @@ impl Lowerer<'_> {
     fn body_inner(&mut self, body: &ir::Block, destination: Option<Place>) -> Result<(), String> {
         self.scopes.push(Vec::new());
         for statement in &body.statements {
+            if self.drop_enabled {
+                self.scopes.push(Vec::new());
+            }
             match statement {
                 ir::Stmt::AssignOp { place, op, value } => {
                     let operand = self.expression(*value)?;
@@ -3081,11 +3143,11 @@ impl Lowerer<'_> {
                     if self.parameters.contains(local) {
                         return Err("declaration local aliases parameter".into());
                     }
-                    self.live(*local, None);
+                    self.live_binding(*local, None);
                 }
                 ir::Stmt::Let { local, value } => {
                     let operand = self.expression(*value)?;
-                    self.live(*local, Some(*value));
+                    self.live_binding(*local, Some(*value));
                     self.assign(place(*local), Rvalue::Use(operand), Some(*value));
                 }
                 ir::Stmt::LetPattern {
@@ -3093,6 +3155,9 @@ impl Lowerer<'_> {
                     ty,
                     bindings,
                 } => {
+                    if drop_normal::descriptor(ty, self.facts)?.is_some() && !bindings.is_empty() {
+                        return Err("unsupported: destructuring a normal Drop owner".into());
+                    }
                     self.source.validate_pattern_bindings_with_params(
                         ty,
                         bindings,
@@ -3108,6 +3173,10 @@ impl Lowerer<'_> {
                     {
                         let (array, index) = self.dynamic_source(base, index)?;
                         self.statement(Statement::IndexInspect { array, index }, Some(*value));
+                        if self.drop_enabled {
+                            self.cleanup(self.scopes.len() - 1, None);
+                            self.scopes.pop();
+                        }
                         continue;
                     }
                     let source = self.pattern_source(*value)?;
@@ -3119,7 +3188,7 @@ impl Lowerer<'_> {
                         }
                         // The entire initializer runs in the old scope before
                         // any new binding starts its storage lifetime.
-                        self.live(binding.local, Some(*value));
+                        self.live_binding(binding.local, Some(*value));
                         if completes {
                             let mut selected = source.clone();
                             selected.projection.extend_from_slice(&binding.projection);
@@ -3137,15 +3206,28 @@ impl Lowerer<'_> {
                     pattern,
                     else_branch,
                 } => {
+                    if drop_normal::descriptor(ty, self.facts)?.is_some() {
+                        return Err("unsupported: let-else with a normal Drop owner".into());
+                    }
                     self.let_else(*value, ty, pattern, *else_branch)?;
                 }
                 ir::Stmt::Assign { local, value } => {
                     let operand = self.expression(*value)?;
+                    self.drop_value(*local, Some(*value));
                     self.assign(place(*local), Rvalue::Use(operand), Some(*value));
                 }
                 ir::Stmt::AssignPlace { place, value } => {
+                    if !place.projection.is_empty()
+                        && drop_normal::descriptor(self.result.place_ty(place)?, self.facts)?
+                            .is_some()
+                    {
+                        return Err("unsupported: indirect normal Drop replacement".into());
+                    }
                     let operand = self.expression(*value)?;
                     self.inspect_index_prefixes(place, Some(*value))?;
+                    if place.projection.is_empty() {
+                        self.drop_value(place.local, Some(*value));
+                    }
                     self.assign(place.clone(), Rvalue::Use(operand), Some(*value));
                 }
                 ir::Stmt::Expr(value) => {
@@ -3201,18 +3283,22 @@ impl Lowerer<'_> {
                     let condition_scope = self.scopes.pop().unwrap();
                     self.current = run;
                     for local in condition_scope.iter().rev() {
-                        self.statement(Statement::StorageDead(*local), Some(*condition));
+                        self.end_storage(*local, Some(*condition));
                     }
                     self.body(body, None)?;
                     self.terminate(Terminator::Goto(head), None)?;
                     self.current = condition_false;
                     for local in condition_scope.iter().rev() {
-                        self.statement(Statement::StorageDead(*local), Some(*condition));
+                        self.end_storage(*local, Some(*condition));
                     }
                     self.terminate(Terminator::Goto(exit), Some(*condition))?;
                     self.current = exit;
                     self.loops.pop();
                 }
+            }
+            if self.drop_enabled {
+                self.cleanup(self.scopes.len() - 1, None);
+                self.scopes.pop();
             }
         }
         if let Some(tail) = body.tail {
@@ -3530,6 +3616,11 @@ impl Lowerer<'_> {
             ir::ExprKind::Binary { op, left, right }
                 if matches!(op, BinaryOp::And | BinaryOp::Or) =>
             {
+                // Each lazy operand is its own temporary scope: LHS temporaries
+                // end before the RHS is evaluated or the shortcut is taken.
+                if self.drop_enabled {
+                    self.scopes.push(Vec::new());
+                }
                 let left = self.expression(*left)?;
                 let evaluate = self.block();
                 let shortcut = self.block();
@@ -3547,7 +3638,15 @@ impl Lowerer<'_> {
                     },
                     origin,
                 )?;
+                let left_scope = if self.drop_enabled {
+                    self.scopes.pop().expect("lazy operand scope")
+                } else {
+                    Vec::new()
+                };
                 self.current = shortcut;
+                for local in left_scope.iter().rev() {
+                    self.end_storage(*local, origin);
+                }
                 self.assign(
                     destination.clone(),
                     Rvalue::Use(Operand::Constant(Constant::Bool(matches!(
@@ -3558,6 +3657,9 @@ impl Lowerer<'_> {
                 );
                 self.terminate(Terminator::Goto(join), origin)?;
                 self.current = evaluate;
+                for local in left_scope.iter().rev() {
+                    self.end_storage(*local, origin);
+                }
                 self.scopes.push(Vec::new());
                 let right = self.expression(*right)?;
                 self.assign(destination.clone(), Rvalue::Use(right), origin);
@@ -3623,6 +3725,11 @@ impl Lowerer<'_> {
                 then_block,
                 else_block,
             } => {
+                // Edition 2024: the whole if condition is a temporary scope,
+                // so its temporaries end before either branch runs.
+                if self.drop_enabled {
+                    self.scopes.push(Vec::new());
+                }
                 let condition = self.expression(*condition)?;
                 let yes = self.block();
                 let no = self.block();
@@ -3635,10 +3742,21 @@ impl Lowerer<'_> {
                     },
                     origin,
                 )?;
+                let condition_scope = if self.drop_enabled {
+                    self.scopes.pop().expect("if condition scope")
+                } else {
+                    Vec::new()
+                };
                 self.current = yes;
+                for local in condition_scope.iter().rev() {
+                    self.end_storage(*local, origin);
+                }
                 self.body(then_block, Some(destination.clone()))?;
                 self.terminate(Terminator::Goto(join), origin)?;
                 self.current = no;
+                for local in condition_scope.iter().rev() {
+                    self.end_storage(*local, origin);
+                }
                 self.body(else_block, Some(destination.clone()))?;
                 self.terminate(Terminator::Goto(join), origin)?;
                 self.current = join;
@@ -4001,6 +4119,7 @@ fn lower_internal_with_source(
     // Metadata and exact publication authority precede unsupported-position
     // classification, including for unused and concretely substituted types.
     reject_slices(source, facts, budget)?;
+    let drop_enabled = drop_normal::admit(source, facts)?;
     let arena_size = source
         .exprs
         .len()
@@ -4114,6 +4233,7 @@ fn lower_internal_with_source(
             terminator: None,
         }],
         current: BlockId(0),
+        drop_enabled,
         scopes: vec![source.params.clone()],
         loops: Vec::new(),
     };
@@ -4131,6 +4251,9 @@ fn lower_internal_with_source(
     }
     body_result?;
     lowerer.cleanup(0, None);
+    if let Some(error) = lowerer.resource_error.take() {
+        return Err(error);
+    }
     lowerer.terminate(Terminator::Return, None)?;
     for (index, expression) in source.exprs.iter().enumerate() {
         if let ir::ExprKind::Borrow {
@@ -4476,6 +4599,7 @@ mod panic_terminal_tests {
                 terminator: None,
             }],
             current: BlockId(0),
+            drop_enabled: false,
             scopes: vec![Vec::new()],
             loops: Vec::new(),
         };
@@ -7333,6 +7457,7 @@ mod tests {
             parameters: Default::default(),
             blocks: vec![],
             current: BlockId(0),
+            drop_enabled: false,
             scopes: vec![],
             loops: vec![],
         };
@@ -8354,6 +8479,7 @@ mod tests {
                 })
                 .collect(),
             current: BlockId(1),
+            drop_enabled: false,
             scopes: Vec::new(),
             loops: Vec::new(),
         }
@@ -10154,6 +10280,10 @@ mod tests {
                     assert!(live[place.local.0], "variant switch reads dead storage");
                     pending.push((*then_block, live.clone()));
                     pending.push((*else_block, live));
+                }
+                Terminator::Drop { cleanup, next } => {
+                    assert!(live[cleanup.owner().local.0], "cleanup uses dead storage");
+                    pending.push((*next, live));
                 }
                 Terminator::Goto(next) => pending.push((*next, live)),
                 Terminator::Switch {

@@ -150,7 +150,7 @@ fn edges(terminator: &cfg::Terminator) -> Vec<cfg::BlockId> {
             else_block,
             ..
         } => vec![*then_block, *else_block],
-        cfg::Terminator::Call { next, .. } => vec![*next],
+        cfg::Terminator::Call { next, .. } | cfg::Terminator::Drop { next, .. } => vec![*next],
         cfg::Terminator::Return | cfg::Terminator::Panic(_) | cfg::Terminator::Unreachable => {
             vec![]
         }

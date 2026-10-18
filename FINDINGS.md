@@ -1,5 +1,22 @@
 # Findings: where agent build time goes
 
+## 2026-10-18: Normal-path canonical Drop for scalar-field structs
+
+- Real `impl Drop` execution for nongeneric scalar-field named structs: an atomic
+  CFG `Drop` terminator with private validated cleanup evidence, per-root
+  runtime drop flags, RHS-first replacement, condition/statement temporary
+  scopes and implicit destructor instance demand, all sealed before analysis.
+- 56 stock-frozen sources (receipts-v9): 25 native-positive byte-identical to
+  stock in debug and release at workers 1/8, 4 semantic rejections, 27 explicit
+  boundaries. See DROP-NORMAL.md.
+- Integrated with pending character-cast work: 3,236 tests passed, release Drop
+  and char-cast acceptance passed, strict all-target Clippy clean. Validation
+  timing only, no compiler speed claim.
+- Acceptance caught real wrong-code before release: `if` conditions and `&&`/`||`
+  left operands held Drop temporaries past the branch. Fixed against stock order.
+- Not claimed: unwinding cleanup, aggregate/enum/generic/reference owners,
+  field moves out of Drop owners, owned patterns, captures. Full Rust remains open.
+
 ## 2026-10-18: Primitive leading-zero count and original core estimator
 
 - Implemented width-correct native `.leading_zeros()` for all 12 integer types,

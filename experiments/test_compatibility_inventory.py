@@ -131,6 +131,134 @@ class InventoryTests(unittest.TestCase):
         self.put("stock-receipt.json", '{"cases": null}')
         self.assertEqual(inv.manifest_records(path, "manifest.tsv")[0]["evidence"], "receipt-unreadable")
 
+    def make_drop_v2(self):
+        prefix = "tests/fixtures/drop_normal/"
+        source = self.put(prefix + "neutral.rs", "fn main(){}")
+        entry = {"path": "neutral.rs", "classification": "unsupported",
+                 "sha256": inv.digest(source.read_bytes())}
+        manifest = self.put(prefix + "receipts-v2/manifest.json",
+                            json.dumps({"schema": 1, "sources": [entry]}))
+        stock = self.put(prefix + "receipts-v2/stock.json", json.dumps({
+            "schema": 1, "manifest_sha256": inv.digest(manifest.read_bytes()),
+            "observations": [{**entry, "compile": {"status": 0}, "run": {"status": 0}}]}))
+        return source, manifest, stock
+
+    def test_drop_v2_explicit_label_hashes_and_no_v1_duplicates(self):
+        self.make_drop_v2()
+        self.put("tests/fixtures/drop_normal/receipts-v1/manifest.json", '{"sources": []}')
+        records = inv.inventory(self.root)["records"]
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record["classification"], "legal-unsupported")
+        self.assertTrue(record["source_hash_match"])
+        self.assertTrue(record["manifest_hash_match"])
+        self.assertTrue(record["receipt_record_match"])
+        self.assertEqual(record["evidence"], "receipt-record-agrees")
+        self.assertEqual(record["native_support"], "unknown; not evaluated")
+
+    def test_drop_v2_source_and_manifest_drift(self):
+        source, manifest, stock = self.make_drop_v2()
+        source.write_text("changed source")
+        self.assertFalse(inv.drop_receipt_records(self.root)[0]["source_hash_match"])
+        manifest.write_text(manifest.read_text() + "\n")
+        record = inv.drop_receipt_records(self.root)[0]
+        self.assertFalse(record["manifest_hash_match"])
+        self.assertEqual(record["evidence"], "receipt-record-conflicts")
+        data = json.loads(stock.read_text())
+        data["observations"][0]["classification"] = "negative"
+        stock.write_text(json.dumps(data))
+        self.assertFalse(inv.drop_receipt_records(self.root)[0]["receipt_record_match"])
+
+    def test_drop_v2_missing_and_malformed_receipt(self):
+        source, manifest, stock = self.make_drop_v2()
+        stock.unlink()
+        self.assertEqual(inv.drop_receipt_records(self.root)[0]["evidence"], "unavailable")
+        source.unlink()
+        self.assertFalse(inv.drop_receipt_records(self.root)[0]["source_exists"])
+        stock.write_text('{"schema": 1, "observations": null}')
+        self.assertEqual(inv.drop_receipt_records(self.root)[0]["evidence"], "receipt-unreadable")
+        manifest.write_text('{"schema": 2, "sources": []}')
+        self.assertEqual(inv.drop_receipt_records(self.root)[0]["classification"], "unknown")
+
+    def test_drop_v2_unknown_label_duplicate_and_traversal(self):
+        _, manifest, _ = self.make_drop_v2()
+        data = json.loads(manifest.read_text())
+        data["sources"][0]["classification"] = "boundary"
+        manifest.write_text(json.dumps(data))
+        self.assertEqual(inv.drop_receipt_records(self.root)[0]["classification"], "unknown")
+        data["sources"] *= 2
+        data["sources"].append({"path": "../outside.rs", "classification": "unsupported"})
+        manifest.write_text(json.dumps(data))
+        records = inv.drop_receipt_records(self.root)
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0]["classification"], "unknown")
+        self.assertIn("duplicate", records[0]["note"])
+        self.assertIn("invalid source path", records[1]["note"])
+
+    def test_drop_v2_duplicate_observations_are_not_agreement(self):
+        _, _, stock = self.make_drop_v2()
+        data = json.loads(stock.read_text())
+        data["observations"] *= 2
+        stock.write_text(json.dumps(data))
+        self.assertEqual(inv.drop_receipt_records(self.root)[0]["evidence"], "receipt-record-duplicate")
+
+    def test_drop_v1_only_has_no_classification_fallback(self):
+        self.put("tests/fixtures/drop_normal/unsupported/mystery.rs", "fn main(){}")
+        self.put("tests/fixtures/drop_normal/receipts-v1/manifest.json", '{"schema": 1, "sources": []}')
+        records = inv.inventory(self.root)["records"]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["classification"], "unknown")
+        self.assertEqual(records[0]["locator"], "file")
+
+    def test_drop_selects_numeric_latest_and_missing_receipt(self):
+        _, manifest, _ = self.make_drop_v2()
+        self.put("tests/fixtures/drop_normal/receipts-v9/manifest.json", "not selected")
+        self.put("tests/fixtures/drop_normal/receipts-v10/manifest.json", manifest.read_text())
+        self.put("tests/fixtures/drop_normal/receipts-v999oops/manifest.json", "ignore")
+        self.put("tests/fixtures/drop_normal/receipts-v0100/manifest.json", "ignore")
+        records = inv.drop_receipt_records(self.root)
+        self.assertEqual(len(records), 1)
+        self.assertIn("receipts-v10/", records[0]["contract"])
+        self.assertEqual(records[0]["evidence"], "unavailable")
+        self.assertEqual(records[0]["native_support"], "unknown; not evaluated")
+
+    def test_drop_incomplete_latest_never_uses_older(self):
+        self.make_drop_v2()
+        directory = self.root / "tests/fixtures/drop_normal/receipts-v11"
+        directory.mkdir()
+        records = inv.drop_receipt_records(self.root)
+        self.assertEqual(records[0]["classification"], "unknown")
+        self.assertIn("receipts-v11/", records[0]["source_path"])
+        self.assertIn("no fallback", records[0]["note"])
+        (directory / "manifest.json").write_text('{"schema": 999, "sources": []}')
+        self.assertIn("unknown latest", inv.drop_receipt_records(self.root)[0]["note"])
+
+    def test_drop_ignores_symlinked_version_and_rejects_symlinked_receipt(self):
+        _, manifest, stock = self.make_drop_v2()
+        base = manifest.parent.parent
+        (base / "receipts-v99").symlink_to(manifest.parent, target_is_directory=True)
+        self.assertIn("receipts-v2/", inv.drop_receipt_records(self.root)[0]["contract"])
+        stock.rename(stock.with_name("saved-stock.json"))
+        stock.symlink_to(stock.with_name("saved-stock.json"))
+        self.assertEqual(inv.drop_receipt_records(self.root)[0]["evidence"], "receipt-symlink-rejected")
+
+    def test_actual_latest_drop_has_one_record_per_source(self):
+        root = Path(__file__).resolve().parents[1]
+        records = inv.drop_receipt_records(root)
+        self.assertTrue(records)
+        contract = records[0]["contract"]
+        manifest = json.loads((root / contract).read_text())
+        self.assertEqual(len(records), len(manifest["sources"]))
+        inventory_rows = inv.inventory(root)["records"]
+        declared_paths = {r["source_path"] for r in records}
+        self.assertTrue(all(sum(row["source_path"] == path for row in inventory_rows) == 1
+                            for path in declared_paths))
+        self.assertTrue(all(r["source_hash_match"] for r in records))
+        self.assertTrue(all(r["native_support"] == "unknown; not evaluated" for r in records))
+        self.assertTrue(all(r["evidence"] == "unavailable" or
+                            (r["manifest_hash_match"] and r["receipt_record_match"])
+                            for r in records))
+
     def test_actual_checkout_formats(self):
         root = Path(__file__).resolve().parents[1]
         report = inv.inventory(root)

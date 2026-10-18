@@ -732,6 +732,8 @@ impl Provider for CompilerProvider {
                                 )
                                 .map_err(|error| source_fact_error(error, &this.0.budget))?;
                         }
+                        plan.validate_cleanup_dependencies(&lowered)
+                            .map_err(Error::new)?;
                         let closed =
                             cfg::close(lowered, facts, &this.0.budget).map_err(Error::new)?;
                         let effects =
@@ -761,6 +763,8 @@ impl Provider for CompilerProvider {
                             .concrete
                             .get()
                             .ok_or_else(|| Error::new("missing exact concrete analysis seal"))?;
+                        plan.validate_cleanup_dependencies(concrete.function())
+                            .map_err(Error::new)?;
                         let object =
                             backend::emit_cfg_function(concrete, &|target| plan.symbol(target))
                                 .map_err(Error::new)?;
@@ -1125,7 +1129,9 @@ fn compile_input_configured(
             .blocks
             .iter()
             .map(|block| match &block.terminator.value {
-                cfg::Terminator::Goto(_) | cfg::Terminator::Call { .. } => 1,
+                cfg::Terminator::Goto(_)
+                | cfg::Terminator::Call { .. }
+                | cfg::Terminator::Drop { .. } => 1,
                 cfg::Terminator::Switch { .. } | cfg::Terminator::SwitchVariant { .. } => 2,
                 cfg::Terminator::Return
                 | cfg::Terminator::Panic(_)

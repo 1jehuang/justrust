@@ -314,6 +314,7 @@ struct Emitter<'a> {
     concrete: &'a ownership::ConcreteCfg,
     resolve: &'a dyn Fn(&ir::CallTarget) -> Result<String, String>,
     locals: Vec<i32>,
+    drop_flags: Vec<Option<i32>>,
     aggregate_scratch: i32,
     /// 0=LHS, 16=RHS, 32=result, 48..256=wide arithmetic workspace.
     /// Independent of aggregate scratch so constructors cannot destroy inputs.
@@ -764,13 +765,25 @@ impl<'a> Emitter<'a> {
         }
         self.load_place(place)
     }
+    fn set_drop_flag(&mut self, local: LocalId, value: bool) {
+        if let Some(Some(offset)) = self.drop_flags.get(local.0) {
+            let offset = *offset;
+            self.bytes(&[0xc6, 0x85]); // mov byte [rbp+disp32], imm8
+            self.i32(offset);
+            self.bytes(&[u8::from(value)]);
+        }
+    }
     fn store_place(&mut self, place: &ir::Place) -> Result<(), String> {
         // Rust assignment evaluates the complete owning RHS first. Resolve a
         // dereference's CURRENT carrier only after that evaluation/snapshot.
         self.bytes(&[0x49, 0x89, 0xc1]); // r9 = RHS
         let ty = self.place_address(place)?;
         self.bytes(&[0x48, 0x89, 0xc7, 0x4c, 0x89, 0xc8]);
-        self.store_address_value(ty)
+        self.store_address_value(ty)?;
+        if place.projection.is_empty() {
+            self.set_drop_flag(place.local, true);
+        }
+        Ok(())
     }
     fn operand(&mut self, operand: &cfg::Operand) -> Result<(), String> {
         match operand {
@@ -807,6 +820,9 @@ impl<'a> Emitter<'a> {
             }),
             cfg::Operand::Copy(place) | cfg::Operand::Move(place) => {
                 self.load_place(place)?;
+                if matches!(operand, cfg::Operand::Move(_)) && place.projection.is_empty() {
+                    self.set_drop_flag(place.local, false);
+                }
             }
         }
         Ok(())
@@ -1647,10 +1663,10 @@ impl<'a> Emitter<'a> {
     }
     fn statement(&mut self, statement: &cfg::Statement) -> Result<(), String> {
         match statement {
-            // Admitted values have fixed storage and no destructors this slice.
-            cfg::Statement::StorageLive(_)
-            | cfg::Statement::StorageDead(_)
-            | cfg::Statement::Inspect(_) => {}
+            cfg::Statement::StorageLive(local) | cfg::Statement::StorageDead(local) => {
+                self.set_drop_flag(*local, false)
+            }
+            cfg::Statement::Inspect(_) => {}
             cfg::Statement::IndexInspect { array, index } => {
                 self.index_address(array, index)?;
             }
@@ -1718,6 +1734,28 @@ impl<'a> Emitter<'a> {
     }
     fn terminator(&mut self, terminator: &cfg::Terminator) -> Result<(), String> {
         match terminator {
+            cfg::Terminator::Drop { cleanup, next } => {
+                let owner = cleanup.owner();
+                let offset = self
+                    .drop_flags
+                    .get(owner.local.0)
+                    .copied()
+                    .flatten()
+                    .ok_or("cleanup omitted runtime flag")?;
+                self.bytes(&[0x80, 0xbd]); // cmp byte [rbp+disp32], 0
+                self.i32(offset);
+                self.bytes(&[0]);
+                self.edge(&[0x0f, 0x84], *next);
+                self.set_drop_flag(owner.local, false);
+                self.place_address(owner)?;
+                self.bytes(&[0x50]); // genuine &mut Self parameter
+                let at = self.jump(&[0xe8]);
+                self.object
+                    .calls
+                    .push((at, (self.resolve)(cleanup.destructor().target())?));
+                self.bytes(&[0x48, 0x83, 0xc4, 8]);
+                self.edge(&[0xe9], *next);
+            }
             cfg::Terminator::Goto(target) => self.edge(&[0xe9], *target),
             cfg::Terminator::SwitchVariant {
                 place,
@@ -1830,6 +1868,8 @@ impl<'a> Emitter<'a> {
                 }
                 if !aggregate {
                     self.store_place(destination)?;
+                } else if destination.projection.is_empty() {
+                    self.set_drop_flag(destination.local, true);
                 }
                 self.edge(&[0xe9], *next);
             }
@@ -1954,6 +1994,22 @@ pub fn emit_cfg_function(
         .iter()
         .map(|local| allocate_value(&mut frame_bytes, &local.ty))
         .collect::<Result<Vec<_>, _>>()?;
+    let mut drop_flags = Vec::with_capacity(function.locals.len());
+    for local in &function.locals {
+        let needs_drop = concrete.facts().has_normal_drop_impls()
+            && matches!(
+                concrete
+                    .facts()
+                    .normal_drop_plan(&local.ty)
+                    .map_err(|e| e.into_legacy_diagnostic(concrete.facts().budget()))?,
+                super::traits::NormalDropPlan::Destructor(_)
+            );
+        drop_flags.push(if needs_drop {
+            Some(allocate_value(&mut frame_bytes, &ir::Ty::Bool)?)
+        } else {
+            None
+        });
+    }
     let mut scratch_size = 0;
     for block in &function.blocks {
         for statement in &block.statements {
@@ -2011,6 +2067,7 @@ pub fn emit_cfg_function(
         concrete,
         resolve,
         locals,
+        drop_flags,
         aggregate_scratch,
         wide_scratch,
         returns: Vec::new(),
@@ -2019,6 +2076,9 @@ pub fn emit_cfg_function(
     };
     emitter.bytes(&[0x55, 0x48, 0x89, 0xe5, 0x48, 0x81, 0xec]);
     emitter.i32(frame_bytes);
+    for local in 0..function.locals.len() {
+        emitter.set_drop_flag(LocalId(local), false);
+    }
     for ((local, offset), words) in function.params.iter().zip(&param_offsets).zip(&param_words) {
         let local_ty = &function.locals[local.0].ty;
         if *words == 2 && local_ty.shared_slice_element().is_some() {
@@ -2036,6 +2096,7 @@ pub fn emit_cfg_function(
         emitter.bytes(&[0x48, 0x8b, 0x85]);
         emitter.i32(*offset);
         emitter.store_value(emitter.local_offset(*local)?, &function.locals[local.0].ty)?;
+        emitter.set_drop_flag(*local, true);
     }
     emitter.edge(&[0xe9], function.entry);
     let mut labels = Vec::with_capacity(function.blocks.len());
@@ -2884,6 +2945,7 @@ mod tests {
             },
             concrete: &concrete,
             resolve: &resolve,
+            drop_flags: Vec::new(),
             locals: Vec::new(),
             aggregate_scratch: 0,
             wide_scratch: 0,
@@ -2945,6 +3007,7 @@ mod tests {
             },
             concrete: &concrete,
             resolve: &resolve,
+            drop_flags: Vec::new(),
             locals: Vec::new(),
             aggregate_scratch: 0,
             wide_scratch: -48,
@@ -3293,6 +3356,7 @@ mod tests {
             },
             concrete: &concrete,
             resolve: &resolve,
+            drop_flags: Vec::new(),
             locals: Vec::new(),
             aggregate_scratch: 0,
             wide_scratch: 0,
@@ -3430,6 +3494,7 @@ mod tests {
             },
             concrete: &concrete,
             resolve: &resolve,
+            drop_flags: Vec::new(),
             locals: Vec::new(),
             aggregate_scratch: -2048,
             wide_scratch: 0,
@@ -5486,6 +5551,7 @@ mod tests {
             },
             concrete: &concrete,
             resolve: &|_| Err("physical fixture has no instance calls".into()),
+            drop_flags: Vec::new(),
             locals: vec![],
             aggregate_scratch: -8,
             wide_scratch: -264,
@@ -5737,6 +5803,7 @@ mod tests {
                 },
                 concrete: &concrete,
                 resolve: &|_| Err("physical fixture has no instance calls".into()),
+                drop_flags: Vec::new(),
                 locals: vec![],
                 aggregate_scratch: 0,
                 wide_scratch: 0,
@@ -5819,6 +5886,7 @@ mod tests {
             },
             concrete: &concrete,
             resolve: &|_| Err("physical fixture has no instance calls".into()),
+            drop_flags: Vec::new(),
             locals: vec![],
             aggregate_scratch: -32,
             wide_scratch: -288,

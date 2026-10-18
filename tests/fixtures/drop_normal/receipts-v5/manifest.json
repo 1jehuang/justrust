@@ -1,0 +1,261 @@
+{
+  "compiler": "/usr/bin/rustc",
+  "compiler_sha256": "c916a85b7d4f52d9650399eebd15c672377933e6c2d8e98215757ab0b9b37136",
+  "flags": [
+    "--edition=2024",
+    "-C",
+    "panic=abort",
+    "-A",
+    "warnings"
+  ],
+  "frozen_at": "2026-10-18T10:12:32.134127+00:00",
+  "schema": 1,
+  "sources": [
+    {
+      "classification": "negative",
+      "path": "negative/copy_drop.rs",
+      "sha256": "a6c26697802801e6fd54863576790b1ea499a93307b411f570cce2f4c19ef5a4"
+    },
+    {
+      "classification": "negative",
+      "path": "negative/copy_drop_manual.rs",
+      "sha256": "40c8296a2090b353985caf943faee4af5bf717ce531501f8075ebbdb6fbb15e1"
+    },
+    {
+      "classification": "negative",
+      "path": "negative/explicit_method.rs",
+      "sha256": "4bf9395600de1dff6914dcfb7368d94b300c9d35208d09bda2785e22d25c991e"
+    },
+    {
+      "classification": "negative",
+      "path": "negative/explicit_ufcs.rs",
+      "sha256": "1e42e69ca5a30c05026601b5dd45d1ed4027c98cf742eb49def73e52d33d24f0"
+    },
+    {
+      "classification": "negative",
+      "path": "negative/move_field.rs",
+      "sha256": "6e22858855c7136c704f6a4fa4b91d914d075de2170f3dd378267411bff8bbec"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/break_value.rs",
+      "sha256": "08d721823df63a4e5522b5b6c26a605e49f7ffc62676feee29125ea42053e51f"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/call_argument_break.rs",
+      "sha256": "a11589857415f129fba0a5aac917d5cb4ff2e2afe324e9d0032289bf1fb7568d"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/call_argument_return.rs",
+      "sha256": "b999a8178fef5c99ef91c9a94dea83368d0e93766b1b0b99af69f753b16d6355"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/canonical_copy_x32.rs",
+      "sha256": "77d24a043ea0f6d3e99e19ac05d82b229b4c56985791c70a57ed246d0ba5c453"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/conditional.rs",
+      "sha256": "cc9d1894b341b7413f3da24de8beb627aa4d1e2fdc3d907f27b2c1ebf7b3319e"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/conditional_plain.rs",
+      "sha256": "84ea2a01e443d91b6b789f628ddcede60072f4d9a7bbdfd870dcaed6c29c1ea1"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/declaration_order.rs",
+      "sha256": "3c354c25326c569d5e1a76ef1c256f88165cc8426c778261deeb28f2e4c0da66"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/destructor_helpers.rs",
+      "sha256": "b71296af7bb63bc2afb2e645cfb36416ff81991cb2418879e8fc757d59457f61"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/destructor_mutation.rs",
+      "sha256": "a05d552b6acd56b266556d0d335389761c410b8caa04f1c17d8ad13da039507c"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/direct_temporaries.rs",
+      "sha256": "97b217d181f892fcbfe32b37789bcc9670cee974e574f6669897b43b2327b592"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/early_return.rs",
+      "sha256": "24bcaa2effaaeaf8fb2da5fdfbe3f715d3497993235271a60fd1b447c6e38b03"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/ignored_place.rs",
+      "sha256": "3ae2f63e32598d582e3c53e76c6d09feb8cc87a51729fb5ec624a92a4d562e69"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/labeled_continue.rs",
+      "sha256": "43fa4863a43ed52ee2c8ca16231b6b67a15919687f8f1f6118c36e65343d9f3a"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/labeled_continue_plain.rs",
+      "sha256": "60c403a2f7e1f408789d17837c0359d220e8d8f5db82c57e97f5590c63a4374d"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/lookalike.rs",
+      "sha256": "8ecbf3559d54b9bcfbfa6c152c7cbcec27a7202ec232b95f62d5c9d4ec6756de"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/loop_flags.rs",
+      "sha256": "16677db187c00536dd2704e57b6530a826553fe2ebd8ea0764ab399549d6a206"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/loops.rs",
+      "sha256": "9ba7cc46e011632ead69148f58c795fe2d8b70ee72b132bf05fd4e8847b54716"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/loops_plain.rs",
+      "sha256": "6e7310dc7a19b8d67474e87714047b52c1f275ae820c5a3a8a82f678a10065d0"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/moves_returns.rs",
+      "sha256": "5f193c0ea2252aba9bc9a270ebdecb9cbbff28e0ac40eb3439f26a5397ddb15d"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/moves_returns_plain.rs",
+      "sha256": "311e98854e268bb5961f999f965d9278ba0670405bb184fa607ad79ecae3465f"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/parameter_paths.rs",
+      "sha256": "232dbb890b0ed2f66883be6cc700c15ff244ce8956f464978d58439a5af0f543"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/reinitialize.rs",
+      "sha256": "cf4b693495979ea701d54d3a42e65b866c3979d0fafbcd6a95d08540e3f44e96"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/replacement.rs",
+      "sha256": "cb9fe683395ab6d9f13942b22043d9dc7d0c4974332686e59b2b04f2eaf45388"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/scope.rs",
+      "sha256": "ee9d436e754b77b824fe23eab2c8494afcb01ac5da44113ee6c48c3b28ed9930"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/scope_plain.rs",
+      "sha256": "bb9b811dd814706df402bd0cc6ddceaaae70e36ebc4220685ecc82d6bc3c196a"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/temporaries.rs",
+      "sha256": "3271835c6a011944097f4f673f0a01c52965d2d05f298325f92a1247c7c3f5e7"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/temporaries_plain.rs",
+      "sha256": "e197b24a1ace39020286f2b1aed8070de87936f91fa7ea7069c90b52af3e665a"
+    },
+    {
+      "classification": "positive",
+      "path": "positive/two_types.rs",
+      "sha256": "32a129288bdb9f3540d8dc69cc23bbecb63aeee6aada896c34bf8394671b5e98"
+    },
+    {
+      "classification": "unsupported",
+      "path": "unsupported/array.rs",
+      "sha256": "9216c9508338837a8b4574daec25faba184519d97d11144acda7957d24b00c02"
+    },
+    {
+      "classification": "unsupported",
+      "path": "unsupported/borrow.rs",
+      "sha256": "b5b549a9702235f19c886a8b02c31d23a4e0fa54032c31ce3396a9734f225542"
+    },
+    {
+      "classification": "unsupported",
+      "path": "unsupported/borrowed_replacement.rs",
+      "sha256": "e552835657db2f268a4207b864f0e57c0dc0a1fcd851755696c750ff8482a559"
+    },
+    {
+      "classification": "unsupported",
+      "path": "unsupported/dead_aggregate.rs",
+      "sha256": "c6f67ab10531bc7babdd771fbbf5dfea60acb000f59f3975f9ea67ef41037bb0"
+    },
+    {
+      "classification": "unsupported",
+      "path": "unsupported/dead_generic.rs",
+      "sha256": "6ea0a5b3c8c4aefc80de0e27cd6ad5e45568b2ab73593d7b9c1c7690a1696d6b"
+    },
+    {
+      "classification": "unsupported",
+      "path": "unsupported/enum.rs",
+      "sha256": "caa695b638dbe8bc63085f0c7fcc87c3c9aa9c1b857bbb56be666311c66c2ebf"
+    },
+    {
+      "classification": "unsupported",
+      "path": "unsupported/generic.rs",
+      "sha256": "d0767c2706b0588961c5ed9602af60da214e0855037926c855cf4529de195289"
+    },
+    {
+      "classification": "unsupported",
+      "path": "unsupported/generic_function.rs",
+      "sha256": "cfa981c597d49fe6e49a4049b4ffc9a75a5710bb237dfbb2b287242653c1fe33"
+    },
+    {
+      "classification": "unsupported",
+      "path": "unsupported/indexed_replacement.rs",
+      "sha256": "6257d0d71955a9b2962cf886ffa7c2adee95641d3f0a0f310fc2c6cd6afb3792"
+    },
+    {
+      "classification": "unsupported",
+      "path": "unsupported/nested.rs",
+      "sha256": "cd563bc12c9a772bf8be9ad5e02eef07c6f2f1aeeff3c910aec6095fe3629949"
+    },
+    {
+      "classification": "unsupported",
+      "path": "unsupported/owned_if_let.rs",
+      "sha256": "2e9a4e9876cdebf71eb3347fdff078d37717fb1d89651cf3e00e107bea2f0408"
+    },
+    {
+      "classification": "unsupported",
+      "path": "unsupported/owned_let_else.rs",
+      "sha256": "47c1e3ca5eaee7e9ffe3c6048d0ef8bfebb78c3ec849e59adb7783b2e2a3cf5b"
+    },
+    {
+      "classification": "unsupported",
+      "path": "unsupported/owned_match.rs",
+      "sha256": "17b300d0b35df1f2cbc122905203e387d3513e5c3d1ab1db26db4b9cfe89f994"
+    },
+    {
+      "classification": "unsupported",
+      "path": "unsupported/owned_pattern.rs",
+      "sha256": "3cc585f4a2bb0c6dbe1647d2fe919188cd6438b3c464b02c25f10f19b72ef348"
+    },
+    {
+      "classification": "unsupported",
+      "path": "unsupported/reference_field.rs",
+      "sha256": "ea92e32aba9348896b92f58a6a896d2a7a52fa236f8dafe5aff70e0d241b55a3"
+    },
+    {
+      "classification": "unsupported",
+      "path": "unsupported/tuple.rs",
+      "sha256": "9744f043b8beb021e154a2b627709f8bea8d3a2eb5230292065995ba045c84fd"
+    }
+  ],
+  "version": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n"
+}

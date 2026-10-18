@@ -111,7 +111,9 @@ fn reachable(
             continue;
         }
         match &function.blocks[id.0].terminator.value {
-            cfg::Terminator::Goto(next) | cfg::Terminator::Call { next, .. } => pending.push(*next),
+            cfg::Terminator::Goto(next)
+            | cfg::Terminator::Call { next, .. }
+            | cfg::Terminator::Drop { next, .. } => pending.push(*next),
             cfg::Terminator::Switch {
                 then_block,
                 else_block,
