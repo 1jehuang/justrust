@@ -753,6 +753,10 @@ fn compare_source_path_work(
     sr::work(budget, 1)?;
     for segment in &path.segments {
         sr::work(budget, 1)?;
+        for binding in &segment.associated_types {
+            sr::work(budget, 1)?;
+            compare_source_type_work(&binding.value, budget, at + 1)?;
+        }
         for ty in &segment.args {
             compare_source_type_work(ty, budget, at + 1)?;
         }
@@ -840,9 +844,21 @@ fn copy_source_path(
         for ty in &segment.args {
             args.push(copy_source_type(ty, budget, at + 1)?);
         }
+        let mut associated_types = Vec::new();
+        associated_types
+            .try_reserve_exact(segment.associated_types.len())
+            .map_err(|_| FactsError::resource(budget, "source equality allocation"))?;
+        for binding in &segment.associated_types {
+            sr::work(budget, 1)?;
+            associated_types.push(AssociatedTypeBinding {
+                name: binding.name,
+                value: copy_source_type(&binding.value, budget, at + 1)?,
+            });
+        }
         segments.push(PathSegment {
             name: segment.name,
             args,
+            associated_types,
         });
     }
     Ok(GenericPath {
@@ -928,7 +944,20 @@ fn retain_source_path(
     for segment in &path.segments {
         sr::work(budget, 1)?;
 
-        for ty in &segment.args {
+        sr::retain(
+            budget,
+            segment
+                .associated_types
+                .len()
+                .checked_mul(2 * std::mem::size_of::<AssociatedTypeBinding>())
+                .ok_or_else(|| FactsError::resource(budget, "source equality sizing overflow"))?,
+        )?;
+        for ty in segment.args.iter().chain(
+            segment
+                .associated_types
+                .iter()
+                .map(|binding| &binding.value),
+        ) {
             retain_source_type(ty, budget, depth + 1)?;
         }
     }
@@ -2918,7 +2947,17 @@ fn optional_application_equal(
         path.checked_path(names)
             .map_err(native_adapter::name_diagnostic)?;
         for segment in &path.segments {
-            for ty in &segment.args {
+            for binding in &segment.associated_types {
+                names
+                    .key(binding.name, LookupClass::Member)
+                    .map_err(native_adapter::name_diagnostic)?;
+            }
+            for ty in segment.args.iter().chain(
+                segment
+                    .associated_types
+                    .iter()
+                    .map(|binding| &binding.value),
+            ) {
                 ty.semantic_eq(ty, names)?;
             }
         }
@@ -2932,8 +2971,16 @@ fn optional_application_equal(
     for (a, b) in left.segments.iter().zip(&right.segments) {
         if !name_scope::ident_eq(names, a.name, b.name, LookupClass::Item(Namespace::Type))?
             || a.args.len() != b.args.len()
+            || a.associated_types.len() != b.associated_types.len()
         {
             return Ok(false);
+        }
+        for (a, b) in a.associated_types.iter().zip(&b.associated_types) {
+            if !name_scope::ident_eq(names, a.name, b.name, LookupClass::Member)?
+                || !a.value.semantic_eq(&b.value, names)?
+            {
+                return Ok(false);
+            }
         }
         for (a, b) in a.args.iter().zip(&b.args) {
             if !a.semantic_eq(b, names)? {
@@ -3143,6 +3190,42 @@ pub(super) fn replay_source_body(
             // Source provider/selection role is frozen before publication; no ordinary omitted-call exemption.
             ir::validate_callee(target, signature, ir::FactsCtx::Validated(facts))
                 .map_err(|e| source_error(budget, &e))?;
+            if let ir::Callee::TraitItem(call) = target
+                && facts.uses_equality_required_call(call)?
+            {
+                // This is the exact required declaration in the actual caller
+                // environment, not a selected implementation's source schema.
+                let view =
+                    facts.original_callable_schema(tr::OriginalCallableSubject::TraitItem(call))?;
+                view.validate_for(facts)?;
+                let required = view.signature();
+                let mut equal = required.params.len() == signature.params.len();
+                for (required, actual) in required.params.iter().zip(&signature.params) {
+                    equal &= replay_type_equal(required, actual, budget)?;
+                }
+                equal &= replay_type_equal(&required.result, &signature.result, budget)?;
+                sr::work(
+                    budget,
+                    required
+                        .ref_contract
+                        .validation_work(&required.params, &required.result)
+                        .map_err(|error| source_error(budget, &error))?,
+                )?;
+                sr::work(
+                    budget,
+                    signature
+                        .ref_contract
+                        .validation_work(&signature.params, &signature.result)
+                        .map_err(|error| source_error(budget, &error))?,
+                )?;
+                equal &= required.ref_contract == signature.ref_contract;
+                if !equal {
+                    return Err(FactsError::invalid(
+                        budget,
+                        "original required call changed its equality-normalized source signature",
+                    ));
+                }
+            }
             continue;
         };
         let expected_decl = *original
@@ -4005,6 +4088,13 @@ pub struct GenericPath {
 pub struct PathSegment {
     pub name: AstIdent,
     pub args: Vec<Type>,
+    pub associated_types: Vec<AssociatedTypeBinding>,
+}
+/// A genuine member occurrence and its written equality RHS, not a positional actual.
+#[derive(Clone, Debug)]
+pub struct AssociatedTypeBinding {
+    pub name: AstIdent,
+    pub value: Type,
 }
 impl GenericPath {
     fn path(&self, names: &impl NameAccess) -> Result<AstPath, String> {
@@ -6462,7 +6552,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             Ok(Type::Tuple(fields))
         } else {
             let path = self.generic_path(true)?;
-            if path.segments.iter().any(|s| !s.args.is_empty()) {
+            if path
+                .segments
+                .iter()
+                .any(|s| !s.args.is_empty() || !s.associated_types.is_empty())
+            {
                 Ok(Type::Apply(path))
             } else {
                 Ok(Type::Named(
@@ -6511,21 +6605,47 @@ impl<'input, 'names> Parser<'input, 'names> {
 
     #[inline(never)]
     fn type_arguments(&mut self) -> Result<Vec<Type>, ParseError> {
+        let (args, associated_types) = self.path_arguments()?;
+        if !associated_types.is_empty() {
+            return Err(
+                self.unsupported("associated equalities are unsupported in method type arguments")
+            );
+        }
+        Ok(args)
+    }
+    #[inline(never)]
+    fn path_arguments(&mut self) -> Result<(Vec<Type>, Vec<AssociatedTypeBinding>), ParseError> {
         self.expect("<")?;
         let mut args = Vec::new();
+        let mut associated_types = Vec::new();
         loop {
-            if args.len() >= 32 {
+            if args.len() + associated_types.len() >= 32 {
                 return Err(self.limit("generic argument resource limit 32"));
             }
-            let ty = self.ty()?;
-            self.reserve_parser_items(&mut args, 1)?;
-            args.push(ty);
+            if self.token().is_ident()
+                && self.cursor.peek(1).is_some_and(|token| token.matches("="))
+            {
+                let name = self.ident()?;
+                self.expect("=")?;
+                let value = self.ty()?;
+                self.reserve_parser_items(&mut associated_types, 1)?;
+                associated_types.push(AssociatedTypeBinding { name, value });
+            } else {
+                if !associated_types.is_empty() {
+                    return Err(
+                        self.error("positional type arguments must precede associated equalities")
+                    );
+                }
+                let value = self.ty()?;
+                self.reserve_parser_items(&mut args, 1)?;
+                args.push(value);
+            }
             if !self.eat(",") || self.token().text.starts_with('>') {
                 break;
             }
         }
         self.close_angle()?;
-        Ok(args)
+        Ok((args, associated_types))
     }
     #[inline(never)]
     fn generic_path(&mut self, type_context: bool) -> Result<GenericPath, ParseError> {
@@ -6549,22 +6669,29 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
             count += 1;
             let name = self.ident()?;
-            let args = if type_context && self.is("<") {
-                self.type_arguments()?
+            let (args, associated_types) = if type_context && self.is("<") {
+                self.path_arguments()?
             } else {
-                Vec::new()
+                (Vec::new(), Vec::new())
             };
             self.reserve_parser_items(&mut segments, 1)?;
-            segments.push(PathSegment { name, args });
+            segments.push(PathSegment {
+                name,
+                args,
+                associated_types,
+            });
             if !self.eat("::") {
                 break;
             }
             if self.is("<") {
-                let args = self.type_arguments()?;
-                if !segments.last().unwrap().args.is_empty() {
+                let (args, associated_types) = self.path_arguments()?;
+                if !segments.last().unwrap().args.is_empty()
+                    || !segments.last().unwrap().associated_types.is_empty()
+                {
                     return Err(self.error("duplicate generic arguments"));
                 }
                 segments.last_mut().unwrap().args = args;
+                segments.last_mut().unwrap().associated_types = associated_types;
                 if !self.eat("::") {
                     break;
                 }
@@ -6664,6 +6791,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             segments.push(PathSegment {
                 name: *name,
                 args: Vec::new(),
+                associated_types: Vec::new(),
             });
         }
         Ok(GenericPath {
@@ -8282,7 +8410,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             .checked_path(self.names)
             .map_err(native_adapter::name_error)?;
         let wrap = |pattern| {
-            if generic_path.segments.iter().any(|s| !s.args.is_empty()) {
+            if generic_path
+                .segments
+                .iter()
+                .any(|s| !s.args.is_empty() || !s.associated_types.is_empty())
+            {
                 Pattern::Apply {
                     path: generic_path.clone(),
                     pattern: Box::new(pattern),
@@ -8775,7 +8907,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             Expr::Var(name)
         };
         Ok(
-            if generic_path.segments.iter().any(|s| !s.args.is_empty()) {
+            if generic_path
+                .segments
+                .iter()
+                .any(|s| !s.args.is_empty() || !s.associated_types.is_empty())
+            {
                 Expr::Apply {
                     path: generic_path,
                     value: Box::new(value),
@@ -10519,6 +10655,88 @@ mod generic_trait_source_tests {
     }
 
     #[test]
+    fn associated_equality_rows_keep_source_handles_and_positional_arity() {
+        let program = parse("trait Source<A>{type Out;} fn f<T:Source<i32,Out=(i32,bool),Out=(i32,bool)>>(){ } fn main(){}").unwrap();
+        let TraitPath::Source(path) = &program.functions[0].bounds[0].traits[0] else {
+            panic!("lost source bound")
+        };
+        let segment = path.segments.last().unwrap();
+        assert_eq!(segment.args.len(), 1);
+        assert_eq!(segment.associated_types.len(), 2);
+        assert!(
+            matches!(&segment.associated_types[0].value, Type::Tuple(fields) if fields.len() == 2)
+        );
+        assert!(
+            name_scope::ident_eq(
+                program.names.as_ref(),
+                segment.associated_types[0].name,
+                segment.associated_types[1].name,
+                LookupClass::Member
+            )
+            .unwrap()
+        );
+        assert!(
+            !exact_source_ident(
+                program.names.as_ref(),
+                segment.associated_types[0].name,
+                segment.associated_types[1].name
+            )
+            .unwrap()
+        );
+        let budget = ir::PlanBudget::default();
+        let copied = copy_source_path(path, &budget, 0).unwrap();
+        assert!(
+            exact_source_generic_path(program.names.as_ref(), path, &copied, &budget, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn associated_equality_conflicts_are_not_parser_or_resolver_invalidity() {
+        for source in [
+            "trait Source{type Out;}fn f<T:Source<Out=i32,Out=bool>>(){}fn main(){}",
+            "trait Source{type Out;}fn f<T:Source<Out=i32>+Source<Out=bool>>(){}fn main(){}",
+            "trait Source{type Out;}fn f<T>() where T:Source<Out=i32>{}fn main(){}",
+            "trait Source{type Out;}struct S<T>{value:T}impl<T:Source<Out=i32>> S<T>{fn f(self){}}fn main(){}",
+        ] {
+            parse(source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+
+    #[test]
+    fn associated_equality_nonbound_sites_are_explicit_boundaries() {
+        for source in [
+            "trait Source{type Out;}trait Child:Source<Out=i32>{}fn main(){}",
+            "trait Source{type Out;}trait Child<T:Source<Out=i32>>{}fn main(){}",
+            "trait Source{type Out;}struct S;impl Source<Out=i32> for S{type Out=i32;}fn main(){}",
+            "struct S<T>{value:T}fn f(x:S<Out=i32>){}fn main(){}",
+            "trait Source{type Out;fn get(self)->Self::Out;}struct S;fn f(x:S)->i32{<S as Source<Out=i32>>::get(x)}fn main(){}",
+        ] {
+            let error = parse(source).unwrap_err();
+            assert!(error.contains("unsupported:"), "{source}: {error}");
+        }
+        let error =
+            parse_syntax_unprepared("fn f(x:i32){x.method::<Out=i32>();}fn main(){}").unwrap_err();
+        assert_eq!(
+            error.kind,
+            super::super::source::SourceErrorKind::Unsupported
+        );
+    }
+
+    #[test]
+    fn associated_equality_validates_late_members_before_capability() {
+        let error =
+            parse("trait Source{type Out;}trait Child:Source<Out=&i32,Missing=i32>{}fn main(){}")
+                .unwrap_err();
+        assert!(!error.starts_with("unsupported:"), "{error}");
+        assert!(error.contains("no associated type"), "{error}");
+        let error = parse_syntax_unprepared(
+            "trait Source<A>{type Out;}fn f<T:Source<Out=i32,bool>>(){}fn main(){}",
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, super::super::source::SourceErrorKind::Syntax);
+    }
+
+    #[test]
     fn source_trait_parameters_bind_forward_actuals_and_inherited_method_types() {
         let parsed = parse_unresolved("trait Base<T>{}trait Derived<T:Base<U>,U>:Base<T> where U:Base<T>{fn choose(self,x:U)->T;fn keep(self,x:T)->T{x}}fn forward<T:Base<U>,U>(x:T,y:U){}fn shadow<T:Base<i32>,i32>(x:T,y:i32){}fn main(){}").unwrap();
         let program = &parsed.program;
@@ -10753,7 +10971,12 @@ fn walk_depth_inspecting(
                     if let TraitPath::Source(path) = trait_path {
                         for segment in &path.segments {
                             name_walk_work(names, 1)?;
-                            for actual in &segment.args {
+                            for actual in segment.args.iter().chain(
+                                segment
+                                    .associated_types
+                                    .iter()
+                                    .map(|binding| &binding.value),
+                            ) {
                                 push(DepthNode::Type(actual))?;
                             }
                         }
@@ -10772,7 +10995,12 @@ fn walk_depth_inspecting(
             DepthNode::Type(Type::Apply(path)) => {
                 for segment in &path.segments {
                     name_walk_work(names, 1)?;
-                    for arg in &segment.args {
+                    for arg in segment.args.iter().chain(
+                        segment
+                            .associated_types
+                            .iter()
+                            .map(|binding| &binding.value),
+                    ) {
                         push(DepthNode::Type(arg))?;
                     }
                 }
@@ -10788,7 +11016,12 @@ fn walk_depth_inspecting(
                         push(DepthNode::Pattern(pattern))?;
                         for segment in &path.segments {
                             name_walk_work(names, 1)?;
-                            for arg in &segment.args {
+                            for arg in segment.args.iter().chain(
+                                segment
+                                    .associated_types
+                                    .iter()
+                                    .map(|binding| &binding.value),
+                            ) {
                                 push(DepthNode::Type(arg))?;
                             }
                         }
@@ -10843,7 +11076,12 @@ fn walk_depth_inspecting(
                     if let TraitPath::Source(path) = trait_path.as_ref() {
                         for segment in &path.segments {
                             name_walk_work(names, 1)?;
-                            for arg in &segment.args {
+                            for arg in segment.args.iter().chain(
+                                segment
+                                    .associated_types
+                                    .iter()
+                                    .map(|binding| &binding.value),
+                            ) {
                                 push(DepthNode::Type(arg))?;
                             }
                         }
@@ -10870,7 +11108,12 @@ fn walk_depth_inspecting(
                     push(DepthNode::Expr(value))?;
                     for segment in &path.segments {
                         name_walk_work(names, 1)?;
-                        for arg in &segment.args {
+                        for arg in segment.args.iter().chain(
+                            segment
+                                .associated_types
+                                .iter()
+                                .map(|binding| &binding.value),
+                        ) {
                             push(DepthNode::Type(arg))?;
                         }
                     }
@@ -11091,6 +11334,11 @@ fn exact_source_generic_path(
     for (a, b) in a.segments.iter().zip(&b.segments) {
         equal &= exact_source_ident(names, a.name, b.name)?;
         equal &= a.args.len() == b.args.len();
+        equal &= a.associated_types.len() == b.associated_types.len();
+        for (a, b) in a.associated_types.iter().zip(&b.associated_types) {
+            equal &= exact_source_ident(names, a.name, b.name)?;
+            equal &= exact_source_type(names, &a.value, &b.value, budget, depth + 1)?;
+        }
         for (a, b) in a.args.iter().zip(&b.args) {
             equal &= exact_source_type(names, a, b, budget, depth + 1)?;
         }
@@ -11246,7 +11494,12 @@ fn retained_function_projection(
             budget.charge_work(1)?;
             if let TraitPath::Source(path) = path {
                 for segment in &path.segments {
-                    for actual in &segment.args {
+                    for actual in segment.args.iter().chain(
+                        segment
+                            .associated_types
+                            .iter()
+                            .map(|binding| &binding.value),
+                    ) {
                         found |= retained_type_projection(names, actual, projection, budget)?;
                     }
                 }
@@ -11379,7 +11632,7 @@ impl DeclRegistry {
         }
         let info = self.declaration(context.declaration)?;
         let names = self.names.as_ref();
-        let found = match info.kind {
+        let mut found = match info.kind {
             ir::DeclKind::TraitImpl => {
                 let block = self
                     .program
@@ -11447,9 +11700,126 @@ impl DeclRegistry {
             }
             _ => false,
         };
+        // Equality RHS projections retain their original bound occurrence,
+        // including requirements inherited by an implementation callable.
+        let mut inspect_bounds = |bounds: &[TypeBound]| -> Result<(), String> {
+            for bound in bounds {
+                for path in &bound.traits {
+                    if let TraitPath::Source(path) = path {
+                        for segment in &path.segments {
+                            for ty in segment.args.iter().chain(
+                                segment
+                                    .associated_types
+                                    .iter()
+                                    .map(|binding| &binding.value),
+                            ) {
+                                found |= retained_type_projection(names, ty, projection, budget)?;
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(())
+        };
+        match info.kind {
+            ir::DeclKind::Trait => inspect_bounds(&self.program.traits[info.source_index].bounds)?,
+            ir::DeclKind::TraitImpl => {
+                inspect_bounds(&self.program.impls[info.source_index].bounds)?
+            }
+            ir::DeclKind::AssociatedFunction => {
+                if let Some(owner) = info
+                    .owner
+                    .or_else(|| info.path.associated.as_ref().map(|owner| owner.impl_decl))
+                {
+                    let owner = self.declaration(owner)?;
+                    if owner.kind == ir::DeclKind::TraitImpl {
+                        inspect_bounds(&self.program.impls[owner.source_index].bounds)?;
+                    }
+                }
+            }
+            _ => {}
+        }
         if !found {
             return Err(
                 "projection member does not match its original retained source occurrence".into(),
+            );
+        }
+        Ok(())
+    }
+    fn validate_source_bound_path(
+        &self,
+        context: SourceTypeContext,
+        path: &TraitPath,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        let TraitPath::Source(candidate) = path else {
+            return Ok(());
+        };
+        let expected = self.source_type_context(context.declaration)?;
+        if context.module != expected.module || context.owner != expected.owner {
+            return Err("associated equality changed source owner".into());
+        }
+        let mut found = false;
+        let mut inspect = |bounds: &[TypeBound]| -> Result<(), String> {
+            for bound in bounds {
+                for retained in &bound.traits {
+                    budget.charge_work(1)?;
+                    if let TraitPath::Source(retained) = retained {
+                        found |= exact_source_generic_path(
+                            self.names.as_ref(),
+                            candidate,
+                            retained,
+                            budget,
+                            0,
+                        )?;
+                    }
+                }
+            }
+            Ok(())
+        };
+        let info = self.declaration(context.declaration)?;
+        match info.kind {
+            ir::DeclKind::Trait => inspect(&self.program.traits[info.source_index].bounds)?,
+            ir::DeclKind::TraitImpl => inspect(&self.program.impls[info.source_index].bounds)?,
+            ir::DeclKind::Function | ir::DeclKind::AssociatedFunction => {
+                for (index, id) in self.function_ids.iter().enumerate() {
+                    budget.charge_work(1)?;
+                    if *id != context.declaration {
+                        continue;
+                    }
+                    match self.callable_sources[index] {
+                        CallableSource::Free(index) => {
+                            inspect(&self.program.functions[index].bounds)?
+                        }
+                        CallableSource::Associated {
+                            implementation,
+                            item,
+                        } => {
+                            let block = &self.program.impls[implementation];
+                            inspect(&block.bounds)?;
+                            inspect(&block.items[item].function.bounds)?;
+                        }
+                        CallableSource::TraitDefault { trait_index, item } => {
+                            let declaration = &self.program.traits[trait_index];
+                            inspect(&declaration.bounds)?;
+                            if let Some(function) = &declaration.items[item].default {
+                                inspect(&function.bounds)?;
+                            }
+                        }
+                    }
+                }
+            }
+            ir::DeclKind::TraitItem => {
+                let owner = self.declaration(info.owner.ok_or("trait item has no owner")?)?;
+                let declaration = &self.program.traits[owner.source_index];
+                inspect(&declaration.bounds)?;
+                inspect(&declaration.items[info.source_index].signature.bounds)?;
+            }
+            _ => {}
+        }
+        if !found {
+            return Err(
+                "associated equality does not match its original retained bound occurrence".into(),
             );
         }
         Ok(())
@@ -11615,6 +11985,10 @@ fn source_type_storage(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resu
                             for argument in &segment.args {
                                 add(source_type_storage(argument, budget, depth + 1)?)?;
                             }
+                            for binding in &segment.associated_types {
+                                add(std::mem::size_of::<AssociatedTypeBinding>())?;
+                                add(source_type_storage(&binding.value, budget, depth + 1)?)?;
+                            }
                         }
                     }
                 }
@@ -11628,6 +12002,10 @@ fn source_type_storage(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resu
                 add(std::mem::size_of::<PathSegment>())?;
                 for arg in &segment.args {
                     add(source_type_storage(arg, budget, depth + 1)?)?;
+                }
+                for binding in &segment.associated_types {
+                    add(std::mem::size_of::<AssociatedTypeBinding>())?;
+                    add(source_type_storage(&binding.value, budget, depth + 1)?)?;
                 }
             }
         }
@@ -11756,6 +12134,19 @@ fn validate_const_forwarding(
     Ok(())
 }
 impl PlanCtx {
+    pub(super) fn validate_source_bound_path(
+        &self,
+        declaration: ir::DeclId,
+        path: &TraitPath,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        self.check_budget(budget)?;
+        self.registry.validate_source_bound_path(
+            self.registry.source_type_context(declaration)?,
+            path,
+            budget,
+        )
+    }
     pub fn resolve_trait_path(&self, path: &TraitPath) -> Result<ir::DeclId, String> {
         self.registry.resolve_trait_path(path)
     }
@@ -11789,7 +12180,16 @@ impl PlanCtx {
                 .state
                 .lock()
                 .map_err(|_| "generic plan context poisoned")?;
-            state.source_trait_ref(&self.registry, path, owner, &env.params, structural, budget)?
+            state
+                .source_trait_application(
+                    &self.registry,
+                    path,
+                    owner,
+                    &env.params,
+                    structural,
+                    budget,
+                )?
+                .reject_equalities()?
         };
         caller.validate_ty_with_budget(&application.self_ty, budget)?;
         for actual in application.args.iter() {
@@ -12488,7 +12888,9 @@ impl PlanCtx {
             collect_source_params(program.names.as_ref(), &block.self_ty, &mut used, budget, 0)?;
             if let Some(path) = &block.trait_path {
                 bindings.insert(GenericBindingKey::SelfType, self_ty.clone());
-                state.source_trait_ref(&registry, path, &self_ty, &bindings, caller, budget)?;
+                state
+                    .source_trait_application(&registry, path, &self_ty, &bindings, caller, budget)?
+                    .reject_equalities()?;
                 if let TraitPath::Source(path) = path {
                     for segment in &path.segments {
                         for actual in &segment.args {
@@ -12731,17 +13133,19 @@ impl PlanCtx {
                     budget,
                 )?;
                 if let Some(path) = &program.impls[implementation].trait_path {
-                    let trait_ref = state.source_trait_ref(
-                        &registry,
-                        path,
-                        context
-                            .self_ty
-                            .as_ref()
-                            .ok_or("trait impl item without Self")?,
-                        &bindings,
-                        caller,
-                        budget,
-                    )?;
+                    let trait_ref = state
+                        .source_trait_application(
+                            &registry,
+                            path,
+                            context
+                                .self_ty
+                                .as_ref()
+                                .ok_or("trait impl item without Self")?,
+                            &bindings,
+                            caller,
+                            budget,
+                        )?
+                        .reject_equalities()?;
                     if rows.len() >= tr::MAX_PREDICATES {
                         return Err("predicate environment limit exceeded".into());
                     }
@@ -12980,6 +13384,7 @@ impl PlanCtx {
                     .state
                     .lock()
                     .map_err(|_| "generic plan context poisoned")?;
+                state.source_context = Some(self.registry.source_type_context(id)?);
                 let mut rows = Vec::new();
                 append_implicit_sized(&self.registry, &info.env, &mut rows, budget)?;
                 append_source_bounds(
@@ -12995,14 +13400,16 @@ impl PlanCtx {
                     if rows.len() >= tr::MAX_PREDICATES {
                         return Err("predicate environment limit exceeded".into());
                     }
-                    let application = state.source_trait_ref(
-                        &self.registry,
-                        path,
-                        &self_ty,
-                        &bindings,
-                        caller,
-                        budget,
-                    )?;
+                    let application = state
+                        .source_trait_application(
+                            &self.registry,
+                            path,
+                            &self_ty,
+                            &bindings,
+                            caller,
+                            budget,
+                        )?
+                        .reject_equalities()?;
                     budget.retain_bytes(256)?;
                     rows.try_reserve_exact(1).map_err(|_| {
                         super::source::SourceError::from_token(
@@ -13037,8 +13444,15 @@ impl PlanCtx {
                         .checked_mul(std::mem::size_of::<ir::TraitRef>())
                         .ok_or("trait implication capacity overflow")?,
                 )?;
-                for ir::Predicate::Implements(application) in rows {
-                    applications.push(application);
+                for row in rows {
+                    match row {
+                        ir::Predicate::Implements(application) => applications.push(application),
+                        ir::Predicate::ProjectionEq { .. } => {
+                            return Err(
+                                "unsupported: associated equality in trait implications".into()
+                            );
+                        }
+                    }
                 }
                 applications
             };
@@ -13103,6 +13517,7 @@ impl PlanCtx {
                     .state
                     .lock()
                     .map_err(|_| "generic plan context poisoned")?;
+                state.source_context = Some(self.registry.source_type_context(declaration)?);
                 append_source_bounds(
                     &mut state,
                     &self.registry,
@@ -13112,7 +13527,16 @@ impl PlanCtx {
                     caller,
                     budget,
                 )?;
-                state.source_trait_ref(&self.registry, path, &self_ty, &bindings, caller, budget)?
+                state
+                    .source_trait_application(
+                        &self.registry,
+                        path,
+                        &self_ty,
+                        &bindings,
+                        caller,
+                        budget,
+                    )?
+                    .reject_equalities()?
             };
             let mut pairs = Vec::new();
             for id in &self.registry.associated_ids[bi] {
@@ -13777,8 +14201,102 @@ fn receiver_mode(receiver: ReceiverKind) -> ir::ReceiverMode {
         ReceiverKind::Borrowed { kind } => ir::ReceiverMode::Borrowed { kind },
     }
 }
+struct LoweredTraitApplication {
+    trait_ref: ir::TraitRef,
+    equalities: Vec<LoweredAssociatedEquality>,
+}
+struct LoweredAssociatedEquality {
+    projection: ir::AssociatedTypeProjection,
+    ty: ir::Ty,
+}
+impl LoweredTraitApplication {
+    fn reject_equalities(self) -> Result<ir::TraitRef, String> {
+        if !self.equalities.is_empty() {
+            return Err("unsupported: associated equalities are only admitted in callable and implementation bounds".into());
+        }
+        Ok(self.trait_ref)
+    }
+}
 impl PlanState {
-    fn source_trait_ref(
+    // Metadata-only pass. Capability checks must not hide malformed later
+    // children behind an earlier unsupported reference or equality position.
+    fn validate_source_type_metadata(
+        &self,
+        registry: &DeclRegistry,
+        ty: &Type,
+        bindings: &HashMap<GenericBindingKey, ir::Ty>,
+        caller: ir::FactsCtx<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        let mut inspect = |node: &DepthNode<'_>, depth| {
+            budget.check_depth(depth)?;
+            budget.charge_work(1)?;
+            if let DepthNode::Type(ty) = node {
+                match ty {
+                    Type::Param(parameter) => {
+                        let ty = bindings
+                            .get(&registry.parameter_key(*parameter)?)
+                            .ok_or("unknown generic parameter")?;
+                        caller.validate_ty_metadata_with_budget(ty, budget)?;
+                    }
+                    Type::SelfType => {
+                        let ty = bindings
+                            .get(&GenericBindingKey::SelfType)
+                            .ok_or("Self is not in an impl scope")?;
+                        caller.validate_ty_metadata_with_budget(ty, budget)?;
+                    }
+                    Type::Named(path) => {
+                        let key =
+                            name_scope::path_key(registry.names.as_ref(), path, Namespace::Type)?;
+                        let id = registry.nominals.get(&key).ok_or("unknown nominal type")?;
+                        if registry.declaration(*id)?.param_env.arity() != 0 {
+                            return Err("nominal type argument arity mismatch".into());
+                        }
+                    }
+                    Type::Apply(path) => {
+                        let key = name_scope::path_key(
+                            registry.names.as_ref(),
+                            &path.path(registry.names.as_ref())?,
+                            Namespace::Type,
+                        )?;
+                        let id = registry.nominals.get(&key).ok_or("unknown nominal type")?;
+                        let count = path.segments.iter().try_fold(0usize, |count, segment| {
+                            count
+                                .checked_add(segment.args.len())
+                                .ok_or("nominal argument count overflow")
+                        })?;
+                        if registry.declaration(*id)?.param_env.arity() != count {
+                            return Err("nominal type argument arity mismatch".into());
+                        }
+                    }
+                    Type::Projection(projection) => {
+                        registry.validate_source_projection(
+                            self.source_context
+                                .ok_or("projection without retained source declaration context")?,
+                            projection,
+                            budget,
+                        )?;
+                        if let SourceProjection::Qualified {
+                            trait_path, item, ..
+                        } = projection.as_ref()
+                        {
+                            let owner = registry.resolve_trait_path(trait_path)?;
+                            registry.associated_type_item(owner, *item, budget)?;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(())
+        };
+        walk_depth_inspecting(
+            DepthNode::Type(ty),
+            None,
+            Some(registry.names.as_ref()),
+            Some(&mut inspect),
+        )
+    }
+    fn source_trait_application(
         &mut self,
         registry: &DeclRegistry,
         path: &TraitPath,
@@ -13786,9 +14304,29 @@ impl PlanState {
         bindings: &HashMap<GenericBindingKey, ir::Ty>,
         caller: ir::FactsCtx<'_>,
         budget: &ir::PlanBudget,
-    ) -> Result<ir::TraitRef, String> {
+    ) -> Result<LoweredTraitApplication, String> {
         budget.charge_work(1)?;
         caller.validate_ty_metadata_with_budget(owner, budget)?;
+        let declaration = registry.resolve_trait_path(path)?;
+        if let TraitPath::Source(path) = path {
+            path.path(registry.names.as_ref())?;
+            // Visit all supplied children before lowering can issue a capability error.
+            for segment in &path.segments {
+                for actual in &segment.args {
+                    self.validate_source_type_metadata(registry, actual, bindings, caller, budget)?;
+                }
+                for binding in &segment.associated_types {
+                    registry.associated_type_item(declaration, binding.name, budget)?;
+                    self.validate_source_type_metadata(
+                        registry,
+                        &binding.value,
+                        bindings,
+                        caller,
+                        budget,
+                    )?;
+                }
+            }
+        }
         let mut args = Vec::new();
         if let TraitPath::Source(path) = path {
             // Check the exact original-use certificate, never synthesize a new
@@ -13799,7 +14337,11 @@ impl PlanState {
                     .checked_add(segment.args.len())
                     .ok_or("trait actual count overflow")
             })?;
-            budget.charge_work(count + path.segments.len())?;
+            budget.charge_work(
+                count
+                    .checked_add(path.segments.len())
+                    .ok_or("trait actual work overflow")?,
+            )?;
             let bytes = count
                 .checked_mul(std::mem::size_of::<ir::Ty>())
                 .ok_or("trait actual storage overflow")?;
@@ -13821,7 +14363,6 @@ impl PlanState {
                 for actual in &segment.args {
                     let ty =
                         self.source_ty(registry, actual, bindings, caller, budget, 0, false)?;
-                    ir::reject_references(&ty, budget)?;
                     caller.validate_ty_metadata_with_budget(&ty, budget)?;
                     args.push(ty);
                 }
@@ -13835,7 +14376,6 @@ impl PlanState {
                 return Err("unsupported: only final trait segment may carry arguments".into());
             }
         }
-        let declaration = registry.resolve_trait_path(path)?;
         let expected = registry
             .declaration(declaration)?
             .param_env
@@ -13851,10 +14391,71 @@ impl PlanState {
                 .and_then(|bytes| bytes.checked_add(2 * std::mem::size_of::<usize>()))
                 .ok_or("trait actual storage overflow")?,
         )?;
-        Ok(ir::TraitRef {
+        let trait_ref = ir::TraitRef {
             declaration,
             self_ty: owner.clone(),
             args: args.into(),
+        };
+        let mut equalities = Vec::new();
+        if let TraitPath::Source(path) = path {
+            for segment in &path.segments {
+                for binding in &segment.associated_types {
+                    budget.charge_work(1)?;
+                    let item = registry.associated_type_item(declaration, binding.name, budget)?;
+                    let ty = self.source_ty(
+                        registry,
+                        &binding.value,
+                        bindings,
+                        caller,
+                        budget,
+                        0,
+                        true,
+                    )?;
+                    caller.validate_ty_metadata_with_budget(&ty, budget)?;
+                    budget.retain_bytes(std::mem::size_of::<LoweredAssociatedEquality>())?;
+                    let old_capacity = equalities.capacity();
+                    equalities.try_reserve_exact(1).map_err(|_| {
+                        super::source::SourceError::from_token(
+                            super::token_session::TokenError::Budget(
+                                registry.names.budget().poison_allocation(),
+                            ),
+                        )
+                        .to_string()
+                    })?;
+                    budget.retain_bytes(
+                        equalities
+                            .capacity()
+                            .saturating_sub(old_capacity)
+                            .saturating_sub(1)
+                            .checked_mul(std::mem::size_of::<LoweredAssociatedEquality>())
+                            .ok_or("associated equality capacity overflow")?,
+                    )?;
+                    equalities.push(LoweredAssociatedEquality {
+                        projection: ir::AssociatedTypeProjection {
+                            trait_ref: trait_ref.clone(),
+                            item,
+                        },
+                        ty,
+                    });
+                }
+            }
+            if path
+                .segments
+                .iter()
+                .take(path.segments.len().saturating_sub(1))
+                .any(|segment| !segment.associated_types.is_empty())
+            {
+                return Err(
+                    "unsupported: only final trait segment may carry associated equalities".into(),
+                );
+            }
+        }
+        for arg in trait_ref.args.iter() {
+            ir::reject_references(arg, budget)?;
+        }
+        Ok(LoweredTraitApplication {
+            trait_ref,
+            equalities,
         })
     }
 }
@@ -13878,14 +14479,48 @@ fn append_source_bounds(
                 return Err("predicate environment limit exceeded".into());
             }
             budget.retain_bytes(256)?;
-            let trait_ref = state.source_trait_ref(registry, path, ty, bindings, caller, budget)?;
-            out.try_reserve_exact(1).map_err(|_| {
+            let application =
+                state.source_trait_application(registry, path, ty, bindings, caller, budget)?;
+            if !application.equalities.is_empty() {
+                registry.validate_source_bound_path(
+                    state
+                        .source_context
+                        .ok_or("associated equality without retained source context")?,
+                    path,
+                    budget,
+                )?;
+            }
+            let count = application
+                .equalities
+                .len()
+                .checked_add(1)
+                .ok_or("predicate count overflow")?;
+            if out
+                .len()
+                .checked_add(count)
+                .ok_or("predicate count overflow")?
+                > tr::MAX_PREDICATES
+            {
+                return Err("predicate environment limit exceeded".into());
+            }
+            budget.retain_bytes(
+                count
+                    .checked_mul(std::mem::size_of::<ir::Predicate>())
+                    .ok_or("predicate storage overflow")?,
+            )?;
+            out.try_reserve_exact(count).map_err(|_| {
                 super::source::SourceError::from_token(super::token_session::TokenError::Budget(
                     registry.names.budget().poison_allocation(),
                 ))
                 .to_string()
             })?;
-            out.push(ir::Predicate::Implements(trait_ref));
+            out.push(ir::Predicate::Implements(application.trait_ref));
+            for equality in application.equalities {
+                out.push(ir::Predicate::ProjectionEq {
+                    projection: equality.projection,
+                    ty: equality.ty,
+                });
+            }
         }
     }
     Ok(())
@@ -14050,14 +14685,25 @@ impl tr::SchemaCx for SchemaAdapter {
             .collect::<Result<Vec<_>, _>>()?;
         let result = sub(&schema.signature.result)?;
         let mut predicates = Vec::new();
-        for ir::Predicate::Implements(r) in schema.predicates.iter() {
+        for row in schema.predicates.iter() {
+            let r = row.trait_ref();
             let self_ty = sub(&r.self_ty)?;
             let args = r.args.iter().map(&mut sub).collect::<Result<Vec<_>, _>>()?;
-            predicates.push(ir::Predicate::Implements(ir::TraitRef {
+            let trait_ref = ir::TraitRef {
                 declaration: r.declaration,
                 self_ty,
                 args: args.into(),
-            }));
+            };
+            predicates.push(match row {
+                ir::Predicate::Implements(_) => ir::Predicate::Implements(trait_ref),
+                ir::Predicate::ProjectionEq { projection, ty } => ir::Predicate::ProjectionEq {
+                    projection: ir::AssociatedTypeProjection {
+                        trait_ref,
+                        item: projection.item,
+                    },
+                    ty: sub(ty)?,
+                },
+            });
         }
         Ok(tr::InstantiatedSchema {
             signature: ir::Signature {
@@ -14913,6 +15559,12 @@ fn collect_source_params(
                         for argument in &segment.args {
                             collect_source_params(names, argument, used, budget, depth + 1)?;
                         }
+                        for binding in &segment.associated_types {
+                            names
+                                .check(binding.name)
+                                .map_err(native_adapter::name_diagnostic)?;
+                            collect_source_params(names, &binding.value, used, budget, depth + 1)?;
+                        }
                     }
                 }
             }
@@ -14929,6 +15581,12 @@ fn collect_source_params(
             for s in &path.segments {
                 for a in &s.args {
                     collect_source_params(names, a, used, budget, depth + 1)?;
+                }
+                for binding in &s.associated_types {
+                    names
+                        .check(binding.name)
+                        .map_err(native_adapter::name_diagnostic)?;
+                    collect_source_params(names, &binding.value, used, budget, depth + 1)?;
                 }
             }
         }
@@ -14974,6 +15632,7 @@ mod registry_resource_tests {
                 .map(|_| PathSegment {
                     name,
                     args: Vec::new(),
+                    associated_types: Vec::new(),
                 })
                 .collect(),
         });
@@ -15221,6 +15880,156 @@ mod associated_registry_tests {
                 "{source}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod equality_registry_tests {
+    use super::*;
+
+    fn equality_plan() -> PlanCtx {
+        let program = parse("trait Source<A>{type Out;type Other;}fn f<T:Source<u8,Out=u64,Out=u64>>(x:T)->T{x}fn refs(x:&u64){}fn main(){}").unwrap();
+        PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap()
+    }
+
+    #[test]
+    fn equality_normalization_keeps_raw_callable_projection_and_requirement() {
+        let program = parse("trait Source{type Out;}fn f<T:Source<Out=u64>>(x:T)-><T as Source>::Out{0u64}fn main(){}").unwrap();
+        let plan = PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let raw = plan.raw_schema(declaration).unwrap();
+        assert!(matches!(raw.signature.result, ir::Ty::AssociatedType(_)));
+        assert!(
+            raw.predicates
+                .iter()
+                .any(|row| matches!(row, ir::Predicate::ProjectionEq { .. }))
+        );
+        assert_eq!(
+            plan.function_schema(declaration).unwrap().signature.result,
+            ir::Ty::Int(ir::IntTy::U64)
+        );
+        assert!(matches!(
+            plan.raw_schema(declaration).unwrap().signature.result,
+            ir::Ty::AssociatedType(_)
+        ));
+    }
+
+    #[test]
+    fn repeated_equalities_retain_full_application_in_raw_rows() {
+        let plan = equality_plan();
+        let schema = plan.raw_schema(plan.function_decl(0).unwrap()).unwrap();
+        let equalities = schema
+            .predicates
+            .iter()
+            .filter_map(|row| match row {
+                ir::Predicate::ProjectionEq { projection, ty } => Some((projection, ty)),
+                ir::Predicate::Implements(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(equalities.len(), 2);
+        for (projection, ty) in equalities {
+            assert_eq!(projection.trait_ref.declaration, plan.registry.trait_ids[0]);
+            assert_eq!(
+                projection.trait_ref.args.as_ref(),
+                &[ir::Ty::Int(ir::IntTy::U8)]
+            );
+            assert!(matches!(projection.trait_ref.self_ty, ir::Ty::Param(_)));
+            assert_eq!(projection.item, plan.registry.trait_associated_types[0][0]);
+            assert_eq!(*ty, ir::Ty::Int(ir::IntTy::U64));
+        }
+    }
+
+    #[test]
+    fn same_owner_identical_binding_transplant_is_not_source_authority() {
+        let plan = equality_plan();
+        let declaration = plan.function_decl(0).unwrap();
+        let original = &plan.program.functions[0].bounds[0].traits[0];
+        plan.validate_source_bound_path(declaration, original, &plan.budget)
+            .unwrap();
+        let mut changed = original.clone();
+        let TraitPath::Source(path) = &mut changed else {
+            panic!("source bound")
+        };
+        let bindings = &mut path.segments.last_mut().unwrap().associated_types;
+        bindings[0] = bindings[1].clone();
+        assert!(
+            plan.validate_source_bound_path(declaration, &changed, &plan.budget)
+                .is_err()
+        );
+        let TraitPath::Source(path) = &mut changed else {
+            unreachable!()
+        };
+        path.segments.last_mut().unwrap().associated_types.clear();
+        assert!(
+            plan.validate_source_bound_path(declaration, &changed, &plan.budget)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn nonbound_application_cannot_discard_equalities() {
+        let plan = equality_plan();
+        let declaration = plan.function_decl(0).unwrap();
+        let info = plan.declaration(declaration).unwrap();
+        let bindings = generic_bindings(&plan.registry, &info.env, &plan.budget).unwrap();
+        let bound = &plan.program.functions[0].bounds[0];
+        let owner = bindings
+            .get(&plan.registry.parameter_key(bound.parameter).unwrap())
+            .unwrap();
+        let application = plan
+            .state
+            .lock()
+            .unwrap()
+            .source_trait_application(
+                &plan.registry,
+                &bound.traits[0],
+                owner,
+                &bindings,
+                ir::FactsCtx::Universal(&info.env),
+                &plan.budget,
+            )
+            .unwrap();
+        assert!(
+            application
+                .reject_equalities()
+                .unwrap_err()
+                .starts_with("unsupported:")
+        );
+    }
+
+    #[test]
+    fn later_unknown_binding_precedes_unsupported_reference_argument() {
+        let plan = equality_plan();
+        let declaration = plan.function_decl(0).unwrap();
+        let info = plan.declaration(declaration).unwrap();
+        let bindings = generic_bindings(&plan.registry, &info.env, &plan.budget).unwrap();
+        let bound = &plan.program.functions[0].bounds[0];
+        let owner = bindings
+            .get(&plan.registry.parameter_key(bound.parameter).unwrap())
+            .unwrap();
+        let mut path = bound.traits[0].clone();
+        let TraitPath::Source(source) = &mut path else {
+            panic!("source bound")
+        };
+        let segment = source.segments.last_mut().unwrap();
+        segment.args[0] = plan.program.functions[1].params[0].1.clone();
+        segment.associated_types[1].name = bound.parameter;
+        let error = plan
+            .state
+            .lock()
+            .unwrap()
+            .source_trait_application(
+                &plan.registry,
+                &path,
+                owner,
+                &bindings,
+                ir::FactsCtx::Universal(&info.env),
+                &plan.budget,
+            )
+            .err()
+            .expect("unknown member must fail");
+        assert!(error.contains("unknown associated type item"), "{error}");
+        assert!(!error.starts_with("unsupported:"));
     }
 }
 

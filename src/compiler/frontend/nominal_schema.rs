@@ -161,9 +161,10 @@ impl PlanState {
                             transport,
                         )?;
                         (
-                            self.source_trait_ref(
+                            self.source_trait_application(
                                 registry, trait_path, &self_ty, bindings, caller, budget,
-                            )?,
+                            )?
+                            .reject_equalities()?,
                             *item,
                         )
                     }
@@ -213,7 +214,7 @@ impl PlanState {
                                 if block.module != context.module {
                                     return Err("retained impl module changed".into());
                                 }
-                                self.source_trait_ref(
+                                self.source_trait_application(
                                     registry,
                                     block
                                         .trait_path
@@ -224,6 +225,7 @@ impl PlanState {
                                     caller,
                                     budget,
                                 )?
+                                .reject_equalities()?
                             }
                             _ => return Err("Self projection requires retained trait owner".into()),
                         };
@@ -242,6 +244,16 @@ impl PlanState {
                 .cloned()
                 .ok_or_else(|| "unknown generic parameter".to_owned())?,
             Type::Apply(path) => {
+                self.validate_source_type_metadata(registry, ty, bindings, caller, budget)?;
+                if path
+                    .segments
+                    .iter()
+                    .any(|segment| !segment.associated_types.is_empty())
+                {
+                    return Err(
+                        "unsupported: associated equalities in nominal type applications".into(),
+                    );
+                }
                 let (at, segment) = path
                     .segments
                     .iter()

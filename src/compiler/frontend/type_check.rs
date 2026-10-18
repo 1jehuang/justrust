@@ -7483,6 +7483,36 @@ fn signature_source_equal(
     right: SignatureSource<'_>,
 ) -> Result<bool, String> {
     let names = &*plan.program.names;
+    // Replay validates every written equality occurrence before resolving or
+    // comparing paths. In particular, an unequal prefix or unsupported earlier
+    // child must not hide a forged handle in a later binding.
+    for source in [&left, &right] {
+        for bound in source.bounds {
+            for path in &bound.traits {
+                if let TraitPath::Source(path) = path {
+                    for segment in &path.segments {
+                        plan.budget.charge_work(
+                            segment
+                                .args
+                                .len()
+                                .checked_add(segment.associated_types.len())
+                                .and_then(|work| work.checked_add(1))
+                                .ok_or("signature binding metadata work overflow")?,
+                        )?;
+                        for argument in &segment.args {
+                            argument.semantic_eq(argument, names)?;
+                        }
+                        for binding in &segment.associated_types {
+                            names
+                                .key(binding.name, LookupClass::Member)
+                                .map_err(native_adapter::name_diagnostic)?;
+                            binding.value.semantic_eq(&binding.value, names)?;
+                        }
+                    }
+                }
+            }
+        }
+    }
     let work = left
         .type_params
         .len()
@@ -7525,19 +7555,18 @@ fn signature_source_equal(
         equal &= a.traits.len() == b.traits.len();
         for (a, b) in a.traits.iter().zip(&b.traits) {
             equal &= plan.resolve_trait_path(a)? == plan.resolve_trait_path(b)?;
-            for path in [a, b] {
-                if let TraitPath::Source(path) = path {
-                    for segment in &path.segments {
-                        plan.budget
-                            .charge_work(segment.args.len().saturating_add(1))?;
-                        for argument in &segment.args {
-                            argument.semantic_eq(argument, names)?;
-                        }
-                    }
-                }
-            }
             match (a, b) {
                 (TraitPath::Source(a), TraitPath::Source(b)) => {
+                    equal &= a.segments.len() == b.segments.len();
+                    for (a, b) in a.segments.iter().zip(&b.segments) {
+                        plan.budget.charge_work(a.associated_types.len())?;
+                        equal &= a.associated_types.len() == b.associated_types.len();
+                        for (a, b) in a.associated_types.iter().zip(&b.associated_types) {
+                            equal &=
+                                name_scope::ident_eq(names, a.name, b.name, LookupClass::Member)?;
+                            equal &= a.value.semantic_eq(&b.value, names)?;
+                        }
+                    }
                     let a = a.segments.iter().flat_map(|segment| &segment.args);
                     let b = b.segments.iter().flat_map(|segment| &segment.args);
                     equal &= a.clone().count() == b.clone().count();
@@ -7597,6 +7626,13 @@ pub(super) fn type_callable_source(
             }
         };
     name_validation::validate_function_names(program, f, containing_module)?;
+    // Semantic equality cannot establish occurrence authority: another bound
+    // in this same source owner can have the same member spelling and RHS.
+    for bound in &f.bounds {
+        for path in &bound.traits {
+            plan.validate_source_bound_path(declaration, path, budget)?;
+        }
+    }
     let original = plan.callable_body(&plan.program, declaration)?;
     let same_name = name_scope::path_key(&*program.names, &f.name, Namespace::Value)?
         == name_scope::path_key(&*program.names, &original.name, Namespace::Value)?;
@@ -7616,6 +7652,11 @@ pub(super) fn type_callable_source(
         let supplied = &program.traits[trait_index].items[item].signature;
         let original = &plan.program.traits[trait_index].items[item].signature;
         name_validation::validate_function_head_names(program, supplied)?;
+        for bound in &supplied.bounds {
+            for path in &bound.traits {
+                plan.validate_source_bound_path(declaration, path, budget)?;
+            }
+        }
         if !name_scope::ident_eq(
             &*program.names,
             supplied.name,
@@ -8001,6 +8042,123 @@ mod checked_identity_tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn equality_required_calls_keep_rigid_trait_item_identity() {
+        let program = parse("trait Source{type Out;fn get(self)->Self::Out;}fn read<T:Source<Out=i32>>(x:T)->i32{x.get()}fn main(){}").unwrap();
+        let signatures = signature_table(&program).unwrap();
+        let typed = type_function_with_signatures(&program, 0, &signatures).unwrap();
+        let calls = typed
+            .exprs
+            .iter()
+            .filter_map(|expression| match &expression.kind {
+                ir::ExprKind::Call {
+                    target, signature, ..
+                } => Some((target, signature)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), 1);
+        let (ir::Callee::TraitItem(call), signature) = calls[0] else {
+            panic!("rigid equality cannot select an implementation target");
+        };
+        assert!(matches!(call.trait_ref.self_ty, ir::Ty::Param(_)));
+        assert_eq!(signature.result, ir::Ty::Int(ir::IntTy::I32));
+        assert!(matches!(signature.params.as_slice(), [ir::Ty::Param(_)]));
+    }
+
+    #[test]
+    fn equality_requirements_survive_unused_and_body_only_signatures() {
+        for source in [
+            "trait Source{type Out;}struct S;impl Source for S{type Out=i32;}fn unused<T:Source<Out=i32>>(x:T)->i32{42}fn main(){let n=unused(S);}",
+            "trait Source{type Out;fn get(self)->Self::Out;}fn first<T:Source<Out=i32>>(x:T)->i32{x.get()}fn second<T:Source<Out=i32>>(x:T)->i32{first(x)}fn main(){}",
+            "trait Source{type Out;fn get(self)->Self::Out;}fn read<T:Source<Out=i32>>(x:T)->i32{let n:<T as Source>::Out=x.get();n}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            check(&program).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+        for source in [
+            "trait Source{type Out;}struct S;impl Source for S{type Out=bool;}fn unused<T:Source<Out=i32>>(x:T)->i32{42}fn main(){let n=unused(S);}",
+            "trait Source{type Out;fn get(self)->Self::Out;}fn first<T:Source<Out=i32>>(x:T)->i32{x.get()}fn second<T:Source>(x:T)->i32{first(x)}fn main(){}",
+            "trait Source{type Out;fn get(self)->Self::Out;}fn wrong<T:Source<Out=i32>>(x:T)->bool{x.get()}fn main(){}",
+        ] {
+            let program = parse(source).unwrap();
+            assert!(check(&program).is_err(), "accepted {source}");
+        }
+    }
+
+    #[test]
+    fn equality_source_replay_keeps_every_binding_occurrence() {
+        let program = parse(
+            "trait Source{type Out;}fn read<T:Source<Out=i32,Out=i32>>(x:T)->i32{42}fn main(){}",
+        )
+        .unwrap();
+        let signatures = signature_table(&program).unwrap();
+        let plan = signatures.plan().unwrap();
+        let original = &program.functions[0];
+        assert!(signature_source_equal(plan, original.into(), original.into()).unwrap());
+        let mut changed = original.clone();
+        let TraitPath::Source(path) = &mut changed.bounds[0].traits[0] else {
+            panic!("source equality bound");
+        };
+        path.segments.last_mut().unwrap().associated_types[1].value = Type::Bool;
+        assert!(!signature_source_equal(plan, original.into(), (&changed).into()).unwrap());
+        let TraitPath::Source(path) = &mut changed.bounds[0].traits[0] else {
+            unreachable!();
+        };
+        path.segments.last_mut().unwrap().associated_types.pop();
+        assert!(!signature_source_equal(plan, original.into(), (&changed).into()).unwrap());
+    }
+
+    #[test]
+    fn equality_source_replay_checks_later_handles_before_comparison() {
+        let source =
+            "trait Source{type Out;}fn read<T:Source<Out=i32,Out=i32>>(x:T)->i32{42}fn main(){}";
+        let program = parse(source).unwrap();
+        let foreign = parse(source).unwrap();
+        let signatures = signature_table(&program).unwrap();
+        let plan = signatures.plan().unwrap();
+        let original = &program.functions[0];
+        let mut changed = original.clone();
+        let TraitPath::Source(foreign_path) = &foreign.functions[0].bounds[0].traits[0] else {
+            panic!("foreign source equality bound");
+        };
+        let TraitPath::Source(path) = &mut changed.bounds[0].traits[0] else {
+            panic!("source equality bound");
+        };
+        let bindings = &mut path.segments.last_mut().unwrap().associated_types;
+        bindings[0].value = Type::Bool;
+        bindings[1].name = foreign_path.segments.last().unwrap().associated_types[1].name;
+        assert!(signature_source_equal(plan, original.into(), (&changed).into()).is_err());
+    }
+
+    #[test]
+    fn equality_source_replay_rejects_same_owner_occurrence_transplants() {
+        let program = parse("struct Cell;trait Source{type Out;}fn first<T:Source<Out=Cell>>(x:T){}fn second<T:Source<Out=Cell>>(x:T){}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        type_function_with_plan(&program, 0, &plan, &budget).unwrap();
+        let TraitPath::Source(donor) = &program.functions[1].bounds[0].traits[0] else {
+            panic!("donor bound");
+        };
+        let donor = &donor.segments.last().unwrap().associated_types[0];
+        for transplant in 0..3 {
+            let mut supplied = program.clone();
+            let TraitPath::Source(path) = &mut supplied.functions[0].bounds[0].traits[0] else {
+                panic!("recipient bound");
+            };
+            let binding = &mut path.segments.last_mut().unwrap().associated_types[0];
+            match transplant {
+                0 => *binding = donor.clone(),
+                1 => binding.name = donor.name,
+                _ => binding.value = donor.value.clone(),
+            }
+            assert!(
+                type_function_with_plan(&supplied, 0, &plan, &budget).is_err(),
+                "accepted same-owner transplant {transplant}"
+            );
+        }
     }
 
     #[test]

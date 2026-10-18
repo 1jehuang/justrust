@@ -107,7 +107,18 @@ fn validate_type_names(ty: &Type, names: &impl NameAccess) -> Result<(), String>
                                     .key(segment.name, LookupClass::Item(Namespace::Type))
                                     .map_err(native_adapter::name_diagnostic)?;
                                 work(names, segment.args.len())?;
-                                for actual in &segment.args {
+                                for binding in &segment.associated_types {
+                                    work(names, 1)?;
+                                    names
+                                        .key(binding.name, LookupClass::Member)
+                                        .map_err(native_adapter::name_diagnostic)?;
+                                }
+                                for actual in segment.args.iter().chain(
+                                    segment
+                                        .associated_types
+                                        .iter()
+                                        .map(|binding| &binding.value),
+                                ) {
                                     pending.push(actual).map_err(transport)?;
                                 }
                             }
@@ -156,7 +167,18 @@ fn validate_type_names(ty: &Type, names: &impl NameAccess) -> Result<(), String>
                         .key(segment.name, LookupClass::Item(Namespace::Type))
                         .map_err(native_adapter::name_diagnostic)?;
                     work(names, segment.args.len())?;
-                    for argument in &segment.args {
+                    for binding in &segment.associated_types {
+                        work(names, 1)?;
+                        names
+                            .key(binding.name, LookupClass::Member)
+                            .map_err(native_adapter::name_diagnostic)?;
+                    }
+                    for argument in segment.args.iter().chain(
+                        segment
+                            .associated_types
+                            .iter()
+                            .map(|binding| &binding.value),
+                    ) {
                         pending.push(argument).map_err(transport)?;
                     }
                 }
@@ -217,6 +239,14 @@ impl Type {
                                         LookupClass::Item(Namespace::Type),
                                     )?;
                                     equal &= a.args.len() == b.args.len();
+                                    equal &= a.associated_types.len() == b.associated_types.len();
+                                    for (a, b) in a.associated_types.iter().zip(&b.associated_types)
+                                    {
+                                        equal &=
+                                            ident_eq(names, a.name, b.name, LookupClass::Member)?;
+                                        work(names, 1)?;
+                                        pending.push((&a.value, &b.value)).map_err(transport)?;
+                                    }
                                     for (a, b) in a.args.iter().zip(&b.args) {
                                         work(names, 1)?;
                                         pending.push((a, b)).map_err(transport)?;
@@ -296,6 +326,12 @@ impl Type {
                         equal &=
                             ident_eq(names, a.name, b.name, LookupClass::Item(Namespace::Type))?;
                         equal &= a.args.len() == b.args.len();
+                        equal &= a.associated_types.len() == b.associated_types.len();
+                        for (a, b) in a.associated_types.iter().zip(&b.associated_types) {
+                            equal &= ident_eq(names, a.name, b.name, LookupClass::Member)?;
+                            work(names, 1)?;
+                            pending.push((&a.value, &b.value)).map_err(transport)?;
+                        }
                         for (a, b) in a.args.iter().zip(&b.args) {
                             work(names, 1)?;
                             pending.push((a, b)).map_err(|e| {
@@ -359,6 +395,7 @@ mod tests {
             segments: vec![PathSegment {
                 name,
                 args: arguments,
+                associated_types: Vec::new(),
             }],
         })
     }
@@ -375,6 +412,7 @@ mod tests {
                     segments: vec![PathSegment {
                         name: trait_name,
                         args: vec![argument],
+                        associated_types: Vec::new(),
                     }],
                     resolved_use: None,
                 }),
@@ -474,10 +512,12 @@ mod tests {
                         PathSegment {
                             name: own[0],
                             args: vec![],
+                            associated_types: Vec::new(),
                         },
                         PathSegment {
                             name: foreign_name,
                             args: vec![],
+                            associated_types: Vec::new(),
                         },
                     ],
                 }),

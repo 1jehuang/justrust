@@ -249,17 +249,31 @@ pub(super) fn inventory(
                 }
                 SourceProjection::SelfItem { .. } => {}
             },
-            // `[T]` is unsized and not Clone: no recipe descriptor. Admission of
-            // slice types is decided by the typed frontend, not recipe discovery.
-            Type::Slice(_) => {}
-            Type::Apply(p) => {
-                for s in &p.segments {
-                    for t in &s.args {
-                        ty(t, ds, b, depth + 1)?;
-                    }
-                }
-            }
+            // The slice itself has no Clone recipe, but every written element
+            // shape remains part of the source inventory, even in a boundary.
+            Type::Slice(element) => ty(element, ds, b, depth + 1)?,
+            Type::Apply(path) => generic_path(path, ds, b, depth)?,
             _ => {}
+        }
+        Ok(())
+    }
+    fn generic_path(
+        path: &GenericPath,
+        ds: &mut Vec<tr::RecipeDescriptor>,
+        b: &ir::PlanBudget,
+        depth: usize,
+    ) -> Result<(), String> {
+        b.check_depth(depth)?;
+        b.charge_work(path.segments.len())?;
+        for segment in &path.segments {
+            b.charge_work(segment.args.len())?;
+            b.charge_work(segment.associated_types.len())?;
+            for actual in &segment.args {
+                ty(actual, ds, b, depth + 1)?;
+            }
+            for binding in &segment.associated_types {
+                ty(&binding.value, ds, b, depth + 1)?;
+            }
         }
         Ok(())
     }
@@ -272,13 +286,7 @@ pub(super) fn inventory(
         b.check_depth(depth)?;
         b.charge_work(1)?;
         if let TraitPath::Source(path) = path {
-            b.charge_work(path.segments.len())?;
-            for segment in &path.segments {
-                b.charge_work(segment.args.len())?;
-                for actual in &segment.args {
-                    ty(actual, ds, b, depth + 1)?;
-                }
-            }
+            generic_path(path, ds, b, depth)?;
         }
         Ok(())
     }
@@ -298,6 +306,59 @@ pub(super) fn inventory(
         }
         Ok(())
     }
+    fn pattern(
+        value: &Pattern,
+        ds: &mut Vec<tr::RecipeDescriptor>,
+        b: &ir::PlanBudget,
+        depth: usize,
+    ) -> Result<(), String> {
+        b.check_depth(depth)?;
+        b.charge_work(1)?;
+        match value {
+            Pattern::Apply {
+                path,
+                pattern: child,
+            } => {
+                generic_path(path, ds, b, depth)?;
+                pattern(child, ds, b, depth + 1)?;
+            }
+            Pattern::Tuple(children) | Pattern::Array(children) => {
+                b.charge_work(children.len())?;
+                for child in children {
+                    pattern(child, ds, b, depth + 1)?;
+                }
+            }
+            Pattern::TupleRest(children)
+            | Pattern::ArrayRest(children)
+            | Pattern::VariantRest {
+                fields: children, ..
+            } => {
+                b.charge_work(children.prefix.len())?;
+                b.charge_work(children.suffix.len())?;
+                for child in children.prefix.iter().chain(&children.suffix) {
+                    pattern(child, ds, b, depth + 1)?;
+                }
+            }
+            Pattern::Variant { fields, .. } => {
+                b.charge_work(fields.len())?;
+                for (_, child) in fields {
+                    pattern(child, ds, b, depth + 1)?;
+                }
+            }
+            Pattern::Struct { fields, .. } => {
+                b.charge_work(fields.len())?;
+                for (_, child) in fields {
+                    pattern(child, ds, b, depth + 1)?;
+                }
+            }
+            Pattern::Path(_)
+            | Pattern::Bool(_)
+            | Pattern::Int { .. }
+            | Pattern::Wildcard
+            | Pattern::Binding { .. } => {}
+        }
+        Ok(())
+    }
     fn block(
         value: &Block,
         ds: &mut Vec<tr::RecipeDescriptor>,
@@ -309,16 +370,26 @@ pub(super) fn inventory(
             b.charge_work(1)?;
             match s {
                 Stmt::Declare { ty: t, .. } => ty(t, ds, b, d + 1)?,
-                Stmt::Let { ty: t, value, .. } | Stmt::LetPattern { ty: t, value, .. } => {
+                Stmt::Let { ty: t, value, .. } => {
+                    ty(t, ds, b, d + 1)?;
+                    expr(value, ds, b, d + 1)?;
+                }
+                Stmt::LetPattern {
+                    pattern: child,
+                    ty: t,
+                    value,
+                } => {
+                    pattern(child, ds, b, d + 1)?;
                     ty(t, ds, b, d + 1)?;
                     expr(value, ds, b, d + 1)?;
                 }
                 Stmt::LetElse {
+                    pattern: child,
                     ty: t,
                     value,
                     else_block,
-                    ..
                 } => {
+                    pattern(child, ds, b, d + 1)?;
                     ty(t, ds, b, d + 1)?;
                     expr(value, ds, b, d + 1)?;
                     block(else_block, ds, b, d + 1)?;
@@ -345,8 +416,12 @@ pub(super) fn inventory(
                     block(body, ds, b, d + 1)?;
                 }
                 Stmt::WhileLet {
-                    scrutinee, body, ..
+                    pattern: child,
+                    scrutinee,
+                    body,
+                    ..
                 } => {
+                    pattern(child, ds, b, d + 1)?;
                     expr(scrutinee, ds, b, d + 1)?;
                     block(body, ds, b, d + 1)?;
                 }
@@ -403,11 +478,7 @@ pub(super) fn inventory(
                 expr(value, ds, b, d + 1)?;
             }
             Expr::Apply { path, value } => {
-                for s in &path.segments {
-                    for t in &s.args {
-                        ty(t, ds, b, d + 1)?;
-                    }
-                }
+                generic_path(path, ds, b, d)?;
                 expr(value, ds, b, d + 1)?;
             }
             Expr::MethodCall {
@@ -485,15 +556,17 @@ pub(super) fn inventory(
             Expr::Match { scrutinee, arms } => {
                 expr(scrutinee, ds, b, d + 1)?;
                 for a in arms {
+                    pattern(&a.pattern, ds, b, d + 1)?;
                     expr(&a.body, ds, b, d + 1)?;
                 }
             }
             Expr::IfLet {
+                pattern: child,
                 scrutinee,
                 then_block,
                 else_branch,
-                ..
             } => {
+                pattern(child, ds, b, d + 1)?;
                 expr(scrutinee, ds, b, d + 1)?;
                 block(then_block, ds, b, d + 1)?;
                 if let Some(branch) = else_branch {
@@ -779,6 +852,80 @@ pub(super) fn checked_body(
 #[cfg(test)]
 mod wide_tests {
     use super::*;
+
+    #[test]
+    fn equality_inventory_keeps_nested_and_unused_shapes_in_every_path_position() {
+        let parsed = super::super::parse_unresolved(
+            "trait Family{type Out;type Other;}\
+             fn unused<T:Family<Out=(Boxed<[bool;2]>,<[bool;3] as Family<Other=[bool;4]>>::Out,[&[bool;5];0]),Other=[[bool;6]]>>(){}fn main(){}",
+        )
+        .unwrap();
+        let TraitPath::Source(path) = &parsed.program.functions[0].bounds[0].traits[0] else {
+            panic!("expected actual source equality path")
+        };
+        for site in 0..4 {
+            let mut program = parsed.program.clone();
+            if site != 0 {
+                program.functions[0].bounds.clear();
+            }
+            match site {
+                0 => {}
+                1 => program.functions[0].result = Type::Apply(path.clone()),
+                2 => {
+                    program.functions[0].body.tail = Some(Box::new(Expr::Apply {
+                        path: path.clone(),
+                        value: Box::new(Expr::Bool(true)),
+                    }))
+                }
+                _ => program.functions[0].body.statements.push(Stmt::LetPattern {
+                    pattern: Pattern::Apply {
+                        path: path.clone(),
+                        pattern: Box::new(Pattern::Wildcard),
+                    },
+                    ty: Type::Infer,
+                    value: Expr::Bool(true),
+                }),
+            }
+            let budget = ir::PlanBudget::default();
+            let shapes = inventory(&program, &budget).unwrap();
+            let builder = tr::CoreCatalogBuilder::new(
+                ir::SnapshotId::allocate().unwrap(),
+                program.modules.clone(),
+                &budget,
+            )
+            .unwrap();
+            let source_start = builder.source_start();
+            let catalog = builder.finish(source_start, shapes, &budget).unwrap();
+            for descriptor in [
+                tr::RecipeDescriptor::CloneTuple { arity: 3 },
+                tr::RecipeDescriptor::CloneArray { len: 0 },
+                tr::RecipeDescriptor::CloneArray { len: 2 },
+                tr::RecipeDescriptor::CloneArray { len: 3 },
+                tr::RecipeDescriptor::CloneArray { len: 4 },
+                tr::RecipeDescriptor::CloneArray { len: 5 },
+                tr::RecipeDescriptor::CloneArray { len: 6 },
+            ] {
+                match catalog.recipe(descriptor) {
+                    Ok(_) => {}
+                    Err(error) => {
+                        let footprint = counts(descriptor, &budget).unwrap();
+                        let admission = crate::compiler::ownership::preflight_recipe_counts(
+                            &footprint, &budget,
+                        )
+                        .unwrap();
+                        let crate::compiler::ownership::RecipeAdmission::IntrinsicLimit(reason) =
+                            admission
+                        else {
+                            panic!("site {site}: missing inventoried {descriptor:?}: {error}");
+                        };
+                        assert_eq!(error.kind(), tr::FactsErrorKind::Resource);
+                        assert_eq!(error.to_string(), reason.message());
+                    }
+                }
+            }
+            assert!(!budget.has_resource_failure());
+        }
+    }
 
     #[test]
     fn unused_associated_rhs_inventory_includes_projection_self_actuals_and_siblings() {

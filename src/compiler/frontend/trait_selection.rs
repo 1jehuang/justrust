@@ -184,8 +184,13 @@ impl PlanCtx {
                 budget,
             )?;
         }
-        for ir::Predicate::Implements(bound) in facts.predicates().predicates() {
+        for predicate in facts.predicates().predicates() {
             budget.charge_work(1)?;
+            // Equality constrains an exact application, but never establishes
+            // membership or introduces an application for method discovery.
+            let ir::Predicate::Implements(bound) = predicate else {
+                continue;
+            };
             if bound.declaration == trait_id
                 && metered_type_equal(&bound.self_ty, owner, budget, 0)?
             {
@@ -382,8 +387,11 @@ impl PlanCtx {
                     visible = true;
                 }
             }
-            for ir::Predicate::Implements(bound) in facts.predicates().predicates() {
+            for predicate in facts.predicates().predicates() {
                 budget.charge_work(1)?;
+                let ir::Predicate::Implements(bound) = predicate else {
+                    continue;
+                };
                 if bound.declaration == *trait_id
                     && metered_type_equal(&bound.self_ty, owner, budget, 0)?
                 {
@@ -460,6 +468,9 @@ impl PlanCtx {
         for argument in trait_ref.args.iter() {
             budget.charge_work(1)?;
             caller.validate_ty_with_budget(argument, budget)?;
+        }
+        // Check every supplied type before reporting a capability boundary.
+        for argument in trait_ref.args.iter() {
             ir::reject_references(argument, budget)?;
         }
         if self.param_env(trait_ref.declaration)?.arity() != trait_ref.args.len().saturating_add(1)
@@ -542,6 +553,21 @@ mod tests {
                 "{source}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn equality_selection_retains_full_trait_application_without_result_inference() {
+        let source = "trait Source<A>{type Out;fn get(self)->Self::Out;}fn both<T:Source<i32,Out=i64>+Source<bool,Out=bool>>(a:T,b:T)->(i64,bool){(<T as Source<i32>>::get(a),<T as Source<bool>>::get(b))}fn main(){}";
+        let program = parse(source).unwrap();
+        check(&program).unwrap_or_else(|error| panic!("{source}: {error}"));
+
+        let source = "trait Source<A>{type Out;fn get(self)->Self::Out;}fn ambiguous<T:Source<i32,Out=i64>+Source<bool,Out=bool>>(a:T)->i64{a.get()}fn main(){}";
+        let program = parse(source).unwrap();
+        let error = check(&program).unwrap_err();
+        assert!(
+            error.contains("multiple trait applications require explicit UFCS"),
+            "{error}"
+        );
     }
 
     #[test]

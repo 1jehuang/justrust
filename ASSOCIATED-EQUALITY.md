@@ -1,6 +1,6 @@
 # Associated equality bounds for rigid callers
 
-Status: frozen next-stage contract. Implementation and native acceptance are pending. Full Rust, unconstrained symbolic projections and general associated equality remain open.
+Status: bounded closed-RHS equality implemented and validated on October 17, 2026. Full Rust, unconstrained symbolic projections and general associated equality remain open.
 
 ## Bounded vertical
 
@@ -52,4 +52,12 @@ Stock measurements accept repeated identical equality bounds, repeated bindings 
 
 Freeze exact stock sources and native expectations before editing implementation. Preserve design-oracle originals, including earlier unsupported library calls, and use separately measured positive-check equivalents for native payload evidence. Cover closed scalar/aggregate/non-Copy/wide RHSs; genuine unused universal bodies; exact same-Self/different-trait-argument selection; wrong equality and bad body rejection; unchanged unconstrained/parameter-RHS/reference/default boundaries; repeated and conflicting constraints; source/world/environment/phase/evidence replay; and poisoned resource/cycle behavior.
 
-Run hosted all-target check, full regressions, strict all-target lint, formatting, public authority controls and workers1/8 CHECK/BUILD plus real ELF runtime matrices under debug and release. Preserve failed and passing run receipts. No native acceptance, speed or full-Rust claim follows from this proposal.
+Run hosted all-target check, full regressions, strict all-target lint, formatting, public authority controls and workers1/8 CHECK/BUILD plus real ELF runtime matrices under debug and release. Preserve failed and passing run receipts. No speed or full-Rust claim follows from this bounded implementation.
+
+## Validated delivery
+
+The frozen 46-source corpus passed debug and release: 22 runtime cases, six ordinary invalid cases, 17 stock-valid explicit boundaries and one stock-invalid explicit boundary. Each profile exercises 184 CLI cells and 184 all-body graph cells, with 44 CLI ELF executions. All source bytes remain frozen; earlier short-projection parsing boundaries are reported at their actual phase rather than attributed to equality proof.
+
+Hosted final validation passed 2,936 tests across 142 binaries, all-target check and warning-free strict all-target lint. Release validation passed the 17 corpus/public-authority tests and 26 focused private equality tests. Thirteen public authority controls include exact-world/environment/phase replay, immutable source bindings, caller parameter carriers and poisoned original resource ledgers.
+
+The 17 failed and passing receipts are retained in `data/runs/xps14/2026-10-17-associated-equality.jsonl`. Construction and final logical/normalization memo epochs are distinct. Original equality obligations survive normalized signatures and are discharged on actual calls and instances. Parameter-valued RHSs, unconstrained projected values, associated bounds, projected defaults and general equality inference are not delivered by this milestone.

@@ -12,12 +12,14 @@ use std::sync::{Arc, Mutex};
 
 mod associated_types;
 mod catalog;
+mod equality;
 mod projected_methods;
 pub use associated_types::NormalizedAssociatedType;
 pub use catalog::{
     CallableProvider, CatalogDecl, CatalogItem, CoreCatalog, CoreCatalogBuilder, DeclOrigin,
     RecipeDescriptor, RecipeShapeInventory,
 };
+pub use equality::NormalizedProjectionEquality;
 
 pub const MAX_PREDICATES: usize = 256;
 const DIAGNOSTIC_LIMIT: usize = 64 * 1024;
@@ -434,13 +436,6 @@ pub struct ValidatedFacts {
 #[derive(Clone, Copy, Debug)]
 pub(super) enum OriginalCallableSubject<'a> {
     Direct(DeclId),
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "reserved original trait replay subject remains explicitly unsupported"
-        )
-    )]
     TraitItem(&'a TraitCall),
 }
 
@@ -452,6 +447,7 @@ pub(super) struct OriginalCallableView {
     schema: GenericSchema,
     source_regions: Arc<ir::SourceRegionEnv>,
     receiver: ReceiverMode,
+    required: Option<(TraitCall, Arc<CarrierContractView>)>,
 }
 impl OriginalCallableView {
     #[cfg(test)]
@@ -460,7 +456,10 @@ impl OriginalCallableView {
     }
     #[cfg(test)]
     pub(super) fn subject(&self) -> OriginalCallableSubject<'_> {
-        OriginalCallableSubject::Direct(self.declaration)
+        match &self.required {
+            Some((call, _)) => OriginalCallableSubject::TraitItem(call),
+            None => OriginalCallableSubject::Direct(self.declaration),
+        }
     }
     pub(super) fn generic_env(&self) -> &Arc<GenericEnv> {
         &self.schema.env
@@ -498,6 +497,23 @@ impl OriginalCallableView {
                 facts.budget(),
                 "original callable view changed its header authority",
             ));
+        }
+        if let Some((call, view)) = &self.required {
+            view.validate_for(facts)?;
+            let application = facts
+                .world
+                .instantiate_equality_required_item(call, facts)?;
+            if !facts.world.same_env(&self.schema.env, facts.env())?
+                || !facts
+                    .world
+                    .eq_signature(&self.schema.signature, &application.instantiated.signature)?
+                || *self.source_regions != *view.source_regions
+            {
+                return Err(FactsError::invalid(
+                    facts.budget(),
+                    "original required replay changed its exact caller application",
+                ));
+            }
         }
         Ok(())
     }
@@ -549,11 +565,21 @@ impl ValidatedFacts {
         let declaration = match subject {
             OriginalCallableSubject::Direct(declaration) => declaration,
             OriginalCallableSubject::TraitItem(call) => {
-                self.world.item_header(call.item)?;
-                return Err(FactsError::unsupported(
-                    self.budget(),
-                    "original trait-call inference replay is not implemented",
-                ));
+                let application = self.world.instantiate_equality_required_item(call, self)?;
+                let required = self.world.equality_required_carrier_contract(call, self)?;
+                retain::<OriginalCallableView>(self.budget(), 1)?;
+                return Ok(Arc::new(OriginalCallableView {
+                    facts: self.clone(),
+                    declaration: call.item,
+                    schema: GenericSchema {
+                        env: self.env().clone(),
+                        signature: application.instantiated.signature,
+                        predicates: application.instantiated.predicates,
+                    },
+                    source_regions: required.source_regions.clone(),
+                    receiver: self.world.info(call.item)?.receiver,
+                    required: Some((call.clone(), required)),
+                }));
             }
         };
         let info = self.world.info(declaration)?;
@@ -586,6 +612,7 @@ impl ValidatedFacts {
             schema,
             source_regions,
             receiver: info.receiver,
+            required: None,
         }))
     }
     /// Provider role is derived from validated world headers and catalog, not a
@@ -744,6 +771,10 @@ impl ValidatedFacts {
 #[derive(Clone, Debug)]
 enum ProofOrigin {
     Assumption,
+    DeclaredEquality,
+    ClosedEquality {
+        normalization: NormalizedAssociatedType,
+    },
     Builtin {
         item: CatalogItem,
     },
@@ -788,6 +819,7 @@ pub struct ResolvedTraitCall {
     _evidence: ProofEvidence,
     _refinement: Option<Arc<ReturnRefinementProof>>,
     _topology: Option<Arc<SignatureTopologyProof>>,
+    _required: Option<Arc<CarrierContractView>>,
 }
 impl ResolvedTraitCall {
     pub fn callee(&self) -> &Callee {
@@ -801,6 +833,7 @@ impl ResolvedTraitCall {
 struct GoalKey {
     environment: usize,
     phase: FactsPhase,
+    finalized: bool,
     goal: Predicate,
 }
 #[derive(Clone, Debug)]
@@ -885,6 +918,7 @@ pub struct CarrierContractView {
     nominals: Arc<[ir::NominalCarrierMapping]>,
     projected: Option<Arc<projected_methods::ProjectedMethodEvidence>>,
     projected_subject: Option<TraitRef>,
+    equality_required: Option<Arc<equality::EqualityRequiredMethodEvidence>>,
     budget: PlanBudget,
 }
 impl CarrierContractView {
@@ -948,6 +982,11 @@ impl CarrierContractView {
             facts
                 .world
                 .validate_projected_carrier(self, evidence, facts)?;
+        }
+        if let Some(evidence) = &self.equality_required {
+            facts
+                .world
+                .validate_equality_required_carrier(self, evidence, facts)?;
         }
         Ok(())
     }
@@ -1068,6 +1107,7 @@ pub struct ValidatedTraitWorld {
     projection_memo: Mutex<Vec<associated_types::NormalizationMemo>>,
     owner_normalization_ready: bool,
     owner_normalization_finalized: bool,
+    declared_callables: Vec<equality::DeclaredCallableContext>,
 }
 
 impl ValidatedTraitWorld {
@@ -1209,12 +1249,14 @@ impl ValidatedTraitWorld {
             projection_memo: Mutex::new(Vec::new()),
             owner_normalization_ready: false,
             owner_normalization_finalized: false,
+            declared_callables: Vec::new(),
         };
         world.validate_header_type_metadata()?;
         world.validate_headers()?;
         world.validate_associated_headers()?;
         world.validate_supertrait_graph()?;
         world.build_declared_environments()?;
+        world.build_declared_callable_contexts()?;
         world.validate_projected_owner_metadata()?;
         world.owner_normalization_ready = true;
         world.stage_associated_types()?;
@@ -1231,6 +1273,7 @@ impl ValidatedTraitWorld {
             world.require_impl_wf(h, &h.trait_ref, context, &mut Vec::new())?;
         }
         world.build_environments()?;
+        world.validate_final_declared_contexts()?;
         world.validate_default_body_signatures()?;
         if world
             .headers
@@ -1463,16 +1506,27 @@ impl ValidatedTraitWorld {
     ) -> Result<()> {
         let mut canonical = Vec::new();
         for predicate in predicates {
-            let Predicate::Implements(goal) = predicate;
-            self.validate_ref_in(goal, env, maybe_unsized)?;
+            self.validate_predicate_metadata(predicate, env)?;
+        }
+        for predicate in predicates {
+            match predicate {
+                Predicate::Implements(goal) => self.validate_ref_in(goal, env, maybe_unsized)?,
+                Predicate::ProjectionEq { projection, ty } => {
+                    self.validate_equality_domain(projection, ty, env)?;
+                }
+            }
             self.append_predicate(&mut canonical, predicate)?;
         }
+        self.validate_equality_conflicts(predicates)?;
         Ok(())
     }
     /// Inspect canonical contextual bounds without invoking type validation or
     /// the goal solver. Merely being a trait Self does not establish Sized.
     fn predicates_prove_sized(&self, parameter: ParamId, predicates: &[Predicate]) -> Result<bool> {
-        for Predicate::Implements(goal) in predicates {
+        for predicate in predicates {
+            let Predicate::Implements(goal) = predicate else {
+                continue;
+            };
             charged(&self.budget, self.budget.charge_work(1))?;
             if goal.declaration == self.catalog.id(CatalogItem::Sized)
                 && goal.args.is_empty()
@@ -2090,7 +2144,26 @@ impl ValidatedTraitWorld {
         Ok(true)
     }
     fn eq_predicate(&self, a: &Predicate, b: &Predicate) -> Result<bool> {
-        let (Predicate::Implements(a), Predicate::Implements(b)) = (a, b);
+        match (a, b) {
+            (
+                Predicate::ProjectionEq {
+                    projection: a,
+                    ty: at,
+                },
+                Predicate::ProjectionEq {
+                    projection: b,
+                    ty: bt,
+                },
+            ) => {
+                return Ok(self.same_projection(a, b)? && self.eq_ty(at, bt, 0)?);
+            }
+            (Predicate::Implements(_), Predicate::ProjectionEq { .. })
+            | (Predicate::ProjectionEq { .. }, Predicate::Implements(_)) => return Ok(false),
+            _ => {}
+        }
+        let (Predicate::Implements(a), Predicate::Implements(b)) = (a, b) else {
+            unreachable!()
+        };
         Ok(a.declaration == b.declaration
             && self.eq_ty(&a.self_ty, &b.self_ty, 0)?
             && self.eq_types(&a.args, &b.args, 0)?)
@@ -2262,6 +2335,17 @@ impl ValidatedTraitWorld {
                 ));
             }
             self.validate_declaration_schema(item.declaration, &item.schema)?;
+            if item
+                .schema
+                .predicates
+                .iter()
+                .any(|p| matches!(p, Predicate::ProjectionEq { .. }))
+            {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: equality in trait declaration predicates",
+                ));
+            }
             let projected = self.schema_contains_projection(&item.schema)?;
             if projected {
                 self.validate_projected_required_schema(item)?;
@@ -2740,8 +2824,10 @@ impl ValidatedTraitWorld {
                     && requirement.args.is_empty()
             })
         {
-            for Predicate::Implements(requirement) in &mut declared {
-                requirement.self_ty = goal.self_ty.clone();
+            for predicate in &mut declared {
+                if let Predicate::Implements(requirement) = predicate {
+                    requirement.self_ty = goal.self_ty.clone();
+                }
             }
             return Ok(declared);
         }
@@ -2769,7 +2855,10 @@ impl ValidatedTraitWorld {
     fn close_predicates(&self, predicates: &mut Vec<Predicate>, caller: &GenericEnv) -> Result<()> {
         let mut index = 0;
         while index < predicates.len() {
-            let Predicate::Implements(goal) = &predicates[index];
+            let Predicate::Implements(goal) = &predicates[index] else {
+                index += 1;
+                continue;
+            };
             let supers = self.supers_for(goal, caller)?;
             for p in supers {
                 self.append_predicate(predicates, &p)?;
@@ -2837,6 +2926,9 @@ impl ValidatedTraitWorld {
         if let SignatureSubject::Call(Callee::TraitItem(call)) = subject
             && self.schema_contains_projection(&self.item_header(call.item)?.schema)?
         {
+            if !self.goal_is_closed(&call.trait_ref, facts.env())? {
+                return self.equality_required_carrier_contract(call, facts);
+            }
             return self.projected_carrier_contract(call, facts);
         }
         let (declaration, arguments, signature) = match subject {
@@ -3137,6 +3229,7 @@ impl ValidatedTraitWorld {
             nominals: nominals.into(),
             projected,
             projected_subject,
+            equality_required: None,
             budget: self.budget.clone(),
         });
         view.validate_for(facts)?;
@@ -4448,6 +4541,15 @@ impl ValidatedTraitWorld {
         }
         result.signature.ref_contract =
             self.realize_ref_contract(schema, args, &result.signature, declaration)?;
+        if result.predicates.len() != schema.predicates.len() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "schema substitution changed predicate row count",
+            ));
+        }
+        for (raw, actual) in schema.predicates.iter().zip(result.predicates.iter()) {
+            self.validate_predicate_substitution(raw, actual, &schema.env, args)?;
+        }
         self.validate_signature_shape(&result.signature, facts.env(), None)?;
         self.validate_predicates(&result.predicates, facts.env(), None)?;
         Ok(result)
@@ -5177,6 +5279,12 @@ impl ValidatedTraitWorld {
     ) -> Result<ProofEvidence> {
         match self.prove_in(predicate, facts, active)? {
             ProofOutcome::Proved(p) => Ok(p),
+            ProofOutcome::NotProven if matches!(predicate, Predicate::ProjectionEq { .. }) => {
+                Err(FactsError::invalid(
+                    &self.budget,
+                    "associated equality obligation does not match the caller or selected implementation",
+                ))
+            }
             ProofOutcome::NotProven => Err(FactsError::unproved(
                 &self.budget,
                 "trait obligation is not proven by caller bounds or a conditional implementation",
@@ -5186,6 +5294,7 @@ impl ValidatedTraitWorld {
     fn same_key(&self, a: &GoalKey, b: &GoalKey) -> Result<bool> {
         Ok(a.environment == b.environment
             && a.phase == b.phase
+            && a.finalized == b.finalized
             && self.eq_predicate(&a.goal, &b.goal)?)
     }
     fn prove(
@@ -5204,11 +5313,17 @@ impl ValidatedTraitWorld {
     ) -> Result<ProofOutcome> {
         charged(&self.budget, self.budget.check_depth(active.len()))?;
         charged(&self.budget, self.budget.charge_work(1))?;
-        let Predicate::Implements(goal) = predicate;
-        self.validate_ref_in(goal, facts.env(), None)?;
+        self.check_normalization_budget()?;
+        match predicate {
+            Predicate::Implements(goal) => self.validate_ref_in(goal, facts.env(), None)?,
+            Predicate::ProjectionEq { projection, ty } => {
+                self.validate_equality_domain(projection, ty, facts.env())?
+            }
+        }
         let key = GoalKey {
             environment: facts.predicates.index,
             phase: facts.phase,
+            finalized: self.owner_normalization_finalized,
             goal: predicate.clone(),
         };
         for old in active.iter() {
@@ -5280,6 +5395,21 @@ impl ValidatedTraitWorld {
         facts: ProofContext<'_>,
         origin: ProofOrigin,
     ) -> Result<ProofOutcome> {
+        if let ProofOrigin::ClosedEquality { normalization } = &origin {
+            self.validate_projected_dependency(normalization, facts)?;
+            let Predicate::ProjectionEq { ty, .. } = predicate else {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "closed equality evidence cannot prove membership",
+                ));
+            };
+            if !self.eq_ty(normalization.ty(), ty, 0)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "closed equality evidence changed RHS",
+                ));
+            }
+        }
         retain::<ProofRecord>(&self.budget, 1)?;
         Ok(ProofOutcome::Proved(ProofEvidence(Arc::new(ProofRecord {
             world: self.id,
@@ -5295,6 +5425,9 @@ impl ValidatedTraitWorld {
         facts: ProofContext<'_>,
         active: &mut Vec<GoalKey>,
     ) -> Result<ProofOutcome> {
+        if let Predicate::ProjectionEq { projection, ty } = predicate {
+            return self.prove_projection_equality(projection, ty, facts, active);
+        }
         for assumption in facts.predicates.predicates.iter() {
             if self.eq_predicate(assumption, predicate)? {
                 return self.evidence(predicate, facts, ProofOrigin::Assumption);
@@ -5311,7 +5444,12 @@ impl ValidatedTraitWorld {
         facts: ProofContext<'_>,
         active: &mut Vec<GoalKey>,
     ) -> Result<ProofOutcome> {
-        let Predicate::Implements(goal) = predicate;
+        let Predicate::Implements(goal) = predicate else {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "equality is not implementation membership",
+            ));
+        };
         let mut selected = None;
         for implementation in self.headers.impls.iter() {
             charged(&self.budget, self.budget.charge_work(1))?;
@@ -5426,7 +5564,9 @@ impl ValidatedTraitWorld {
         context: ProofContext<'_>,
         active: &mut Vec<GoalKey>,
     ) -> Result<Option<ProofOutcome>> {
-        let Predicate::Implements(goal) = predicate;
+        let Predicate::Implements(goal) = predicate else {
+            return Ok(None);
+        };
         let item = if goal.declaration == self.catalog.id(CatalogItem::Sized) {
             CatalogItem::Sized
         } else if goal.declaration == self.catalog.id(CatalogItem::Clone) {
@@ -5711,6 +5851,14 @@ impl TraitCx for ValidatedTraitWorld {
         facts: &ValidatedFacts,
     ) -> Result<Signature> {
         self.check_facts(facts, true)?;
+        if self.schema_contains_projection(&self.item_header(call.item)?.schema)?
+            && !self.goal_is_closed(&call.trait_ref, facts.env())?
+        {
+            return Ok(self
+                .instantiate_equality_required_item(call, facts)?
+                .instantiated
+                .signature);
+        }
         self.trait_signature_in(call, ProofContext::from_facts(facts))
     }
     fn prove_goal(&self, goal: &Predicate, facts: &ValidatedFacts) -> Result<ProofOutcome> {
@@ -5732,6 +5880,25 @@ impl TraitCx for ValidatedTraitWorld {
     ) -> Result<ResolvedTraitCall> {
         self.check_facts(facts, true)?;
         let caller = ProofContext::from_facts(facts);
+        if self.schema_contains_projection(&self.item_header(call.item)?.schema)?
+            && !self.goal_is_closed(&call.trait_ref, facts.env())?
+        {
+            let application = self.instantiate_equality_required_item(call, facts)?;
+            let required = self.equality_required_carrier_contract(call, facts)?;
+            let evidence = self.require_in(
+                &Predicate::Implements(call.trait_ref.clone()),
+                caller,
+                &mut Vec::new(),
+            )?;
+            return Ok(ResolvedTraitCall {
+                callee: Callee::TraitItem(call.clone()),
+                signature: application.instantiated.signature,
+                _evidence: evidence,
+                _refinement: None,
+                _topology: None,
+                _required: Some(required),
+            });
+        }
         let (signature, caller_topology) = self.trait_signature_with_topology(call, caller)?;
         let predicate = Predicate::Implements(call.trait_ref.clone());
         if facts.phase() == FactsPhase::Universal
@@ -5744,6 +5911,7 @@ impl TraitCx for ValidatedTraitWorld {
                 _evidence: evidence,
                 _refinement: None,
                 _topology: caller_topology,
+                _required: None,
             });
         }
         // The same obligation engine runs with the world's private empty
@@ -5917,6 +6085,7 @@ impl TraitCx for ValidatedTraitWorld {
             _evidence: evidence,
             _refinement: Some(refinement),
             _topology: None,
+            _required: None,
         })
     }
 }
@@ -6229,13 +6398,17 @@ pub(crate) mod test_support {
             {
                 schema.gather(ty, 0)?;
             }
-            for Predicate::Implements(goal) in raw.predicates.iter() {
-                schema.gather(&goal.self_ty, 0)?;
+            for predicate in raw.predicates.iter() {
+                for ty in predicate.metadata_types() {
+                    schema.gather(ty, 0)?;
+                }
             }
         }
         for h in headers.impls.iter() {
-            for Predicate::Implements(goal) in h.predicates.iter() {
-                schema.gather(&goal.self_ty, 0)?;
+            for predicate in h.predicates.iter() {
+                for ty in predicate.metadata_types() {
+                    schema.gather(ty, 0)?;
+                }
             }
         }
         for ty in types {
@@ -6371,7 +6544,8 @@ pub(crate) mod test_support {
             }
             let result = charged(budget, substitute(&schema.signature.result, &mut cx))?;
             let mut predicates = Vec::new();
-            for Predicate::Implements(goal) in schema.predicates.iter() {
+            for predicate in schema.predicates.iter() {
+                let goal = predicate.trait_ref();
                 let self_ty = charged(budget, substitute(&goal.self_ty, &mut cx))?;
                 let mut trait_args = Vec::new();
                 for a in goal.args.iter() {
@@ -6384,11 +6558,24 @@ pub(crate) mod test_support {
                 push(
                     budget,
                     &mut predicates,
-                    Predicate::Implements(TraitRef {
-                        declaration: goal.declaration,
-                        self_ty,
-                        args: trait_args.into(),
-                    }),
+                    match predicate {
+                        Predicate::Implements(_) => Predicate::Implements(TraitRef {
+                            declaration: goal.declaration,
+                            self_ty,
+                            args: trait_args.into(),
+                        }),
+                        Predicate::ProjectionEq { projection, ty } => Predicate::ProjectionEq {
+                            projection: ir::AssociatedTypeProjection {
+                                item: projection.item,
+                                trait_ref: TraitRef {
+                                    declaration: goal.declaration,
+                                    self_ty,
+                                    args: trait_args.into(),
+                                },
+                            },
+                            ty: charged(budget, substitute(ty, &mut cx))?,
+                        },
+                    },
                 )?;
             }
             Ok(InstantiatedSchema {
@@ -6959,7 +7146,10 @@ mod tests {
         let implementations = Arc::make_mut(&mut c.headers.impls);
         implementations[1].trait_ref.args = Arc::from([Ty::Bool]);
         let Predicate::Implements(requirement) =
-            &mut Arc::make_mut(&mut implementations[0].predicates)[0];
+            &mut Arc::make_mut(&mut implementations[0].predicates)[0]
+        else {
+            panic!("membership fixture")
+        };
         requirement.args = Arc::from([Ty::Bool]);
         c
     }
@@ -7087,7 +7277,10 @@ mod tests {
         Arc::make_mut(&mut c.headers.impls)[0].trait_ref.args = Arc::from([Ty::Int(IntTy::I32)]);
         let Predicate::Implements(requirement) =
             &mut Arc::make_mut(&mut Arc::make_mut(&mut c.headers.callables)[1].schema.predicates)
-                [0];
+                [0]
+        else {
+            panic!("membership fixture")
+        };
         requirement.args = Arc::from([Ty::Int(IntTy::I32)]);
         c
     }
@@ -8078,6 +8271,7 @@ mod tests {
         let key = GoalKey {
             environment: facts.predicates.index,
             phase: facts.phase(),
+            finalized: world.owner_normalization_finalized,
             goal: goal.clone(),
         };
         c.budget.charge_obligation().unwrap();

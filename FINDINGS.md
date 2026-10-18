@@ -1,5 +1,49 @@
 # Findings: where agent build time goes
 
+## 2026-10-17: Closed associated equality for rigid generic callers
+
+Delivered the bounded `ASSOCIATED-EQUALITY.md` vertical, not general associated
+projection inference or full Rust. Genuine source member/RHS occurrences lower to
+separate ProjectionEq predicates. Closed, projection-free, Sized and recursively
+reference-free RHSs include non-Copy records, tuples, arrays and wide values.
+Required calls normalize under the actual caller environment and retain its
+ParamTail carriers and original required source regions. Raw equality obligations
+survive erased signatures and are discharged again on calls and concrete instances.
+
+Construction contexts precede associated-type staging but are not public facts.
+Both logical and normalization memo keys distinguish construction from final
+publication. Independent review found and closed mixed owner/equality routing,
+uncharged retained signature storage and staging-replay gaps. Exact owner fallback
+is per projection occurrence, never a fabricated implementation for a rigid caller.
+Immutable source replay validates complete binding rows and all unused RHS metadata.
+
+The frozen 46-source corpus has 22 runtime, six ordinary invalid, 17 stock-valid
+Unsupported and one stock-invalid Unsupported case. Both debug and release passed
+184 CLI and 184 all-body graph cells, including 44 CLI ELF executions per profile.
+The ordered source digest remains
+`8b447cec8e57bcd0ff54b18d47734979c0dc169dee999c91dcf88be74f180b9a`.
+Original design sources retain their earlier parsing/external-call boundaries;
+separately stock-measured positive equivalents establish native payload behavior.
+Repeated identical constraints are accepted; conflicting unused constraints remain
+stock-valid/native Unsupported rather than being mislabeled invalid.
+
+Final hosted all-target check `20261017-170400060-3619434`, full regression
+`20261017-170403020-3620007` (2,936 tests, 142 binaries), and strict all-target lint
+`20261017-170434549-3619183` passed. Release corpus/public authority
+`20261017-170402927-3619989` passed 17 tests, including 13 public authority controls;
+release private equality `20261017-170407137-3621198` passed 26 tests. Poisoned
+original-ledger replay is tested after warming real equality and carrier evidence.
+
+Seventeen failed/passing receipts are retained in
+`data/runs/xps14/2026-10-17-associated-equality.jsonl`. Earlier failures exposed
+in-progress enum integration, test-only private API misuse, a recipe test confusing
+intrinsic admission limits with absent inventory, and source-replay tests that
+incorrectly created a new authoritative snapshot after mutation. Those tests now
+retain the original snapshot. Corpus phase assertions were corrected without
+changing any source bytes or runtime expectations. Formatting and diff checks pass.
+No speedup is claimed. Parameter-valued RHSs, unconstrained projections, associated
+bounds, projected defaults, reference-bearing normal forms and full Rust remain open.
+
 ## 2026-10-17: projected required methods with exact owning-impl and closed-call authority
 
 - Delivered the bounded PROJECTED-METHODS.md vertical, not general associated

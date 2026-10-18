@@ -54,6 +54,7 @@ struct NormalizationKey {
     environment: usize,
     phase: FactsPhase,
     staged: bool,
+    finalized: bool,
     projection: ir::AssociatedTypeProjection,
 }
 
@@ -93,6 +94,7 @@ impl NormalizedAssociatedType {
             environment: facts.predicates.index,
             phase: facts.phase(),
             staged: false,
+            finalized: world.owner_normalization_finalized,
             projection: projection.clone(),
         };
         if !world.normalization_key_equal(&self.0.key, &key)? {
@@ -120,6 +122,7 @@ struct NormalizationContext<'a> {
 #[derive(Default)]
 struct NormalizationStack {
     active: Vec<(NormalizationKey, DeclId)>,
+    obligations: Vec<GoalKey>,
 }
 
 impl ValidatedTraitWorld {
@@ -167,11 +170,8 @@ impl ValidatedTraitWorld {
             {
                 self.validate_ty_metadata_in(ty, &header.1.env, 0)?;
             }
-            for Predicate::Implements(goal) in header.1.predicates.iter() {
-                self.validate_ty_metadata_in(&goal.self_ty, &header.1.env, 0)?;
-                for argument in goal.args.iter() {
-                    self.validate_ty_metadata_in(argument, &header.1.env, 0)?;
-                }
+            for predicate in header.1.predicates.iter() {
+                self.validate_predicate_metadata(predicate, &header.1.env)?;
             }
         }
         for header in self.headers.impls.iter() {
@@ -180,11 +180,8 @@ impl ValidatedTraitWorld {
             for argument in header.trait_ref.args.iter() {
                 self.validate_ty_metadata_in(argument, &header.schema_env, 0)?;
             }
-            for Predicate::Implements(goal) in header.predicates.iter() {
-                self.validate_ty_metadata_in(&goal.self_ty, &header.schema_env, 0)?;
-                for argument in goal.args.iter() {
-                    self.validate_ty_metadata_in(argument, &header.schema_env, 0)?;
-                }
+            for predicate in header.predicates.iter() {
+                self.validate_predicate_metadata(predicate, &header.schema_env)?;
             }
             for value in header.associated_types.iter() {
                 self.validate_ty_metadata_in(&value.rhs, &header.schema_env, 0)?;
@@ -371,6 +368,16 @@ impl ValidatedTraitWorld {
         self.check_normalization_budget()?;
         self.check_facts(facts, false)?;
         self.validate_ty_metadata_in(ty, facts.env(), 0)?;
+        if facts
+            .predicates
+            .predicates
+            .iter()
+            .any(|p| matches!(p, Predicate::ProjectionEq { .. }))
+        {
+            let normal = self.normalize_equality_type(ty, facts)?;
+            self.validate_ty(&normal, facts.env(), None, true, 0)?;
+            return Ok(normal);
+        }
         if self.type_contains_projection(ty, 0)?
             && let Some(normal) = self.normalize_owner_annotation(ty, facts)?
         {
@@ -418,6 +425,25 @@ impl ValidatedTraitWorld {
             )?;
         }
         Ok((normal, retained))
+    }
+
+    pub(super) fn normalize_closed_equality_projection(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        proof: ProofContext<'_>,
+        active: &[GoalKey],
+    ) -> Result<NormalizedAssociatedType> {
+        let mut stack = NormalizationStack::default();
+        for goal in active {
+            push(&self.budget, &mut stack.obligations, goal.clone())?;
+        }
+        let context = NormalizationContext {
+            proof,
+            staged: false,
+        };
+        let evidence = self.normalize_projection_in(projection, context, &mut stack)?;
+        self.validate_normalization_evidence(&evidence, context)?;
+        Ok(NormalizedAssociatedType(evidence))
     }
 
     pub(super) fn validate_projected_dependency(
@@ -490,13 +516,13 @@ impl ValidatedTraitWorld {
                 return Ok(true);
             }
         }
-        for Predicate::Implements(goal) in schema.predicates.iter() {
-            if self.type_contains_projection(&goal.self_ty, 0)? {
-                return Ok(true);
-            }
-            for argument in goal.args.iter() {
-                if self.type_contains_projection(argument, 0)? {
-                    return Ok(true);
+        for predicate in schema.predicates.iter() {
+            // Equality rows are retained raw requirements, not signature occurrences.
+            if let Predicate::Implements(_) = predicate {
+                for argument in predicate.metadata_types() {
+                    if self.type_contains_projection(argument, 0)? {
+                        return Ok(true);
+                    }
                 }
             }
         }
@@ -571,11 +597,27 @@ impl ValidatedTraitWorld {
         Ok(())
     }
 
-    fn raw_associated_ty_is_closed(&self, ty: &Ty, depth: usize) -> Result<bool> {
+    pub(super) fn raw_associated_ty_is_closed(&self, ty: &Ty, depth: usize) -> Result<bool> {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         match ty {
             Ty::Param(_) => return Ok(false),
+            Ty::Struct(value) => {
+                for field in value.def().fields.iter() {
+                    if !self.raw_associated_ty_is_closed(&field.ty, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+            }
+            Ty::Enum(value) => {
+                for variant in value.def().variants.iter() {
+                    for field in variant.fields.iter() {
+                        if !self.raw_associated_ty_is_closed(&field.ty, depth + 1)? {
+                            return Ok(false);
+                        }
+                    }
+                }
+            }
             Ty::AssociatedType(projection) => {
                 if !self.raw_associated_ty_is_closed(&projection.trait_ref.self_ty, depth + 1)? {
                     return Ok(false);
@@ -739,6 +781,19 @@ impl ValidatedTraitWorld {
         for callable in self.headers.callables.iter() {
             let mut schema = clone_schema(&callable.schema, &self.budget)?;
             if self.schema_contains_projection(&schema)? {
+                if self.has_declared_callable_equalities(callable.declaration)? {
+                    schema =
+                        self.normalize_declared_callable_schema(callable.declaration, &schema)?;
+                    push(
+                        &self.budget,
+                        &mut normalized,
+                        CallableHeader {
+                            declaration: callable.declaration,
+                            schema,
+                        },
+                    )?;
+                    continue;
+                }
                 if let Some(owned) =
                     self.normalize_owner_callable_schema(callable.declaration, &schema)?
                 {
@@ -885,6 +940,7 @@ impl ValidatedTraitWorld {
         Ok(left.environment == right.environment
             && left.phase == right.phase
             && left.staged == right.staged
+            && left.finalized == right.finalized
             && left.projection.item == right.projection.item
             && self.eq_predicate(
                 &Predicate::Implements(left.projection.trait_ref.clone()),
@@ -912,6 +968,7 @@ impl ValidatedTraitWorld {
             environment: context.proof.predicates.index,
             phase: context.proof.phase,
             staged: context.staged,
+            finalized: self.owner_normalization_finalized,
             projection: projection.clone(),
         };
         for (old, _) in &stack.active {
@@ -969,7 +1026,7 @@ impl ValidatedTraitWorld {
         let membership = match self.prove_implementation_in(
             &Predicate::Implements(selected_goal.clone()),
             selection_context,
-            &mut Vec::new(),
+            &mut stack.obligations,
         )? {
             ProofOutcome::Proved(evidence) => evidence,
             ProofOutcome::NotProven => {
@@ -1244,6 +1301,7 @@ impl ValidatedTraitWorld {
             || evidence.key.environment != context.proof.predicates.index
             || evidence.key.phase != context.proof.phase
             || evidence.key.staged != context.staged
+            || evidence.key.finalized != self.owner_normalization_finalized
             || evidence.membership.0.world != self.id
             || evidence.membership.0.environment != self.empty.index
             || evidence.membership.0.phase != FactsPhase::Closed
@@ -1284,6 +1342,7 @@ impl ValidatedTraitWorld {
                 || dependency.key.environment != evidence.key.environment
                 || dependency.key.phase != evidence.key.phase
                 || dependency.key.staged != evidence.key.staged
+                || dependency.key.finalized != evidence.key.finalized
             {
                 return Err(FactsError::invalid(
                     &self.budget,

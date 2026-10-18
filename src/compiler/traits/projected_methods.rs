@@ -46,6 +46,17 @@ impl ValidatedTraitWorld {
         self.validate_declaration_schema(item.declaration, &item.schema)?;
         // Validate original source-region identity before capability rejection.
         self.validate_source_regions(item.declaration, &item.schema.signature)?;
+        if item
+            .schema
+            .predicates
+            .iter()
+            .any(|p| matches!(p, Predicate::ProjectionEq { .. }))
+        {
+            return Err(FactsError::unsupported(
+                &self.budget,
+                "unsupported: equality in trait declaration predicates",
+            ));
+        }
         if item.default.is_some() {
             return Err(FactsError::unsupported(
                 &self.budget,
@@ -56,7 +67,10 @@ impl ValidatedTraitWorld {
     }
 
     fn validate_projected_value_schema(&self, schema: &GenericSchema) -> Result<()> {
-        for Predicate::Implements(goal) in schema.predicates.iter() {
+        for predicate in schema.predicates.iter() {
+            let Predicate::Implements(goal) = predicate else {
+                continue;
+            };
             if self.type_contains_projection(&goal.self_ty, 0)? {
                 return Err(FactsError::unsupported(
                     &self.budget,
@@ -86,7 +100,7 @@ impl ValidatedTraitWorld {
 
     // This is a value-oriented stage, including references hidden in nominals.
     // Do not ask the IR carrier walker to interpret an unreduced projection.
-    fn reject_projected_references(&self, ty: &Ty, depth: usize) -> Result<()> {
+    pub(super) fn reject_projected_references(&self, ty: &Ty, depth: usize) -> Result<()> {
         self.projected_reference_walk(ty, depth, &mut TypeWalk::default())
             .map(|_| ())
     }
@@ -276,7 +290,7 @@ impl ValidatedTraitWorld {
     }
 
     /// Structural substitution must preserve every original occurrence and binder.
-    fn substitute_projected_schema(
+    pub(super) fn substitute_projected_schema(
         &self,
         schema: &GenericSchema,
         arguments: &[Ty],
@@ -319,25 +333,8 @@ impl ValidatedTraitWorld {
             self.validate_rhs_substitution(raw, actual, &schema.env, arguments, 0)?;
             self.validate_ty_metadata_in(actual, caller, 0)?;
         }
-        for (Predicate::Implements(raw), Predicate::Implements(actual)) in
-            schema.predicates.iter().zip(value.predicates.iter())
-        {
-            if raw.declaration != actual.declaration || raw.args.len() != actual.args.len() {
-                return Err(FactsError::invalid(
-                    &self.budget,
-                    "projected substitution changed predicate identity",
-                ));
-            }
-            self.validate_rhs_substitution(
-                &raw.self_ty,
-                &actual.self_ty,
-                &schema.env,
-                arguments,
-                0,
-            )?;
-            for (raw, actual) in raw.args.iter().zip(actual.args.iter()) {
-                self.validate_rhs_substitution(raw, actual, &schema.env, arguments, 0)?;
-            }
+        for (raw, actual) in schema.predicates.iter().zip(value.predicates.iter()) {
+            self.validate_predicate_substitution(raw, actual, &schema.env, arguments)?;
         }
         Ok(value)
     }
@@ -537,6 +534,34 @@ impl ValidatedTraitWorld {
             )?;
             self.validate_source_regions(declaration, &normalized.signature)?;
             return Ok(Some(normalized));
+        }
+        Ok(None)
+    }
+
+    pub(super) fn normalize_exact_owner_projection(
+        &self,
+        declaration: DeclId,
+        projection: &ir::AssociatedTypeProjection,
+    ) -> Result<Option<Ty>> {
+        let Some(owner_id) = self.info(declaration)?.owner else {
+            return Ok(None);
+        };
+        for implementation in self.headers.impls.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if implementation.declaration != owner_id
+                || !self.eq_predicate(
+                    &Predicate::Implements(projection.trait_ref.clone()),
+                    &Predicate::Implements(implementation.trait_ref.clone()),
+                )?
+            {
+                continue;
+            }
+            let owner = self.owner_context(implementation)?;
+            retain::<ir::AssociatedTypeProjection>(&self.budget, 1)?;
+            let ty = Ty::AssociatedType(Arc::new(projection.clone()));
+            return self
+                .normalize_owner_type(&ty, &owner, &mut Vec::new(), 0)
+                .map(Some);
         }
         Ok(None)
     }

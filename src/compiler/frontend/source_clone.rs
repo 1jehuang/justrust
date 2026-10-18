@@ -55,6 +55,9 @@ fn clone_trait_path(path: &TraitPath, budget: &ir::PlanBudget) -> Result<(), Str
             for actual in &segment.args {
                 walk_depth(DepthNode::Type(actual), Some(budget))?;
             }
+            for binding in &segment.associated_types {
+                walk_depth(DepthNode::Type(&binding.value), Some(budget))?;
+            }
         }
     }
     Ok(())
@@ -116,6 +119,7 @@ pub(super) fn clone_path(path: &GenericPath, budget: &ir::PlanBudget) -> Result<
     clone_vector(&path.segments, budget)?;
     for segment in &path.segments {
         clone_vector(&segment.args, budget)?;
+        clone_vector(&segment.associated_types, budget)?;
     }
     Ok(())
 }
@@ -411,7 +415,9 @@ mod tests {
             panic!("expected written nested tuple actual");
         };
         let children_bytes = std::mem::size_of_val(children.as_slice()) * 2 + 128;
-        let used = 1024 + box_bytes + segments + args + 1024;
+        let bindings =
+            std::mem::size_of_val(path.segments[0].associated_types.as_slice()) * 2 + 128;
+        let used = 1024 + box_bytes + segments + args + bindings + 1024;
         let budget = ir::PlanBudget::new(ir::PlanLimits {
             bytes: used + children_bytes - 1,
             ..Default::default()
@@ -432,6 +438,64 @@ mod tests {
         }
         check_vector(&parsed.program.traits[0].associated_types);
         check_vector(&parsed.program.impls[0].associated_types);
+    }
+
+    #[test]
+    fn equality_binding_clone_precharges_rows_and_every_rhs_child() {
+        let parsed = super::super::parse_unresolved(
+            "trait Family{type Out;type Other;}\
+             fn unused<T:Family<Out=(bool,[i32;7]),Other=[bool;0]>>(){}fn main(){}",
+        )
+        .unwrap();
+        let trait_path = &parsed.program.functions[0].bounds[0].traits[0];
+        let TraitPath::Source(path) = trait_path else {
+            panic!("expected source equality bound")
+        };
+        let segment = &path.segments[0];
+        let segments = std::mem::size_of_val(path.segments.as_slice()) * 2 + 128;
+        let args = std::mem::size_of_val(segment.args.as_slice()) * 2 + 128;
+        let rows = std::mem::size_of_val(segment.associated_types.as_slice()) * 2 + 128;
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: segments + args + rows - 1,
+            ..Default::default()
+        });
+        assert!(clone_trait_path(trait_path, &budget).is_err());
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
+        assert_eq!((failure.used, failure.requested), (segments + args, rows));
+        let Type::Tuple(children) = &segment.associated_types[0].value else {
+            panic!("expected first equality tuple RHS")
+        };
+        let children_bytes = std::mem::size_of_val(children.as_slice()) * 2 + 128;
+        let used = segments + args + rows + 1024;
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: used + children_bytes - 1,
+            ..Default::default()
+        });
+        assert!(clone_trait_path(trait_path, &budget).is_err());
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!((failure.used, failure.requested), (used, children_bytes));
+        assert!(clone_trait_path(trait_path, &budget).is_err());
+        assert_eq!(budget.first_resource_failure().unwrap(), failure);
+
+        let before = parsed.program.names.budget().snapshot();
+        preflight_program_clone(&parsed.program, &ir::PlanBudget::default()).unwrap();
+        let copied = parsed.program.clone();
+        let TraitPath::Source(copy) = &copied.functions[0].bounds[0].traits[0] else {
+            unreachable!()
+        };
+        assert_eq!(copy.segments[0].associated_types.len(), 2);
+        for (original, copied) in segment
+            .associated_types
+            .iter()
+            .zip(&copy.segments[0].associated_types)
+        {
+            assert!(exact_source_ident(&parsed.program.names, original.name, copied.name).unwrap());
+        }
+        assert_eq!(
+            parsed.program.names.budget().snapshot().retained_bytes,
+            before.retained_bytes
+        );
     }
 
     #[test]
@@ -462,13 +526,15 @@ mod tests {
             panic!("expected actual nested tuple argument");
         };
         let children_bytes = std::mem::size_of_val(children.as_slice()) * 2 + 128;
+        let bindings =
+            std::mem::size_of_val(actual.segments[0].associated_types.as_slice()) * 2 + 128;
         let budget = ir::PlanBudget::new(ir::PlanLimits {
-            bytes: segments + args + 1024 + children_bytes - 1,
+            bytes: segments + args + bindings + 1024 + children_bytes - 1,
             ..Default::default()
         });
         assert!(clone_trait_path(path, &budget).is_err());
         let failure = budget.first_resource_failure().unwrap();
-        assert_eq!(failure.used, segments + args + 1024);
+        assert_eq!(failure.used, segments + args + bindings + 1024);
         assert_eq!(failure.requested, children_bytes);
         clone_trait_path(path, &ir::PlanBudget::default()).unwrap();
     }

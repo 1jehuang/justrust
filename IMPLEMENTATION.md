@@ -312,7 +312,11 @@ cleanup failures.
       universally checked implementations plus closed calls under PROJECTED-METHODS.md.
       Per-application required carrier evidence preserves source regions; direct calls
       recheck all associated assignments after substitution. Arbitrary rigid caller
-      projections, projected defaults and associated equality/bounds remain open.
+      projections and projected defaults remain open beyond the equality slice below.
+- [x] Bounded closed-RHS associated equality in function/impl bounds under
+      ASSOCIATED-EQUALITY.md, with genuine rigid caller parameter carriers, immutable
+      raw obligations and exact post-substitution discharge. Debug/release native
+      and authority gates pass; parameter-valued RHSs and general equality remain open.
 - [ ] Add trait type/lifetime/const parameters, generic methods, where clauses,
       associated types/constants, projection normalization, GATs, defaults and
       supertrait obligations beyond the bounded delivered source-default slice.
@@ -329,9 +333,9 @@ cleanup failures.
       retaining universal checks, binder-qualified substitution and sealed native
       instances. Optimization must not bypass unused-body validation.
 
-**Next:** extend the bounded owning-impl/closed-call foundation to rigid generic
-caller types with authoritative symbolic carrier/Copy/equality facts and projected
-defaults before attempting an Iterator-like source client. Closure
+**Next:** extend closed-RHS equality to parameter-valued relationships and
+unconstrained projection/associated-bound facts, then projected defaults, with
+authoritative carrier and Copy proofs before an Iterator-like source client. Closure
 capture design can proceed independently against the agreed place/region API.
 **Acceptance:** generic bodies prove obligations without favorable concrete
 witnesses, ambiguous/overlapping impls reject, and concrete dispatch, closures,

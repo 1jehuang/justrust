@@ -99,7 +99,12 @@ impl Resolver<'_> {
             Type::Apply(path) => {
                 self.alias_budget.charge_work(path.segments.len())?;
                 for segment in &path.segments {
-                    for actual in &segment.args {
+                    for actual in segment.args.iter().chain(
+                        segment
+                            .associated_types
+                            .iter()
+                            .map(|binding| &binding.value),
+                    ) {
                         found |= self.contains_projection(actual, depth + 1)?;
                     }
                 }
@@ -178,6 +183,7 @@ impl Resolver<'_> {
         projection: &mut SourceProjection,
         module: ModuleId,
     ) -> Result<(), String> {
+        let mut boundary = None;
         let (trait_index, item) = match projection {
             SourceProjection::Qualified {
                 self_ty,
@@ -185,7 +191,12 @@ impl Resolver<'_> {
                 item,
             } => {
                 self.ty(self_ty, module)?;
-                self.trait_path(trait_path, module)?;
+                match self.trait_path(trait_path, module) {
+                    Err(error) if error.starts_with("unsupported:") => {
+                        boundary = Some(error);
+                    }
+                    result => result?,
+                }
                 (self.source_trait_index(trait_path, module)?, *item)
             }
             SourceProjection::SelfItem { item } => {
@@ -212,7 +223,11 @@ impl Resolver<'_> {
                 (index, *item)
             }
         };
-        self.check_associated_member(trait_index, item)
+        self.check_associated_member(trait_index, item)?;
+        if let Some(error) = boundary {
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn names(&self) -> &NameStore {
@@ -346,6 +361,7 @@ impl Resolver<'_> {
             segments.push(PathSegment {
                 name: *ident,
                 args: Vec::new(),
+                associated_types: Vec::new(),
             });
         }
         Ok(GenericPath {
@@ -427,6 +443,12 @@ impl Resolver<'_> {
                                     for segment in &path.segments {
                                         self.charge_entries::<&Type>(segment.args.len())?;
                                         pending.extend(&segment.args);
+                                        pending.extend(
+                                            segment
+                                                .associated_types
+                                                .iter()
+                                                .map(|binding| &binding.value),
+                                        );
                                     }
                                 }
                             }
@@ -436,6 +458,12 @@ impl Resolver<'_> {
                             spellings.push(path.path(self.names())?);
                             for segment in &path.segments {
                                 pending.extend(&segment.args);
+                                pending.extend(
+                                    segment
+                                        .associated_types
+                                        .iter()
+                                        .map(|binding| &binding.value),
+                                );
                             }
                         }
                         Type::Tuple(fields) => pending.extend(fields),
@@ -497,7 +525,12 @@ impl Resolver<'_> {
                         check_target(self_ty)?;
                         if let TraitPath::Source(path) = trait_path {
                             for segment in &path.segments {
-                                for actual in &segment.args {
+                                for actual in segment.args.iter().chain(
+                                    segment
+                                        .associated_types
+                                        .iter()
+                                        .map(|binding| &binding.value),
+                                ) {
                                     check_target(actual)?;
                                 }
                             }
@@ -520,7 +553,12 @@ impl Resolver<'_> {
                 }
                 Type::Apply(path) => {
                     for segment in &path.segments {
-                        for arg in &segment.args {
+                        for arg in segment.args.iter().chain(
+                            segment
+                                .associated_types
+                                .iter()
+                                .map(|binding| &binding.value),
+                        ) {
                             check_target(arg)?;
                         }
                     }
@@ -585,7 +623,12 @@ impl Resolver<'_> {
                     self.collect_params(self_ty, used, depth + 1)?;
                     if let TraitPath::Source(path) = trait_path {
                         for segment in &path.segments {
-                            for actual in &segment.args {
+                            for actual in segment.args.iter().chain(
+                                segment
+                                    .associated_types
+                                    .iter()
+                                    .map(|binding| &binding.value),
+                            ) {
                                 self.collect_params(actual, used, depth + 1)?;
                             }
                         }
@@ -600,7 +643,12 @@ impl Resolver<'_> {
             }
             Type::Apply(path) => {
                 for segment in &path.segments {
-                    for arg in &segment.args {
+                    for arg in segment.args.iter().chain(
+                        segment
+                            .associated_types
+                            .iter()
+                            .map(|binding| &binding.value),
+                    ) {
                         self.collect_params(arg, used, depth + 1)?;
                     }
                 }
@@ -662,7 +710,12 @@ impl Resolver<'_> {
                     // syntax and must not be used to fabricate that authority.
                     if let TraitPath::Source(path) = trait_path {
                         for segment in &mut path.segments {
-                            for actual in &mut segment.args {
+                            for actual in segment.args.iter_mut().chain(
+                                segment
+                                    .associated_types
+                                    .iter_mut()
+                                    .map(|binding| &mut binding.value),
+                            ) {
                                 self.alias_use(actual, source, depth + 1)?;
                             }
                         }
@@ -673,7 +726,12 @@ impl Resolver<'_> {
             Type::Apply(path) => {
                 self.certify_generic(path, source)?;
                 for segment in &mut path.segments {
-                    for arg in &mut segment.args {
+                    for arg in segment.args.iter_mut().chain(
+                        segment
+                            .associated_types
+                            .iter_mut()
+                            .map(|binding| &mut binding.value),
+                    ) {
                         self.alias_use(arg, source, depth + 1)?;
                     }
                 }
@@ -710,7 +768,12 @@ impl Resolver<'_> {
                     self.substitute(self_ty, params, args, depth + 1)?;
                     if let TraitPath::Source(path) = trait_path {
                         for segment in &mut path.segments {
-                            for actual in &mut segment.args {
+                            for actual in segment.args.iter_mut().chain(
+                                segment
+                                    .associated_types
+                                    .iter_mut()
+                                    .map(|binding| &mut binding.value),
+                            ) {
                                 self.substitute(actual, params, args, depth + 1)?;
                             }
                         }
@@ -730,7 +793,12 @@ impl Resolver<'_> {
             }
             Type::Apply(path) => {
                 for segment in &mut path.segments {
-                    for arg in &mut segment.args {
+                    for arg in segment.args.iter_mut().chain(
+                        segment
+                            .associated_types
+                            .iter_mut()
+                            .map(|binding| &mut binding.value),
+                    ) {
                         self.substitute(arg, params, args, depth + 1)?;
                     }
                 }
@@ -864,54 +932,91 @@ impl Resolver<'_> {
         }))
     }
     fn trait_path(&mut self, path: &mut TraitPath, module: ModuleId) -> Result<(), String> {
+        self.trait_application(path, module, false)
+    }
+    fn trait_application(
+        &mut self,
+        path: &mut TraitPath,
+        module: ModuleId,
+        allow_equalities: bool,
+    ) -> Result<(), String> {
         let TraitPath::Source(source) = path else {
             return Ok(());
         };
+        // Resolve all supplied children before deciding capability. The global
+        // source-name admission has already checked every occurrence handle.
+        let mut boundary = None;
         for segment in &mut source.segments {
-            for argument in &mut segment.args {
-                self.ty(argument, module)?;
+            for argument in segment.args.iter_mut().chain(
+                segment
+                    .associated_types
+                    .iter_mut()
+                    .map(|binding| &mut binding.value),
+            ) {
+                match self.ty(argument, module) {
+                    Err(error) if error.starts_with("unsupported:") => {
+                        boundary.get_or_insert(error);
+                    }
+                    result => result?,
+                }
             }
         }
+        if source.segments.is_empty() {
+            return Err("empty trait application path".into());
+        }
+        let original = source.path(self.names())?;
+        let resolved = self.path(&original, module, true, false)?;
         let mut projected = false;
         for segment in &source.segments {
             for argument in &segment.args {
                 projected |= self.contains_projection(argument, 0)?;
             }
         }
-        if projected {
-            return Err("unsupported: projection-bearing trait actuals are unsupported".into());
-        }
-        if source.segments.is_empty() {
-            return Err("empty trait application path".into());
-        }
-        if source.segments[..source.segments.len() - 1]
+        let misplaced = source.segments[..source.segments.len() - 1]
             .iter()
-            .any(|segment| !segment.args.is_empty())
-        {
-            return Err(
-                "unsupported: trait arguments must belong to the final trait segment".into(),
-            );
-        }
-        let original = source.path(self.names())?;
-        let resolved = self.path(&original, module, true, false)?;
+            .any(|segment| !segment.args.is_empty() || !segment.associated_types.is_empty());
+        let has_equalities = source
+            .segments
+            .iter()
+            .any(|segment| !segment.associated_types.is_empty());
         if let Some(item) = resolved {
             if item.kind != ResolvedKind::Trait {
                 return Err(format!("{} is not a trait", self.display(&original)?));
             }
             match item.path {
                 ResolvedPath::Source(target) => {
+                    let target_key = self.key(&target)?;
+                    let mut trait_index = None;
+                    for (index, declaration) in self.program.traits.iter().enumerate() {
+                        self.alias_budget.charge_work(1)?;
+                        if self.key(&declaration.name)? == target_key {
+                            trait_index = Some(index);
+                        }
+                    }
+                    let trait_index =
+                        trait_index.ok_or("trait is not a retained source declaration")?;
+                    // Every row is checked before any duplicate handling or boundary.
+                    for segment in &source.segments {
+                        for binding in &segment.associated_types {
+                            self.check_associated_member(trait_index, binding.name)?;
+                        }
+                    }
                     let mut canonical = self.alias_source_path(&target)?;
-                    canonical
+                    let destination = canonical
                         .segments
                         .last_mut()
-                        .ok_or("empty canonical trait path")?
-                        .args = std::mem::take(
-                        &mut source.segments.last_mut().ok_or("empty trait path")?.args,
-                    );
+                        .ok_or("empty canonical trait path")?;
+                    let final_segment = source.segments.last_mut().ok_or("empty trait path")?;
+                    destination.args = std::mem::take(&mut final_segment.args);
+                    destination.associated_types =
+                        std::mem::take(&mut final_segment.associated_types);
                     self.certify_generic(&mut canonical, &original)?;
                     *path = TraitPath::Source(canonical);
                 }
                 ResolvedPath::Builtin(id) => {
+                    if has_equalities {
+                        return Err("builtin trait has no associated type declaration".into());
+                    }
                     if source
                         .segments
                         .iter()
@@ -928,6 +1033,9 @@ impl Resolver<'_> {
         } else if let Some(ident) = original.single()
             && let Some(id) = self.builtin_trait(ident)?
         {
+            if has_equalities {
+                return Err("builtin trait has no associated type declaration".into());
+            }
             if source
                 .segments
                 .iter()
@@ -939,16 +1047,41 @@ impl Resolver<'_> {
         } else {
             return Err(format!("unresolved trait {}", self.display(&original)?));
         }
+        if let Some(error) = boundary {
+            return Err(error);
+        }
+        if misplaced {
+            return Err("unsupported: trait arguments and equalities must belong to the final trait segment".into());
+        }
+        if projected {
+            return Err("unsupported: projection-bearing trait actuals are unsupported".into());
+        }
+        if has_equalities && !allow_equalities {
+            return Err(
+                "unsupported: associated equalities are supported only in function and impl bounds"
+                    .into(),
+            );
+        }
         Ok(())
     }
     fn bounds(&mut self, bounds: &mut [TypeBound], module: ModuleId) -> Result<(), String> {
+        let allow_equalities = !matches!(self.source_owner, SourceOwnerContext::Trait { .. });
+        let mut boundary = None;
         for bound in bounds {
             if !self.param_contains(bound.parameter)? {
                 return Err("bound parameter is not in scope".into());
             }
             for path in &mut bound.traits {
-                self.trait_path(path, module)?;
+                match self.trait_application(path, module, allow_equalities) {
+                    Err(error) if error.starts_with("unsupported:") => {
+                        boundary.get_or_insert(error);
+                    }
+                    result => result?,
+                }
             }
+        }
+        if let Some(error) = boundary {
+            return Err(error);
         }
         Ok(())
     }
@@ -1277,13 +1410,76 @@ impl Resolver<'_> {
         }
         Ok((current.module == namespace).then_some(current))
     }
+    fn reject_nonbound_equalities(
+        &mut self,
+        path: &GenericPath,
+        module: ModuleId,
+    ) -> Result<(), String> {
+        if !path
+            .segments
+            .iter()
+            .any(|segment| !segment.associated_types.is_empty())
+        {
+            return Ok(());
+        }
+        let mut boundary = None;
+        for segment in &path.segments {
+            for ty in segment.args.iter().chain(
+                segment
+                    .associated_types
+                    .iter()
+                    .map(|binding| &binding.value),
+            ) {
+                walk_depth(DepthNode::Type(ty), Some(&self.alias_budget))?;
+                let mut ty = ty.clone();
+                match self.ty(&mut ty, module) {
+                    Err(error) if error.starts_with("unsupported:") => {
+                        boundary.get_or_insert(error);
+                    }
+                    result => result?,
+                }
+            }
+        }
+        let original = path.path(self.names())?;
+        if let Some(item) = self.path(&original, module, true, false)?
+            && item.kind == ResolvedKind::Trait
+        {
+            let target = self.key(item.source()?)?;
+            let mut index = None;
+            for (candidate, declaration) in self.program.traits.iter().enumerate() {
+                self.alias_budget.charge_work(1)?;
+                if self.key(&declaration.name)? == target {
+                    index = Some(candidate);
+                }
+            }
+            let index = index.ok_or("trait is not a retained source declaration")?;
+            for segment in &path.segments {
+                for binding in &segment.associated_types {
+                    self.check_associated_member(index, binding.name)?;
+                }
+            }
+        }
+        if let Some(error) = boundary {
+            return Err(error);
+        }
+        Err(
+            "unsupported: associated equalities are supported only in function and impl bounds"
+                .into(),
+        )
+    }
     fn generic_path(&mut self, path: &mut GenericPath, module: ModuleId) -> Result<(), String> {
+        self.reject_nonbound_equalities(path, module)?;
         if path.anchor == PathAnchor::SelfType {
             if !self.self_allowed {
                 return Err("Self outside impl".into());
             }
             for segment in &mut path.segments {
-                for arg in &mut segment.args {
+                for arg in segment.args.iter_mut().chain(
+                    segment
+                        .associated_types
+                        .iter_mut()
+                        .map(|binding| &mut binding.value),
+                ) {
                     self.ty(arg, module)?;
                 }
             }
@@ -1339,6 +1535,7 @@ impl Resolver<'_> {
         path: &GenericPath,
         module: ModuleId,
     ) -> Result<Option<(Type, AstIdent, Vec<Type>)>, String> {
+        self.reject_nonbound_equalities(path, module)?;
         if path.segments.is_empty()
             || (path.segments.len() < 2 && path.anchor != PathAnchor::SelfType)
         {
@@ -1777,6 +1974,7 @@ impl Resolver<'_> {
     ) -> Result<(), String> {
         let source_path = match pattern {
             Pattern::Apply { path, .. } => {
+                self.reject_nonbound_equalities(path, module)?;
                 clone_vector(&path.segments, &self.alias_budget)?;
                 Some(path.clone())
             }
@@ -2233,6 +2431,7 @@ impl Resolver<'_> {
         }
         let source_path = match expr {
             Expr::Apply { path, .. } => {
+                self.reject_nonbound_equalities(path, module)?;
                 clone_vector(&path.segments, &self.alias_budget)?;
                 Some(path.clone())
             }
@@ -2689,6 +2888,19 @@ impl Resolver<'_> {
 
 /// Resolve one immutable parsed program using checked semantic identities.
 /// Source paths remain structural. Catalog traits are explicit typed targets.
+fn defer_equality_boundary(
+    result: Result<(), String>,
+    pending: &mut Option<String>,
+) -> Result<(), String> {
+    match result {
+        Err(error) if error.starts_with("unsupported: associated equalities") => {
+            pending.get_or_insert(error);
+            Ok(())
+        }
+        result => result,
+    }
+}
+
 pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     parsed.program.validate_name_handles()?;
     parsed
@@ -2868,15 +3080,22 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         }
     }
     let mut projected_default = false;
+    let mut equality_boundary = None;
     for (source_index, declaration) in program.traits.iter_mut().enumerate() {
         resolver.with_source_owner(SourceOwnerContext::Trait { source_index }, |resolver| {
             clone_vector(&declaration.type_params, &resolver.alias_budget)?;
             resolver.type_params = declaration.type_params.clone();
             resolver.self_nominal = None;
             resolver.self_allowed = true;
-            resolver.bounds(&mut declaration.bounds, declaration.module)?;
+            defer_equality_boundary(
+                resolver.bounds(&mut declaration.bounds, declaration.module),
+                &mut equality_boundary,
+            )?;
             for path in &mut declaration.supertraits {
-                resolver.trait_path(path, declaration.module)?;
+                defer_equality_boundary(
+                    resolver.trait_path(path, declaration.module),
+                    &mut equality_boundary,
+                )?;
             }
             for item in &mut declaration.items {
                 clone_vector(&declaration.type_params, &resolver.alias_budget)?;
@@ -2889,7 +3108,10 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                 resolver
                     .type_params
                     .extend_from_slice(&item.signature.type_params);
-                resolver.bounds(&mut item.signature.bounds, declaration.module)?;
+                defer_equality_boundary(
+                    resolver.bounds(&mut item.signature.bounds, declaration.module),
+                    &mut equality_boundary,
+                )?;
                 resolver.ty(&mut item.signature.result, declaration.module)?;
                 for (_, ty) in &mut item.signature.params {
                     resolver.ty(ty, declaration.module)?;
@@ -2912,7 +3134,10 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                     resolver
                         .type_params
                         .extend_from_slice(&function.type_params);
-                    resolver.bounds(&mut function.bounds, declaration.module)?;
+                    defer_equality_boundary(
+                        resolver.bounds(&mut function.bounds, declaration.module),
+                        &mut equality_boundary,
+                    )?;
                     resolver.ty(&mut function.result, declaration.module)?;
                     for (_, ty) in &mut function.params {
                         resolver.ty(ty, declaration.module)?;
@@ -3025,6 +3250,9 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         })?;
     }
     program.validate_name_handles()?;
+    if let Some(error) = equality_boundary {
+        return Err(error);
+    }
     if projected_default {
         return Err(Resolver::unsupported(
             "projection-bearing trait default signatures and bodies are unsupported",

@@ -434,7 +434,11 @@ impl<'a> Validator<'a> {
             }
             Visit::ImportShape(path) => {
                 self.work(path.segments.len())?;
-                if path.segments.iter().any(|segment| !segment.args.is_empty()) {
+                if path
+                    .segments
+                    .iter()
+                    .any(|segment| !segment.args.is_empty() || !segment.associated_types.is_empty())
+                {
                     return Err(transport(TokenError::InvalidInput(
                         "trait imports cannot contain application arguments",
                     )));
@@ -612,6 +616,11 @@ impl<'a> Validator<'a> {
                 }
                 for segment in &path.segments {
                     self.many(&segment.args, Visit::Type)?;
+                    self.work(segment.associated_types.len())?;
+                    for binding in &segment.associated_types {
+                        self.push(Visit::Ident(binding.name, LookupClass::Member))?;
+                        self.push(Visit::Type(&binding.value))?;
+                    }
                 }
             }
             Visit::TraitPath(path) => match path {
@@ -1107,6 +1116,76 @@ mod tests {
         assert!(valid.names.budget().snapshot().failure.is_none());
     }
 
+    #[test]
+    fn equality_bindings_validate_later_foreign_children_after_unsupported_rhs() {
+        let parsed = super::super::parse_unresolved(
+            "trait Family{type Out;type Other;}\
+             fn unused<T:Family<Out=&i32,Other=(bool,[i32;7])>>(){}fn main(){}",
+        )
+        .unwrap();
+        let valid = parsed.program;
+        validate_program_names(&valid).unwrap();
+        let mut foreign = builder();
+        let foreign_name = foreign.ident("Other").unwrap();
+        let foreign_path = foreign.path("crate::Family").unwrap();
+        let _foreign = foreign.finish().unwrap();
+        let baseline = valid.names.budget().snapshot().temporary_bytes;
+        for site in 0..4 {
+            let mut malformed = valid.clone();
+            let TraitPath::Source(path) = &mut malformed.functions[0].bounds[0].traits[0] else {
+                panic!("expected written equality application")
+            };
+            match site {
+                0 => path.segments.last_mut().unwrap().associated_types[1].name = foreign_name,
+                1 => {
+                    path.segments.last_mut().unwrap().associated_types[1].value =
+                        Type::Tuple(vec![
+                            Type::Bool,
+                            Type::Array(Box::new(Type::Param(foreign_name)), 7),
+                        ]);
+                }
+                2 => path.resolved_use = Some(foreign_path.clone()),
+                _ => path.segments.last_mut().unwrap().name = foreign_name,
+            }
+            let error = validate_program_names(&malformed).unwrap_err();
+            assert!(error.starts_with("contract:"), "site {site}: {error}");
+            assert_eq!(valid.names.budget().snapshot().temporary_bytes, baseline);
+        }
+        assert!(valid.names.budget().snapshot().failure.is_none());
+    }
+
+    #[test]
+    fn equality_exact_source_rejects_same_owner_member_rhs_and_row_mutations() {
+        let parsed = super::super::parse_unresolved(
+            "trait Family{type Out;}\
+             fn unused<T:Family<Out=(bool,[i32;7]),Out=(bool,[i32;7])>>(){}fn main(){}",
+        )
+        .unwrap();
+        let valid = parsed.program;
+        let TraitPath::Source(original) = &valid.functions[0].bounds[0].traits[0] else {
+            panic!("expected written equality application")
+        };
+        let budget = ir::PlanBudget::default();
+        assert!(exact_source_generic_path(&valid.names, original, original, &budget, 0).unwrap());
+        for site in 0..4 {
+            let mut changed = original.clone();
+            let rows = &mut changed.segments.last_mut().unwrap().associated_types;
+            match site {
+                // The spelling and owner agree, but the written occurrence does not.
+                0 => rows[0].name = rows[1].name,
+                1 => rows[0].value = Type::Bool,
+                2 => rows.swap(0, 1),
+                _ => {
+                    rows.pop();
+                }
+            }
+            assert!(
+                !exact_source_generic_path(&valid.names, original, &changed, &budget, 0).unwrap(),
+                "site {site}"
+            );
+        }
+    }
+
     fn builder() -> ProgramBuilder {
         ProgramBuilder::new(
             std::path::Path::new("name-validation.rs"),
@@ -1148,6 +1227,7 @@ mod tests {
             .map(|name| PathSegment {
                 name: *name,
                 args: Vec::new(),
+                associated_types: Vec::new(),
             })
             .collect();
         segments.last_mut().unwrap().args = args;

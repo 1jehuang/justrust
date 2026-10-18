@@ -208,6 +208,32 @@ pub struct AssociatedTypeProjection {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Predicate {
     Implements(TraitRef),
+    ProjectionEq {
+        projection: AssociatedTypeProjection,
+        ty: Ty,
+    },
+}
+impl Predicate {
+    /// The complete trait application, not evidence of membership by itself.
+    pub fn trait_ref(&self) -> &TraitRef {
+        match self {
+            Self::Implements(trait_ref) => trait_ref,
+            Self::ProjectionEq { projection, .. } => &projection.trait_ref,
+        }
+    }
+
+    /// Every type supplied by this predicate, including an equality's RHS.
+    /// Visitors must validate all of these before imposing capability limits.
+    pub fn metadata_types(&self) -> impl Iterator<Item = &Ty> {
+        let trait_ref = self.trait_ref();
+        let rhs = match self {
+            Self::Implements(_) => None,
+            Self::ProjectionEq { ty, .. } => Some(ty),
+        };
+        std::iter::once(&trait_ref.self_ty)
+            .chain(trait_ref.args.iter())
+            .chain(rhs)
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TraitCall {
@@ -8448,6 +8474,116 @@ mod tests {
             },
             item: test_decl(),
         }))
+    }
+
+    #[test]
+    fn equality_predicate_metadata_includes_complete_application_and_rhs() {
+        let projection = AssociatedTypeProjection {
+            trait_ref: TraitRef {
+                declaration: test_decl(),
+                self_ty: Ty::Bool,
+                args: Arc::from([Ty::Int(IntTy::U128), Ty::Unit]),
+            },
+            item: test_decl(),
+        };
+        let equality = Predicate::ProjectionEq {
+            projection: projection.clone(),
+            ty: Ty::Never,
+        };
+        assert_eq!(equality.trait_ref(), &projection.trait_ref);
+        assert_eq!(
+            equality.metadata_types().cloned().collect::<Vec<_>>(),
+            [Ty::Bool, Ty::Int(IntTy::U128), Ty::Unit, Ty::Never]
+        );
+        let membership = Predicate::Implements(projection.trait_ref);
+        assert_eq!(
+            membership.metadata_types().cloned().collect::<Vec<_>>(),
+            [Ty::Bool, Ty::Int(IntTy::U128), Ty::Unit]
+        );
+    }
+
+    #[test]
+    fn equality_predicate_keys_preserve_kind_item_application_and_rhs() {
+        let projection = AssociatedTypeProjection {
+            trait_ref: TraitRef {
+                declaration: test_decl(),
+                self_ty: Ty::Bool,
+                args: Arc::from([Ty::Int(IntTy::U128), Ty::Unit]),
+            },
+            item: test_decl(),
+        };
+        let equality = Predicate::ProjectionEq {
+            projection: projection.clone(),
+            ty: Ty::Int(IntTy::I128),
+        };
+        let mut keys = std::collections::HashSet::from([equality.clone()]);
+        assert!(!keys.insert(equality.clone()));
+        assert!(keys.insert(Predicate::Implements(projection.trait_ref.clone())));
+        assert!(keys.insert(Predicate::ProjectionEq {
+            projection: projection.clone(),
+            ty: Ty::Bool,
+        }));
+        for changed in 0..4 {
+            let mut other = projection.clone();
+            match changed {
+                0 => other.item = test_decl(),
+                1 => other.trait_ref.declaration = test_decl(),
+                2 => other.trait_ref.self_ty = Ty::Unit,
+                3 => other.trait_ref.args = Arc::from([Ty::Unit, Ty::Int(IntTy::U128)]),
+                _ => unreachable!(),
+            }
+            assert!(keys.insert(Predicate::ProjectionEq {
+                projection: other,
+                ty: Ty::Int(IntTy::I128),
+            }));
+        }
+        assert_eq!(keys.len(), 7);
+        assert!(keys.contains(&equality));
+    }
+
+    #[test]
+    fn equality_metadata_walk_reaches_invalid_rhs_before_capability_checks() {
+        let budget = PlanBudget::default();
+        let predicate = Predicate::ProjectionEq {
+            projection: AssociatedTypeProjection {
+                trait_ref: TraitRef {
+                    declaration: test_decl(),
+                    self_ty: projection_fixture(),
+                    args: Arc::from([Ty::Unit]),
+                },
+                item: test_decl(),
+            },
+            ty: Ty::Array {
+                element: Arc::new(Ty::Param(ParamId {
+                    owner: BinderId {
+                        declaration: test_decl(),
+                    },
+                    index: 0,
+                })),
+                len: 0,
+            },
+        };
+        let error = predicate
+            .metadata_types()
+            .try_for_each(|ty| FactsCtx::Concrete.validate_ty_metadata_with_budget(ty, &budget))
+            .unwrap_err();
+        assert!(
+            error.contains("outside its authoritative binder"),
+            "{error}"
+        );
+        assert!(!error.contains("unsupported"), "{error}");
+
+        let poisoned = PlanBudget::default();
+        assert!(poisoned.check_depth(poisoned.limits().depth + 1).is_err());
+        assert!(
+            predicate
+                .metadata_types()
+                .try_for_each(|ty| {
+                    FactsCtx::Concrete.validate_ty_metadata_with_budget(ty, &poisoned)
+                })
+                .is_err()
+        );
+        assert!(poisoned.has_resource_failure());
     }
 
     #[test]
