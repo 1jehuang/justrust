@@ -2133,8 +2133,6 @@ fn e2_field_normalization_preserves_authority_privacy_and_deferred_boundaries() 
     for source in [
         "struct S{a:[i32;1]}fn main(){let s=S{a:[1]};let r=&s;let i=0usize;let _=r.a[i];}",
         "struct S{a:[i32;1]}fn main(){let mut s=S{a:[1]};let r=&mut s;let i=0usize;r.a[i]=2;}",
-        "enum E{A}struct S{e:E}fn main(){let s=S{e:E::A};let r=&s;match r.e{E::A=>()};}",
-        "enum E{A}struct S{e:E}fn main(){let s=S{e:E::A};let r=&s;let E::A=r.e;}",
         "struct S{x:i32}fn main(){let s=S{x:1};let r=&s;let n=({r}).x;}",
     ] {
         let p = parse(source).unwrap();
@@ -2148,6 +2146,13 @@ fn e2_field_normalization_preserves_authority_privacy_and_deferred_boundaries() 
     }
     check(&parse("struct S{x:i32}fn main(){let s=S{x:1};let r=&s;return;r.x=2;}").unwrap())
         .unwrap();
+    // Variant matches through a projected dereference switch on the referent.
+    for source in [
+        "enum E{A}struct S{e:E}fn main(){let s=S{e:E::A};let r=&s;match r.e{E::A=>()};}",
+        "enum E{A}struct S{e:E}fn main(){let s=S{e:E::A};let r=&s;let E::A=r.e;}",
+    ] {
+        check(&parse(source).unwrap()).unwrap();
+    }
 }
 
 #[test]

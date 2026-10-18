@@ -1926,6 +1926,33 @@ impl Paths {
     }
 }
 
+/// The single canonical storage node whose variant a switch inspects. A
+/// dereferenced scrutinee is refined only through one exact loan target; an
+/// ambiguous referent records no proof, so later downcasts fail closed.
+fn switch_node(
+    paths: &Paths,
+    loans: Option<&borrow::Plan>,
+    place: &Place,
+    block: BlockId,
+    budget: &mut Budget,
+) -> Result<Option<usize>, Exhausted> {
+    if !place.projection.contains(&Projection::Deref) {
+        return Ok(Some(paths.resolve(place)));
+    }
+    let Some(loans) = loans else {
+        return Ok(None);
+    };
+    let Ok(targets) = loans.resolve(place, block, None, Phase::Read, budget)? else {
+        return Ok(None);
+    };
+    match targets.as_slice() {
+        [target] if target.precision == TargetPrecision::Exact => {
+            Ok(Some(paths.resolve_canonical(&target.place)))
+        }
+        _ => Ok(None),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Bits(Vec<u64>);
 impl Bits {
@@ -2753,8 +2780,15 @@ impl Transfer<'_> {
             Terminator::Switch { condition, .. } => self.operand(state, condition)?,
             Terminator::SwitchVariant { place, .. } => {
                 self.budget.spend(place.projection.len() + 1)?;
-                let node = self.paths.resolve(place);
-                if self.paths.nodes[node].variant_offsets.len() == 1 {
+                let singleton = matches!(
+                    self.f.place_ty(place),
+                    Ok(Ty::Enum(enumeration)) if enumeration.def().variants.len() == 1
+                );
+                if singleton && place.projection.contains(&Projection::Deref) {
+                    // The referent's variant is known from its type. Reading
+                    // the carrier is still required to reach the referent.
+                    self.carrier_read(state, place)?;
+                } else if singleton {
                     // A singleton pattern does not inspect storage or a tag.
                     // Payload bindings still perform their normal full reads.
                     self.authorize(state, place)?;
@@ -3106,10 +3140,13 @@ fn analyze_with_context(
                         &f.blocks[block.0].terminator.value
                     {
                         budget.spend(place.projection.len() + 1)?;
-                        let node = paths.resolve(place);
-                        let old = output.selected[node];
-                        output.selected.set(node, variant.index);
-                        Some((node, old))
+                        switch_node(&paths, loans.as_ref(), place, block, &mut budget)?.map(
+                            |node| {
+                                let old = output.selected[node];
+                                output.selected.set(node, variant.index);
+                                (node, old)
+                            },
+                        )
                     } else {
                         None
                     }

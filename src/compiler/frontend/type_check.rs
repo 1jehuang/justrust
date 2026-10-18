@@ -4874,21 +4874,6 @@ impl<'a> Checker<'a> {
                     let direct_dynamic = matches!(value, Expr::DynamicIndex { .. });
                     let direct_wildcard = matches!(pattern, Pattern::Wildcard);
                     let value = self.expr_expected(value, annotation.as_ref())?;
-                    if self.deref_source(value)
-                        && matches!(
-                            pattern,
-                            Pattern::Path(_)
-                                | Pattern::Variant { .. }
-                                | Pattern::VariantRest { .. }
-                        )
-                        && self
-                            .tuple_pattern_type(pattern, &self.flow(value).ty)?
-                            .is_none()
-                    {
-                        return Err(
-                            "enum downcasts after a dereference are unsupported in B1".into()
-                        );
-                    }
                     let flow = self.flow(value);
                     if direct_dynamic && !self.facts().must_copy(&flow.ty)? && !direct_wildcard {
                         return Err("non-Copy runtime indexed pattern extraction is unsupported; only direct let _ inspection is admitted".into());
@@ -6399,15 +6384,6 @@ impl<'a> Checker<'a> {
         };
         let value = self.expr_expected(source, annotation.as_ref())?;
         let flow = self.flow(value);
-        if self.deref_source(value)
-            && matches!(
-                pattern,
-                Pattern::Path(_) | Pattern::Variant { .. } | Pattern::VariantRest { .. }
-            )
-            && self.tuple_pattern_type(pattern, &flow.ty)?.is_none()
-        {
-            return Err("enum downcasts after a dereference are unsupported in B1".into());
-        }
         if matches!(source, Expr::DynamicIndex { .. })
             && !matches!(pattern, Pattern::Wildcard)
             && !self.facts().must_copy(&flow.ty)?
@@ -6462,21 +6438,6 @@ impl<'a> Checker<'a> {
     ) -> Result<(ir::ExprKind, Flow), String> {
         if arms.len() > 4096 {
             return Err("match arm count exceeds limit 4096".into());
-        }
-        if self.deref_source(scrutinee) {
-            for arm in arms.clone() {
-                if let Some(pattern) = arm.pattern
-                    && matches!(
-                        pattern,
-                        Pattern::Path(_) | Pattern::Variant { .. } | Pattern::VariantRest { .. }
-                    )
-                    && self
-                        .tuple_pattern_type(pattern, &self.flow(scrutinee).ty)?
-                        .is_none()
-                {
-                    return Err("enum downcasts after a dereference are unsupported in B1".into());
-                }
-            }
         }
         let source = self.flow(scrutinee);
         let mut domain = source.ty.clone();

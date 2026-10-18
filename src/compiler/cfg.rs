@@ -2262,9 +2262,6 @@ impl Function {
                     then_block,
                     else_block,
                 } => {
-                    if place.projection.contains(&Projection::Deref) {
-                        return Err("unsupported: enum variant matching through dereference".into());
-                    }
                     let Ty::Enum(ty) = self.place_ty(place)? else {
                         return Err("CFG variant switch requires enum place".into());
                     };
@@ -2726,16 +2723,6 @@ impl Lowerer<'_> {
         self.source
             .validate_match(scrutinee, arms, &self.parameters)?;
         let source = self.pattern_source(scrutinee)?;
-        if source.projection.contains(&Projection::Deref)
-            && arms.iter().any(|arm| {
-                matches!(
-                    arm.pattern,
-                    ir::MatchPattern::EnumVariant { .. } | ir::MatchPattern::Decision { .. }
-                )
-            })
-        {
-            return Err("unsupported: enum variant matching through dereference".into());
-        }
         let completes = self.source.exprs[scrutinee.0].completion == ir::Completion::Returns;
         let join = self.block();
         for arm in arms {
@@ -2915,14 +2902,6 @@ impl Lowerer<'_> {
         self.source
             .validate_let_else(value, ty, pattern, else_branch, &self.parameters)?;
         let source = self.pattern_source(value)?;
-        if source.projection.contains(&Projection::Deref)
-            && matches!(
-                pattern,
-                ir::MatchPattern::EnumVariant { .. } | ir::MatchPattern::Decision { .. }
-            )
-        {
-            return Err("unsupported: enum variant matching through dereference".into());
-        }
         let completes = self.source.exprs[value.0].completion == ir::Completion::Returns;
         let PatternTest {
             selected,
@@ -5871,66 +5850,30 @@ mod tests {
     }
 
     #[test]
-    fn dereferenced_enum_variant_matches_fail_closed_without_refinement() {
+    fn dereferenced_enum_variant_matches_switch_through_the_referent() {
         for source in [
             "enum E{A,B} fn f(p:&E)->i32{match *p{E::A=>1,E::B=>2}} fn main(){}",
             "enum E{A} fn f(p:&E)->i32{match *p{E::A=>1}} fn main(){}",
+            "enum E{A(i32),B} fn f(p:&E)->i32{match *p{E::A(x)=>x,E::B=>2}} fn main(){}",
         ] {
             let program = super::super::frontend::parse(source).unwrap();
             let signatures = super::super::frontend::signature_table(&program).unwrap();
-            assert!(
+            let function =
                 super::super::frontend::type_function_with_signatures(&program, 0, &signatures)
                     .and_then(|source| lower(&source))
-                    .unwrap_err()
-                    .contains("unsupported")
+                    .unwrap();
+            function.validate().unwrap();
+            // A singleton enum's variant is known from its type: no tag switch.
+            assert_eq!(
+                function.blocks.iter().any(|block| matches!(
+                    &block.terminator.value,
+                    Terminator::SwitchVariant { place, .. }
+                        if place.projection.contains(&Projection::Deref)
+                )),
+                !source.starts_with("enum E{A}")
             );
+            assert!(super::super::ownership::analyze(&function).passed());
         }
-        let source = checked("enum E{A,B} fn f(p:&E){match *p{_=>()};} fn main(){}", 0);
-        let mut function = nominal_lowered(&source);
-        let Ty::Ref { referent, .. } = &function.locals[0].ty else {
-            unreachable!()
-        };
-        let Ty::Enum(ty) = referent.as_ref() else {
-            unreachable!()
-        };
-        let mut variant_source = source.clone();
-        for expression in &mut variant_source.exprs {
-            if let ir::ExprKind::Match { arms, .. } = &mut expression.kind {
-                arms.push(ir::MatchArm {
-                    pattern: ir::MatchPattern::EnumVariant {
-                        ty: ty.clone(),
-                        variant: 0,
-                        bindings: vec![],
-                    },
-                    body: arms[0].body,
-                });
-            }
-        }
-        assert!(
-            lower(&variant_source)
-                .unwrap_err()
-                .contains("unsupported: enum variant matching through dereference")
-        );
-        function.blocks[function.entry.0].terminator.value = Terminator::SwitchVariant {
-            place: Place {
-                local: LocalId(0),
-                projection: vec![Projection::Deref],
-            },
-            variant: ir::VariantId {
-                owner: ty.def().id,
-                index: 0,
-            },
-            then_block: function.entry,
-            else_block: function.entry,
-        };
-        assert!(
-            function
-                .validate()
-                .unwrap_err()
-                .contains("unsupported: enum variant matching through dereference")
-        );
-        let analysis = super::super::ownership::analyze(&function);
-        assert!(!analysis.passed());
     }
 
     #[test]
