@@ -1,0 +1,180 @@
+{
+  "cases": [
+    {
+      "category": "boundary",
+      "compile_status": 0,
+      "path": "boundary/debug.rs",
+      "run_status": 0,
+      "sha256": "73af4755f0ea0bce4eb81a1bf363ccab003326de6b46979fcce199da40d5a025",
+      "stderr_hex": "",
+      "stdout_hex": "350a"
+    },
+    {
+      "category": "boundary",
+      "compile_status": 0,
+      "path": "boundary/float.rs",
+      "run_status": 0,
+      "sha256": "996038796189fc203f936e837c4abe1d37997bbca0b0671f888daee3daf7bcc7",
+      "stderr_hex": "",
+      "stdout_hex": "312e350a"
+    },
+    {
+      "category": "boundary",
+      "compile_status": 0,
+      "path": "boundary/inline_named.rs",
+      "run_status": 0,
+      "sha256": "3ab8b9994edea1b54e9a434cac6a2aff81a545bd12e2b747546ec910fb2f4399",
+      "stderr_hex": "",
+      "stdout_hex": "330a"
+    },
+    {
+      "category": "boundary",
+      "compile_status": 0,
+      "path": "boundary/integers_assoc_const.rs",
+      "run_status": 0,
+      "sha256": "9031e6afc75e5ce47c92085c5f92cbac1bfb5f4a0d123c14c85ec081f9d713f7",
+      "stderr_hex": "",
+      "stdout_hex": "6938202d313238202d31203132370a693136202d33323736382033323736370a693332202d32313437343833363438203020323134373438333634370a693634202d3932323333373230333638353437373538303820393232333337323033363835343737353830370a69313238202d313730313431313833343630343639323331373331363837333033373135383834313035373238203137303134313138333436303436393233313733313638373330333731353838343130353732370a6973697a65202d3932323333373230333638353437373538303820393232333337323033363835343737353830370a75382030203235350a7531362036353533350a75333220343239343936373239350a7536342031383434363734343037333730393535313631350a75313238203334303238323336363932303933383436333436333337343630373433313736383231313435350a7573697a652031383434363734343037333730393535313631350a"
+    },
+    {
+      "category": "boundary",
+      "compile_status": 0,
+      "path": "boundary/positional.rs",
+      "run_status": 0,
+      "sha256": "96935799bebc87beee1febb66997f18aeee5ad0e3bcdee6a3ff5e9ce2f0af933",
+      "stderr_hex": "",
+      "stdout_hex": "3220310a"
+    },
+    {
+      "category": "boundary",
+      "compile_status": 0,
+      "path": "boundary/reference_arg.rs",
+      "run_status": 0,
+      "sha256": "ae9393ee6bc9515580c0dac900ea4e9efd67c9b08300674a990330c195e78f2a",
+      "stderr_hex": "",
+      "stdout_hex": "340a"
+    },
+    {
+      "category": "boundary",
+      "compile_status": 0,
+      "path": "boundary/str_arg.rs",
+      "run_status": 0,
+      "sha256": "df3b07eb077302558e63ddaf6ad4299285cd241c35be9a9673e8a003d6bc0bda",
+      "stderr_hex": "",
+      "stdout_hex": "746578740a"
+    },
+    {
+      "category": "boundary",
+      "compile_status": 0,
+      "path": "boundary/width.rs",
+      "run_status": 0,
+      "sha256": "5f152c4539687824c82c8bb3407deaa8be204f646ea9df27e5a7dc4770ffd9c3",
+      "stderr_hex": "",
+      "stdout_hex": "5b20202034325d0a"
+    },
+    {
+      "category": "negative",
+      "compile_status": 1,
+      "path": "negative/no_display.rs",
+      "sha256": "ec66cd731e6a98b7d2f502c3b3e40ba5554acf8536e40d994cf66cecf94a26b3"
+    },
+    {
+      "category": "negative",
+      "compile_status": 1,
+      "path": "negative/too_few.rs",
+      "sha256": "ee02f53c2a6fee122292a42e03c1287c6e550623d404f8a7ad94823583b17e59"
+    },
+    {
+      "category": "negative",
+      "compile_status": 1,
+      "path": "negative/too_many.rs",
+      "sha256": "dc70f9345463a9f92809820f888ab606279f9fb48e3f994ac8eacfff08b648e9"
+    },
+    {
+      "category": "negative",
+      "compile_status": 1,
+      "path": "negative/unmatched_open.rs",
+      "sha256": "439f55e8f4c4beea7f85a72aa36d7d3a14422f8b184e3c1fd80e892b013dbdc4"
+    },
+    {
+      "category": "negative",
+      "compile_status": 1,
+      "path": "negative/unused_bad_format.rs",
+      "sha256": "65dbdaaa5a0355cc316fb9d09fc51ae0d8950f721bf8e50159e4ca676d2c3403"
+    },
+    {
+      "category": "positive",
+      "compile_status": 0,
+      "path": "positive/bool_char.rs",
+      "run_status": 0,
+      "sha256": "e8a9f8dacaa214a88601c54dbde451c4960ac703373d720e26cc0b94a40a170b",
+      "stderr_hex": "",
+      "stdout_hex": "747275652066616c73650a5b615d205bc3a95d205bf09fa6805d0a7472756520616e64207a0a"
+    },
+    {
+      "category": "positive",
+      "compile_status": 0,
+      "path": "positive/escapes.rs",
+      "run_status": 0,
+      "sha256": "548bab49b1e227da0a763e28daf2688821fee9114b8f4dfd6c3fd609b4088ad5",
+      "stderr_hex": "",
+      "stdout_hex": "7b7d207b357d207d7b0a6c69746572616c207b206f6e6c79207d0a6e6f206e65776c696e65203120320a0a"
+    },
+    {
+      "category": "positive",
+      "compile_status": 0,
+      "path": "positive/integers_literal.rs",
+      "run_status": 0,
+      "sha256": "84ba937725b5f2bbd8b26c7305bd2a7192cb5c10c83cbf2cd08c751013337fea",
+      "stderr_hex": "",
+      "stdout_hex": "6938202d313238202d31203132370a693136202d33323736382033323736370a693332202d32313437343833363438203020323134373438333634370a693634202d3932323333373230333638353437373538303820393232333337323033363835343737353830370a69313238202d313730313431313833343630343639323331373331363837333033373135383834313035373238203137303134313138333436303436393233313733313638373330333731353838343130353732370a6973697a65202d3932323333373230333638353437373538303820393232333337323033363835343737353830370a75382030203235350a7531362036353533350a75333220343239343936373239350a7536342031383434363734343037333730393535313631350a75313238203334303238323336363932303933383436333436333337343630373433313736383231313435350a7573697a652031383434363734343037333730393535313631350a736d616c6c20392031302031383434363734343037333730393535313631360a"
+    },
+    {
+      "category": "positive",
+      "compile_status": 0,
+      "path": "positive/locals_and_exprs.rs",
+      "run_status": 0,
+      "sha256": "c848d3a67e70cfde4dc8a9eb8d0f54b87e8bbd302bd214ca0425aa49a7757da0",
+      "stderr_hex": "",
+      "stdout_hex": "613d3720623d3230302073756d3d31300a7371756172653d3134340a746f74616c2035350a3132330a300a"
+    },
+    {
+      "category": "positive",
+      "compile_status": 0,
+      "path": "positive/loop_table.rs",
+      "run_status": 0,
+      "sha256": "0ac9967a65770a0b1e58bb3ac4caddccec0c6c1821420aba21cbfe1864b7213c",
+      "stderr_hex": "",
+      "stdout_hex": "3121203d20310a3221203d20320a3321203d20360a3421203d2032340a3521203d203132300a"
+    },
+    {
+      "category": "positive",
+      "compile_status": 0,
+      "path": "positive/order.rs",
+      "run_status": 0,
+      "sha256": "e4596138c291c91840f39c2faca30565dd9226091a1b54e0d5978748c2d351f8",
+      "stderr_hex": "",
+      "stdout_hex": "6576616c20310a6576616c20320a6576616c20330a726573756c742031302032302033300a"
+    },
+    {
+      "category": "positive",
+      "compile_status": 0,
+      "path": "positive/stderr.rs",
+      "run_status": 0,
+      "sha256": "99b2fa9c40afb0a9f9139c4b93bacc86aab8f3cb968419589d50f419bccd636f",
+      "stderr_hex": "657272202d352066616c73650a7061727469616c20710a",
+      "stdout_hex": "6f757420390a"
+    }
+  ],
+  "compiler": "/usr/bin/rustc",
+  "compiler_sha256": "c916a85b7d4f52d9650399eebd15c672377933e6c2d8e98215757ab0b9b37136",
+  "flags": [
+    "--edition=2024",
+    "-C",
+    "panic=abort",
+    "-A",
+    "warnings"
+  ],
+  "schema": 1,
+  "version": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n"
+}
