@@ -146,9 +146,9 @@ impl LocalInput for AstPath {
 
 #[derive(Clone, Debug)]
 pub struct TypeEnv {
-    pub structs: HashMap<PathKey, ir::StructTy>,
-    pub enums: HashMap<PathKey, ir::EnumTy>,
-    pub functions: HashMap<PathKey, ir::Signature>,
+    pub structs: Arc<HashMap<PathKey, ir::StructTy>>,
+    pub enums: Arc<HashMap<PathKey, ir::EnumTy>>,
+    pub functions: Arc<HashMap<PathKey, ir::Signature>>,
     pub(super) plan: Option<PlanCtx>,
     pub(super) params: HashMap<GenericBindingKey, ir::Ty>,
     pub(super) param_env: Option<Arc<ir::GenericEnv>>,

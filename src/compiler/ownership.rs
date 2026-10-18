@@ -127,12 +127,16 @@ pub(super) struct CarrierEffectTable {
     budget: super::ir::PlanBudget,
 }
 impl CarrierEffectTable {
+    /// `caller_validated` is true only when the borrow plan already validated
+    /// this exact caller CFG against these exact facts. Otherwise the caller
+    /// provenance is checked here as before.
     pub(super) fn lookup(
         &self,
         target: &super::ir::Callee,
         caller: &cfg::Function,
         facts: &ValidatedFacts,
         view: &super::traits::CarrierContractView,
+        caller_validated: bool,
     ) -> Result<Option<Arc<borrow::CarrierEffects>>, super::traits::FactsError> {
         let budget = facts.budget();
         if !budget.same_authority(&self.budget) || facts.phase() != FactsPhase::Closed {
@@ -141,9 +145,11 @@ impl CarrierEffectTable {
                 "effect lookup changed closed planning authority",
             ));
         }
-        caller
-            .validate_provenance(facts, budget)
-            .map_err(|message| super::traits::FactsError::from_message(budget, &message))?;
+        if !caller_validated {
+            caller
+                .validate_provenance(facts, budget)
+                .map_err(|message| super::traits::FactsError::from_message(budget, &message))?;
+        }
         view.validate_for(facts)?;
         for template in self.templates.iter() {
             budget

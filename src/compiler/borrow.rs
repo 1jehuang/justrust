@@ -662,6 +662,10 @@ struct CarrierBuilder<'a, 'b> {
     call_rows: Vec<Vec<(CarrierLocation, ReferenceOriginId)>>,
     function: Option<Arc<cfg::Function>>,
     authority: Option<Arc<super::traits::ValidatedFacts>>,
+    /// Exact `(function, facts)` pair whose provenance already validated in
+    /// this plan. Validation is a pure function of these immutable Arcs, so a
+    /// repeated per-call check would only redo O(blocks * evidence) work.
+    validated_provenance: Option<(Arc<cfg::Function>, Arc<super::traits::ValidatedFacts>)>,
     bindings: Vec<CallCarrierBinding>,
     regions: RegionRelations,
     effect_table: Option<Arc<super::ownership::CarrierEffectTable>>,
@@ -670,6 +674,23 @@ struct CarrierBuilder<'a, 'b> {
     problems: Vec<(BlockId, Option<usize>, Problem)>,
 }
 impl CarrierBuilder<'_, '_> {
+    /// Validate the exact caller CFG provenance at most once per plan.
+    /// Failures are not memoized, so every failing call still reports.
+    fn ensure_provenance(
+        &mut self,
+        function: &Arc<cfg::Function>,
+        facts: &Arc<super::traits::ValidatedFacts>,
+    ) -> Result<(), String> {
+        if let Some((done_function, done_facts)) = &self.validated_provenance
+            && Arc::ptr_eq(done_function, function)
+            && Arc::ptr_eq(done_facts, facts)
+        {
+            return Ok(());
+        }
+        function.validate_provenance(facts, &self.ledger)?;
+        self.validated_provenance = Some((function.clone(), facts.clone()));
+        Ok(())
+    }
     fn bind_call(
         &mut self,
         state: &FlowState,
@@ -704,7 +725,7 @@ impl CarrierBuilder<'_, '_> {
             )?;
             return Ok(None);
         };
-        if let Err(message) = function.validate_provenance(&facts, &self.ledger) {
+        if let Err(message) = self.ensure_provenance(&function, &facts) {
             if message.contains("limit") || message.contains("exhaust") {
                 return Err(Exhausted);
             }
@@ -1919,6 +1940,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             call_rows,
             function: None,
             authority: None,
+            validated_provenance: None,
             bindings: vec![],
             regions: RegionRelations::default(),
             effect_table: None,
@@ -2692,7 +2714,22 @@ impl CarrierBuilder<'_, '_> {
             let summary = if let (Some(table), Some(facts)) =
                 (self.effect_table.clone(), self.authority.clone())
             {
-                match table.lookup(&target, self.f, &facts, view) {
+                let caller_validated = match self.function.clone() {
+                    Some(function) if std::ptr::eq(Arc::as_ptr(&function), self.f) => {
+                        match self.ensure_provenance(&function, &facts) {
+                            Ok(()) => true,
+                            Err(message)
+                                if message.contains("limit") || message.contains("exhaust") =>
+                            {
+                                return Err(Exhausted);
+                            }
+                            // Let lookup report the exact original diagnostic.
+                            Err(_) => false,
+                        }
+                    }
+                    _ => false,
+                };
+                match table.lookup(&target, self.f, &facts, view, caller_validated) {
                     Ok(summary) => summary,
                     Err(error) => {
                         if error.is_resource() {
@@ -3233,13 +3270,15 @@ impl CarrierBuilder<'_, '_> {
         // Capsules retain the original arena, including expressions that never
         // receive a CFG point. This audit grants no ENTRY or loan permission.
         if let Some(function) = self.function.clone() {
+            // Identity set of audited sources replaces an O(n^2) prefix scan.
+            let mut audited_sources = std::collections::HashSet::new();
+            audited_sources
+                .try_reserve(function.call_evidence.len())
+                .map_err(|_| Exhausted)?;
             for capsule_index in 0..function.call_evidence.len() {
                 let capsule = &function.call_evidence[capsule_index];
-                self.budget.spend(capsule_index + 1)?;
-                if function.call_evidence[..capsule_index]
-                    .iter()
-                    .any(|earlier| Arc::ptr_eq(earlier.source(), capsule.source()))
-                {
+                self.budget.spend(1)?;
+                if !audited_sources.insert(Arc::as_ptr(capsule.source())) {
                     continue;
                 }
                 let source = capsule.source();

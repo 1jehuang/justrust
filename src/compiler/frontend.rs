@@ -12562,7 +12562,7 @@ fn retained_function_projection(
     found |= retained_node_projection(names, DepthNode::Block(&function.body), projection, budget)?;
     Ok(found)
 }
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Clone, Copy, Debug)]
 pub enum DeclItemName {
@@ -13015,7 +13015,19 @@ pub struct PlanCtx {
     validated: Arc<HashMap<ir::DeclId, ir::GenericSignature>>,
     registry: Arc<DeclRegistry>,
     state: Arc<Mutex<PlanState>>,
+    /// Immutable whole-program signature and nominal lookup maps, built once
+    /// after the trait world is published and shared by every body check.
+    /// Previously each body copied every signature, which made checking
+    /// quadratic in program size in both time and retained bytes.
+    shared_env: Arc<OnceLock<SharedTypeEnv>>,
     pub budget: ir::PlanBudget,
+}
+/// Shared read-only part of a [`TypeEnv`].
+#[derive(Debug)]
+pub(super) struct SharedTypeEnv {
+    structs: Arc<HashMap<PathKey, ir::StructTy>>,
+    enums: Arc<HashMap<PathKey, ir::EnumTy>>,
+    functions: Arc<HashMap<PathKey, ir::Signature>>,
 }
 fn source_type_storage(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Result<usize, String> {
     budget.check_depth(depth)?;
@@ -14464,6 +14476,7 @@ impl PlanCtx {
             validated: Arc::new(HashMap::new()),
             registry,
             state: Arc::new(Mutex::new(state)),
+            shared_env: Arc::new(OnceLock::new()),
             budget: budget.clone(),
         };
         plan.validate_inherent_overlaps(budget)?;
@@ -14739,6 +14752,7 @@ impl PlanCtx {
         }
         self.validated = Arc::new(validated);
         self.world = Some(world);
+        self.shared_env = Arc::new(OnceLock::new());
         Ok(())
     }
     pub fn trait_world(&self) -> Result<Arc<tr::ValidatedTraitWorld>, String> {
@@ -15227,6 +15241,25 @@ impl PlanCtx {
         })
     }
     fn environment(&self, decl: Option<ir::DeclId>) -> Result<TypeEnv, String> {
+        let shared = match self.shared_env.get() {
+            Some(shared) if self.world.is_some() => shared,
+            _ => {
+                let built = self.build_shared_env()?;
+                if self.world.is_some() {
+                    // A concurrent builder may win. Both values are identical
+                    // functions of the same immutable published world.
+                    let _ = self.shared_env.set(built);
+                    self.shared_env
+                        .get()
+                        .ok_or("shared body environment was not published")?
+                } else {
+                    return self.finish_environment(&built, decl);
+                }
+            }
+        };
+        self.finish_environment(shared, decl)
+    }
+    fn build_shared_env(&self) -> Result<SharedTypeEnv, String> {
         let state = self
             .state
             .lock()
@@ -15252,19 +15285,12 @@ impl PlanCtx {
                 .ok_or("body environment allocation overflow")?;
         }
         self.budget.retain_bytes(environment_bytes)?;
-        let mut env = TypeEnv {
-            structs: HashMap::new(),
-            enums: HashMap::new(),
-            functions: HashMap::new(),
-            plan: Some(self.clone()),
-            params: HashMap::new(),
-            param_env: None,
-            self_ty: None,
-            facts: None,
-        };
+        let mut functions = HashMap::new();
+        let mut structs = HashMap::new();
+        let mut enums = HashMap::new();
         for (key, id) in &self.registry.functions {
             self.budget.charge_work(1)?;
-            env.functions.insert(
+            functions.insert(
                 key.clone(),
                 self.validated
                     .get(id)
@@ -15281,14 +15307,42 @@ impl PlanCtx {
             }
             match state.nominals.applications.get(&(*id, Vec::new())) {
                 Some(ir::Ty::Struct(ty)) => {
-                    env.structs.insert(key.clone(), ty.clone());
+                    structs.insert(key.clone(), ty.clone());
                 }
                 Some(ir::Ty::Enum(ty)) => {
-                    env.enums.insert(key.clone(), ty.clone());
+                    enums.insert(key.clone(), ty.clone());
                 }
                 _ => return Err("missing nominal application".into()),
             }
         }
+        Ok(SharedTypeEnv {
+            structs: Arc::new(structs),
+            enums: Arc::new(enums),
+            functions: Arc::new(functions),
+        })
+    }
+    fn finish_environment(
+        &self,
+        shared: &SharedTypeEnv,
+        decl: Option<ir::DeclId>,
+    ) -> Result<TypeEnv, String> {
+        // Per-body state only: the shared maps are reference counted.
+        self.budget.charge_work(1)?;
+        self.budget.retain_bytes(512)?;
+        let mut env = TypeEnv {
+            structs: shared.structs.clone(),
+            enums: shared.enums.clone(),
+            functions: shared.functions.clone(),
+            plan: Some(self.clone()),
+            params: HashMap::new(),
+            param_env: None,
+            self_ty: None,
+            facts: None,
+        };
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "generic plan context poisoned")?;
         if let Some(decl) = decl {
             let info = self.declaration(decl)?;
             env.params = generic_bindings(&self.registry, &info.env, &self.budget)?;
@@ -15734,6 +15788,7 @@ impl SchemaAdapter {
             budget: self.budget.clone(),
             world: None,
             validated: Arc::new(HashMap::new()),
+            shared_env: Arc::new(OnceLock::new()),
         })
     }
     fn error(&self, e: String) -> tr::FactsError {
