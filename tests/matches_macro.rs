@@ -2,7 +2,7 @@
 //! Stock first: /home/jeremy/.jcode/scratch/matches-macro-stock/results.json
 //! Receipt SHA256 7a98ef13729f223511d2c0133d68e5f1df35bf692da1297f290cfa42e3ae83d7
 //! Actual /usr/bin/rustc, edition2024, panic=abort, no RUSTC_BOOTSTRAP.
-//! Stock: 19 pass, 2 reject. Native: 14 live, 4 unsupported, 2 invalid, 1 syntax.
+//! Stock: 19 pass, 2 reject. Native: 15 live, 3 unsupported, 2 invalid, 1 syntax.
 //! Range retains the existing parser Syntax boundary, not an Unsupported claim.
 //! Sources frozen before native checks. Root owns native gates.
 //! Module shadow stays unsupported; local_shadow is the distinct final append.
@@ -119,8 +119,8 @@ error: aborting due to 1 previous error
 For more information about this error, try `rustc --explain E0308`.
 "###, source_bytes: 54, source_fingerprint: 881276056421007699, native: Native::Invalid, stock_compile_code: 1, stock_code: None, },
         Case { name: r###"guard"###, source: r###"fn main(){ if matches!(1, x if x == 1) { println!("guard"); } }
-"###, source_sha256: r###"5875421359eba37b761e61cddb3b94a904ecce723b5df8d0b06e15950ff17edb"###, boundary: r###"matches! pattern guards are unsupported"###, phase: r###"parse"###, stock_stdout: r###"guard
-"###, stock_stderr: r###""###, stock_compile_stderr: r###""###, source_bytes: 64, source_fingerprint: 13549839185063572285, native: Native::Unsupported, stock_compile_code: 0, stock_code: Some(0), },
+"###, source_sha256: r###"5875421359eba37b761e61cddb3b94a904ecce723b5df8d0b06e15950ff17edb"###, boundary: r###""###, phase: r###"check"###, stock_stdout: r###"guard
+"###, stock_stderr: r###""###, stock_compile_stderr: r###""###, source_bytes: 64, source_fingerprint: 13549839185063572285, native: Native::Live, stock_compile_code: 0, stock_code: Some(0), },
         Case { name: r###"range"###, source: r###"fn main(){ if matches!(2, 1..=3) { println!("range"); } }
 "###, source_sha256: r###"71e1655e7716bc7b55e1e4a6fa148c1f797f44011139d518b51d3d3a89d85b28"###, boundary: r###"expected ")""###, phase: r###"parse"###, stock_stdout: r###"range
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""###, source_bytes: 58, source_fingerprint: 10514283390403151409, native: Native::Syntax, stock_compile_code: 0, stock_code: Some(0), },
@@ -373,7 +373,7 @@ fn frozen_matches_macro_sources_and_strict_phases() {
             }
         });
     }
-    assert_eq!(partition, [14, 4, 2, 1]);
+    assert_eq!(partition, [15, 3, 2, 1]);
     failures.finish();
 }
 fn stock_all() {

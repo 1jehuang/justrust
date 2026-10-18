@@ -2,6 +2,8 @@
 
 Status: implemented and validated in debug/release, including the complete 3,116-test regression suite. Full Rust remains open.
 
+Follow-up: `GUARDED-MATCHES.md` tracks the later bounded guard extension and promotion of the unchanged original guard witness. Counts below describe the original unguarded milestone, not the later extension.
+
 The independently measured 21-source corpus retains character literals as an earlier parser Unsupported boundary, ranges as an earlier closing-delimiter Syntax boundary, and guards/or-patterns/module macro use as explicit Unsupported cases. These cases do not constitute native pattern execution coverage. Positive witnesses use supported integer/Bool, wildcard, tuple and enum forms and a separate function-local macro shadow.
 
 Add checked builtin `matches!(expression, pattern)` with optional trailing comma and all three delimiters. Reuse existing supported source pattern forms and checked match lowering: evaluate the scrutinee once, yield true for its matching arm and false for the wildcard arm. The result is Bool, subject to ordinary Never coercion/completion rules. Do not add new IR or backend operations, general match guards, range patterns, or-patterns or unsupported pattern forms in this slice.

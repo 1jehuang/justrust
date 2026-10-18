@@ -20,8 +20,10 @@ fn builtin_matches_source_shape_and_single_evaluation() {
             assert_eq!(arms.len(), 2);
             assert!(matches!(arms[0].pattern, Pattern::Int { .. }));
             assert!(matches!(arms[0].body, Expr::Bool(true)));
+            assert!(!arms[0].guarded);
             assert!(matches!(arms[1].pattern, Pattern::Wildcard));
             assert!(matches!(arms[1].body, Expr::Bool(false)));
+            assert!(!arms[1].guarded);
             let budget = ir::PlanBudget::default();
             let identity = sr::OriginalBodyId::new(&budget).unwrap();
             let inventory =
@@ -65,7 +67,6 @@ fn builtin_matches_bounded_grammar_and_late_invalid() {
         );
     }
     for (args, diagnostic) in [
-        ("1,1 if true", "matches! pattern guards are unsupported"),
         ("1,1|2", "or-patterns and @ patterns are unsupported"),
         ("1,x @ _", "unsupported token \"@\""),
     ] {
@@ -79,6 +80,168 @@ fn builtin_matches_bounded_grammar_and_late_invalid() {
     ] {
         bad(source);
     }
+}
+
+#[test]
+fn builtin_matches_guard_shape_and_single_evaluation() {
+    for (open, close) in [("(", ")"), ("[", "]"), ("{", "}")] {
+        for comma in ["", ","] {
+            let source = format!(
+                "fn value()->i32{{1}}fn guard(x:i32)->bool{{x==1}}fn probe()->bool{{matches!{open}value(),x if guard(x){comma}{close}}}fn main(){{}}"
+            );
+            let program = parse(&source).unwrap();
+            let Expr::Match { scrutinee, arms } =
+                program.functions[2].body.tail.as_deref().unwrap()
+            else {
+                panic!("expected guarded source Match")
+            };
+            assert!(matches!(scrutinee.as_ref(), Expr::Call { .. }));
+            assert_eq!(arms.len(), 2);
+            assert!(matches!(arms[0].pattern, Pattern::Binding { .. }));
+            assert!(arms[0].guarded);
+            let Expr::If {
+                condition,
+                then_block,
+                else_block,
+            } = &arms[0].body
+            else {
+                panic!("expected guard only within matched arm")
+            };
+            assert!(matches!(condition.as_ref(), Expr::Call { .. }));
+            assert!(then_block.statements.is_empty());
+            assert!(else_block.statements.is_empty());
+            assert!(matches!(then_block.tail.as_deref(), Some(Expr::Bool(true))));
+            assert!(matches!(
+                else_block.tail.as_deref(),
+                Some(Expr::Bool(false))
+            ));
+            assert!(matches!(arms[1].pattern, Pattern::Wildcard));
+            assert!(matches!(arms[1].body, Expr::Bool(false)));
+            assert!(!arms[1].guarded);
+            let budget = ir::PlanBudget::default();
+            let identity = sr::OriginalBodyId::new(&budget).unwrap();
+            let inventory =
+                SourceInventory::build(&program, &program.functions[2], identity, &budget).unwrap();
+            assert_eq!(inventory.calls.len(), 2);
+            let env = type_env(&program).unwrap();
+            let checked = type_function_with_env(&program, 2, &env).unwrap();
+            assert_eq!(
+                checked
+                    .exprs
+                    .iter()
+                    .filter(|expr| matches!(expr.kind, ir::ExprKind::Call { .. }))
+                    .count(),
+                2
+            );
+            program.validate_name_handles().unwrap();
+            preflight_program_clone(&program, &budget).unwrap();
+            recipes::inventory(&program, &budget).unwrap();
+        }
+    }
+}
+
+#[test]
+fn builtin_matches_guards_use_existing_checker_and_binding_scope() {
+    for source in [
+        "fn main(){let b:bool=matches!(1,1 if true);}",
+        "fn main(){let b:bool=matches!(1,1 if false);}",
+        "fn main(){let b:bool=matches!(1,2 if panic!(\"skipped\"));}",
+        "fn main(){let b:bool=matches!(1,1 if panic!(\"guard\"));}",
+        "fn main(){let x=false;let b:bool=matches!(1,x if x==1);let y:bool=x;}",
+        "fn main(){let b:bool=matches!((1,(true,2)),(x,(flag,y)) if flag && x<y);}",
+        "enum E{A((i32,bool)),B}fn main(){let b:bool=matches!(E::A((1,true)),E::A((x,flag)) if flag && x==1);}",
+        "struct S{value:bool}fn main(){if matches!(1,1 if S{value:true}.value) {}}",
+        "fn main(){let mut n=0;let b=matches!({n=n+1;n},x if {n=n+1;x==1});}",
+        "fn main(){macro_rules! matches{($x:literal,$p:literal if $g:literal)=>{42};}let n:i32=matches!(1,1 if true);}",
+    ] {
+        good(source);
+    }
+    for source in [
+        "fn main(){matches!(1,1 if 1);}",
+        "fn main(){matches!(1,1 if ());}",
+        "fn main(){matches!(1,1 if &true);}",
+        "fn main(){matches!(1,1 if unknown);}",
+        "fn main(){matches!(1,x if true);let y=x;}",
+        "fn main(){return;matches!(1,1 if 1);}",
+        "fn main(){let b=false && matches!(1,1 if unknown);}",
+        "fn main(){matches!(1,2 if unknown);}",
+        "fn main(){matches!(1,true if false);}",
+        "fn main(){matches!(1,1 if {return;1});}",
+    ] {
+        bad(source);
+    }
+    let error = parse("fn main(){match 1 {1 if true=>true,_=>false};}").unwrap_err();
+    assert!(error.contains("match guards, or-patterns and @ patterns are unsupported"));
+}
+
+#[test]
+fn builtin_matches_guard_source_separators_and_invalid_syntax() {
+    for source in [
+        "fn main(){matches!(1,1 if true) let x=1;}",
+        "fn main(){matches![1,1 if true] let x=1;}",
+        "fn main(){(matches!{1,1 if true}) let x=1;}",
+        "fn main(){match 1 {1=>matches!(1,1 if true) _=>false};}",
+        "fn main(){match 1 {1=>matches![1,1 if true] _=>false};}",
+        "fn main(){match 1 {1=>(matches!{1,1 if true}) _=>false};}",
+    ] {
+        assert!(parse(source).is_err(), "{source}");
+    }
+    // Braces permit the source separator omission, but the resulting bool is
+    // still checked as a non-unit implicit statement.
+    let program = parse("fn main(){matches!{1,1 if true} let x=1;}").unwrap();
+    assert!(check(&program).is_err());
+    good("fn main(){let b=match 1 {1=>matches!{1,1 if true} _=>false};}");
+    for args in ["1,1 if", "1,1 if ,", "1,1 if true,,", "1,1 if true,false"] {
+        assert!(parse(&format!("fn main(){{matches!({args})}}")).is_err());
+    }
+}
+
+#[test]
+fn builtin_matches_guard_storage_failure_is_poisoned_and_released() {
+    use super::super::expansion_budget::{BudgetResource, Storage};
+    let (tokens, session) = lex("matches!(1,1 if true)").unwrap().into_parts();
+    let mut names = NameStoreBuilder::new(session, super::super::token::Edition::E2024).unwrap();
+    let budget = names.budget().clone();
+    let mut parser = Parser::new(&tokens, &mut names).unwrap();
+    let snapshot = budget.snapshot();
+    let remaining = budget.limits().bytes - snapshot.retained_bytes - snapshot.temporary_bytes;
+    let blocker = budget.reserve(Storage::Temporary, remaining).unwrap();
+    let error = parser.matches_expression().unwrap_err();
+    assert_eq!(error.kind, super::super::source::SourceErrorKind::Limit);
+    assert_eq!(
+        budget.snapshot().failure.unwrap().resource,
+        BudgetResource::Bytes
+    );
+    drop(error);
+    drop(blocker);
+    drop(parser);
+    drop(names);
+    drop(tokens);
+    assert_eq!(budget.snapshot().retained_bytes, 0);
+    assert_eq!(budget.snapshot().temporary_bytes, 0);
+}
+
+#[test]
+fn builtin_matches_guard_bindings_are_bounded_to_immutable_copy() {
+    for source in [
+        "struct S{x:i32}fn take(s:S)->bool{true}fn main(){matches!(S{x:1},s if take(s));}",
+        "struct S{x:i32}fn main(){matches!(S{x:1},s if true);}",
+        "fn main(){matches!(1,mut x if {x=2;true});}",
+        "fn main(){matches!((1,true),(mut x,flag) if flag);}",
+    ] {
+        bad(source);
+    }
+    // Ordinary match bodies still permit non-Copy moves and mutable bindings.
+    let program = parse("struct S{x:i32}fn take(s:S)->bool{true}fn main(){let b=match (S{x:1}){s=>take(s)};let c=match 1{mut x=>{x=2;true}};}").unwrap();
+    check(&program).unwrap();
+    let Stmt::Let {
+        value: Expr::Match { arms, .. },
+        ..
+    } = &program.functions[1].body.statements[0]
+    else {
+        panic!("expected ordinary match initializer")
+    };
+    assert!(arms.iter().all(|arm| !arm.guarded));
 }
 
 #[test]

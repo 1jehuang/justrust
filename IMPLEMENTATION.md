@@ -449,6 +449,12 @@ host macro and compiles its generated target source.
 
 ### G6. Runtime, FFI, linking and target expansion
 
+- [x] Bounded guarded `matches!` evaluates guards only after a successful pattern,
+      with genuine Copy proof and immutable-binding restrictions. The 23-source
+      debug/release corpus, twelve authority controls, promoted original witness,
+      and full 3,140-test/160-binary suite pass. See `GUARDED-MATCHES.md`; general
+      match guards and non-Copy/mutable binding guards remain open.
+
 - [x] Bounded `matches!` lowers once-evaluated scrutinees through existing checked
       match/pattern machinery, preserving Bool results and macro/source authority.
       Frozen 21-source debug/release CLI/graph matrices, six public authority

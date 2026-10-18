@@ -11346,3 +11346,42 @@ Hosted library `20261017-185545794-1234287` passed1,253 tests. All-target check
 seconds including compilation. Reload-interrupted gates were rerun; fourteen
 exact failed and successful receipts are retained in
 `data/runs/xps14/2026-10-18-matches-macro.jsonl`. Full Rust support remains open.
+
+## 2026-10-18: bounded guarded matches with genuine binding restrictions
+
+Extended checked `matches!` with an optional guard, using a matched-arm If
+and the existing Match/Bool lowering. The guard and scrutinee each occur
+once, and the guard runs only after a successful pattern. A retained source
+arm marker triggers genuine Copy proof for every pending pattern binding,
+plus rejection of mutable bindings before publication. These checks run even
+for dead arms. This bounded restriction is deliberate: ordinary If lowering
+alone would allow non-Copy moves or binding mutation that Rust guards forbid.
+No-binding patterns can still inspect non-Copy scrutinees. Generic `T: Copy`
+positive and unconstrained `T` negative controls use the real callable facts.
+General match guards and non-Copy/mutable guard bindings remain unsupported.
+
+All23 frozen sources remain exact against stock receipt
+`5d3cc8b9951d3a45db7a8db350c37990ef3d00d8c57475e42691efbf843d21af`;
+their concatenated source SHA256 is
+`4aabdfa905ffdc6fa7960004c7bbab85097b683b1e5e5662559984b0df0e5e6d`.
+The partition is10 executable cases (one abort),7 Unsupported,5 Invalid and
+1 earlier Syntax boundary. Formatting and @ token originals keep their
+actual earlier boundaries; two separately measured literal-output controls
+supply unmasked guard and binding-scope coverage. The original21 matches sources also remain
+unchanged. Its exact guard witness is promoted, yielding15 live,3 Unsupported,
+2 Invalid and1 Syntax case, rather than replacing or weakening the source.
+
+Debug `20261017-190358586-1432533` and release
+`20261017-190418443-1438625` each passed20 corpus/authority tests. New corpus
+coverage is92 CLI and92 observed graph cells, with20 runtime executions per
+path. Twelve public authority controls and eight added private groups cover
+scope, single evaluation, conditional CFG, Never guards, rejected mutations,
+foreign metadata, genuine Copy facts and retained checked-body immutability.
+Only ephemeral SessionId digits are normalized in repeated failure diagnostics.
+Hosted library `20261017-190302221-1427850` passed1,261 tests. Final all-target
+check `20261017-190416151-1438532`, strict lint
+`20261017-190418700-1438681` and formatting passed. Complete local run
+`20261017-190421708-1438799` passed3,140 tests across160 binaries in149.4
+seconds including compilation. Fourteen exact failed/successful receipts are
+retained in `data/runs/xps14/2026-10-18-guarded-matches.jsonl`. No full Rust or
+performance claim follows from this bounded milestone.

@@ -4835,6 +4835,9 @@ pub enum Expr {
 pub struct MatchArm {
     pub pattern: Pattern,
     pub body: Expr,
+    /// A builtin matches! guard lowered into the body's If condition.
+    /// Retained so type checking can enforce the bounded guard binding rules.
+    pub guarded: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnaryOp {
@@ -6055,9 +6058,44 @@ impl<'input, 'names> Parser<'input, 'names> {
         let scrutinee = self.nested_expr()?;
         self.expect(",")?;
         let pattern = self.pattern()?;
-        if self.is("if") {
-            return Err(self.unsupported("matches! pattern guards are unsupported"));
-        }
+        let guarded = self.eat("if");
+        let body = if guarded {
+            let frontier = self.enter_lexical()?;
+            let guard = (|| {
+                self.bind_pattern_lexical(&pattern)?;
+                self.nested_expr()
+            })();
+            self.restore_frontier(frontier);
+            let guard = guard?;
+            self.names
+                .budget()
+                .charge(super::expansion_budget::Counter::Work, 3)
+                .map_err(|error| native_adapter::transport_error(error.into()))?;
+            Expr::If {
+                condition: self
+                    .names
+                    .try_parser_box(guard)
+                    .map_err(native_adapter::name_error)?,
+                then_block: Block {
+                    statements: Vec::new(),
+                    tail: Some(
+                        self.names
+                            .try_parser_box(Expr::Bool(true))
+                            .map_err(native_adapter::name_error)?,
+                    ),
+                },
+                else_block: Block {
+                    statements: Vec::new(),
+                    tail: Some(
+                        self.names
+                            .try_parser_box(Expr::Bool(false))
+                            .map_err(native_adapter::name_error)?,
+                    ),
+                },
+            }
+        } else {
+            Expr::Bool(true)
+        };
         self.eat(",");
         self.expect(close)?;
         let scrutinee = self
@@ -6082,13 +6120,17 @@ impl<'input, 'names> Parser<'input, 'names> {
             .map_err(native_adapter::name_error)?;
         arms.push(MatchArm {
             pattern,
-            body: Expr::Bool(true),
+            body,
+            guarded,
         });
         arms.push(MatchArm {
             pattern: Pattern::Wildcard,
             body: Expr::Bool(false),
+            guarded: false,
         });
-        Ok(Expr::Match { scrutinee, arms })
+        let expression = Expr::Match { scrutinee, arms };
+        validate_depth(DepthNode::Expr(&expression)).map_err(|e| self.depth_error(&e))?;
+        Ok(expression)
     }
     fn output_expression(&mut self, spelling: &'static str) -> Result<Expr, ParseError> {
         let site = self.token().span;
@@ -10054,7 +10096,11 @@ impl<'input, 'names> Parser<'input, 'names> {
                         | Expr::Loop { .. }
                         | Expr::Match { .. }
                 );
-            arms.push(MatchArm { pattern, body });
+            arms.push(MatchArm {
+                pattern,
+                body,
+                guarded: false,
+            });
             self.restore_frontier(frontier);
             if !self.eat(",") && !self.is("}") && !blocklike {
                 return Err(self.error("expected comma after match arm"));

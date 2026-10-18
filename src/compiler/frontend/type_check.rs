@@ -13,6 +13,7 @@ enum MatchBody<'a> {
 struct BorrowedMatchArm<'a> {
     /// None is an internal fallback, never a fabricated source pattern.
     pattern: Option<&'a Pattern>,
+    guarded: bool,
     body: MatchBody<'a>,
 }
 
@@ -6050,10 +6051,12 @@ impl<'a> Checker<'a> {
                 [
                     BorrowedMatchArm {
                         pattern: Some(pattern),
+                        guarded: false,
                         body: MatchBody::Block(body),
                     },
                     BorrowedMatchArm {
                         pattern: None,
+                        guarded: false,
                         body: MatchBody::LoopExit(id),
                     },
                 ]
@@ -6384,6 +6387,23 @@ impl<'a> Checker<'a> {
             let arm_result = (|| {
                 let (pattern, coverage, exact_useful) = if let Some(source_pattern) = arm.pattern {
                     let plan = self.collect_pattern(source_pattern, &domain)?;
+                    if arm.guarded {
+                        // Validate real pending locals before publication, even on dead
+                        // paths. An If cannot model guard borrows or binding immutability.
+                        self.signatures
+                            .plan()?
+                            .budget
+                            .charge_work(plan.bindings.rows.len())?;
+                        for pending in plan.bindings.rows.as_slice() {
+                            let binding = &pending.local;
+                            if binding.mutable {
+                                return Err("unsupported: guarded matches with mutable bindings are unsupported".into());
+                            }
+                            if !self.facts().must_copy(&binding.ty)? {
+                                return Err("unsupported: guarded matches with non-Copy bindings are unsupported".into());
+                            }
+                        }
+                    }
                     let coverage = plan.coverage();
                     let useful = matrix
                         .as_mut()
@@ -6822,6 +6842,7 @@ impl<'a> Checker<'a> {
                 scrutinee,
                 arms.iter().map(|arm| BorrowedMatchArm {
                     pattern: Some(&arm.pattern),
+                    guarded: arm.guarded,
                     body: MatchBody::Expr(&arm.body),
                 }),
                 expected,
@@ -6836,10 +6857,12 @@ impl<'a> Checker<'a> {
                 [
                     BorrowedMatchArm {
                         pattern: Some(pattern.as_ref()),
+                        guarded: false,
                         body: MatchBody::Block(then_block),
                     },
                     BorrowedMatchArm {
                         pattern: None,
+                        guarded: false,
                         body: else_branch
                             .as_deref()
                             .map_or(MatchBody::ImplicitUnit, MatchBody::Expr),
@@ -7917,6 +7940,57 @@ pub fn check(program: &Program) -> Result<(), String> {
 
 #[cfg(test)]
 mod checked_identity_tests {
+    #[test]
+    fn guarded_matches_reject_noncopy_bindings_before_guard_checking() {
+        for source in [
+            "fn f<T>(x:T)->bool{matches!(x,y if true)}fn main(){}",
+            "struct Token;fn consume(x:Token)->bool{true}fn main(){let value=Token;let result=matches!(value,bound if consume(bound));}",
+            "struct Token;fn main(){let value=Token;let result=matches!(value,bound if true);}",
+            "struct Token;struct Wrap{value:Token}fn main(){let value=Wrap{value:Token};let result=matches!(value,Wrap{value:bound} if false);}",
+            "struct Token;fn main(){if false{let value=Token;let result=matches!(value,bound if true);}}",
+        ] {
+            let program = parse(source).unwrap();
+            let error = check(&program).unwrap_err();
+            assert!(
+                error.contains(
+                    "unsupported: guarded matches with non-Copy bindings are unsupported"
+                ),
+                "{source}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn guarded_matches_reject_mutable_bindings_before_guard_checking() {
+        for source in [
+            "fn main(){let value=1;let result=matches!(value,mut bound if {bound=2;true});}",
+            "fn main(){let value=(1,2);let result=matches!(value,(mut bound,_) if false);}",
+            "fn main(){if false{let value=1;let result=matches!(value,mut bound if true);}}",
+        ] {
+            let program = parse(source).unwrap();
+            let error = check(&program).unwrap_err();
+            assert!(
+                error
+                    .contains("unsupported: guarded matches with mutable bindings are unsupported"),
+                "{source}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn guarded_matches_admit_copy_bindings_and_binding_free_noncopy_values() {
+        for source in [
+            "fn f<T:Copy>(x:T)->bool{matches!(x,y if true)}fn main(){}",
+            "fn main(){let value=1;let result=matches!(value,bound if bound==1);}",
+            "struct Token;fn main(){let value=Token;let result=matches!(value,_ if true);}",
+            "struct Token;struct Wrap{value:Token}fn main(){let value=Wrap{value:Token};let result=matches!(value,Wrap{value:_} if true);}",
+            "struct Token;struct Wrap{token:Token,number:i32}fn main(){let value=Wrap{token:Token,number:1};let result=matches!(value,Wrap{token:_,number:bound} if bound==1);}",
+        ] {
+            let program = parse(source).unwrap();
+            check(&program).unwrap_or_else(|error| panic!("{source}: {error}"));
+        }
+    }
+
     #[test]
     fn closed_associated_types_reach_checker_as_normalized_source_types() {
         for source in [
