@@ -2402,6 +2402,7 @@ mod tests {
                     )
                 })
                 .collect(),
+            param_mut: Vec::new(),
             result,
             body,
         }

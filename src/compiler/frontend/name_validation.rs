@@ -1230,6 +1230,7 @@ mod tests {
             regions: RegionDecls::default(),
             type_params: Vec::new(),
             params: Vec::new(),
+            param_mut: Vec::new(),
             result: Type::Unit,
             body: Block {
                 statements: Vec::new(),
@@ -2286,6 +2287,7 @@ mod tests {
             type_params: Vec::new(),
             bounds: Vec::new(),
             params: Vec::new(),
+            param_mut: Vec::new(),
             result: Type::Unit,
         };
         validate_function_head_names(&input, &head).unwrap();

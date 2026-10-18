@@ -1,5 +1,16 @@
 # Findings: where agent build time goes
 
+## 2026-10-18: `mut` by-value parameters
+
+- Parser accepts `mut name: T` parameters; the checker marks those locals
+  mutable, and existing ownership analysis keeps rejecting assignment to
+  immutable parameters, including in unused functions.
+- 9 stock-frozen sources in `tests/fixtures/mut_params/stock.json`. 5 positives
+  match stock byte for byte via CLI CHECK/BUILD at workers 1/8, debug and
+  release. Tuple-pattern `mut` stays an explicit unsupported boundary.
+- Unblocks the frozen Drop `parameter_paths.rs` case (26 Drop native positives).
+- Integrated with pending char-cast work: 3,237 tests passed, strict clippy clean.
+
 ## 2026-10-18: Normal-path canonical Drop for scalar-field structs
 
 - Real `impl Drop` execution for nongeneric scalar-field named structs: an atomic

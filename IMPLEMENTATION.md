@@ -245,6 +245,13 @@ missing-file changes invalidate only justified consumers without stale lookup.
 - [x] Width-correct primitive integer `.leading_zeros()` and unchanged original
       core exponent-estimator module acceptance under LEADING-ZEROS.md. This is
       not the original numeric method provider, a core crate artifact or CTFE.
+- [x] `mut` by-value function and method parameters bound as mutable locals,
+      with immutable-parameter reassignment rejected (E0384) even in unused
+      bodies. 9 stock-frozen sources: 5 native positives byte-identical to stock
+      in debug and release at workers 1/8 (including a Drop owner replaced
+      through a `mut` parameter), 3 rejections, 1 explicit boundary (`mut`
+      inside a tuple parameter pattern). Promotes the frozen Drop
+      `parameter_paths.rs` to native positive.
 - [ ] Complete char, str/string literals, raw pointers, function items/pointers,
       remaining type-alias inference/generic forms, never coercions and literals.
       Bounded canonical source aliases are delivered under TYPE-ALIASES.md.

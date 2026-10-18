@@ -1,0 +1,81 @@
+{
+  "cases": [
+    {
+      "category": "boundary",
+      "compile_status": 0,
+      "path": "boundary/mut_pattern_param.rs",
+      "run_status": 0,
+      "sha256": "c2cb134d6803346484e011ed9e85604910f33ae3d225f50049eb0bae7b52a7f8",
+      "stdout_hex": "7061747465726e206f6b0a"
+    },
+    {
+      "category": "negative",
+      "compile_status": 1,
+      "path": "negative/assign_immutable_param.rs",
+      "sha256": "7f6495b998c464fe2276b31266506f243a0b16e8c6f032895977f4322e5392ef"
+    },
+    {
+      "category": "negative",
+      "compile_status": 1,
+      "path": "negative/mut_mut.rs",
+      "sha256": "401be31bc2a01879c4d09b299c7f9fef123059e4b63baa5d98dda0dd612bb47e"
+    },
+    {
+      "category": "negative",
+      "compile_status": 1,
+      "path": "negative/unused_assign_immutable_param.rs",
+      "sha256": "7093e39c940ec8f0c550a6245f4ad19883ad4a60418c4611a8d3e4306e8526d5"
+    },
+    {
+      "category": "positive",
+      "compile_status": 0,
+      "path": "positive/drop_param.rs",
+      "run_status": 0,
+      "sha256": "297b1769b3cd2636ceb39fa5d27480dddae0df2b64335384b562bf56002756e5",
+      "stdout_hex": "636f6e73756d652066697273740a64726f70206669727374206f726967696e616c0a6561726c79206166746572207265696e69740a64726f70206c6f63616c0a64726f70207365636f6e6420706172616d657465720a64726f70206669727374207265706c6163656d656e740a63616c6c657220616674657220747275650a64726f70206669727374206f726967696e616c0a66616c6c7468726f756768206166746572207265706c6163656d656e740a64726f70206c6f63616c0a64726f70207365636f6e6420706172616d657465720a64726f70206669727374207265706c6163656d656e740a63616c6c65722061667465722066616c73650a"
+    },
+    {
+      "category": "positive",
+      "compile_status": 0,
+      "path": "positive/loop_counter.rs",
+      "run_status": 0,
+      "sha256": "87e7ebbc693cc28748d27281245f527fd457c31aa4dff5ebf9e1710ef8aaf5fd",
+      "stdout_hex": "636f6c6c61747a203237206f6b0a"
+    },
+    {
+      "category": "positive",
+      "compile_status": 0,
+      "path": "positive/method_param.rs",
+      "run_status": 0,
+      "sha256": "df0728e6faa977fa27ecda1b49eec70d50f06eaad7993b73c791d0089b92d5cc",
+      "stdout_hex": "6d6574686f64206f6b0a"
+    },
+    {
+      "category": "positive",
+      "compile_status": 0,
+      "path": "positive/scalar.rs",
+      "run_status": 0,
+      "sha256": "c6678db46eb53a11c48452bc6c5249fc1025e1f3f1d3e15898ccb71b7e15a268",
+      "stdout_hex": "7363616c6172206f6b0a"
+    },
+    {
+      "category": "positive",
+      "compile_status": 0,
+      "path": "positive/struct_field.rs",
+      "run_status": 0,
+      "sha256": "bcf677ce759ce7b9bfcabf1c566a94a31972b31a9e9bdb2a1fb4a5457e1a3be2",
+      "stdout_hex": "737472756374206f6b0a"
+    }
+  ],
+  "compiler": "/usr/bin/rustc",
+  "compiler_sha256": "c916a85b7d4f52d9650399eebd15c672377933e6c2d8e98215757ab0b9b37136",
+  "flags": [
+    "--edition=2024",
+    "-C",
+    "panic=abort",
+    "-A",
+    "warnings"
+  ],
+  "schema": 1,
+  "version": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n"
+}

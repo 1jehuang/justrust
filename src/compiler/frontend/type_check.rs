@@ -7886,9 +7886,13 @@ pub(super) fn type_callable_source(
     if signature.params.len() != f.params.len() + offset {
         return Err("callable parameter count mismatch".into());
     }
+    if !f.param_mut.is_empty() && f.param_mut.len() != f.params.len() {
+        return Err("parameter mutability table does not match parameters".into());
+    }
     for (parameter, ((name, _), ty)) in f.params.iter().zip(&signature.params[offset..]).enumerate()
     {
         let local = c.bind(name, ty.clone())?;
+        c.locals[local.0].mutable = f.param_mut.get(parameter).copied().unwrap_or(false);
         if let Some(cap) = canonical {
             sr::work(budget, 1).map_err(|e| cap.render(e))?;
             let index = parameter;
@@ -9168,6 +9172,7 @@ mod checked_identity_tests {
             },
             type_params: Vec::new(),
             params: Vec::new(),
+            param_mut: Vec::new(),
             result: Type::Unit,
             body: Block {
                 statements: Vec::new(),

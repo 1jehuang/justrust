@@ -4209,6 +4209,9 @@ pub struct Function {
     pub regions: RegionDecls,
     pub type_params: Vec<AstIdent>,
     pub params: Vec<(BindingName, Type)>,
+    /// Per-parameter `mut` binding mode, parallel to `params`. Empty means all
+    /// parameters are immutable (synthetic and test-built functions).
+    pub param_mut: Vec<bool>,
     pub result: Type,
     pub body: Block,
 }
@@ -4284,6 +4287,7 @@ pub struct FunctionHead {
     pub type_params: Vec<AstIdent>,
     pub bounds: Vec<TypeBound>,
     pub params: Vec<(BindingName, Type)>,
+    pub param_mut: Vec<bool>,
     pub result: Type,
 }
 #[derive(Clone, Debug)]
@@ -8440,6 +8444,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         regions: signature.regions.clone(),
                         type_params: signature.type_params.clone(),
                         params: signature.params.clone(),
+                        param_mut: signature.param_mut.clone(),
                         result: signature.result.clone(),
                         body,
                     })
@@ -8994,6 +8999,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 type_params: head.type_params,
                 bounds: head.bounds,
                 params: head.params,
+                param_mut: head.param_mut,
                 result: head.result,
                 body,
             },
@@ -9116,6 +9122,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         self.expect("(")?;
         let mut params = Vec::new();
+        let mut param_mut = Vec::new();
         let mut receiver = ReceiverKind::None;
         if associated && self.eat("&") {
             regions.receiver = if self.token().is_lifetime() {
@@ -9149,12 +9156,20 @@ impl<'input, 'names> Parser<'input, 'names> {
                 if self.is("[") {
                     return Err(self.unsupported("array parameter patterns are unsupported"));
                 }
+                let mutable = self.eat("mut");
+                if mutable && self.is("mut") {
+                    return Err(self.error("`mut` must be followed by a binding name"));
+                }
+                if mutable && (self.is("(") || self.is("[") || self.is("_")) {
+                    return Err(self.unsupported("`mut` parameter patterns are unsupported"));
+                }
                 let n = self.binding()?;
                 if self.is("(") || self.is("{") || self.is("::") {
                     return Err(self.unsupported("constructor parameter patterns are unsupported"));
                 }
                 self.expect(":")?;
                 params.push((n, self.ty()?));
+                param_mut.push(mutable);
                 if !self.eat(",") || self.is(")") {
                     break;
                 }
@@ -9190,6 +9205,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 type_params,
                 bounds,
                 params,
+                param_mut,
                 result,
             },
             receiver,

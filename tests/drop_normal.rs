@@ -278,15 +278,15 @@ fn attribute_blocked(case: &Case) -> bool {
 fn native_accepted(case: &Case) -> bool {
     case.category == "positive" && !attribute_blocked(case) && !path_blocked(case)
 }
-/// Unqualified `module::Trait::method` / `Trait::method` paths and `mut`
-/// by-value parameters are existing parser/resolver boundaries unrelated to
-/// Drop. Frozen variants (qualified `<T as Trait>::method` calls, `let mut`
-/// rebind with its own stock drop order) carry the native claims instead;
-/// a resolver rejection never counts as E0040 conformance.
+/// Unqualified `module::Trait::method` / `Trait::method` paths are existing
+/// resolver boundaries unrelated to Drop. Frozen qualified variants carry the
+/// native claims instead; a resolver rejection never counts as E0040
+/// conformance. `parameter_paths.rs` (a `mut` by-value parameter) is native
+/// positive since MUT-PARAMS support.
 fn path_blocked(case: &Case) -> bool {
     matches!(
         case.path.as_str(),
-        "positive/lookalike.rs" | "positive/parameter_paths.rs" | "negative/explicit_ufcs.rs"
+        "positive/lookalike.rs" | "negative/explicit_ufcs.rs"
     )
 }
 /// Rejected by earlier parser/library boundaries before Drop admission runs:
@@ -332,8 +332,7 @@ fn rejection_reason(message: &str, case: &Case) {
     if path_blocked(case) {
         assert!(
             lower.contains("non-module declaration in path")
-                || lower.contains("unresolved function")
-                || lower.contains("expected ascii identifier, found \"mut\""),
+                || lower.contains("unresolved function"),
             "{}: expected explicit parser/resolver boundary: {message}",
             case.path
         );
@@ -496,7 +495,7 @@ fn frozen_stock_before_native_normal_drop() {
     );
     assert_eq!(
         cases.iter().filter(|case| native_accepted(case)).count(),
-        25
+        26
     );
     assert_eq!(
         cases.iter().filter(|case| attribute_blocked(case)).count(),
