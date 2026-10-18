@@ -11600,3 +11600,23 @@ remaining whole-program joins are unchanged in this step. All 3225 local tests
 pass, clippy is strict-clean, and graph_integrity passes. Flat 256 check at one
 worker is 122 ms (unchanged). Eight workers take 372 ms, still slower than one
 because of the shared PlanBudget ledger (see above).
+
+### Per-task budgets owned by graph nodes (2026-10-18)
+
+Each engine node now owns a `Meter` (work, nodes, live bytes). Inside a graph
+poll, `PlanBudget::charge_work/charge_nodes/reserve_bytes/retain_bytes` charge
+the polled node's meter against per-task limits; byte reservations release to
+the meter that charged them. Outside polling (direct API, unit tests) the
+shared ledger still applies. Failures still record the exact first failure
+(kind, site, task) in the ledger and stay sticky. Reported usage is the shared
+ledger plus the summed node meters (`Report::metered_work/nodes`).
+
+Effects, flat generated program, release, xps14 under heavy concurrent load
+(load avg 30): 256-function check best-of-5 is 108 ms at one worker and 97 ms at
+eight. Before this change it was 122 ms and 372 ms. More workers are no longer
+slower. The size ceiling moves from 350 to 450 functions. 480 fails because
+the single `main` task exceeds its own per-task work limit, a real per-task
+cost, not a shared cap. graph_integrity ratchets were raised in the permitted
+direction (REQUIRED 450, KNOWN_FAILING 480). 3225 tests pass; clippy clean.
+Remaining: whole-program join nodes, plus `main` analysis cost that is still
+superlinear in its own call count.

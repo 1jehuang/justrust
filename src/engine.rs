@@ -33,6 +33,68 @@ static NEXT_GRAPH: AtomicU64 = AtomicU64::new(1);
 thread_local! {
     // The currently polled branch, not the Context that a fork captured.
     static CURRENT_TASK: Cell<Option<(u64, u64)>> = const { Cell::new(None) };
+    // The node owning the current poll, for per-task resource metering.
+    static CURRENT_NODE: std::cell::RefCell<Option<Arc<Node>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Per-task resource usage owned by one graph node. Limits are per task, so a
+/// program's size never hits a shared whole-compilation ceiling, and workers
+/// never contend on a shared counter. Branches of one node share its meter.
+#[derive(Debug, Default)]
+pub struct Meter {
+    pub work: AtomicU64,
+    pub nodes: AtomicU64,
+    /// Live (reserved or retained) bytes attributed to this task.
+    pub bytes: AtomicU64,
+}
+impl Meter {
+    /// Add `amount` to `counter` if the result stays within `limit`. Returns
+    /// the previous value on rejection.
+    pub fn admit(counter: &AtomicU64, amount: u64, limit: u64) -> Result<(), u64> {
+        let mut used = counter.load(Ordering::Relaxed);
+        loop {
+            match used.checked_add(amount) {
+                Some(next) if next <= limit => {
+                    match counter.compare_exchange_weak(
+                        used,
+                        next,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    ) {
+                        Ok(_) => return Ok(()),
+                        Err(actual) => used = actual,
+                    }
+                }
+                _ => return Err(used),
+            }
+        }
+    }
+}
+
+/// Run `f` with the meter of the node whose task is being polled on this
+/// thread, or `None` outside provider polling.
+pub fn with_current_meter<R>(f: impl FnOnce(Option<&Meter>) -> R) -> R {
+    CURRENT_NODE.with(|node| f(node.borrow().as_ref().map(|node| &node.meter)))
+}
+
+/// A shareable handle to the polled node's meter, so a scoped byte
+/// reservation can release back to the task that charged it even if it is
+/// dropped elsewhere.
+#[derive(Clone)]
+pub struct MeterHandle(Arc<Node>);
+impl MeterHandle {
+    pub fn current() -> Option<Self> {
+        CURRENT_NODE.with(|node| node.borrow().clone().map(Self))
+    }
+    pub fn meter(&self) -> &Meter {
+        &self.0.meter
+    }
+}
+impl fmt::Debug for MeterHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "MeterHandle({})", self.0.id)
+    }
 }
 
 /// The poll owning the current thread, for diagnostic attribution only.
@@ -126,6 +188,9 @@ pub struct Report {
     pub cancellations: usize,
     /// CPU samples and allocator/peak-RSS measurements are not implemented.
     pub resource_sampling_available: bool,
+    /// Sum of every node's per-task metered work and node charges.
+    pub metered_work: u64,
+    pub metered_nodes: u64,
 }
 
 #[derive(Clone)]
@@ -202,6 +267,7 @@ struct Node {
     key: Key,
     slots: Vec<Mutex<Slot>>,
     state: Mutex<NodeState>,
+    meter: Meter,
 }
 
 struct NodeState {
@@ -284,10 +350,12 @@ impl Wake for TaskWake {
     }
 }
 
-struct PollGuard(Option<(u64, u64)>);
+struct PollGuard(Option<(u64, u64)>, Option<Arc<Node>>);
 impl Drop for PollGuard {
     fn drop(&mut self) {
         CURRENT_TASK.with(|current| current.set(self.0));
+        let previous = self.1.take();
+        CURRENT_NODE.with(|node| *node.borrow_mut() = previous);
     }
 }
 
@@ -506,6 +574,14 @@ impl Engine {
             .collect();
         accounting.report.node_ids = nodes.iter().map(|node| node.id).collect();
         accounting.report.retained_outputs = retained_outputs;
+        accounting.report.metered_work = nodes
+            .iter()
+            .map(|node| node.meter.work.load(Ordering::Relaxed))
+            .fold(0u64, u64::saturating_add);
+        accounting.report.metered_nodes = nodes
+            .iter()
+            .map(|node| node.meter.nodes.load(Ordering::Relaxed))
+            .fold(0u64, u64::saturating_add);
         accounting.report.node_errors = node_errors;
         let report = accounting.report.clone();
         drop(accounting);
@@ -864,6 +940,7 @@ impl Shared {
                 completed: false,
                 error: None,
             }),
+            meter: Meter::default(),
         });
         bucket.push(node.clone());
         lock(&self.nodes).push(node.clone());
@@ -1178,7 +1255,9 @@ impl Shared {
             }));
             let mut cx = PollContext::from_waker(&waker);
             let previous = CURRENT_TASK.with(|current| current.replace(Some((self.id, task.id))));
-            let guard = PollGuard(previous);
+            let previous_node =
+                CURRENT_NODE.with(|node| node.borrow_mut().replace(task.node.clone()));
+            let guard = PollGuard(previous, previous_node);
             // Ownership is removed from the mutex during arbitrary provider code.
             // Scheduler state, not this mutex, prevents overlapping polls.
             let mut future = lock(&task.future).take();

@@ -68,7 +68,7 @@ may only move toward the target:
 | Whole-program nodes | `source`, `parse`, `resolve`, `signatures`, `effects_ready`, `mono_plan`, `concrete_proofs` | only `check`, `build` |
 | Leaf closure growth 16 to 32 | 1.481 (ceiling 1.50) | 1.0 |
 | Work growth 16 to 32 | 1.997 (ceiling 2.05, was 3.807) | about 2.0 |
-| Largest compiling flat program | 350 functions (400 fails, was 64/100) | no fixed ceiling |
+| Largest compiling flat program | 450 functions (480 fails: one task, main, exceeds its per-task work limit; was 64/100) | no fixed ceiling |
 
 When a change improves a number, the tests fail until it is recorded:
 

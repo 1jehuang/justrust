@@ -929,7 +929,7 @@ fn compile_input_configured(
         error,
         report: Some(Box::new(report.clone())),
         analyses: retained_analyses(&engine),
-        resource_usage: Box::new(snapshot.budget.usage_snapshot()),
+        resource_usage: Box::new(metered_usage(&snapshot.budget, report)),
     };
     let outcome = (|| -> Result<Option<Arc<Vec<u8>>>, Error> {
         check.completion()?;
@@ -1030,6 +1030,7 @@ fn compile_input_configured(
         })
         .map(|analysis| analysis.as_ref().clone())
         .collect();
+    let resource_usage = metered_usage(&snapshot.budget, &report);
     Ok(Compilation {
         executable: executable.map(|bytes| bytes.as_ref().clone()),
         report,
@@ -1043,8 +1044,20 @@ fn compile_input_configured(
         control_flow,
         source_bytes,
         source_files,
-        resource_usage: snapshot.budget.usage_snapshot(),
+        resource_usage,
     })
+}
+
+/// The shared ledger snapshot plus all per-task metered work and nodes.
+fn metered_usage(budget: &ir::PlanBudget, report: &Report) -> ir::PlanUsageSnapshot {
+    let mut usage = budget.usage_snapshot();
+    usage.work = usage
+        .work
+        .saturating_add(usize::try_from(report.metered_work).unwrap_or(usize::MAX));
+    usage.nodes = usage
+        .nodes
+        .saturating_add(usize::try_from(report.metered_nodes).unwrap_or(usize::MAX));
+    usage
 }
 
 pub(super) fn compile_program_observed(

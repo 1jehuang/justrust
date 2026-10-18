@@ -657,10 +657,10 @@ const WORK_GROWTH_CEILING: f64 = 2.05;
 
 /// The largest generated program that must compile. Raise as fixed; the
 /// architectural target is no fixed program-size ceiling at all.
-const REQUIRED_FUNCTIONS: usize = 350;
+const REQUIRED_FUNCTIONS: usize = 450;
 /// Known to fail today because whole-compilation budgets cap total program
 /// size. When it compiles, this test fails until the constant is raised.
-const KNOWN_FAILING_FUNCTIONS: Option<usize> = Some(400);
+const KNOWN_FAILING_FUNCTIONS: Option<usize> = Some(480);
 
 struct Graph {
     keys: HashMap<u64, (String, Vec<u64>)>,

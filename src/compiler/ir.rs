@@ -1741,9 +1741,18 @@ pub struct PlanBudget {
 pub struct PlanReservation {
     usage: Arc<std::sync::Mutex<PlanUsage>>,
     bytes: usize,
+    /// Set when the bytes were charged to a task meter instead of the ledger.
+    meter: Option<crate::engine::MeterHandle>,
 }
 impl Drop for PlanReservation {
     fn drop(&mut self) {
+        if let Some(meter) = &self.meter {
+            meter.meter().bytes.fetch_sub(
+                u64::try_from(self.bytes).unwrap_or(u64::MAX),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            return;
+        }
         if let Ok(mut usage) = self.usage.lock() {
             usage.bytes -= self.bytes;
             usage.reservations.release(self.bytes);
@@ -1845,6 +1854,9 @@ impl PlanBudget {
     }
     #[track_caller]
     pub fn charge_work(&self, amount: usize) -> Result<(), String> {
+        if let Some(result) = self.charge_task(amount, ResourceBudgetKind::Work) {
+            return result;
+        }
         self.charge(
             amount,
             |u| &mut u.work,
@@ -1853,8 +1865,50 @@ impl PlanBudget {
             None,
         )
     }
+    /// Per-task metering: inside a graph task, work and node charges go to
+    /// the polled node's own meter with per-task limits, so total program size
+    /// has no shared ceiling and workers never contend on one counter.
+    /// Returns `None` outside graph polling (direct API and unit-test use),
+    /// where the shared ledger still applies. Poison and recorded failures
+    /// remain sticky through the ledger.
+    #[track_caller]
+    fn charge_task(&self, amount: usize, kind: ResourceBudgetKind) -> Option<Result<(), String>> {
+        let limit = match kind {
+            ResourceBudgetKind::Work => self.limits.work,
+            _ => self.limits.nodes,
+        };
+        crate::engine::with_current_meter(|meter| {
+            let meter = meter?;
+            let counter = match kind {
+                ResourceBudgetKind::Work => &meter.work,
+                _ => &meter.nodes,
+            };
+            let amount64 = u64::try_from(amount).unwrap_or(u64::MAX);
+            let limit64 = u64::try_from(limit).unwrap_or(u64::MAX);
+            Some(
+                match crate::engine::Meter::admit(counter, amount64, limit64) {
+                    Ok(()) => Ok(()),
+                    Err(used) => {
+                        let used = usize::try_from(used).unwrap_or(usize::MAX);
+                        match self.usage.lock() {
+                            Ok(mut usage) => {
+                                usage.resource_failed = true;
+                                let failure = ResourceBudgetFailure::new(kind, amount, used, limit);
+                                usage.first_failure.get_or_insert(failure);
+                                Err("generic planning resource limit exceeded".into())
+                            }
+                            Err(_) => Err("generic planning budget poisoned".into()),
+                        }
+                    }
+                },
+            )
+        })
+    }
     #[track_caller]
     pub fn charge_nodes(&self, amount: usize) -> Result<(), String> {
+        if let Some(result) = self.charge_task(amount, ResourceBudgetKind::Nodes) {
+            return result;
+        }
         self.charge(
             amount,
             |u| &mut u.nodes,
@@ -1895,6 +1949,14 @@ impl PlanBudget {
     }
     #[track_caller]
     pub fn reserve_bytes(&self, bytes: usize) -> Result<PlanReservation, String> {
+        if let Some(meter) = crate::engine::MeterHandle::current() {
+            self.charge_meter_bytes(meter.meter(), bytes)?;
+            return Ok(PlanReservation {
+                usage: self.usage.clone(),
+                bytes,
+                meter: Some(meter),
+            });
+        }
         self.charge(
             bytes,
             |u| &mut u.bytes,
@@ -1905,11 +1967,48 @@ impl PlanBudget {
         Ok(PlanReservation {
             usage: self.usage.clone(),
             bytes,
+            meter: None,
         })
+    }
+    /// Charge live bytes to one task's meter under the per-task byte limit.
+    #[track_caller]
+    fn charge_meter_bytes(&self, meter: &crate::engine::Meter, bytes: usize) -> Result<(), String> {
+        let limit = self.limits.bytes;
+        match crate::engine::Meter::admit(
+            &meter.bytes,
+            u64::try_from(bytes).unwrap_or(u64::MAX),
+            u64::try_from(limit).unwrap_or(u64::MAX),
+        ) {
+            Ok(()) => {
+                if self.usage.is_poisoned() {
+                    return Err("generic planning budget poisoned".into());
+                }
+                Ok(())
+            }
+            Err(used) => match self.usage.lock() {
+                Ok(mut usage) => {
+                    usage.resource_failed = true;
+                    let failure = ResourceBudgetFailure::new(
+                        ResourceBudgetKind::Bytes,
+                        bytes,
+                        usize::try_from(used).unwrap_or(usize::MAX),
+                        limit,
+                    );
+                    usage.first_failure.get_or_insert(failure);
+                    Err("generic planning resource limit exceeded".into())
+                }
+                Err(_) => Err("generic planning budget poisoned".into()),
+            },
+        }
     }
     /// Conservatively retain generated semantic storage until this plan ends.
     #[track_caller]
     pub fn retain_bytes(&self, bytes: usize) -> Result<(), String> {
+        if let Some(result) = crate::engine::with_current_meter(|meter| {
+            meter.map(|meter| self.charge_meter_bytes(meter, bytes))
+        }) {
+            return result;
+        }
         self.charge(
             bytes,
             |u| &mut u.bytes,
