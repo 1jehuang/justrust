@@ -7682,3 +7682,17 @@ target dir/slot, where a parallel `check` wrote metadata-only rmeta for
 jcode-base that a test build then linked; (2) the push for provider/mod.rs
 raced the run's barrier. Next step: reproduce by editing a base crate and
 launching `check` and `test` concurrently on hosted.
+
+### Follow-up: likely root cause found and fixed in localcache
+
+`localcache::stage` hashed a unit's dep-info inputs *after* rustc finished.
+A source written while rustc ran (here: a hosted sync push of
+`provider/mod.rs` landing mid-build, mtime 1s after the last build) was
+hashed with its new content and paired with outputs compiled from the old
+content. Every later build of the new content then hit that entry and
+restored the stale `jcode_base` (`20261017-022657688-3098021` shows
+`depcache: "local"` for jcode_base, saved 7.8s). Fix: refuse to stage when
+any non-target input's mtime is at or after the compile start. Regression
+test `source_changed_during_compile_is_not_stored` fails before, passes
+after. A scratch 2-crate concurrent repro (8 rounds) did not hit the race,
+so the end-to-end trigger is inferred from the run records, not reproduced.

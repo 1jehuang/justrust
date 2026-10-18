@@ -186,6 +186,18 @@ fn stage_with(
     h.field(plan.base.as_bytes());
     for p in inputs {
         let abs = plan.cwd.join(&p);
+        // An input modified after the compile started (an editor save, or a
+        // hosted sync push landing mid-build) may differ from what rustc
+        // read: hashing it now would pair new content with old outputs, and
+        // every later build of the new content would restore stale code.
+        // Target-dir inputs (OUT_DIR) are written by this build: exempt.
+        if !abs.starts_with(&plan.norm.target)
+            && std::fs::metadata(&abs)
+                .ok()
+                .is_some_and(|m| crate::sys::mtime_f64(&m) >= start)
+        {
+            return None;
+        }
         let hash = depcache::file_hash(&abs, false)?;
         let np = plan.norm.norm(abs.to_str()?);
         h.field(np.as_bytes());
@@ -714,6 +726,9 @@ mod tests {
         };
         let (plan, args) = build("t1", "debug");
         std::fs::write(&runtime_data, "first").unwrap();
+        // Taken before the compile, after the sources were written, as the
+        // shim does: output mtimes are compared against it.
+        let start = paths::now();
         assert!(
             std::process::Command::new(&rustc)
                 .args(&args)
@@ -722,7 +737,7 @@ mod tests {
                 .unwrap()
                 .success()
         );
-        assert!(stage_with(&plan, paths::now() - 2.0, 1.5, &[], true, true).is_some());
+        assert!(stage_with(&plan, start, 1.5, &[], true, true).is_some());
         assert!(
             !plan.manifest().exists(),
             "target-bound output must never be advertised as portable"
@@ -815,7 +830,7 @@ mod tests {
         let (p1, args) = build("t1");
         let mut err = Vec::new();
         assert!(p1.restore(&mut err).is_none());
-        let start = paths::now() - 0.5;
+        let start = paths::now();
         let st = std::process::Command::new(&rustc)
             .args(&args)
             .current_dir(&ws)
@@ -854,6 +869,64 @@ mod tests {
         std::fs::write(ws.join("src/lib.rs"), "pub fn f() {}").unwrap();
         assert!(p3.restore(&mut Vec::new()).is_some());
 
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A source edited while rustc runs (an editor save, or a hosted sync
+    /// push landing mid-build) must not be stored: its post-compile hash
+    /// would pair the new content with outputs built from the old content,
+    /// and every later build of the new content would restore stale code.
+    #[test]
+    fn source_changed_during_compile_is_not_stored() {
+        let base =
+            std::env::temp_dir().join(format!("justrust-localcache-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let ws = base.join("ws");
+        std::fs::create_dir_all(ws.join("src")).unwrap();
+        std::fs::write(ws.join("src/lib.rs"), "pub fn old() {}").unwrap();
+        let rustc = paths::find_on_path("rustc", Path::new("/nonexistent")).unwrap();
+        let out = ws.join("t/debug/deps");
+        std::fs::create_dir_all(&out).unwrap();
+        let args: Vec<OsString> = [
+            "--crate-name",
+            "w",
+            "--edition=2021",
+            "src/lib.rs",
+            "--crate-type",
+            "lib",
+            "--emit=dep-info,metadata,link",
+            "-C",
+            "extra-filename=-0123456789abcdef",
+            "--out-dir",
+            out.to_str().unwrap(),
+        ]
+        .iter()
+        .map(OsString::from)
+        .collect();
+        let key = LocalKey {
+            root: base.join("cache"),
+            salt: vec![],
+            cwd: Some(ws.clone()),
+        };
+        let plan = depcache::plan_with(&rustc, &args, &[], Some(key)).unwrap();
+        let start = paths::now();
+        let st = std::process::Command::new(&rustc)
+            .args(&args)
+            .current_dir(&ws)
+            .status()
+            .unwrap();
+        assert!(st.success());
+        // The edit lands after rustc read the file but before staging.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(ws.join("src/lib.rs"), "pub fn new_fn() {}").unwrap();
+        assert!(
+            stage_with(&plan, start, 1.0, &[], true, false).is_none(),
+            "must refuse to store outputs whose inputs changed mid-compile"
+        );
+        assert!(
+            plan.restore(&mut Vec::new()).is_none(),
+            "new content must not restore the old build"
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 }
