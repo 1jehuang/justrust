@@ -689,8 +689,8 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_bytes: 36,
             source_fingerprint: 4804096277573192797,
             source_sha256: r###"edc9f927f6f1a42b773dd542f586915914060e8187428ead83bfafa5b0371565"###,
-            native: Native::Unsupported,
-            boundary: r###"unknown function-local macro"###,
+            native: Native::Abort,
+            boundary: r###""###,
             stock_compile_code: 0,
             stock_code: Some(-6),
             stock_stdout: r###""###,
@@ -1104,7 +1104,7 @@ fn frozen_assertion_sources_and_phase_partitions() {
         }
     }
     assert_eq!(groups, [30, 3]);
-    assert_eq!(partition, [10, 12, 4, 7]);
+    assert_eq!(partition, [10, 13, 4, 6]);
     assert_eq!(stock, [14, 14, 5]);
     let joined: String = all.iter().map(|case| case.source).collect();
     assert_eq!(fingerprint(&joined), 6894148404861029812);
@@ -1351,7 +1351,7 @@ fn cli_all() {
         }
     }
     assert_eq!(cells, 132);
-    failures.check("runtime count", || assert_eq!(runtimes, 44));
+    failures.check("runtime count", || assert_eq!(runtimes, 46));
     failures.finish();
 }
 fn graph_all() {
@@ -1414,7 +1414,7 @@ fn graph_all() {
         }
     }
     assert_eq!(cells, 132);
-    failures.check("graph runtime count", || assert_eq!(runtimes, 44));
+    failures.check("graph runtime count", || assert_eq!(runtimes, 46));
     failures.finish();
 }
 fn isolated(name: &str, marker: &str, run: fn()) {

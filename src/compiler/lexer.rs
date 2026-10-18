@@ -763,11 +763,9 @@ mod tests {
         let text = "name \"\\q\"";
         let mut sources = SourceMap::default();
         sources.add("lex.rs".into(), Arc::from(text));
-        let prepared = PreparedSource {
-            text: text.into(),
-            sources,
-            ..PreparedSource::default()
-        };
+        let mut prepared = PreparedSource::default();
+        prepared.text = text.into();
+        prepared.sources = sources;
         let budget = ExpansionBudget::default();
         let input = PreparedLexInput::prepared(&prepared, &budget).unwrap();
         let mut session = TokenSession::new(input.snapshot().clone(), budget.clone()).unwrap();
@@ -791,16 +789,14 @@ mod tests {
             lo: 0,
             hi: 10,
         };
-        let prepared = PreparedSource {
-            text: "{}".into(),
-            sources,
-            origins: vec![OriginSegment {
-                prepared: 0..2,
-                origin: original,
-                synthetic: true,
-            }],
-            ..PreparedSource::default()
-        };
+        let mut prepared = PreparedSource::default();
+        prepared.text = "{}".into();
+        prepared.sources = sources;
+        prepared.origins = vec![OriginSegment {
+            prepared: 0..2,
+            origin: original,
+            synthetic: true,
+        }];
         let budget = ExpansionBudget::default();
         let input = PreparedLexInput::prepared(&prepared, &budget).unwrap();
         let mut session = TokenSession::new(input.snapshot().clone(), budget).unwrap();

@@ -2,6 +2,8 @@
 
 Status: bounded implementation delivered. Full Rust remains open.
 
+Follow-up: `EQUALITY-ASSERTIONS.md` and `DEBUG-ASSERTIONS.md` record later bounded extensions. The unchanged `deferred_debug_assert` witness is now an enabled native abort case. Counts and scope below describe the original assertion milestone, not these later extensions.
+
 Admit `assert!(condition)`, an optional trailing comma, and one optional literal message with an optional trailing comma, using parentheses, brackets or braces. Evaluate the condition once with the ordinary Bool requirement. Success yields Unit. Failure uses the existing checked literal panic path and native abort contract in `PANIC.md`. Preserve short-circuiting, nested condition effects and source errors in dead/unused bodies. This does not introduce a new trait-based truth conversion or an executable assertion type.
 
 Select the builtin using checked macro namespace identity only after real lexical/module macro lookup misses. A user macro named assert retains its meaning. Unknown or unsupported module macros must not be replaced by a builtin. Reuse the checked invocation location and source replay authority. Generated source structures must be fully budgeted, and the original delimiter must still govern statement semicolon rules even if the source implementation lowers to an ordinary If expression.

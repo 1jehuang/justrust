@@ -449,6 +449,13 @@ host macro and compiles its generated target source.
 
 ### G6. Runtime, FFI, linking and target expansion
 
+- [x] Bounded debug assertion macros use an explicit native program setting,
+      independent of the bootstrap profile, with checked disabled operands and
+      zero disabled evaluation. Frozen 53-source enabled/disabled debug/release
+      CLI/graph matrices, seven authority controls and full 3,158-test/162-binary
+      regression passed. See `DEBUG-ASSERTIONS.md`; general formatting, trait
+      equality and full Cargo profile support remain open.
+
 - [x] Bounded guarded `matches!` evaluates guards only after a successful pattern,
       with genuine Copy proof and immutable-binding restrictions. The 23-source
       debug/release corpus, twelve authority controls, promoted original witness,

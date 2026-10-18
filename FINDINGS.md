@@ -11385,3 +11385,52 @@ check `20261017-190416151-1438532`, strict lint
 seconds including compilation. Fourteen exact failed/successful receipts are
 retained in `data/runs/xps14/2026-10-18-guarded-matches.jsonl`. No full Rust or
 performance claim follows from this bounded milestone.
+
+## 2026-10-18: configured native debug assertions
+
+Implemented bounded `debug_assert!`, `debug_assert_eq!` and `debug_assert_ne!`
+using the existing checked assertion path. Four implementation lanes covered
+configuration, frontend lowering, stock/native corpus and public authority
+controls. Native program settings are independent of the bootstrap compiler's
+build profile. The default remains enabled; `--debug-assertions yes|no` and
+`SourceOptions.cfg.set_debug_assertions(bool)` select the explicit setting.
+A private configuration bit is validated against public cfg membership and
+captured immutably in prepared source. Root and macro-child parsers receive it.
+Disabled assertions retain their argument expressions under a checked false
+conditional, so invalid operands remain errors without runtime side effects.
+
+The stock receipt at `debug-assert-stock-20261018/results.json` has SHA256
+`3479b805944fec9cdb2ebf9be806abda922e9b7d69558d7f160730a2d724d61a`.
+All53 source strings and their order were verified byte-exact; their concatenated
+SHA256 is `546b9793f501c4716d6065149dd2a4bfac0005f082eca880c5ed23c848eb29a8`.
+Stock both settings compile43 and reject10 cases; enabled execution aborts15,
+disabled execution aborts none. The bounded native partition is22 live,
+12 enabled-abort,7 Invalid and12 Unsupported. Each debug/release matrix covers
+424 CLI and424 observed graph cells with136 executable checks per path, across
+both native settings and workers1/8. Earlier formatting/operator boundaries
+remain explicit. Seven public authority tests cover configured preparation,
+retained bodies, cold invalid metadata, lexical shadows and operand validation.
+
+Initial gates exposed two old direct-parser diagnostic regressions and two
+new authority fixture assumptions at existing borrow/Never boundaries. The
+legacy direct parsing path now retains its original diagnostics while passing
+the configured setting. Fixtures explicitly preserve unsupported boundaries.
+The unchanged historical `deferred_debug_assert` source is promoted to an
+enabled native abort; all33 historical assertion source strings remain intact.
+That corpus now executes46 runtimes per path with132 cells per path.
+
+Final library `20261017-191424731-1658480` passed1,266 tests; all-target
+`20261017-191420384-1658197`, strict lint
+`20261017-191744904-1793546` and formatting passed. Final optimized corpus and
+authority run `20261017-191524268-1688653` passed11 tests. Optimized private
+configuration/parser and CLI runs `20261017-191650127-1768188` and
+`20261017-191650600-1768187` passed5 and2 tests. The earlier mistyped filter
+matched zero tests and is retained rather than counted as validation.
+Historical promotion run `20261017-191722843-1775096` passed4 tests.
+Complete local run `20261017-191732086-1775095` passed3,158 tests across162
+binaries in121.9 seconds. Local stock/abort execution uses the existing documented
+hosted subprocess limitation. A server reload interrupted one full run and a
+shared-build retry returned the aborted run; disabling build sharing for the
+retry produced the complete result. Twenty exact failed/successful receipts are
+retained in `data/runs/xps14/2026-10-18-debug-assertions.jsonl`. No full Rust or
+performance claim follows from this bounded milestone.

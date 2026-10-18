@@ -25,7 +25,7 @@ pub(super) const MAX_FILES: usize = 1024;
 const MAX_ORIGINS: usize = 1024 * 1024;
 #[derive(Clone, Debug)]
 /// Native x86_64 Linux configuration plus bounded user predicates.
-/// The default pins abort/checked-debug profile facts, not complete Rust panic semantics.
+/// The default pins abort and enables debug assertions, not complete Rust panic semantics.
 pub struct SourceOptions {
     pub cfg: CfgSet,
 }
@@ -134,8 +134,9 @@ pub struct PreparedAttribute {
     pub name: String,
     pub effective: bool,
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct PreparedSource {
+    debug_assertions: bool,
     pub text: String,
     pub sources: SourceMap,
     pub origins: Vec<OriginSegment>,
@@ -145,7 +146,25 @@ pub struct PreparedSource {
     pub source_bytes: usize,
     pub files: usize,
 }
+impl Default for PreparedSource {
+    fn default() -> Self {
+        Self {
+            debug_assertions: CfgSet::DEFAULT_DEBUG_ASSERTIONS,
+            text: String::new(),
+            sources: SourceMap::default(),
+            origins: Vec::new(),
+            attributes: Vec::new(),
+            probes: Vec::new(),
+            source_bytes: 0,
+            files: 0,
+        }
+    }
+}
 impl PreparedSource {
+    /// Immutable native profile fact captured when source options were validated.
+    pub fn debug_assertions(&self) -> bool {
+        self.debug_assertions
+    }
     pub fn map_range(&self, r: Range<usize>) -> Option<SourceSpan> {
         if r.end > self.text.len()
             || r.start > r.end
@@ -293,7 +312,10 @@ impl<'a> Loader<'a> {
             active: Vec::new(),
             options,
             reader,
-            prepared: PreparedSource::default(),
+            prepared: PreparedSource {
+                debug_assertions: options.cfg.debug_assertions(),
+                ..PreparedSource::default()
+            },
             lexical_budget: super::expansion_budget::ExpansionBudget::default(),
         }
     }
@@ -1119,6 +1141,35 @@ mod tests {
             };
             Ok(text.as_bytes()[..text.len().min(limit)].to_vec())
         }
+    }
+
+    #[test]
+    fn prepared_debug_assertions_capture_validated_options() {
+        assert!(PreparedSource::default().debug_assertions());
+        for enabled in [false, true] {
+            let mut options = SourceOptions::default();
+            options.cfg.set_debug_assertions(enabled);
+            let text = "#[cfg(debug_assertions)] fn checked(){} #[cfg(not(debug_assertions))] fn unchecked(){} fn main(){}";
+            let memory = prepare_text("main.rs", text, &options).unwrap();
+            let mut reader = RecordingReader {
+                root: text.into(),
+                ..Default::default()
+            };
+            let file = prepare_with_reader(Path::new("main.rs"), &options, &mut reader).unwrap();
+            options.cfg.set_debug_assertions(!enabled);
+            for prepared in [memory, file] {
+                assert_eq!(prepared.debug_assertions(), enabled);
+                assert_eq!(prepared.clone().debug_assertions(), enabled);
+                assert_eq!(prepared.text.contains("fn checked"), enabled);
+                assert_eq!(prepared.text.contains("fn unchecked"), !enabled);
+            }
+        }
+        let mut options = SourceOptions::default();
+        options.cfg.names.remove("debug_assertions");
+        assert!(prepare_text("main.rs", "fn main(){}", &options).is_err());
+        let mut reader = RecordingReader::default();
+        assert!(prepare_with_reader(Path::new("main.rs"), &options, &mut reader).is_err());
+        assert!(reader.calls.is_empty());
     }
 
     #[test]

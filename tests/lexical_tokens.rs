@@ -42,25 +42,23 @@ fn source_file(name: &str, text: &str) -> SourceFile {
     }
 }
 fn prepared_identity(text: &str) -> PreparedSource {
-    PreparedSource {
-        text: text.into(),
-        sources: SourceMap {
-            files: vec![source_file("original.rs", text)],
+    let mut prepared = PreparedSource::default();
+    prepared.text = text.into();
+    prepared.sources = SourceMap {
+        files: vec![source_file("original.rs", text)],
+    };
+    prepared.origins = vec![OriginSegment {
+        prepared: 0..text.len(),
+        origin: SourceSpan {
+            file: FileId(0),
+            lo: 0,
+            hi: text.len() as u32,
         },
-        origins: vec![OriginSegment {
-            prepared: 0..text.len(),
-            origin: SourceSpan {
-                file: FileId(0),
-                lo: 0,
-                hi: text.len() as u32,
-            },
-            synthetic: false,
-        }],
-        attributes: vec![],
-        probes: vec![],
-        source_bytes: text.len(),
-        files: 1,
-    }
+        synthetic: false,
+    }];
+    prepared.source_bytes = text.len();
+    prepared.files = 1;
+    prepared
 }
 
 #[test]

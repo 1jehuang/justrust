@@ -12,7 +12,7 @@ mod compiler_profile;
 static ALLOCATION_PROFILE: allocation_profile::ProfilingAllocator<std::alloc::System> =
     allocation_profile::ProfilingAllocator::new(std::alloc::System);
 
-const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--cfg NAME_OR_KEY_VALUE] [--trace NEW_TRACE] [--profile NEW_JSON]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n--cfg may be repeated for user names or key=\"value\" predicates; native target/profile cfg is fixed.\n--source-lock PATH --source-item NAME adds a verified source declaration probe, not a library crate.\n--profile writes bounded task timings and exact first budget failure without CFG dumps.\nAllocator counters require a binary built with --features allocation-profile.\n";
+const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--debug-assertions yes|no] [--cfg NAME_OR_KEY_VALUE] [--trace NEW_TRACE] [--profile NEW_JSON]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n--cfg may be repeated for user names or key=\"value\" predicates; native target cfg is fixed.\n--debug-assertions yes|no sets native debug assertions (default: yes); may be supplied once.\n--source-lock PATH --source-item NAME adds a verified source declaration probe, not a library crate.\n--profile writes bounded task timings and exact first budget failure without CFG dumps.\nAllocator counters require a binary built with --features allocation-profile.\n";
 
 fn allocator_json() -> String {
     #[cfg(feature = "allocation-profile")]
@@ -36,6 +36,25 @@ fn new_file(path: &Path) -> std::io::Result<File> {
     OpenOptions::new().write(true).create_new(true).open(path)
 }
 
+fn set_debug_assertions_option(
+    cfg: &mut compiler::source::CfgSet,
+    seen: &mut bool,
+    value: Option<&std::ffi::OsStr>,
+) -> Result<(), &'static str> {
+    if *seen {
+        return Err("--debug-assertions may only be supplied once");
+    }
+    let value = value.ok_or("missing --debug-assertions value (expected yes or no)")?;
+    let enabled = match value.to_str() {
+        Some("yes") => true,
+        Some("no") => false,
+        _ => return Err("invalid --debug-assertions value (expected yes or no)"),
+    };
+    cfg.set_debug_assertions(enabled);
+    *seen = true;
+    Ok(())
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut source = None;
     let mut output: Option<PathBuf> = None;
@@ -44,6 +63,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut workers = 1usize;
     let mut check = false;
     let mut source_options = compiler::source::SourceOptions::default();
+    let mut debug_assertions_seen = false;
     let mut source_lock: Option<PathBuf> = None;
     let mut source_item: Option<String> = None;
     let mut args = std::env::args_os().skip(1);
@@ -69,6 +89,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 if source_item.replace(item.to_owned()).is_some() {
                     return Err("--source-item may only be supplied once".into());
                 }
+            }
+            Some("--debug-assertions") => {
+                let value = args.next();
+                set_debug_assertions_option(
+                    &mut source_options.cfg,
+                    &mut debug_assertions_seen,
+                    value.as_deref(),
+                )?;
+            }
+            Some(s) if s.starts_with("--debug-assertions=") => {
+                set_debug_assertions_option(
+                    &mut source_options.cfg,
+                    &mut debug_assertions_seen,
+                    Some(std::ffi::OsStr::new(&s[19..])),
+                )?;
             }
             Some("--cfg") => {
                 let specification = args.next().ok_or("missing cfg specification")?;
@@ -257,4 +292,56 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         report.capture_complete
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn debug_assertions_option_accepts_only_exact_yes_or_no_once() {
+        for (value, expected) in [("yes", true), ("no", false)] {
+            let mut cfg = compiler::source::CfgSet::native_x86_64_linux();
+            let mut seen = false;
+            set_debug_assertions_option(&mut cfg, &mut seen, Some(OsStr::new(value))).unwrap();
+            assert_eq!(cfg.debug_assertions(), expected);
+            assert!(cfg.validate_native().is_ok());
+            assert_eq!(
+                set_debug_assertions_option(&mut cfg, &mut seen, Some(OsStr::new(value))),
+                Err("--debug-assertions may only be supplied once")
+            );
+            assert_eq!(cfg.debug_assertions(), expected);
+        }
+    }
+
+    #[test]
+    fn debug_assertions_option_rejects_missing_and_invalid_without_mutation() {
+        let mut cfg = compiler::source::CfgSet::native_x86_64_linux();
+        let mut seen = false;
+        assert_eq!(
+            set_debug_assertions_option(&mut cfg, &mut seen, None),
+            Err("missing --debug-assertions value (expected yes or no)")
+        );
+        for value in [
+            "", "true", "false", "1", "0", "YES", "No", " yes", "no ", "--check",
+        ] {
+            assert_eq!(
+                set_debug_assertions_option(&mut cfg, &mut seen, Some(OsStr::new(value))),
+                Err("invalid --debug-assertions value (expected yes or no)")
+            );
+            assert!(!seen);
+            assert!(cfg.debug_assertions());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            assert!(
+                set_debug_assertions_option(&mut cfg, &mut seen, Some(OsStr::from_bytes(b"\xff")))
+                    .is_err()
+            );
+        }
+        assert!(HELP.contains("--debug-assertions yes|no"));
+        assert!(HELP.contains("default: yes"));
+    }
 }

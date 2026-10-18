@@ -2,13 +2,44 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CfgSet {
+    debug_assertions: bool,
     pub names: BTreeSet<String>,
     pub values: BTreeMap<String, BTreeSet<String>>,
 }
 
+impl Default for CfgSet {
+    fn default() -> Self {
+        Self {
+            debug_assertions: Self::DEFAULT_DEBUG_ASSERTIONS,
+            names: if Self::DEFAULT_DEBUG_ASSERTIONS {
+                BTreeSet::from(["debug_assertions".into()])
+            } else {
+                BTreeSet::new()
+            },
+            values: BTreeMap::new(),
+        }
+    }
+}
+
 impl CfgSet {
+    /// Native default, independent of the host compiler's build profile.
+    pub const DEFAULT_DEBUG_ASSERTIONS: bool = true;
+
+    /// Configure the native profile fact and its cfg predicate together.
+    pub fn set_debug_assertions(&mut self, enabled: bool) {
+        self.debug_assertions = enabled;
+        if enabled {
+            self.names.insert("debug_assertions".into());
+        } else {
+            self.names.remove("debug_assertions");
+        }
+    }
+
+    pub fn debug_assertions(&self) -> bool {
+        self.debug_assertions
+    }
     fn usage(&self) -> (usize, usize) {
         let entries =
             self.names.len() + self.values.values().map(|v| v.len().max(1)).sum::<usize>();
@@ -56,7 +87,8 @@ impl CfgSet {
 
     /// Validate public option data before it can describe a native source snapshot.
     pub fn validate_native(&self) -> Result<(), String> {
-        let native = Self::native_x86_64_linux();
+        let mut native = Self::native_x86_64_linux();
+        native.set_debug_assertions(self.debug_assertions);
         let reserved = |s: &str| {
             s.starts_with("target_")
                 || matches!(
@@ -108,7 +140,7 @@ impl CfgSet {
     /// Pinned native compiler contract, never inferred from the compiler host.
     pub fn native_x86_64_linux() -> Self {
         let mut cfg = Self::default();
-        cfg.names.extend(["unix".into(), "debug_assertions".into()]);
+        cfg.names.insert("unix".into());
         for (key, values) in [
             ("target_arch", &["x86_64"][..]),
             ("target_os", &["linux"][..]),
@@ -587,6 +619,36 @@ mod tests {
         assert!(text.is_char_boundary(error.range.end - 17));
         let eof = parse_meta("cfg(", 17).unwrap_err();
         assert_eq!(eof.range, 21..21);
+    }
+    #[test]
+    fn debug_assertions_profile_is_authoritative() {
+        assert!(CfgSet::default().debug_assertions());
+        let mut cfg = CfgSet::native_x86_64_linux();
+        for enabled in [false, true, false] {
+            cfg.set_debug_assertions(enabled);
+            assert_eq!(cfg.debug_assertions(), enabled);
+            assert_eq!(eval("debug_assertions", &cfg).unwrap(), enabled);
+            assert!(cfg.validate_native().is_ok());
+            for spec in [
+                "debug_assertions",
+                "debug_assertions=\"no\"",
+                "r#debug_assertions",
+            ] {
+                assert!(cfg.insert_user(spec).is_err());
+            }
+            let mut forged = cfg.clone();
+            if enabled {
+                forged.names.remove("debug_assertions");
+            } else {
+                forged.names.insert("debug_assertions".into());
+            }
+            assert!(forged.validate_native().is_err());
+            let mut forged = cfg.clone();
+            forged
+                .values
+                .insert("debug_assertions".into(), BTreeSet::new());
+            assert!(forged.validate_native().is_err());
+        }
     }
     #[test]
     fn native_configuration_cannot_be_spoofed() {

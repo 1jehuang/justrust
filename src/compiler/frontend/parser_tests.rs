@@ -1737,7 +1737,6 @@ fn builtin_assert_does_not_reinterpret_shadowing_or_unsupported_messages() {
         "fn main(){assert!(true,\"{name}\")}",
         "fn main(){assert!(true,\"message\",42)}",
         "fn main(){assert!(true,,)}",
-        "fn main(){debug_assert!(true)}",
     ] {
         assert!(parse(source).is_err(), "{source}");
     }
@@ -2047,4 +2046,137 @@ fn comparison_assertions_expanded_and_foreign_metadata() {
         assert!(preflight_program_clone(&program, &ir::PlanBudget::default()).is_err());
         assert!(recipes::inventory(&program, &ir::PlanBudget::default()).is_err());
     }
+}
+
+fn configured_debug_program(source: &str, enabled: bool) -> Result<Program, String> {
+    let mut options = super::super::source::SourceOptions::default();
+    options.cfg.set_debug_assertions(enabled);
+    let prepared = super::super::source::prepare_text("debug.rs", source, &options)
+        .map_err(|e| e.to_string())?;
+    resolve(&parse_prepared(&prepared).map_err(|e| e.to_string())?)
+}
+
+#[test]
+fn debug_assertions_keep_checked_arguments_and_configured_source_shape() {
+    for enabled in [false, true] {
+        for (name, args, calls) in [
+            ("debug_assert", "left()==1", 1),
+            ("debug_assert_eq", "left(),right()", 2),
+            ("debug_assert_ne", "left(),right()", 2),
+        ] {
+            let source = format!(
+                "fn left()->i32{{1}}fn right()->i32{{2}}fn main(){{\n{name}!({args},\"message\")\n}}"
+            );
+            let program = configured_debug_program(&source, enabled).unwrap();
+            check(&program).unwrap();
+            let expression = program.functions[2].body.tail.as_deref().unwrap();
+            let assertion = if enabled {
+                expression
+            } else {
+                let Expr::If {
+                    condition,
+                    then_block,
+                    else_block,
+                } = expression
+                else {
+                    panic!("expected disabled assertion guard")
+                };
+                assert!(matches!(condition.as_ref(), Expr::Bool(false)));
+                assert!(then_block.statements.is_empty());
+                assert!(else_block.statements.is_empty());
+                assert!(else_block.tail.is_none());
+                then_block.tail.as_deref().unwrap()
+            };
+            let panic = assertion_failure(assertion);
+            assert_eq!(panic.message, "message");
+            validate_panic_site(panic, &program.names).unwrap();
+            let original = program.names.session().original(panic.site, 512).unwrap();
+            let (_, line, column) = program
+                .names
+                .session()
+                .sources()
+                .location(original)
+                .unwrap();
+            assert_eq!((line, column), (2, 1));
+            let budget = ir::PlanBudget::default();
+            let identity = sr::OriginalBodyId::new(&budget).unwrap();
+            let inventory =
+                SourceInventory::build(&program, &program.functions[2], identity, &budget).unwrap();
+            assert_eq!(inventory.calls.len(), calls);
+            program.validate_name_handles().unwrap();
+            preflight_program_clone(&program, &budget).unwrap();
+            recipes::inventory(&program, &budget).unwrap();
+        }
+        for invocation in [
+            "debug_assert!(1)",
+            "debug_assert_eq!(1,true)",
+            "debug_assert_ne!([1],[1])",
+            "debug_assert!(missing)",
+        ] {
+            let result = configured_debug_program(&format!("fn main(){{{invocation};}}"), enabled)
+                .and_then(|program| check(&program));
+            assert!(result.is_err(), "enabled={enabled}: {invocation}");
+        }
+    }
+}
+
+#[test]
+fn debug_assertions_preserve_expansion_profile_shadowing_and_message_bounds() {
+    for enabled in [false, true] {
+        for (name, args) in [
+            ("debug_assert", "true"),
+            ("debug_assert_eq", "1,1"),
+            ("debug_assert_ne", "1,2"),
+        ] {
+            let source =
+                format!("fn main(){{macro_rules! call{{()=>{{{name}!({args})}};}}call!()}}");
+            let program = configured_debug_program(&source, enabled).unwrap();
+            check(&program).unwrap();
+            let Expr::If { condition, .. } = program.functions[0].body.tail.as_deref().unwrap()
+            else {
+                panic!("expected assertion source conditional")
+            };
+            if !enabled {
+                assert!(matches!(condition.as_ref(), Expr::Bool(false)));
+            }
+            let shadow = format!("fn main(){{macro_rules! {name}{{()=>{{42}};}}{name}!()}}");
+            let program = configured_debug_program(&shadow, enabled).unwrap();
+            assert!(matches!(
+                program.functions[0].body.tail.as_deref(),
+                Some(Expr::Integer(_))
+            ));
+            for suffix in [",42", ",\"{}\"", ",\"message\",42"] {
+                let source = format!("fn main(){{{name}!({args}{suffix})}}");
+                let error = configured_debug_program(&source, enabled).unwrap_err();
+                assert!(error.contains(name), "{error}");
+                assert!(error.contains("unsupported"), "{error}");
+            }
+        }
+    }
+}
+
+#[test]
+fn disabled_debug_assertion_storage_denial_releases_all_parser_storage() {
+    use super::super::expansion_budget::{BudgetResource, Storage};
+    let (tokens, session) = lex("debug_assert!(true)").unwrap().into_parts();
+    let mut names = NameStoreBuilder::new(session, super::super::token::Edition::E2024).unwrap();
+    let budget = names.budget().clone();
+    let mut parser = Parser::new(&tokens, &mut names).unwrap();
+    parser.debug_assertions = false;
+    let snapshot = budget.snapshot();
+    let remaining = budget.limits().bytes - snapshot.retained_bytes - snapshot.temporary_bytes;
+    let blocker = budget.reserve(Storage::Temporary, remaining).unwrap();
+    let error = parser.debug_assertion_expression(None).unwrap_err();
+    assert_eq!(error.kind, super::super::source::SourceErrorKind::Limit);
+    assert_eq!(
+        budget.snapshot().failure.unwrap().resource,
+        BudgetResource::Bytes
+    );
+    drop(error);
+    drop(blocker);
+    drop(parser);
+    drop(names);
+    drop(tokens);
+    assert_eq!(budget.snapshot().retained_bytes, 0);
+    assert_eq!(budget.snapshot().temporary_bytes, 0);
 }

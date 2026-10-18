@@ -5446,6 +5446,7 @@ enum ConditionPurpose {
 }
 
 struct Parser<'input, 'names> {
+    debug_assertions: bool,
     input: &'input NativeTokenBuffer,
     names: &'names mut NameStoreBuilder,
     modules: ParserState<'names, ModuleArenaBuilder>,
@@ -5614,6 +5615,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             &proof,
         )?;
         let mut child = Parser {
+            debug_assertions: self.debug_assertions,
             input: &buffer,
             names: &mut *self.names,
             modules: ParserState::Borrowed(&mut *self.modules),
@@ -5987,6 +5989,15 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.builtin_macro_ahead("assert_ne")? {
             return self.assertion_expression(Some(BinaryOp::Ne));
         }
+        for (spelling, comparison) in [
+            ("debug_assert", None),
+            ("debug_assert_eq", Some(BinaryOp::Eq)),
+            ("debug_assert_ne", Some(BinaryOp::Ne)),
+        ] {
+            if self.builtin_macro_ahead(spelling)? {
+                return self.debug_assertion_expression(comparison);
+            }
+        }
         if self.item_expansion.is_some() {
             return Err(self.unsupported(
                 "user macro expressions in item-generated functions are unsupported",
@@ -6290,15 +6301,72 @@ impl<'input, 'names> Parser<'input, 'names> {
     fn assert_expression(&mut self) -> Result<Expr, ParseError> {
         self.assertion_expression(None)
     }
+    /// Keep the ordinary assertion available for semantic checking even when
+    /// disabled. The false source conditional evaluates no original argument.
+    fn debug_assertion_expression(
+        &mut self,
+        comparison: Option<BinaryOp>,
+    ) -> Result<Expr, ParseError> {
+        let assertion = self.assertion_expression(comparison)?;
+        if self.debug_assertions {
+            return Ok(assertion);
+        }
+        self.names
+            .budget()
+            .charge(super::expansion_budget::Counter::Work, 4)
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        let condition = self
+            .names
+            .try_parser_box(Expr::Bool(false))
+            .map_err(native_adapter::name_error)?;
+        let assertion = self
+            .names
+            .try_parser_box(assertion)
+            .map_err(native_adapter::name_error)?;
+        let expression = Expr::If {
+            condition,
+            then_block: Block {
+                statements: Vec::new(),
+                tail: Some(assertion),
+            },
+            else_block: Block {
+                statements: Vec::new(),
+                tail: None,
+            },
+        };
+        validate_depth(DepthNode::Expr(&expression)).map_err(|e| self.depth_error(&e))?;
+        Ok(expression)
+    }
     fn assertion_expression(&mut self, comparison: Option<BinaryOp>) -> Result<Expr, ParseError> {
-        let (delimiter, operand, right_operand, separator) = match comparison {
-            Some(BinaryOp::Eq) => (
+        let debug = self.token().matches("debug_assert")
+            || self.token().matches("debug_assert_eq")
+            || self.token().matches("debug_assert_ne");
+        let (delimiter, operand, right_operand, separator) = match (comparison, debug) {
+            (Some(BinaryOp::Eq), true) => (
+                "expected a debug_assert_eq! delimiter",
+                "debug_assert_eq! requires a left operand",
+                "debug_assert_eq! requires a right operand",
+                "expected comma or closing debug_assert_eq! delimiter",
+            ),
+            (Some(BinaryOp::Ne), true) => (
+                "expected a debug_assert_ne! delimiter",
+                "debug_assert_ne! requires a left operand",
+                "debug_assert_ne! requires a right operand",
+                "expected comma or closing debug_assert_ne! delimiter",
+            ),
+            (_, true) => (
+                "expected a debug_assert! delimiter",
+                "debug_assert! requires a condition",
+                "debug_assert! requires a condition",
+                "expected comma or closing debug_assert! delimiter",
+            ),
+            (Some(BinaryOp::Eq), false) => (
                 "expected an assert_eq! delimiter",
                 "assert_eq! requires a left operand",
                 "assert_eq! requires a right operand",
                 "expected comma or closing assert_eq! delimiter",
             ),
-            Some(BinaryOp::Ne) => (
+            (Some(BinaryOp::Ne), false) => (
                 "expected an assert_ne! delimiter",
                 "assert_ne! requires a left operand",
                 "assert_ne! requires a right operand",
@@ -6367,13 +6435,28 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else {
             condition
         };
-        let (nonliteral, placeholders, arguments) = match comparison {
-            Some(BinaryOp::Eq) => (
+        let (nonliteral, placeholders, arguments) = match (comparison, debug) {
+            (Some(BinaryOp::Eq), true) => (
+                "debug_assert_eq! nonliteral messages are unsupported",
+                "debug_assert_eq! formatting placeholders are unsupported",
+                "debug_assert_eq! formatting arguments are unsupported",
+            ),
+            (Some(BinaryOp::Ne), true) => (
+                "debug_assert_ne! nonliteral messages are unsupported",
+                "debug_assert_ne! formatting placeholders are unsupported",
+                "debug_assert_ne! formatting arguments are unsupported",
+            ),
+            (_, true) => (
+                "debug_assert! nonliteral messages are unsupported",
+                "debug_assert! formatting placeholders are unsupported",
+                "debug_assert! formatting arguments are unsupported",
+            ),
+            (Some(BinaryOp::Eq), false) => (
                 "assert_eq! nonliteral messages are unsupported",
                 "assert_eq! formatting placeholders are unsupported",
                 "assert_eq! formatting arguments are unsupported",
             ),
-            Some(BinaryOp::Ne) => (
+            (Some(BinaryOp::Ne), false) => (
                 "assert_ne! nonliteral messages are unsupported",
                 "assert_ne! formatting placeholders are unsupported",
                 "assert_ne! formatting arguments are unsupported",
@@ -6579,6 +6662,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         expansion_depth: u32,
     ) -> Result<Expr, ParseError> {
         let mut child = Parser {
+            debug_assertions: self.debug_assertions,
             input: buffer,
             names: &mut *self.names,
             modules: ParserState::Borrowed(&mut *self.modules),
@@ -6969,6 +7053,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         let lexical = ParserState::owned(state, names.budget())?;
         Ok(Self {
+            debug_assertions: super::source::CfgSet::DEFAULT_DEBUG_ASSERTIONS,
             input: tokens,
             names,
             modules,
@@ -10354,8 +10439,15 @@ impl std::fmt::Debug for InactiveSyntaxCertificate {
     }
 }
 /// Parse syntax only, retaining imports and visibility for the signatures phase.
+#[cfg(test)]
 fn parse_syntax_tokens(tokens: NativeParserInput) -> Result<ParsedProgram, ParseError> {
-    let unit = parse_syntax_unit(tokens, ParserPurpose::Active)?;
+    parse_syntax_tokens_configured(tokens, super::source::CfgSet::DEFAULT_DEBUG_ASSERTIONS)
+}
+fn parse_syntax_tokens_configured(
+    tokens: NativeParserInput,
+    debug_assertions: bool,
+) -> Result<ParsedProgram, ParseError> {
+    let unit = parse_syntax_unit(tokens, ParserPurpose::Active, debug_assertions)?;
     Ok(ParsedProgram {
         program: unit
             .parsed
@@ -10368,6 +10460,7 @@ fn parse_syntax_tokens(tokens: NativeParserInput) -> Result<ParsedProgram, Parse
 fn parse_syntax_unit(
     tokens: NativeParserInput,
     purpose: ParserPurpose,
+    debug_assertions: bool,
 ) -> Result<ParsedSyntaxUnit, ParseError> {
     let (tokens, session) = tokens.into_parts();
     let mut names = NameStoreBuilder::new(session, super::token::Edition::E2024)
@@ -10377,6 +10470,7 @@ fn parse_syntax_unit(
         ParserPurpose::Active => Parser::new(&tokens, &mut names)?,
         ParserPurpose::InactiveSyntax => Parser::with_purpose(&tokens, &mut names, purpose)?,
     };
+    parser.debug_assertions = debug_assertions;
     let mut parsed = ParsedDeclarations {
         program: ProgramDeclarations::default(),
         items: HashMap::new(),
@@ -10455,6 +10549,7 @@ fn parse_syntax_unit(
 }
 /// Syntax-only preparation seam. Does not process attributes, resolve names, or
 /// access files. The source preparation owner supplies attribute-masked text.
+#[cfg(test)]
 pub(super) fn parse_syntax_unprepared(source: &str) -> Result<ParsedProgram, ParseError> {
     parse_syntax_tokens(lex(source)?)
 }
@@ -10475,7 +10570,11 @@ pub(super) fn validate_inactive_syntax(
         .map_err(native_adapter::lex_error)?;
     let input = NativeParserInput::new_inactive(lexed, session, &projection)?;
     Ok(InactiveSyntaxCertificate {
-        _unit: parse_syntax_unit(input, ParserPurpose::InactiveSyntax)?,
+        _unit: parse_syntax_unit(
+            input,
+            ParserPurpose::InactiveSyntax,
+            super::source::CfgSet::DEFAULT_DEBUG_ASSERTIONS,
+        )?,
     })
 }
 
@@ -11323,7 +11422,7 @@ pub fn parse_prepared(
     let budget = super::expansion_budget::ExpansionBudget::default();
     let projection = super::source::PreparedLexInput::prepared(source, &budget)?;
     let tokens = native_input(&projection, budget).map_err(mapped)?;
-    parse_syntax_tokens(tokens).map_err(mapped)
+    parse_syntax_tokens_configured(tokens, source.debug_assertions()).map_err(mapped)
 }
 
 /// Parse syntax with the same preparation policy as file inputs, retaining the
@@ -11332,7 +11431,8 @@ pub fn parse_unresolved(source: &str) -> Result<ParsedProgram, String> {
     let prepared =
         super::source::prepare_text("<text>", source, &super::source::SourceOptions::default())
             .map_err(|e| e.to_string())?;
-    parse_syntax_unprepared(&prepared.text).map_err(|e| e.to_string())
+    let tokens = lex(&prepared.text).map_err(|e| e.to_string())?;
+    parse_syntax_tokens_configured(tokens, prepared.debug_assertions()).map_err(|e| e.to_string())
 }
 
 /// Convenience frontend for callers without separate parse/signatures phases.
