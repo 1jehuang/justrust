@@ -628,29 +628,45 @@ counts. **Acceptance:** every claimed contract row links to real observed result
 known valid unsupported programs remain gaps, and discovered failures acquire
 minimized tests before the corresponding completion claim is restored.
 
-### G12. Graph-native optimizer and code generation tiers
+### G12. Graph-native optimizer and code generation
 
 Decided 2026-10-18: a from-scratch optimizer embedded in the graph engine, no
-LLVM/Cranelift. Design and rationale in `OPTIMIZATION.md`. Nothing implemented.
+LLVM/Cranelift. One adaptive, incremental pipeline with no user-facing levels:
+the profile chooses behavior (overflow checks, debug assertions, panic strategy),
+never speed. Design in `OPTIMIZATION.md`. Nothing implemented.
 
+Phase 1 (now, alongside language work):
+- [ ] `JR_OPT=off|adaptive|final` engine switch, recorded in telemetry and cache
+      keys. Only `off` (current emitter) exists until the optimizer lands.
 - [ ] Preserve borrow/alias, validity/range/niche and drop facts in lowered
-      instances so later tiers can consume them (coordinate with G2/G3).
-- [ ] Define the SSA function representation, canonical hashing and per-instance
-      graph nodes with explicit callee-summary edges.
-- [ ] T1 debug tier: SSA lowering, linear-scan register allocation on the real
-      G6 ABI, trivial folding. Differential-equal to T0 and stock.
-- [ ] Generated-code runtime/size harness versus stock `opt-level=0/3`.
-- [ ] Measure the stock LLVM share of debug/release/cold build time on the
-      representative workload before T2/T3 investment.
-- [ ] T2 tier: intraprocedural passes and small-function inlining with recorded
-      callee-body dependencies and exact invalidation.
-- [ ] T3 tier: interprocedural, loop, vector and target-tuned passes. Runtime
-      parity then improvement versus stock release, with determinism at workers 1/N.
+      instances (coordinate with G2/G3).
+- [ ] SSA representation (block parameters), canonical hashing, verifier and a
+      reference interpreter differential-tested against the stack emitter.
+- [ ] Per-function `SSA`, `LOCAL_OPT`, `FRAGMENT` graph nodes with trivial
+      passes. CHECK never demands them.
+- [ ] Compile time, runtime and size harness versus stock `opt-level=0/3`.
 
-**Next:** fact preservation and SSA design, which can start before the G6 ABI
-lands. **Acceptance:** per tier, differential conformance passes,
-outputs are deterministic, an edit dirties only recorded dependents, and compile
-time, runtime and size receipts are compared against stock.
+Phase 2 (with the real G6 ABI):
+- [ ] Linear-scan register allocation. New features lower only to SSA. The
+      stack emitter becomes a reference oracle.
+
+Phase 3 (alongside core/std bring-up):
+- [ ] Function summaries with early cutoff, recorded inlining dependencies,
+      recursion fixed-point protocol, generic-template optimization and
+      instance folding.
+- [ ] Incremental linker patching per-function fragments.
+- [ ] Measure the stock LLVM share of debug/release/cold build time.
+
+Phase 4 (once real crates compile):
+- [ ] Final-goal interprocedural, loop, vector and target-tuned passes with
+      reproducible output at workers 1/N.
+- [ ] Adaptive iteration scheduler (volatility, hotness, budget) that never
+      delays foreground work. Complete backtraces including inlined frames.
+
+**Next:** the `JR_OPT` switch, fact preservation and the SSA core in new files
+under `src/compiler/ssa/`. **Acceptance:** differential conformance per mode,
+behavior settings preserved per profile, deterministic final output, edits dirty
+only recorded dependents, and compile/runtime/size receipts versus `off` and stock.
 
 ### G11. Representative performance and final compatibility audit
 
