@@ -1128,7 +1128,12 @@ impl ValidatedTraitWorld {
                 &mut dependencies,
                 0,
             )?;
-            self.validate_associated_normal_form(&normal, context.proof.env(), selection_context)?;
+            self.validate_associated_normal_form(
+                &normal,
+                context.proof.env(),
+                selection_context,
+                &mut stack.obligations,
+            )?;
             retain::<NormalizationEvidence>(&self.budget, 1)?;
             let evidence = Arc::new(NormalizationEvidence {
                 world: self.id,
@@ -1269,6 +1274,7 @@ impl ValidatedTraitWorld {
         normal: &Ty,
         env: &GenericEnv,
         context: ProofContext<'_>,
+        active: &mut Vec<GoalKey>,
     ) -> Result<()> {
         if self.type_contains_projection(normal, 0)? {
             return Err(FactsError::invalid(
@@ -1285,7 +1291,7 @@ impl ValidatedTraitWorld {
                 args: Arc::from([]),
             }),
             context,
-            &mut Vec::new(),
+            active,
         )?;
         Ok(())
     }

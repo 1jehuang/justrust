@@ -316,7 +316,13 @@ cleanup failures.
 - [x] Bounded closed-RHS associated equality in function/impl bounds under
       ASSOCIATED-EQUALITY.md, with genuine rigid caller parameter carriers, immutable
       raw obligations and exact post-substitution discharge. Debug/release native
-      and authority gates pass; parameter-valued RHSs and general equality remain open.
+      and authority gates pass; general equality remains open.
+- [x] Bare caller-parameter equality RHSs under PARAMETER-EQUALITY.md, with exact
+      ParamId preservation, contextual Sized, mandatory body/direct/required result
+      certificates and post-substitution reference-free checks. Generic T-to-U
+      results, moves and genuine Copy facts pass debug/release native gates.
+      Composite symbolic RHSs, reference-bearing results and associated bounds
+      remain outside this bounded slice.
 - [ ] Add trait type/lifetime/const parameters, generic methods, where clauses,
       associated types/constants, projection normalization, GATs, defaults and
       supertrait obligations beyond the bounded delivered source-default slice.
@@ -333,7 +339,7 @@ cleanup failures.
       retaining universal checks, binder-qualified substitution and sealed native
       instances. Optimization must not bypass unused-body validation.
 
-**Next:** extend closed-RHS equality to parameter-valued relationships and
+**Next:** extend equality to composite symbolic relationships and
 unconstrained projection/associated-bound facts, then projected defaults, with
 authoritative carrier and Copy proofs before an Iterator-like source client. Closure
 capture design can proceed independently against the agreed place/region API.

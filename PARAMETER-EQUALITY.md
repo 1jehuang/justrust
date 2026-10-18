@@ -1,8 +1,8 @@
-# Parameter-valued associated equality: pending implementation contract
+# Parameter-valued associated equality
 
-Status: design checkpoint only, not implemented or natively validated. Builds on accepted `bc428d8aa` and ASSOCIATED-EQUALITY.md. Full Rust remains open.
+Status: implemented and validated for the bounded scope below. Builds on accepted `bc428d8aa` and ASSOCIATED-EQUALITY.md. Full Rust remains open.
 
-## Intended next vertical
+## Bounded vertical
 
 Add a bare, authoritative caller type parameter as equality RHS: `T: Source<Out = U>`. Keep existing closed RHS forms. Preserve the exact `ParamId` including owner and index through source lowering, staged/final predicates, normalization and substitution. Do not infer U from a selected implementation or equate unrelated parameters. Parameter-containing RHS tuples/arrays/nominals and projected RHSs remain separate work; an actual substituted U may be an already-admitted concrete aggregate.
 
@@ -32,8 +32,16 @@ Every closed substitution revalidates exact equality, Sized and recursive refere
 
 Existing parser binding vectors already retain U as a real source type occurrence. Preserve all source/callback provenance, unused-row validation, duplicate handling and exact source replay. Conflicting U/V equalities remain explicit Unsupported rather than selecting a convenient RHS. Raw signature callbacks stay immutable; no world normalization under the PlanState mutex. Original sticky resource ledgers and bounded work/depth/capacity accounting apply to certificate creation, comparisons and replay. Keep construction/final memo namespaces separate.
 
-## Evidence and acceptance still required
+## Evidence and release gates
 
 Stock-only receipt: `parameter-rhs-bc428d8aa-oracle/oracle.json`, SHA256 `f4da57c52ed0930976109226f90a8043cf1583168489ed50daada7d2830659a2`, 14 original sources, eight runtime successes and six compile failures. Manifest SHA256 `4feac27d1e01d7acedff75fd39a836b5f81eac42f50c5ae830ea2341bf4d07c8`. The original positives contain panic branches unsupported by the current parser; preserve them and measure separate positive-only equivalents before native expectations. Composite RHS supplement is evidence only, not admitted by this contract.
 
-Before production release, finish independent review of the exact restricted-result certificate and direct-call integration. Freeze stock/native source corpus including real T->U result, explicit U input with distinguishable receiver payload, non-Copy move/duplicate and Copy positive, actual aggregate/wide U, wrong equality, unused bad body, foreign binder/source replay, closed-LHS/rigid-RHS boundary, reference-bearing actuals, and missing/tampered domain certificates. Run full existing regressions, all-target check, strict lint, debug/release workers1/8 CHECK/BUILD, public authority tests and real ELF payloads. Retain failed and passing receipts. No native support or speed claim follows from this design.
+## Validation evidence
+
+The stock receipts retain the original 30 sources, including their active `allow` attribute boundary. Fifteen separately measured sources remove only that outer attribute, without changing their bodies or payload checks. `tests/parameter_equality.rs` preserves all 45 sources and checks workers 1/8 in CHECK/BUILD: 180 CLI cells and 180 all-body graph cells, including 12 real native payload executions per build profile. The partition is six Runtime, six ordinary Invalid, 21 stock-valid Unsupported and 12 stock-invalid Unsupported. Earlier parser/attribute boundaries are not claimed as equality-semantic coverage.
+
+Sixteen public authority tests and twelve private parameter-equality tests cover real sealed facts, missing or altered certificates, exact source/binder replay, empty and nonempty result-source unions, body/direct/required subjects, non-Copy versus Copy, nested and zero-length reference metadata, fixed/origin/region transport, sticky failures and allocation accounting. The historical 46-source associated-equality corpus keeps every source byte unchanged and promotes only its now-supported parameter-RHS case 37 to Runtime.
+
+The complete hosted suite passes 2,969 tests across 144 binaries, with all-target check, strict Clippy, formatting and diff checks. Run `20261017-173121336-3832748` records that full suite. The unchanged growing-generic profile also reaches its original depth boundary after removing a redundant metadata scan following complete predicate validation, not by raising a budget. Debug/release and failed-then-repaired runs are retained in `data/runs/xps14/2026-10-18-parameter-equality.jsonl`.
+
+This is bounded parameter equality, not general equality solving, reference-bearing associated values, associated bounds/defaults, parameter-containing RHS syntax or complete Rust support. No compile-speed claim follows from these correctness gates.

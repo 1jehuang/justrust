@@ -46,17 +46,7 @@ impl ValidatedTraitWorld {
         self.validate_declaration_schema(item.declaration, &item.schema)?;
         // Validate original source-region identity before capability rejection.
         self.validate_source_regions(item.declaration, &item.schema.signature)?;
-        if item
-            .schema
-            .predicates
-            .iter()
-            .any(|p| matches!(p, Predicate::ProjectionEq { .. }))
-        {
-            return Err(FactsError::unsupported(
-                &self.budget,
-                "unsupported: equality in trait declaration predicates",
-            ));
-        }
+        self.validate_predicates(&item.schema.predicates, &item.schema.env, None)?;
         if item.default.is_some() {
             return Err(FactsError::unsupported(
                 &self.budget,
@@ -413,6 +403,7 @@ impl ValidatedTraitWorld {
                             predicates: &owner.predicates,
                             phase: FactsPhase::Universal,
                         },
+                        &mut Vec::new(),
                     )?;
                     Ok(normal)
                 } else {
@@ -692,7 +683,12 @@ impl ValidatedTraitWorld {
                     context,
                     closed,
                 )?;
-                self.validate_associated_normal_form(&normal, context.env(), context)?;
+                self.validate_associated_normal_form(
+                    &normal,
+                    context.env(),
+                    context,
+                    &mut Vec::new(),
+                )?;
             }
             if raw.signature.params.len() != signature.params.len() {
                 return Err(FactsError::invalid(
@@ -946,6 +942,7 @@ impl ValidatedTraitWorld {
             &base.retained,
             base.origin,
             Some(application.evidence),
+            super::parameter_equality::EqualityResultSubject::Required(call.clone()),
         )
     }
 
@@ -1128,7 +1125,7 @@ impl ValidatedTraitWorld {
         // Reuse ordinary transport, with no projected proof, to independently
         // check the final carrier shape without recursive evidence validation.
         retain::<Ty>(&self.budget, evidence.signature.params.len())?;
-        let expected = self.transport_carrier_contract(
+        let expected = self.transport_carrier_parts(
             evidence.item,
             base.arguments,
             evidence.signature.clone(),
@@ -1137,6 +1134,7 @@ impl ValidatedTraitWorld {
             &base.retained,
             base.origin,
             None,
+            view.result_subject.clone(),
         )?;
         if view.contract != expected.contract
             || view.regions != expected.regions

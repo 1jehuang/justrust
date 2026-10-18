@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 mod associated_types;
 mod catalog;
 mod equality;
+mod parameter_equality;
 mod projected_methods;
 pub use associated_types::NormalizedAssociatedType;
 pub use catalog::{
@@ -44,6 +45,20 @@ pub struct FactsError {
     diagnostic: Diagnostic,
 }
 impl FactsError {
+    // Exact PlanBudget messages only, never caller/source text. These bounded
+    // static spellings preserve context after the diagnostic ledger is exhausted.
+    fn generic_resource_message(message: &str) -> Option<&'static str> {
+        match message {
+            "generic planning resource limit exceeded" => {
+                Some("generic planning resource limit exceeded")
+            }
+            "generic planning depth limit exceeded" => {
+                Some("generic planning depth limit exceeded")
+            }
+            _ => None,
+        }
+    }
+
     fn make(budget: &PlanBudget, kind: FactsErrorKind, message: &str) -> Self {
         let fallback = || Self {
             kind: FactsErrorKind::Resource,
@@ -101,6 +116,12 @@ impl FactsError {
         Self::make(b, FactsErrorKind::Resource, m)
     }
     pub fn from_message(b: &PlanBudget, m: &str) -> Self {
+        if let Some(message) = Self::generic_resource_message(m) {
+            return Self {
+                kind: FactsErrorKind::Resource,
+                diagnostic: Diagnostic::Static(message),
+            };
+        }
         if b.charge_work(m.len()).is_err() {
             return Self::resource(b, "trait diagnostic classification resource boundary");
         }
@@ -140,13 +161,19 @@ impl FactsError {
         Ok(output)
     }
     /// Consumes an already-paid owned message whenever uniquely held. The ONLY
-    /// unmetered transport exception is the fixed, source-independent resource
-    /// message below (under 80 bytes), approved for legacy String boundaries.
+    /// unmetered transport exceptions are fixed, source-independent resource
+    /// messages below (under 80 bytes), approved for legacy String boundaries.
     /// Diagnostic exhaustion must not erase an error or reset semantic budgets.
     pub fn into_legacy_diagnostic(self, budget: &PlanBudget) -> String {
         const EXHAUSTED: &str =
             "trait planning resource limit exceeded (diagnostic transport exhausted)";
         let Self { kind, diagnostic } = self;
+        let fallback = match &diagnostic {
+            Diagnostic::Static(message) if kind == FactsErrorKind::Resource => {
+                Self::generic_resource_message(message).unwrap_or(EXHAUSTED)
+            }
+            _ => EXHAUSTED,
+        };
         let copied = match diagnostic {
             Diagnostic::Owned(shared) => match Arc::try_unwrap(shared) {
                 Ok(text) => return text,
@@ -167,9 +194,9 @@ impl FactsError {
             Err(_) => {
                 // Best-effort storage accounting, not a renewed allowance. Rich
                 // source/goal text can never enter this constant-size fallback.
-                let _ = budget.retain_bytes(EXHAUSTED.len());
-                let _ = budget.charge_work(EXHAUSTED.len());
-                EXHAUSTED.to_owned()
+                let _ = budget.retain_bytes(fallback.len());
+                let _ = budget.charge_work(fallback.len());
+                fallback.to_owned()
             }
         }
     }
@@ -919,6 +946,9 @@ pub struct CarrierContractView {
     projected: Option<Arc<projected_methods::ProjectedMethodEvidence>>,
     projected_subject: Option<TraitRef>,
     equality_required: Option<Arc<equality::EqualityRequiredMethodEvidence>>,
+    equality_results: Option<Arc<parameter_equality::EqualityResultAuthority>>,
+    result_subject: parameter_equality::EqualityResultSubject,
+    result_signature: Signature,
     budget: PlanBudget,
 }
 impl CarrierContractView {
@@ -988,6 +1018,7 @@ impl CarrierContractView {
                 .world
                 .validate_equality_required_carrier(self, evidence, facts)?;
         }
+        facts.world.validate_equality_results(self, facts)?;
         Ok(())
     }
 }
@@ -2335,17 +2366,8 @@ impl ValidatedTraitWorld {
                 ));
             }
             self.validate_declaration_schema(item.declaration, &item.schema)?;
-            if item
-                .schema
-                .predicates
-                .iter()
-                .any(|p| matches!(p, Predicate::ProjectionEq { .. }))
-            {
-                return Err(FactsError::unsupported(
-                    &self.budget,
-                    "unsupported: equality in trait declaration predicates",
-                ));
-            }
+            // Equality rows are immutable required obligations. Their domain is
+            // checked below and again after the exact caller substitution.
             let projected = self.schema_contains_projection(&item.schema)?;
             if projected {
                 self.validate_projected_required_schema(item)?;
@@ -2900,6 +2922,7 @@ impl ValidatedTraitWorld {
             }
             self.implicit_sized(&h.schema_env, &mut predicates)?;
             self.close_predicates(&mut predicates, &h.schema_env)?;
+            self.validate_declared_equality_domains(&predicates, &h.schema_env)?;
             retain::<PredicateEnv>(&self.budget, 1)?;
             let index = self.environments.len();
             push(
@@ -2931,6 +2954,7 @@ impl ValidatedTraitWorld {
             }
             return self.projected_carrier_contract(call, facts);
         }
+        let result_subject = self.equality_result_subject(subject, facts)?;
         let (declaration, arguments, signature) = match subject {
             SignatureSubject::Body => match &facts.subject {
                 FactsSubject::UniversalCallable(declaration) => {
@@ -3004,6 +3028,7 @@ impl ValidatedTraitWorld {
             retained,
             origin,
             None,
+            result_subject,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -3017,7 +3042,39 @@ impl ValidatedTraitWorld {
         retained: &DeclarationCarriers,
         origin: Arc<ir::SignatureOriginSchema>,
         projected: Option<Arc<projected_methods::ProjectedMethodEvidence>>,
+        result_subject: parameter_equality::EqualityResultSubject,
     ) -> Result<Arc<CarrierContractView>> {
+        let mut view = self.transport_carrier_parts(
+            declaration,
+            arguments,
+            signature,
+            facts,
+            raw,
+            retained,
+            origin,
+            projected,
+            result_subject,
+        )?;
+        self.seal_equality_results(&mut view, facts)?;
+        view.validate_for(facts)?;
+        Ok(Arc::new(view))
+    }
+
+    /// Private structural replay only. A view cannot be published from this
+    /// helper: the publishing wrapper always seals and validates all authority.
+    #[allow(clippy::too_many_arguments)]
+    fn transport_carrier_parts(
+        &self,
+        declaration: DeclId,
+        arguments: Arc<[Ty]>,
+        signature: Signature,
+        facts: &ValidatedFacts,
+        raw: GenericSchema,
+        retained: &DeclarationCarriers,
+        origin: Arc<ir::SignatureOriginSchema>,
+        projected: Option<Arc<projected_methods::ProjectedMethodEvidence>>,
+        result_subject: parameter_equality::EqualityResultSubject,
+    ) -> Result<CarrierContractView> {
         if arguments.len() != raw.env.total_arity() {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -3205,7 +3262,11 @@ impl ValidatedTraitWorld {
         });
         retain::<CarrierContractView>(&self.budget, 1)?;
         let projected_subject = projected.as_ref().map(|proof| proof.goal().clone());
-        let view = Arc::new(CarrierContractView {
+        let fixed = signature.ref_contract.clone();
+        let view = CarrierContractView {
+            result_signature: signature,
+            result_subject,
+            equality_results: None,
             world: self.id,
             registry: self.registry,
             environment: facts.predicates.index,
@@ -3220,7 +3281,7 @@ impl ValidatedTraitWorld {
                 writes: writes.into(),
             },
             origin,
-            fixed: signature.ref_contract,
+            fixed,
             regions: ir::CarrierRegionSchema {
                 constraints: constraints.into(),
             },
@@ -3231,8 +3292,7 @@ impl ValidatedTraitWorld {
             projected_subject,
             equality_required: None,
             budget: self.budget.clone(),
-        });
-        view.validate_for(facts)?;
+        };
         Ok(view)
     }
     fn transport_fixed_region(
@@ -4096,6 +4156,7 @@ impl ValidatedTraitWorld {
                 &Predicate::Implements(self.symbolic_trait_ref(item.trait_decl)?),
             )?;
             self.close_predicates(&mut predicates, &item.schema.env)?;
+            self.validate_declared_equality_domains(&predicates, &item.schema.env)?;
             retain::<PredicateEnv>(&self.budget, 1)?;
             let env = Arc::new(PredicateEnv {
                 world: self.id,
@@ -4552,6 +4613,10 @@ impl ValidatedTraitWorld {
         }
         self.validate_signature_shape(&result.signature, facts.env(), None)?;
         self.validate_predicates(&result.predicates, facts.env(), None)?;
+        // The complete predicate batch, including ordinary membership rows,
+        // already passed metadata validation above. Only equality discharge is
+        // new work here; replaying metadata repeats deep actual-type walks.
+        self.replay_validated_equality_rows(&result.predicates, facts, &mut Vec::new())?;
         Ok(result)
     }
     fn validate_executable_actual(&self, actual: &Ty, env: &GenericEnv) -> Result<()> {
@@ -8259,6 +8324,39 @@ mod tests {
         });
         assert!(
             matches!(ValidatedTraitWorld::build(c.headers,erased,&c.budget),Err(e)if e.kind()==FactsErrorKind::InvalidMetadata)
+        );
+    }
+
+    #[test]
+    fn generic_resource_diagnostic_preserves_context_after_transport_exhaustion() {
+        for operation in 0..3 {
+            let budget = PlanBudget::new(ir::PlanLimits {
+                work: 0,
+                bytes: 0,
+                depth: 0,
+                ..ir::PlanLimits::default()
+            });
+            let result = match operation {
+                0 => budget.charge_work(1),
+                1 => budget.retain_bytes(1),
+                _ => budget.check_depth(1),
+            };
+            let original = result.as_ref().unwrap_err().clone();
+            let failure = budget.first_resource_failure();
+            let error = charged(&budget, result).unwrap_err();
+            assert_eq!(error.kind(), FactsErrorKind::Resource);
+            assert_eq!(error.to_string(), original);
+            assert_eq!(error.into_legacy_diagnostic(&budget), original);
+            assert!(budget.has_resource_failure());
+            assert_eq!(budget.first_resource_failure(), failure);
+            assert!(budget.charge_work(1).is_err());
+        }
+        // Source-controlled suffixes cannot gain the static transport exception.
+        assert!(
+            FactsError::generic_resource_message(
+                "generic planning resource limit exceeded: source-controlled suffix"
+            )
+            .is_none()
         );
     }
 

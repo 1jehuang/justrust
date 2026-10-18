@@ -1,5 +1,51 @@
 # Findings: where agent build time goes
 
+## 2026-10-18: Parameter-valued associated equality and sealed result flow
+
+- Delivered the bounded T: Source<Out = U> vertical in PARAMETER-EQUALITY.md.
+  U is the exact existing caller ParamId, not an implementation-inferred type.
+  Raw shape validation is separate from contextual Sized proof. Original unused,
+  body-only and erased equality rows remain obligations after substitution.
+- Body, direct-call and required-call views now retain private result-domain
+  certificates. Borrow analysis checks them before both empty and nonempty
+  origin unions and at body return. Certificates retain original source-region,
+  fixed-contract and carrier topology, exact subject/env/phase, raw occurrence,
+  RHS binder, result location and normalization dependencies. They do not grant
+  Copy, erase ParamTail or invent a cross-parameter lifetime mapping.
+- The 45-source stock corpus preserves the original 30 and separately measures
+  15 variants removing only their outer allow attribute. Debug and release each
+  pass 180 CLI and 180 graph cells at workers 1/8, with 12 native payload runs.
+  Earlier attribute/parser boundaries remain explicit. Historical equality case
+  37 is promoted to Runtime without changing any of the 46 historical sources.
+- Preserved failed gates rather than treating partial passes as acceptance:
+  20261017-171631039-3717129 exposed 12 closed-equality regressions, repaired by
+  proving a closed RHS without revalidating a rigid LHS under an empty env.
+  20261017-172218683-3764852 exposed the sticky-budget spare-capacity/ZST hole,
+  repaired before allocation reuse. 20261017-172428674-3786186 exposed needless
+  no-equality certificate allocation in the unchanged maximum-argument test.
+  Canonical empty-obligation checks now avoid it without weakening coverage.
+- Full-run 20261017-172735807-3806675 exposed lost generic resource diagnostics.
+  Only the two fixed PlanBudget resource/depth messages survive exhausted
+  diagnostic transport; source-controlled suffixes do not gain that exception.
+  Run 20261017-172925404-3823147 then exposed redundant metadata replay consuming
+  work before the original growing-generic depth boundary. Instantiation now
+  reuses its immediately preceding complete predicate validation, while standalone
+  replay still validates all metadata first. No resource caps or sources changed.
+- Final hosted gates: all-target check 20261017-173118550-3832419; full 2,969
+  tests / 144 binaries 20261017-173121336-3832748; warning-free strict Clippy
+  20261017-173145156-3837574. Focused public authority: 16 passing tests in
+  20261017-173112768-3831272. Original resource-profile test passes in
+  20261017-173103964-3831405. Release native/authority/historical: 24 tests in
+  20261017-173121819-3832900; release private proof tests: 12 in
+  20261017-173222413-3842498. Formatting and diff checks pass.
+- Independent read-only reviews covered certificate omission/tampering, retained
+  topology, exact capacity accounting and metadata-validation reuse. All 44
+  retained failed/successful summaries, including every run cited here, are in
+  data/runs/xps14/2026-10-18-parameter-equality.jsonl. Full Rust, composite symbolic
+  RHSs, associated bounds/defaults and reference-bearing results remain open.
+  These are correctness results, not a compile-time speed claim.
+
+
 ## 2026-10-17: Closed associated equality for rigid generic callers
 
 Delivered the bounded `ASSOCIATED-EQUALITY.md` vertical, not general associated

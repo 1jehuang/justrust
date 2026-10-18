@@ -19,14 +19,15 @@ impl ValidatedFacts {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct DeclaredStageId(WorldId);
+pub(super) struct DeclaredStageId(WorldId);
 pub(super) struct DeclaredCallableContext {
-    world: WorldId,
-    stage: DeclaredStageId,
-    declaration: DeclId,
-    env: Arc<GenericEnv>,
-    predicates: Arc<[Predicate]>,
-    raw: GenericSchema,
+    pub(super) world: WorldId,
+    pub(super) stage: DeclaredStageId,
+    pub(super) declaration: DeclId,
+    pub(super) env: Arc<GenericEnv>,
+    pub(super) predicates: Arc<[Predicate]>,
+    pub(super) raw: GenericSchema,
+    pub(super) origins: Arc<[super::parameter_equality::EqualityObligationOrigin]>,
     reductions: Mutex<Vec<DeclaredEqualityReduction>>,
 }
 
@@ -77,7 +78,12 @@ impl NormalizedProjectionEquality {
                 "projection equality replay changed world, environment, phase or projection",
             ));
         }
-        world.validate_equality_domain(projection, &evidence.rhs, facts.env())?;
+        world.validate_equality_domain_in(
+            projection,
+            &evidence.rhs,
+            ProofContext::from_facts(facts),
+            &mut Vec::new(),
+        )?;
         world.compare_predicate_rows(&evidence.rows, &facts.predicates.predicates)?;
         let actual = world
             .declared_equality_rhs(projection, &facts.predicates.predicates, facts.env())?
@@ -126,16 +132,16 @@ pub(super) struct EqualityRequiredMethodEvidence {
     world: WorldId,
     environment: usize,
     phase: FactsPhase,
-    call: TraitCall,
-    raw: GenericSchema,
-    arguments: Arc<[Ty]>,
-    signature: Signature,
-    source_regions: Arc<ir::SourceRegionEnv>,
-    dependencies: Arc<[(ir::AssociatedTypeProjection, ProjectionReduction)]>,
+    pub(super) call: TraitCall,
+    pub(super) raw: GenericSchema,
+    pub(super) arguments: Arc<[Ty]>,
+    pub(super) signature: Signature,
+    pub(super) source_regions: Arc<ir::SourceRegionEnv>,
+    pub(super) dependencies: Arc<[(ir::AssociatedTypeProjection, ProjectionReduction)]>,
 }
 pub(super) struct EqualityRequiredApplication {
     pub(super) instantiated: InstantiatedSchema,
-    evidence: Arc<EqualityRequiredMethodEvidence>,
+    pub(super) evidence: Arc<EqualityRequiredMethodEvidence>,
 }
 
 impl ValidatedTraitWorld {
@@ -157,7 +163,8 @@ impl ValidatedTraitWorld {
                 "final equality changed declaring binder provenance",
             ));
         }
-        self.validate_predicates(&facts.predicates.predicates, facts.env(), None)
+        self.validate_predicates(&facts.predicates.predicates, facts.env(), None)?;
+        self.validate_declared_equality_domains(&facts.predicates.predicates, facts.env())
     }
     pub(super) fn validate_predicate_metadata(
         &self,
@@ -180,6 +187,7 @@ impl ValidatedTraitWorld {
         for context in &self.declared_callables {
             let env = self.predicate_env(context.declaration)?;
             self.validate_predicates(&env.predicates, &env.env, None)?;
+            self.validate_declared_equality_domains(&env.predicates, &env.env)?;
             let mut canonical = Vec::new();
             for row in context.predicates.iter() {
                 self.append_predicate(&mut canonical, row)?;
@@ -316,7 +324,7 @@ impl ValidatedTraitWorld {
         let mut dependencies = Vec::new();
         let mut reduce = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
             let proof = self.normalize_projection_for_facts(projection, facts)?;
-            self.validate_equality_domain(projection, proof.ty(), facts.env())?;
+            self.validate_equality_domain_in(projection, proof.ty(), context, &mut Vec::new())?;
             let normal = proof.ty().clone();
             push(&self.budget, &mut dependencies, (projection.clone(), proof))?;
             Ok(normal)
@@ -442,7 +450,13 @@ impl ValidatedTraitWorld {
             push(&self.budget, &mut arguments, ty)?;
         }
         retain::<CarrierContractView>(&self.budget, 1)?;
-        let view = Arc::new(CarrierContractView {
+        let fixed = signature.ref_contract.clone();
+        let mut view = CarrierContractView {
+            result_signature: signature,
+            result_subject: super::parameter_equality::EqualityResultSubject::Required(
+                call.clone(),
+            ),
+            equality_results: None,
             world: self.id,
             registry: self.registry,
             environment: facts.predicates.index,
@@ -453,7 +467,7 @@ impl ValidatedTraitWorld {
             original_contract: contract.clone(),
             contract,
             origin,
-            fixed: signature.ref_contract,
+            fixed,
             regions,
             source_regions,
             components: components.into(),
@@ -462,9 +476,10 @@ impl ValidatedTraitWorld {
             projected_subject: Some(call.trait_ref.clone()),
             equality_required: Some(evidence),
             budget: self.budget.clone(),
-        });
+        };
+        self.seal_equality_results(&mut view, facts)?;
         view.validate_for(facts)?;
-        Ok(view)
+        Ok(Arc::new(view))
     }
     pub(super) fn validate_equality_required_carrier(
         &self,
@@ -588,27 +603,81 @@ impl ValidatedTraitWorld {
         self.check_normalization_budget()?;
         self.validate_ty_metadata_in(&self.projection_type(projection)?, env, 0)?;
         self.validate_ty_metadata_in(rhs, env, 0)?;
+        // Raw admission is solver-free. Metadata, including rejected children,
+        // has already been validated above.
+        if matches!(rhs, Ty::Param(_)) {
+            if self.goal_is_closed(&projection.trait_ref, env)? {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: closed equality cannot infer a rigid RHS parameter",
+                ));
+            }
+            return Ok(());
+        }
         if self.type_contains_projection(rhs, 0)? || !self.raw_associated_ty_is_closed(rhs, 0)? {
             return Err(FactsError::unsupported(
                 &self.budget,
-                "unsupported: equality RHS must already be closed and projection-free",
+                "unsupported: equality RHS must be closed or one authoritative parameter",
             ));
         }
         self.reject_projected_references(rhs, 0)?;
-        self.validate_ty(rhs, env, None, true, 0)?;
+        self.validate_ty(rhs, env, None, true, 0)
+    }
+
+    pub(super) fn validate_equality_domain_in(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        rhs: &Ty,
+        context: ProofContext<'_>,
+        active: &mut Vec<GoalKey>,
+    ) -> Result<()> {
+        self.validate_equality_domain(projection, rhs, context.env())?;
+        self.require_equality_rhs_sized(rhs, context, active)
+    }
+
+    fn require_equality_rhs_sized(
+        &self,
+        rhs: &Ty,
+        context: ProofContext<'_>,
+        active: &mut Vec<GoalKey>,
+    ) -> Result<()> {
         let sized = Predicate::Implements(TraitRef {
             declaration: self.catalog.id(CatalogItem::Sized),
             self_ty: rhs.clone(),
             args: Arc::from([]),
         });
-        self.require_in(
-            &sized,
-            ProofContext {
-                predicates: &self.empty,
-                phase: FactsPhase::Closed,
-            },
-            &mut Vec::new(),
-        )?;
+        self.require_in(&sized, context, active)?;
+        Ok(())
+    }
+
+    pub(super) fn validate_declared_equality_domains(
+        &self,
+        rows: &[Predicate],
+        env: &GenericEnv,
+    ) -> Result<()> {
+        for row in rows {
+            let Predicate::ProjectionEq { projection, ty } = row else {
+                continue;
+            };
+            self.validate_equality_domain(projection, ty, env)?;
+            if let Ty::Param(parameter) = ty {
+                if !self.predicates_prove_sized(*parameter, rows)? {
+                    return Err(FactsError::unproved(
+                        &self.budget,
+                        "declared equality RHS lacks genuine contextual Sized evidence",
+                    ));
+                }
+            } else {
+                self.require_equality_rhs_sized(
+                    ty,
+                    ProofContext {
+                        predicates: &self.empty,
+                        phase: FactsPhase::Closed,
+                    },
+                    &mut Vec::new(),
+                )?;
+            }
+        }
         Ok(())
     }
     pub(super) fn validate_equality_conflicts(&self, rows: &[Predicate]) -> Result<()> {
@@ -721,7 +790,7 @@ impl ValidatedTraitWorld {
         active: &mut Vec<GoalKey>,
     ) -> Result<ProofOutcome> {
         self.check_context(context)?;
-        self.validate_equality_domain(projection, rhs, context.env())?;
+        self.validate_equality_domain_in(projection, rhs, context, active)?;
         let goal = Predicate::ProjectionEq {
             projection: projection.clone(),
             ty: rhs.clone(),
@@ -730,7 +799,7 @@ impl ValidatedTraitWorld {
             let normalization =
                 self.normalize_closed_equality_projection(projection, context, active)?;
             let normal = normalization.ty();
-            self.validate_equality_domain(projection, normal, context.env())?;
+            self.validate_equality_domain_in(projection, normal, context, active)?;
             if !self.eq_ty(normal, rhs, 0)? {
                 return Ok(ProofOutcome::NotProven);
             }
@@ -758,8 +827,13 @@ impl ValidatedTraitWorld {
     pub(super) fn build_declared_callable_contexts(&mut self) -> Result<()> {
         for callable in self.headers.callables.iter() {
             self.validate_declaration_schema(callable.declaration, &callable.schema)?;
-            self.validate_predicates(&callable.schema.predicates, &callable.schema.env, None)?;
             let mut rows = Vec::new();
+            let mut origins = Vec::new();
+            self.retain_equality_origins(
+                callable.declaration,
+                &callable.schema.predicates,
+                &mut origins,
+            )?;
             // Retain occurrences until all supplied rows have been validated.
             for row in callable.schema.predicates.iter() {
                 push(&self.budget, &mut rows, row.clone())?;
@@ -767,10 +841,10 @@ impl ValidatedTraitWorld {
             let owner = self.info(callable.declaration)?.owner;
             for implementation in self.headers.impls.iter() {
                 if Some(implementation.declaration) == owner {
-                    self.validate_predicates(
+                    self.retain_equality_origins(
+                        implementation.declaration,
                         &implementation.predicates,
-                        &callable.schema.env,
-                        None,
+                        &mut origins,
                     )?;
                     for row in implementation.predicates.iter() {
                         push(&self.budget, &mut rows, row.clone())?;
@@ -790,6 +864,7 @@ impl ValidatedTraitWorld {
             self.implicit_sized(&callable.schema.env, &mut rows)?;
             self.validate_predicates(&rows, &callable.schema.env, None)?;
             self.close_predicates(&mut rows, &callable.schema.env)?;
+            self.validate_declared_equality_domains(&rows, &callable.schema.env)?;
             retain::<DeclaredCallableContext>(&self.budget, 1)?;
             push(
                 &self.budget,
@@ -801,13 +876,17 @@ impl ValidatedTraitWorld {
                     env: callable.schema.env.clone(),
                     predicates: rows.into(),
                     raw: clone_schema(&callable.schema, &self.budget)?,
+                    origins: super::parameter_equality::result_slice(&self.budget, origins)?,
                     reductions: Mutex::new(Vec::new()),
                 },
             )?;
         }
         Ok(())
     }
-    fn declared_callable_context(&self, declaration: DeclId) -> Result<&DeclaredCallableContext> {
+    pub(super) fn declared_callable_context(
+        &self,
+        declaration: DeclId,
+    ) -> Result<&DeclaredCallableContext> {
         for context in &self.declared_callables {
             charged(&self.budget, self.budget.charge_work(1))?;
             if context.declaration == declaration {

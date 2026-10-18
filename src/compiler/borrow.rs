@@ -586,6 +586,54 @@ fn key_channel(ty: &Ty) -> Option<CellChannel> {
     }
 }
 
+fn result_flow_problem(
+    view: Option<&super::traits::CarrierContractView>,
+    facts: Option<&super::traits::ValidatedFacts>,
+    subject: ir::SignatureSubject<'_>,
+    signature: &ir::Signature,
+    location: &CarrierLocation,
+) -> Result<Option<Problem>, Exhausted> {
+    let Some(facts) = facts else {
+        // Concrete legacy fixtures have no declaration authority to replay.
+        return Ok(None);
+    };
+    let Some(view) = view else {
+        return Ok(Some(Problem::Invalid(
+            "carrier result has no validated declaration view".into(),
+        )));
+    };
+    match view.validate_result_flow(facts, subject, signature, location) {
+        Ok(()) => Ok(None),
+        Err(error) if error.is_resource() => Err(Exhausted),
+        Err(error) => Ok(Some(Problem::Invalid(
+            error
+                .into_diagnostic(facts.budget())
+                .map_err(|_| Exhausted)?,
+        ))),
+    }
+}
+
+fn body_signature(f: &cfg::Function, budget: &mut Budget) -> Result<ir::Signature, Exhausted> {
+    budget.spend(f.params.len() + 1)?;
+    budget.reserve_bytes(mul(f.params.len(), size_of::<Ty>())?)?;
+    let mut params = Vec::new();
+    params
+        .try_reserve_exact(f.params.len())
+        .map_err(|_| Exhausted)?;
+    budget.reserve_bytes(mul(
+        params.capacity().saturating_sub(f.params.len()),
+        size_of::<Ty>(),
+    )?)?;
+    for local in &f.params {
+        params.push(f.locals.get(local.0).ok_or(Exhausted)?.ty.clone());
+    }
+    Ok(ir::Signature {
+        params,
+        result: f.result.clone(),
+        ref_contract: f.ref_contract.clone(),
+    })
+}
+
 /// The sole cell-state builder feeds the existing Plan queries, conflict and
 /// activation logic. Families are value relations, never fabricated loans.
 struct CarrierBuilder<'a, 'b> {
@@ -610,6 +658,7 @@ struct CarrierBuilder<'a, 'b> {
     dependencies: Vec<Set>,
     calls: Vec<Option<Arc<super::traits::CarrierContractView>>>,
     body: Option<Arc<super::traits::CarrierContractView>>,
+    body_signature: Option<ir::Signature>,
     call_rows: Vec<Vec<(CarrierLocation, ReferenceOriginId)>>,
     function: Option<Arc<cfg::Function>>,
     authority: Option<Arc<super::traits::ValidatedFacts>>,
@@ -1866,6 +1915,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             dependencies: vec![Set::new(n); n],
             calls: vec![None; f.blocks.len()],
             body: None,
+            body_signature: None,
             call_rows,
             function: None,
             authority: None,
@@ -1984,8 +2034,26 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             .reserve_bytes(mul(builder.cells.len().div_ceil(64), size_of::<u64>())?)?;
         builder.initial.overwritten = Set::new(builder.cells.len());
         if let FactsCtx::Validated(authority) = facts {
+            let signature = body_signature(f, builder.budget)?;
             match authority.carrier_contract(ir::SignatureSubject::Body) {
-                Ok(view) => builder.body = Some(view),
+                Ok(view) => {
+                    let mut valid = true;
+                    for result in view.contract().results.iter() {
+                        if let Some(problem) = result_flow_problem(
+                            Some(&view),
+                            Some(authority),
+                            ir::SignatureSubject::Body,
+                            &signature,
+                            &result.location,
+                        )? {
+                            builder.problem(f.entry, None, problem)?;
+                            valid = false;
+                        }
+                    }
+                    if valid {
+                        builder.body = Some(view);
+                    }
+                }
                 Err(error) if error.is_resource() => return Err(Exhausted),
                 Err(error) => builder.problem(
                     f.entry,
@@ -1998,9 +2066,29 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                 )?,
             }
             for (index, block) in f.blocks.iter().enumerate() {
-                if let Terminator::Call { target, .. } = &block.terminator.value {
+                if let Terminator::Call {
+                    target, signature, ..
+                } = &block.terminator.value
+                {
                     match authority.carrier_contract(ir::SignatureSubject::Call(target)) {
-                        Ok(view) => builder.calls[index] = Some(view),
+                        Ok(view) => {
+                            let mut valid = true;
+                            for result in view.contract().results.iter() {
+                                if let Some(problem) = result_flow_problem(
+                                    Some(&view),
+                                    Some(authority),
+                                    ir::SignatureSubject::Call(target),
+                                    signature,
+                                    &result.location,
+                                )? {
+                                    builder.problem(BlockId(index), None, problem)?;
+                                    valid = false;
+                                }
+                            }
+                            if valid {
+                                builder.calls[index] = Some(view);
+                            }
+                        }
                         Err(error) if error.is_resource() => return Err(Exhausted),
                         Err(error) => builder.problem(
                             BlockId(index),
@@ -2014,6 +2102,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                     }
                 }
             }
+            builder.body_signature = Some(signature);
         }
         Ok(builder)
     }
@@ -2469,8 +2558,28 @@ impl CarrierBuilder<'_, '_> {
         let mut result_values = Vec::new();
         let rows = self.call_rows[block.0].clone();
         let view = self.calls[block.0].clone();
+        let authority = self.authority.clone();
+        let facts = authority.as_deref().or(self.facts.validated());
+        if facts.is_some() && view.is_none() {
+            self.problem(
+                block,
+                None,
+                Problem::Invalid("call result has no validated declaration view".into()),
+            )?;
+            return Ok(());
+        }
         if let Some(view) = &view {
             for result in view.contract().results.iter() {
+                if let Some(problem) = result_flow_problem(
+                    Some(view),
+                    facts,
+                    ir::SignatureSubject::Call(&target),
+                    &signature,
+                    &result.location,
+                )? {
+                    self.problem(block, None, problem)?;
+                    return Ok(());
+                }
                 // Return rows are entry relations. Pointee rows are not new
                 // owned values and remain current-cell views of their anchors.
                 if value_projection(&result.location).contains(&Projection::Deref) {
@@ -2485,6 +2594,16 @@ impl CarrierBuilder<'_, '_> {
             }
         }
         for (location, row) in rows {
+            if let Some(problem) = result_flow_problem(
+                view.as_deref(),
+                facts,
+                ir::SignatureSubject::Call(&target),
+                &signature,
+                &location,
+            )? {
+                self.problem(block, None, problem)?;
+                return Ok(());
+            }
             let mut value = self.empty_origins()?;
             let mut fixed_contract = false;
             if location.path.0.is_empty()
@@ -3604,6 +3723,20 @@ impl CarrierBuilder<'_, '_> {
                 births[origin.0] = Some(block);
             }
         }
+        let authority = if let Some(authority) = self.authority {
+            Some(authority)
+        } else if let Some(facts) = self.facts.validated() {
+            // The compatibility entry point borrows facts instead of an Arc.
+            // Preserve that same sealed authority for return consumers too.
+            self.budget.reserve_bytes(add(
+                size_of::<super::traits::ValidatedFacts>(),
+                2 * size_of::<usize>(),
+            )?)?;
+            self.budget.nodes(1)?;
+            Some(Arc::new(facts.clone()))
+        } else {
+            None
+        };
         let mut plan = Plan {
             offsets,
             points,
@@ -3619,6 +3752,8 @@ impl CarrierBuilder<'_, '_> {
             original_locals: self.original_locals,
             family_inputs: self.family_inputs,
             body: self.body,
+            body_signature: self.body_signature,
+            authority,
             effects,
             problems: self.problems,
             bytes: self
@@ -3836,6 +3971,8 @@ pub(super) struct Plan {
     original_locals: Vec<Ty>,
     family_inputs: Vec<FamilyOrigin>,
     body: Option<Arc<super::traits::CarrierContractView>>,
+    body_signature: Option<ir::Signature>,
+    authority: Option<Arc<super::traits::ValidatedFacts>>,
     effects: Option<Arc<CarrierEffects>>,
     pub problems: Vec<(BlockId, Option<usize>, Problem)>,
     pub bytes: usize,
@@ -4441,8 +4578,71 @@ impl Plan {
         facts: FactsCtx<'_>,
         budget: &mut Budget,
     ) -> Result<Option<Problem>, Exhausted> {
+        let authority = self.authority.as_deref().or(facts.validated());
+        if authority.is_some() && self.body.is_none() {
+            return Ok(Some(Problem::Invalid(
+                "body result has no validated declaration view".into(),
+            )));
+        }
         if let Some(body) = &self.body {
+            let Some(signature) = &self.body_signature else {
+                return Ok(Some(Problem::Invalid(
+                    "body result lost its original signature".into(),
+                )));
+            };
+            if let Some(authority) = authority {
+                // Reuse the charged snapshot, but never authorize a different
+                // CFG signature with it. Types use the bounded world comparator.
+                let same = (|| -> Result<bool, super::traits::FactsError> {
+                    if signature.params.len() != f.params.len()
+                        || !Arc::ptr_eq(&signature.ref_contract, &f.ref_contract)
+                        || !authority.world().types_equal(
+                            std::slice::from_ref(&signature.result),
+                            std::slice::from_ref(&f.result),
+                        )?
+                    {
+                        return Ok(false);
+                    }
+                    for (expected, local) in signature.params.iter().zip(&f.params) {
+                        let Some(actual) = f.locals.get(local.0) else {
+                            return Ok(false);
+                        };
+                        if !authority.world().types_equal(
+                            std::slice::from_ref(expected),
+                            std::slice::from_ref(&actual.ty),
+                        )? {
+                            return Ok(false);
+                        }
+                    }
+                    Ok(true)
+                })();
+                match same {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return Ok(Some(Problem::Invalid(
+                            "body result changed its original CFG signature".into(),
+                        )));
+                    }
+                    Err(error) if error.is_resource() => return Err(Exhausted),
+                    Err(error) => {
+                        return Ok(Some(Problem::Invalid(
+                            error
+                                .into_diagnostic(authority.budget())
+                                .map_err(|_| Exhausted)?,
+                        )));
+                    }
+                }
+            }
             for row in body.contract().results.iter() {
+                if let Some(problem) = result_flow_problem(
+                    Some(body),
+                    authority,
+                    ir::SignatureSubject::Body,
+                    signature,
+                    &row.location,
+                )? {
+                    return Ok(Some(problem));
+                }
                 let projection = value_projection(&row.location);
                 // Returning a handle transports its owned carrier components,
                 // not the current contents of its pointee. In particular an
@@ -4798,5 +4998,207 @@ impl Plan {
             }
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod parameter_equality_tests {
+    use super::*;
+    use crate::compiler::{frontend, ownership};
+
+    fn source_template(source: &str, index: usize) -> cfg::TemplateCfg {
+        let program = frontend::parse(source).unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(index).unwrap();
+        let frontend::PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("expected genuine source publication")
+        };
+        cfg::lower_source_template(&publication, &budget).unwrap()
+    }
+
+    #[test]
+    fn parameter_equality_call_guards_cover_empty_and_nonempty_sources() {
+        for (body, has_sources) in [
+            ("<T as Source>::get(x)", false),
+            ("<T as Source>::pass(x, fallback)", true),
+        ] {
+            let params = if has_sources { "x:T,fallback:U" } else { "x:T" };
+            let source = format!(
+                "trait Source:Sized{{type Out;fn get(self)->Self::Out;\
+                 fn pass(self,value:Self::Out)->Self::Out;}}\
+                 fn probe<T,U>({params})->U where T:Source<Out=U>{{{body}}}\
+                 fn main(){{}}"
+            );
+            let template = source_template(&source, 0);
+            let facts = template.facts();
+            let body_view = facts.carrier_contract(ir::SignatureSubject::Body).unwrap();
+            assert_eq!(
+                !body_view.contract().results[0].sources.is_empty(),
+                has_sources
+            );
+            let function = template.function();
+            let (target, signature) = function
+                .blocks
+                .iter()
+                .find_map(|block| match &block.terminator.value {
+                    Terminator::Call {
+                        target, signature, ..
+                    } => Some((target, signature)),
+                    _ => None,
+                })
+                .unwrap();
+            let view = facts
+                .carrier_contract(ir::SignatureSubject::Call(target))
+                .unwrap();
+            let row = view.contract().results.first().unwrap();
+            assert_eq!(!row.sources.is_empty(), has_sources);
+            assert!(matches!(signature.result, Ty::Param(_)));
+            assert_ne!(signature.params[0], signature.result);
+            assert!(
+                result_flow_problem(
+                    Some(&view),
+                    Some(facts),
+                    ir::SignatureSubject::Call(target),
+                    signature,
+                    &row.location,
+                )
+                .unwrap()
+                .is_none()
+            );
+            assert!(matches!(
+                result_flow_problem(
+                    None,
+                    Some(facts),
+                    ir::SignatureSubject::Call(target),
+                    signature,
+                    &row.location,
+                )
+                .unwrap(),
+                Some(Problem::Invalid(_))
+            ));
+            assert!(matches!(
+                result_flow_problem(
+                    Some(&view),
+                    Some(facts),
+                    ir::SignatureSubject::Body,
+                    signature,
+                    &row.location,
+                )
+                .unwrap(),
+                Some(Problem::Invalid(_))
+            ));
+            let mut wrong_signature = signature.clone();
+            wrong_signature.result = Ty::Bool;
+            assert!(matches!(
+                result_flow_problem(
+                    Some(&view),
+                    Some(facts),
+                    ir::SignatureSubject::Call(target),
+                    &wrong_signature,
+                    &row.location,
+                )
+                .unwrap(),
+                Some(Problem::Invalid(_))
+            ));
+            let mut wrong_location = row.location.clone();
+            wrong_location.path = ir::CarrierPath(Arc::from([ir::CarrierStep::Field(0)]));
+            assert!(matches!(
+                result_flow_problem(
+                    Some(&view),
+                    Some(facts),
+                    ir::SignatureSubject::Call(target),
+                    signature,
+                    &wrong_location,
+                )
+                .unwrap(),
+                Some(Problem::Invalid(_))
+            ));
+            // These are universally checked source bodies with no selected impl.
+            // The pass case deliberately retains its conservative U input union.
+            ownership::verify_template(template).unwrap();
+        }
+    }
+
+    #[test]
+    fn parameter_equality_direct_forwarding_and_aggregate_returns_keep_u_tail() {
+        for (result, expression) in [
+            ("U", "get::<T,U>(x)"),
+            ("(U,i32)", "(get::<T,U>(x),7)"),
+            ("[U;1]", "[get::<T,U>(x)]"),
+        ] {
+            let source = format!(
+                "trait Source:Sized{{type Out;fn get(self)->Self::Out;}}\
+                 fn get<T,U>(x:T)->U where T:Source<Out=U>{{<T as Source>::get(x)}}\
+                 fn forward<T,U>(x:T,unrelated:&i32)->{result} where T:Source<Out=U>{{{expression}}}\
+                 fn main(){{}}"
+            );
+            let template = source_template(&source, 1);
+            let facts = template.facts();
+            let body = facts.carrier_contract(ir::SignatureSubject::Body).unwrap();
+            assert_eq!(body.contract().results.len(), 1);
+            let result = &body.contract().results[0];
+            assert!(matches!(
+                result.location.channel,
+                CarrierChannel::ParamTail { .. }
+            ));
+            assert!(result.sources.is_empty());
+            let function = template.function();
+            let (target, signature) = function
+                .blocks
+                .iter()
+                .find_map(|block| match &block.terminator.value {
+                    Terminator::Call {
+                        target, signature, ..
+                    } => Some((target, signature)),
+                    _ => None,
+                })
+                .unwrap();
+            assert!(matches!(target, ir::Callee::Direct(_)));
+            let view = facts
+                .carrier_contract(ir::SignatureSubject::Call(target))
+                .unwrap();
+            assert!(view.contract().results[0].sources.is_empty());
+            assert!(
+                result_flow_problem(
+                    Some(&view),
+                    Some(facts),
+                    ir::SignatureSubject::Call(target),
+                    signature,
+                    &view.contract().results[0].location,
+                )
+                .unwrap()
+                .is_none()
+            );
+            ownership::verify_template(template).unwrap();
+        }
+    }
+
+    #[test]
+    fn parameter_equality_self_produced_u_does_not_acquire_copy_permission() {
+        for (bound, succeeds) in [("U", false), ("U:Copy", true)] {
+            let source = format!(
+                "trait Source:Sized{{type Out;fn get(self)->Self::Out;}}\
+                 fn duplicate<T,{bound}>(x:T)->(U,U) where T:Source<Out=U>{{\
+                     let value=<T as Source>::get(x);(value,value)\
+                 }}fn main(){{}}"
+            );
+            let template = source_template(&source, 0);
+            let checked = ownership::verify_template(template);
+            assert_eq!(checked.is_ok(), succeeds, "{source}: {checked:?}");
+            if let Err(analysis) = checked {
+                assert!(analysis.complete);
+                assert!(
+                    analysis.diagnostics.iter().any(|diagnostic| matches!(
+                        diagnostic.kind,
+                        ownership::ErrorKind::ReadNotDefinitelyInitialized
+                    )),
+                    "{:?}",
+                    analysis.diagnostics
+                );
+            }
+        }
     }
 }

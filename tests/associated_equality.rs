@@ -40,7 +40,6 @@ enum Phase {
     ExternalExit,
     ParseProjection,
     Conflict,
-    ParameterRhs,
     AssociatedBounds,
     StaticLifetime,
 }
@@ -652,8 +651,8 @@ fn main() { if forward::<S, i32>(S) == 83 { println!("ok"); } }
             source_fingerprint: 13320683244852603914,
             stock_diagnostic: None,
             stdout: b"ok\n",
-            outcome: Outcome::Unsupported,
-            phase: Phase::ParameterRhs,
+            outcome: Outcome::Runtime,
+            phase: Phase::None,
         },
         // Source SHA256 08f7337bd6e0c0dc93a39a8b64de965d7907819c9899c63771c67cf4c0921f56
         Case {
@@ -846,7 +845,7 @@ fn associated_equality_frozen_stock_partition_and_source_bytes() {
             case.name
         );
     }
-    assert_eq!(partition, [22, 6, 17, 1]);
+    assert_eq!(partition, [23, 6, 16, 1]);
     assert_eq!(stock, [39, 7]);
     assert_eq!(
         cases[..10]
@@ -1003,7 +1002,6 @@ fn assert_native_diagnostic(case: &Case, diagnostic: &str) {
             "unsupported: associated type projections are unsupported, found \"::\""
         }
         Phase::Conflict => "conflicting declared projection equalities",
-        Phase::ParameterRhs => "equality RHS must already be closed and projection-free",
         Phase::AssociatedBounds => "associated type bounds and defaults are unsupported",
         // This source is preserved, not rewritten to bypass its earlier lifetime parser boundary.
         Phase::StaticLifetime => "static and inferred lifetimes are unsupported",
@@ -1180,13 +1178,13 @@ fn native_associated_equality_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(cells, 184);
-    assert_eq!(modes, [[44, 44], [12, 12], [34, 34], [2, 2]]);
+    assert_eq!(modes, [[46, 46], [12, 12], [32, 32], [2, 2]]);
     failures.check("native CLI successful runtime count", || {
-        assert_eq!(runtimes, 44)
+        assert_eq!(runtimes, 46)
     });
     failures.finish();
     eprintln!(
-        "NATIVE ASSOCIATED EQUALITY:184 CLI cells,modes{modes:?},44 native ELF payloads;22 Runtime,6 Invalid,17 stock-valid Unsupported,1 stock-invalid Unsupported"
+        "NATIVE ASSOCIATED EQUALITY:184 CLI cells,modes{modes:?},46 native ELF payloads;23 Runtime,6 Invalid,16 stock-valid Unsupported,1 stock-invalid Unsupported"
     );
 }
 fn evaluated_once(report: &Report, kind: u32, index: usize, case: &Case) {
@@ -1375,7 +1373,7 @@ fn all_body_graph() {
             }
         }
     }
-    assert_eq!(modes, [[44, 44], [12, 12], [34, 34], [2, 2]]);
+    assert_eq!(modes, [[46, 46], [12, 12], [32, 32], [2, 2]]);
     failures.check("native graph unused universal rejection count", || {
         assert_eq!(unused_failures, 8)
     });
