@@ -67,8 +67,8 @@ may only move toward the target:
 | Out-of-graph state primitives | `out_of_graph_state.baseline` (compiler/mod.rs side slots removed 2026-10-18; global budget mutexes and ID counters remain) | none |
 | Whole-program nodes | `source`, `parse`, `resolve`, `signatures`, `effects_ready`, `mono_plan`, `concrete_proofs` | only `check`, `build` |
 | Leaf closure growth 16 to 32 | 1.481 (ceiling 1.50) | 1.0 |
-| Work growth 16 to 32 | 1.997 (ceiling 2.05, was 3.807) | about 2.0 |
-| Largest compiling flat program | 450 functions (480 fails: one task, main, exceeds its per-task work limit; was 64/100) | no fixed ceiling |
+| Work growth 16 to 32 | 1.866 (ceiling 1.92, was 3.807) | about 2.0 |
+| Largest compiling flat program | 540 functions (570 fails: main's dense per-block ownership bitsets exceed its per-task byte limit; was 64/100) | no fixed ceiling |
 
 When a change improves a number, the tests fail until it is recorded:
 

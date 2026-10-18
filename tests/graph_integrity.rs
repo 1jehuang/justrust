@@ -653,14 +653,14 @@ const LEAF_CLOSURE_GROWTH_CEILING: f64 = 1.50;
 
 /// Ceiling on planning work growth from 16 to 32 functions. Linear compilation
 /// is about 2.0; quadratic is 4.0. Target: at most 2.2. May only go down.
-const WORK_GROWTH_CEILING: f64 = 2.05;
+const WORK_GROWTH_CEILING: f64 = 1.92;
 
 /// The largest generated program that must compile. Raise as fixed; the
 /// architectural target is no fixed program-size ceiling at all.
-const REQUIRED_FUNCTIONS: usize = 450;
+const REQUIRED_FUNCTIONS: usize = 540;
 /// Known to fail today because whole-compilation budgets cap total program
 /// size. When it compiles, this test fails until the constant is raised.
-const KNOWN_FAILING_FUNCTIONS: Option<usize> = Some(480);
+const KNOWN_FAILING_FUNCTIONS: Option<usize> = Some(570);
 
 struct Graph {
     keys: HashMap<u64, (String, Vec<u64>)>,

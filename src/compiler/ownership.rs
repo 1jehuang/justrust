@@ -2018,7 +2018,51 @@ struct State {
     ever_written: Bits,
     /// Variant index or usize::MAX (unknown), indexed by actual enum path.
     /// Owner identity is fixed by the structurally verified path type.
-    selected: Vec<usize>,
+    selected: Selected,
+}
+/// Known variant selections, sparse and sorted by path node. Absence means
+/// unknown (`usize::MAX`). Dense per-path storage made every block state copy
+/// and merge O(paths) even when no enum is involved, so analysis of a large
+/// function was O(blocks x paths).
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+struct Selected(Vec<(usize, usize)>);
+impl std::ops::Index<usize> for Selected {
+    type Output = usize;
+    fn index(&self, node: usize) -> &usize {
+        match self.0.binary_search_by_key(&node, |(n, _)| *n) {
+            Ok(position) => &self.0[position].1,
+            Err(_) => &usize::MAX,
+        }
+    }
+}
+impl Selected {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn set(&mut self, node: usize, variant: usize) {
+        match self.0.binary_search_by_key(&node, |(n, _)| *n) {
+            Ok(position) if variant == usize::MAX => {
+                self.0.remove(position);
+            }
+            Ok(position) => self.0[position].1 = variant,
+            Err(_) if variant == usize::MAX => {}
+            Err(position) => self.0.insert(position, (node, variant)),
+        }
+    }
+    /// Forget every selection in the preorder interval `[start, end)`.
+    /// Returns how many were known.
+    fn clear_range(&mut self, start: usize, end: usize) -> usize {
+        let from = self.0.partition_point(|(n, _)| *n < start);
+        let to = self.0.partition_point(|(n, _)| *n < end);
+        self.0.drain(from..to).count()
+    }
+    /// Meet: keep only selections both sides agree on. Returns whether
+    /// `self` changed.
+    fn meet(&mut self, other: &Self) -> bool {
+        let before = self.0.len();
+        self.0.retain(|(node, variant)| other[*node] == *variant);
+        self.0.len() != before
+    }
 }
 impl State {
     fn new(locals: usize, paths: usize) -> Self {
@@ -2028,7 +2072,7 @@ impl State {
             must_init: Bits::new(paths),
             may_init: Bits::new(paths),
             ever_written: Bits::new(paths),
-            selected: vec![usize::MAX; paths],
+            selected: Selected::default(),
         }
     }
     fn words(&self) -> usize {
@@ -2043,12 +2087,7 @@ impl State {
             .ever_written
             .merge(&other.ever_written, false, budget)?;
         budget.spend(self.selected.len())?;
-        for (ours, theirs) in self.selected.iter_mut().zip(&other.selected) {
-            if *ours != *theirs && *ours != usize::MAX {
-                *ours = usize::MAX;
-                changed = true;
-            }
-        }
+        changed |= self.selected.meet(&other.selected);
         Ok(changed)
     }
 }
@@ -2276,14 +2315,10 @@ impl Transfer<'_> {
     }
     fn kill_proofs(&mut self, state: &mut State, node: usize) -> Result<(), Exhausted> {
         let end = self.paths.nodes[node].end;
-        self.budget.spend(end - node)?;
-        for selected in &mut state.selected[node..end] {
-            if *selected != usize::MAX {
-                if let Some(report) = &mut self.report {
-                    report.stats.variant_proofs_killed += 1;
-                }
-                *selected = usize::MAX;
-            }
+        self.budget.spend(state.selected.len() + 1)?;
+        let killed = state.selected.clear_range(node, end);
+        if let Some(report) = &mut self.report {
+            report.stats.variant_proofs_killed += killed;
         }
         Ok(())
     }
@@ -3073,7 +3108,7 @@ fn analyze_with_context(
                         budget.spend(place.projection.len() + 1)?;
                         let node = paths.resolve(place);
                         let old = output.selected[node];
-                        output.selected[node] = variant.index;
+                        output.selected.set(node, variant.index);
                         Some((node, old))
                     } else {
                         None
@@ -3090,7 +3125,7 @@ fn analyze_with_context(
                     true
                 };
                 if let Some((node, old)) = previous {
-                    output.selected[node] = old;
+                    output.selected.set(node, old);
                 }
                 if changed {
                     report.stats.state_changes += 1;
@@ -6053,7 +6088,7 @@ mod tests {
                 .range(0, paths.nodes.len(), true, &mut budget)
                 .unwrap();
             for node in &nodes {
-                state.selected[*node] = 0;
+                state.selected.set(*node, 0);
             }
             if !initialized {
                 state.must_init.set(nodes[0] + 1, false);
@@ -8638,8 +8673,8 @@ mod tests {
         let inner_node = paths.resolve(&payload_field(&outer, 0, 0));
         let sibling = paths.resolve(&payload_field(&outer, 0, 1));
         let mut state = State::new(f.locals.len(), paths.nodes.len());
-        state.selected[outer_node] = 0;
-        state.selected[inner_node] = 0;
+        state.selected.set(outer_node, 0);
+        state.selected.set(inner_node, 0);
         let mut budget = Budget::new(1000);
         let mut transfer = Transfer {
             facts: FactsCtx::Concrete,
@@ -8660,7 +8695,7 @@ mod tests {
         transfer.initialize(&mut state, inner_node, false).unwrap();
         assert_eq!(state.selected[outer_node], 0);
         assert_eq!(state.selected[inner_node], usize::MAX);
-        state.selected[inner_node] = 0;
+        state.selected.set(inner_node, 0);
         transfer.initialize(&mut state, outer_node, true).unwrap();
         assert_eq!(state.selected[outer_node], usize::MAX);
         assert_eq!(state.selected[inner_node], usize::MAX);

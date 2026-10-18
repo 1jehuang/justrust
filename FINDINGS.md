@@ -11620,3 +11620,16 @@ cost, not a shared cap. graph_integrity ratchets were raised in the permitted
 direction (REQUIRED 450, KNOWN_FAILING 480). 3225 tests pass; clippy clean.
 Remaining: whole-program join nodes, plus `main` analysis cost that is still
 superlinear in its own call count.
+
+### Sparse variant selections remove main's superlinear analysis (2026-10-18)
+
+Per-task charge histograms showed `main`'s analysis growing ~4x per doubling,
+dominated by worklist state copies and merges (ownership.rs `input.words()`,
+`entry.merge`) plus per-block `kill_proofs`, all O(paths) because variant
+selections were a dense `Vec<usize>` per path in every block state. Selections
+are now a sparse sorted map (absence = unknown) with an exact meet. Main's
+analysis is linear: 64 fn 4.4 ms, 256 fn 17 ms, 512 fn 36 ms (was 20/75/130+).
+Work growth 16->32 is 1.866 (ceiling lowered to 1.92). The ceiling moves to 540
+functions; 570 fails because main's dense per-block init/live bitsets
+(O(blocks x paths) bytes) exceed its per-task byte limit. The next fix is a
+sparse or interval representation for those bitsets. 3251 tests pass.
