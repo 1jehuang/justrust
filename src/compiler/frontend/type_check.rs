@@ -967,6 +967,7 @@ impl<'s> Checker<'s> {
             })?,
             Expr::Bool(_) => self.infer_node(InferKind::Rigid(ir::Ty::Bool))?,
             Expr::Char(_) => self.infer_node(InferKind::Rigid(ir::Ty::Char))?,
+            Expr::Str(_) => self.infer_node(InferKind::Rigid(ir::Ty::shared_str_ty()))?,
             Expr::Var(name) => match self.lookup_optional(name)? {
                 Some(local) => self.infer_type_term(&self.locals[local.0].ty, None, depth + 1)?,
                 None => self.infer_node(InferKind::Unknown(false))?,
@@ -1590,7 +1591,9 @@ pub(super) fn original_source_regions(
     };
     let mut normalized = vec![None; regions.params.len()];
     let mut bind = |name: Option<&RegionName>, region: ir::RegionParamId| -> Result<(), String> {
-        if let Some(name) = name {
+        if let Some(name) = name
+            && !matches!(name, RegionName::Static)
+        {
             let source = lookup(name)?;
             let slot = &mut normalized[source.index as usize];
             if slot.is_some_and(|old| old != region) {
@@ -1738,7 +1741,9 @@ pub(super) fn canonical_ref_contract(
     }
     let mut count = ids.len();
     let mut fresh = |name: Option<&RegionName>| -> Result<ir::RegionParamId, String> {
-        if let Some(name) = name {
+        if let Some(name) = name
+            && !matches!(name, RegionName::Static)
+        {
             return lookup(name);
         }
         if count >= ir::MAX_REGION_PARAMS {
@@ -1780,6 +1785,9 @@ pub(super) fn canonical_ref_contract(
             if depth >= 128 {
                 return Err("reference depth exceeds supported limit128".into());
             }
+            if matches!(region, Some(RegionName::Static)) {
+                return Err("unsupported: 'static lifetimes on parameter references".into());
+            }
             let region = fresh(region.as_ref())?;
             if let Some(outer) = previous {
                 edges.push((region, outer));
@@ -1806,7 +1814,11 @@ pub(super) fn canonical_ref_contract(
         if results.len() >= 128 {
             return Err("reference depth exceeds supported limit128".into());
         }
-        let region = if let Some(name) = region {
+        let region = if let Some(RegionName::Static) = region {
+            // `'static` outlives every input: an independent region that no
+            // input reference can supply. Only origin-free data may flow out.
+            fresh(None)?
+        } else if let Some(name) = region {
             lookup(name)?
         } else if let Some(region) = receiver_region {
             region
@@ -1982,6 +1994,7 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
         Type::Float(ty) => Ok(ir::Ty::Float(*ty)),
         Type::Bool => Ok(ir::Ty::Bool),
         Type::Char => Ok(ir::Ty::Char),
+        Type::Str => Ok(ir::Ty::Str),
         Type::Unit => Ok(ir::Ty::Unit),
         Type::Never => Ok(ir::Ty::Never),
         Type::Tuple(fields) if !fields.is_empty() => fields
@@ -3917,7 +3930,7 @@ impl<'a> Checker<'a> {
                 if slice_len_candidate(e, self.names()?)?
                     && self
                         .scalar_hint(receiver)?
-                        .is_some_and(|ty| ty.shared_slice_element().is_some()) =>
+                        .is_some_and(|ty| ty.shared_descriptor_element().is_some()) =>
             {
                 Some(ir::Ty::Int(ir::IntTy::Usize))
             }
@@ -3967,6 +3980,7 @@ impl<'a> Checker<'a> {
             Expr::Float(literal) => literal.suffix.map(ir::Ty::Float),
             Expr::Bool(_) => Some(ir::Ty::Bool),
             Expr::Char(_) => Some(ir::Ty::Char),
+            Expr::Str(_) => Some(ir::Ty::shared_str_ty()),
             Expr::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
             Expr::Var(name) => self
                 .lookup_optional(name)?
@@ -5326,17 +5340,23 @@ impl<'a> Checker<'a> {
         if !slice_len_candidate(e, self.names()?)?
             || !self
                 .scalar_hint(receiver)?
-                .is_some_and(|ty| ty.shared_slice_element().is_some())
+                .is_some_and(|ty| ty.shared_descriptor_element().is_some())
         {
             return Ok(None);
         }
         let slice = self.expr(receiver)?;
         let flow = self.flow(slice);
-        let element = flow
-            .ty
-            .shared_slice_element()
-            .ok_or("builtin slice length receiver changed type")?;
-        ir::validate_shared_slice_element(element, self.facts(), &self.signatures.plan()?.budget)?;
+        if !flow.ty.is_shared_str() {
+            let element = flow
+                .ty
+                .shared_slice_element()
+                .ok_or("builtin slice length receiver changed type")?;
+            ir::validate_shared_slice_element(
+                element,
+                self.facts(),
+                &self.signatures.plan()?.budget,
+            )?;
+        }
         let id = ir::ExprId(self.exprs.len());
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         self.exprs.push(ir::TypedExpr {
@@ -7165,6 +7185,17 @@ impl<'a> Checker<'a> {
                 }),
                 Flow::value(ir::Ty::Char),
             ),
+            Expr::Str(text) => {
+                self.charge_node(
+                    text.len()
+                        .checked_add(32)
+                        .ok_or("string literal storage overflow")?,
+                )?;
+                (
+                    ir::ExprKind::Str(text.clone()),
+                    Flow::value(ir::Ty::shared_str_ty()),
+                )
+            }
             Expr::Var(n) => {
                 let local = self.lookup(n)?;
                 let ty = self.locals[local.0].ty.clone();
@@ -7326,79 +7357,112 @@ impl<'a> Checker<'a> {
                 )?;
                 let l = self.flow(left);
                 let r = self.flow(right);
-                if matches!(l.ty, ir::Ty::Ref { .. }) || matches!(r.ty, ir::Ty::Ref { .. }) {
-                    return Err("reference comparisons and arithmetic are unsupported in B1".into());
-                }
-                if matches!(
-                    l.ty,
-                    ir::Ty::Tuple(_) | ir::Ty::Struct(_) | ir::Ty::Array { .. }
-                ) || matches!(
-                    r.ty,
-                    ir::Ty::Tuple(_) | ir::Ty::Struct(_) | ir::Ty::Array { .. }
-                ) {
-                    return Err("aggregate operators and comparisons are unsupported".into());
-                }
-                let numeric = if matches!(l.ty, ir::Ty::Int(_) | ir::Ty::Float(_)) {
-                    l.ty.clone()
-                } else if matches!(r.ty, ir::Ty::Int(_) | ir::Ty::Float(_)) {
-                    r.ty.clone()
-                } else {
-                    ir::Ty::Int(ir::IntTy::I32)
-                };
-                let (operand, result) = match op {
-                    BinaryOp::And | BinaryOp::Or => (ir::Ty::Bool, ir::Ty::Bool),
-                    BinaryOp::Shl | BinaryOp::Shr => {
-                        if l.ty == ir::Ty::Never || r.ty == ir::Ty::Never {
-                            return Err("shift operator on semantic Never is unsupported".into());
-                        }
-                        if !matches!(l.ty, ir::Ty::Int(_)) || !matches!(r.ty, ir::Ty::Int(_)) {
-                            return Err("shift operands must both be integers".into());
-                        }
-                        (l.ty.clone(), l.ty.clone())
-                    }
-                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
-                        let operand = self.join(&l.ty, &r.ty, "bitwise operands")?;
-                        if !matches!(operand, ir::Ty::Int(_) | ir::Ty::Bool) {
-                            return Err(
-                                "bitwise operands require identical integer types or Bool".into()
-                            );
-                        }
-                        (operand.clone(), operand)
-                    }
-                    BinaryOp::Eq | BinaryOp::Ne => {
-                        (self.join(&l.ty, &r.ty, "equality operands")?, ir::Ty::Bool)
-                    }
-                    BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => (
-                        if l.ty == ir::Ty::Char || r.ty == ir::Ty::Char {
-                            ir::Ty::Char
-                        } else {
-                            numeric.clone()
+                let str_comparison = l.ty.is_shared_str()
+                    && r.ty.is_shared_str()
+                    && matches!(
+                        op,
+                        BinaryOp::Eq
+                            | BinaryOp::Ne
+                            | BinaryOp::Lt
+                            | BinaryOp::Le
+                            | BinaryOp::Gt
+                            | BinaryOp::Ge
+                    );
+                if str_comparison {
+                    // Builtin `&str` comparison: byte-lexicographic, exactly
+                    // `<str as PartialOrd>` / `PartialEq` on UTF-8 contents.
+                    let completes = l.completes && r.completes;
+                    (
+                        ir::ExprKind::Binary {
+                            op: *op,
+                            left,
+                            right,
                         },
-                        ir::Ty::Bool,
-                    ),
-                    _ => (numeric.clone(), numeric),
-                };
-                self.require(&l, &operand)?;
-                if !shifting {
-                    self.require(&r, &operand)?;
+                        Flow {
+                            ty: ir::Ty::Bool,
+                            completes,
+                        },
+                    )
+                } else {
+                    if matches!(l.ty, ir::Ty::Ref { .. }) || matches!(r.ty, ir::Ty::Ref { .. }) {
+                        return Err(
+                            "reference comparisons and arithmetic are unsupported in B1".into()
+                        );
+                    }
+                    if matches!(
+                        l.ty,
+                        ir::Ty::Tuple(_) | ir::Ty::Struct(_) | ir::Ty::Array { .. }
+                    ) || matches!(
+                        r.ty,
+                        ir::Ty::Tuple(_) | ir::Ty::Struct(_) | ir::Ty::Array { .. }
+                    ) {
+                        return Err("aggregate operators and comparisons are unsupported".into());
+                    }
+                    let numeric = if matches!(l.ty, ir::Ty::Int(_) | ir::Ty::Float(_)) {
+                        l.ty.clone()
+                    } else if matches!(r.ty, ir::Ty::Int(_) | ir::Ty::Float(_)) {
+                        r.ty.clone()
+                    } else {
+                        ir::Ty::Int(ir::IntTy::I32)
+                    };
+                    let (operand, result) = match op {
+                        BinaryOp::And | BinaryOp::Or => (ir::Ty::Bool, ir::Ty::Bool),
+                        BinaryOp::Shl | BinaryOp::Shr => {
+                            if l.ty == ir::Ty::Never || r.ty == ir::Ty::Never {
+                                return Err(
+                                    "shift operator on semantic Never is unsupported".into()
+                                );
+                            }
+                            if !matches!(l.ty, ir::Ty::Int(_)) || !matches!(r.ty, ir::Ty::Int(_)) {
+                                return Err("shift operands must both be integers".into());
+                            }
+                            (l.ty.clone(), l.ty.clone())
+                        }
+                        BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
+                            let operand = self.join(&l.ty, &r.ty, "bitwise operands")?;
+                            if !matches!(operand, ir::Ty::Int(_) | ir::Ty::Bool) {
+                                return Err(
+                                    "bitwise operands require identical integer types or Bool"
+                                        .into(),
+                                );
+                            }
+                            (operand.clone(), operand)
+                        }
+                        BinaryOp::Eq | BinaryOp::Ne => {
+                            (self.join(&l.ty, &r.ty, "equality operands")?, ir::Ty::Bool)
+                        }
+                        BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => (
+                            if l.ty == ir::Ty::Char || r.ty == ir::Ty::Char {
+                                ir::Ty::Char
+                            } else {
+                                numeric.clone()
+                            },
+                            ir::Ty::Bool,
+                        ),
+                        _ => (numeric.clone(), numeric),
+                    };
+                    self.require(&l, &operand)?;
+                    if !shifting {
+                        self.require(&r, &operand)?;
+                    }
+                    // Trait-based scalar operators do not gain a never coercion
+                    // merely because evaluating an operand cannot complete.
+                    if !logical && (l.ty == ir::Ty::Never || r.ty == ir::Ty::Never) {
+                        return Err("binary operator on never is unsupported".into());
+                    }
+                    let completes = l.completes && (logical || r.completes);
+                    (
+                        ir::ExprKind::Binary {
+                            op: *op,
+                            left,
+                            right,
+                        },
+                        Flow {
+                            ty: result,
+                            completes,
+                        },
+                    )
                 }
-                // Trait-based scalar operators do not gain a never coercion
-                // merely because evaluating an operand cannot complete.
-                if !logical && (l.ty == ir::Ty::Never || r.ty == ir::Ty::Never) {
-                    return Err("binary operator on never is unsupported".into());
-                }
-                let completes = l.completes && (logical || r.completes);
-                (
-                    ir::ExprKind::Binary {
-                        op: *op,
-                        left,
-                        right,
-                    },
-                    Flow {
-                        ty: result,
-                        completes,
-                    },
-                )
             }
             Expr::Call { name, args } => {
                 let key = self.path_key(name, Namespace::Value)?;

@@ -416,6 +416,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
             | Ty::Array {
                 element: referent, ..
             } => child(referent)?,
+            Ty::Str => {}
             Ty::Slice { element } => {
                 // A slice descriptor carries its outer loan, not channels
                 // hidden inside an element. Concrete element references are
@@ -592,7 +593,13 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                             }
                         }
                     }
-                    Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => {}
+                    Ty::Int(_)
+                    | Ty::Float(_)
+                    | Ty::Char
+                    | Ty::Str
+                    | Ty::Bool
+                    | Ty::Unit
+                    | Ty::Never => {}
                     Ty::Ref { .. } | Ty::Param(_) => unreachable!(),
                 }
                 path.truncate(saved);
@@ -1127,6 +1134,7 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
         (Ty::Int(a), Ty::Int(b)) => a == b,
         (Ty::Float(a), Ty::Float(b)) => a == b,
         (Ty::Char, Ty::Char)
+        | (Ty::Str, Ty::Str)
         | (Ty::Bool, Ty::Bool)
         | (Ty::Unit, Ty::Unit)
         | (Ty::Never, Ty::Never) => true,
@@ -2376,7 +2384,9 @@ fn substitute_ty_walk(
                 budget,
             )?
         }
-        Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => ty.clone(),
+        Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Str | Ty::Bool | Ty::Unit | Ty::Never => {
+            ty.clone()
+        }
     })
 }
 
@@ -2488,6 +2498,7 @@ pub fn instantiate_checked(
             | ExprKind::IntCast { .. }
             | ExprKind::FloatCast { .. }
             | ExprKind::Char(_)
+            | ExprKind::Str(_)
             | ExprKind::Float(_)
             | ExprKind::Deref { .. }
             | ExprKind::DynamicIndex { .. }
@@ -2836,7 +2847,9 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
                 );
             }
             Ty::Ref { .. } => return Err("reference generic arguments are unsupported".into()),
-            Ty::Slice { .. } => return Err("slice generic arguments are unsupported".into()),
+            Ty::Slice { .. } | Ty::Str => {
+                return Err("slice generic arguments are unsupported".into());
+            }
             Ty::Tuple(fields) => {
                 for field in fields.iter() {
                     walk(field, budget, depth + 1)?;
@@ -3545,6 +3558,9 @@ pub enum Ty {
     Param(ParamId),
     Int(IntTy),
     Char,
+    /// Unsized UTF-8 `str`. Only an admitted shared root reference `&str`
+    /// has a native descriptor (data pointer, byte length).
+    Str,
     Float(FloatTy),
     Ref {
         kind: BorrowKind,
@@ -3717,7 +3733,7 @@ fn type_metadata_walk(
                 }
                 return Ok((false, 0));
             }
-            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => {
+            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Str | Ty::Bool | Ty::Unit | Ty::Never => {
                 return Ok((false, 0));
             }
         };
@@ -3806,6 +3822,7 @@ fn type_metadata_walk(
             | Ty::Int(_)
             | Ty::Float(_)
             | Ty::Char
+            | Ty::Str
             | Ty::Bool
             | Ty::Unit
             | Ty::Never => {}
@@ -3830,6 +3847,30 @@ impl Ty {
             },
             _ => None,
         }
+    }
+
+    /// Exactly shared `&str`.
+    pub fn is_shared_str(&self) -> bool {
+        matches!(self, Self::Ref { kind: BorrowKind::Shared, referent } if **referent == Self::Str)
+    }
+
+    /// The canonical `&str` type.
+    pub fn shared_str_ty() -> Self {
+        Self::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(Self::Str),
+        }
+    }
+
+    /// Element of the private two-word (data, len) descriptor carrying this
+    /// value: `&[T]` carries T, `&str` carries UTF-8 bytes. This is physical
+    /// transport only; it grants no slice indexing or element typing to str.
+    pub fn shared_descriptor_element(&self) -> Option<&Ty> {
+        const BYTE: &Ty = &Ty::Int(IntTy::U8);
+        if self.is_shared_str() {
+            return Some(BYTE);
+        }
+        self.shared_slice_element()
     }
 
     /// Exact element and extent of a shared root array reference.
@@ -3925,6 +3966,7 @@ impl Ty {
                 | Self::Int(_)
                 | Self::Float(_)
                 | Self::Char
+                | Self::Str
                 | Self::Bool
                 | Self::Unit
                 | Self::Never => {}
@@ -3959,6 +4001,7 @@ impl Ty {
             | Self::Struct(_)
             | Self::Enum(_)
             | Self::Param(_)
+            | Self::Str
             | Self::Slice { .. } => false,
             Self::Tuple(_) | Self::Array { .. } => {
                 let mut pending = vec![self];
@@ -3974,6 +4017,7 @@ impl Ty {
                         | Self::Struct(_)
                         | Self::Enum(_)
                         | Self::Param(_)
+                        | Self::Str
                         | Self::Slice { .. } => {
                             return false;
                         }
@@ -4898,6 +4942,7 @@ fn ref_type_walk(
                 child(element)?;
             }
             Ty::Slice { element } => child(element)?,
+            Ty::Str => {}
             Ty::Struct(value) => {
                 for argument in value.def().type_args.iter() {
                     child(argument)?;
@@ -5020,6 +5065,7 @@ fn ref_types_equal(
             (Ty::Int(a), Ty::Int(b)) => a == b,
             (Ty::Float(a), Ty::Float(b)) => a == b,
             (Ty::Char, Ty::Char)
+            | (Ty::Str, Ty::Str)
             | (Ty::Bool, Ty::Bool)
             | (Ty::Unit, Ty::Unit)
             | (Ty::Never, Ty::Never) => true,
@@ -5526,6 +5572,7 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
             (Ty::Float(a), Ty::Float(b)) if a == b => {}
             (Ty::Param(a), Ty::Param(b)) if a == b => {}
             (Ty::Char, Ty::Char)
+            | (Ty::Str, Ty::Str)
             | (Ty::Bool, Ty::Bool)
             | (Ty::Unit, Ty::Unit)
             | (Ty::Never, Ty::Never) => {}
@@ -5779,6 +5826,8 @@ pub struct LiteralOutput {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExprKind {
     Char(CharValue),
+    /// A string literal: `&'static str` over immutable program data.
+    Str(String),
     /// Count zero bits before the highest set bit within the integer's declared width.
     LeadingZeros {
         value: ExprId,
@@ -6459,6 +6508,7 @@ impl CheckedFunction {
                     storage(budget, values.len(), std::mem::size_of::<ExprId>())?
                 }
                 ExprKind::Output(output) => storage(budget, output.text.len(), 1)?,
+                ExprKind::Str(text) => storage(budget, text.len(), 1)?,
                 ExprKind::Println(text) => storage(budget, text.len(), 1)?,
                 ExprKind::Panic(payload) => {
                     storage(budget, 1, std::mem::size_of::<PanicMessage>())?;
@@ -7164,10 +7214,12 @@ impl CheckedFunction {
                 ExprKind::SliceLen { slice } => {
                     expr(*slice)?;
                     let source = &self.exprs[slice.0];
-                    let Some(element) = source.ty.shared_slice_element() else {
-                        return Err("slice length requires shared slice".into());
-                    };
-                    validate_shared_slice_element_with_facts(element, facts)?;
+                    if !source.ty.is_shared_str() {
+                        let Some(element) = source.ty.shared_slice_element() else {
+                            return Err("slice length requires shared slice or str".into());
+                        };
+                        validate_shared_slice_element_with_facts(element, facts)?;
+                    }
                     if value.ty != Ty::Int(IntTy::Usize) {
                         return Err("slice length result must be usize".into());
                     }
@@ -7306,7 +7358,34 @@ impl CheckedFunction {
                     expr(*right)?;
                     let lhs = &self.exprs[left.0];
                     let rhs = &self.exprs[right.0];
-                    if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+                    if lhs.ty.is_shared_str() || rhs.ty.is_shared_str() {
+                        let comparison = matches!(
+                            op,
+                            BinaryOp::Eq
+                                | BinaryOp::Ne
+                                | BinaryOp::Lt
+                                | BinaryOp::Le
+                                | BinaryOp::Gt
+                                | BinaryOp::Ge
+                        );
+                        let completion = if lhs.completion == Completion::Returns
+                            && rhs.completion == Completion::Returns
+                        {
+                            Completion::Returns
+                        } else {
+                            Completion::Never
+                        };
+                        if !comparison
+                            || !lhs.ty.is_shared_str()
+                            || !rhs.ty.is_shared_str()
+                            || value.ty != Ty::Bool
+                            || value.completion != completion
+                        {
+                            return Err(
+                                "&str permits only &str comparisons with bool result".into()
+                            );
+                        }
+                    } else if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
                         // Metadata for the entire arena was validated above. Equality
                         // remains a closed scalar operation, not structural/trait equality.
                         if !matches!(
@@ -7543,6 +7622,11 @@ impl CheckedFunction {
                     value: Some(value), ..
                 } => expr(*value)?,
                 ExprKind::Break { value: None, .. } | ExprKind::Continue { .. } => {}
+                ExprKind::Str(_) => {
+                    if !value.ty.is_shared_str() || value.completion != Completion::Returns {
+                        return Err("string literal expression type mismatch".into());
+                    }
+                }
                 ExprKind::Char(character) => {
                     character.validate()?;
                     if value.ty != Ty::Char || value.completion != Completion::Returns {

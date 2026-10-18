@@ -195,7 +195,9 @@ impl<'facts> CoverageMatrix<'facts> {
             }
             let next = depth.checked_add(1).ok_or_else(overflow)?;
             match ty {
-                Ty::Never | Ty::Slice { .. } | Ty::AssociatedType(_) => applicable = false,
+                Ty::Never | Ty::Slice { .. } | Ty::Str | Ty::AssociatedType(_) => {
+                    applicable = false
+                }
                 Ty::Tuple(fields) => {
                     if fields.is_empty() {
                         applicable = false;

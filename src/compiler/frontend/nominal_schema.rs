@@ -354,6 +354,15 @@ impl PlanState {
                     }),
                 }
             }
+            Type::Ref {
+                kind: ir::BorrowKind::Shared,
+                region: Some(RegionName::Static),
+                referent,
+            } if matches!(referent.as_ref(), Type::Str) => {
+                // `&'static str` carries no borrowed origin, so it is admitted
+                // in aggregate positions such as struct fields.
+                ir::Ty::shared_str_ty()
+            }
             Type::Ref { kind, referent, .. } => {
                 if !allow_ref {
                     return Err("references in generic or aggregate types are unsupported".into());
@@ -421,6 +430,7 @@ impl PlanState {
             Type::Int(i) => ir::Ty::Int(*i),
             Type::Float(f) => ir::Ty::Float(*f),
             Type::Char => ir::Ty::Char,
+            Type::Str => ir::Ty::Str,
             Type::Bool => ir::Ty::Bool,
             Type::Unit => ir::Ty::Unit,
             Type::Never => ir::Ty::Never,

@@ -633,7 +633,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_fingerprint: 921804843175273415,
             source_sha256: r###"5b2ee6845f34ee4af819f91d8750b393e24a87e56cc8747cc639e75764b1d7fe"###,
             native: Native::Unsupported,
-            boundary: r###"expected ASCII identifier"###,
+            boundary: r###"assert! nonliteral messages are unsupported"###,
             stock_compile_code: 1,
             stock_code: None,
             stock_stdout: r###""###,

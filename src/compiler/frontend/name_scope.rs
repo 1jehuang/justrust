@@ -187,6 +187,7 @@ fn validate_type_names(ty: &Type, names: &impl NameAccess) -> Result<(), String>
             | Type::Int(_)
             | Type::Float(_)
             | Type::Char
+            | Type::Str
             | Type::Bool
             | Type::Unit
             | Type::Never
@@ -345,6 +346,7 @@ impl Type {
                 (Type::Float(a), Type::Float(b)) => equal &= a == b,
                 (Type::SelfType, Type::SelfType)
                 | (Type::Char, Type::Char)
+                | (Type::Str, Type::Str)
                 | (Type::Bool, Type::Bool)
                 | (Type::Unit, Type::Unit)
                 | (Type::Never, Type::Never)

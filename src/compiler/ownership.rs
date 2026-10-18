@@ -1502,7 +1502,7 @@ fn preflight_with_plan(
                             operand(field, &mut budget)?;
                         }
                     }
-                    Rvalue::Println(_) | Rvalue::Output(_) => {}
+                    Rvalue::Println(_) | Rvalue::Output(_) | Rvalue::Str(_) => {}
                 }
             }
         }
@@ -1688,6 +1688,9 @@ impl<'a> MoveShape<'a> {
                 .map_err(|_| Exhausted)?;
                 Self::Scalar
             }
+            // Exactly shared `&str` is a Copy two-word descriptor leaf.
+            Ty::Ref { .. } if ty.is_shared_str() => Self::Scalar,
+            Ty::Str => Self::Scalar,
             Ty::Ref { referent, .. } if referent.contains_slice() => return Err(Exhausted),
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Ref { .. } => {
                 Self::Scalar
@@ -2647,7 +2650,7 @@ impl Transfer<'_> {
                     self.operand(state, field)?;
                 }
             }
-            Rvalue::Println(_) | Rvalue::Output(_) => {}
+            Rvalue::Println(_) | Rvalue::Output(_) | Rvalue::Str(_) => {}
         }
         Ok(())
     }

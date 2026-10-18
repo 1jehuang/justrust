@@ -616,6 +616,7 @@ impl<'a> Validator<'a> {
                 | Type::Int(_)
                 | Type::Float(_)
                 | Type::Char
+                | Type::Str
                 | Type::Bool
                 | Type::Unit
                 | Type::Never
@@ -914,6 +915,7 @@ impl<'a> Validator<'a> {
                 Expr::Integer(_)
                 | Expr::Float(_)
                 | Expr::Char(_)
+                | Expr::Str(_)
                 | Expr::Bool(_)
                 | Expr::Println(_) => (),
             },

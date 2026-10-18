@@ -263,6 +263,7 @@ impl Encoder<'_> {
             }
             ir::Ty::Bool => self.append(b"b"),
             ir::Ty::Char => self.append(b"c"),
+            ir::Ty::Str => self.append(b"z"),
             ir::Ty::Unit => self.append(b"u"),
             ir::Ty::Tuple(fields) => {
                 self.append(b"t")?;
@@ -327,6 +328,7 @@ impl Encoder<'_> {
             }
             ir::Ty::Bool => self.append(b"b"),
             ir::Ty::Char => self.append(b"c"),
+            ir::Ty::Str => self.append(b"z"),
             ir::Ty::Unit => self.append(b"u"),
             ir::Ty::Never => self.append(b"n"),
             ir::Ty::Tuple(fields) => {
@@ -459,6 +461,7 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
             | ir::Ty::Int(_)
             | ir::Ty::Float(_)
             | ir::Ty::Char
+            | ir::Ty::Str
             | ir::Ty::Bool
             | ir::Ty::Unit
             | ir::Ty::Never => {}

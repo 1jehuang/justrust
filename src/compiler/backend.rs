@@ -83,7 +83,7 @@ fn shared_slice_layout(element: &ir::Ty) -> Result<SliceLayout, String> {
 /// Exactly shared `&[T]` is true two-word transport (data, len); it is
 /// checked BEFORE `indirect`. Bare `Slice` has no by-value ABI and errors.
 fn argument_words(ty: &ir::Ty) -> Result<usize, String> {
-    if let Some(element) = ty.shared_slice_element() {
+    if let Some(element) = ty.shared_descriptor_element() {
         shared_slice_layout(element)?;
         return Ok(2);
     }
@@ -156,7 +156,7 @@ fn result_indirect(ty: &ir::Ty) -> Result<bool, String> {
 /// boundary as a pointer: calls use `argument_words` == 2 and push both words.
 fn indirect(ty: &ir::Ty) -> Result<bool, String> {
     ir::reject_associated_types(ty, None)?;
-    if let Some(element) = ty.shared_slice_element() {
+    if let Some(element) = ty.shared_descriptor_element() {
         shared_slice_layout(element)?;
         return Ok(true);
     }
@@ -178,7 +178,7 @@ fn indirect(ty: &ir::Ty) -> Result<bool, String> {
         | ir::Ty::Ref { .. } => Ok(false),
         ir::Ty::Param(_) => Err("type parameter has no native ABI".into()),
         ir::Ty::AssociatedType(_) => Err("unresolved associated type has no native ABI".into()),
-        ir::Ty::Slice { .. } => Err(SLICE_UNSUPPORTED.into()),
+        ir::Ty::Slice { .. } | ir::Ty::Str => Err(SLICE_UNSUPPORTED.into()),
     }
 }
 
@@ -191,7 +191,7 @@ fn value_size(ty: &ir::Ty) -> Result<i32, String> {
     if matches!(ty, ir::Ty::Param(_) | ir::Ty::AssociatedType(_)) {
         return Err("unresolved type has no native layout".into());
     }
-    if let Some(element) = ty.shared_slice_element() {
+    if let Some(element) = ty.shared_descriptor_element() {
         shared_slice_layout(element)?;
         return Ok(2 * i32::from(SHARED_BYTE_SLICE_LAYOUT.word_bytes));
     }
@@ -758,7 +758,7 @@ impl<'a> Emitter<'a> {
             || self
                 .function()
                 .place_ty(place)?
-                .shared_slice_element()
+                .shared_descriptor_element()
                 .is_none()
         {
             return Err("slice operand requires a whole shared &[T] local".into());
@@ -1259,6 +1259,36 @@ impl<'a> Emitter<'a> {
         self.bytes(&[0x48, 0x39, 0xc8, 0x0f, cc, 0xc0, 0x0f, 0xb6, 0xc0]);
         Ok(())
     }
+    /// rax = left `&str` carrier address, rcx = right carrier address.
+    /// Byte-lexicographic comparison (Rust `str` ordering): compare the common
+    /// prefix with `repe cmpsb`, then the lengths. Clobbers caller-saved
+    /// rax, rcx, rdx, rsi, rdi, r9 only.
+    fn binary_str(&mut self, op: BinaryOp) -> Result<(), String> {
+        let cc = match op {
+            BinaryOp::Eq => 0x94,
+            BinaryOp::Ne => 0x95,
+            BinaryOp::Lt => 0x92,
+            BinaryOp::Le => 0x96,
+            BinaryOp::Gt => 0x97,
+            BinaryOp::Ge => 0x93,
+            _ => return Err("&str only supports comparisons".into()),
+        };
+        self.bytes(&[0x48, 0x8b, 0x30]); // mov rsi, [rax]      left data
+        self.bytes(&[0x48, 0x8b, 0x50, 0x08]); // mov rdx, [rax+8] left len
+        self.bytes(&[0x48, 0x8b, 0x39]); // mov rdi, [rcx]      right data
+        self.bytes(&[0x4c, 0x8b, 0x49, 0x08]); // mov r9, [rcx+8]  right len
+        self.bytes(&[0x48, 0x89, 0xd1]); // mov rcx, rdx
+        self.bytes(&[0x4c, 0x39, 0xc9]); // cmp rcx, r9
+        self.bytes(&[0x49, 0x0f, 0x47, 0xc9]); // cmova rcx, r9 (min len)
+        self.bytes(&[0xfc]); // cld
+        self.bytes(&[0x48, 0x85, 0xc9]); // test rcx, rcx: ZF=1 for empty prefix
+        self.bytes(&[0xf3, 0xa6]); // repe cmpsb
+        let differ = self.jump(&[0x0f, 0x85]);
+        self.bytes(&[0x4c, 0x39, 0xca]); // cmp rdx, r9: equal prefix, by length
+        self.patch(differ, self.position())?;
+        self.bytes(&[0x0f, cc, 0xc0, 0x0f, 0xb6, 0xc0]);
+        Ok(())
+    }
     fn binary_noninteger(&mut self, op: BinaryOp) -> Result<(), String> {
         if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor) {
             // Exact CFG validation limits this dispatch to canonical Booleans.
@@ -1280,6 +1310,61 @@ impl<'a> Emitter<'a> {
             _ => return Err("noninteger binary operator is unsupported".into()),
         };
         self.bytes(&[0x48, 0x39, 0xc8, 0x0f, cc, 0xc0, 0x0f, 0xb6, 0xc0]);
+        Ok(())
+    }
+    /// Reserve one immutable data relocation for `bytes`, emitting
+    /// `mov rsi, imm64` whose immediate the linker patches to its address.
+    fn data_relocation(&mut self, bytes: Vec<u8>) -> Result<(), String> {
+        let budget = self.concrete.facts().budget().clone();
+        if self.object.strings.len() == self.object.strings.capacity() {
+            let old = self.object.strings.capacity();
+            let entry = std::mem::size_of::<(usize, Vec<u8>)>();
+            budget.retain_bytes(entry)?;
+            self.object
+                .strings
+                .try_reserve_exact(1)
+                .map_err(|_| "data relocation allocation failed")?;
+            let extra = (self.object.strings.capacity() - old)
+                .checked_sub(1)
+                .and_then(|count| count.checked_mul(entry))
+                .ok_or("data relocation storage overflow")?;
+            budget.retain_bytes(extra)?;
+        }
+        self.bytes(&[0x48, 0xbe]);
+        let at = self.position();
+        self.bytes(&[0; 8]);
+        self.object.strings.push((at, bytes));
+        Ok(())
+    }
+    /// `&'static str` literal: write (data, len) into the aggregate scratch
+    /// carrier and leave its address in rax, like every two-word descriptor.
+    /// Empty literals still point at owned (zero-length) program data.
+    fn str_literal(&mut self, text: &str) -> Result<(), String> {
+        let budget = self.concrete.facts().budget().clone();
+        budget.charge_work(text.len())?;
+        budget.retain_bytes(text.len())?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(text.len())
+            .map_err(|_| "string literal allocation failed")?;
+        bytes.extend_from_slice(text.as_bytes());
+        let len = u64::try_from(text.len()).map_err(|_| "string literal too large")?;
+        self.data_relocation(bytes)?;
+        let layout = SHARED_BYTE_SLICE_LAYOUT;
+        let data = self
+            .aggregate_scratch
+            .checked_add(i32::from(layout.data_offset))
+            .ok_or("str carrier offset too large")?;
+        let len_at = self
+            .aggregate_scratch
+            .checked_add(i32::from(layout.len_offset))
+            .ok_or("str carrier offset too large")?;
+        self.bytes(&[0x48, 0x89, 0xb5]); // mov [rbp+data], rsi
+        self.i32(data);
+        self.word(len);
+        self.bytes(&[0x48, 0x89, 0x85]); // mov [rbp+len], rax
+        self.i32(len_at);
+        self.address(self.aggregate_scratch);
         Ok(())
     }
     fn println(&mut self, text: &str) -> Result<(), String> {
@@ -1610,6 +1695,8 @@ impl<'a> Emitter<'a> {
                     self.binary_integer(*op, integer)?;
                 } else if ty == ir::Ty::Char {
                     self.binary_char(*op)?;
+                } else if ty.is_shared_str() {
+                    self.binary_str(*op)?;
                 } else if let ir::Ty::Float(float) = ty {
                     self.binary_float(*op, float)?;
                 } else {
@@ -1644,6 +1731,7 @@ impl<'a> Emitter<'a> {
             cfg::Rvalue::Output(output) => {
                 self.literal_output(&output.text, output.stream, output.newline)?;
             }
+            cfg::Rvalue::Str(text) => self.str_literal(text)?,
             cfg::Rvalue::ArrayToSlice { reference } => {
                 // N comes only from the validated operand type. The operand is
                 // the thin array pointer (the dummy word address for N == 0).
@@ -1865,11 +1953,11 @@ impl<'a> Emitter<'a> {
                             self.operand(operand)?;
                             self.bytes(&[0x50]);
                         }
-                        2 if param.shared_slice_element().is_some()
+                        2 if param.shared_descriptor_element().is_some()
                             && self
                                 .function()
                                 .operand_ty(operand)?
-                                .shared_slice_element()
+                                .shared_descriptor_element()
                                 .is_some() =>
                         {
                             self.slice_operand(operand)?;
@@ -2041,7 +2129,7 @@ pub fn emit_cfg_function(
                         value_size(ty)?
                     }
                     cfg::Rvalue::EnumVariant { ty, .. } => value_size(&ir::Ty::Enum(ty.clone()))?,
-                    cfg::Rvalue::ArrayToSlice { .. } => {
+                    cfg::Rvalue::ArrayToSlice { .. } | cfg::Rvalue::Str(_) => {
                         2 * i32::from(SHARED_BYTE_SLICE_LAYOUT.word_bytes)
                     }
                     cfg::Rvalue::SliceIndex { slice, .. } => {
@@ -2103,7 +2191,7 @@ pub fn emit_cfg_function(
     }
     for ((local, offset), words) in function.params.iter().zip(&param_offsets).zip(&param_words) {
         let local_ty = &function.locals[local.0].ty;
-        if *words == 2 && local_ty.shared_slice_element().is_some() {
+        if *words == 2 && local_ty.shared_descriptor_element().is_some() {
             // len at offset, data at offset+8, into the local carrier.
             emitter.store_slice_parameter(
                 SHARED_BYTE_SLICE_LAYOUT,

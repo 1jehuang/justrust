@@ -927,6 +927,7 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
         Type::Int(kind) => Type::Int(*kind),
         Type::Float(kind) => Type::Float(*kind),
         Type::Char => Type::Char,
+        Type::Str => Type::Str,
         Type::Bool => Type::Bool,
         Type::Unit => Type::Unit,
         Type::Never => Type::Never,
@@ -1788,6 +1789,7 @@ impl SourceInventory {
             | Expr::Integer(_)
             | Expr::Float(_)
             | Expr::Char(_)
+            | Expr::Str(_)
             | Expr::Bool(_)
             | Expr::Var(_)
             | Expr::Continue { .. }
@@ -2001,7 +2003,7 @@ impl CanonicalSourceCapability {
             || *ty != ir::Ty::Int(ir::IntTy::Usize)
             || !checked
                 .get(slice.0)
-                .is_some_and(|receiver| receiver.ty.shared_slice_element().is_some())
+                .is_some_and(|receiver| receiver.ty.shared_descriptor_element().is_some())
         {
             return Err(self.render(FactsError::invalid(
                 budget,
@@ -3045,7 +3047,7 @@ fn replay_builtin_lens(
             || !checked
                 .exprs
                 .get(slice.0)
-                .is_some_and(|receiver| receiver.ty.shared_slice_element().is_some())
+                .is_some_and(|receiver| receiver.ty.shared_descriptor_element().is_some())
         {
             return Err(FactsError::invalid(
                 budget,
@@ -4453,6 +4455,8 @@ pub enum Type {
     Int(ir::IntTy),
     Float(ir::FloatTy),
     Char,
+    /// Unsized `str`; admitted only behind a shared reference.
+    Str,
     Bool,
     Unit,
     Tuple(Vec<Type>),
@@ -4995,6 +4999,8 @@ pub enum Expr {
     Float(FloatLiteral),
     /// A validated Unicode scalar, never an arbitrary integer.
     Char(char),
+    /// Decoded UTF-8 contents of a string literal, typed `&'static str`.
+    Str(String),
     DynamicIndex {
         base: Box<Expr>,
         index: Box<Expr>,
@@ -5556,14 +5562,12 @@ mod local_macro_parser_tests {
     fn opaque_bool_numeric_and_contextual_string_use_real_source_forwarding() {
         let program = parse("fn forward(n:i32)->i32{n}fn main(){macro_rules! emit{($n:literal,$flag:literal,$text:literal)=>{if $flag{if forward($n)==-45{println!($text);}}};}emit!(-45,true,\"ok\");}").unwrap();
         check(&program).unwrap();
-        let error = parse_syntax_unprepared(
+        // A forwarded string literal is an ordinary `&'static str` value.
+        let program = parse(
             "fn main(){macro_rules! one{($value:literal)=>{$value};}let value=one!(\"text\");}",
         )
-        .unwrap_err();
-        assert_eq!(
-            error.kind,
-            super::super::source::SourceErrorKind::Unsupported
-        );
+        .unwrap();
+        check(&program).unwrap();
         let program = parse(
             "fn main(){macro_rules! one{($value:literal)=>{$value};}let value:bool=one!(-true);}",
         )
@@ -6951,10 +6955,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             .input
             .opaque_literal_buffer(&self.token(), self.names)?;
         let cursor = TokenCursor::new(&buffer);
-        if cursor.current().string
-            || (cursor.current().matches("-") && cursor.peek(1).is_some_and(|token| token.string))
-        {
-            return Err(self.unsupported("standalone string expressions are unsupported"));
+        if cursor.current().matches("-") && cursor.peek(1).is_some_and(|token| token.string) {
+            return Err(self.error("cannot apply unary operator `-` to type `&str`"));
         }
         let value = self.isolated_expression(&buffer)?;
         self.cursor.bump();
@@ -6996,6 +6998,17 @@ impl<'input, 'names> Parser<'input, 'names> {
             message.push_str(text);
         }
         Ok(message)
+    }
+    /// Copy a decoded string literal into charged parser storage.
+    fn string_literal_value(&mut self, text: &str) -> Result<String, ParseError> {
+        self.names
+            .budget()
+            .charge(super::expansion_budget::Counter::Work, text.len() as u64)
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        self.names
+            .retain_parser_text(text.len())
+            .map_err(native_adapter::name_error)?;
+        Ok(text.to_owned())
     }
     fn literal_message(
         &mut self,
@@ -7498,7 +7511,10 @@ impl<'input, 'names> Parser<'input, 'names> {
             );
         }
         if self.eat("&") {
-            let region = if self.token().is_lifetime() {
+            let region = if self.token().is_lifetime() && self.token().text == "'static" {
+                self.cursor.bump();
+                Some(RegionName::Static)
+            } else if self.token().is_lifetime() {
                 Some(self.lifetime()?)
             } else {
                 None
@@ -7549,6 +7565,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             Ok(Type::Float(ty))
         } else if self.eat("char") {
             Ok(Type::Char)
+        } else if self.eat("str") {
+            Ok(Type::Str)
         } else if self.eat("bool") {
             Ok(Type::Bool)
         } else if self.eat("(") {
@@ -10383,6 +10401,10 @@ impl<'input, 'names> Parser<'input, 'names> {
                 op: UnaryOp::Not,
                 value: Box::new(self.expr(11)?),
             }
+        } else if self.token().string {
+            let text = self.string_literal_value(self.token().text)?;
+            self.cursor.bump();
+            Expr::Str(text)
         } else if self.token().is_char() {
             self.names
                 .budget()
@@ -12712,6 +12734,7 @@ fn exact_source_type(
         (Type::Float(a), Type::Float(b)) => a == b,
         (Type::SelfType, Type::SelfType)
         | (Type::Char, Type::Char)
+        | (Type::Str, Type::Str)
         | (Type::Bool, Type::Bool)
         | (Type::Unit, Type::Unit)
         | (Type::Never, Type::Never)
@@ -17084,6 +17107,8 @@ fn argument_height(
             ir::FactsCtx::Validated(facts) if facts.env().contains(*p) => {}
             _ => return Err("foreign or unresolved generic parameter".into()),
         },
+        // `&'static str` is an origin-free leaf.
+        ir::Ty::Ref { .. } if ty.is_shared_str() => {}
         ir::Ty::Ref { .. } => {
             return Err("reference-containing generic arguments are unsupported".into());
         }

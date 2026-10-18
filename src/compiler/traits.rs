@@ -1877,6 +1877,15 @@ impl ValidatedTraitWorld {
                     }
                 }
             }
+            Ty::Str => {
+                // Unsized: only meaningful directly behind a shared reference.
+                if !matches!(usage, TypeUse::Referent { shared: true, .. }) {
+                    return Err(FactsError::unsupported(
+                        &self.budget,
+                        "unsupported: str type outside a shared reference",
+                    ));
+                }
+            }
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => {}
         }
         if let Some(key) = key {
@@ -2212,6 +2221,7 @@ impl ValidatedTraitWorld {
             (Ty::Int(a), Ty::Int(b)) => Ok(a == b),
             (Ty::Float(a), Ty::Float(b)) => Ok(a == b),
             (Ty::Char, Ty::Char)
+            | (Ty::Str, Ty::Str)
             | (Ty::Bool, Ty::Bool)
             | (Ty::Unit, Ty::Unit)
             | (Ty::Never, Ty::Never) => Ok(true),
@@ -5767,7 +5777,7 @@ impl ValidatedTraitWorld {
             }
             Ty::Ref { kind, .. } => item == CatalogItem::Sized || *kind == ir::BorrowKind::Shared,
             // `[T]` is neither Sized nor Copy/Clone.
-            Ty::Slice { .. } => false,
+            Ty::Slice { .. } | Ty::Str => false,
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => true,
             Ty::AssociatedType(_) => {
                 return Err(FactsError::unsupported(

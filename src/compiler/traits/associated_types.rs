@@ -339,7 +339,7 @@ impl ValidatedTraitWorld {
                     }
                 }
             }
-            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => {}
+            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Str | Ty::Bool | Ty::Unit | Ty::Never => {}
         }
         if let Some(key) = key {
             walk.insert(key, height, &self.budget)?;

@@ -499,6 +499,8 @@ pub enum Rvalue {
         fields: Vec<Operand>,
     },
     Output(ir::LiteralOutput),
+    /// Materialize a `&'static str` descriptor over immutable program data.
+    Str(std::sync::Arc<str>),
     Println(String),
     /// Unsizes exactly shared `&[u8; N]` to shared `&[u8]`. N comes from the
     /// operand's validated type. The operand is evaluated once and its loan
@@ -584,7 +586,11 @@ impl Rvalue {
                 }
             }
             Self::IndexCopy { index, .. } => visit(index)?,
-            Self::Borrow(_) | Self::Discriminant(_) | Self::Println(_) | Self::Output(_) => {}
+            Self::Borrow(_)
+            | Self::Discriminant(_)
+            | Self::Println(_)
+            | Self::Output(_)
+            | Self::Str(_) => {}
         }
         Ok(())
     }
@@ -1021,6 +1027,7 @@ impl Function {
                                 add(&mut bytes, output.text.len(), 1, budget)?
                             }
                             Rvalue::Println(text) => add(&mut bytes, text.len(), 1, budget)?,
+                            Rvalue::Str(text) => add(&mut bytes, text.len(), 1, budget)?,
                             Rvalue::IndexCopy { array, .. } | Rvalue::Discriminant(array) => {
                                 path(&mut bytes, array, budget)?
                             }
@@ -1624,7 +1631,10 @@ impl Function {
                                 operand(index, budget, facts)?;
                             }
                             Rvalue::Discriminant(place) => path(place, budget)?,
-                            Rvalue::Borrow(_) | Rvalue::Println(_) | Rvalue::Output(_) => {}
+                            Rvalue::Borrow(_)
+                            | Rvalue::Println(_)
+                            | Rvalue::Output(_)
+                            | Rvalue::Str(_) => {}
                         }
                     }
                 }
@@ -1818,6 +1828,13 @@ impl Function {
             op,
             BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
         );
+        if left.is_shared_str() || right.is_shared_str() {
+            return if comparison && left == right {
+                Ok(Ty::Bool)
+            } else {
+                Err("CFG &str permits only same-type comparisons".into())
+            };
+        }
         if left == Ty::Char || right == Ty::Char {
             return if comparison && left == right {
                 Ok(Ty::Bool)
@@ -2015,10 +2032,12 @@ impl Function {
             }
             Rvalue::SliceLen { slice } => {
                 let source = self.slice_operand_ty(slice, facts)?;
-                let element = source
-                    .shared_slice_element()
-                    .ok_or("CFG slice length requires shared slice")?;
-                ir::validate_shared_slice_element_with_facts(element, facts)?;
+                if !source.is_shared_str() {
+                    let element = source
+                        .shared_slice_element()
+                        .ok_or("CFG slice length requires shared slice or str")?;
+                    ir::validate_shared_slice_element_with_facts(element, facts)?;
+                }
                 Ok(Ty::Int(IntTy::Usize))
             }
             Rvalue::SliceIndex { slice, index } => {
@@ -2034,6 +2053,7 @@ impl Function {
                 Ok(element.clone())
             }
             Rvalue::Println(_) | Rvalue::Output(_) => Ok(Ty::Unit),
+            Rvalue::Str(_) => Ok(Ty::shared_str_ty()),
             Rvalue::Unary { op, value } => {
                 let ty = self.operand_ty_with_facts(value, facts)?;
                 match (op, &ty) {
@@ -3605,6 +3625,11 @@ impl Lowerer<'_> {
             ir::ExprKind::Int(value) => self.assign(
                 destination.clone(),
                 Rvalue::Use(Operand::Constant(Constant::Int(*value))),
+                origin,
+            ),
+            ir::ExprKind::Str(text) => self.assign(
+                destination.clone(),
+                Rvalue::Str(std::sync::Arc::from(text.as_str())),
                 origin,
             ),
             ir::ExprKind::Char(value) => self.assign(
@@ -10522,7 +10547,7 @@ mod tests {
                             Rvalue::Discriminant(place) => {
                                 assert!(live[place.local.0], "discriminant reads dead storage");
                             }
-                            Rvalue::Println(_) | Rvalue::Output(_) => {}
+                            Rvalue::Println(_) | Rvalue::Output(_) | Rvalue::Str(_) => {}
                         }
                     }
                 }

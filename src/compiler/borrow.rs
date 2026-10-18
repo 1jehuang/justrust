@@ -294,7 +294,9 @@ fn read_cell_cover(
                 Ok(true)
             }
             Ty::Param(_) => Ok(false),
-            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => Ok(true),
+            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Str | Ty::Bool | Ty::Unit | Ty::Never => {
+                Ok(true)
+            }
             _ => {
                 if let Ty::Enum(value) = ty {
                     budget.spend(value.def().variants.len())?;
@@ -471,6 +473,7 @@ fn resolve_cells<'a>(
     }];
     let mut trace = Vec::new();
     let mut failure = None;
+    let mut static_referent = false;
     for step in &place.projection {
         if *step != Projection::Deref {
             for target in &mut candidates {
@@ -494,12 +497,25 @@ fn resolve_cells<'a>(
             };
             for cell in cover {
                 budget.spend(mul(origins(cell).0.len(), 2)?)?;
+                if origins(cell).count() == 0 && cells[cell].ty.is_shared_str() {
+                    // A shared `&str` with no issued loan origin designates
+                    // immutable `'static` program data (string literals).
+                    // Initialization is proven separately by move analysis.
+                    static_referent = true;
+                    continue;
+                }
                 if origins(cell).count() == 0 {
                     // The layout and cell exist. Missing current provenance is
                     // semantic uninitialization/move, not an unsupported layout.
                     failure = Some(ResolutionFailure::EmptyOrigins);
                 }
                 for origin in origins(cell).members() {
+                    if origins_targets[origin].is_empty() && cells[cell].ty.is_shared_str() {
+                        // A `&str` origin that resolved to no storage (for
+                        // example a call result derived from a literal) is
+                        // `'static` program data, never a dangling loan.
+                        static_referent = true;
+                    }
                     budget.spend(add(trace.len(), 1)?)?;
                     if !trace.contains(&ReferenceOriginId(origin)) {
                         checked_vec_growth(&mut trace, budget)?;
@@ -556,7 +572,7 @@ fn resolve_cells<'a>(
         }
         candidates = next;
     }
-    if candidates.is_empty() && failure.is_none() {
+    if candidates.is_empty() && failure.is_none() && !static_referent {
         failure = Some(ResolutionFailure::EmptyOrigins);
     }
     Ok((candidates, trace, failure))
@@ -2376,8 +2392,35 @@ impl CarrierBuilder<'_, '_> {
             }
             Rvalue::Aggregate { fields, .. } | Rvalue::EnumVariant { fields, .. } => {
                 let mut output = Vec::new();
+                let nominal = matches!(
+                    value,
+                    Rvalue::EnumVariant { .. }
+                        | Rvalue::Aggregate {
+                            ty: Ty::Struct(_),
+                            ..
+                        }
+                );
                 for (index, operand) in fields.iter().enumerate() {
                     for (mut location, origins) in self.operand_value(state, operand)? {
+                        // Nominal declarations have no lifetime parameters, so
+                        // their only admitted reference fields are `&'static
+                        // str`. Data borrowed from any storage cannot flow in.
+                        if nominal
+                            && self.diagnosing
+                            && origins
+                                .references
+                                .0
+                                .members()
+                                .any(|origin| !self.targets[origin].is_empty())
+                        {
+                            self.problem(
+                                block,
+                                Some(statement),
+                                Problem::Invalid(
+                                    "borrowed data does not live long enough for a `&'static str` field".into(),
+                                ),
+                            )?;
+                        }
                         let step = match value {
                             Rvalue::Aggregate {
                                 ty: Ty::Array { .. },
@@ -4082,7 +4125,7 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
             visit(array, false);
             visit_operand(index, &mut visit);
         }
-        Rvalue::Println(_) | Rvalue::Output(_) => {}
+        Rvalue::Println(_) | Rvalue::Output(_) | Rvalue::Str(_) => {}
     }
 }
 
@@ -4838,6 +4881,18 @@ impl Plan {
         let origins = &value.references.0;
         budget.spend(origins.0.len())?;
         if origins.count() == 0 {
+            // A shared `&str` without any loan origin is a string literal:
+            // `'static` program data that outlives every region.
+            let mut ty = &f.result;
+            for _ in 0..result.position.depth {
+                let Ty::Ref { referent, .. } = ty else {
+                    break;
+                };
+                ty = referent;
+            }
+            if ty.is_shared_str() {
+                return Ok(None);
+            }
             return Ok(Some(Problem::Invalid(
                 "returned reference has no issued provenance".into(),
             )));
