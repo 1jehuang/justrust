@@ -1470,6 +1470,28 @@ impl<'a> Emitter<'a> {
     fn rvalue(&mut self, value: &cfg::Rvalue) -> Result<(), String> {
         match value {
             cfg::Rvalue::Use(operand) => self.operand(operand)?,
+            cfg::Rvalue::CharToInt { value, to } => {
+                if self.function().operand_ty(value)? != ir::Ty::Char {
+                    return Err("character cast requires char source".into());
+                }
+                self.operand(value)?;
+                // A validated scalar is unsigned and fits in 21 bits. Narrow
+                // destinations wrap exactly like integer casts; wide targets
+                // receive a zero high limb, even when the target is signed.
+                if to.bits() == 128 {
+                    self.snapshot_number(ir::NumTy::Int(ir::IntTy::U32), 32);
+                    self.address(self.wide_scratch + 32);
+                } else {
+                    self.normalize_integer(*to);
+                }
+            }
+            cfg::Rvalue::U8ToChar { value } => {
+                if self.function().operand_ty(value)? != ir::Ty::Int(ir::IntTy::U8) {
+                    return Err("character cast requires u8 source".into());
+                }
+                // All 256 canonical u8 values are Unicode scalar values.
+                self.operand(value)?;
+            }
             cfg::Rvalue::IntCast { value, to } => {
                 // Exact CFG validation established an integer source. Extend
                 // SOURCE signedness before destination-width normalization.
@@ -4544,6 +4566,109 @@ mod tests {
             let output = run(&program);
             assert_eq!(output.status.code(), Some(101), "{expression}: {output:?}");
         }
+    }
+
+    #[test]
+    fn character_casts_execute_all_integer_destinations_and_all_bytes() {
+        use ir::IntTy;
+        let types = [
+            IntTy::I8,
+            IntTy::I16,
+            IntTy::I32,
+            IntTy::I64,
+            IntTy::I128,
+            IntTy::Isize,
+            IntTy::U8,
+            IntTy::U16,
+            IntTy::U32,
+            IntTy::U64,
+            IntTy::U128,
+            IntTy::Usize,
+        ];
+        for scalar in [
+            0u32, 127, 128, 255, 256, 0x7fff, 0x8000, 0xffff, 0x10000, 0xd7ff, 0xe000, 0x10ffff,
+        ] {
+            let mut source = String::from("fn scalar(value:char)->bool {");
+            for target in types {
+                let expected = if target.bits() >= 32 {
+                    i128::from(scalar)
+                } else {
+                    let modulus = 1i128 << target.bits();
+                    let low = i128::from(scalar) % modulus;
+                    if target.is_signed() && low >= modulus / 2 {
+                        low - modulus
+                    } else {
+                        low
+                    }
+                };
+                let name = target.name();
+                source.push_str(&format!(
+                    "if (value as {name}) != {expected}{name} {{return false;}}"
+                ));
+            }
+            source.push_str(&format!(
+                r"true}}fn main(){{if !scalar('\u{{{scalar:x}}}') {{1/0;}}}}"
+            ));
+            let program = frontend::parse(&source).unwrap();
+            let output = run(&program);
+            assert_eq!(output.status.code(), Some(0), "scalar={scalar}: {output:?}");
+        }
+        // Keep all 256 byte cases, with independent default planning budgets.
+        for start in (0..256).step_by(16) {
+            let mut source = String::from(
+                "fn byte(value:u8, expected:char)->bool {(value as char)==expected}fn main(){",
+            );
+            for byte in start..start + 16 {
+                source.push_str(&format!(r"if !byte({byte}u8, '\u{{{byte:x}}}') {{1/0;}}"));
+            }
+            source.push('}');
+            let program = frontend::parse(&source).unwrap();
+            let output = run(&program);
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "byte batch={start}: {output:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn character_casts_preserve_once_only_snapshots_wide_results_and_divergence() {
+        let program = frontend::parse(
+            r#"
+            struct Record { guard: [u8; 9], value: char }
+            fn scalar(counter:&mut i32)->char { *counter += 1; '\u{10ffff}' }
+            fn byte(counter:&mut i32)->u8 { *counter += 1; 255u8 }
+            fn wide(value:char)->u128 { value as u128 }
+            fn signed(value:char)->i128 { value as i128 }
+            fn array(value:char)->[u128; 2] { [value as u128; 2] }
+            fn early_scalar()->u8 { ({return 7u8; 'a'}) as u8 }
+            fn early_byte()->char { ({return 'z'; 65u8}) as char }
+            fn main() {
+                let mut counter=0;
+                if (scalar(&mut counter) as i8) != -1i8 {1/0;}
+                if counter != 1 {1/0;}
+                if (byte(&mut counter) as char) != '\u{ff}' {1/0;}
+                if counter != 2 {1/0;}
+                let mut record=Record { guard:[9u8;9], value:'\u{10000}' };
+                let reference=&record;
+                let snapshot=reference.value as u16;
+                record.value='\u{ffff}';
+                if snapshot != 0u16 {1/0;}
+                if (record.value as i16) != -1i16 {1/0;}
+                if record.guard[8] != 9u8 {1/0;}
+                if wide('\u{10ffff}') != 1114111u128 {1/0;}
+                if signed('\u{10ffff}') != 1114111i128 {1/0;}
+                let values=array('\u{10ffff}');
+                if values[1] != 1114111u128 {1/0;}
+                if early_scalar() != 7u8 {1/0;}
+                if early_byte() != 'z' {1/0;}
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&program);
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
     }
 
     #[test]

@@ -1458,8 +1458,12 @@ fn preflight_with_plan(
                         place_type(f, array, &mut budget)?;
                         operand(index, &mut budget)?;
                     }
-                    Rvalue::IntCast { value, to } => {
+                    Rvalue::CharToInt { value, to } | Rvalue::IntCast { value, to } => {
                         preflight_ty(&Ty::Int(*to), 0, &mut budget)?;
+                        operand(value, &mut budget)?;
+                    }
+                    Rvalue::U8ToChar { value } => {
+                        preflight_ty(&Ty::Char, 0, &mut budget)?;
                         operand(value, &mut budget)?;
                     }
                     Rvalue::FloatCast { value, to } => {
@@ -2541,6 +2545,8 @@ impl Transfer<'_> {
             Rvalue::Use(op)
             | Rvalue::LeadingZeros { value: op }
             | Rvalue::Unary { value: op, .. }
+            | Rvalue::CharToInt { value: op, .. }
+            | Rvalue::U8ToChar { value: op }
             | Rvalue::IntCast { value: op, .. }
             | Rvalue::FloatCast { value: op, .. } => self.operand(state, op)?,
             // Unsizing copies the shared reference once. Its loan and origins
@@ -5078,6 +5084,122 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn character_cast_reads_one_operand_and_preserves_move_semantics() {
+        for to_char in [false, true] {
+            for moved in [false, true] {
+                let mut f = fixture();
+                let (source, destination) = if to_char {
+                    (Ty::Int(IntTy::U8), Ty::Char)
+                } else {
+                    (Ty::Char, Ty::Int(IntTy::U8))
+                };
+                f.locals.extend([local(source), local(destination)]);
+                f.params.push(LocalId(1));
+                let value = if moved {
+                    Operand::Move(place(1))
+                } else {
+                    Operand::Copy(place(1))
+                };
+                let value = if to_char {
+                    Rvalue::U8ToChar { value }
+                } else {
+                    Rvalue::CharToInt {
+                        value,
+                        to: IntTy::U8,
+                    }
+                };
+                f.blocks[0].statements.extend([
+                    located(Statement::StorageLive(LocalId(2))),
+                    located(Statement::Assign {
+                        destination: place(2),
+                        value,
+                    }),
+                    located(Statement::Inspect(place(2))),
+                ]);
+                let result = analyze(&f);
+                assert!(result.passed(), "{:?}", result.diagnostics);
+                assert_eq!(result.stats.operands_read, 3);
+                assert_eq!(result.stats.moves, usize::from(moved));
+                f.blocks[0]
+                    .statements
+                    .push(located(Statement::Inspect(place(1))));
+                assert_eq!(analyze(&f).passed(), !moved);
+                f.params.clear();
+                f.blocks[0]
+                    .statements
+                    .insert(0, located(Statement::StorageLive(LocalId(1))));
+                assert!(
+                    analyze(&f)
+                        .diagnostics
+                        .iter()
+                        .any(|d| d.kind == ErrorKind::ReadNotDefinitelyInitialized)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn character_cast_deref_keeps_shared_carrier_live_until_last_read() {
+        use super::super::ir::BorrowKind;
+        let mut f = fixture();
+        f.locals.extend([
+            local(Ty::Char),
+            local(Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: std::sync::Arc::new(Ty::Char),
+            }),
+            local(Ty::Int(IntTy::U8)),
+        ]);
+        f.params.push(LocalId(1));
+        f.loan_sites.push(cfg::LoanSite {
+            timing: cfg::LoanTiming::Immediate,
+            kind: BorrowKind::Shared,
+            place: place(1),
+            origin: None,
+        });
+        let write = located(Statement::Assign {
+            destination: place(1),
+            value: Rvalue::Use(Operand::Constant(Constant::Char(
+                super::super::ir::CharValue { value: 66 },
+            ))),
+        });
+        f.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(2))),
+            located(Statement::StorageLive(LocalId(3))),
+            located(Statement::Assign {
+                destination: place(2),
+                value: Rvalue::Borrow(cfg::LoanId(0)),
+            }),
+            write.clone(),
+            located(Statement::Assign {
+                destination: place(3),
+                value: Rvalue::CharToInt {
+                    value: Operand::Copy(Place {
+                        local: LocalId(2),
+                        projection: vec![Projection::Deref],
+                    }),
+                    to: IntTy::U8,
+                },
+            }),
+        ]);
+        let result = analyze(&f);
+        assert!(result.complete);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| matches!(d.kind, ErrorKind::BorrowConflict(_))),
+            "{:?}",
+            result.diagnostics
+        );
+        let len = f.blocks[0].statements.len();
+        f.blocks[0].statements.remove(len - 2);
+        f.blocks[0].statements.push(write);
+        let result = analyze(&f);
+        assert!(result.passed(), "{:?}", result.diagnostics);
     }
 
     #[test]

@@ -6,6 +6,7 @@
 //! blocklike statements require unit. While loops do not establish return flow.
 //! Numeric literals support primitive integers through 128 bits.
 //! Character literals are Unicode scalars with equality/order, not integers.
+//! Explicit character casts admit char to integer and u8 to char only.
 //! Inline modules, named nonempty braced structs, nonempty unit/tuple/braced enums, ordinary visibility, and
 //! module-level named/grouped imports have separate type/value namespaces. Named
 //! structs and enums are nominal and non-Copy. Checked pattern decisions retain

@@ -4060,6 +4060,8 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
         | Rvalue::Repeat { value: op, .. }
         | Rvalue::ArrayToSlice { reference: op }
         | Rvalue::SliceLen { slice: op }
+        | Rvalue::CharToInt { value: op, .. }
+        | Rvalue::U8ToChar { value: op }
         | Rvalue::IntCast { value: op, .. }
         | Rvalue::FloatCast { value: op, .. } => visit_operand(op, &mut visit),
         Rvalue::SliceIndex { slice, index } => {
