@@ -628,6 +628,30 @@ counts. **Acceptance:** every claimed contract row links to real observed result
 known valid unsupported programs remain gaps, and discovered failures acquire
 minimized tests before the corresponding completion claim is restored.
 
+### G12. Graph-native optimizer and code generation tiers
+
+Decided 2026-10-18: a from-scratch optimizer embedded in the graph engine, no
+LLVM/Cranelift. Design and rationale in `OPTIMIZATION.md`. Nothing implemented.
+
+- [ ] Preserve borrow/alias, validity/range/niche and drop facts in lowered
+      instances so later tiers can consume them (coordinate with G2/G3).
+- [ ] Define the SSA function representation, canonical hashing and per-instance
+      graph nodes with explicit callee-summary edges.
+- [ ] T1 debug tier: SSA lowering, linear-scan register allocation on the real
+      G6 ABI, trivial folding. Differential-equal to T0 and stock.
+- [ ] Generated-code runtime/size harness versus stock `opt-level=0/3`.
+- [ ] Measure the stock LLVM share of debug/release/cold build time on the
+      representative workload before T2/T3 investment.
+- [ ] T2 tier: intraprocedural passes and small-function inlining with recorded
+      callee-body dependencies and exact invalidation.
+- [ ] T3 tier: interprocedural, loop, vector and target-tuned passes. Runtime
+      parity then improvement versus stock release, with determinism at workers 1/N.
+
+**Next:** fact preservation and SSA design, which can start before the G6 ABI
+lands. **Acceptance:** per tier, differential conformance passes,
+outputs are deterministic, an edit dirties only recorded dependents, and compile
+time, runtime and size receipts are compared against stock.
+
 ### G11. Representative performance and final compatibility audit
 
 - [ ] Measure reproducible debug/release, cold/no-change/edit, build/check/test

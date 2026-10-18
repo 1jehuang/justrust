@@ -656,7 +656,8 @@ These requirements do not yet choose the mechanisms below:
 3. Stable identities, task granularity, graph representation, and dynamic
    dependency validation.
 4. Compiler representations, ownership/borrow analysis, code generation,
-   linking, and standard-library strategy.
+   linking, and standard-library strategy. Decided for optimization: a
+   from-scratch, graph-native optimizer with no LLVM (`OPTIMIZATION.md`).
 5. Persistent process/state boundaries and on-disk result formats.
 6. Shared-cache protocol, trust/provenance model, and publication rules.
 7. Local/remote placement, distributed scheduling, isolation, and recovery.
