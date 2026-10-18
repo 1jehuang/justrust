@@ -7659,3 +7659,26 @@ hosted target dominate these small validation requests. Coordinate related
 checks rather than adding competing requests. Large base/app-core test units
 also account for 6.9s/8.1s compilation here. No project restructuring or
 unmeasured speedup is claimed.
+
+## 2026-10-17: hosted test compiled against stale jcode-base source (unresolved)
+
+Three hosted `justrust test` runs started within 10s of each other on
+/home/jeremy/jcode (same agent session) failed with
+`E0425: cannot find function request_compression_mode in jcode_base::provider`,
+although the function existed locally and a hosted `justrust check` of the
+same packages (`20261017-022608522-3089046`) had just passed.
+
+- `20261017-022647728-3097126`: cargo reported jcode-base Dirty
+  (`provider/mod.rs` changed, mtime 1s after last build) and recompiled it,
+  yet dependents still could not see the new function.
+- `20261017-022650638-3097326`: same error.
+- `20261017-022657688-3098021`: jcode-base Fresh, same error.
+- Local reruns (`--local`) of the same commands passed (272 tests).
+
+No git checkout, stash, or reset of those files happened in the window
+(reflog only shows unrelated commits). Sync logs show ordinary 1.3-2.9s
+pushes. Hypotheses not yet tested: (1) concurrent hosted runs sharing one
+target dir/slot, where a parallel `check` wrote metadata-only rmeta for
+jcode-base that a test build then linked; (2) the push for provider/mod.rs
+raced the run's barrier. Next step: reproduce by editing a base crate and
+launching `check` and `test` concurrently on hosted.
