@@ -1,0 +1,13 @@
+# Literal panic macro: next bounded native milestone
+
+Status: implementation contract, not delivered. Full Rust remains open.
+
+Admit builtin `panic!()` and `panic!("literal"[,])` as genuine divergent expressions, including Rust macro delimiters. Existing lexical macro definitions named panic take precedence; known unsupported module macros must not be silently replaced by a builtin. Builtin selection uses checked macro namespace identity and an explicit not-found result, never matching an error message. Formatting arguments/nonliteral messages remain explicit earlier boundaries, and panic=unwind/cleanup is not implemented by this abort-only milestone.
+
+The source payload retains the checked invocation SpanId and literal text. Use the checked original invocation location (expansion call-site policy) for diagnostics; reject foreign source handles before publication. Box the cold payload rather than enlarging all expression stack frames. IR records a real panic with exact Never type and nonreturning completion; mutable public IR cannot claim a returning panic or fabricate a normal value. Every source/IR clone, storage/depth/name/replay visitor must include it.
+
+CFG uses a distinct terminal Panic operation carrying literal diagnostic data, with no successor and no assignment to a result destination. Lowering must terminate then create only an unreachable continuation for subsequent source validation. Treat it as a terminal in ownership/borrow dataflow and actual CFG let-else divergence proofs. Dead source is still checked, unused generic bodies remain universally checked, and ordinary user functions/macros named panic must preserve their own identity.
+
+On native Linux x86_64, this milestone prints a useful diagnostic containing the checked file, line, column and message to stderr, with partial-write/EINTR handling, then aborts the process with SIGABRT. Reset/unblock SIGABRT before raising it; do not claim exit101 equals abort. A terminal syscall-failure fallback may exit101. Do not reuse the silent arithmetic trap as panic. No stock stderr byte-for-byte or unwinding claim. Existing arithmetic/bounds trap behavior remains unchanged.
+
+Stock-first tests preserve no-argument/literal/escaped-message semantics, branch/coercion/return/initializer/let-else divergence, once-only evaluation and short circuiting, rejected dead-source errors, lexical shadowing, and actual signal/stderr observations. Include public IR wrong-type/completion/source metadata and CFG mutation controls, original projected-method panic witnesses, full regression/resource/lint/format gates and debug/release native checks. Report this bounded abort-only primitive, not general formatting, unwinding, or full Rust.
