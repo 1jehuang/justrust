@@ -11169,3 +11169,40 @@ and execution: the first full pass was 46.27s compile and 103.08s tests,
 The oversized engine and slow oracle waste reports remain actionable follow-up,
 not evidence for a performance claim. Formatting, unwind/Drop cleanup, std
 integration and full Rust remain open. No caps or source witnesses were weakened.
+
+### 2026-10-18: bounded assertion implementation and conditional validation
+
+Implemented builtin `assert!` with exact macro-namespace lookup after lexical
+and module lookup, checked invocation location, ordinary Bool typing, Unit
+success and the existing literal-panic abort path. Direct If lowering evaluates
+the condition once and preserves short-circuit effects. The original delimiter
+still controls statement separators and match-arm commas, so lowering to If
+does not accidentally accept missing punctuation. Custom messages use the
+existing literal decoder; formatting and nonliteral messages remain outside
+this bounded milestone.
+
+Four parallel implementation lanes covered parsing, executable stock/native
+acceptance, public authority controls, and the IR conditional validator gap
+exposed by those controls. The latter now rejects non-Bool conditions and
+forged result types even in unused arena entries, using metered iterative joins.
+Explicit dead tails retain their type obligations. Source while-let erasure
+prevents exact reconstruction of some no-tail completion/semicolon semantics;
+those cases retain an explicit conservative Unit/Never domain rather than
+fabricated source evidence. Complete canonical flow replay remains open.
+
+The 33 immutable stock sources pass the native CLI and observed-graph matrix
+with workers 1/8 and CHECK/BUILD (20261017-181128230-188138). Nine public authority
+tests pass, and the full local suite passed 3,049 tests in 150 binaries in
+109.1 seconds (20261017-181248393-198137). Optimized conditional controls passed
+nine tests (20261017-181636991-357367); optimized assertion corpus/authority
+passed 13 tests (20261017-181719436-360867). Hosted all-target check passed
+20261017-181217782-196448 and final strict lint passed
+20261017-181642979-357744. Formatting and whitespace checks passed.
+
+Actual failures are retained with successful runs in
+`data/runs/xps14/2026-10-18-assertions.jsonl`: initial private API misuse,
+incorrect earlier-phase diagnostic expectations, the real missing If validator
+checks, and a needless-borrow lint. Stock/native corpus bytes were not changed
+to fix expectations. Full and stock-abort tests used the previously documented
+local exception; an optimized hosted attempt additionally lost its remote
+connection. No hosted full-suite or performance improvement is claimed.

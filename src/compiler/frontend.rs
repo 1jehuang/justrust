@@ -5945,6 +5945,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.builtin_panic_ahead()? {
             return self.panic_expression();
         }
+        if self.builtin_macro_ahead("assert")? {
+            return self.assert_expression();
+        }
         if self.item_expansion.is_some() {
             return Err(self.unsupported(
                 "user macro expressions in item-generated functions are unsupported",
@@ -5955,6 +5958,9 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     /// Select the builtin only after checked lexical and module lookup miss.
     fn builtin_panic_ahead(&mut self) -> Result<bool, ParseError> {
+        self.builtin_macro_ahead("panic")
+    }
+    fn builtin_macro_ahead(&mut self, spelling: &str) -> Result<bool, ParseError> {
         let token = self.token();
         let name = self.input.mint_name(&token, self.names)?;
         let key = self
@@ -5965,7 +5971,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             .map_err(native_adapter::transport_error)?;
         let builtin = self
             .names
-            .intern_root("panic", builtin_site)
+            .intern_root(spelling, builtin_site)
             .map_err(native_adapter::name_error)?;
         let builtin = self
             .names
@@ -6034,6 +6040,106 @@ impl<'input, 'names> Parser<'input, 'names> {
             .try_parser_box(SourcePanic { message, site })
             .map_err(native_adapter::name_error)?;
         Ok(Expr::Panic(payload))
+    }
+    /// Lower before source inventory: the condition remains one real source
+    /// occurrence and the failure uses the checked assertion invocation site.
+    #[inline(never)]
+    fn assert_expression(&mut self) -> Result<Expr, ParseError> {
+        let site = self.token().span;
+        let original = self
+            .names
+            .session()
+            .original(
+                panic_callsite(self.names.session(), site)
+                    .map_err(native_adapter::transport_error)?,
+                512,
+            )
+            .map_err(native_adapter::transport_error)?;
+        self.names
+            .session()
+            .sources()
+            .location(original)
+            .map_err(native_adapter::transport_error)?;
+        self.ident()?;
+        self.expect("!")?;
+        let close = if self.eat("(") {
+            ")"
+        } else if self.eat("[") {
+            "]"
+        } else if self.eat("{") {
+            "}"
+        } else {
+            return Err(self.error("expected an assert! delimiter"));
+        };
+        if self.is(close) || self.is(",") {
+            return Err(self.error("assert! requires a condition"));
+        }
+        // Macro arguments are ordinary expressions, even inside an outer if
+        // condition. In particular, do not inherit its struct-literal fence.
+        let condition = self.nested_expr()?;
+        let message = if self.eat(",") && !self.is(close) {
+            if !self.token().string && !self.token().is_opaque_literal() {
+                return Err(self.unsupported("assert! nonliteral messages are unsupported"));
+            }
+            let message = self.literal_message(
+                "assert! nonliteral messages are unsupported",
+                "assert! formatting placeholders are unsupported",
+            )?;
+            self.eat(",");
+            if !self.is(close) {
+                return Err(self.unsupported("assert! formatting arguments are unsupported"));
+            }
+            message
+        } else {
+            if !self.is(close) {
+                return Err(self.error("expected comma or closing assert! delimiter"));
+            }
+            let message = "assertion failed";
+            self.names
+                .retain_parser_text(message.len())
+                .map_err(native_adapter::name_error)?;
+            let mut retained = String::new();
+            retained.try_reserve_exact(message.len()).map_err(|_| {
+                native_adapter::transport_error(self.names.budget().poison_allocation().into())
+            })?;
+            if retained.capacity() > message.len() {
+                self.names
+                    .retain_parser_text(retained.capacity() - message.len())
+                    .map_err(native_adapter::name_error)?;
+            }
+            retained.push_str(message);
+            retained
+        };
+        self.expect(close)?;
+        self.names
+            .budget()
+            .charge(super::expansion_budget::Counter::Work, 3)
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        let condition = self
+            .names
+            .try_parser_box(condition)
+            .map_err(native_adapter::name_error)?;
+        let panic = self
+            .names
+            .try_parser_box(SourcePanic { message, site })
+            .map_err(native_adapter::name_error)?;
+        let failure = self
+            .names
+            .try_parser_box(Expr::Panic(panic))
+            .map_err(native_adapter::name_error)?;
+        let expression = Expr::If {
+            condition,
+            then_block: Block {
+                statements: Vec::new(),
+                tail: None,
+            },
+            else_block: Block {
+                statements: Vec::new(),
+                tail: Some(failure),
+            },
+        };
+        validate_depth(DepthNode::Expr(&expression)).map_err(|e| self.depth_error(&e))?;
+        Ok(expression)
     }
     fn known_module_macro(&self, name: AstIdent) -> Result<bool, ParseError> {
         let (Some(driver), Some(call), Some(scopes)) = (
@@ -6210,6 +6316,16 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(value)
     }
     fn panic_literal(&mut self) -> Result<String, ParseError> {
+        self.literal_message(
+            "panic! nonliteral arguments are unsupported",
+            "panic! formatting placeholders are unsupported",
+        )
+    }
+    fn literal_message(
+        &mut self,
+        nonliteral: &'static str,
+        formatting: &'static str,
+    ) -> Result<String, ParseError> {
         let buffer;
         let token = if self.token().is_opaque_literal() {
             buffer = self
@@ -6220,11 +6336,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.token()
         };
         if !token.string {
-            return Err(self.unsupported("panic! nonliteral arguments are unsupported"));
+            return Err(self.unsupported(nonliteral));
         }
         let text = literal_format_owned(token.text, self.names).map_err(|error| {
             if error.kind == super::source::SourceErrorKind::Syntax {
-                self.unsupported("panic! formatting placeholders are unsupported")
+                self.unsupported(formatting)
             } else {
                 error
             }
@@ -8941,6 +9057,10 @@ impl<'input, 'names> Parser<'input, 'names> {
                     "unsupported: for loops and iterators (including slice iteration); use while with an index",
                 ));
             } else {
+                // Statement eligibility comes from written syntax, not a
+                // lowered macro's AST shape (assert! lowers to Expr::If).
+                let source_blocklike = matches!(self.token().text, "if" | "match" | "loop" | "{")
+                    || self.token().is_lifetime();
                 let brace_macro = self.is_identifier()
                     && self.cursor.peek(1).is_some_and(|token| token.matches("!"))
                     && self.cursor.peek(2).is_some_and(|token| token.matches("{"));
@@ -8987,15 +9107,16 @@ impl<'input, 'names> Parser<'input, 'names> {
                     tail = Some(Box::new(expr));
                     break;
                 } else if (brace_macro && matches!(expr, Expr::Panic(_)))
-                    || matches!(
-                        expr,
-                        Expr::If { .. }
-                            | Expr::IfLet { .. }
-                            | Expr::Block(_)
-                            | Expr::LabeledBlock { .. }
-                            | Expr::Loop { .. }
-                            | Expr::Match { .. }
-                    )
+                    || ((source_blocklike || brace_macro)
+                        && matches!(
+                            expr,
+                            Expr::If { .. }
+                                | Expr::IfLet { .. }
+                                | Expr::Block(_)
+                                | Expr::LabeledBlock { .. }
+                                | Expr::Loop { .. }
+                                | Expr::Match { .. }
+                        ))
                 {
                     statements.push(Stmt::ImplicitExpr(expr));
                 } else {
@@ -9608,6 +9729,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             let frontier = self.enter_lexical()?;
             self.bind_pattern_lexical(&pattern)?;
             let direct_return = self.eat("return");
+            let source_blocklike = matches!(self.token().text, "if" | "match" | "loop" | "{")
+                || self.token().is_lifetime();
+            let brace_macro = self.is_identifier()
+                && self.cursor.peek(1).is_some_and(|token| token.matches("!"))
+                && self.cursor.peek(2).is_some_and(|token| token.matches("{"));
             let body = if direct_return {
                 let value = if self.is(",") || self.is("}") {
                     None
@@ -9622,6 +9748,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 self.nested_expr()?
             };
             let blocklike = !direct_return
+                && (source_blocklike || brace_macro)
                 && matches!(
                     body,
                     Expr::Block(_)

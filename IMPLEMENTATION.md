@@ -449,6 +449,12 @@ host macro and compiles its generated target source.
 
 ### G6. Runtime, FFI, linking and target expansion
 
+- [x] Bounded `assert!` evaluates a Bool condition once, yields Unit on success,
+      and uses checked literal panic on failure. Parenthesis/bracket/brace and
+      trailing-comma forms, lexical shadowing, grammar fences, stock/native
+      debug/release and public authority controls are covered. Full local suite
+      passed 3,049 tests/150 binaries. See `ASSERTIONS.md`; formatting assertions,
+      equality/debug assertion macros and complete canonical flow replay remain open.
 - [x] Bounded literal/empty `panic!` now preserves checked invocation locations,
       exact Never completion and terminal CFG control flow, and emits a native
       Linux x86-64 stderr diagnostic followed by SIGABRT. Stock-first 47-source

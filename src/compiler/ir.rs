@@ -5660,6 +5660,203 @@ pub enum ExprKind {
 }
 
 impl CheckedFunction {
+    /// Source while-let statements are erased to Unit-typed loops. Their
+    /// source completion and final-semicolon obligation cannot be recovered.
+    /// Keep that uncertainty explicit, without expanding expression graphs.
+    fn conditional_block_flow<'a>(
+        &'a self,
+        block: &Block,
+        budget: &PlanBudget,
+    ) -> Result<([Option<&'a Ty>; 2], bool, bool), String> {
+        if budget.has_resource_failure() {
+            return Err("planning resource budget already exhausted".into());
+        }
+        let mut definitely_completes = true;
+        let mut possibly_completes = true;
+        let mut erased_obligation = false;
+        let expression = |id: ExprId| -> Result<&TypedExpr, String> {
+            budget.charge_work(1)?;
+            self.exprs
+                .get(id.0)
+                .ok_or_else(|| format!("invalid conditional expression {}", id.0))
+        };
+        for statement in &block.statements {
+            budget.charge_work(1)?;
+            let mut ambiguous = false;
+            let returns = match statement {
+                Stmt::Declare { .. } => true,
+                Stmt::Return(value) => {
+                    if let Some(value) = value {
+                        expression(*value)?;
+                    }
+                    false
+                }
+                Stmt::AssignIndex { index, value, .. }
+                | Stmt::AssignIndexOp { index, value, .. } => {
+                    let value = expression(*value)?.completion == Completion::Returns;
+                    let index = expression(*index)?.completion == Completion::Returns;
+                    value && index
+                }
+                Stmt::Expr(id) => {
+                    let value = expression(*id)?;
+                    // This is a possible erased source obligation, not proof
+                    // that the expression originated as a while-let.
+                    ambiguous = value.ty == Ty::Unit && matches!(value.kind, ExprKind::Loop { .. });
+                    erased_obligation |= ambiguous;
+                    value.completion == Completion::Returns
+                }
+                Stmt::Let { value, .. }
+                | Stmt::LetPattern { value, .. }
+                // The else arm is separately required to diverge by
+                // validate_let_else. Only initializer completion propagates.
+                | Stmt::LetElse { value, .. }
+                | Stmt::Assign { value, .. }
+                | Stmt::AssignPlace { value, .. }
+                | Stmt::AssignOp { value, .. } => {
+                    expression(*value)?.completion == Completion::Returns
+                }
+                // A while body need not execute. Its condition must complete.
+                Stmt::While { condition, .. } => {
+                    expression(*condition)?.completion == Completion::Returns
+                }
+            };
+            definitely_completes &= returns;
+            possibly_completes &= returns || ambiguous;
+        }
+        let types = if let Some(tail) = block.tail {
+            let tail = expression(tail)?;
+            definitely_completes &= tail.completion == Completion::Returns;
+            possibly_completes &= tail.completion == Completion::Returns;
+            [Some(&tail.ty), None]
+        } else if definitely_completes {
+            [Some(&Ty::Unit), None]
+        } else if erased_obligation {
+            [Some(&Ty::Unit), Some(&Ty::Never)]
+        } else {
+            [Some(&Ty::Never), None]
+        };
+        Ok((types, definitely_completes, possibly_completes))
+    }
+
+    /// Compare the frontend's Never/array/tuple join with retained result
+    /// metadata, without constructing or recursively expanding a joined type.
+    fn conditional_join_matches(
+        left: &Ty,
+        right: &Ty,
+        result: &Ty,
+        budget: &PlanBudget,
+    ) -> Result<bool, String> {
+        struct Scratch<T> {
+            values: Vec<T>,
+            _base: Option<PlanReservation>,
+            _extra: Option<PlanReservation>,
+        }
+        impl<T> Scratch<T> {
+            fn new() -> Self {
+                Self {
+                    values: Vec::new(),
+                    _base: None,
+                    _extra: None,
+                }
+            }
+            fn push(&mut self, value: T, budget: &PlanBudget) -> Result<(), String> {
+                if self.values.len() == self.values.capacity() {
+                    let target = self
+                        .values
+                        .capacity()
+                        .checked_mul(2)
+                        .ok_or("conditional scratch capacity overflow")?
+                        .max(4);
+                    let bytes = target
+                        .checked_mul(std::mem::size_of::<T>())
+                        .ok_or("conditional scratch byte overflow")?;
+                    let mut staged = Self::new();
+                    staged._base = Some(budget.reserve_bytes(bytes)?);
+                    budget.charge_work(self.values.len())?;
+                    staged
+                        .values
+                        .try_reserve_exact(target)
+                        .map_err(|_| "conditional scratch allocation failed")?;
+                    let excess = staged
+                        .values
+                        .capacity()
+                        .checked_sub(target)
+                        .and_then(|n| n.checked_mul(std::mem::size_of::<T>()))
+                        .ok_or("conditional scratch capacity overflow")?;
+                    staged._extra = Some(budget.reserve_bytes(excess)?);
+                    staged.values.append(&mut self.values);
+                    *self = staged;
+                }
+                self.values.push(value);
+                Ok(())
+            }
+        }
+        if budget.has_resource_failure() {
+            return Err("planning resource budget already exhausted".into());
+        }
+        let mut pending = Scratch::new();
+        let mut seen = Scratch::new();
+        pending.push((left, right, result, 0usize), budget)?;
+        while let Some((left, right, result, depth)) = pending.values.pop() {
+            budget.charge_work(1)?;
+            budget.check_depth(depth)?;
+            let key = (
+                std::ptr::from_ref(left) as usize,
+                std::ptr::from_ref(right) as usize,
+                std::ptr::from_ref(result) as usize,
+            );
+            let mut found = false;
+            for candidate in &seen.values {
+                budget.charge_work(1)?;
+                if candidate == &key {
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                continue;
+            }
+            seen.push(key, budget)?;
+            if matches!(left, Ty::Never) {
+                if !ref_types_equal(right, result, budget, depth)? {
+                    return Ok(false);
+                }
+                continue;
+            }
+            if matches!(right, Ty::Never) {
+                if !ref_types_equal(left, result, budget, depth)? {
+                    return Ok(false);
+                }
+                continue;
+            }
+            match (left, right, result) {
+                (
+                    Ty::Array { element: a, len: x },
+                    Ty::Array { element: b, len: y },
+                    Ty::Array { element: c, len: z },
+                ) if x == y && y == z => {
+                    pending.push((a.as_ref(), b.as_ref(), c.as_ref(), depth + 1), budget)?;
+                }
+                (Ty::Tuple(a), Ty::Tuple(b), Ty::Tuple(c))
+                    if a.len() == b.len() && b.len() == c.len() =>
+                {
+                    budget.charge_work(a.len())?;
+                    for ((a, b), c) in a.iter().zip(b.iter()).zip(c.iter()) {
+                        pending.push((a, b, c, depth + 1), budget)?;
+                    }
+                }
+                _ => {
+                    if !ref_types_equal(left, result, budget, depth)?
+                        || !ref_types_equal(right, result, budget, depth)?
+                    {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        Ok(true)
+    }
+
     /// Validate all retained type metadata before any executable admission check.
     /// Arena rows and statement annotations are authoritative even when dead.
     fn validate_all_type_metadata(
@@ -6483,6 +6680,10 @@ impl CheckedFunction {
         // Traverse nested blocks iteratively so malformed/deep fixtures cannot
         // exhaust the host call stack inside this diagnostic helper.
         let mut blocks = vec![&self.body];
+        let fallback_budget = PlanBudget::default();
+        let conditional_budget = facts
+            .validated()
+            .map_or(&fallback_budget, |authority| authority.budget());
         for (borrow_index, value) in self.exprs.iter().enumerate() {
             match &value.kind {
                 ExprKind::IntCast { value: source, to } => {
@@ -6918,6 +7119,39 @@ impl CheckedFunction {
                     else_block,
                 } => {
                     expr(*condition)?;
+                    let condition = &self.exprs[condition.0];
+                    if condition.ty != Ty::Bool
+                        && !(condition.ty == Ty::Never && condition.completion == Completion::Never)
+                    {
+                        return Err("if condition requires bool or diverging never".into());
+                    }
+                    conditional_budget.charge_work(1)?;
+                    let (then_types, then_definite, then_possible) =
+                        self.conditional_block_flow(then_block, conditional_budget)?;
+                    let (else_types, else_definite, else_possible) =
+                        self.conditional_block_flow(else_block, conditional_budget)?;
+                    let mut valid_join = false;
+                    for then_ty in then_types.into_iter().flatten() {
+                        for else_ty in else_types.into_iter().flatten() {
+                            valid_join |= Self::conditional_join_matches(
+                                then_ty,
+                                else_ty,
+                                &value.ty,
+                                conditional_budget,
+                            )?;
+                        }
+                    }
+                    if !valid_join {
+                        return Err("if branch result type mismatch".into());
+                    }
+                    let condition_returns = condition.completion == Completion::Returns;
+                    let definitely_returns = condition_returns && (then_definite || else_definite);
+                    let possibly_returns = condition_returns && (then_possible || else_possible);
+                    if (value.completion == Completion::Returns && !possibly_returns)
+                        || (value.completion == Completion::Never && definitely_returns)
+                    {
+                        return Err("if completion mismatch".into());
+                    }
                     blocks.push(then_block);
                     blocks.push(else_block);
                 }
@@ -7066,6 +7300,158 @@ impl CheckedFunction {
 #[cfg(test)]
 #[path = "ir/typed_slice_tests.rs"]
 mod typed_slice_tests;
+
+#[cfg(test)]
+mod conditional_validation_tests {
+    use super::*;
+
+    fn block(statements: Vec<Stmt>, tail: Option<ExprId>) -> Block {
+        Block { statements, tail }
+    }
+
+    fn fixture() -> CheckedFunction {
+        CheckedFunction {
+            call_evidence: Arc::from([]),
+            body_substitution: None,
+            ref_contract: Default::default(),
+            name: "conditional".into(),
+            params: vec![],
+            result: Ty::Unit,
+            locals: vec![],
+            exprs: vec![
+                TypedExpr {
+                    ty: Ty::Bool,
+                    completion: Completion::Returns,
+                    kind: ExprKind::Bool(true),
+                },
+                TypedExpr {
+                    ty: Ty::Never,
+                    completion: Completion::Never,
+                    kind: ExprKind::Panic(Box::new(PanicMessage {
+                        message: "assertion failed".into(),
+                        location: "fixture:1:1".into(),
+                    })),
+                },
+                TypedExpr {
+                    ty: Ty::Unit,
+                    completion: Completion::Returns,
+                    kind: ExprKind::If {
+                        condition: ExprId(0),
+                        then_block: block(vec![], None),
+                        else_block: block(vec![Stmt::Expr(ExprId(1))], None),
+                    },
+                },
+            ],
+            // Deliberately unused: validation must check all retained rows.
+            body: block(vec![], None),
+        }
+    }
+
+    #[test]
+    fn unused_assertion_conditional_rejects_forged_result_and_condition() {
+        let function = fixture();
+        function.validate().unwrap();
+        let mut forged = function.clone();
+        forged.exprs[2].ty = Ty::Int(IntTy::I32);
+        assert!(forged.validate().unwrap_err().contains("branch result"));
+        let mut forged = function.clone();
+        forged.exprs[0].ty = Ty::Int(IntTy::I32);
+        assert!(forged.validate().unwrap_err().contains("if condition"));
+        let mut forged = function;
+        forged.exprs[2].completion = Completion::Never;
+        assert!(forged.validate().unwrap_err().contains("if completion"));
+    }
+
+    #[test]
+    fn never_condition_must_diverge_and_controls_conditional_completion() {
+        let mut function = fixture();
+        let ExprKind::If { condition, .. } = &mut function.exprs[2].kind else {
+            unreachable!()
+        };
+        *condition = ExprId(1);
+        function.exprs[2].completion = Completion::Never;
+        function.validate().unwrap();
+        function.exprs[2].completion = Completion::Returns;
+        assert!(function.validate().unwrap_err().contains("if completion"));
+        // A forged Never row that returns is not a Bool coercion.
+        function.exprs[0].ty = Ty::Never;
+        let ExprKind::If { condition, .. } = &mut function.exprs[2].kind else {
+            unreachable!()
+        };
+        *condition = ExprId(0);
+        assert!(function.validate().unwrap_err().contains("if condition"));
+    }
+
+    #[test]
+    fn dead_explicit_tail_still_constrains_join_but_not_completion() {
+        let mut function = fixture();
+        function.exprs[0].ty = Ty::Bool;
+        let ExprKind::If { then_block, .. } = &mut function.exprs[2].kind else {
+            unreachable!()
+        };
+        *then_block = block(vec![Stmt::Return(None)], Some(ExprId(0)));
+        function.exprs[2].ty = Ty::Bool;
+        function.exprs[2].completion = Completion::Never;
+        function.validate().unwrap();
+        function.exprs[2].ty = Ty::Unit;
+        assert!(function.validate().unwrap_err().contains("branch result"));
+        function.exprs[2].ty = Ty::Bool;
+        function.exprs[2].completion = Completion::Returns;
+        assert!(function.validate().unwrap_err().contains("if completion"));
+    }
+
+    #[test]
+    fn erased_while_let_obligations_preserve_both_source_possibilities() {
+        let mut function = fixture();
+        function.exprs.push(TypedExpr {
+            ty: Ty::Unit,
+            completion: Completion::Never,
+            kind: ExprKind::Loop {
+                id: LoopId(0),
+                body: block(vec![], None),
+            },
+        });
+        let ExprKind::If { then_block, .. } = &mut function.exprs[2].kind else {
+            unreachable!()
+        };
+        *then_block = block(vec![Stmt::Expr(ExprId(3))], None);
+        // An erased irrefutable while-let can retain source Returns.
+        function.validate().unwrap();
+        function.exprs[2].completion = Completion::Never;
+        function.validate().unwrap();
+        function.exprs[2].ty = Ty::Never;
+        function.validate().unwrap();
+        function.exprs[2].ty = Ty::Int(IntTy::I32);
+        assert!(function.validate().unwrap_err().contains("branch result"));
+    }
+
+    #[test]
+    fn aggregate_join_is_exact_memoized_and_uses_original_budget() {
+        let left = Ty::Tuple(vec![Ty::Never, Ty::Bool].into());
+        let right = Ty::Tuple(vec![Ty::Int(IntTy::I32), Ty::Bool].into());
+        let budget = PlanBudget::default();
+        assert!(CheckedFunction::conditional_join_matches(&left, &right, &right, &budget).unwrap());
+        assert!(!CheckedFunction::conditional_join_matches(&left, &right, &left, &budget).unwrap());
+        let exhausted = PlanBudget::new(PlanLimits {
+            work: 0,
+            ..PlanLimits::default()
+        });
+        assert!(
+            CheckedFunction::conditional_join_matches(&left, &right, &right, &exhausted).is_err()
+        );
+        assert!(exhausted.has_resource_failure());
+
+        let mut dag = Ty::Bool;
+        for _ in 0..24 {
+            dag = Ty::Tuple(vec![dag.clone(), dag].into());
+        }
+        let bounded = PlanBudget::new(PlanLimits {
+            work: 10_000,
+            ..PlanLimits::default()
+        });
+        assert!(CheckedFunction::conditional_join_matches(&dag, &dag, &dag, &bounded).unwrap());
+    }
+}
 
 #[cfg(test)]
 mod original_replay_transport_tests {

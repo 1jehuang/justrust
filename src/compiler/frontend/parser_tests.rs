@@ -1026,3 +1026,280 @@ fn expanded_panic_uses_outer_invocation_location() {
     assert_eq!(message.message, "message");
     assert!(message.location.ends_with(":3:1"), "{}", message.location);
 }
+
+fn assertion_failure(expr: &Expr) -> &SourcePanic {
+    let Expr::If {
+        then_block,
+        else_block,
+        ..
+    } = expr
+    else {
+        panic!("expected assertion source If")
+    };
+    assert!(then_block.statements.is_empty());
+    assert!(then_block.tail.is_none());
+    assert!(else_block.statements.is_empty());
+    let Some(Expr::Panic(panic)) = else_block.tail.as_deref() else {
+        panic!("expected assertion failure source Panic")
+    };
+    panic
+}
+
+#[test]
+fn builtin_assert_delimiters_messages_and_unit_source_shape() {
+    for (invocation, expected) in [
+        ("assert!(true)", "assertion failed"),
+        ("assert!(false,)", "assertion failed"),
+        ("assert![true]", "assertion failed"),
+        ("assert!{true,}", "assertion failed"),
+        ("assert!(true, \"message\")", "message"),
+        ("assert![true, \"message\",]", "message"),
+        (
+            "assert!{false, \"literal {{braces}}\",}",
+            "literal {braces}",
+        ),
+    ] {
+        let program = parse(&format!("fn main(){{\n{invocation}\n}}")).unwrap();
+        let expression = program.functions[0].body.tail.as_deref().unwrap();
+        let panic = assertion_failure(expression);
+        assert_eq!(panic.message, expected);
+        validate_panic_site(panic, &program.names).unwrap();
+        let original = program.names.session().original(panic.site, 512).unwrap();
+        let (_, line, column) = program
+            .names
+            .session()
+            .sources()
+            .location(original)
+            .unwrap();
+        assert_eq!((line, column), (2, 1));
+        let env = type_env(&program).unwrap();
+        let checked = type_function_with_env(&program, 0, &env).unwrap();
+        let if_expression = checked
+            .exprs
+            .iter()
+            .find(|expr| matches!(expr.kind, ir::ExprKind::If { .. }))
+            .unwrap();
+        assert_eq!(if_expression.ty, ir::Ty::Unit);
+        assert_eq!(if_expression.completion, ir::Completion::Returns);
+        let failure = checked
+            .exprs
+            .iter()
+            .find(|expr| matches!(expr.kind, ir::ExprKind::Panic(_)))
+            .unwrap();
+        assert_eq!(failure.ty, ir::Ty::Never);
+        assert_eq!(failure.completion, ir::Completion::Never);
+    }
+}
+
+#[test]
+fn builtin_assert_requires_real_bool_and_retains_one_source_call() {
+    for source in [
+        "fn main(){assert!(1);}",
+        "fn main(){assert!(!1);}",
+        "fn main(){assert!(());}",
+        "fn main(){assert!(&true);}",
+        "fn main(){let b=true;assert!(&b);}",
+        "fn main(){return;assert!(1);}",
+        "fn main(){assert!(false && 1);}",
+        "fn f()->i32{assert!(false)}fn main(){}",
+    ] {
+        bad(source);
+    }
+    for source in [
+        "fn main(){let x:()=assert!(true);}",
+        "fn main(){assert!(panic!(\"condition\"));}",
+        "fn main(){assert!(false && {panic!(\"skipped\")});}",
+        "fn main(){assert!(true || {panic!(\"skipped\")});}",
+        "struct S{value:bool}fn main(){if {assert!(S{value:true}.value);true} {}}",
+    ] {
+        good(source);
+    }
+    // The assertion's delimited argument must not inherit the outer if's
+    // prohibition on an unparenthesized struct literal. Its Unit result is a
+    // separate type error, not a reason to reject the source expression.
+    let program =
+        parse("struct S{value:bool}fn main(){if assert!(S{value:true}.value) {}}").unwrap();
+    assert!(check(&program).is_err());
+    let program = parse("fn predicate()->bool{true}fn main(){assert!(predicate())}").unwrap();
+    let Expr::If { condition, .. } = program.functions[1].body.tail.as_deref().unwrap() else {
+        panic!("expected direct assertion If")
+    };
+    assert!(matches!(condition.as_ref(), Expr::Call { .. }));
+    let budget = ir::PlanBudget::default();
+    let identity = sr::OriginalBodyId::new(&budget).unwrap();
+    let inventory =
+        SourceInventory::build(&program, &program.functions[1], identity, &budget).unwrap();
+    assert_eq!(inventory.calls.len(), 1);
+    let env = type_env(&program).unwrap();
+    let checked = type_function_with_env(&program, 1, &env).unwrap();
+    assert_eq!(
+        checked
+            .exprs
+            .iter()
+            .filter(|expr| matches!(expr.kind, ir::ExprKind::Call { .. }))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn builtin_assert_does_not_reinterpret_shadowing_or_unsupported_messages() {
+    let program = parse("fn main(){macro_rules! assert{()=>{42};}assert!()}").unwrap();
+    assert!(matches!(
+        program.functions[0].body.tail.as_deref(),
+        Some(Expr::Integer(_))
+    ));
+    good(
+        "fn main(){assert!(true);{macro_rules! assert{()=>{42};}let x:i32=assert!();}assert!(true);}",
+    );
+    good("fn main(){macro_rules! panic{()=>{42};}assert!(true);}");
+    for source in [
+        "macro_rules! assert{()=>{42};}fn main(){assert!()}",
+        "fn main(){macro_rules! assert{(other)=>{42};}assert!(true)}",
+        "fn main(){assert!()}",
+        "fn main(){assert!(,)}",
+        "fn main(){assert!(true,42)}",
+        "fn main(){assert!(true,message)}",
+        "fn main(){assert!(true,\"{}\")}",
+        "fn main(){assert!(true,\"{name}\")}",
+        "fn main(){assert!(true,\"message\",42)}",
+        "fn main(){assert!(true,,)}",
+        "fn main(){assert_eq!(1,1)}",
+        "fn main(){debug_assert!(true)}",
+    ] {
+        assert!(parse(source).is_err(), "{source}");
+    }
+    for (source, expected) in [
+        (
+            "fn main(){assert!(true,42)}",
+            "assert! nonliteral messages are unsupported",
+        ),
+        (
+            "fn main(){assert!(true,\"{}\")}",
+            "assert! formatting placeholders are unsupported",
+        ),
+        (
+            "fn main(){assert!(true,\"message\",42)}",
+            "assert! formatting arguments are unsupported",
+        ),
+        (
+            "fn main(){panic!(\"{}\")}",
+            "panic! formatting placeholders are unsupported",
+        ),
+    ] {
+        assert!(parse(source).unwrap_err().contains(expected), "{source}");
+    }
+    // Inactive invocations stay syntax-only, including arguments that the
+    // active builtin subset deliberately does not support.
+    good("#[cfg(any())]fn absent(){assert!(true,unknown + 2);}fn main(){}");
+}
+
+#[test]
+fn builtin_assert_preserves_written_statement_and_operator_precedence() {
+    for expression in [
+        "assert!(true)",
+        "assert![true]",
+        "(assert!(true))",
+        "(assert!{true})",
+    ] {
+        let source = format!("fn main(){{{expression} let x=1;}}");
+        assert!(parse(&source).is_err(), "{source}");
+    }
+    for source in [
+        "fn main(){assert!{true} let x=1;}",
+        "fn main(){assert!(true);let x=1;}",
+        "fn main(){assert![true];let x=1;}",
+        "fn main(){if true {} let x=1;}",
+        "fn main(){{assert!(true)} let x=1;}",
+        "fn main(){match true {true=>assert!(true),false=>assert!(false)}}",
+        "fn main(){match true {true=>assert!{true} false=>assert!{false}}}",
+    ] {
+        good(source);
+    }
+    for source in [
+        "fn main(){match true {true=>assert!(true) false=>assert!(false)}}",
+        "fn main(){match true {true=>assert![true] false=>assert![false]}}",
+        "fn main(){match true {true=>(assert!{true}) false=>assert!{false}}}",
+    ] {
+        assert!(parse(source).is_err(), "{source}");
+    }
+    for (suffix, kind) in [(" == ()", 0), ("[0]", 1), (".field", 2)] {
+        let source = format!("fn main(){{assert!(true){suffix}}}");
+        let program = parse(&source).unwrap();
+        let expression = program.functions[0].body.tail.as_deref().unwrap();
+        assert!(
+            match kind {
+                0 => matches!(
+                    expression,
+                    Expr::Binary {
+                        op: BinaryOp::Eq,
+                        ..
+                    }
+                ),
+                1 => matches!(expression, Expr::Index { .. }),
+                _ => matches!(expression, Expr::Field { .. }),
+            },
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn builtin_assert_expansion_keeps_checked_outer_site_and_opaque_literal() {
+    let program = parse("fn main(){\nmacro_rules! require{($b:literal,$m:literal)=>{assert!($b,$m)};}\nrequire!(true,\"message\")\n}").unwrap();
+    let panic = assertion_failure(program.functions[0].body.tail.as_deref().unwrap());
+    assert_eq!(panic.message, "message");
+    let env = type_env(&program).unwrap();
+    let checked = type_function_with_env(&program, 0, &env).unwrap();
+    let message = checked
+        .exprs
+        .iter()
+        .find_map(|expr| match &expr.kind {
+            ir::ExprKind::Panic(message) => Some(message),
+            _ => None,
+        })
+        .unwrap();
+    assert!(message.location.ends_with(":3:1"), "{}", message.location);
+}
+
+#[test]
+fn builtin_assert_foreign_failure_site_is_rejected() {
+    let mut program = parse("fn main(){assert!(true)}").unwrap();
+    let foreign = parse("fn main(){assert!(true)}").unwrap();
+    let foreign_site = assertion_failure(foreign.functions[0].body.tail.as_deref().unwrap()).site;
+    let Expr::If { else_block, .. } = program.functions[0].body.tail.as_deref_mut().unwrap() else {
+        panic!("expected source If")
+    };
+    let Some(Expr::Panic(panic)) = else_block.tail.as_deref_mut() else {
+        panic!("expected source Panic")
+    };
+    panic.site = foreign_site;
+    assert!(program.validate_name_handles().is_err());
+    assert!(preflight_program_clone(&program, &ir::PlanBudget::default()).is_err());
+    assert!(recipes::inventory(&program, &ir::PlanBudget::default()).is_err());
+}
+
+#[test]
+fn builtin_assert_storage_failure_is_poisoned_and_released() {
+    use super::super::expansion_budget::{BudgetResource, Storage};
+    let (tokens, session) = lex("assert!(true)").unwrap().into_parts();
+    let mut names = NameStoreBuilder::new(session, super::super::token::Edition::E2024).unwrap();
+    let budget = names.budget().clone();
+    let mut parser = Parser::new(&tokens, &mut names).unwrap();
+    let snapshot = budget.snapshot();
+    let remaining = budget.limits().bytes - snapshot.retained_bytes - snapshot.temporary_bytes;
+    let blocker = budget.reserve(Storage::Temporary, remaining).unwrap();
+    let error = parser.assert_expression().unwrap_err();
+    assert_eq!(error.kind, super::super::source::SourceErrorKind::Limit);
+    assert_eq!(
+        budget.snapshot().failure.unwrap().resource,
+        BudgetResource::Bytes
+    );
+    drop(error);
+    drop(blocker);
+    drop(parser);
+    drop(names);
+    drop(tokens);
+    assert_eq!(budget.snapshot().retained_bytes, 0);
+    assert_eq!(budget.snapshot().temporary_bytes, 0);
+}
