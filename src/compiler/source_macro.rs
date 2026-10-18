@@ -165,6 +165,7 @@ impl LocalMacroDriver {
         })?;
         Ok(())
     }
+    #[cfg(test)]
     pub(super) fn select(
         &self,
         name: AstIdent,
@@ -172,6 +173,21 @@ impl LocalMacroDriver {
         scopes: &ScopeArenaBuilder,
         names: &NameStoreBuilder,
     ) -> Result<CheckedDef, DriverError> {
+        let span = names.span(name)?;
+        self.lookup(name, call, scopes, names)?
+            .ok_or(DriverError::Macro(MacroError::Syntax {
+                span: Some(span),
+                message: "unknown function-local macro at this lexical point",
+            }))
+    }
+    /// Absence is distinct from invalid provenance, scope, or expansion errors.
+    pub(super) fn lookup(
+        &self,
+        name: AstIdent,
+        call: FrontierId,
+        scopes: &ScopeArenaBuilder,
+        names: &NameStoreBuilder,
+    ) -> Result<Option<CheckedDef>, DriverError> {
         self.check(names)?;
         scopes.check_names(names).map_err(DriverError::Scope)?;
         if scopes.function(call).map_err(DriverError::Scope)? != self.owner {
@@ -185,20 +201,16 @@ impl LocalMacroDriver {
                     .visible_from(rules.definition, call)
                     .map_err(DriverError::Scope)?
             {
-                return Ok(CheckedDef {
+                return Ok(Some(CheckedDef {
                     driver: self.id,
                     owner: self.owner,
                     index: u32::try_from(index).map_err(|_| TokenError::IdExhausted)?,
                     definition: rules.definition,
                     call,
-                });
+                }));
             }
         }
-        Err(MacroError::Syntax {
-            span: Some(names.span(name)?),
-            message: "unknown function-local macro at this lexical point",
-        }
-        .into())
+        Ok(None)
     }
     /// Lexical visibility and function ownership are checked by the parser's
     /// ScopeArena before this call and again when issuing ExpansionAdmission.

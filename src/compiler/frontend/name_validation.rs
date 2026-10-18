@@ -908,6 +908,7 @@ impl<'a> Validator<'a> {
                         self.push(Visit::Ident(*label, LookupClass::Label))?;
                     }
                 }
+                Expr::Panic(panic) => validate_panic_site(panic, &self.program.names)?,
                 Expr::Integer(_) | Expr::Float(_) | Expr::Bool(_) | Expr::Println(_) => (),
             },
             Visit::Pattern(pattern) => match pattern {

@@ -2394,7 +2394,8 @@ pub fn instantiate_checked(
             | ExprKind::Binary { .. }
             | ExprKind::Break { .. }
             | ExprKind::Continue { .. }
-            | ExprKind::Println(_) => {}
+            | ExprKind::Println(_)
+            | ExprKind::Panic(_) => {}
         }
     }
     visitor.block(&mut output.body, 0)?;
@@ -5530,6 +5531,13 @@ pub struct MatchArm {
     pub body: ExprId,
 }
 
+/// Cold diagnostic payload for an abort-only, nonreturning panic.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PanicMessage {
+    pub message: String,
+    pub location: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExprKind {
     IntCast {
@@ -5648,6 +5656,7 @@ pub enum ExprKind {
         target: LoopId,
     },
     Println(String),
+    Panic(Box<PanicMessage>),
 }
 
 impl CheckedFunction {
@@ -6002,6 +6011,11 @@ impl CheckedFunction {
                     storage(budget, values.len(), std::mem::size_of::<ExprId>())?
                 }
                 ExprKind::Println(text) => storage(budget, text.len(), 1)?,
+                ExprKind::Panic(payload) => {
+                    storage(budget, 1, std::mem::size_of::<PanicMessage>())?;
+                    storage(budget, payload.message.len(), 1)?;
+                    storage(budget, payload.location.len(), 1)?;
+                }
                 ExprKind::IntCast { .. }
                 | ExprKind::FloatCast { .. }
                 | ExprKind::Float(_)
@@ -6918,6 +6932,13 @@ impl CheckedFunction {
                     integer.validate()?;
                     if value.ty != Ty::Int(integer.ty) {
                         return Err("integer expression type mismatch".into());
+                    }
+                }
+                ExprKind::Panic(_) => {
+                    if value.ty != Ty::Never || value.completion != Completion::Never {
+                        return Err(
+                            "panic requires exact Never type and nonreturning completion".into(),
+                        );
                     }
                 }
                 ExprKind::Bool(_) | ExprKind::Println(_) => {}

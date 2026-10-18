@@ -1466,6 +1466,8 @@ impl SourceInventory {
                     "unexpanded macro syntax cannot enter active source inventory",
                 ));
             }
+            Expr::Panic(panic) => validate_panic_site(panic, &self.names)
+                .map_err(|message| source_error(budget, &message))?,
             Expr::Apply { path, value } => {
                 return self.expr(
                     value,
@@ -4655,6 +4657,41 @@ impl std::fmt::Debug for UnexpandedMacroSyntax {
     }
 }
 #[derive(Clone, Debug)]
+pub struct SourcePanic {
+    pub message: String,
+    pub site: super::expansion_span::SpanId,
+}
+
+fn panic_callsite(
+    session: &super::token_session::TokenSession,
+    mut site: super::expansion_span::SpanId,
+) -> Result<super::expansion_span::SpanId, super::token_session::TokenError> {
+    for _ in 0..512 {
+        let span = session.span(site)?;
+        match span.expansion {
+            Some(expansion) => site = session.expansion(expansion)?.call,
+            None => return Ok(site),
+        }
+    }
+    Err(super::token_session::TokenError::TraceTruncated)
+}
+
+fn validate_panic_site(panic: &SourcePanic, names: &NameStore) -> Result<(), String> {
+    let site = panic_callsite(names.session(), panic.site)
+        .map_err(|error| super::source::SourceError::from_token(error).to_string())?;
+    let original = names
+        .session()
+        .original(site, 512)
+        .map_err(|error| super::source::SourceError::from_token(error).to_string())?;
+    names
+        .session()
+        .sources()
+        .location(original)
+        .map_err(|error| super::source::SourceError::from_token(error).to_string())?;
+    Ok(())
+}
+
+#[derive(Clone, Debug)]
 pub enum Expr {
     UnexpandedMacro(Arc<UnexpandedMacroSyntax>),
     TraitCall {
@@ -4772,6 +4809,7 @@ pub enum Expr {
         label: Option<AstIdent>,
     },
     Println(String),
+    Panic(Box<SourcePanic>),
 }
 #[derive(Clone, Debug)]
 pub struct MatchArm {
@@ -5904,6 +5942,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.expect("!")?;
             return Ok(Expr::UnexpandedMacro(self.inactive_invocation(path, span)?));
         }
+        if self.builtin_panic_ahead()? {
+            return self.panic_expression();
+        }
         if self.item_expansion.is_some() {
             return Err(self.unsupported(
                 "user macro expressions in item-generated functions are unsupported",
@@ -5911,6 +5952,88 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         let (buffer, admission, depth) = self.prepare_local_macro()?;
         self.isolated_expression_at(&buffer, Some(admission), depth)
+    }
+    /// Select the builtin only after checked lexical and module lookup miss.
+    fn builtin_panic_ahead(&mut self) -> Result<bool, ParseError> {
+        let token = self.token();
+        let name = self.input.mint_name(&token, self.names)?;
+        let key = self
+            .names
+            .key(name, LookupClass::Item(Namespace::Macro))
+            .map_err(native_adapter::name_error)?;
+        let builtin_site = panic_callsite(self.names.session(), token.span)
+            .map_err(native_adapter::transport_error)?;
+        let builtin = self
+            .names
+            .intern_root("panic", builtin_site)
+            .map_err(native_adapter::name_error)?;
+        let builtin = self
+            .names
+            .key(builtin, LookupClass::Item(Namespace::Macro))
+            .map_err(native_adapter::name_error)?;
+        if key != builtin {
+            return Ok(false);
+        }
+        if let (Some(function), Some(scopes)) = (&self.lexical.function, &self.lexical.scopes)
+            && let Some(driver) = &function.driver
+            && driver
+                .lookup(name, function.frontier, scopes, self.names)
+                .map_err(|error| self.driver_error(error))?
+                .is_some()
+        {
+            return Ok(false);
+        }
+        Ok(!self.known_module_macro(name)?)
+    }
+    fn panic_expression(&mut self) -> Result<Expr, ParseError> {
+        let site = self.token().span;
+        let original = self
+            .names
+            .session()
+            .original(
+                panic_callsite(self.names.session(), site)
+                    .map_err(native_adapter::transport_error)?,
+                512,
+            )
+            .map_err(native_adapter::transport_error)?;
+        self.names
+            .session()
+            .sources()
+            .location(original)
+            .map_err(native_adapter::transport_error)?;
+        self.ident()?;
+        self.expect("!")?;
+        let close = if self.eat("(") {
+            ")"
+        } else if self.eat("[") {
+            "]"
+        } else if self.eat("{") {
+            "}"
+        } else {
+            return Err(self.error("expected a panic! delimiter"));
+        };
+        let message = if self.is(close) {
+            self.names
+                .retain_parser_text("explicit panic".len())
+                .map_err(native_adapter::name_error)?;
+            "explicit panic".to_owned()
+        } else {
+            if !self.token().string && !self.token().is_opaque_literal() {
+                return Err(self.unsupported("panic! nonliteral arguments are unsupported"));
+            }
+            let text = self.panic_literal()?;
+            self.eat(",");
+            if !self.is(close) {
+                return Err(self.unsupported("panic! formatting arguments are unsupported"));
+            }
+            text
+        };
+        self.expect(close)?;
+        let payload = self
+            .names
+            .try_parser_box(SourcePanic { message, site })
+            .map_err(native_adapter::name_error)?;
+        Ok(Expr::Panic(payload))
     }
     fn known_module_macro(&self, name: AstIdent) -> Result<bool, ParseError> {
         let (Some(driver), Some(call), Some(scopes)) = (
@@ -5976,21 +6099,18 @@ impl<'input, 'names> Parser<'input, 'names> {
         let driver = function.driver.as_ref().ok_or_else(|| {
             self.unsupported("user macros in generated functions are unsupported")
         })?;
-        let selected = match driver.select(name, call, scopes, self.names) {
-            Ok(selected) => selected,
-            Err(error) => {
-                if matches!(
-                    &error,
-                    super::source_macro::DriverError::Macro(
-                        super::macro_rules::MacroError::Syntax { .. }
-                    )
-                ) && self.known_module_macro(name)?
-                {
+        let selected = match driver
+            .lookup(name, call, scopes, self.names)
+            .map_err(|error| self.driver_error(error))?
+        {
+            Some(selected) => selected,
+            None => {
+                if self.known_module_macro(name)? {
                     return Err(
                         self.unsupported("module macros in expression position are unsupported")
                     );
                 }
-                return Err(self.driver_error(error));
+                return Err(self.error("unknown function-local macro at this lexical point"));
             }
         };
         let expanded = driver
@@ -6088,6 +6208,29 @@ impl<'input, 'names> Parser<'input, 'names> {
         let value = self.isolated_expression(&buffer)?;
         self.cursor.bump();
         Ok(value)
+    }
+    fn panic_literal(&mut self) -> Result<String, ParseError> {
+        let buffer;
+        let token = if self.token().is_opaque_literal() {
+            buffer = self
+                .input
+                .opaque_literal_buffer(&self.token(), self.names)?;
+            TokenCursor::new(&buffer).current()
+        } else {
+            self.token()
+        };
+        if !token.string {
+            return Err(self.unsupported("panic! nonliteral arguments are unsupported"));
+        }
+        let text = literal_format_owned(token.text, self.names).map_err(|error| {
+            if error.kind == super::source::SourceErrorKind::Syntax {
+                self.unsupported("panic! formatting placeholders are unsupported")
+            } else {
+                error
+            }
+        })?;
+        self.cursor.bump();
+        Ok(text)
     }
     fn println_literal(&mut self) -> Result<String, ParseError> {
         if self.token().is_opaque_literal() {
@@ -8798,6 +8941,9 @@ impl<'input, 'names> Parser<'input, 'names> {
                     "unsupported: for loops and iterators (including slice iteration); use while with an index",
                 ));
             } else {
+                let brace_macro = self.is_identifier()
+                    && self.cursor.peek(1).is_some_and(|token| token.matches("!"))
+                    && self.cursor.peek(2).is_some_and(|token| token.matches("{"));
                 let expr = self.statement_expr()?;
                 if let Some(op) = compound_operator(self.token()) {
                     self.cursor.bump();
@@ -8840,15 +8986,17 @@ impl<'input, 'names> Parser<'input, 'names> {
                 } else if self.is("}") {
                     tail = Some(Box::new(expr));
                     break;
-                } else if matches!(
-                    expr,
-                    Expr::If { .. }
-                        | Expr::IfLet { .. }
-                        | Expr::Block(_)
-                        | Expr::LabeledBlock { .. }
-                        | Expr::Loop { .. }
-                        | Expr::Match { .. }
-                ) {
+                } else if (brace_macro && matches!(expr, Expr::Panic(_)))
+                    || matches!(
+                        expr,
+                        Expr::If { .. }
+                            | Expr::IfLet { .. }
+                            | Expr::Block(_)
+                            | Expr::LabeledBlock { .. }
+                            | Expr::Loop { .. }
+                            | Expr::Match { .. }
+                    )
+                {
                     statements.push(Stmt::ImplicitExpr(expr));
                 } else {
                     return Err(self.error("expected semicolon or block end"));
@@ -11028,6 +11176,7 @@ fn walk_depth_inspecting(
                         check(*label)?;
                     }
                 }
+                DepthNode::Expr(Expr::Panic(panic)) => validate_panic_site(panic, names)?,
                 DepthNode::Expr(Expr::LabeledBlock { label, .. }) => check(*label)?,
                 _ => {}
             }

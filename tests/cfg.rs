@@ -151,7 +151,9 @@ fn edges(terminator: &cfg::Terminator) -> Vec<cfg::BlockId> {
             ..
         } => vec![*then_block, *else_block],
         cfg::Terminator::Call { next, .. } => vec![*next],
-        cfg::Terminator::Return | cfg::Terminator::Unreachable => vec![],
+        cfg::Terminator::Return | cfg::Terminator::Panic(_) | cfg::Terminator::Unreachable => {
+            vec![]
+        }
     }
 }
 fn reachable(function: &cfg::Function) -> HashSet<cfg::BlockId> {

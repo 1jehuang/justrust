@@ -526,6 +526,7 @@ pub enum Terminator {
     },
     /// Consumes the value held in Function::return_local.
     Return,
+    Panic(Box<ir::PanicMessage>),
     Unreachable,
 }
 
@@ -590,7 +591,11 @@ impl Terminator {
                 }
             }
             Self::Switch { condition, .. } => visit(condition)?,
-            Self::SwitchVariant { .. } | Self::Goto(_) | Self::Return | Self::Unreachable => {}
+            Self::SwitchVariant { .. }
+            | Self::Goto(_)
+            | Self::Return
+            | Self::Panic(_)
+            | Self::Unreachable => {}
         }
         Ok(())
     }
@@ -1024,6 +1029,16 @@ impl Function {
                     )?;
                     path(&mut bytes, destination, budget)?;
                 }
+                Terminator::Panic(payload) => {
+                    add(
+                        &mut bytes,
+                        1,
+                        std::mem::size_of::<ir::PanicMessage>(),
+                        budget,
+                    )?;
+                    add(&mut bytes, payload.message.len(), 1, budget)?;
+                    add(&mut bytes, payload.location.len(), 1, budget)?;
+                }
                 Terminator::SwitchVariant { place, .. } => path(&mut bytes, place, budget)?,
                 _ => {}
             }
@@ -1364,6 +1379,7 @@ impl Function {
                     Terminator::Goto(_)
                     | Terminator::Switch { .. }
                     | Terminator::Return
+                    | Terminator::Panic(_)
                     | Terminator::Unreachable => {}
                 }
             }
@@ -1422,7 +1438,7 @@ impl Function {
                             push(then_block);
                             push(else_block);
                         }
-                        Terminator::Return | Terminator::Unreachable => {}
+                        Terminator::Return | Terminator::Panic(_) | Terminator::Unreachable => {}
                     }
                 }
                 Ok(false)
@@ -1561,7 +1577,10 @@ impl Function {
                 }
                 Terminator::Switch { condition, .. } => operand(condition, budget, facts)?,
                 Terminator::SwitchVariant { place, .. } => path(place, budget)?,
-                Terminator::Goto(_) | Terminator::Return | Terminator::Unreachable => {}
+                Terminator::Goto(_)
+                | Terminator::Return
+                | Terminator::Panic(_)
+                | Terminator::Unreachable => {}
             }
         }
         Ok(())
@@ -2199,7 +2218,7 @@ impl Function {
                     }
                     block(*next)?;
                 }
-                Terminator::Return | Terminator::Unreachable => {}
+                Terminator::Return | Terminator::Panic(_) | Terminator::Unreachable => {}
             }
         }
         if loan_uses.iter().any(|count| *count != 1) {
@@ -2730,7 +2749,10 @@ impl Lowerer<'_> {
                 ) => [Some(*then_block), Some(*else_block)],
                 // An open outer break/continue target is a sink in this finite
                 // snapshot, not a proof that the local continuation diverges.
-                None | Some(Terminator::Return | Terminator::Unreachable) => [None, None],
+                None
+                | Some(Terminator::Return | Terminator::Panic(_) | Terminator::Unreachable) => {
+                    [None, None]
+                }
             };
             for next in successors.into_iter().flatten() {
                 self.divergence_work(1)?;
@@ -3643,6 +3665,22 @@ impl Lowerer<'_> {
                 self.terminate(Terminator::Goto(head), origin)?;
                 self.disconnected();
             }
+            ir::ExprKind::Panic(payload) => {
+                // The source preflight covers the arena entry only. A shared
+                // ExprId can be lowered repeatedly, allocating a fresh Box and
+                // both diagnostic strings on each materialization.
+                let bytes = std::mem::size_of::<ir::PanicMessage>()
+                    .checked_add(payload.message.len())
+                    .and_then(|bytes| bytes.checked_add(payload.location.len()))
+                    .ok_or_else(|| {
+                        self.divergence_resource("CFG panic payload allocation overflow")
+                    })?;
+                if !self.allocate(0, bytes) {
+                    return Err(self.resource_error.clone().unwrap());
+                }
+                self.terminate(Terminator::Panic(payload.clone()), origin)?;
+                self.disconnected();
+            }
             ir::ExprKind::Println(text) => {
                 self.assign(destination.clone(), Rvalue::Println(text.clone()), origin)
             }
@@ -3951,6 +3989,336 @@ fn lower_internal_with_source(
         })
         .collect();
     Ok(lowerer.result)
+}
+
+#[cfg(test)]
+mod panic_terminal_tests {
+    use super::*;
+    use crate::compiler::{frontend, ownership};
+    use std::sync::Arc;
+
+    fn publish(
+        text: &str,
+        budget: &ir::PlanBudget,
+    ) -> Arc<crate::compiler::source_replay::CanonicalSourcePublication> {
+        let program = frontend::parse(text).unwrap();
+        let plan = frontend::PlanCtx::from_program(&program, budget).unwrap();
+        let frontend::PublishedCallableBody::Source(publication) = plan
+            .publish_callable_body(plan.function_decl(0).unwrap(), budget)
+            .unwrap()
+        else {
+            panic!("canonical source publication required")
+        };
+        publication
+    }
+
+    #[test]
+    fn source_panic_requires_exact_never_even_in_unused_arena_entries() {
+        let budget = ir::PlanBudget::default();
+        let publication = publish("fn f()->i32{panic!(\"cold\")}fn main(){}", &budget);
+        let source = publication.source();
+        let index = source
+            .exprs
+            .iter()
+            .position(|expression| matches!(expression.kind, ir::ExprKind::Panic(_)))
+            .unwrap();
+        assert_eq!(source.exprs[index].ty, Ty::Never);
+        assert_eq!(source.exprs[index].completion, ir::Completion::Never);
+        for mutate_location in [false, true] {
+            let mut forged = source.as_ref().clone();
+            let ir::ExprKind::Panic(payload) = &mut forged.exprs[index].kind else {
+                unreachable!()
+            };
+            if mutate_location {
+                payload.location.push('!');
+            } else {
+                payload.message.push('!');
+            }
+            assert!(
+                publication
+                    .validate_source(&Arc::new(forged), publication.facts(), &budget)
+                    .is_err()
+            );
+        }
+        let mut forged = source.as_ref().clone();
+        forged.exprs[index].ty = Ty::Unit;
+        assert!(
+            forged
+                .validate()
+                .unwrap_err()
+                .contains("panic requires exact Never")
+        );
+        forged = source.as_ref().clone();
+        forged.exprs[index].completion = ir::Completion::Returns;
+        assert!(
+            forged
+                .validate()
+                .unwrap_err()
+                .contains("panic requires exact Never")
+        );
+        forged = source.as_ref().clone();
+        let mut unused = source.exprs[index].clone();
+        unused.completion = ir::Completion::Returns;
+        forged.exprs.push(unused);
+        assert!(
+            forged
+                .validate()
+                .unwrap_err()
+                .contains("panic requires exact Never")
+        );
+    }
+
+    #[test]
+    fn source_panic_is_terminal_without_a_result_write_and_has_sealed_payload() {
+        let budget = ir::PlanBudget::default();
+        let publication = publish("fn f()->i32{panic!(\"cold\")}fn main(){}", &budget);
+        let function = lower_source_closed(&publication, &budget).unwrap();
+        function.validate().unwrap();
+        assert!(ownership::analyze(&function).passed());
+        let (block_index, block) = function
+            .blocks
+            .iter()
+            .enumerate()
+            .find(|(_, block)| matches!(block.terminator.value, Terminator::Panic(_)))
+            .unwrap();
+        let origin = block.terminator.origin.unwrap();
+        let ir::ExprKind::Panic(expected) = &publication.source().exprs[origin.0].kind else {
+            panic!("panic terminator must retain its panic source")
+        };
+        let Terminator::Panic(actual) = &block.terminator.value else {
+            unreachable!()
+        };
+        assert_eq!(actual, expected);
+        assert_eq!(actual.message, "cold");
+        assert!(!actual.location.is_empty());
+        assert!(!block.statements.iter().any(|statement| {
+            statement.origin == Some(origin) && matches!(statement.value, Statement::Assign { .. })
+        }));
+        let mut visited_operands = 0;
+        block
+            .terminator
+            .value
+            .visit_operands(&mut |_| {
+                visited_operands += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(visited_operands, 0);
+        for change in 0..4 {
+            let mut forged = function.clone();
+            match change {
+                0 => {
+                    let Terminator::Panic(payload) =
+                        &mut forged.blocks[block_index].terminator.value
+                    else {
+                        unreachable!()
+                    };
+                    payload.message.push('!');
+                }
+                1 => {
+                    let Terminator::Panic(payload) =
+                        &mut forged.blocks[block_index].terminator.value
+                    else {
+                        unreachable!()
+                    };
+                    payload.location.push('!');
+                }
+                2 => forged.blocks[block_index].terminator.origin = None,
+                _ => forged.blocks[block_index].terminator.value = Terminator::Return,
+            }
+            assert!(
+                forged
+                    .validate_source_publication(&publication, &budget)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn source_let_else_panic_proves_real_divergence_and_generic_bodies_remain_checkable() {
+        let budget = ir::PlanBudget::default();
+        let publication = publish(
+            "enum E{A(i32),B}fn f(x:E)->i32{let E::A(value)=x else {panic!(\"no\")};value}fn main(){}",
+            &budget,
+        );
+        let function = lower_source_closed(&publication, &budget).unwrap();
+        assert!(ownership::analyze(&function).passed());
+        let mut returning_else = publication.source().as_ref().clone();
+        let panic_expression = returning_else
+            .exprs
+            .iter_mut()
+            .find(|expression| matches!(expression.kind, ir::ExprKind::Panic(_)))
+            .unwrap();
+        // Preserve forged Never metadata while changing the actual operation to
+        // a returning one. CFG reachability, not metadata, must reject this.
+        panic_expression.kind = ir::ExprKind::Println("not divergent".into());
+        assert!(
+            lower_with_facts(&returning_else, publication.facts(), &budget)
+                .unwrap_err()
+                .contains("else branch can fall through")
+        );
+        assert_eq!(
+            function
+                .blocks
+                .iter()
+                .filter(|block| matches!(block.terminator.value, Terminator::Panic(_)))
+                .count(),
+            1
+        );
+        let budget = ir::PlanBudget::default();
+        let publication = publish("fn f<T>(x:T)->T{panic!(\"generic\")}fn main(){}", &budget);
+        let template = lower_source_template(&publication, &budget).unwrap();
+        assert!(
+            ownership::verify_template(template)
+                .unwrap()
+                .analysis()
+                .passed()
+        );
+    }
+
+    #[test]
+    fn repeated_source_panic_materialization_charges_full_payload_before_cloning() {
+        let budget = ir::PlanBudget::default();
+        let text = format!("fn f(){{panic!(\"{}\")}}fn main(){{}}", "x".repeat(4096));
+        let publication = publish(&text, &budget);
+        let function = lower_source_closed(&publication, &budget).unwrap();
+        let source = publication.source();
+        let id = ExprId(
+            source
+                .exprs
+                .iter()
+                .position(|expression| matches!(expression.kind, ir::ExprKind::Panic(_)))
+                .unwrap(),
+        );
+        let ir::ExprKind::Panic(payload) = &source.exprs[id.0].kind else {
+            unreachable!()
+        };
+        assert!(!payload.location.is_empty());
+        let payload_bytes = std::mem::size_of::<ir::PanicMessage>()
+            + payload.message.len()
+            + payload.location.len();
+        let statement_bytes = std::mem::size_of::<Located<Statement>>();
+        let materialization_bytes =
+            statement_bytes + payload_bytes + std::mem::size_of::<PendingBlock>();
+        let mut lowerer = Lowerer {
+            facts: ir::FactsCtx::from_validated(publication.facts()),
+            budget: Some(&budget),
+            resource_error: None,
+            lowering_depth: 0,
+            lowering_work: 0,
+            origins: 0,
+            loans: vec![None; source.exprs.len()],
+            call_blocks: vec![None; source.exprs.len()],
+            used_loans: Default::default(),
+            source,
+            result: function,
+            expressions: (0..source.exprs.len())
+                .map(|index| LocalId(source.locals.len() + index))
+                .collect(),
+            parameters: Default::default(),
+            blocks: vec![PendingBlock {
+                statements: Vec::new(),
+                terminator: None,
+            }],
+            current: BlockId(0),
+            scopes: vec![Vec::new()],
+            loops: Vec::new(),
+        };
+        assert!(publication.facts().budget().same_authority(&budget));
+        assert!(lowerer.budget.unwrap().same_authority(&budget));
+        // Tighten the original publication ledger, not a fresh replacement.
+        // Two complete copies fit. The third falls one byte short of the full
+        // boxed payload, after its StorageLive but before any payload clone.
+        let remaining = 2 * materialization_bytes + statement_bytes + payload_bytes - 1;
+        budget
+            .retain_bytes(budget.limits().bytes - budget.usage_snapshot().bytes - remaining)
+            .unwrap();
+        for index in 0..2 {
+            let before = budget.usage_snapshot().bytes;
+            lowerer.materialize_expression(id).unwrap();
+            assert_eq!(
+                budget.usage_snapshot().bytes - before,
+                materialization_bytes
+            );
+            let terminator = lowerer.blocks[index].terminator.as_ref().unwrap();
+            assert_eq!(terminator.origin, Some(id));
+            let Terminator::Panic(actual) = &terminator.value else {
+                panic!("each occurrence must materialize its own panic terminator")
+            };
+            assert_eq!(actual, payload);
+            assert!(!std::ptr::eq(actual.as_ref(), payload.as_ref()));
+        }
+        let Terminator::Panic(first) = &lowerer.blocks[0].terminator.as_ref().unwrap().value else {
+            unreachable!()
+        };
+        let Terminator::Panic(second) = &lowerer.blocks[1].terminator.as_ref().unwrap().value
+        else {
+            unreachable!()
+        };
+        assert!(!std::ptr::eq(first.as_ref(), second.as_ref()));
+        let error = lowerer.materialize_expression(id).unwrap_err();
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
+        assert_eq!(failure.requested, payload_bytes);
+        assert_eq!(failure.used, budget.usage_snapshot().bytes);
+        assert_eq!(failure.limit - failure.used, payload_bytes - 1);
+        assert!(lowerer.blocks[2].terminator.is_none());
+        assert_eq!(lowerer.blocks.len(), 3);
+        let after_failure = budget.usage_snapshot().bytes;
+        assert_eq!(lowerer.materialize_expression(id).unwrap_err(), error);
+        assert_eq!(budget.usage_snapshot().bytes, after_failure);
+        assert_eq!(budget.first_resource_failure(), Some(failure));
+    }
+
+    #[test]
+    fn panic_payload_storage_is_budgeted_in_ir_and_cfg_clones() {
+        let budget = ir::PlanBudget::default();
+        let publication = publish("fn f(){panic!(\"cold\")}fn main(){}", &budget);
+        let source = publication.source();
+        let mut larger = source.as_ref().clone();
+        let ir::ExprKind::Panic(payload) = &mut larger
+            .exprs
+            .iter_mut()
+            .find(|expression| matches!(expression.kind, ir::ExprKind::Panic(_)))
+            .unwrap()
+            .kind
+        else {
+            unreachable!()
+        };
+        payload.message.push_str(&"x".repeat(4096));
+        payload.location.push_str(&"y".repeat(2048));
+        let small_budget = ir::PlanBudget::default();
+        source
+            .preflight_plan(ir::FactsCtx::Concrete, &small_budget)
+            .unwrap();
+        let large_budget = ir::PlanBudget::default();
+        larger
+            .preflight_plan(ir::FactsCtx::Concrete, &large_budget)
+            .unwrap();
+        assert_eq!(
+            large_budget.usage_snapshot().bytes - small_budget.usage_snapshot().bytes,
+            6144
+        );
+        let function = lower_source_closed(&publication, &budget).unwrap();
+        let mut larger = function.clone();
+        let Terminator::Panic(payload) = &mut larger
+            .blocks
+            .iter_mut()
+            .find(|block| matches!(block.terminator.value, Terminator::Panic(_)))
+            .unwrap()
+            .terminator
+            .value
+        else {
+            unreachable!()
+        };
+        payload.message.push_str(&"x".repeat(4096));
+        payload.location.push_str(&"y".repeat(2048));
+        let original_bytes = function
+            .snapshot_storage(&ir::PlanBudget::default())
+            .unwrap();
+        let enlarged_bytes = larger.snapshot_storage(&ir::PlanBudget::default()).unwrap();
+        assert_eq!(enlarged_bytes - original_bytes, 6144);
+    }
 }
 
 #[cfg(test)]
@@ -9242,7 +9610,7 @@ mod tests {
                         "storage survives return cleanup"
                     );
                 }
-                Terminator::Unreachable => {}
+                Terminator::Panic(_) | Terminator::Unreachable => {}
             }
         }
     }

@@ -905,6 +905,10 @@ impl<'s> Checker<'s> {
             .ok_or("inference requires planning context")?;
         let term = match expr {
             Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
+            Expr::Panic(panic) => {
+                validate_panic_site(panic, self.names()?)?;
+                self.infer_node(InferKind::Rigid(ir::Ty::Never))?
+            }
             Expr::Integer(literal) => self.infer_node(match literal.suffix {
                 Some(t) => InferKind::Rigid(ir::Ty::Int(t)),
                 None => InferKind::Integer,
@@ -3756,6 +3760,10 @@ impl<'a> Checker<'a> {
     pub(super) fn scalar_hint(&self, e: &Expr) -> Result<Option<ir::Ty>, String> {
         Ok(match e {
             Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
+            Expr::Panic(panic) => {
+                validate_panic_site(panic, self.names()?)?;
+                Some(ir::Ty::Never)
+            }
             Expr::TraitCall {
                 owner,
                 trait_path,
@@ -6976,6 +6984,42 @@ impl<'a> Checker<'a> {
                         completes: inhabited(&ty),
                         ty,
                     },
+                )
+            }
+            Expr::Panic(panic) => {
+                let names = self.names()?;
+                validate_panic_site(panic, names)?;
+                let site = panic_callsite(names.session(), panic.site).map_err(|error| {
+                    super::super::source::SourceError::from_token(error).to_string()
+                })?;
+                let original = names.session().original(site, 512).map_err(|error| {
+                    super::super::source::SourceError::from_token(error).to_string()
+                })?;
+                let (path, line, column) =
+                    names
+                        .session()
+                        .sources()
+                        .location(original)
+                        .map_err(|error| {
+                            super::super::source::SourceError::from_token(error).to_string()
+                        })?;
+                // Admit an upper bound before formatting a possibly non-UTF8 path.
+                let bytes = path
+                    .as_os_str()
+                    .len()
+                    .checked_mul(3)
+                    .and_then(|bytes| bytes.checked_add(64))
+                    .and_then(|bytes| bytes.checked_add(panic.message.len()))
+                    .and_then(|bytes| bytes.checked_add(std::mem::size_of::<ir::PanicMessage>()))
+                    .ok_or("panic diagnostic storage overflow")?;
+                self.charge_node(bytes)?;
+                let location = format!("{}:{line}:{column}", path.display());
+                (
+                    ir::ExprKind::Panic(Box::new(ir::PanicMessage {
+                        message: panic.message.clone(),
+                        location,
+                    })),
+                    Flow::never(),
                 )
             }
             Expr::Println(text) => (

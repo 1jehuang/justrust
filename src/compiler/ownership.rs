@@ -2777,7 +2777,7 @@ impl Transfer<'_> {
                     self.operand(state, &Operand::Move(root_place(self.f.return_local)))?;
                 }
             }
-            Terminator::Goto(_) | Terminator::Unreachable => {}
+            Terminator::Goto(_) | Terminator::Panic(_) | Terminator::Unreachable => {}
         }
         Ok(())
     }
@@ -2801,7 +2801,7 @@ fn successors(terminator: &Terminator) -> [Option<BlockId>; 2] {
             else_block,
             ..
         } => [Some(*then_block), Some(*else_block)],
-        Terminator::Return | Terminator::Unreachable => [None, None],
+        Terminator::Return | Terminator::Panic(_) | Terminator::Unreachable => [None, None],
     }
 }
 

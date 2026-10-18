@@ -11119,3 +11119,53 @@ oracle alone took 12.24s. Diagnostic timing only, not a before/after speed claim
 Full Rust, guards/or-patterns, refutable aggregate leaves, rest and implicit
 reference ergonomics remain open. No limits, stack environment or existing
 witnesses were weakened.
+
+## 2026-10-18: literal panic divergence and native abort
+
+Implemented the bounded empty/literal panic macro through checked source
+invocation identity, exact Never IR, terminal CFG and native Linux x86-64
+stderr/SIGABRT emission. Local macro shadowing and unsupported module macros
+retain their own identities. Dead and unused generic source remains checked;
+no panic result value or successor is invented. All payload clone/storage
+paths are metered, including repeated materialization of the same IR node.
+
+Independent review exposed a signal-safety defect in an intermediate emitter:
+a failed getpid could have become a nonpositive kill target. The final emitter
+branches to the exit101 failure fallback before any kill for nonpositive PIDs.
+Seccomp-backed tests deny getpid and trap any kill attempt. Hostile inherited
+SIGABRT state, closed stderr, partial/EINTR writes and exact diagnostic location
+are covered. Native aborts also request nondumpable state after exec, avoiding
+the observed external-core-handler delay. This is not core-file compatibility
+or stock stderr byte equivalence. A second parallel audit found unchecked
+signal-disposition, signal-mask and nondumpable setup results. All four now
+branch to the terminal exit101 fallback on failure; five seccomp regressions
+cover each setup operation and broken-pipe stderr before the SIGPIPE handler
+can be installed. Arithmetic/bounds traps remain unchanged.
+
+The frozen stock-first corpus contains 47 sources: 12 live, 17 aborting, five
+ordinary invalid and 13 earlier unsupported cases. Workers1/8 CHECK/BUILD run
+188 CLI and 188 observed-graph cells per profile, with 116 native executions.
+All 24 historical projected-method source bytes are unchanged; six originals
+now execute, while the rigid generic projection boundary remains explicit.
+Earlier println, eprintln, string-local and unsupported syntax failures are
+asserted as their actual earlier phases, not claimed as panic semantics.
+
+Final hosted check 20261017-180226274-4182951 and strict lint
+20261017-180234257-4182950 passed. Hosted private debug/release panic controls
+passed 17 each (20261017-180229753-4183210 and 20261017-180233463-4186122), and
+seven public authority controls passed. Full local all-target acceptance passed
+3,024 tests in 147 binaries, run 20261017-180229874-4183246. Final local release
+panic/authority/projected suites passed 16 tests, 20261017-180258455-14719.
+The 30 available failed and passing exported rows are retained in
+`data/runs/xps14/2026-10-18-panic.jsonl`, including initial missing exhaustive
+matches, strict-lint failures, native abort timeout and corrected diagnostics.
+
+Hosted stock abort subprocesses stalled, so the full and stock-containing
+acceptance runs used the documented local exception. No hosted full-suite pass
+is claimed. The final local full suite's silent interval was normal compilation
+and execution: the first full pass was 46.27s compile and 103.08s tests,
+149.4s total. The post-audit pass was 18.62s compile and 111.83s tests,
+130.6s total under contention, not a deadlock.
+The oversized engine and slow oracle waste reports remain actionable follow-up,
+not evidence for a performance claim. Formatting, unwind/Drop cleanup, std
+integration and full Rust remain open. No caps or source witnesses were weakened.

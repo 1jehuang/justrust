@@ -928,3 +928,101 @@ fn literals_and_comments() {
     bad("fn main(){println!(\"\\q\");}");
     assert!(parse("\nfn main(){@}").unwrap_err().starts_with("2:11:"));
 }
+
+#[test]
+fn literal_panic_delimiters_and_checked_locations() {
+    for invocation in [
+        "panic!()",
+        "panic![]",
+        "panic!{}",
+        "panic!(\"message\",)",
+        "panic![\"message\"]",
+        "panic!{\"message\"}",
+    ] {
+        let program = parse(&format!("fn main(){{\n{invocation}\n}}")).unwrap();
+        let Expr::Panic(panic) = program.functions[0].body.tail.as_deref().unwrap() else {
+            panic!("expected source panic");
+        };
+        assert_eq!(
+            panic.message,
+            if invocation.contains("message") {
+                "message"
+            } else {
+                "explicit panic"
+            }
+        );
+        validate_panic_site(panic, &program.names).unwrap();
+        let original = program.names.session().original(panic.site, 512).unwrap();
+        let (_, line, column) = program
+            .names
+            .session()
+            .sources()
+            .location(original)
+            .unwrap();
+        assert_eq!((line, column), (2, 1));
+        let env = type_env(&program).unwrap();
+        let checked = type_function_with_env(&program, 0, &env).unwrap();
+        let expr = checked
+            .exprs
+            .iter()
+            .find(|expr| matches!(expr.kind, ir::ExprKind::Panic(_)))
+            .unwrap();
+        assert_eq!(expr.ty, ir::Ty::Never);
+        assert_eq!(expr.completion, ir::Completion::Never);
+    }
+}
+
+#[test]
+fn panic_shadowing_and_unsupported_arguments_are_not_builtin_fallbacks() {
+    let program = parse("fn main(){macro_rules! panic{()=>{42};}panic!()}").unwrap();
+    assert!(matches!(
+        program.functions[0].body.tail.as_deref(),
+        Some(Expr::Integer(_))
+    ));
+    for source in [
+        "macro_rules! panic{()=>{42};}fn main(){panic!()}",
+        "fn main(){macro_rules! panic{(x)=>{42};}panic!()}",
+        "fn main(){panic!(42)}",
+        "fn main(){panic!(\"{}\", 42)}",
+        "fn main(){panic!(\"literal\", 42)}",
+    ] {
+        assert!(parse(source).is_err(), "{source}");
+    }
+    let program = parse("fn main(){panic!{} let x:bool=1;}").unwrap();
+    let env = type_env(&program).unwrap();
+    assert!(type_function_with_env(&program, 0, &env).is_err());
+}
+
+#[test]
+fn panic_foreign_site_is_rejected_by_names_clone_and_replay_inventory() {
+    let mut program = parse("fn main(){panic!()}").unwrap();
+    let foreign = parse("fn main(){panic!()}").unwrap();
+    let Expr::Panic(other) = foreign.functions[0].body.tail.as_deref().unwrap() else {
+        panic!("expected panic")
+    };
+    let Expr::Panic(panic) = program.functions[0].body.tail.as_deref_mut().unwrap() else {
+        panic!("expected panic")
+    };
+    panic.site = other.site;
+    assert!(program.validate_name_handles().is_err());
+    assert!(preflight_program_clone(&program, &ir::PlanBudget::default()).is_err());
+    assert!(recipes::inventory(&program, &ir::PlanBudget::default()).is_err());
+}
+
+#[test]
+fn expanded_panic_uses_outer_invocation_location() {
+    let program =
+        parse("fn main(){\nmacro_rules! fail{()=>{panic!(\"message\")};}\nfail!()\n}").unwrap();
+    let env = type_env(&program).unwrap();
+    let checked = type_function_with_env(&program, 0, &env).unwrap();
+    let message = checked
+        .exprs
+        .iter()
+        .find_map(|expr| match &expr.kind {
+            ir::ExprKind::Panic(message) => Some(message),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(message.message, "message");
+    assert!(message.location.ends_with(":3:1"), "{}", message.location);
+}

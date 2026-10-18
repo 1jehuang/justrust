@@ -3997,7 +3997,7 @@ fn successors(term: &Terminator) -> [Option<BlockId>; 2] {
             else_block,
             ..
         } => [Some(*then_block), Some(*else_block)],
-        Terminator::Return | Terminator::Unreachable => [None, None],
+        Terminator::Return | Terminator::Panic(_) | Terminator::Unreachable => [None, None],
     }
 }
 fn visit_operand(op: &Operand, mut visit: impl FnMut(&Place, bool)) {

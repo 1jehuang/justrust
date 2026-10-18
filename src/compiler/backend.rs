@@ -1230,6 +1230,124 @@ impl<'a> Emitter<'a> {
         self.immediate(0);
         Ok(())
     }
+    /// A panic is terminal, not a value-producing print followed by a trap.
+    /// Linux's kernel sigaction layout uses an eight-byte signal mask here.
+    fn panic(&mut self, panic: &ir::PanicMessage) -> Result<(), String> {
+        let length = panic
+            .location
+            .len()
+            .checked_add(panic.message.len())
+            .and_then(|length| length.checked_add(b"panicked at :\n\n".len()))
+            .ok_or("panic diagnostic storage overflow")?;
+        let budget = self.concrete.facts().budget().clone();
+        budget.charge_work(length)?;
+        budget.retain_bytes(length)?;
+        let mut diagnostic = Vec::new();
+        diagnostic
+            .try_reserve_exact(length)
+            .map_err(|_| "panic diagnostic allocation failed")?;
+        budget.retain_bytes(diagnostic.capacity().saturating_sub(length))?;
+        diagnostic.extend_from_slice(b"panicked at ");
+        diagnostic.extend_from_slice(panic.location.as_bytes());
+        diagnostic.extend_from_slice(b":\n");
+        diagnostic.extend_from_slice(panic.message.as_bytes());
+        diagnostic.push(b'\n');
+
+        // Reserve a zeroed kernel sigaction (handler, flags, restorer, mask).
+        self.bytes(&[0x48, 0x83, 0xec, 0x20, 0x31, 0xc0]);
+        self.bytes(&[0x48, 0x89, 0x04, 0x24]);
+        for offset in [8, 16, 24] {
+            self.bytes(&[0x48, 0x89, 0x44, 0x24, offset]);
+        }
+        // Restore SIGABRT's default disposition, even when inherited ignored.
+        self.bytes(&[0xb8, 13, 0, 0, 0, 0xbf, 6, 0, 0, 0]);
+        self.bytes(&[
+            0x48, 0x89, 0xe6, 0x31, 0xd2, 0x41, 0xba, 8, 0, 0, 0, 0x0f, 0x05,
+        ]);
+        self.bytes(&[0x48, 0x85, 0xc0]);
+        let failed_sigabrt = self.jump(&[0x0f, 0x85]);
+        // Ignore SIGPIPE so a closed stderr still reaches the abort operation.
+        self.bytes(&[0x48, 0xc7, 0x04, 0x24, 1, 0, 0, 0]);
+        self.bytes(&[0xb8, 13, 0, 0, 0, 0xbf, 13, 0, 0, 0]);
+        self.bytes(&[
+            0x48, 0x89, 0xe6, 0x31, 0xd2, 0x41, 0xba, 8, 0, 0, 0, 0x0f, 0x05,
+        ]);
+        self.bytes(&[0x48, 0x85, 0xc0]);
+        let failed_sigpipe = self.jump(&[0x0f, 0x85]);
+
+        self.bytes(&[0x48, 0xbe]);
+        let relocation = self.position();
+        self.bytes(&[0; 8]);
+        let length = u64::try_from(diagnostic.len()).map_err(|_| "panic diagnostic too large")?;
+        if self.object.strings.len() == self.object.strings.capacity() {
+            let old = self.object.strings.capacity();
+            let entry = std::mem::size_of::<(usize, Vec<u8>)>();
+            budget.retain_bytes(entry)?;
+            self.object
+                .strings
+                .try_reserve_exact(1)
+                .map_err(|_| "panic relocation allocation failed")?;
+            let added = self.object.strings.capacity() - old;
+            let extra = added
+                .checked_sub(1)
+                .and_then(|count| count.checked_mul(entry))
+                .ok_or("panic relocation storage overflow")?;
+            budget.retain_bytes(extra)?;
+        }
+        self.object.strings.push((relocation, diagnostic));
+        self.bytes(&[0x48, 0xba]);
+        self.bytes(&length.to_le_bytes());
+        let retry = self.position();
+        self.bytes(&[0xb8, 1, 0, 0, 0, 0xbf, 2, 0, 0, 0, 0x0f, 0x05]);
+        self.bytes(&[0x48, 0x83, 0xf8, 0xfc]);
+        let interrupted = self.jump(&[0x0f, 0x84]);
+        self.patch(interrupted, retry)?;
+        self.bytes(&[0x48, 0x85, 0xc0]);
+        let failed_write = self.jump(&[0x0f, 0x8e]);
+        self.bytes(&[0x48, 0x01, 0xc6, 0x48, 0x29, 0xc2]);
+        let more = self.jump(&[0x0f, 0x85]);
+        self.patch(more, retry)?;
+        let abort = self.position();
+        self.patch(failed_write, abort)?;
+
+        // This abort-only runtime does not produce core files. In particular a
+        // piped core_pattern must not delay termination in an external service.
+        // PR_SET_DUMPABLE must run after exec, which resets the inherited flag.
+        self.bytes(&[0xb8, 157, 0, 0, 0, 0xbf, 4, 0, 0, 0, 0x31, 0xf6]);
+        self.bytes(&[0x31, 0xd2, 0x45, 0x31, 0xd2, 0x45, 0x31, 0xc0, 0x0f, 0x05]);
+        self.bytes(&[0x48, 0x85, 0xc0]);
+        let failed_dumpable = self.jump(&[0x0f, 0x85]);
+        // Unblock SIGABRT, then raise it in this process. This remains fatal
+        // even with an inherited ignored disposition or blocked signal mask.
+        self.bytes(&[0x48, 0xc7, 0x04, 0x24, 32, 0, 0, 0]);
+        self.bytes(&[0xb8, 14, 0, 0, 0, 0xbf, 1, 0, 0, 0]);
+        self.bytes(&[
+            0x48, 0x89, 0xe6, 0x31, 0xd2, 0x41, 0xba, 8, 0, 0, 0, 0x0f, 0x05,
+        ]);
+        self.bytes(&[0x48, 0x85, 0xc0]);
+        let failed_sigprocmask = self.jump(&[0x0f, 0x85]);
+        self.bytes(&[0xb8, 39, 0, 0, 0, 0x0f, 0x05]);
+        // A sandbox may reject getpid. Never reinterpret its negative errno
+        // as kill(-1, ...), which would target unrelated permitted processes.
+        self.bytes(&[0x48, 0x85, 0xc0]);
+        let invalid_pid = self.jump(&[0x0f, 0x8e]);
+        self.bytes(&[0x89, 0xc7, 0xbe, 6, 0, 0, 0, 0xb8, 62, 0, 0, 0, 0x0f, 0x05]);
+        // A denied signal syscall must still never return to Rust code.
+        let fallback = self.position();
+        for failed in [
+            failed_sigabrt,
+            failed_sigpipe,
+            failed_dumpable,
+            failed_sigprocmask,
+            invalid_pid,
+        ] {
+            self.patch(failed, fallback)?;
+        }
+        self.bytes(&[
+            0xbf, 101, 0, 0, 0, 0xb8, 231, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
+        ]);
+        Ok(())
+    }
     fn rvalue(&mut self, value: &cfg::Rvalue) -> Result<(), String> {
         match value {
             cfg::Rvalue::Use(operand) => self.operand(operand)?,
@@ -1604,6 +1722,7 @@ impl<'a> Emitter<'a> {
                 self.returns.push(at);
             }
             cfg::Terminator::Unreachable => self.bytes(&[0x0f, 0x0b]),
+            cfg::Terminator::Panic(panic) => self.panic(panic)?,
         }
         Ok(())
     }
@@ -2273,6 +2392,354 @@ mod tests {
             }
         }
         panic!("native executable remained busy after bounded retries");
+    }
+
+    #[test]
+    fn panic_native_aborts_with_diagnostic_even_if_signal_is_ignored_or_blocked() {
+        use std::os::unix::process::{CommandExt, ExitStatusExt};
+
+        unsafe extern "C" {
+            fn syscall(number: std::ffi::c_long, ...) -> std::ffi::c_long;
+        }
+        #[repr(C)]
+        struct SignalAction {
+            handler: usize,
+            flags: usize,
+            restorer: usize,
+            mask: u64,
+        }
+        for (source, expected) in [
+            ("fn main() {\n    panic!();\n}", "explicit panic"),
+            (
+                "fn main() {\n    panic!(\"diagnostic 🦀 {{braces}}\");\n    println!(\"after\");\n}",
+                "diagnostic 🦀 {braces}",
+            ),
+        ] {
+            let program = frontend::parse(source).unwrap();
+            let path = executable(&program);
+            for hostile in [false, true] {
+                let mut command = Command::new(&path);
+                command.stdout(Stdio::piped());
+                // SAFETY: this runs only in the forked child and invokes Linux
+                // x86_64 syscalls with fixed-size, stack-resident kernel ABI data.
+                // No allocation, locking or mutation of the parent is performed.
+                unsafe {
+                    command.pre_exec(move || {
+                        let core_limit = [0u64; 2];
+                        if syscall(160, 4usize, core_limit.as_ptr()) != 0
+                            || syscall(157, 4usize, 0usize, 0usize, 0usize, 0usize) != 0
+                        {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        if hostile {
+                            let action = SignalAction {
+                                handler: 1,
+                                flags: 0,
+                                restorer: 0,
+                                mask: 0,
+                            };
+                            if syscall(13, 6usize, &action as *const SignalAction, 0usize, 8usize)
+                                != 0
+                            {
+                                return Err(std::io::Error::last_os_error());
+                            }
+                            let mask = 1u64 << 5;
+                            if syscall(14, 0usize, &mask as *const u64, 0usize, 8usize) != 0 {
+                                return Err(std::io::Error::last_os_error());
+                            }
+                        }
+                        Ok(())
+                    });
+                }
+                let output = execute(&mut command);
+                assert_eq!(output.status.signal(), Some(6), "{output:?}");
+                assert!(output.stdout.is_empty(), "{output:?}");
+                let diagnostic = String::from_utf8(output.stderr).unwrap();
+                assert!(diagnostic.contains("panicked at "), "{diagnostic}");
+                assert!(diagnostic.contains(":2:5:\n"), "{diagnostic}");
+                assert!(
+                    diagnostic.ends_with(&format!("{expected}\n")),
+                    "{diagnostic}"
+                );
+            }
+            let mut command = Command::new(&path);
+            command.stdout(Stdio::piped());
+            // SAFETY: only fixed Linux syscalls execute in the child. Closing
+            // its descriptor 2 exercises the panic write-error path.
+            unsafe {
+                command.pre_exec(|| {
+                    let core_limit = [0u64; 2];
+                    if syscall(160, 4usize, core_limit.as_ptr()) != 0
+                        || syscall(157, 4usize, 0usize, 0usize, 0usize, 0usize) != 0
+                        || syscall(3, 2usize) != 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let output = execute(&mut command);
+            assert_eq!(output.status.signal(), Some(6), "{output:?}");
+            assert!(output.stdout.is_empty());
+            assert!(output.stderr.is_empty());
+            std::fs::remove_file(&path).unwrap();
+            std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        }
+    }
+
+    fn assert_panic_setup_denied(number: u32, argument: u32, broken_pipe: bool) {
+        use std::os::unix::process::{CommandExt, ExitStatusExt};
+        unsafe extern "C" {
+            fn syscall(number: i64, ...) -> i64;
+        }
+        #[repr(C)]
+        struct Filter {
+            code: u16,
+            jt: u8,
+            jf: u8,
+            value: u32,
+        }
+        #[repr(C)]
+        struct Program {
+            len: u16,
+            filter: *const Filter,
+        }
+        let path = executable(
+            &frontend::parse("fn main(){panic!(\"denied setup\");println!(\"returned\");}")
+                .unwrap(),
+        );
+        let mut command = Command::new(&path);
+        // SAFETY: only fixed, stack-backed Linux syscalls execute after fork.
+        // The pipe has no reader. Kill is trapped even if the runtime regresses.
+        unsafe {
+            command.pre_exec(move || {
+                if broken_pipe {
+                    let mut pipe = [0i32; 2];
+                    if syscall(22, pipe.as_mut_ptr()) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if syscall(3, pipe[0]) != 0
+                        || syscall(33, pipe[1], 2usize) < 0
+                        || syscall(3, pipe[1]) != 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    // Override Rust's inherited ignored SIGPIPE before exec.
+                    let action = [0u64; 4];
+                    let mask = 1u64 << 12;
+                    if syscall(13, 13usize, action.as_ptr(), 0usize, 8usize) != 0
+                        || syscall(14, 1usize, &mask as *const u64, 0usize, 8usize) != 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                let filters = [
+                    Filter {
+                        code: 0x20,
+                        jt: 0,
+                        jf: 0,
+                        value: 0,
+                    },
+                    Filter {
+                        code: 0x15,
+                        jt: 0,
+                        jf: 1,
+                        value: 62,
+                    },
+                    Filter {
+                        code: 0x06,
+                        jt: 0,
+                        jf: 0,
+                        value: 0x30000,
+                    },
+                    Filter {
+                        code: 0x15,
+                        jt: 0,
+                        jf: 3,
+                        value: number,
+                    },
+                    Filter {
+                        code: 0x20,
+                        jt: 0,
+                        jf: 0,
+                        value: 16,
+                    },
+                    Filter {
+                        code: 0x15,
+                        jt: 0,
+                        jf: 1,
+                        value: argument,
+                    },
+                    Filter {
+                        code: 0x06,
+                        jt: 0,
+                        jf: 0,
+                        value: 0x50001,
+                    },
+                    Filter {
+                        code: 0x06,
+                        jt: 0,
+                        jf: 0,
+                        value: 0x7fff0000,
+                    },
+                ];
+                let program = Program {
+                    len: filters.len() as u16,
+                    filter: filters.as_ptr(),
+                };
+                let core_limit = [0u64; 2];
+                if syscall(160, 4usize, core_limit.as_ptr()) != 0
+                    || syscall(157, 38usize, 1usize, 0usize, 0usize, 0usize) != 0
+                    || syscall(
+                        157,
+                        22usize,
+                        2usize,
+                        &program as *const Program,
+                        0usize,
+                        0usize,
+                    ) != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let output = execute(&mut command);
+        assert_eq!(output.status.signal(), None, "{output:?}");
+        assert_eq!(output.status.code(), Some(101), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        if number == 13 {
+            assert!(output.stderr.is_empty(), "{output:?}");
+        } else {
+            assert!(output.stderr.ends_with(b"denied setup\n"), "{output:?}");
+        }
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn panic_denied_sigabrt_setup_exits_without_kill() {
+        assert_panic_setup_denied(13, 6, false);
+    }
+
+    #[test]
+    fn panic_denied_sigpipe_setup_exits_without_kill() {
+        assert_panic_setup_denied(13, 13, false);
+    }
+
+    #[test]
+    fn panic_denied_sigpipe_setup_with_broken_pipe_exits_before_write() {
+        assert_panic_setup_denied(13, 13, true);
+    }
+
+    #[test]
+    fn panic_denied_dumpable_setup_exits_without_kill() {
+        assert_panic_setup_denied(157, 4, false);
+    }
+
+    #[test]
+    fn panic_denied_sigprocmask_setup_exits_without_kill() {
+        assert_panic_setup_denied(14, 1, false);
+    }
+
+    #[test]
+    fn panic_denied_getpid_falls_back_without_attempting_kill() {
+        use std::os::unix::process::{CommandExt, ExitStatusExt};
+        unsafe extern "C" {
+            fn syscall(number: i64, ...) -> i64;
+        }
+        #[repr(C)]
+        struct Filter {
+            code: u16,
+            jt: u8,
+            jf: u8,
+            value: u32,
+        }
+        #[repr(C)]
+        struct Program {
+            len: u16,
+            filter: *const Filter,
+        }
+        let path = executable(&frontend::parse("fn main(){panic!(\"denied pid\");}").unwrap());
+        for errno in [0u32, 1] {
+            let mut command = Command::new(&path);
+            // SAFETY: only fixed, stack-backed Linux seccomp/prctl syscalls
+            // execute in the child. Kill is trapped, never permitted, even if
+            // the generated getpid failure branch regresses.
+            unsafe {
+                command.pre_exec(move || {
+                    let filters = [
+                        Filter {
+                            code: 0x20,
+                            jt: 0,
+                            jf: 0,
+                            value: 0,
+                        },
+                        Filter {
+                            code: 0x15,
+                            jt: 0,
+                            jf: 1,
+                            value: 39,
+                        },
+                        Filter {
+                            code: 0x06,
+                            jt: 0,
+                            jf: 0,
+                            value: 0x50000 | errno,
+                        },
+                        Filter {
+                            code: 0x15,
+                            jt: 0,
+                            jf: 1,
+                            value: 62,
+                        },
+                        Filter {
+                            code: 0x06,
+                            jt: 0,
+                            jf: 0,
+                            value: 0x30000,
+                        },
+                        Filter {
+                            code: 0x06,
+                            jt: 0,
+                            jf: 0,
+                            value: 0x7fff0000,
+                        },
+                    ];
+                    let program = Program {
+                        len: filters.len() as u16,
+                        filter: filters.as_ptr(),
+                    };
+                    let core_limit = [0u64; 2];
+                    if syscall(160, 4usize, core_limit.as_ptr()) != 0
+                        || syscall(157, 4usize, 0usize, 0usize, 0usize, 0usize) != 0
+                        || syscall(157, 38usize, 1usize, 0usize, 0usize, 0usize) != 0
+                        || syscall(
+                            157,
+                            22usize,
+                            2usize,
+                            &program as *const Program,
+                            0usize,
+                            0usize,
+                        ) != 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let output = execute(&mut command);
+            assert_eq!(output.status.signal(), None, "{output:?}");
+            assert_eq!(output.status.code(), Some(101), "{output:?}");
+            assert!(output.stdout.is_empty());
+            assert!(
+                String::from_utf8(output.stderr)
+                    .unwrap()
+                    .ends_with("denied pid\n")
+            );
+        }
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
     }
 
     #[test]

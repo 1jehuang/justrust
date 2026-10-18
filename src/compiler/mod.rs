@@ -1127,7 +1127,9 @@ fn compile_input_configured(
             .map(|block| match &block.terminator.value {
                 cfg::Terminator::Goto(_) | cfg::Terminator::Call { .. } => 1,
                 cfg::Terminator::Switch { .. } | cfg::Terminator::SwitchVariant { .. } => 2,
-                cfg::Terminator::Return | cfg::Terminator::Unreachable => 0,
+                cfg::Terminator::Return
+                | cfg::Terminator::Panic(_)
+                | cfg::Terminator::Unreachable => 0,
             })
             .sum::<usize>();
     }

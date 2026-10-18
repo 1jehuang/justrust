@@ -156,6 +156,8 @@ pub(super) fn inventory(
     program: &Program,
     budget: &ir::PlanBudget,
 ) -> Result<tr::RecipeShapeInventory, String> {
+    // Inventory walks source before publishing recipes, including cold panic sites.
+    program.validate_name_handles()?;
     let mut descriptors = Vec::new();
     fn add(
         ds: &mut Vec<tr::RecipeDescriptor>,

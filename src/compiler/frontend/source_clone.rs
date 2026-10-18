@@ -176,6 +176,10 @@ pub(super) fn preflight_clone_node(
             }
             Expr::Var(path) => clone_ast_path(path, budget)?,
             Expr::Println(text) => clone_text(text, budget)?,
+            Expr::Panic(panic) => {
+                budget.retain_bytes(std::mem::size_of::<SourcePanic>())?;
+                clone_text(&panic.message, budget)?;
+            }
             Expr::Float(literal) => clone_text(&literal.digits, budget)?,
             Expr::Call { name, args } | Expr::TupleStruct { name, fields: args } => {
                 clone_ast_path(name, budget)?;
@@ -274,7 +278,7 @@ pub(super) fn preflight_program_clone(
     budget.retain_bytes(std::mem::size_of::<Program>())?;
     clone_vector(&program.functions, budget)?;
     for function in &program.functions {
-        preflight_function_clone(function, budget)?;
+        preflight_function_clone(function, &program.names, budget)?;
     }
     clone_vector(&program.impls, budget)?;
     for implementation in &program.impls {
@@ -291,7 +295,7 @@ pub(super) fn preflight_program_clone(
         clone_vector(&implementation.items, budget)?;
         for item in &implementation.items {
             clone_visibility(&item.visibility, budget)?;
-            preflight_function_clone(&item.function, budget)?;
+            preflight_function_clone(&item.function, &program.names, budget)?;
         }
     }
     clone_vector(&program.structs, budget)?;
@@ -337,7 +341,7 @@ pub(super) fn preflight_program_clone(
             clone_parameters(&head.params, budget)?;
             walk_depth(DepthNode::Type(&head.result), Some(budget))?;
             if let Some(default) = &item.default {
-                preflight_function_clone(default, budget)?;
+                preflight_function_clone(default, &program.names, budget)?;
             }
         }
     }
@@ -350,6 +354,7 @@ pub(super) fn preflight_program_clone(
 
 pub(super) fn preflight_function_clone(
     function: &Function,
+    names: &NameStore,
     budget: &ir::PlanBudget,
 ) -> Result<(), String> {
     clone_visibility(&function.visibility, budget)?;
@@ -359,7 +364,7 @@ pub(super) fn preflight_function_clone(
     clone_regions(&function.regions, budget)?;
     clone_parameters(&function.params, budget)?;
     walk_depth(DepthNode::Type(&function.result), Some(budget))?;
-    walk_depth(DepthNode::Block(&function.body), Some(budget))
+    walk_depth_checked(DepthNode::Block(&function.body), Some(budget), Some(names))
 }
 
 pub(super) fn clone_visibility(

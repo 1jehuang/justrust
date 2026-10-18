@@ -449,6 +449,14 @@ host macro and compiles its generated target source.
 
 ### G6. Runtime, FFI, linking and target expansion
 
+- [x] Bounded literal/empty `panic!` now preserves checked invocation locations,
+      exact Never completion and terminal CFG control flow, and emits a native
+      Linux x86-64 stderr diagnostic followed by SIGABRT. Stock-first 47-source
+      debug/release acceptance, public authority and hostile-signal/syscall
+      controls passed; complete local suite 3,024 tests/147 binaries, hosted
+      check/strict lint. See `PANIC.md` for receipts and the hosted stock-abort
+      environment limitation. Formatting, unwinding/Drop cleanup, core-file
+      compatibility and general runtime support remain open below.
 - [ ] Define target data layouts/calling conventions, object/relocation/symbol
       formats, crate artifacts and linking, repr(C)/transparent/packed/aligned,
       extern calls/statics, native libraries, variadics and stable ABI boundaries.
