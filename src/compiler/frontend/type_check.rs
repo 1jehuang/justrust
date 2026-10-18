@@ -4187,6 +4187,21 @@ impl<'a> Checker<'a> {
         }
         .to_string()
     }
+    /// True when dropping a value of `ty` runs no user destructor.
+    pub(super) fn trivially_dropped(&self, ty: &ir::Ty) -> Result<bool, String> {
+        let Some(facts) = self.facts().validated() else {
+            return Ok(true);
+        };
+        if !facts.has_normal_drop_impls() {
+            return Ok(true);
+        }
+        Ok(matches!(
+            facts
+                .normal_drop_plan(ty)
+                .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?,
+            super::super::traits::NormalDropPlan::Trivial
+        ))
+    }
     /// Recover only concrete pattern shape, without a general inference engine.
     pub(super) fn pattern_ty(&self, pattern: &Pattern, ty: &ir::Ty) -> Result<ir::Ty, String> {
         if !matches!(
@@ -5802,25 +5817,34 @@ impl<'a> Checker<'a> {
             ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
             ir::Callee::TraitItem(_) => 0,
         };
-        // Only primitive value temporaries have the approved lexical autoref extension.
+        // Value temporaries (rvalue receivers such as `Type::new().get()`) are
+        // materialized in a block-scoped local and autoref'd. Values with drop
+        // glue are excluded because the block would end their lifetime before
+        // the enclosing statement does.
         if selected.depth == 0
-            && matches!(selected.adjustment, ReceiverAdjustment::SharedAutoref)
             && matches!(
-                ty,
-                ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Char | ir::Ty::Bool | ir::Ty::Unit
+                selected.adjustment,
+                ReceiverAdjustment::SharedAutoref | ReceiverAdjustment::MutAutoref
             )
+            && !matches!(ty, ir::Ty::Ref { .. })
             && static_source_place(receiver).is_err()
+            && self.trivially_dropped(&ty)?
         {
+            let mutable = matches!(selected.adjustment, ReceiverAdjustment::MutAutoref);
             let value = self.expr(receiver)?;
             self.charge_node(std::mem::size_of::<ir::LocalDecl>() + 64)?;
             let local = ir::LocalId(self.locals.len());
             self.locals.push(ir::LocalDecl {
                 name: "$primitive_receiver".into(),
                 ty,
-                mutable: false,
+                mutable,
             });
             let borrowed = self.borrow_expression(
-                ir::BorrowKind::Shared,
+                if mutable {
+                    ir::BorrowKind::Mut
+                } else {
+                    ir::BorrowKind::Shared
+                },
                 ir::Place {
                     local,
                     projection: Vec::new(),

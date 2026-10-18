@@ -512,13 +512,23 @@ fn main(){if run()==7{println!("generic references oracle ok");}}
 }
 
 #[test]
-fn rejects_legal_unsupported_owned_rvalue_borrowed_receiver_temporary() {
-    rejects(
-        "owned_rvalue_borrowed_receiver_temporary",
-        r###"struct S{x:i32}impl S{fn get(&self)->i32{self.x}}fn run()->i32{S{x:7}.get()}
+fn accepts_owned_rvalue_borrowed_receiver_temporary() {
+    runs(
+        r###"struct S{x:i32}impl S{fn get(&self)->i32{self.x}fn bump(&mut self)->i32{self.x+=1;self.x}}fn run()->i32{S{x:7}.get()+S{x:6}.bump()-7}
 fn main(){if run()==7{println!("generic references oracle ok");}}
 "###,
-        false,
+        "generic references oracle ok\n",
+    );
+}
+
+#[test]
+fn rejects_reference_into_dropped_rvalue_receiver_temporary() {
+    rejects(
+        "dropped_rvalue_receiver_temporary",
+        r###"struct S{x:i32}impl S{fn get(&self)->&i32{&self.x}}fn run()->i32{let r=S{x:7}.get();*r}
+fn main(){if run()==7{println!("generic references oracle ok");}}
+"###,
+        true,
     );
 }
 
