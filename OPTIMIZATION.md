@@ -195,6 +195,32 @@ Rules:
 9. **Telemetry per pass and per instance** feeds observability, so cost and
    benefit are attributable.
 
+## 8a. Graph integrity constraints (mandatory)
+
+`GRAPH-INTEGRITY.md` and `tests/graph_integrity.rs` apply to every optimizer
+change from the first commit:
+
+- Every optimizer result (`SSA`, `LOCAL_OPT`, `SUMMARY`, `IPO_OPT`, `MACHINE`,
+  `FRAGMENT`) is a **typed graph output read through engine handles**. No
+  `OnceLock`/`Mutex` side slots, no placeholder publishes, no new baseline lines.
+- **No new whole-program node kinds.** Cross-function work is keyed by item
+  identity: per function, per call-graph SCC, or per explicit callee set.
+  Global optimizations (code layout, whole-program devirtualization, global
+  constant propagation) are not designed as whole-program nodes. If one is ever
+  proven necessary by measurement, it needs explicit user approval first.
+- Linking stays under the requested `build` root, which already gates the
+  linked artifact.
+- `JR_OPT` mode, volatility (edit history) and hotness (test profiles) enter as
+  explicit graph input facts, never process-global statics or shared state.
+- Per-node budgets scale with that node's own input. No whole-compilation
+  optimization budget.
+
+Sequencing: optimizer nodes are built on graph-native facts. Until the
+`graph-unification` work makes compiler facts typed outputs, optimizer code
+must either wait or read only handle-based outputs it introduces itself.
+Design, SSA data structures, hashing, verifier and interpreter are pure
+libraries with no graph state and can proceed independently.
+
 ## 9. Representation
 
 - SSA CFG with block parameters instead of phi nodes. Simple, cheap to hash
@@ -227,10 +253,12 @@ Why defer heavy passes: no realistic workload to tune inlining/loop passes,
 no way to measure the hypothesis, and closures/async/unwind will still churn
 the IR.
 
-1. **Now:** `JR_OPT` switch (only `off` implemented). Fact preservation
-   through lowering. SSA data structures, canonical hashing, verifier and
-   reference interpreter. Per-function `SSA`, `LOCAL_OPT`, `FRAGMENT` nodes
-   with trivial passes only.
+1. **Now, as pure libraries (no graph state):** SSA data structures, canonical
+   hashing, verifier and reference interpreter under `src/compiler/ssa/`.
+   **After facts are graph outputs (`graph-unification`):** `JR_OPT` as a graph
+   input fact (only `off` implemented), fact preservation through lowering, and
+   per-function `SSA`, `LOCAL_OPT`, `FRAGMENT` nodes as typed outputs with
+   trivial passes only.
 2. **With the real G6 ABI:** linear-scan register allocation. New features
    lower only to SSA. The stack emitter becomes a reference oracle.
 3. **Alongside core/std bring-up:** summaries, incremental linker, and
