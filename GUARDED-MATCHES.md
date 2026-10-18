@@ -1,0 +1,7 @@
+# Bounded guarded matches macro
+
+Status: pending implementation and acceptance. Full Rust remains open.
+
+Extend the checked builtin `matches!(expression, pattern if condition)` only. Lower through the existing two-arm Match with the matched arm evaluating an ordinary If(condition, true, false). The guard is evaluated exactly once only when the pattern matches; existing pattern bindings are visible only within the matched arm and guard. The scrutinee remains evaluated once. A false guard produces false, not another pattern attempt. Require the existing Bool/Never condition semantics, source ownership, lexical macro selection, metered allocation and all-source checking. Do not add a general match-arm guard AST/IR or backend path, permit unsupported patterns, or bypass borrow checking. Ordinary match guards remain explicitly unsupported.
+
+All three delimiters and the existing optional trailing comma retain their source separator rules. Invalid guard types, names, ownership and unreachable source remain checked. Preserve the prior21 source strings and stock receipts; promotion of the old guard source must be documented, not silently skipped. Add independently stock-measured true/false, mismatch-short-circuit, exact-once, binding-scope, nested tuple/enum, Never guard, invalid Bool, local shadow and dead-source controls. Validate actual CLI and observed graph workers1/8 CHECK/BUILD in debug/release, public authority controls, full regressions, strict lint and formatting before publication. No performance or full Rust claims.
