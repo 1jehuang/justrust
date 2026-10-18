@@ -6,7 +6,7 @@
 //! Sources retain original 01..27 bytes/order and append 28..39, including final LF.
 //! Original stock-valid cases are earlier formatting boundaries, NOT projection parity.
 //! Case16 never establishes a later rvalue-borrow or reference-normal-form outcome.
-//! Cases07/08/12 are stock-invalid outside this vertical, not invalid parity.
+//! Case07 stops at unresolved String, before checking its associated Copy obligation.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use justrust_engine::compiler::{frontend, source};
 use std::fs::{self, OpenOptions};
@@ -21,7 +21,6 @@ enum Outcome {
     Runtime,
     Invalid,
     Unsupported,
-    InvalidUnsupported,
 }
 struct Case {
     name: &'static str,
@@ -93,7 +92,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: None,
             stock_diagnostic: Some("error[E0277]"),
-            outcome: Outcome::InvalidUnsupported,
+            outcome: Outcome::Invalid,
         },
         // Source SHA256 d1b6874d1ca32f13a83c0b68a7ea2b3e7662cfb02480c3756bc9df0d362b499c
         Case {
@@ -520,7 +519,6 @@ fn stock_all() {
             Outcome::Runtime => partition.0 += 1,
             Outcome::Invalid => partition.1 += 1,
             Outcome::Unsupported => partition.2 += 1,
-            Outcome::InvalidUnsupported => partition.3 += 1,
         }
         let scratch = Scratch::new();
         scratch.write("client.rs", case.source.as_bytes());
@@ -559,7 +557,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (28, 12));
-    assert_eq!(partition, (12, 11, 16, 1));
+    assert_eq!(partition, (12, 12, 16, 0));
 }
 #[test]
 fn stock_nested_associated_types_oracle_edition2024_actual_toolchain() {
@@ -667,18 +665,19 @@ fn native_associated_types_workers1_8_check_build_no_compiler_fallback() {
                             "{}:{diagnostic}",
                             case.name
                         );
-                    } else if case.outcome == Outcome::InvalidUnsupported {
-                        assert!(
-                            diagnostic.contains("unsupported:"),
-                            "{} explicit boundary:{diagnostic}",
-                            case.name
-                        );
                     } else {
                         assert!(
                             !diagnostic.contains("unsupported:"),
                             "{} ordinary invalid must not become Unsupported:{diagnostic}",
                             case.name
                         );
+                        if case.name == "07_wrong_assignment" {
+                            assert!(
+                                diagnostic.contains(": unresolved type\n"),
+                                "{} expected name-resolution failure before Copy validation:{diagnostic}",
+                                case.name
+                            );
+                        }
                     }
                 }
                 if !check && case.outcome == Outcome::Runtime {
@@ -703,16 +702,14 @@ fn native_associated_types_workers1_8_check_build_no_compiler_fallback() {
                     (Outcome::Invalid, false) => modes.3 += 1,
                     (Outcome::Unsupported, true) => modes.4 += 1,
                     (Outcome::Unsupported, false) => modes.5 += 1,
-                    (Outcome::InvalidUnsupported, true) => modes.6 += 1,
-                    (Outcome::InvalidUnsupported, false) => modes.7 += 1,
                 }
                 gates += 1;
             }
         }
     }
     assert_eq!(gates, 160);
-    assert_eq!(modes, (24, 24, 22, 22, 32, 32, 2, 2));
+    assert_eq!(modes, (24, 24, 24, 24, 32, 32, 0, 0));
     eprintln!(
-        "NATIVE ASSOCIATED TYPES:160 cells, modes{modes:?};24 nonempty-output main images;64 stock-valid Unsupported cells and4 stock-invalid/native-Unsupported cells are distinct boundaries, not ordinary-invalid parity or full Rust support"
+        "NATIVE ASSOCIATED TYPES:160 cells, modes{modes:?};24 nonempty-output main images;64 stock-valid Unsupported cells remain distinct boundaries;case07 is unresolved String, not Copy-obligation parity or full Rust support"
     );
 }

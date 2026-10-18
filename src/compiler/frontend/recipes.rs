@@ -640,6 +640,13 @@ pub(super) fn inventory(
         for path in &t.supertraits {
             trait_path(path, &mut descriptors, budget, 0)?;
         }
+        budget.charge_work(t.associated_types.len())?;
+        for associated in &t.associated_types {
+            budget.charge_work(associated.bounds.len())?;
+            for path in &associated.bounds {
+                trait_path(path, &mut descriptors, budget, 0)?;
+            }
+        }
         for i in &t.items {
             budget.charge_work(i.signature.type_params.len())?;
             bounds(&i.signature.bounds, &mut descriptors, budget, 0)?;

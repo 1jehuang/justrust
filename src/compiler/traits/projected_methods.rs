@@ -483,7 +483,18 @@ impl ValidatedTraitWorld {
                     trait_ref: implementation.trait_ref.clone(),
                     item: value.associated,
                 }));
-                self.normalize_owner_type(&projection, &owner, &mut Vec::new(), 0)?;
+                let normal = self.normalize_owner_type(&projection, &owner, &mut Vec::new(), 0)?;
+                // The owner context contains only actual impl constraints, never
+                // its own head or an equality manufactured from this assignment.
+                self.require_associated_assignment_bounds(
+                    value.associated,
+                    &normal,
+                    ProofContext {
+                        predicates: &owner.predicates,
+                        phase: FactsPhase::Universal,
+                    },
+                    &mut Vec::new(),
+                )?;
             }
         }
         Ok(())

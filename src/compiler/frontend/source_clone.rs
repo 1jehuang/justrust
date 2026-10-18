@@ -323,6 +323,12 @@ pub(super) fn preflight_program_clone(
         }
         clone_vector(&declaration.items, budget)?;
         clone_vector(&declaration.associated_types, budget)?;
+        for associated in &declaration.associated_types {
+            clone_vector(&associated.bounds, budget)?;
+            for path in &associated.bounds {
+                clone_trait_path(path, budget)?;
+            }
+        }
         for item in &declaration.items {
             let head = &item.signature;
             clone_names(&head.type_params, budget)?;

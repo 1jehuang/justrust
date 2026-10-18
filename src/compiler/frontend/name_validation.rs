@@ -63,6 +63,23 @@ pub(super) fn validate_function_head_names(
     validator.run()
 }
 
+/// Admission for the owning trait's associated declaration metadata during
+/// callable replay. This does not inspect unrelated declarations or bodies.
+pub(super) fn validate_associated_bound_names(
+    program: &Program,
+    owner: &TraitDecl,
+) -> Result<(), String> {
+    let mut validator = Validator::new(program)?;
+    validator.enter_scope(None, owner.module)?;
+    validator.push(Visit::Path(&owner.name))?;
+    validator.work(owner.associated_types.len())?;
+    for member in &owner.associated_types {
+        validator.push(Visit::Ident(member.name, LookupClass::Member))?;
+        validator.many(&member.bounds, Visit::TraitPath)?;
+    }
+    validator.run()
+}
+
 enum Visit<'a> {
     Function(&'a Function, Option<ModuleId>),
     RestoreScope(Option<ScopeId>, ModuleId),
@@ -538,6 +555,7 @@ impl<'a> Validator<'a> {
                 self.work(declaration.associated_types.len())?;
                 for associated in &declaration.associated_types {
                     self.push(Visit::Ident(associated.name, LookupClass::Member))?;
+                    self.many(&associated.bounds, Visit::TraitPath)?;
                 }
                 self.many(&declaration.items, |item| {
                     Visit::TraitItem(item, declaration.module)

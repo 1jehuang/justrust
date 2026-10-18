@@ -147,6 +147,24 @@ impl ValidatedTraitWorld {
         }
         for header in self.headers.associated_types.iter() {
             self.info(header.declaration)?;
+            let declared = self.schema.associated_type_bounds(header.declaration)?;
+            if header.bounds.len() > MAX_PREDICATES || declared.len() > MAX_PREDICATES {
+                return Err(FactsError::resource(
+                    &self.budget,
+                    "associated declaration bound limit exceeded",
+                ));
+            }
+            // Admit callback-only identities before signature capability checks.
+            // Ordered agreement remains in validate_associated_headers.
+            for bound in header.bounds.iter().chain(declared.iter()) {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if self.info(*bound)?.kind != DeclKind::Trait {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "associated bound does not name a trait",
+                    ));
+                }
+            }
         }
         for header in self
             .headers
@@ -645,8 +663,9 @@ impl ValidatedTraitWorld {
         Ok(true)
     }
 
-    pub(super) fn validate_associated_headers(&self) -> Result<()> {
+    pub(super) fn validate_associated_headers(&mut self) -> Result<()> {
         for header in self.headers.associated_types.iter() {
+            self.has_associated_bounds |= !header.bounds.is_empty();
             let info = self.info(header.declaration)?;
             let owner = self.trait_header(header.trait_decl)?;
             if info.kind != DeclKind::AssociatedType
@@ -660,6 +679,30 @@ impl ValidatedTraitWorld {
                 return Err(FactsError::invalid(
                     &self.budget,
                     "associated type header has foreign owner or environment",
+                ));
+            }
+            let declared = self.schema.associated_type_bounds(header.declaration)?;
+            if header.bounds.len() > MAX_PREDICATES || declared.len() > MAX_PREDICATES {
+                return Err(FactsError::resource(
+                    &self.budget,
+                    "associated declaration bound limit exceeded",
+                ));
+            }
+            // Inspect every callback row before comparing or rejecting capabilities.
+            for bound in declared.iter() {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if self.info(*bound)?.kind != DeclKind::Trait {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "associated source bound does not name a trait",
+                    ));
+                }
+            }
+            charged(&self.budget, self.budget.charge_work(declared.len()))?;
+            if header.bounds.as_ref() != declared.as_ref() {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "associated bounds disagree with immutable source metadata",
                 ));
             }
         }
@@ -762,6 +805,64 @@ impl ValidatedTraitWorld {
                     ));
                 }
             }
+        }
+        // All headers, callback identities and assignment metadata precede the
+        // capability boundary, including a bad later member after a user trait.
+        for header in self.headers.associated_types.iter() {
+            for bound in header.bounds.iter() {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if *bound != self.catalog.id(CatalogItem::Copy)
+                    && *bound != self.catalog.id(CatalogItem::Sized)
+                {
+                    return Err(FactsError::unsupported(
+                        &self.budget,
+                        "unsupported: associated bounds require canonical Copy or Sized",
+                    ));
+                }
+                if self.trait_header(*bound)?.env.total_arity() != 1 {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "canonical associated bound has unexpected arguments",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn require_associated_assignment_bounds(
+        &self,
+        associated: DeclId,
+        normal: &Ty,
+        context: ProofContext<'_>,
+        active: &mut Vec<GoalKey>,
+    ) -> Result<()> {
+        if !self.has_associated_bounds {
+            return Ok(());
+        }
+        let header = self.associated_header(associated)?;
+        if header.bounds.is_empty() {
+            return Ok(());
+        }
+        let declared = self.schema.associated_type_bounds(associated)?;
+        charged(&self.budget, self.budget.charge_work(declared.len()))?;
+        if declared.as_ref() != header.bounds.as_ref() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "associated bounds changed after header validation",
+            ));
+        }
+        for bound in header.bounds.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            self.require_in(
+                &Predicate::Implements(TraitRef {
+                    declaration: *bound,
+                    self_ty: normal.clone(),
+                    args: Arc::from([]),
+                }),
+                context,
+                active,
+            )?;
         }
         Ok(())
     }
@@ -1134,6 +1235,12 @@ impl ValidatedTraitWorld {
                 selection_context,
                 &mut stack.obligations,
             )?;
+            self.require_associated_assignment_bounds(
+                projection.item,
+                &normal,
+                selection_context,
+                &mut stack.obligations,
+            )?;
             retain::<NormalizationEvidence>(&self.budget, 1)?;
             let evidence = Arc::new(NormalizationEvidence {
                 world: self.id,
@@ -1356,6 +1463,17 @@ impl ValidatedTraitWorld {
                 ));
             }
         }
+        // Replay the actual selected RHS requirement, including on a cache hit.
+        // Caller assumptions must not certify a closed implementation's bound.
+        self.require_associated_assignment_bounds(
+            evidence.key.projection.item,
+            &evidence.normal,
+            ProofContext {
+                predicates: &self.empty,
+                phase: FactsPhase::Closed,
+            },
+            &mut Vec::new(),
+        )?;
         Ok(())
     }
 }
@@ -1368,6 +1486,8 @@ mod tests {
     struct RhsAdapter {
         inner: Arc<dyn SchemaCx + Send + Sync>,
         values: Vec<AssociatedTypeValue>,
+        bounds: Vec<(DeclId, Arc<[DeclId]>)>,
+        schemas: Vec<(DeclId, GenericSchema)>,
     }
     impl SchemaCx for RhsAdapter {
         fn budget(&self) -> &PlanBudget {
@@ -1383,7 +1503,18 @@ mod tests {
             self.inner.declaration_info(id)
         }
         fn declaration_schema(&self, id: DeclId) -> Result<GenericSchema> {
+            if let Some((_, schema)) = self.schemas.iter().find(|(decl, _)| *decl == id) {
+                return Ok(schema.clone());
+            }
             self.inner.declaration_schema(id)
+        }
+        fn associated_type_bounds(&self, associated: DeclId) -> Result<Arc<[DeclId]>> {
+            for (declaration, bounds) in &self.bounds {
+                if *declaration == associated {
+                    return Ok(bounds.clone());
+                }
+            }
+            self.inner.associated_type_bounds(associated)
         }
         fn associated_type_rhs(&self, implementation: DeclId, associated: DeclId) -> Result<Ty> {
             for value in &self.values {
@@ -1441,7 +1572,9 @@ mod tests {
         value.rhs = Ty::Bool;
         let adapter = Arc::new(RhsAdapter {
             inner: world.schema.clone(),
+            schemas: Vec::new(),
             values: vec![value],
+            bounds: Vec::new(),
         });
         let error =
             ValidatedTraitWorld::build(world.headers.clone(), adapter, &world.budget).unwrap_err();
@@ -1507,7 +1640,9 @@ mod tests {
             }
             let adapter = Arc::new(RhsAdapter {
                 inner: world.schema.clone(),
+                schemas: Vec::new(),
                 values: values.clone(),
+                bounds: Vec::new(),
             });
             let mut headers = world.headers.clone();
             Arc::make_mut(&mut headers.impls)[index].associated_types = values.into();
@@ -1517,6 +1652,266 @@ mod tests {
                     .kind(),
                 FactsErrorKind::Cycle
             );
+        }
+    }
+
+    #[test]
+    fn associated_bound_header_cannot_add_or_erase_source_requirements() {
+        let world = fixture();
+        let associated = world.headers.associated_types[0].declaration;
+        let copy = world.catalog.id(CatalogItem::Copy);
+        let mut headers = world.headers.clone();
+        Arc::make_mut(&mut headers.associated_types)[0].bounds = Arc::from([copy]);
+        let error =
+            ValidatedTraitWorld::build(headers, world.schema.clone(), &world.budget).unwrap_err();
+        assert_eq!(error.kind(), FactsErrorKind::InvalidMetadata);
+
+        let adapter = Arc::new(RhsAdapter {
+            inner: world.schema.clone(),
+            schemas: Vec::new(),
+            values: Vec::new(),
+            bounds: vec![(associated, Arc::from([copy]))],
+        });
+        let error =
+            ValidatedTraitWorld::build(world.headers.clone(), adapter, &world.budget).unwrap_err();
+        assert_eq!(error.kind(), FactsErrorKind::InvalidMetadata);
+    }
+
+    #[test]
+    fn associated_bound_checks_later_foreign_and_wrong_kind_before_capability() {
+        for foreign in [false, true] {
+            let world = fixture();
+            let header = &world.headers.associated_types[0];
+            let later = if foreign {
+                DeclId {
+                    snapshot: SnapshotId::allocate().unwrap(),
+                    index: header.declaration.index,
+                }
+            } else {
+                header.declaration
+            };
+            // Has is a valid source trait but outside the bounded capability.
+            // Its unsupported status must not hide the invalid later identity.
+            let bounds: Arc<[DeclId]> = Arc::from([header.trait_decl, later]);
+            let mut headers = world.headers.clone();
+            Arc::make_mut(&mut headers.associated_types)[0].bounds = bounds.clone();
+            let adapter = Arc::new(RhsAdapter {
+                inner: world.schema.clone(),
+                schemas: Vec::new(),
+                values: Vec::new(),
+                bounds: vec![(header.declaration, bounds)],
+            });
+            let error = ValidatedTraitWorld::build(headers, adapter, &world.budget).unwrap_err();
+            assert_eq!(error.kind(), FactsErrorKind::InvalidMetadata);
+        }
+    }
+
+    #[test]
+    fn callback_bound_identity_precedes_projected_default_capability() {
+        let program = frontend::parse(
+            "struct S;trait Has{type Out;fn value()->i32{7}}\
+             impl Has for S{type Out=i32;}fn main(){}",
+        )
+        .unwrap();
+        let world = PlanCtx::from_program(&program, &PlanBudget::default())
+            .unwrap()
+            .trait_world()
+            .unwrap();
+        let associated = &world.headers.associated_types[0];
+        let owner = world.trait_header(associated.trait_decl).unwrap();
+        let mut headers = world.headers.clone();
+        let item = Arc::make_mut(&mut headers.items)
+            .iter_mut()
+            .find(|item| item.trait_decl == owner.declaration)
+            .unwrap();
+        let default = item.default.unwrap();
+        item.schema.signature.result = Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection {
+            trait_ref: TraitRef {
+                declaration: owner.declaration,
+                self_ty: Ty::Param(owner.self_param),
+                args: Arc::from([]),
+            },
+            item: associated.declaration,
+        }));
+        let mut schemas = vec![(item.declaration, item.schema.clone())];
+        let callable = Arc::make_mut(&mut headers.callables)
+            .iter_mut()
+            .find(|callable| callable.declaration == default)
+            .unwrap();
+        callable.schema.signature.result = schemas[0].1.signature.result.clone();
+        schemas.push((default, callable.schema.clone()));
+
+        // First prove that the same headers reach an actual capability rejection.
+        let adapter = Arc::new(RhsAdapter {
+            inner: world.schema.clone(),
+            values: Vec::new(),
+            bounds: Vec::new(),
+            schemas: schemas.clone(),
+        });
+        let error =
+            ValidatedTraitWorld::build(headers.clone(), adapter, &world.budget).unwrap_err();
+        assert_eq!(error.kind(), FactsErrorKind::Unsupported);
+        assert!(
+            error
+                .to_string()
+                .contains("projection-bearing trait default signatures"),
+            "{error}"
+        );
+
+        for foreign in [false, true] {
+            let invalid = if foreign {
+                DeclId {
+                    snapshot: SnapshotId::allocate().unwrap(),
+                    index: associated.declaration.index,
+                }
+            } else {
+                associated.declaration
+            };
+            // Header bounds stay empty: only the authoritative callback is invalid.
+            let adapter = Arc::new(RhsAdapter {
+                inner: world.schema.clone(),
+                values: Vec::new(),
+                bounds: vec![(associated.declaration, Arc::from([invalid]))],
+                schemas: schemas.clone(),
+            });
+            let error =
+                ValidatedTraitWorld::build(headers.clone(), adapter, &world.budget).unwrap_err();
+            assert_eq!(error.kind(), FactsErrorKind::InvalidMetadata);
+        }
+    }
+
+    #[test]
+    fn associated_bound_rejects_noncanonical_trait_even_with_matching_source() {
+        let world = fixture();
+        let header = &world.headers.associated_types[0];
+        let bounds: Arc<[DeclId]> = Arc::from([header.trait_decl]);
+        let mut headers = world.headers.clone();
+        Arc::make_mut(&mut headers.associated_types)[0].bounds = bounds.clone();
+        let adapter = Arc::new(RhsAdapter {
+            inner: world.schema.clone(),
+            schemas: Vec::new(),
+            values: Vec::new(),
+            bounds: vec![(header.declaration, bounds)],
+        });
+        let error = ValidatedTraitWorld::build(headers, adapter, &world.budget).unwrap_err();
+        assert_eq!(error.kind(), FactsErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn associated_bound_preserves_duplicate_canonical_rows() {
+        let world = fixture();
+        let header = &world.headers.associated_types[0];
+        let copy = world.catalog.id(CatalogItem::Copy);
+        let sized = world.catalog.id(CatalogItem::Sized);
+        let bounds: Arc<[DeclId]> = Arc::from([copy, sized, copy]);
+        let mut headers = world.headers.clone();
+        Arc::make_mut(&mut headers.associated_types)[0].bounds = bounds.clone();
+        let adapter = Arc::new(RhsAdapter {
+            inner: world.schema.clone(),
+            schemas: Vec::new(),
+            values: Vec::new(),
+            bounds: vec![(header.declaration, bounds.clone())],
+        });
+        let rebuilt = ValidatedTraitWorld::build(headers, adapter, &world.budget).unwrap();
+        assert_eq!(
+            rebuilt
+                .associated_header(header.declaration)
+                .unwrap()
+                .bounds,
+            bounds
+        );
+    }
+
+    #[test]
+    fn associated_source_unused_generic_assignment_requires_actual_copy_bound() {
+        for copy in [false, true] {
+            let bound = if copy { ":Copy" } else { "" };
+            let source = frontend::parse(&format!(
+                "trait Has{{type Out:Copy;}}struct Wrap<T>{{value:T}}\
+                 impl<T{bound}> Has for Wrap<T>{{type Out=T;}}fn main(){{}}"
+            ))
+            .unwrap();
+            let result = PlanCtx::from_program(&source, &PlanBudget::default());
+            if copy {
+                assert!(result.is_ok());
+            } else {
+                let error = match result {
+                    Err(error) => error,
+                    Ok(_) => panic!("unused non-Copy assignment accepted"),
+                };
+                assert!(error.contains("trait obligation"), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn associated_closed_bound_survives_cached_normalization_and_replay() {
+        let source = frontend::parse(
+            "struct S;trait Has{type Out:Copy;}impl Has for S{type Out=i32;}\
+             fn run()->i32{7}fn main(){}",
+        )
+        .unwrap();
+        let plan = PlanCtx::from_program(&source, &PlanBudget::default()).unwrap();
+        let world = plan.trait_world().unwrap();
+        let implementation = world
+            .headers
+            .impls
+            .iter()
+            .find(|header| !header.associated_types.is_empty())
+            .unwrap();
+        let projection = ir::AssociatedTypeProjection {
+            trait_ref: implementation.trait_ref.clone(),
+            item: implementation.associated_types[0].associated,
+        };
+        let declaration = world
+            .headers
+            .callables
+            .iter()
+            .find(|header| header.schema.env.total_arity() == 0)
+            .unwrap()
+            .declaration;
+        let facts = world.callable_facts(declaration).unwrap();
+        let first = world
+            .normalize_associated_type(&projection, &facts)
+            .unwrap();
+        let cached = world
+            .normalize_associated_type(&projection, &facts)
+            .unwrap();
+        assert!(Arc::ptr_eq(&first.0, &cached.0));
+        cached.validate_for(&projection, &facts).unwrap();
+        let mut forged = (*cached.0).clone();
+        forged.normal = Ty::Slice {
+            element: Arc::new(Ty::Bool),
+        };
+        let error = NormalizedAssociatedType(Arc::new(forged))
+            .validate_for(&projection, &facts)
+            .unwrap_err();
+        assert_eq!(error.kind(), FactsErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn associated_source_copy_bound_does_not_elaborate_equality_parameter() {
+        for copy in [false, true] {
+            let bound = if copy { ":Copy" } else { "" };
+            let source = frontend::parse(&format!(
+                "trait Source:Sized{{type Out:Copy;fn get(self)->Self::Out;}}\
+                 fn produce<T:Source<Out=U>,U{bound}>(x:T)->U{{x.get()}}fn main(){{}}"
+            ))
+            .unwrap();
+            let plan = PlanCtx::from_program(&source, &PlanBudget::default()).unwrap();
+            let world = plan.trait_world().unwrap();
+            let callable = world
+                .headers
+                .callables
+                .iter()
+                .find(|header| header.schema.env.total_arity() == 2)
+                .unwrap();
+            let rhs = callable.schema.env.ordered_params().nth(1).unwrap();
+            let facts = world.callable_facts(callable.declaration).unwrap();
+            assert_eq!(facts.must_copy(&Ty::Param(rhs)).unwrap(), copy);
+            // The existing result certificate remains usable and does not
+            // change the independent Copy decision above.
+            facts.carrier_contract(SignatureSubject::Body).unwrap();
         }
     }
 }

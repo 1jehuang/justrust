@@ -934,6 +934,79 @@ impl Resolver<'_> {
     fn trait_path(&mut self, path: &mut TraitPath, module: ModuleId) -> Result<(), String> {
         self.trait_application(path, module, false)
     }
+    /// Unlike ordinary trait uses, declaration bounds retain the complete
+    /// original occurrence even for catalog targets. The target is kept in a
+    /// separate private record and is never inferred later from display text.
+    fn associated_bound(
+        &mut self,
+        path: &mut TraitPath,
+        module: ModuleId,
+    ) -> Result<BuiltinTrait, String> {
+        let TraitPath::Source(source) = path else {
+            return Err(
+                "unsupported: associated bound requires an original source occurrence".into(),
+            );
+        };
+        let mut boundary = None;
+        for segment in &mut source.segments {
+            for ty in segment.args.iter_mut().chain(
+                segment
+                    .associated_types
+                    .iter_mut()
+                    .map(|binding| &mut binding.value),
+            ) {
+                match self.ty(ty, module) {
+                    Err(error) if error.starts_with("unsupported:") => {
+                        boundary.get_or_insert(error);
+                    }
+                    result => result?,
+                }
+            }
+        }
+        let original = source.path(self.names())?;
+        let resolved = self.path(&original, module, true, false)?;
+        let target = match resolved {
+            Some(item) if item.kind != ResolvedKind::Trait => {
+                return Err(format!("{} is not a trait", self.display(&original)?));
+            }
+            Some(ResolvedItem {
+                path: ResolvedPath::Builtin(kind),
+                ..
+            }) => Some(kind),
+            Some(_) => None,
+            None => {
+                let kind = original
+                    .single()
+                    .map(|ident| self.builtin_trait(ident))
+                    .transpose()?
+                    .flatten();
+                if kind.is_none() {
+                    return Err(format!("unresolved trait {}", self.display(&original)?));
+                }
+                kind
+            }
+        };
+        if let Some(error) = boundary {
+            return Err(error);
+        }
+        if source
+            .segments
+            .iter()
+            .any(|segment| !segment.args.is_empty() || !segment.associated_types.is_empty())
+        {
+            return Err(
+                "unsupported: associated declaration bounds require unapplied catalog traits"
+                    .into(),
+            );
+        }
+        let Some(target @ (BuiltinTrait::Copy | BuiltinTrait::Sized)) = target else {
+            return Err(
+                "unsupported: associated declaration bounds require catalog Copy or Sized".into(),
+            );
+        };
+        self.certify_generic(source, &original)?;
+        Ok(target)
+    }
     fn trait_application(
         &mut self,
         path: &mut TraitPath,
@@ -3081,6 +3154,8 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     }
     let mut projected_default = false;
     let mut equality_boundary = None;
+    let mut associated_boundary = None;
+    let mut associated_bound_sources = Vec::new();
     for (source_index, declaration) in program.traits.iter_mut().enumerate() {
         resolver.with_source_owner(SourceOwnerContext::Trait { source_index }, |resolver| {
             clone_vector(&declaration.type_params, &resolver.alias_budget)?;
@@ -3096,6 +3171,40 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                     resolver.trait_path(path, declaration.module),
                     &mut equality_boundary,
                 )?;
+            }
+            for (member_index, associated) in declaration.associated_types.iter_mut().enumerate() {
+                resolver.charge_entries::<(GenericPath, BuiltinTrait)>(associated.bounds.len())?;
+                let mut bounds = Vec::new();
+                bounds
+                    .try_reserve_exact(associated.bounds.len())
+                    .map_err(|_| "associated bound source allocation failed")?;
+                for path in &mut associated.bounds {
+                    match resolver.associated_bound(path, declaration.module) {
+                        Ok(target) => {
+                            let TraitPath::Source(source) = path else {
+                                unreachable!()
+                            };
+                            source_clone::clone_path(source, &resolver.alias_budget)?;
+                            bounds.push((source.clone(), target));
+                        }
+                        Err(error) if error.starts_with("unsupported:") => {
+                            associated_boundary.get_or_insert(error);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                resolver.charge_entries::<AssociatedBoundSource>(1)?;
+                associated_bound_sources
+                    .try_reserve_exact(1)
+                    .map_err(|_| "associated source record allocation failed")?;
+                associated_bound_sources.push(AssociatedBoundSource {
+                    trait_index: source_index,
+                    member_index,
+                    module: declaration.module,
+                    trait_name: declaration.name.clone(),
+                    member_name: associated.name,
+                    bounds: bounds.into(),
+                });
             }
             for item in &mut declaration.items {
                 clone_vector(&declaration.type_params, &resolver.alias_budget)?;
@@ -3250,6 +3359,9 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         })?;
     }
     program.validate_name_handles()?;
+    if let Some(error) = associated_boundary {
+        return Err(error);
+    }
     if let Some(error) = equality_boundary {
         return Err(error);
     }
@@ -3258,6 +3370,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
             "projection-bearing trait default signatures and bodies are unsupported",
         ));
     }
+    program.associated_bound_sources = associated_bound_sources.into();
     Ok(program)
 }
 

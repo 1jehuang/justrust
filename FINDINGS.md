@@ -1,5 +1,43 @@
 # Findings: where agent build time goes
 
+## 2026-10-18: Exact associated declaration Copy/Sized bounds
+
+- Delivered ASSOCIATED-BOUNDS.md: real catalog Copy/Sized declarations retain
+  ordered source occurrences and immutable registry/header/callback agreement.
+  All associated RHSs, including unused generic assignments, prove their bounds
+  under real impl predicates, never an assumption of the impl's own head.
+  Closed normalization and cached evidence replay recheck the actual bound.
+- Stock rustc 1.98.1 rejected bare-U duplication despite Source::Out:Copy.
+  The implementation intentionally does not elaborate U:Copy from equality.
+  Direct unresolved projection execution, general user bounds and defaults remain
+  outside this milestone. Existing carrier, result-domain and reference guards stay.
+- Independent review found callback-only bound IDs could be masked by earlier
+  unsupported signatures. The initial metadata pass now admits both header and
+  callback IDs before capability checks; a private precedence regression covers it.
+  Source replay preserves exact member/path occurrences and uses lock-free frozen
+  registry callbacks. No resource caps or executable ABI changed.
+- Forty stock-measured sources retain all 29 originals and 11 separate literal
+  controls. Native outcomes are 8 Runtime, 14 Invalid and 18 explicit earlier
+  boundaries. Debug/release each pass 160 CLI and 160 all-body graph cells at
+  workers1/8, with 16 actual payload executions. Tuple/wide/generic values and
+  unused invalid Copy assignments are covered without weakening original sources.
+  Source concatenation SHA256 is
+  b56b309099f0686cc337d0590dd7f5579c6b34a0c6ca0a47a4f92247234495c5.
+- Failed gates are retained: 20261017-173805200-3878235 exposed an incorrect
+  private test category for residual Slice; 20261017-174026140-3897412 exposed
+  strict-test lint; 20261017-174211308-3908897 still held provisional corpus
+  classifications. Final tests assert exact observed phases, not generic failure.
+  Historical 40/46/24-source associated/projection/equality payloads are unchanged.
+- Final hosted check 20261017-174250756-3911775; full 2,997 tests in 146 binaries
+  20261017-174252477-3912192; strict warning-free lint
+  20261017-174317713-3913996. Release corpus/public authority: 13 tests in
+  20261017-174256867-3912493. Release private associated proofs: 57 tests in
+  20261017-174318086-3912492. Formatting/diff checks pass. All 19 root receipts
+  (7 failures and 12 successes) are retained in
+  data/runs/xps14/2026-10-18-associated-bounds.jsonl. Full Rust remains open;
+  these are correctness results, not compile-time performance claims.
+
+
 ## 2026-10-18: Parameter-valued associated equality and sealed result flow
 
 - Delivered the bounded T: Source<Out = U> vertical in PARAMETER-EQUALITY.md.

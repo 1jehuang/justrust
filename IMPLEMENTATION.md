@@ -321,8 +321,12 @@ cleanup failures.
       ParamId preservation, contextual Sized, mandatory body/direct/required result
       certificates and post-substitution reference-free checks. Generic T-to-U
       results, moves and genuine Copy facts pass debug/release native gates.
-      Composite symbolic RHSs, reference-bearing results and associated bounds
-      remain outside this bounded slice.
+      Composite symbolic RHSs and reference-bearing results remain outside this
+      bounded slice.
+- [x] Catalog Copy/Sized associated declaration bounds under ASSOCIATED-BOUNDS.md,
+      with exact retained source occurrences and header/callback identity, all unused
+      assignment checks under real impl predicates, and closed normalization replay.
+      This does not infer Copy for an equality-bound U or admit arbitrary user bounds.
 - [ ] Add trait type/lifetime/const parameters, generic methods, where clauses,
       associated types/constants, projection normalization, GATs, defaults and
       supertrait obligations beyond the bounded delivered source-default slice.
@@ -340,8 +344,8 @@ cleanup failures.
       instances. Optimization must not bypass unused-body validation.
 
 **Next:** extend equality to composite symbolic relationships and
-unconstrained projection/associated-bound facts, then projected defaults, with
-authoritative carrier and Copy proofs before an Iterator-like source client. Closure
+unconstrained projection facts, then projected defaults and general associated
+bounds, with authoritative carrier and Copy proofs before an Iterator-like source client. Closure
 capture design can proceed independently against the agreed place/region API.
 **Acceptance:** generic bodies prove obligations without favorable concrete
 witnesses, ambiguous/overlapping impls reject, and concrete dispatch, closures,

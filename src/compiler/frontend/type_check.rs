@@ -7618,6 +7618,7 @@ pub(super) fn type_callable_source(
         return plan.checked_body(&target, &facts, budget);
     }
     let f = plan.callable_body(program, declaration)?;
+    plan.validate_callable_associated_bounds(program, declaration, budget)?;
     let containing_module =
         match plan.registry.callable_sources[plan.callable_index(declaration)?] {
             CallableSource::Free(_) => None,

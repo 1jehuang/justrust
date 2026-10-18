@@ -10,7 +10,7 @@
 //! Native gates found 01-07 blocked at panic! and 12/13 at earlier Self where syntax.
 //! Those are early-phase stock-valid admission boundaries, NOT projected semantics.
 //! Unsupported below is a corpus category, not necessarily the diagnostic error kind.
-//! Cases 08/09 retain rigid projection boundaries, 10/11 associated-type bounds.
+//! Cases 08/09 retain rigid projection boundaries, 10/11 earlier short-projection syntax.
 //! Cases 17/18 stop at nominal lifetime syntax, before projected-reference semantics.
 //! Cases 08/09/18 are stock-invalid Unsupported boundaries, not ordinary-invalid parity.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -26,7 +26,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const BASELINE_STOCK: &str = "rustc 1.98.1;48a229ceaefd4985c50990b14116b6d856af0985;2026-09-01;x86_64-unknown-linux-gnu;LLVM22.1.8";
 const RIGID_BOUNDARY: &str = "unsupported: rigid generic associated projection";
-const BOUNDS_BOUNDARY: &str = "associated type bounds and defaults are unsupported";
+const PARSE_PROJECTION_BOUNDARY: &str =
+    "unsupported: associated type projections are unsupported, found \"::\"";
 const MACRO_BOUNDARY: &str = "unknown function-local macro";
 const SELF_WHERE_BOUNDARY: &str = "Self where predicates are unsupported";
 const LIFETIME_BOUNDARY: &str =
@@ -182,7 +183,7 @@ fn main() { let x = duplicate(S); if x.0 != 42 || x.1 != 42 { panic!(); } printl
             source_bytes: 311,
             stock_diagnostic: None,
             outcome: Outcome::Unsupported,
-            native_boundary: Some(BOUNDS_BOUNDARY),
+            native_boundary: Some(PARSE_PROJECTION_BOUNDARY),
         },
         // Source SHA256 7028424f9528fb4af4aca48bd6d9f01eef061adf0c5f644d099a6df3b2d56731
         Case {
@@ -196,7 +197,7 @@ fn main() { if forward(S) != 42 { panic!(); } println!("ok"); }
             source_bytes: 256,
             stock_diagnostic: None,
             outcome: Outcome::Unsupported,
-            native_boundary: Some(BOUNDS_BOUNDARY),
+            native_boundary: Some(PARSE_PROJECTION_BOUNDARY),
         },
         // Source SHA256 d64b7f5e8b9207e57a2bb6569de605f2628d6f18814caf74ac74861838f121d6
         Case {
@@ -439,7 +440,7 @@ fn projected_methods_stock_partition_and_frozen_source_metadata() {
             1..=7 => Some(MACRO_BOUNDARY),
             12 | 13 => Some(SELF_WHERE_BOUNDARY),
             8 | 9 => Some(RIGID_BOUNDARY),
-            10 | 11 => Some(BOUNDS_BOUNDARY),
+            10 | 11 => Some(PARSE_PROJECTION_BOUNDARY),
             14..=16 => None,
             17 | 18 => Some(LIFETIME_BOUNDARY),
             _ => unreachable!(),
@@ -605,6 +606,13 @@ fn assert_native_diagnostic(case: &Case, diagnostic: &str) {
             "{}: expected exact boundary {boundary:?}, got {diagnostic}",
             case.name
         );
+        if case.name == "10_explicit_out_copy" {
+            assert!(
+                diagnostic.contains(&format!(":4:36: {PARSE_PROJECTION_BOUNDARY}")),
+                "{} expected recorded short-projection parser location:{diagnostic}",
+                case.name
+            );
+        }
     } else {
         assert_eq!(case.outcome, Outcome::Invalid);
         assert!(

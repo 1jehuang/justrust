@@ -40,7 +40,6 @@ enum Phase {
     ExternalExit,
     ParseProjection,
     Conflict,
-    AssociatedBounds,
     StaticLifetime,
 }
 struct Case {
@@ -684,7 +683,7 @@ fn main() { let x = forward(S); if x.0 == 97 && x.1 == 97 { println!("ok"); } }
             stock_diagnostic: None,
             stdout: b"ok\n",
             outcome: Outcome::Unsupported,
-            phase: Phase::AssociatedBounds,
+            phase: Phase::ParseProjection,
         },
         // Source SHA256 c38c80a7565f0d1d7e42a14c37bf4c7bc1b31ad085e04359130e9ea9976b1413
         Case {
@@ -1002,7 +1001,6 @@ fn assert_native_diagnostic(case: &Case, diagnostic: &str) {
             "unsupported: associated type projections are unsupported, found \"::\""
         }
         Phase::Conflict => "conflicting declared projection equalities",
-        Phase::AssociatedBounds => "associated type bounds and defaults are unsupported",
         // This source is preserved, not rewritten to bypass its earlier lifetime parser boundary.
         Phase::StaticLifetime => "static and inferred lifetimes are unsupported",
         Phase::Body => {
@@ -1022,6 +1020,13 @@ fn assert_native_diagnostic(case: &Case, diagnostic: &str) {
         case.name,
         case.phase
     );
+    if case.name == "39_out_copy" {
+        assert!(
+            diagnostic.contains(&format!(":4:34: {expected}")),
+            "{} expected recorded short-projection parser location:{diagnostic}",
+            case.name
+        );
+    }
 }
 // Catch at cell boundaries, never suppress individual assertions or process safety guards.
 // Every failed cell is printed with its source and mode before the aggregate gate fails.
@@ -1310,12 +1315,8 @@ fn all_body_graph() {
                                 "{}: rejected source emitted object",
                                 case.name
                             );
-                            if matches!(
-                                case.phase,
-                                Phase::ParseProjection
-                                    | Phase::AssociatedBounds
-                                    | Phase::StaticLifetime
-                            ) {
+                            if matches!(case.phase, Phase::ParseProjection | Phase::StaticLifetime)
+                            {
                                 assert!(
                                     report
                                         .node_evaluations

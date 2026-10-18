@@ -3671,6 +3671,8 @@ impl PlanCtx {
 }
 
 #[cfg(test)]
+mod associated_bounds;
+#[cfg(test)]
 mod name_tests;
 mod recipes;
 #[cfg(test)]
@@ -3689,6 +3691,17 @@ pub struct Program {
     pub impls: Vec<ImplDecl>,
     pub traits: Vec<TraitDecl>,
     pub trait_imports: Vec<(ModuleId, TraitPath)>,
+    // Resolver-issued source authority. Shared unchanged by public AST clones.
+    associated_bound_sources: Arc<[AssociatedBoundSource]>,
+}
+#[derive(Clone, Debug)]
+struct AssociatedBoundSource {
+    trait_index: usize,
+    member_index: usize,
+    module: ModuleId,
+    trait_name: AstPath,
+    member_name: AstIdent,
+    bounds: Arc<[(GenericPath, BuiltinTrait)]>,
 }
 /// Syntax-only result. Resolve this once before publishing callable signatures.
 #[derive(Clone, Debug)]
@@ -3732,6 +3745,7 @@ impl ProgramDeclarations {
             impls: self.impls,
             traits: self.traits,
             trait_imports: self.trait_imports,
+            associated_bound_sources: Arc::from([]),
         }
     }
 }
@@ -3868,6 +3882,68 @@ impl Program {
     fn validate_name_handles(&self) -> Result<(), String> {
         name_validation::validate_program_names(self)
     }
+    fn validate_associated_bound_source(
+        &self,
+        source: &AssociatedBoundSource,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        budget.charge_work(1)?;
+        self.modules
+            .check(source.module)
+            .map_err(module_diagnostic)?;
+        let owner = self
+            .traits
+            .get(source.trait_index)
+            .ok_or("associated bound source owner was removed")?;
+        let member = owner
+            .associated_types
+            .get(source.member_index)
+            .ok_or("associated bound source member was removed")?;
+        let mut equal = owner.module == source.module;
+        equal &= exact_source_path(&self.names, &owner.name, &source.trait_name, budget)?;
+        equal &= exact_source_ident(&self.names, member.name, source.member_name)?;
+        equal &= member.bounds.len() == source.bounds.len();
+        budget.charge_work(member.bounds.len().saturating_add(source.bounds.len()))?;
+        for (path, (original, _)) in member.bounds.iter().zip(source.bounds.iter()) {
+            equal &= match path {
+                TraitPath::Source(path) => {
+                    exact_source_generic_path(&self.names, path, original, budget, 0)?
+                }
+                TraitPath::Builtin(_) => false,
+            };
+        }
+        if !equal {
+            return Err(
+                "associated declaration bounds differ from their exact retained source occurrences"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+    fn validate_associated_bound_sources(&self, budget: &ir::PlanBudget) -> Result<(), String> {
+        let mut count = 0usize;
+        let mut has_bounds = false;
+        for owner in &self.traits {
+            budget.charge_work(owner.associated_types.len().saturating_add(1))?;
+            count = count
+                .checked_add(owner.associated_types.len())
+                .ok_or("associated bound source count overflow")?;
+            for member in &owner.associated_types {
+                has_bounds |= !member.bounds.is_empty();
+            }
+        }
+        // Structural no-bound fixtures do not need resolver certificates.
+        if self.associated_bound_sources.is_empty() && !has_bounds {
+            return Ok(());
+        }
+        for source in self.associated_bound_sources.iter() {
+            self.validate_associated_bound_source(source, budget)?;
+        }
+        if count != self.associated_bound_sources.len() {
+            return Err("associated declaration source inventory changed".into());
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Debug)]
 struct Item {
@@ -3987,6 +4063,7 @@ pub struct TraitDecl {
 #[derive(Clone, Debug)]
 pub struct AssociatedTypeDecl {
     pub name: AstIdent,
+    pub bounds: Vec<TraitPath>,
 }
 #[derive(Clone, Debug)]
 pub struct TraitItemDecl {
@@ -7425,14 +7502,34 @@ impl<'input, 'names> Parser<'input, 'names> {
                     if self.is("<") || self.is("where") {
                         return Err(self.unsupported("generic associated types are unsupported"));
                     }
-                    if self.is(":") || self.is("=") {
+                    let mut associated_bounds = Vec::new();
+                    if self.eat(":") {
+                        loop {
+                            if associated_bounds.len() >= 256 {
+                                return Err(self.limit("associated type bound limit exceeded"));
+                            }
+                            let path = self.trait_path()?;
+                            self.reserve_parser_items(&mut associated_bounds, 1)?;
+                            associated_bounds.push(path);
+                            if !self.eat("+") {
+                                break;
+                            }
+                        }
+                    }
+                    if self.is("=") {
                         return Err(
                             self.unsupported("associated type bounds and defaults are unsupported")
                         );
                     }
+                    if self.is("where") {
+                        return Err(self.unsupported("generic associated types are unsupported"));
+                    }
                     self.expect(";")?;
                     self.reserve_parser_items(&mut associated_types, 1)?;
-                    associated_types.push(AssociatedTypeDecl { name });
+                    associated_types.push(AssociatedTypeDecl {
+                        name,
+                        bounds: associated_bounds,
+                    });
                     continue;
                 }
                 let (signature, receiver) = self.function_head(&type_params, true)?;
@@ -11555,12 +11652,18 @@ pub struct DeclRegistry {
     trait_ids: Vec<ir::DeclId>,
     trait_items: Vec<Vec<ir::DeclId>>,
     trait_associated_types: Vec<Vec<ir::DeclId>>,
+    associated_type_bounds: HashMap<ir::DeclId, FrozenAssociatedBounds>,
     trait_imports: Vec<(ModuleId, TraitPath)>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum TraitLookupKey {
     Source(PathKey),
     Builtin(BuiltinTrait),
+}
+#[derive(Debug)]
+struct FrozenAssociatedBounds {
+    ids: Arc<[ir::DeclId]>,
+    source_index: Option<usize>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum GenericBindingKey {
@@ -12208,6 +12311,7 @@ impl PlanCtx {
     ) -> Result<Self, String> {
         let program = shared.as_ref();
         program.validate_name_handles()?;
+        program.validate_associated_bound_sources(budget)?;
         // Source constructors retain nominal identity. Generic unit declarations
         // remain outside source-shape admission.
         budget.charge_work(program.structs.len())?;
@@ -12277,6 +12381,7 @@ impl PlanCtx {
             trait_ids: Vec::new(),
             trait_items: Vec::new(),
             trait_associated_types: Vec::new(),
+            associated_type_bounds: HashMap::new(),
             trait_imports: program.trait_imports.clone(),
         };
         reserve_registry_map(&mut registry.functions, program.functions.len(), budget)?;
@@ -12815,6 +12920,60 @@ impl PlanCtx {
                 info.visibility = program.impls[implementation].items[info.source_index]
                     .visibility
                     .clone();
+            }
+        }
+        let bound_count =
+            registry
+                .trait_associated_types
+                .iter()
+                .try_fold(0usize, |count, members| {
+                    count
+                        .checked_add(members.len())
+                        .ok_or("associated bound inventory overflow")
+                })?;
+        reserve_registry_map(&mut registry.associated_type_bounds, bound_count, budget)?;
+        let mut source_index = 0usize;
+        for (trait_index, owner) in program.traits.iter().enumerate() {
+            for (member_index, member) in owner.associated_types.iter().enumerate() {
+                let declaration = registry.trait_associated_types[trait_index][member_index];
+                budget.charge_work(member.bounds.len().saturating_add(1))?;
+                let mut ids = Vec::new();
+                budget.retain_bytes(
+                    member
+                        .bounds
+                        .len()
+                        .checked_mul(2 * std::mem::size_of::<ir::DeclId>())
+                        .and_then(|bytes| bytes.checked_add(128))
+                        .ok_or("associated bound storage overflow")?,
+                )?;
+                ids.try_reserve_exact(member.bounds.len())
+                    .map_err(|_| "associated bound allocation failed")?;
+                if !program.associated_bound_sources.is_empty() {
+                    let source = program
+                        .associated_bound_sources
+                        .get(source_index)
+                        .ok_or("missing associated bound source")?;
+                    if source.trait_index != trait_index || source.member_index != member_index {
+                        return Err("associated bound source order changed".into());
+                    }
+                    for (_, kind) in source.bounds.iter() {
+                        let id = registry
+                            .traits
+                            .get(&TraitLookupKey::Builtin(*kind))
+                            .copied()
+                            .ok_or("missing associated bound catalog identity")?;
+                        ids.push(id);
+                    }
+                }
+                registry.associated_type_bounds.insert(
+                    declaration,
+                    FrozenAssociatedBounds {
+                        ids: ids.into(),
+                        source_index: (!program.associated_bound_sources.is_empty())
+                            .then_some(source_index),
+                    },
+                );
+                source_index += 1;
             }
         }
         let mut registry = Arc::new(registry);
@@ -13473,6 +13632,12 @@ impl PlanCtx {
                     declaration: *declaration,
                     trait_decl: id,
                     env: info.env.clone(),
+                    bounds: self
+                        .registry
+                        .associated_type_bounds
+                        .get(declaration)
+                        .map(|bounds| bounds.ids.clone())
+                        .ok_or("missing authoritative associated declaration bounds")?,
                 });
             }
             for (ii, item) in t.items.iter().enumerate() {
@@ -13752,6 +13917,75 @@ impl PlanCtx {
                 .map(|m| &m.function),
         }
         .ok_or_else(|| "callable source does not belong to program".into())
+    }
+    fn validate_callable_associated_bounds(
+        &self,
+        program: &Program,
+        declaration: ir::DeclId,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        self.check_budget(budget)?;
+        let owner_index = match self.registry.callable_sources[self.callable_index(declaration)?] {
+            CallableSource::Free(_) => return Ok(()),
+            CallableSource::TraitDefault { trait_index, .. } => trait_index,
+            CallableSource::Associated { implementation, .. } => {
+                let Some(path) = &self.program.impls[implementation].trait_path else {
+                    return Ok(());
+                };
+                let owner = self.registry.resolve_trait_path(path)?;
+                if self.catalog.declaration(owner).is_some() {
+                    return Ok(());
+                }
+                self.registry.declaration(owner)?.source_index
+            }
+        };
+        let supplied = program
+            .traits
+            .get(owner_index)
+            .ok_or("callable associated-bound owner was removed")?;
+        name_validation::validate_associated_bound_names(program, supplied)?;
+        let original = self
+            .program
+            .traits
+            .get(owner_index)
+            .ok_or("missing retained callable associated-bound owner")?;
+        let ids = self
+            .registry
+            .trait_associated_types
+            .get(owner_index)
+            .ok_or("missing retained associated-bound member identities")?;
+        budget.charge_work(ids.len().saturating_add(1))?;
+        let mut equal = supplied.associated_types.len() == original.associated_types.len();
+        for (index, id) in ids.iter().enumerate() {
+            let frozen = self
+                .registry
+                .associated_type_bounds
+                .get(id)
+                .ok_or("missing frozen associated bound metadata")?;
+            if let Some(source_index) = frozen.source_index {
+                let source = self
+                    .program
+                    .associated_bound_sources
+                    .get(source_index)
+                    .ok_or("missing retained associated bound occurrence")?;
+                program.validate_associated_bound_source(source, budget)?;
+            } else {
+                let candidate = supplied
+                    .associated_types
+                    .get(index)
+                    .ok_or("callable associated member was removed")?;
+                equal &= exact_source_ident(
+                    &program.names,
+                    candidate.name,
+                    original.associated_types[index].name,
+                )?;
+                equal &= candidate.bounds.is_empty();
+            }
+        }
+        if !equal {
+            return Err("callable associated declaration bounds changed".into());
+        }
+        Ok(())
     }
     pub fn callable_env(&self, decl: ir::DeclId) -> Result<Arc<ir::GenericEnv>, String> {
         Ok(self.declaration(decl)?.env.clone())
@@ -14633,6 +14867,34 @@ impl tr::SchemaCx for SchemaAdapter {
             .get(&(implementation, associated))
             .cloned()
             .ok_or_else(|| self.error("missing authoritative associated assignment".into()))
+    }
+    fn associated_type_bounds(
+        &self,
+        associated: ir::DeclId,
+    ) -> Result<Arc<[ir::DeclId]>, tr::FactsError> {
+        self.budget.charge_work(1).map_err(|e| self.error(e))?;
+        let info = self
+            .registry
+            .declaration(associated)
+            .map_err(|e| self.error(e))?;
+        if info.kind != ir::DeclKind::AssociatedType {
+            return Err(self.error("associated bounds requested for a nonmember".into()));
+        }
+        let owner = self
+            .registry
+            .declaration(
+                info.owner
+                    .ok_or_else(|| self.error("associated bounds have no owner".into()))?,
+            )
+            .map_err(|e| self.error(e))?;
+        if owner.kind != ir::DeclKind::Trait || owner.path.module != info.path.module {
+            return Err(self.error("associated bound owner mismatch".into()));
+        }
+        self.registry
+            .associated_type_bounds
+            .get(&associated)
+            .map(|bounds| bounds.ids.clone())
+            .ok_or_else(|| self.error("missing authoritative associated declaration bounds".into()))
     }
     fn source_region_env(
         &self,

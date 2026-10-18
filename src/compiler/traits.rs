@@ -360,6 +360,7 @@ pub struct AssociatedTypeHeader {
     pub declaration: DeclId,
     pub trait_decl: DeclId,
     pub env: Arc<GenericEnv>,
+    pub bounds: Arc<[DeclId]>,
 }
 #[derive(Clone, Debug)]
 pub struct AssociatedTypeValue {
@@ -400,6 +401,10 @@ pub trait SchemaCx {
     fn core_catalog(&self) -> &Arc<CoreCatalog>;
     fn declaration_info(&self, id: DeclId) -> Result<SchemaDecl>;
     fn declaration_schema(&self, id: DeclId) -> Result<GenericSchema>;
+    fn associated_type_bounds(&self, associated: DeclId) -> Result<Arc<[DeclId]>> {
+        let _ = associated;
+        Ok(Arc::from([]))
+    }
     fn associated_type_rhs(&self, implementation: DeclId, associated: DeclId) -> Result<Ty> {
         let _ = (implementation, associated);
         Err(FactsError::invalid(
@@ -1138,6 +1143,7 @@ pub struct ValidatedTraitWorld {
     projection_memo: Mutex<Vec<associated_types::NormalizationMemo>>,
     owner_normalization_ready: bool,
     owner_normalization_finalized: bool,
+    has_associated_bounds: bool,
     declared_callables: Vec<equality::DeclaredCallableContext>,
 }
 
@@ -1280,6 +1286,7 @@ impl ValidatedTraitWorld {
             projection_memo: Mutex::new(Vec::new()),
             owner_normalization_ready: false,
             owner_normalization_finalized: false,
+            has_associated_bounds: false,
             declared_callables: Vec::new(),
         };
         world.validate_header_type_metadata()?;

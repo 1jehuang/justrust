@@ -1,6 +1,6 @@
 # Associated declaration bounds: bounded next milestone
 
-Status: frozen implementation contract, not delivered. Builds on `458253eb5` and PARAMETER-EQUALITY.md. Full Rust remains open.
+Status: delivered as a bounded milestone, verified on 2026-10-18. Builds on `458253eb5` and PARAMETER-EQUALITY.md. Full Rust remains open.
 
 ## Scope
 
@@ -33,3 +33,9 @@ No new executable projection, carrier mapping or ABI rule is introduced. Existin
 Preserve frozen stock sources and add separately measured literal payload controls if earlier parser boundaries mask them. Native tests must cover valid scalar/tuple/wide assignments and calls, generic RHS with explicit Copy, non-Copy and missing-Copy assignments rejected even unused, wrong argument/member/world/source replay, catalog identity rather than user-trait spelling, duplicate bounds, and unchanged no-bound declarations. Bare U duplication without U:Copy remains ordinary invalid. Unconstrained rigid projected values remain an explicit boundary.
 
 Run hosted all-target check, full regressions, strict lint and formatting; debug/release workers1/8 CHECK/BUILD and real native payloads; public metadata/proof tests and original resource guards. Retain both failed and passing receipts. Report declaration-bound support only, not full associated types, general bound elaboration, a speedup or full Rust.
+
+## Verified delivery
+
+The 40-source corpus retains all 29 originals and 11 separately measured append controls. The append receipt is `associated-bounds-stock-append/receipt.json`, SHA256 `e14960c7ce019ef53084fd257803f9627cbba99f623d2d7544b5bfb87d92b268`. Concatenated source bytes in case order hash to `b56b309099f0686cc337d0590dd7f5579c6b34a0c6ca0a47a4f92247234495c5`. Native outcomes are eight Runtime, 14 Invalid and 18 explicit earlier boundaries, not 40 semantic successes. Debug and release each pass 160 CLI and 160 graph cells at workers 1/8, including 16 real payload executions. Every earlier parser/resolver/inference boundary is asserted separately. Bare U duplication still fails without explicit U:Copy.
+
+Final hosted validation: all-target check `20261017-174250756-3911775`; full 2,997 tests across 146 binaries `20261017-174252477-3912192`; warning-free Clippy `20261017-174317713-3913996`. Release corpus/public authority passes 13 tests in `20261017-174256867-3912493`, and release associated proof controls pass 57 in `20261017-174318086-3912492`. Formatting and diff checks pass. Nineteen failed and successful root run summaries are retained in `data/runs/xps14/2026-10-18-associated-bounds.jsonl`. Historical source bytes remain unchanged; only observed earlier-phase expectations were updated.
