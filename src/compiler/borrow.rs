@@ -294,7 +294,7 @@ fn read_cell_cover(
                 Ok(true)
             }
             Ty::Param(_) => Ok(false),
-            Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => Ok(true),
+            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => Ok(true),
             _ => {
                 if let Ty::Enum(value) = ty {
                     budget.spend(value.def().variants.len())?;
@@ -4918,7 +4918,7 @@ impl Plan {
         Ok(match (anchor, output) {
             (Ty::Int(a), Ty::Int(b)) => a == b,
             (Ty::Float(a), Ty::Float(b)) => a == b,
-            (Ty::Bool, Ty::Bool) => true,
+            (Ty::Char, Ty::Char) | (Ty::Bool, Ty::Bool) => true,
             _ => false,
         })
     }

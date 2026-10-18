@@ -63,7 +63,8 @@ pub(super) fn literal_buffer(
     // No arbitrary payload token can become a name or a recursive opaque atom.
     match parts.value.kind {
         TokenKind::Literal {
-            kind: LiteralKind::Integer | LiteralKind::Float | LiteralKind::String,
+            kind:
+                LiteralKind::Integer | LiteralKind::Float | LiteralKind::String | LiteralKind::Char,
             ..
         } => {}
         TokenKind::Ident(ident)
@@ -340,6 +341,19 @@ fn push_logical(
                     )
                 }
                 TokenKind::Literal {
+                    kind: LiteralKind::Char,
+                    spelling,
+                } => {
+                    let text = session.symbol(spelling).map_err(transport_error)?;
+                    output.push_expanded(
+                        session,
+                        text,
+                        ParserTokenKind::Char,
+                        &[part(session, token.span)?],
+                        None,
+                    )
+                }
+                TokenKind::Literal {
                     kind: LiteralKind::String,
                     spelling,
                 } => {
@@ -378,7 +392,7 @@ fn push_logical(
                 TokenKind::Literal { .. } => Err(failure(
                     session,
                     token.span,
-                    "raw, byte, character and C literals are unsupported",
+                    "raw, byte and C literals are unsupported",
                 )),
                 TokenKind::Opaque(_) => {
                     output.push_opaque_literal(session, token, part(session, token.span)?)
@@ -1086,7 +1100,7 @@ mod tests {
         let released = budget.snapshot();
         assert!(released.retained_bytes < live.retained_bytes);
         assert_eq!(released.temporary_bytes, live.temporary_bytes);
-        for argument in ["('x')", "(b'x')", "(r\"raw\")", "(b\"bytes\")", "(c\"C\")"] {
+        for argument in ["(b'x')", "(r\"raw\")", "(b\"bytes\")", "(c\"C\")"] {
             let mut source = fixture_rules("($x:literal)=>{$x};", argument);
             let buffer = run(&mut source).unwrap();
             let view = super::super::TokenCursor::new(&buffer).current();
@@ -1120,6 +1134,15 @@ mod tests {
         let buffer = run(&mut source).unwrap();
         assert_eq!(buffer[0].text, "ok\n");
         assert_eq!(buffer[0].kind, ParserTokenKind::String);
+        let mut source = fixture("'水'");
+        let buffer = run(&mut source).unwrap();
+        assert_eq!(buffer[0].text, "'水'");
+        assert_eq!(buffer[0].kind, ParserTokenKind::Char);
+        assert_eq!(
+            buffer[0].whole.provenance(),
+            super::super::TokenProvenance::Expanded
+        );
+        assert!(buffer[0].name.is_none());
     }
 
     #[test]

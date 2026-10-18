@@ -1073,6 +1073,33 @@ mod float_inference_tests {
     use super::*;
 
     #[test]
+    fn char_rigid_inference_never_accepts_numeric_or_boolean_domains() {
+        let budget = ir::PlanBudget::default();
+        let state = CallInferenceState::new(None, &budget).unwrap();
+        let character = state.type_term(&ir::Ty::Char, None, 0).unwrap();
+        let mut materialize = |_, _: &[ir::Ty]| unreachable!();
+        assert_eq!(
+            state
+                .resolve(&character, false, 0, &mut materialize)
+                .unwrap(),
+            Some(ir::Ty::Char)
+        );
+        for other in [
+            InferKind::Integer,
+            InferKind::Float,
+            InferKind::UnknownFloat,
+            InferKind::Rigid(ir::Ty::Int(ir::IntTy::U32)),
+            InferKind::Rigid(ir::Ty::Bool),
+        ] {
+            let other = state.node(other).unwrap();
+            assert!(state.merge(&character, &other, 0).is_err());
+            assert!(state.merge(&other, &character, 0).is_err());
+        }
+        let same = state.type_term(&ir::Ty::Char, None, 0).unwrap();
+        assert!(state.merge(&character, &same, 0).is_ok());
+    }
+
+    #[test]
     fn float_fallback_is_deferred_and_never_integer() {
         let budget = ir::PlanBudget::default();
         let state = CallInferenceState::new(None, &budget).unwrap();

@@ -427,6 +427,7 @@ pub enum Statement {
 pub enum Constant {
     Enum { ty: ir::EnumTy, variant: usize },
     Int(IntValue),
+    Char(ir::CharValue),
     Float(ir::FloatValue),
     Bool(bool),
     Unit,
@@ -1474,7 +1475,11 @@ impl Function {
                 }
                 Operand::Copy(place) | Operand::Move(place) => path(place, budget)?,
                 Operand::Constant(
-                    Constant::Int(_) | Constant::Float(_) | Constant::Bool(_) | Constant::Unit,
+                    Constant::Int(_)
+                    | Constant::Char(_)
+                    | Constant::Float(_)
+                    | Constant::Bool(_)
+                    | Constant::Unit,
                 ) => {}
             }
             Ok(())
@@ -1623,6 +1628,10 @@ impl Function {
                 value.validate()?;
                 Ok(Ty::Float(value.ty))
             }
+            Operand::Constant(Constant::Char(value)) => {
+                value.validate()?;
+                Ok(Ty::Char)
+            }
             Operand::Constant(Constant::Bool(_)) => Ok(Ty::Bool),
             Operand::Constant(Constant::Unit) => Ok(Ty::Unit),
             Operand::Constant(Constant::Enum { ty, variant }) => {
@@ -1734,6 +1743,13 @@ impl Function {
             op,
             BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
         );
+        if left == Ty::Char || right == Ty::Char {
+            return if comparison && left == right {
+                Ok(Ty::Bool)
+            } else {
+                Err("CFG char permits only same-type comparisons".into())
+            };
+        }
         if matches!(left, Ty::Float(_)) {
             if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor) {
                 return Err("CFG bitwise operator requires integer or bool operands".into());
@@ -3417,6 +3433,11 @@ impl Lowerer<'_> {
             ir::ExprKind::Int(value) => self.assign(
                 destination.clone(),
                 Rvalue::Use(Operand::Constant(Constant::Int(*value))),
+                origin,
+            ),
+            ir::ExprKind::Char(value) => self.assign(
+                destination.clone(),
+                Rvalue::Use(Operand::Constant(Constant::Char(*value))),
                 origin,
             ),
             ir::ExprKind::Bool(value) => self.assign(
@@ -6308,6 +6329,89 @@ mod tests {
                 "{source}"
             );
         }
+    }
+
+    #[test]
+    fn char_constants_and_operators_are_exact_and_validated() {
+        let function = nominal_lowered(&with_root(Ty::Unit, vec![], vec![]));
+        let scalar = |value| Operand::Constant(Constant::Char(ir::CharValue { value }));
+        for value in [0, 0xd7ff, 0xe000, 0x10ffff] {
+            assert_eq!(function.operand_ty(&scalar(value)).unwrap(), Ty::Char);
+        }
+        for value in [0xd800, 0xdfff, 0x110000, u32::MAX] {
+            assert!(function.operand_ty(&scalar(value)).is_err());
+        }
+        for op in [
+            BinaryOp::Eq,
+            BinaryOp::Ne,
+            BinaryOp::Lt,
+            BinaryOp::Le,
+            BinaryOp::Gt,
+            BinaryOp::Ge,
+        ] {
+            assert_eq!(
+                function
+                    .rvalue_ty(&Rvalue::Binary {
+                        op,
+                        left: scalar(0),
+                        right: scalar(0x10ffff)
+                    })
+                    .unwrap(),
+                Ty::Bool
+            );
+            assert!(
+                function
+                    .rvalue_ty(&Rvalue::Binary {
+                        op,
+                        left: scalar(65),
+                        right: Operand::Constant(Constant::Int(IntValue {
+                            ty: IntTy::U32,
+                            bits: 65
+                        }))
+                    })
+                    .is_err()
+            );
+        }
+        for op in [
+            BinaryOp::Add,
+            BinaryOp::Sub,
+            BinaryOp::Mul,
+            BinaryOp::Div,
+            BinaryOp::Rem,
+            BinaryOp::Shl,
+            BinaryOp::Shr,
+            BinaryOp::BitAnd,
+            BinaryOp::BitOr,
+            BinaryOp::BitXor,
+        ] {
+            assert!(
+                function
+                    .rvalue_ty(&Rvalue::Binary {
+                        op,
+                        left: scalar(65),
+                        right: scalar(1)
+                    })
+                    .is_err()
+            );
+        }
+        for op in [UnaryOp::Neg, UnaryOp::Not] {
+            assert!(
+                function
+                    .rvalue_ty(&Rvalue::Unary {
+                        op,
+                        value: scalar(65)
+                    })
+                    .is_err()
+            );
+        }
+        assert!(
+            function
+                .rvalue_ty(&Rvalue::IntCast {
+                    value: scalar(65),
+                    to: IntTy::U32
+                })
+                .is_err()
+        );
     }
 
     #[test]

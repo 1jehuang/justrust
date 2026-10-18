@@ -420,6 +420,7 @@ impl PlanState {
             }
             Type::Int(i) => ir::Ty::Int(*i),
             Type::Float(f) => ir::Ty::Float(*f),
+            Type::Char => ir::Ty::Char,
             Type::Bool => ir::Ty::Bool,
             Type::Unit => ir::Ty::Unit,
             Type::Never => ir::Ty::Never,

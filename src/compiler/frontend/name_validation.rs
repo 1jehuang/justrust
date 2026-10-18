@@ -615,6 +615,7 @@ impl<'a> Validator<'a> {
                 Type::SelfType
                 | Type::Int(_)
                 | Type::Float(_)
+                | Type::Char
                 | Type::Bool
                 | Type::Unit
                 | Type::Never
@@ -910,7 +911,11 @@ impl<'a> Validator<'a> {
                 }
                 Expr::Output(output) => validate_output_site(output, &self.program.names)?,
                 Expr::Panic(panic) => validate_panic_site(panic, &self.program.names)?,
-                Expr::Integer(_) | Expr::Float(_) | Expr::Bool(_) | Expr::Println(_) => (),
+                Expr::Integer(_)
+                | Expr::Float(_)
+                | Expr::Char(_)
+                | Expr::Bool(_)
+                | Expr::Println(_) => (),
             },
             Visit::Pattern(pattern) => match pattern {
                 Pattern::Apply { path, pattern } => {

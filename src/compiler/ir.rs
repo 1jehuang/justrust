@@ -441,7 +441,13 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                     }
                 }
             }
-            Ty::Param(_) | Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
+            Ty::Param(_)
+            | Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Char
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Never => {}
         }
         budget.retain_bytes(4 * std::mem::size_of::<(usize, (bool, usize))>())?;
         memo.try_reserve(1)
@@ -586,7 +592,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                             }
                         }
                     }
-                    Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
+                    Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => {}
                     Ty::Ref { .. } | Ty::Param(_) => unreachable!(),
                 }
                 path.truncate(saved);
@@ -1120,7 +1126,10 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
         (Ty::Param(a), Ty::Param(b)) => a == b,
         (Ty::Int(a), Ty::Int(b)) => a == b,
         (Ty::Float(a), Ty::Float(b)) => a == b,
-        (Ty::Bool, Ty::Bool) | (Ty::Unit, Ty::Unit) | (Ty::Never, Ty::Never) => true,
+        (Ty::Char, Ty::Char)
+        | (Ty::Bool, Ty::Bool)
+        | (Ty::Unit, Ty::Unit)
+        | (Ty::Never, Ty::Never) => true,
         _ => false,
     })
 }
@@ -2268,7 +2277,7 @@ fn substitute_ty_walk(
                 budget,
             )?
         }
-        Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => ty.clone(),
+        Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => ty.clone(),
     })
 }
 
@@ -2376,6 +2385,7 @@ pub fn instantiate_checked(
             | ExprKind::LabeledBlock { body: block, .. } => visitor.block(block, 0)?,
             ExprKind::IntCast { .. }
             | ExprKind::FloatCast { .. }
+            | ExprKind::Char(_)
             | ExprKind::Float(_)
             | ExprKind::Deref { .. }
             | ExprKind::DynamicIndex { .. }
@@ -2750,7 +2760,13 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
                     }
                 }
             }
-            Ty::Param(_) | Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
+            Ty::Param(_)
+            | Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Char
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Never => {}
         }
         Ok(())
     }
@@ -3391,6 +3407,20 @@ pub struct FieldDef {
 pub struct LocalId(pub usize);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ExprId(pub usize);
+/// A Unicode scalar, validated again at every checked IR boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CharValue {
+    pub value: u32,
+}
+impl CharValue {
+    pub fn validate(self) -> Result<(), String> {
+        if char::from_u32(self.value).is_none() {
+            return Err("character constant is not a Unicode scalar".into());
+        }
+        Ok(())
+    }
+}
+
 /// Resolved control-flow target, allocated monotonically within one function.
 /// Source labels resolve to these function-local targets before CFG lowering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -3403,6 +3433,7 @@ pub enum Ty {
     AssociatedType(Arc<AssociatedTypeProjection>),
     Param(ParamId),
     Int(IntTy),
+    Char,
     Float(FloatTy),
     Ref {
         kind: BorrowKind,
@@ -3575,7 +3606,9 @@ fn type_metadata_walk(
                 }
                 return Ok((false, 0));
             }
-            Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => return Ok((false, 0)),
+            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => {
+                return Ok((false, 0));
+            }
         };
         for (candidate, result) in &memo.entries {
             charge(budget, work)?;
@@ -3658,7 +3691,13 @@ fn type_metadata_walk(
                     }
                 }
             }
-            Ty::Param(_) | Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
+            Ty::Param(_)
+            | Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Char
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Never => {}
         }
         memo.entries[index].1 = Some((found, height));
         Ok((found, height))
@@ -3774,6 +3813,7 @@ impl Ty {
                 Self::Param(_)
                 | Self::Int(_)
                 | Self::Float(_)
+                | Self::Char
                 | Self::Bool
                 | Self::Unit
                 | Self::Never => {}
@@ -3801,7 +3841,9 @@ impl Ty {
     pub fn is_copy(&self) -> bool {
         match self {
             Self::Ref { kind, .. } => *kind == BorrowKind::Shared,
-            Self::Int(_) | Self::Float(_) | Self::Bool | Self::Unit | Self::Never => true,
+            Self::Int(_) | Self::Float(_) | Self::Char | Self::Bool | Self::Unit | Self::Never => {
+                true
+            }
             Self::AssociatedType(_)
             | Self::Struct(_)
             | Self::Enum(_)
@@ -4764,7 +4806,13 @@ fn ref_type_walk(
                     }
                 }
             }
-            Ty::Param(_) | Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
+            Ty::Param(_)
+            | Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Char
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Never => {}
         }
         budget.retain_bytes(4 * std::mem::size_of::<((usize, bool), (bool, usize))>())?;
         memo.try_reserve(1)
@@ -4860,7 +4908,10 @@ fn ref_types_equal(
             (Ty::Param(a), Ty::Param(b)) => a == b,
             (Ty::Int(a), Ty::Int(b)) => a == b,
             (Ty::Float(a), Ty::Float(b)) => a == b,
-            (Ty::Bool, Ty::Bool) | (Ty::Unit, Ty::Unit) | (Ty::Never, Ty::Never) => true,
+            (Ty::Char, Ty::Char)
+            | (Ty::Bool, Ty::Bool)
+            | (Ty::Unit, Ty::Unit)
+            | (Ty::Never, Ty::Never) => true,
             _ => false,
         };
         budget.retain_bytes(4 * std::mem::size_of::<((usize, usize), (bool, usize))>())?;
@@ -5363,7 +5414,10 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
             (Ty::Int(a), Ty::Int(b)) if a == b => {}
             (Ty::Float(a), Ty::Float(b)) if a == b => {}
             (Ty::Param(a), Ty::Param(b)) if a == b => {}
-            (Ty::Bool, Ty::Bool) | (Ty::Unit, Ty::Unit) | (Ty::Never, Ty::Never) => {}
+            (Ty::Char, Ty::Char)
+            | (Ty::Bool, Ty::Bool)
+            | (Ty::Unit, Ty::Unit)
+            | (Ty::Never, Ty::Never) => {}
             (Ty::Struct(a), Ty::Struct(b)) if a == b => {}
             (Ty::Enum(a), Ty::Enum(b)) if a == b => {}
             (
@@ -5556,6 +5610,7 @@ pub struct LiteralOutput {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExprKind {
+    Char(CharValue),
     IntCast {
         value: ExprId,
         to: IntTy,
@@ -6233,6 +6288,7 @@ impl CheckedFunction {
                 }
                 ExprKind::IntCast { .. }
                 | ExprKind::FloatCast { .. }
+                | ExprKind::Char(_)
                 | ExprKind::Float(_)
                 | ExprKind::Deref { .. }
                 | ExprKind::DynamicIndex { .. }
@@ -7010,6 +7066,9 @@ impl CheckedFunction {
                 ExprKind::Unary { op, value: operand } => {
                     expr(*operand)?;
                     let operand = &self.exprs[operand.0];
+                    if operand.ty == Ty::Char {
+                        return Err("unary operators do not accept char".into());
+                    }
                     if matches!(operand.ty, Ty::Float(_))
                         && (*op != UnaryOp::Neg
                             || value.ty != operand.ty
@@ -7026,8 +7085,10 @@ impl CheckedFunction {
                     if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
                         // Metadata for the entire arena was validated above. Equality
                         // remains a closed scalar operation, not structural/trait equality.
-                        if !matches!(lhs.ty, Ty::Unit | Ty::Bool | Ty::Int(_) | Ty::Float(_))
-                            || !ref_types_equal(&lhs.ty, &rhs.ty, conditional_budget, 0)?
+                        if !matches!(
+                            lhs.ty,
+                            Ty::Unit | Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_)
+                        ) || !ref_types_equal(&lhs.ty, &rhs.ty, conditional_budget, 0)?
                             || !ref_types_equal(&value.ty, &Ty::Bool, conditional_budget, 0)?
                         {
                             return Err(
@@ -7070,6 +7131,34 @@ impl CheckedFunction {
                         {
                             return Err(
                                 "logical operator result type or completion mismatch".into()
+                            );
+                        }
+                    }
+                    if lhs.ty == Ty::Char || rhs.ty == Ty::Char {
+                        let comparison = matches!(
+                            op,
+                            BinaryOp::Eq
+                                | BinaryOp::Ne
+                                | BinaryOp::Lt
+                                | BinaryOp::Le
+                                | BinaryOp::Gt
+                                | BinaryOp::Ge
+                        );
+                        let completion = if lhs.completion == Completion::Returns
+                            && rhs.completion == Completion::Returns
+                        {
+                            Completion::Returns
+                        } else {
+                            Completion::Never
+                        };
+                        if !comparison
+                            || lhs.ty != rhs.ty
+                            || value.ty != Ty::Bool
+                            || value.completion != completion
+                        {
+                            return Err(
+                                "char permits only identical-type comparisons with bool result"
+                                    .into(),
                             );
                         }
                     }
@@ -7230,6 +7319,12 @@ impl CheckedFunction {
                     value: Some(value), ..
                 } => expr(*value)?,
                 ExprKind::Break { value: None, .. } | ExprKind::Continue { .. } => {}
+                ExprKind::Char(character) => {
+                    character.validate()?;
+                    if value.ty != Ty::Char || value.completion != Completion::Returns {
+                        return Err("character expression type mismatch".into());
+                    }
+                }
                 ExprKind::Int(integer) => {
                     integer.validate()?;
                     if value.ty != Ty::Int(integer.ty) {
@@ -7420,6 +7515,106 @@ mod conditional_validation_tests {
             ],
             // Deliberately unused: validation must check all retained rows.
             body: block(vec![], None),
+        }
+    }
+
+    #[test]
+    fn char_scalar_domain_is_checked_even_in_unused_ir() {
+        assert!(Ty::Char.is_copy());
+        assert!(NumTy::of(&Ty::Char).is_none());
+        for value in [0, 0xd7ff, 0xe000, 0x10ffff] {
+            let mut function = fixture();
+            function.exprs.push(TypedExpr {
+                ty: Ty::Char,
+                completion: Completion::Returns,
+                kind: ExprKind::Char(CharValue { value }),
+            });
+            function.validate().unwrap();
+            let last = function.exprs.len() - 1;
+            function.exprs[last].completion = Completion::Never;
+            assert!(function.validate().is_err());
+            function.exprs[last].completion = Completion::Returns;
+            function.exprs[last].ty = Ty::Int(IntTy::U32);
+            assert!(function.validate().is_err());
+        }
+        for value in [0xd800, 0xdfff, 0x110000, u32::MAX] {
+            let mut function = fixture();
+            function.exprs.push(TypedExpr {
+                ty: Ty::Char,
+                completion: Completion::Returns,
+                kind: ExprKind::Char(CharValue { value }),
+            });
+            assert!(function.validate().unwrap_err().contains("Unicode scalar"));
+        }
+        assert!(identical_type(&Ty::Char, &Ty::Char, &PlanBudget::default()).unwrap());
+        for other in [Ty::Int(IntTy::U32), Ty::Bool, Ty::Float(FloatTy::F32)] {
+            assert!(!identical_type(&Ty::Char, &other, &PlanBudget::default()).unwrap());
+        }
+    }
+
+    #[test]
+    fn unused_char_operations_require_exact_comparison_domain() {
+        for op in [
+            BinaryOp::Eq,
+            BinaryOp::Ne,
+            BinaryOp::Lt,
+            BinaryOp::Le,
+            BinaryOp::Gt,
+            BinaryOp::Ge,
+            BinaryOp::Add,
+            BinaryOp::Sub,
+            BinaryOp::Mul,
+            BinaryOp::Div,
+            BinaryOp::Rem,
+            BinaryOp::BitAnd,
+            BinaryOp::BitOr,
+            BinaryOp::BitXor,
+            BinaryOp::Shl,
+            BinaryOp::Shr,
+        ] {
+            let mut function = fixture();
+            function.exprs = vec![
+                TypedExpr {
+                    ty: Ty::Char,
+                    completion: Completion::Returns,
+                    kind: ExprKind::Char(CharValue { value: 0xd7ff }),
+                },
+                TypedExpr {
+                    ty: Ty::Char,
+                    completion: Completion::Returns,
+                    kind: ExprKind::Char(CharValue { value: 0xe000 }),
+                },
+                TypedExpr {
+                    ty: Ty::Bool,
+                    completion: Completion::Returns,
+                    kind: ExprKind::Binary {
+                        op,
+                        left: ExprId(0),
+                        right: ExprId(1),
+                    },
+                },
+            ];
+            let comparison = matches!(
+                op,
+                BinaryOp::Eq
+                    | BinaryOp::Ne
+                    | BinaryOp::Lt
+                    | BinaryOp::Le
+                    | BinaryOp::Gt
+                    | BinaryOp::Ge
+            );
+            assert_eq!(function.validate().is_ok(), comparison, "{op:?}");
+            if comparison {
+                function.exprs[2].ty = Ty::Char;
+                assert!(function.validate().is_err());
+                function.exprs[2].ty = Ty::Bool;
+                function.exprs[1].ty = Ty::Int(IntTy::U32);
+                function.exprs[1].kind = ExprKind::Int(IntValue {
+                    ty: IntTy::U32,
+                    bits: 0xe000,
+                });
+                assert!(function.validate().is_err());
+            }
         }
     }
 

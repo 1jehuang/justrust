@@ -171,6 +171,7 @@ fn indirect(ty: &ir::Ty) -> Result<bool, String> {
         ir::Ty::Enum(ty) => Ok(ty.has_payload()),
         ir::Ty::Int(_)
         | ir::Ty::Float(_)
+        | ir::Ty::Char
         | ir::Ty::Bool
         | ir::Ty::Unit
         | ir::Ty::Never
@@ -252,6 +253,7 @@ fn value_size(ty: &ir::Ty) -> Result<i32, String> {
         None => match ty {
             ir::Ty::Int(_)
             | ir::Ty::Float(_)
+            | ir::Ty::Char
             | ir::Ty::Bool
             | ir::Ty::Unit
             | ir::Ty::Never
@@ -741,12 +743,16 @@ impl<'a> Emitter<'a> {
                     self.normalize_integer(value.ty);
                 }
             }
+            cfg::Operand::Constant(cfg::Constant::Char(value)) => {
+                value.validate()?;
+                self.word(u64::from(value.value));
+            }
             cfg::Operand::Constant(cfg::Constant::Float(value)) => {
                 value.validate()?;
                 self.word(value.bits);
             }
             cfg::Operand::Constant(value) => self.immediate(match value {
-                cfg::Constant::Int(_) | cfg::Constant::Float(_) => {
+                cfg::Constant::Int(_) | cfg::Constant::Float(_) | cfg::Constant::Char(_) => {
                     unreachable!("numeric constants use typed full-width immediates")
                 }
                 cfg::Constant::Bool(value) => i32::from(*value),
@@ -1184,6 +1190,19 @@ impl<'a> Emitter<'a> {
         self.normalize_integer(integer);
         Ok(())
     }
+    fn binary_char(&mut self, op: BinaryOp) -> Result<(), String> {
+        let cc = match op {
+            BinaryOp::Eq => 0x94,
+            BinaryOp::Ne => 0x95,
+            BinaryOp::Lt => 0x92,
+            BinaryOp::Le => 0x96,
+            BinaryOp::Gt => 0x97,
+            BinaryOp::Ge => 0x93,
+            _ => return Err("char only supports comparisons".into()),
+        };
+        self.bytes(&[0x48, 0x39, 0xc8, 0x0f, cc, 0xc0, 0x0f, 0xb6, 0xc0]);
+        Ok(())
+    }
     fn binary_noninteger(&mut self, op: BinaryOp) -> Result<(), String> {
         if matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor) {
             // Exact CFG validation limits this dispatch to canonical Booleans.
@@ -1499,6 +1518,8 @@ impl<'a> Emitter<'a> {
                 self.bytes(&[0x48, 0x89, 0xc1, 0x4c, 0x89, 0xc0]);
                 if let ir::Ty::Int(integer) = ty {
                     self.binary_integer(*op, integer)?;
+                } else if ty == ir::Ty::Char {
+                    self.binary_char(*op)?;
                 } else if let ir::Ty::Float(float) = ty {
                     self.binary_float(*op, float)?;
                 } else {
@@ -2787,6 +2808,76 @@ mod tests {
         }
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn char_private_layout_transport_and_unsigned_comparison_encoding() {
+        assert_eq!(value_size(&ir::Ty::Char), Ok(8));
+        assert_eq!(indirect(&ir::Ty::Char), Ok(false));
+        assert_eq!(result_indirect(&ir::Ty::Char), Ok(false));
+        assert_eq!(argument_words(&ir::Ty::Char), Ok(1));
+        let array = ir::Ty::Array {
+            element: std::sync::Arc::new(ir::Ty::Char),
+            len: 3,
+        };
+        assert_eq!(value_size(&array), Ok(24));
+        assert_eq!(array_offset(&array, 2).unwrap().0, 16);
+        let concrete = unit_concrete_fixture();
+        let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
+        let mut emitter = Emitter {
+            object: Object {
+                code: Vec::new(),
+                calls: Vec::new(),
+                strings: Vec::new(),
+            },
+            concrete: &concrete,
+            resolve: &resolve,
+            locals: Vec::new(),
+            aggregate_scratch: 0,
+            wide_scratch: 0,
+            returns: Vec::new(),
+            traps: Vec::new(),
+            edges: Vec::new(),
+        };
+        for value in [0, 0xd7ff, 0xe000, 0x10ffff] {
+            emitter.object.code.clear();
+            emitter
+                .operand(&cfg::Operand::Constant(cfg::Constant::Char(
+                    ir::CharValue { value },
+                )))
+                .unwrap();
+            assert_eq!(
+                emitter.object.code,
+                [vec![0x48, 0xb8], u64::from(value).to_le_bytes().to_vec()].concat()
+            );
+        }
+        for value in [0xd800, 0xdfff, 0x110000, u32::MAX] {
+            emitter.object.code.clear();
+            assert!(
+                emitter
+                    .operand(&cfg::Operand::Constant(cfg::Constant::Char(
+                        ir::CharValue { value }
+                    )))
+                    .is_err()
+            );
+            assert!(emitter.object.code.is_empty());
+        }
+        for (op, cc) in [
+            (BinaryOp::Eq, 0x94),
+            (BinaryOp::Ne, 0x95),
+            (BinaryOp::Lt, 0x92),
+            (BinaryOp::Le, 0x96),
+            (BinaryOp::Gt, 0x97),
+            (BinaryOp::Ge, 0x93),
+        ] {
+            emitter.object.code.clear();
+            emitter.binary_char(op).unwrap();
+            assert_eq!(
+                emitter.object.code,
+                [0x48, 0x39, 0xc8, 0x0f, cc, 0xc0, 0x0f, 0xb6, 0xc0]
+            );
+        }
+        assert!(emitter.binary_char(BinaryOp::Add).is_err());
     }
 
     #[test]

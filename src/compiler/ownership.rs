@@ -1678,7 +1678,9 @@ impl<'a> MoveShape<'a> {
                 Self::Scalar
             }
             Ty::Ref { referent, .. } if referent.contains_slice() => return Err(Exhausted),
-            Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Ref { .. } => Self::Scalar,
+            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Ref { .. } => {
+                Self::Scalar
+            }
         })
     }
 }

@@ -1806,7 +1806,7 @@ impl ValidatedTraitWorld {
                     }
                 }
             }
-            Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => {}
+            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => {}
         }
         if let Some(key) = key {
             walk.insert(key, height, &self.budget)?;
@@ -2140,7 +2140,10 @@ impl ValidatedTraitWorld {
             (Ty::Param(a), Ty::Param(b)) => Ok(a == b),
             (Ty::Int(a), Ty::Int(b)) => Ok(a == b),
             (Ty::Float(a), Ty::Float(b)) => Ok(a == b),
-            (Ty::Bool, Ty::Bool) | (Ty::Unit, Ty::Unit) | (Ty::Never, Ty::Never) => Ok(true),
+            (Ty::Char, Ty::Char)
+            | (Ty::Bool, Ty::Bool)
+            | (Ty::Unit, Ty::Unit)
+            | (Ty::Never, Ty::Never) => Ok(true),
             (Ty::Tuple(a), Ty::Tuple(b)) => self.eq_types(a, b, depth + 1),
             (
                 Ty::Array {
@@ -5679,7 +5682,7 @@ impl ValidatedTraitWorld {
             Ty::Ref { kind, .. } => item == CatalogItem::Sized || *kind == ir::BorrowKind::Shared,
             // `[T]` is neither Sized nor Copy/Clone.
             Ty::Slice { .. } => false,
-            Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit | Ty::Never => true,
+            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => true,
             Ty::AssociatedType(_) => {
                 return Err(FactsError::unsupported(
                     &self.budget,
@@ -6053,6 +6056,7 @@ impl TraitCx for ValidatedTraitWorld {
                 Ty::Int(i) => RecipeDescriptor::CloneInt(*i),
                 Ty::Float(float) => RecipeDescriptor::CloneFloat(*float),
                 Ty::Bool => RecipeDescriptor::CloneBool,
+                Ty::Char => RecipeDescriptor::CloneChar,
                 Ty::Unit => RecipeDescriptor::CloneUnit,
                 Ty::Never => {
                     return Err(FactsError::unsupported(
@@ -8436,6 +8440,10 @@ mod tests {
         let world = c.build().unwrap();
         let facts = world.callable_facts(c.caller).unwrap();
         assert!(facts.must_copy(&Ty::Int(IntTy::I32)).unwrap());
+        assert!(facts.must_copy(&Ty::Char).unwrap());
+        assert!(world.eq_ty(&Ty::Char, &Ty::Char, 0).unwrap());
+        assert!(!world.eq_ty(&Ty::Char, &Ty::Int(IntTy::U32), 0).unwrap());
+        assert!(!world.eq_ty(&Ty::Char, &Ty::Bool, 0).unwrap());
         assert!(!facts.must_copy(&c.caller_parameter).unwrap());
         assert!(!facts.must_copy(&c.leaf).unwrap());
         let f32_ty = Ty::Float(ir::FloatTy::F32);

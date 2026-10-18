@@ -225,6 +225,7 @@ impl Encoder<'_> {
                 self.text(float.name())
             }
             traits::RecipeDescriptor::CloneBool => self.append(&[1]),
+            traits::RecipeDescriptor::CloneChar => self.append(&[8]),
             traits::RecipeDescriptor::CloneUnit => self.append(&[2]),
             traits::RecipeDescriptor::CloneNever => self.append(&[3]),
             traits::RecipeDescriptor::CloneTuple { arity } => {
@@ -261,6 +262,7 @@ impl Encoder<'_> {
                 self.text(float.name())
             }
             ir::Ty::Bool => self.append(b"b"),
+            ir::Ty::Char => self.append(b"c"),
             ir::Ty::Unit => self.append(b"u"),
             ir::Ty::Tuple(fields) => {
                 self.append(b"t")?;
@@ -324,6 +326,7 @@ impl Encoder<'_> {
                 self.text(float.name())
             }
             ir::Ty::Bool => self.append(b"b"),
+            ir::Ty::Char => self.append(b"c"),
             ir::Ty::Unit => self.append(b"u"),
             ir::Ty::Never => self.append(b"n"),
             ir::Ty::Tuple(fields) => {
@@ -455,6 +458,7 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
             | ir::Ty::Enum(_)
             | ir::Ty::Int(_)
             | ir::Ty::Float(_)
+            | ir::Ty::Char
             | ir::Ty::Bool
             | ir::Ty::Unit
             | ir::Ty::Never => {}
@@ -1159,6 +1163,23 @@ mod tests {
                 .len(),
             wide_keys.len()
         );
+        let char_key = identity(&target(declaration, ir::Ty::Char), &first, &budget).unwrap();
+        let renamed_char = identity(
+            &target(other_declaration, ir::Ty::Char),
+            &reordered,
+            &other_budget,
+        )
+        .unwrap();
+        assert_eq!(char_key.canonical, renamed_char.canonical);
+        for different in [
+            ir::Ty::Int(ir::IntTy::U32),
+            ir::Ty::Bool,
+            ir::Ty::Float(ir::FloatTy::F32),
+        ] {
+            let key = identity(&target(declaration, different), &first, &budget).unwrap();
+            assert_ne!(char_key.canonical, key.canonical);
+            assert_ne!(char_key.symbol, key.symbol);
+        }
         let mut excessive = scalar;
         for _ in 0..=ir::PlanLimits::default().depth {
             excessive = reference(ir::BorrowKind::Shared, excessive);

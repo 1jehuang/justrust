@@ -923,6 +923,7 @@ impl<'s> Checker<'s> {
                 None => InferKind::Float,
             })?,
             Expr::Bool(_) => self.infer_node(InferKind::Rigid(ir::Ty::Bool))?,
+            Expr::Char(_) => self.infer_node(InferKind::Rigid(ir::Ty::Char))?,
             Expr::Var(name) => match self.lookup_optional(name)? {
                 Some(local) => self.infer_type_term(&self.locals[local.0].ty, None, depth + 1)?,
                 None => self.infer_node(InferKind::Unknown(false))?,
@@ -1935,6 +1936,7 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
         Type::Int(ty) => Ok(ir::Ty::Int(*ty)),
         Type::Float(ty) => Ok(ir::Ty::Float(*ty)),
         Type::Bool => Ok(ir::Ty::Bool),
+        Type::Char => Ok(ir::Ty::Char),
         Type::Unit => Ok(ir::Ty::Unit),
         Type::Never => Ok(ir::Ty::Never),
         Type::Tuple(fields) if !fields.is_empty() => fields
@@ -3887,6 +3889,7 @@ impl<'a> Checker<'a> {
             Expr::Integer(literal) => literal.suffix.map(ir::Ty::Int),
             Expr::Float(literal) => literal.suffix.map(ir::Ty::Float),
             Expr::Bool(_) => Some(ir::Ty::Bool),
+            Expr::Char(_) => Some(ir::Ty::Char),
             Expr::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
             Expr::Var(name) => self
                 .lookup_optional(name)?
@@ -4836,7 +4839,11 @@ impl<'a> Checker<'a> {
                             self.scalar_hint(value)?.filter(|ty| {
                                 matches!(
                                     ty,
-                                    ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool | ir::Ty::Unit
+                                    ir::Ty::Int(_)
+                                        | ir::Ty::Float(_)
+                                        | ir::Ty::Char
+                                        | ir::Ty::Bool
+                                        | ir::Ty::Unit
                                 )
                             })
                         } else {
@@ -5688,7 +5695,7 @@ impl<'a> Checker<'a> {
             && matches!(selected.adjustment, ReceiverAdjustment::SharedAutoref)
             && matches!(
                 ty,
-                ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool | ir::Ty::Unit
+                ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Char | ir::Ty::Bool | ir::Ty::Unit
             )
             && static_source_place(receiver).is_err()
         {
@@ -7006,6 +7013,12 @@ impl<'a> Checker<'a> {
                 (ir::ExprKind::Float(value), Flow::value(ir::Ty::Float(ty)))
             }
             Expr::Bool(value) => (ir::ExprKind::Bool(*value), Flow::value(ir::Ty::Bool)),
+            Expr::Char(value) => (
+                ir::ExprKind::Char(ir::CharValue {
+                    value: *value as u32,
+                }),
+                Flow::value(ir::Ty::Char),
+            ),
             Expr::Var(n) => {
                 let local = self.lookup(n)?;
                 let ty = self.locals[local.0].ty.clone();
@@ -7209,9 +7222,14 @@ impl<'a> Checker<'a> {
                     BinaryOp::Eq | BinaryOp::Ne => {
                         (self.join(&l.ty, &r.ty, "equality operands")?, ir::Ty::Bool)
                     }
-                    BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
-                        (numeric.clone(), ir::Ty::Bool)
-                    }
+                    BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => (
+                        if l.ty == ir::Ty::Char || r.ty == ir::Ty::Char {
+                            ir::Ty::Char
+                        } else {
+                            numeric.clone()
+                        },
+                        ir::Ty::Bool,
+                    ),
                     _ => (numeric.clone(), numeric),
                 };
                 self.require(&l, &operand)?;

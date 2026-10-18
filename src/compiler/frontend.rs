@@ -5,6 +5,7 @@
 //! Explicit semicolons discard expression values, while omitted-semicolon
 //! blocklike statements require unit. While loops do not establish return flow.
 //! Numeric literals support primitive integers through 128 bits.
+//! Character literals are Unicode scalars with equality/order, not integers.
 //! Inline modules, named nonempty braced structs, nonempty unit/tuple/braced enums, ordinary visibility, and
 //! module-level named/grouped imports have separate type/value namespaces. Named
 //! structs and enums are nominal and non-Copy. Checked pattern decisions retain
@@ -28,11 +29,13 @@ use super::semantic_name::{
 pub use super::semantic_path::{AstPath, PathAnchor};
 use super::semantic_path::{NameAccess, PathKey};
 use native_adapter::{NativeParserInput, NativeTokenBuffer};
+mod char_literal;
 mod name_scope;
 mod name_validation;
 mod pattern_usefulness;
 mod program_symbols;
 mod token_cursor;
+use char_literal::parse_char_literal;
 mod trait_selection;
 pub use program_symbols::ProgramSymbols;
 mod persistent_path;
@@ -920,6 +923,7 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
         Type::SelfType => Type::SelfType,
         Type::Int(kind) => Type::Int(*kind),
         Type::Float(kind) => Type::Float(*kind),
+        Type::Char => Type::Char,
         Type::Bool => Type::Bool,
         Type::Unit => Type::Unit,
         Type::Never => Type::Never,
@@ -1777,6 +1781,7 @@ impl SourceInventory {
             Expr::Borrow { .. }
             | Expr::Integer(_)
             | Expr::Float(_)
+            | Expr::Char(_)
             | Expr::Bool(_)
             | Expr::Var(_)
             | Expr::Continue { .. }
@@ -2626,6 +2631,7 @@ fn source_binding_type(
 enum RootBorrowLiteral {
     Int(ir::IntValue),
     Bool(bool),
+    Char(char),
 }
 struct RootBorrowOrigin {
     ty: ir::Ty,
@@ -2695,10 +2701,11 @@ fn root_borrow_origin(
                     (ir::Ty::Int(value.ty), Some(RootBorrowLiteral::Int(value)))
                 }
                 Expr::Bool(value) => (ir::Ty::Bool, Some(RootBorrowLiteral::Bool(*value))),
+                Expr::Char(value) => (ir::Ty::Char, Some(RootBorrowLiteral::Char(*value))),
                 _ => {
                     return Err(FactsError::unsupported(
                         budget,
-                        "fresh borrow root requires an annotation or suffixed integer/Bool literal",
+                        "fresh borrow root requires an annotation or suffixed integer/Bool/char literal",
                     ));
                 }
             }
@@ -2709,10 +2716,10 @@ fn root_borrow_origin(
             literal,
         }
     };
-    if !matches!(origin.ty, ir::Ty::Int(_) | ir::Ty::Bool) {
+    if !matches!(origin.ty, ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char) {
         return Err(FactsError::unsupported(
             budget,
-            "fresh borrow inference requires an integer or Bool root",
+            "fresh borrow inference requires an integer, Bool or char root",
         ));
     }
     Ok(origin)
@@ -2770,6 +2777,9 @@ fn source_root_borrow_type(
         let same = match (literal, &value.kind) {
             (RootBorrowLiteral::Int(expected), ir::ExprKind::Int(actual)) => expected == *actual,
             (RootBorrowLiteral::Bool(expected), ir::ExprKind::Bool(actual)) => expected == *actual,
+            (RootBorrowLiteral::Char(expected), ir::ExprKind::Char(actual)) => {
+                expected as u32 == actual.value
+            }
             _ => false,
         };
         if !same || !replay_type_equal(&value.ty, &origin.ty, budget)? {
@@ -4230,6 +4240,7 @@ pub enum Type {
     Slice(Box<Type>),
     Int(ir::IntTy),
     Float(ir::FloatTy),
+    Char,
     Bool,
     Unit,
     Tuple(Vec<Type>),
@@ -4748,6 +4759,8 @@ pub enum Expr {
     },
     Integer(IntegerLiteral),
     Float(FloatLiteral),
+    /// A validated Unicode scalar, never an arbitrary integer.
+    Char(char),
     DynamicIndex {
         base: Box<Expr>,
         index: Box<Expr>,
@@ -4894,6 +4907,7 @@ impl std::fmt::Display for ParseError {
 enum ParserTokenKind {
     Ident,
     Number,
+    Char,
     String,
     Punct,
     Lifetime,
@@ -7290,6 +7304,8 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else if let Some(ty) = float_type(self.token().text) {
             self.cursor.bump();
             Ok(Type::Float(ty))
+        } else if self.eat("char") {
+            Ok(Type::Char)
         } else if self.eat("bool") {
             Ok(Type::Bool)
         } else if self.eat("(") {
@@ -9110,6 +9126,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(Pattern::Array(prefix))
     }
     fn pattern_inner(&mut self) -> Result<Pattern, ParseError> {
+        if self.token().is_char() {
+            return Err(self.unsupported("character literal and range patterns are unsupported"));
+        }
         if self.token().string {
             return Err(self.unsupported("string literal patterns are unsupported"));
         }
@@ -9901,6 +9920,17 @@ impl<'input, 'names> Parser<'input, 'names> {
                 op: UnaryOp::Not,
                 value: Box::new(self.expr(11)?),
             }
+        } else if self.token().is_char() {
+            self.names
+                .budget()
+                .charge(
+                    super::expansion_budget::Counter::Work,
+                    self.token().text.len() as u64,
+                )
+                .map_err(|error| native_adapter::transport_error(error.into()))?;
+            let value = parse_char_literal(self.token().text).map_err(|e| self.error(e))?;
+            self.cursor.bump();
+            Expr::Char(value)
         } else if self.eat("true") {
             Expr::Bool(true)
         } else if self.eat("false") {
@@ -12218,6 +12248,7 @@ fn exact_source_type(
         (Type::Int(a), Type::Int(b)) => a == b,
         (Type::Float(a), Type::Float(b)) => a == b,
         (Type::SelfType, Type::SelfType)
+        | (Type::Char, Type::Char)
         | (Type::Bool, Type::Bool)
         | (Type::Unit, Type::Unit)
         | (Type::Never, Type::Never)
@@ -17416,7 +17447,6 @@ mod prepared_location_tests {
         assert_eq!(unsupported.kind, SourceErrorKind::Unsupported);
         for text in [
             "async fn unused() {}",
-            "fn unused() { let value = 'x'; }",
             "fn unused() { let value = r\"raw\"; }",
         ] {
             assert_eq!(
@@ -17456,6 +17486,8 @@ mod prepared_location_tests {
     }
 }
 
+#[cfg(test)]
+mod char_tests;
 #[cfg(test)]
 mod parser_tests;
 

@@ -244,8 +244,13 @@ impl<'facts> CoverageMatrix<'facts> {
                         }
                     }
                 }
-                Ty::Param(_) | Ty::Ref { .. } | Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Unit => {
-                }
+                Ty::Param(_)
+                | Ty::Ref { .. }
+                | Ty::Int(_)
+                | Ty::Float(_)
+                | Ty::Char
+                | Ty::Bool
+                | Ty::Unit => {}
             }
         }
         // Only fully facts-validated inhabitance boundaries may fall back.

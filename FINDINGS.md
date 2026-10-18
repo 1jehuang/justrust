@@ -11434,3 +11434,11 @@ shared-build retry returned the aborted run; disabling build sharing for the
 retry produced the complete result. Twenty exact failed/successful receipts are
 retained in `data/runs/xps14/2026-10-18-debug-assertions.jsonl`. No full Rust or
 performance claim follows from this bounded milestone.
+
+## 2026-10-18: bounded Unicode character scalars
+
+Implemented distinct char source/IR/CFG/native values with Unicode scalar validation, unsigned comparisons and genuine Copy/Clone/Sized support. Catalog v6 appends CloneChar. No casts, arithmetic or literal/range patterns are claimed. Source, IR, CFG and native work was implemented in parallel with disjoint ownership.
+
+Stock receipt SHA256 `7bc819a16b51543c63923f0f0f6f54de9b9820fd7519789e2e7c09f4c5b12e53` freezes 36 sources: 10 accepted, 26 rejected. Native CLI and observed graph each verify 144 worker1/8 CHECK/BUILD cells and 20 executable results. Historical source bytes remain unchanged; lexical char/Unicode-char and disabled-char expectations advance to accepted, while char-pattern rejection moves to its precise unsupported boundary.
+
+Retained failures include stale private lexical/macro fixtures, invalid public-test assumptions about closed facts versus rigid callable publication, a CLI harness assuming empty stdout instead of the report, and stale historical character expectations. They were corrected without raising budgets or weakening scalar validation. The final suite passes 3179 tests across 164 binaries in run `20261017-193351333-2275251`; its predecessor `20261017-193120629-2107016` passed 3178 with one stale lexical expectation. Optimized char-filter tests pass 27 in `20261017-192557320-1980319`, optimized corpus/authority pass eight in `20261017-193130640-2129445`, and hosted strict lint passes `20261017-193350613-2275382`. All-target check and cargo fmt pass. The 24 exact failed/successful receipts are retained in `data/runs/xps14/2026-10-18-chars.jsonl`. Native full/executable gates use the documented local path; hosted checks/lints remain enabled. No speedup or full Rust compatibility claim.

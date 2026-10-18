@@ -241,6 +241,7 @@ missing-file changes invalidate only justified consumers without stale lookup.
 
 - [x] Native i128/u128 scalar arithmetic, numeric casts, transport and exact
       typed constants under INTEGER128.md (not platform ABI or full Rust).
+- [x] Bounded Unicode `char` literals, scalar transport, Copy/Clone/Sized and comparisons (CHARS.md). Character casts and literal/range patterns remain open.
 - [ ] Complete char, str/string literals, raw pointers, function items/pointers,
       remaining type-alias inference/generic forms, never coercions and literals.
       Bounded canonical source aliases are delivered under TYPE-ALIASES.md.

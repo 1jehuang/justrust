@@ -49,7 +49,7 @@ fn cases() -> Vec<Case> {
 "###, source_sha256: r###"5d04230af0ceae5528997c93994cf068be7f917db2d8d6bfecb89866f28217d3"###, boundary: r###""###, phase: r###"check"###, stock_stdout: r###"bool
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""###, source_bytes: 61, source_fingerprint: 18265286624080065559, native: Native::Live, stock_compile_code: 0, stock_code: Some(0), },
         Case { name: r###"character"###, source: r###"fn main(){ if matches!('x', 'x') { println!("char"); } }
-"###, source_sha256: r###"91b1bcbac76b43555449dd67711895003afa1b8492e68d89ad74733f5b05be09"###, boundary: r###"raw, byte, character and C literals are unsupported"###, phase: r###"parse"###, stock_stdout: r###"char
+"###, source_sha256: r###"91b1bcbac76b43555449dd67711895003afa1b8492e68d89ad74733f5b05be09"###, boundary: r###"character literal and range patterns are unsupported"###, phase: r###"parse"###, stock_stdout: r###"char
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""###, source_bytes: 57, source_fingerprint: 14947838046542800197, native: Native::Unsupported, stock_compile_code: 0, stock_code: Some(0), },
         Case { name: r###"negative"###, source: r###"fn main(){ if matches!(-3, -3) { println!("negative"); } }
 "###, source_sha256: r###"afc027825c31f8c35a7946d9b99e5c3ecb4a6e01c8c3e37944d2130af643ef30"###, boundary: r###""###, phase: r###"check"###, stock_stdout: r###"negative

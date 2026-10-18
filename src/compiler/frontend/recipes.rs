@@ -201,6 +201,7 @@ pub(super) fn inventory(
         tr::RecipeDescriptor::CloneFloat(ir::FloatTy::F32),
         tr::RecipeDescriptor::CloneFloat(ir::FloatTy::F64),
         tr::RecipeDescriptor::CloneBool,
+        tr::RecipeDescriptor::CloneChar,
         tr::RecipeDescriptor::CloneUnit,
         tr::RecipeDescriptor::CloneSharedRef,
         tr::RecipeDescriptor::CloneNever,

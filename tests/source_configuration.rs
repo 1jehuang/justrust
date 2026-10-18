@@ -305,7 +305,7 @@ fn fixtures() -> Vec<Fixture> {
     cases.push(case(
         "disabled_char_boundary",
         "#[cfg(any())] fn unused() { let value = 'x'; }",
-        Unsupported,
+        Supported,
         "",
     ));
     cases.push(case(

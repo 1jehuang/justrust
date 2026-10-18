@@ -5,7 +5,7 @@ use crate::compiler::ir::{BinderId, BorrowKind, IntTy};
 use crate::compiler::module_identity::CatalogModule;
 use crate::compiler::semantic_name::BuiltinAtom;
 
-pub const CATALOG_VERSION: u32 = 5;
+pub const CATALOG_VERSION: u32 = 6;
 
 const BASE_COUNT: u32 = 8;
 
@@ -14,6 +14,7 @@ pub enum RecipeDescriptor {
     CloneInt(IntTy),
     CloneFloat(ir::FloatTy),
     CloneBool,
+    CloneChar,
     CloneUnit,
     CloneNever,
     CloneTuple { arity: u16 },
@@ -39,6 +40,7 @@ impl RecipeDescriptor {
                 IntTy::U128 => (8, 1),
             },
             Self::CloneBool => (1, 0),
+            Self::CloneChar => (9, 0),
             Self::CloneUnit => (2, 0),
             Self::CloneNever => (3, 0),
             Self::CloneTuple { arity } => (4, arity),
@@ -682,6 +684,7 @@ fn recipe_schema(
         RecipeDescriptor::CloneInt(i) => Ty::Int(i),
         RecipeDescriptor::CloneFloat(float) => Ty::Float(float),
         RecipeDescriptor::CloneBool => Ty::Bool,
+        RecipeDescriptor::CloneChar => Ty::Char,
         RecipeDescriptor::CloneUnit => Ty::Unit,
         RecipeDescriptor::CloneNever => {
             return Err(FactsError::unsupported(
@@ -877,6 +880,33 @@ mod wide_tests {
         let budget = PlanBudget::default();
         assert!(
             matches!(CoreCatalogBuilder::new(SnapshotId::allocate().unwrap(), modules, &budget), Err(error) if error.is_resource())
+        );
+    }
+
+    #[test]
+    fn char_clone_schema_and_identity_are_distinct() {
+        let budget = PlanBudget::default();
+        let snapshot = SnapshotId::allocate().unwrap();
+        let schema = recipe_schema(
+            DeclId {
+                snapshot,
+                index: 100,
+            },
+            RecipeDescriptor::CloneChar,
+            id(snapshot, CatalogItem::Sized),
+            id(snapshot, CatalogItem::Clone),
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(schema.signature.result, Ty::Char);
+        assert!(
+            matches!(schema.signature.params.as_slice(), [Ty::Ref { kind: BorrowKind::Shared, referent }] if **referent == Ty::Char)
+        );
+        assert!(schema.predicates.is_empty());
+        assert_eq!(schema.env.ordered_params().count(), 0);
+        assert_eq!(RecipeDescriptor::CloneChar.order(), (9, 0));
+        assert!(
+            RecipeDescriptor::CloneInt(IntTy::U128).order() < RecipeDescriptor::CloneChar.order()
         );
     }
 

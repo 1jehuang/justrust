@@ -615,6 +615,7 @@ impl NativeParserInput {
                             crate::compiler::token::LiteralKind::Integer
                                 | crate::compiler::token::LiteralKind::Float
                                 | crate::compiler::token::LiteralKind::String
+                                | crate::compiler::token::LiteralKind::Char
                         ) || event
                             .literal
                             .as_ref()
@@ -740,6 +741,17 @@ impl NativeParserInput {
                                     &[native_part(event)?],
                                 )?;
                             }
+                            LiteralKind::Char => {
+                                input.push_range(
+                                    projection,
+                                    event.prepared.clone(),
+                                    event.line,
+                                    event.column,
+                                    ParserTokenKind::Char,
+                                    None,
+                                    &[native_part(event)?],
+                                )?;
+                            }
                             LiteralKind::Integer | LiteralKind::Float => {
                                 input.push_number(projection, event)?;
                             }
@@ -747,7 +759,7 @@ impl NativeParserInput {
                                 return Err(event_error(
                                     event,
                                     SourceErrorKind::Unsupported,
-                                    "raw, byte, character and C literals are unsupported",
+                                    "raw, byte and C literals are unsupported",
                                 ));
                             }
                         }
@@ -1520,7 +1532,13 @@ mod tests {
             }
             cursor.bump();
         }
-        assert!(count >= 8);
+        // Char now has a native semantic token rather than deferred syntax.
+        assert!(count >= 7);
+        assert!(
+            buffer
+                .iter()
+                .any(|token| token.kind == ParserTokenKind::Char)
+        );
     }
 
     #[test]
@@ -1542,13 +1560,13 @@ mod tests {
     }
 
     #[test]
-    fn inactive_character_is_not_a_lifetime_and_keeps_checked_original_error_span() {
+    fn inactive_character_is_not_a_lifetime_and_keeps_checked_original_span() {
         let text = "fn unused() { let value = 'x'; }";
         let start = text.find("'x'").unwrap();
         let input = inactive_input(text).unwrap();
         let (buffer, session) = input.into_parts();
         let mut cursor = super::super::TokenCursor::new(&buffer);
-        while !cursor.current().is_deferred_unsupported() {
+        while !cursor.current().is_char() {
             assert!(!cursor.current().matches(""));
             cursor.bump();
         }
@@ -1560,10 +1578,7 @@ mod tests {
         let checked = original(&session, character.span).unwrap();
         assert_eq!(checked.lo as usize, start);
         assert_eq!(checked.hi as usize, start + 3);
-        let error = super::super::validate_inactive_syntax(text).unwrap_err();
-        assert_eq!(error.kind, SourceErrorKind::Unsupported);
-        assert_eq!(error.bytes, start..start + 3);
-        assert_eq!(error.primary.unwrap(), checked);
+        super::super::validate_inactive_syntax(text).unwrap();
         let lifetime = super::super::lex("'label").unwrap();
         assert!(
             super::super::TokenCursor::new(&lifetime)
@@ -1898,7 +1913,6 @@ mod tests {
             "#!/bin/native\nfn f(){}",
             "r#name",
             "水",
-            "'x'",
             "b'x'",
             "b\"x\"",
             "r\"x\"",
