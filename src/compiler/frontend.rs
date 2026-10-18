@@ -483,6 +483,7 @@ mod canonical_source_replay_tests {
             facts: original.facts.clone(),
             inventory,
             calls: Default::default(),
+            builtin_leading_zeros: Default::default(),
             builtin_lens: Default::default(),
             unsizes: Default::default(),
             bindings: Default::default(),
@@ -600,6 +601,7 @@ struct SourceCallSite {
     /// only a candidate: the checker alone decides builtin SliceLen from the
     /// typed receiver, and replay requires typed evidence for every builtin row.
     len_candidate: bool,
+    leading_zeros_candidate: bool,
     ordinary: Option<AstPath>,
     application: Option<GenericPath>,
     argument_binding: Option<sr::SourceNode>,
@@ -1508,6 +1510,7 @@ impl SourceInventory {
                     SourceCallSite {
                         node: node.clone(),
                         len_candidate: false,
+                        leading_zeros_candidate: false,
                         ordinary: Some(name.clone()),
                         application: application
                             .map(|path| copy_source_path(path, budget, 0))
@@ -1544,6 +1547,8 @@ impl SourceInventory {
                     &mut self.calls,
                     SourceCallSite {
                         node: node.clone(),
+                        leading_zeros_candidate: leading_zeros_candidate(expr, &self.names)
+                            .map_err(|e| source_error(budget, &e))?,
                         len_candidate: slice_len_candidate(expr, &self.names)
                             .map_err(|e| source_error(budget, &e))?,
                         ordinary: None,
@@ -1814,6 +1819,33 @@ fn slice_len_candidate(expr: &Expr, names: &NameStore) -> Result<bool, String> {
     }
 }
 
+/// Syntax alone never grants integer-method authority.
+fn leading_zeros_candidate(expr: &Expr, names: &NameStore) -> Result<bool, String> {
+    if let Expr::MethodCall {
+        name,
+        type_args,
+        args,
+        ..
+    } = expr
+    {
+        Ok(names
+            .spelling(*name)
+            .map_err(native_adapter::name_diagnostic)?
+            == "leading_zeros"
+            && type_args.is_empty()
+            && args.is_empty())
+    } else {
+        Ok(false)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct BuiltinLeadingZerosOccurrence {
+    pub(super) source_index: usize,
+    pub(super) expr: ir::ExprId,
+    pub(super) receiver: ir::ExprId,
+}
+
 /// Typed builtin `.len()` occurrence: original source call index, the checked
 /// SliceLen expression, and its exact checked receiver expression.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1842,6 +1874,7 @@ pub(super) struct CanonicalSourceCapability {
     facts: Arc<tr::ValidatedFacts>,
     inventory: SourceInventory,
     calls: std::cell::RefCell<Vec<(usize, ir::ExprId, ir::Callee)>>,
+    builtin_leading_zeros: std::cell::RefCell<Vec<BuiltinLeadingZerosOccurrence>>,
     builtin_lens: std::cell::RefCell<Vec<BuiltinLenOccurrence>>,
     unsizes: std::cell::RefCell<Vec<UnsizeOccurrence>>,
     bindings: std::cell::RefCell<Vec<(usize, ir::LocalId)>>,
@@ -1858,6 +1891,7 @@ pub(super) struct OriginalSource {
     calls: Vec<SourceCallSite>,
     bindings: Vec<SourceBindingSite>,
     call_mapping: Vec<(usize, ir::ExprId, ir::Callee)>,
+    builtin_leading_zeros_mapping: Vec<BuiltinLeadingZerosOccurrence>,
     builtin_len_mapping: Vec<BuiltinLenOccurrence>,
     unsize_mapping: Vec<UnsizeOccurrence>,
     binding_mapping: Vec<(usize, ir::LocalId)>,
@@ -1971,6 +2005,54 @@ impl CanonicalSourceCapability {
         )
         .map_err(|e| self.render(e))
     }
+    fn record_builtin_leading_zeros(
+        &self,
+        expr: &Expr,
+        id: ir::ExprId,
+        checked: &[ir::TypedExpr],
+    ) -> Result<(), String> {
+        let budget = &self.plan.budget;
+        sr::work(budget, 1).map_err(|e| self.render(e))?;
+        let index = self
+            .inventory
+            .call_pointers
+            .get(&(expr as *const Expr as usize))
+            .copied()
+            .ok_or_else(|| {
+                self.render(FactsError::invalid(
+                    budget,
+                    "leading zeros has no original occurrence",
+                ))
+            })?;
+        let Some(result) = checked.get(id.0) else {
+            return Err(self.render(FactsError::invalid(budget, "leading zeros outside arena")));
+        };
+        let ir::ExprKind::LeadingZeros { value } = result.kind else {
+            return Err(self.render(FactsError::invalid(budget, "expected LeadingZeros")));
+        };
+        if !self.inventory.calls[index].leading_zeros_candidate
+            || result.ty != ir::Ty::Int(ir::IntTy::U32)
+            || !checked.get(value.0).is_some_and(|receiver| {
+                matches!(receiver.ty, ir::Ty::Int(_)) && receiver.completion == result.completion
+            })
+        {
+            return Err(self.render(FactsError::invalid(
+                budget,
+                "leading zeros typed shape changed",
+            )));
+        }
+        sr::push(
+            &mut self.builtin_leading_zeros.borrow_mut(),
+            BuiltinLeadingZerosOccurrence {
+                source_index: index,
+                expr: id,
+                receiver: value,
+            },
+            budget,
+        )
+        .map_err(|e| self.render(e))
+    }
+
     fn record_unsize(&self, wrapper: ir::ExprId, reference: ir::ExprId) -> Result<(), String> {
         let budget = &self.plan.budget;
         sr::work(budget, 1).map_err(|e| self.render(e))?;
@@ -2792,10 +2874,104 @@ fn source_root_borrow_type(
     Ok((local, origin.ty))
 }
 
-/// Exact replay of typed builtin `.len()` occurrences. Every row names a distinct
-/// syntactic candidate with no ordinary call correspondence, maps to exactly one
-/// checked SliceLen over its retained receiver, rows follow source order, and
-/// every SliceLen in the checked arena is covered. Returns the builtin sources.
+/// Replay every integer intrinsic, including unused arena rows, against its
+/// separately retained source candidate and exact typed receiver ID.
+/// This correspondence helper does not reconstruct arbitrary receiver ASTs.
+/// CanonicalSourcePublication seals the immutable checked-body Arc: its
+/// validate_source boundary rejects replaced bodies, including copy-on-write
+/// edits to a receiver's contents that preserve its ID and type.
+fn replay_builtin_leading_zeros(
+    original: &OriginalSource,
+    checked: &ir::CheckedFunction,
+    ordinary: &[Option<usize>],
+    seen: &mut [bool],
+    budget: &ir::PlanBudget,
+) -> Result<Vec<bool>, FactsError> {
+    sr::work(budget, original.calls.len())?;
+    sr::retain(budget, original.calls.len())?;
+    let mut sources = Vec::new();
+    sources
+        .try_reserve_exact(original.calls.len())
+        .map_err(|_| FactsError::resource(budget, "leading zeros occurrence allocation"))?;
+    sources.resize(original.calls.len(), false);
+    let mut previous: Option<(usize, ir::ExprId)> = None;
+    for row in &original.builtin_leading_zeros_mapping {
+        sr::work(budget, 1)?;
+        let site = original
+            .calls
+            .get(row.source_index)
+            .ok_or_else(|| FactsError::invalid(budget, "orphan leading zeros occurrence"))?;
+        if !site.leading_zeros_candidate || site.ordinary.is_some() || site.application.is_some() {
+            return Err(FactsError::invalid(
+                budget,
+                "leading zeros mapped from non-candidate",
+            ));
+        }
+        if std::mem::replace(&mut sources[row.source_index], true)
+            || ordinary.get(row.source_index).copied().flatten().is_some()
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "duplicate leading zeros correspondence",
+            ));
+        }
+        if let Some((index, expr)) = previous {
+            let prior = &original.calls[index].node.path;
+            let current = &site.node.path;
+            sr::work(budget, prior.len().saturating_add(current.len()))?;
+            // Inventory is preorder, emission is postorder: a receiver call
+            // precedes its enclosing method, but independent sites stay ordered.
+            let encloses_prior = prior.len() > current.len() && prior.starts_with(current);
+            let prior_encloses = current.len() > prior.len() && current.starts_with(prior);
+            if row.expr.0 <= expr.0
+                || prior_encloses
+                || (row.source_index <= index && !encloses_prior)
+            {
+                return Err(FactsError::invalid(
+                    budget,
+                    "leading zeros source order changed",
+                ));
+            }
+        }
+        previous = Some((row.source_index, row.expr));
+        let result = checked
+            .exprs
+            .get(row.expr.0)
+            .ok_or_else(|| FactsError::invalid(budget, "leading zeros outside checked arena"))?;
+        let ir::ExprKind::LeadingZeros { value } = result.kind else {
+            return Err(FactsError::invalid(
+                budget,
+                "leading zeros mapped to different operation",
+            ));
+        };
+        if value != row.receiver
+            || result.ty != ir::Ty::Int(ir::IntTy::U32)
+            || !checked.exprs.get(value.0).is_some_and(|receiver| {
+                matches!(receiver.ty, ir::Ty::Int(_)) && receiver.completion == result.completion
+            })
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "leading zeros receiver, type or completion changed",
+            ));
+        }
+        if std::mem::replace(&mut seen[row.expr.0], true) {
+            return Err(FactsError::invalid(
+                budget,
+                "leading zeros mapped from two sources",
+            ));
+        }
+    }
+    sr::work(budget, checked.exprs.len())?;
+    for (index, expr) in checked.exprs.iter().enumerate() {
+        if matches!(expr.kind, ir::ExprKind::LeadingZeros { .. }) && !seen[index] {
+            return Err(FactsError::invalid(budget, "orphan checked leading zeros"));
+        }
+    }
+    Ok(sources)
+}
+
+/// Exact replay of typed builtin `.len()` occurrences and their receivers.
 fn replay_builtin_lens(
     original: &OriginalSource,
     checked: &ir::CheckedFunction,
@@ -3004,6 +3180,11 @@ fn optional_application_equal(
     }
     Ok(true)
 }
+/// Validate retained source correspondences, not arbitrary AST equivalence.
+/// The private publication factory checks its own canonical checked body and
+/// seals that immutable Arc. Consumers must also use the publication's
+/// validate_source boundary, rather than treating this helper as permission to
+/// replace an expression's contents in an independently supplied checked body.
 pub(super) fn replay_source_body(
     original: &OriginalSource,
     checked: &Arc<ir::CheckedFunction>,
@@ -3039,6 +3220,7 @@ pub(super) fn replay_source_body(
         compare_call_site_work(retained, budget)?;
         sr::work(budget, 1)?;
         if fresh.node != retained.node
+            || fresh.leading_zeros_candidate != retained.leading_zeros_candidate
             || fresh.len_candidate != retained.len_candidate
             || !optional_source_path_equal(
                 &fresh.ordinary,
@@ -3166,11 +3348,13 @@ pub(super) fn replay_source_body(
             ));
         }
     }
+    let leading_zero_sources =
+        replay_builtin_leading_zeros(original, checked, &positions, &mut seen, budget)?;
     let builtin_sources = replay_builtin_lens(original, checked, &positions, &mut seen, budget)?;
     replay_unsizes(original, checked, budget)?;
     for (index, site) in original.calls.iter().enumerate() {
         sr::work(budget, 1)?;
-        if builtin_sources[index] {
+        if builtin_sources[index] || leading_zero_sources[index] {
             continue;
         }
         let position = positions[index].ok_or_else(|| {
@@ -3533,6 +3717,7 @@ pub(super) fn replay_source_body(
         .call_mapping
         .len()
         .checked_add(original.builtin_len_mapping.len())
+        .and_then(|n| n.checked_add(original.builtin_leading_zeros_mapping.len()))
         != Some(original.calls.len())
     {
         return Err(FactsError::invalid(budget, "orphan original call mapping"));
@@ -3624,6 +3809,7 @@ impl PlanCtx {
                     facts: facts.clone(),
                     inventory,
                     calls: Default::default(),
+                    builtin_leading_zeros: Default::default(),
                     builtin_lens: Default::default(),
                     unsizes: Default::default(),
                     bindings: Default::default(),
@@ -3664,6 +3850,7 @@ impl PlanCtx {
                     calls,
                     bindings: std::mem::take(&mut cap.inventory.bindings),
                     call_mapping: cap.calls.take(),
+                    builtin_leading_zeros_mapping: cap.builtin_leading_zeros.take(),
                     builtin_len_mapping: cap.builtin_lens.take(),
                     unsize_mapping: cap.unsizes.take(),
                     binding_mapping: cap.bindings.take(),
@@ -3686,6 +3873,8 @@ impl PlanCtx {
 
 #[cfg(test)]
 mod associated_bounds;
+#[cfg(test)]
+mod leading_zero_tests;
 #[cfg(test)]
 mod name_tests;
 mod recipes;

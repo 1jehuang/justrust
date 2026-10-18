@@ -1461,6 +1461,7 @@ fn preflight_with_plan(
                         operand(value, &mut budget)?;
                     }
                     Rvalue::Use(op)
+                    | Rvalue::LeadingZeros { value: op }
                     | Rvalue::Unary { value: op, .. }
                     | Rvalue::ArrayToSlice { reference: op }
                     | Rvalue::SliceLen { slice: op } => operand(op, &mut budget)?,
@@ -2532,6 +2533,7 @@ impl Transfer<'_> {
                 self.read(state, array)?;
             }
             Rvalue::Use(op)
+            | Rvalue::LeadingZeros { value: op }
             | Rvalue::Unary { value: op, .. }
             | Rvalue::IntCast { value: op, .. }
             | Rvalue::FloatCast { value: op, .. } => self.operand(state, op)?,
@@ -5011,6 +5013,103 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn leading_zeros_reads_operand_tracks_moves_and_initialization() {
+        for moved in [false, true] {
+            let mut f = fixture();
+            f.locals
+                .extend([local(Ty::Int(IntTy::I64)), local(Ty::Int(IntTy::U32))]);
+            f.params.push(LocalId(1));
+            f.blocks[0].statements.extend([
+                located(Statement::StorageLive(LocalId(2))),
+                located(Statement::Assign {
+                    destination: place(2),
+                    value: Rvalue::LeadingZeros {
+                        value: if moved {
+                            Operand::Move(place(1))
+                        } else {
+                            Operand::Copy(place(1))
+                        },
+                    },
+                }),
+                located(Statement::Inspect(place(2))),
+            ]);
+            f.validate().unwrap();
+            let result = analyze(&f);
+            assert!(result.passed(), "{:?}", result.diagnostics);
+            assert_eq!(result.stats.operands_read, 3);
+            assert_eq!(result.stats.moves, usize::from(moved));
+            f.blocks[0]
+                .statements
+                .push(located(Statement::Inspect(place(1))));
+            assert_eq!(analyze(&f).passed(), !moved);
+            f.params.clear();
+            f.blocks[0]
+                .statements
+                .insert(0, located(Statement::StorageLive(LocalId(1))));
+            assert!(
+                analyze(&f)
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.kind == ErrorKind::ReadNotDefinitelyInitialized)
+            );
+        }
+    }
+
+    #[test]
+    fn leading_zeros_deref_keeps_borrow_live_until_the_operand_read() {
+        use super::super::ir::BorrowKind;
+        let mut f = fixture();
+        f.locals.extend([
+            local(Ty::Int(IntTy::I32)),
+            local(Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: std::sync::Arc::new(Ty::Int(IntTy::I32)),
+            }),
+            local(Ty::Int(IntTy::U32)),
+        ]);
+        f.params.push(LocalId(1));
+        f.loan_sites.push(cfg::LoanSite {
+            timing: cfg::LoanTiming::Immediate,
+            kind: BorrowKind::Shared,
+            place: place(1),
+            origin: None,
+        });
+        let write = located(Statement::Assign {
+            destination: place(1),
+            value: Rvalue::Use(Operand::Constant(Constant::Int(IntValue::i32(2)))),
+        });
+        f.blocks[0].statements.extend([
+            located(Statement::StorageLive(LocalId(2))),
+            located(Statement::StorageLive(LocalId(3))),
+            located(Statement::Assign {
+                destination: place(2),
+                value: Rvalue::Borrow(cfg::LoanId(0)),
+            }),
+            write.clone(),
+            located(Statement::Assign {
+                destination: place(3),
+                value: Rvalue::LeadingZeros {
+                    value: Operand::Copy(Place {
+                        local: LocalId(2),
+                        projection: vec![Projection::Deref],
+                    }),
+                },
+            }),
+        ]);
+        f.validate().unwrap();
+        assert!(
+            analyze(&f)
+                .diagnostics
+                .iter()
+                .any(|diagnostic| matches!(diagnostic.kind, ErrorKind::BorrowConflict(_)))
+        );
+        let length = f.blocks[0].statements.len();
+        f.blocks[0].statements.remove(length - 2);
+        f.blocks[0].statements.push(write);
+        assert!(analyze(&f).passed());
     }
 
     #[test]

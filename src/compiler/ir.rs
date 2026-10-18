@@ -2383,7 +2383,8 @@ pub fn instantiate_checked(
             ExprKind::Block(block)
             | ExprKind::Loop { body: block, .. }
             | ExprKind::LabeledBlock { body: block, .. } => visitor.block(block, 0)?,
-            ExprKind::IntCast { .. }
+            ExprKind::LeadingZeros { .. }
+            | ExprKind::IntCast { .. }
             | ExprKind::FloatCast { .. }
             | ExprKind::Char(_)
             | ExprKind::Float(_)
@@ -5611,6 +5612,10 @@ pub struct LiteralOutput {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExprKind {
     Char(CharValue),
+    /// Count zero bits before the highest set bit within the integer's declared width.
+    LeadingZeros {
+        value: ExprId,
+    },
     IntCast {
         value: ExprId,
         to: IntTy,
@@ -6286,7 +6291,8 @@ impl CheckedFunction {
                     storage(budget, payload.message.len(), 1)?;
                     storage(budget, payload.location.len(), 1)?;
                 }
-                ExprKind::IntCast { .. }
+                ExprKind::LeadingZeros { .. }
+                | ExprKind::IntCast { .. }
                 | ExprKind::FloatCast { .. }
                 | ExprKind::Char(_)
                 | ExprKind::Float(_)
@@ -6760,6 +6766,19 @@ impl CheckedFunction {
             .map_or(&fallback_budget, |authority| authority.budget());
         for (borrow_index, value) in self.exprs.iter().enumerate() {
             match &value.kind {
+                ExprKind::LeadingZeros { value: source } => {
+                    expr(*source)?;
+                    let source = &self.exprs[source.0];
+                    if !matches!(source.ty, Ty::Int(_)) {
+                        return Err("leading zeros requires integer source".into());
+                    }
+                    if value.ty != Ty::Int(IntTy::U32) {
+                        return Err("leading zeros result type mismatch".into());
+                    }
+                    if value.completion != source.completion {
+                        return Err("leading zeros completion mismatch".into());
+                    }
+                }
                 ExprKind::IntCast { value: source, to } => {
                     expr(*source)?;
                     let source = &self.exprs[source.0];
@@ -10031,6 +10050,75 @@ mod tests {
         );
         assert_ne!(FloatValue::f32(0.0), FloatValue::f32(-0.0));
         assert_eq!(FloatValue::f64(f64::NAN), FloatValue::f64(f64::NAN));
+    }
+
+    #[test]
+    fn leading_zeros_validate_unused_operands_results_and_completion() {
+        let mut function = fixture();
+        function.exprs.push(TypedExpr {
+            ty: Ty::Int(IntTy::U32),
+            completion: Completion::Returns,
+            kind: ExprKind::LeadingZeros { value: ExprId(0) },
+        });
+        // The operation is not referenced by the body. Its operand is still
+        // authoritative, independently of its declared u32 result.
+        function.validate().unwrap();
+        for source in [
+            Ty::Bool,
+            Ty::Char,
+            Ty::Float(FloatTy::F32),
+            Ty::Unit,
+            Ty::Never,
+            Ty::Tuple(Arc::from([Ty::Int(IntTy::I32)])),
+            Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: Arc::new(Ty::Int(IntTy::I32)),
+            },
+        ] {
+            let mut invalid = function.clone();
+            invalid.exprs[0].ty = source;
+            assert!(invalid.validate().unwrap_err().contains("integer source"));
+        }
+        for result in [Ty::Int(IntTy::I32), Ty::Int(IntTy::U64), Ty::Never] {
+            let mut invalid = function.clone();
+            invalid.exprs[1].ty = result;
+            assert!(
+                invalid
+                    .validate()
+                    .unwrap_err()
+                    .contains("result type mismatch")
+            );
+        }
+        let mut invalid = function.clone();
+        invalid.exprs[1].kind = ExprKind::LeadingZeros { value: ExprId(99) };
+        assert!(
+            invalid
+                .validate()
+                .unwrap_err()
+                .contains("invalid expression 99")
+        );
+        invalid = function.clone();
+        invalid.exprs[1].completion = Completion::Never;
+        assert!(
+            invalid
+                .validate()
+                .unwrap_err()
+                .contains("completion mismatch")
+        );
+        function.exprs[0].kind = ExprKind::Block(Block {
+            statements: vec![Stmt::Return(None)],
+            tail: None,
+        });
+        function.exprs[0].completion = Completion::Never;
+        function.exprs[1].completion = Completion::Never;
+        function.validate().unwrap();
+        function.exprs[1].completion = Completion::Returns;
+        assert!(
+            function
+                .validate()
+                .unwrap_err()
+                .contains("completion mismatch")
+        );
     }
 
     #[test]

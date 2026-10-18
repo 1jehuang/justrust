@@ -384,6 +384,46 @@ impl<'a> Emitter<'a> {
         }
         Ok(())
     }
+    /// Count an already evaluated integer in rax (a snapshot pointer for 128
+    /// bits). Baseline BSR is only executed for nonzero inputs. Clobbers rax,
+    /// rcx and rdx, all caller-saved in the private ABI, without extra storage.
+    fn integer_leading_zeros(&mut self, ty: ir::IntTy) -> Result<(), String> {
+        if ty.bits() == 128 {
+            self.bytes(&[0x48, 0x8b, 0x10]); // rdx = low limb
+            self.bytes(&[0x48, 0x8b, 0x40, 0x08]); // rax = high limb
+            self.bytes(&[0x48, 0x85, 0xc0]);
+            let high_nonzero = self.jump(&[0x0f, 0x85]);
+            self.bytes(&[0x48, 0x89, 0xd0]); // high is zero: scan low limb
+            self.word_leading_zeros(64)?;
+            self.bytes(&[0x83, 0xc0, 64]); // includes all-zero => 128
+            let done = self.jump(&[0xe9]);
+            self.patch(high_nonzero, self.position())?;
+            self.word_leading_zeros(64)?;
+            self.patch(done, self.position())?;
+        } else {
+            // Signed carriers are sign-extended. Discard every bit above the
+            // declared width before scanning, including for negative inputs.
+            if ty.bits() < 64 {
+                let shift = (64 - ty.bits()) as u8;
+                self.bytes(&[0x48, 0xc1, 0xe0, shift]);
+                self.bytes(&[0x48, 0xc1, 0xe8, shift]);
+            }
+            self.word_leading_zeros(ty.bits())?;
+        }
+        Ok(())
+    }
+    fn word_leading_zeros(&mut self, bits: u32) -> Result<(), String> {
+        self.bytes(&[0x48, 0x85, 0xc0]); // test rax, rax
+        let zero = self.jump(&[0x0f, 0x84]);
+        self.bytes(&[0x48, 0x0f, 0xbd, 0xc8]); // bsr rcx, rax
+        self.immediate((bits - 1) as i32);
+        self.bytes(&[0x29, 0xc8]); // sub eax, ecx; result is exactly u32
+        let done = self.jump(&[0xe9]);
+        self.patch(zero, self.position())?;
+        self.immediate(bits as i32);
+        self.patch(done, self.position())?;
+        Ok(())
+    }
     fn normalize_integer(&mut self, ty: ir::IntTy) {
         assert!(ty.bits() <= 64, "wide integer reached word normalization");
         if ty.bits() < 64 {
@@ -1419,6 +1459,18 @@ impl<'a> Emitter<'a> {
                 // SOURCE signedness before destination-width normalization.
                 // Wide endpoints use limbs, never the legacy word kernel.
                 self.integer_cast(value, *to)?;
+            }
+            cfg::Rvalue::LeadingZeros { value } => {
+                let ty = self.function().operand_ty(value)?;
+                if ty == ir::Ty::Never {
+                    // Divergent receiver effects already completed in the CFG.
+                    return Ok(());
+                }
+                let ir::Ty::Int(integer) = ty else {
+                    return Err("leading-zero count requires an integer source".into());
+                };
+                self.operand(value)?;
+                self.integer_leading_zeros(integer)?;
             }
             cfg::Rvalue::FloatCast { value, to } => {
                 let from = ir::NumTy::of(&self.function().operand_ty(value)?)
@@ -2878,6 +2930,134 @@ mod tests {
             );
         }
         assert!(emitter.binary_char(BinaryOp::Add).is_err());
+    }
+
+    /// Exercise the exact helper bytes in a native ELF, comparing the full
+    /// 64-bit carrier so a stale upper half cannot masquerade as a u32 result.
+    fn run_leading_zero_cases(cases: &[(ir::IntTy, u128, u32)]) {
+        let concrete = unit_concrete_fixture();
+        let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
+        let mut e = Emitter {
+            object: Object {
+                code: Vec::new(),
+                calls: Vec::new(),
+                strings: Vec::new(),
+            },
+            concrete: &concrete,
+            resolve: &resolve,
+            locals: Vec::new(),
+            aggregate_scratch: 0,
+            wide_scratch: -48,
+            returns: Vec::new(),
+            traps: Vec::new(),
+            edges: Vec::new(),
+        };
+        e.bytes(&[0x55, 0x48, 0x89, 0xe5, 0x48, 0x83, 0xec, 16]);
+        let mut failures = Vec::new();
+        for &(ty, bits, expected) in cases {
+            if ty.bits() == 128 {
+                e.wide_constant(ir::IntValue { ty, bits });
+            } else {
+                e.word(bits as u64);
+            }
+            e.integer_leading_zeros(ty).unwrap();
+            e.bytes(&[0x48, 0x3d]); // cmp rax, expected
+            e.i32(expected as i32);
+            failures.push(e.jump(&[0x0f, 0x85]));
+        }
+        e.bytes(&[0x31, 0xff, 0xb8, 60, 0, 0, 0, 0x0f, 0x05]);
+        let failure = e.position();
+        e.bytes(&[0xbf, 1, 0, 0, 0, 0xb8, 60, 0, 0, 0, 0x0f, 0x05]);
+        for at in failures {
+            e.patch(at, failure).unwrap();
+        }
+        let path = executable_bytes(&link(&[("main".into(), e.object)]).unwrap());
+        let output = execute(&mut Command::new(&path));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        assert!(output.status.success(), "{output:?}; cases: {cases:?}");
+    }
+
+    #[test]
+    fn leading_zeros_native_word_widths_normalize_low_bits() {
+        let mut cases = Vec::new();
+        for ty in [
+            ir::IntTy::I8,
+            ir::IntTy::U8,
+            ir::IntTy::I16,
+            ir::IntTy::U16,
+            ir::IntTy::I32,
+            ir::IntTy::U32,
+            ir::IntTy::I64,
+            ir::IntTy::U64,
+            ir::IntTy::Isize,
+            ir::IntTy::Usize,
+        ] {
+            let width = ty.bits();
+            let mask = (1_u128 << width) - 1;
+            cases.push((ty, 0, width));
+            cases.push((ty, mask, 0));
+            cases.push((ty, u128::MAX, 0)); // sign-extended negative carrier
+            for bit in 0..width {
+                cases.push((ty, 1_u128 << bit, width - bit - 1));
+                if width < 64 {
+                    // Deliberately dirty upper bits, including an all-zero
+                    // declared-width value, must not influence the scan.
+                    cases.push((ty, (1_u128 << bit) | !mask, width - bit - 1));
+                }
+            }
+            if width < 64 {
+                cases.push((ty, !mask, width));
+            }
+        }
+        run_leading_zero_cases(&cases);
+    }
+
+    #[test]
+    fn leading_zeros_native_wide_checks_both_halves_and_zero() {
+        let mut cases = Vec::new();
+        for ty in [ir::IntTy::I128, ir::IntTy::U128] {
+            cases.extend([
+                (ty, 0, 128),
+                (ty, u64::MAX as u128, 64),
+                (ty, (u64::MAX as u128) << 64, 0),
+                (ty, u128::MAX, 0),
+            ]);
+            for bit in 0..128 {
+                let value = 1_u128 << bit;
+                cases.push((ty, value, 127 - bit));
+                if bit >= 64 {
+                    cases.push((ty, value | u64::MAX as u128, 127 - bit));
+                }
+            }
+        }
+        run_leading_zero_cases(&cases);
+    }
+
+    #[test]
+    fn leading_zeros_native_typed_receiver_is_evaluated_once() {
+        let program = frontend::parse(
+            r#"
+            fn next(calls: &mut u32) -> u128 {
+                *calls += 1u32;
+                18446744073709551616u128
+            }
+            fn main() {
+                let mut calls = 0u32;
+                let count: u32 = next(&mut calls).leading_zeros();
+                if calls == 1u32 && count == 63u32
+                    && (-1i8).leading_zeros() == 0u32
+                    && (0u128).leading_zeros() == 128u32
+                    && (1u128).leading_zeros() == 127u32
+                { println!("leading zeros once"); }
+                else { 1 / 0; }
+            }
+            "#,
+        )
+        .unwrap();
+        let output = run(&program);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"leading zeros once\n");
     }
 
     #[test]

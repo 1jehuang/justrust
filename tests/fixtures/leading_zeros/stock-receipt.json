@@ -1,0 +1,1486 @@
+{
+  "cases": [
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "u8",
+      "source_sha256": "df96c432b9490000f727c84210e2d30b0cd2db7277c1e51fc230c221e213f848",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "u16",
+      "source_sha256": "6837f76cac1cfdd3a39ee268c203a1cd8956c7d6762920d3a73fdc15c1df39e3",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "u32",
+      "source_sha256": "eb76599637564284d57c3cc9dcb4046a77718deea5fab9184a2431bc97b7c048",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "u64",
+      "source_sha256": "f8b53778355f3a8864fa132a30f21a44eb7f0a0c5d647810f2c71200f1396909",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "u128",
+      "source_sha256": "7b35a9f7e5f852738517f5d1a69e8d19b29e0128c8d363a9403ca98ff988fb00",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "usize",
+      "source_sha256": "2674ec5e94c5ce7095eb1845cf98b9d3d3864ffa737f51017cb6cc96d6c6e86a",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "i8",
+      "source_sha256": "ee3f65ebce148b867fc0c149956fed4d52dfa6a152fd5897c52ceb1c992f221c",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "i16",
+      "source_sha256": "5b4e6ab6a0dc90bee46abe17d417bc96818bb087e967cc35b965117ba963fe8f",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "i32",
+      "source_sha256": "0278d5ad4bd038510beef057bd9a19fa5787686b80536d693fd557c08f6c053a",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "i64",
+      "source_sha256": "d4ae0329a008dea57b688eb34e875debf38d445b12a916e95d3671153937dec9",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "i128",
+      "source_sha256": "b5d1783eb3c27fd1b5cd4a3914617952eae3513c8d16283faad2a8b9df6a26a6",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "isize",
+      "source_sha256": "6b2ed4964925b8ee9de8bafd3d345ad8c895fd403da825766523788ce30da7f0",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "once",
+      "source_sha256": "a60f09ecdd662b2197d1c0a240634a476dc4d37f43ca39b532fa6cbce8325165",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "nominal",
+      "source_sha256": "4756aa09fb7dd38a18938a4bdf65b54f8d95fd3c1a091ec2cc0b1295c651fcf5",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "divergent",
+      "source_sha256": "7708126d780cf49ae4ced120a48243f41a3b0969521e29995e491cf5f045f4c0",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "nested",
+      "source_sha256": "17403c97b820b7ce53c9e3cdf032778d7391d1bde6711e97321ece76323662ab",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "u128_positions",
+      "source_sha256": "7df0d5df76c4c1003f29350017aaac3af86b1182e7c50fc1578c8313536f38b2",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "bytes_exhaustive",
+      "source_sha256": "48ba585700b4478a10be5173639655733a71b3f12903eca6217a0d9f2104113c",
+      "stock": "accepted"
+    },
+    {
+      "category": "invalid",
+      "expected_stdout": "",
+      "name": "float",
+      "source_sha256": "b78057fc07702650ac7ff53f0ccca698c43a53caf827e0b4993e77f468682c9e",
+      "stock": "rejected"
+    },
+    {
+      "category": "invalid",
+      "expected_stdout": "",
+      "name": "bool",
+      "source_sha256": "3dde10eb23a8eeee4f2ac2f9948f1294fb64ff575b9666af5f1877b2c3651074",
+      "stock": "rejected"
+    },
+    {
+      "category": "invalid",
+      "expected_stdout": "",
+      "name": "char",
+      "source_sha256": "871aa09558c0f7843ad5b2fc4b0ec407816c119483d2d8d182ef2593dea0fd93",
+      "stock": "rejected"
+    },
+    {
+      "category": "invalid",
+      "expected_stdout": "",
+      "name": "generic",
+      "source_sha256": "510e7068e918892208a4558170de7c6649e18f97380caa647e24fb22f235596e",
+      "stock": "rejected"
+    },
+    {
+      "category": "invalid",
+      "expected_stdout": "",
+      "name": "arity",
+      "source_sha256": "d2fd2f8a0c56358f80ec8b8705191ffb51ac881519f19b17320ae1a8778cfc22",
+      "stock": "rejected"
+    },
+    {
+      "category": "invalid",
+      "expected_stdout": "",
+      "name": "turbofish",
+      "source_sha256": "e7d8fda34676213bdde8c9913737b6d647d3c2dd757400d222983c6dc832acd4",
+      "stock": "rejected"
+    },
+    {
+      "category": "invalid",
+      "expected_stdout": "",
+      "name": "result",
+      "source_sha256": "d943f8e346299f7aeaac0555adf9dd34814d077800b28bbbc4467072ae78e1e7",
+      "stock": "rejected"
+    },
+    {
+      "category": "invalid",
+      "expected_stdout": "",
+      "name": "dead",
+      "source_sha256": "5842cab421a1636bf049fe891c072ac5650fff5c15cefefb819b1ff8deec3266",
+      "stock": "rejected"
+    },
+    {
+      "category": "legal-unsupported",
+      "expected_stdout": "ok\n",
+      "name": "ufcs",
+      "source_sha256": "6aaa0115d09bbfd5e90e0253e71f51d84fc72e401f190b50c599d869516d1c62",
+      "stock": "accepted"
+    },
+    {
+      "category": "legal-unsupported",
+      "expected_stdout": "ok\n",
+      "name": "reference",
+      "source_sha256": "ff6f3960696dfdf622c9e5aa5c71244ca38c33f81edd6f0f3791156796bd2f0b",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "unsuffixed",
+      "source_sha256": "630badb4463c0e7285c6f309375cb1d37c032cd3681bdab070e721d9fa70473e",
+      "stock": "accepted"
+    },
+    {
+      "category": "valid",
+      "expected_stdout": "ok\n",
+      "name": "estimator",
+      "source_sha256": "387c636c26dccf9118599df484ec4da9b265a6428424bf824a83c9a4c4e3ddd9",
+      "stock": "accepted"
+    }
+  ],
+  "commands": [
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "-Vv"
+      ],
+      "cwd": "$OUTPUT",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+      "stdout_sha256": "81680c954f2b88cfa8fc69757d34488dd4740819379a9f389ce7e417ab756d53",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/u8",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/u8",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/u8/program"
+      ],
+      "cwd": "$OUTPUT/u8",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/u16",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/u16",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/u16/program"
+      ],
+      "cwd": "$OUTPUT/u16",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/u32",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/u32",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/u32/program"
+      ],
+      "cwd": "$OUTPUT/u32",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/u64",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/u64",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/u64/program"
+      ],
+      "cwd": "$OUTPUT/u64",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/u128",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/u128",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/u128/program"
+      ],
+      "cwd": "$OUTPUT/u128",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/usize",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/usize",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/usize/program"
+      ],
+      "cwd": "$OUTPUT/usize",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/i8",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/i8",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/i8/program"
+      ],
+      "cwd": "$OUTPUT/i8",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/i16",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/i16",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/i16/program"
+      ],
+      "cwd": "$OUTPUT/i16",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/i32",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/i32",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/i32/program"
+      ],
+      "cwd": "$OUTPUT/i32",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/i64",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/i64",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/i64/program"
+      ],
+      "cwd": "$OUTPUT/i64",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/i128",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/i128",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/i128/program"
+      ],
+      "cwd": "$OUTPUT/i128",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/isize",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/isize",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/isize/program"
+      ],
+      "cwd": "$OUTPUT/isize",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/once",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/once",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/once/program"
+      ],
+      "cwd": "$OUTPUT/once",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/nominal",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/nominal",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/nominal/program"
+      ],
+      "cwd": "$OUTPUT/nominal",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/divergent",
+      "status": 0,
+      "stderr": "warning: unreachable expression\n --> main.rs:1:27\n  |\n1 | fn f()->u32{({return 7u32;1u64}).leading_zeros()}\n  |               ----------- ^^^^ unreachable expression\n  |               |\n  |               any code following this expression is unreachable\n  |\n  = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default\n\nwarning: 1 warning emitted\n\n",
+      "stderr_sha256": "0c961d056fade18d7d402ef740e90f4549b75b8f02cbde72d92d8a125cd9e431",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/divergent",
+      "status": 0,
+      "stderr": "warning: unreachable expression\n --> main.rs:1:27\n  |\n1 | fn f()->u32{({return 7u32;1u64}).leading_zeros()}\n  |               ----------- ^^^^ unreachable expression\n  |               |\n  |               any code following this expression is unreachable\n  |\n  = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default\n\nwarning: 1 warning emitted\n\n",
+      "stderr_sha256": "0c961d056fade18d7d402ef740e90f4549b75b8f02cbde72d92d8a125cd9e431",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/divergent/program"
+      ],
+      "cwd": "$OUTPUT/divergent",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/nested",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/nested",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/nested/program"
+      ],
+      "cwd": "$OUTPUT/nested",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/u128_positions",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/u128_positions",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/u128_positions/program"
+      ],
+      "cwd": "$OUTPUT/u128_positions",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/bytes_exhaustive",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/bytes_exhaustive",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/bytes_exhaustive/program"
+      ],
+      "cwd": "$OUTPUT/bytes_exhaustive",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/float",
+      "status": 1,
+      "stderr": "error[E0599]: no method named `leading_zeros` found for type `f64` in the current scope\n --> main.rs:1:24\n  |\n1 | fn main(){let n=1.0f64.leading_zeros();}\n  |                        ^^^^^^^^^^^^^ method not found in `f64`\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0599`.\n",
+      "stderr_sha256": "54bf3a28a9303575beaca0545c13b727c707d072f3aa572864b4c62417b490c7",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/float",
+      "status": 1,
+      "stderr": "error[E0599]: no method named `leading_zeros` found for type `f64` in the current scope\n --> main.rs:1:24\n  |\n1 | fn main(){let n=1.0f64.leading_zeros();}\n  |                        ^^^^^^^^^^^^^ method not found in `f64`\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0599`.\n",
+      "stderr_sha256": "54bf3a28a9303575beaca0545c13b727c707d072f3aa572864b4c62417b490c7",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/bool",
+      "status": 1,
+      "stderr": "error[E0599]: no method named `leading_zeros` found for type `bool` in the current scope\n --> main.rs:1:22\n  |\n1 | fn main(){let n=true.leading_zeros();}\n  |                      ^^^^^^^^^^^^^ method not found in `bool`\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0599`.\n",
+      "stderr_sha256": "94a75030bc5e6c21e8a8fe10701a496ea0c8e82ced4667be1c66a1f4c0831589",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/bool",
+      "status": 1,
+      "stderr": "error[E0599]: no method named `leading_zeros` found for type `bool` in the current scope\n --> main.rs:1:22\n  |\n1 | fn main(){let n=true.leading_zeros();}\n  |                      ^^^^^^^^^^^^^ method not found in `bool`\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0599`.\n",
+      "stderr_sha256": "94a75030bc5e6c21e8a8fe10701a496ea0c8e82ced4667be1c66a1f4c0831589",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/char",
+      "status": 1,
+      "stderr": "error[E0599]: no method named `leading_zeros` found for type `char` in the current scope\n --> main.rs:1:21\n  |\n1 | fn main(){let n='a'.leading_zeros();}\n  |                     ^^^^^^^^^^^^^ method not found in `char`\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0599`.\n",
+      "stderr_sha256": "f056aa66b31679e77061ae931469578b8748def510abb0686063f917bf10a7fb",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/char",
+      "status": 1,
+      "stderr": "error[E0599]: no method named `leading_zeros` found for type `char` in the current scope\n --> main.rs:1:21\n  |\n1 | fn main(){let n='a'.leading_zeros();}\n  |                     ^^^^^^^^^^^^^ method not found in `char`\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0599`.\n",
+      "stderr_sha256": "f056aa66b31679e77061ae931469578b8748def510abb0686063f917bf10a7fb",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/generic",
+      "status": 1,
+      "stderr": "error[E0599]: no method named `leading_zeros` found for type parameter `T` in the current scope\n --> main.rs:1:21\n  |\n1 | fn f<T>(x:T)->u32{x.leading_zeros()} fn main(){}\n  |      -              ^^^^^^^^^^^^^ method not found in `T`\n  |      |\n  |      method `leading_zeros` not found for this type parameter\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0599`.\n",
+      "stderr_sha256": "5e922c3279909be90c3d7314de4e3ef48a0edaa2ea899066d99c1c61ec5752c7",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/generic",
+      "status": 1,
+      "stderr": "error[E0599]: no method named `leading_zeros` found for type parameter `T` in the current scope\n --> main.rs:1:21\n  |\n1 | fn f<T>(x:T)->u32{x.leading_zeros()} fn main(){}\n  |      -              ^^^^^^^^^^^^^ method not found in `T`\n  |      |\n  |      method `leading_zeros` not found for this type parameter\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0599`.\n",
+      "stderr_sha256": "5e922c3279909be90c3d7314de4e3ef48a0edaa2ea899066d99c1c61ec5752c7",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/arity",
+      "status": 1,
+      "stderr": "error[E0061]: this method takes 0 arguments but 1 argument was supplied\n --> main.rs:1:22\n  |\n1 | fn main(){let n=1u32.leading_zeros(2u32);}\n  |                      ^^^^^^^^^^^^^ ---- unexpected argument of type `u32`\n  |\nnote: method defined here\n --> library/core/src/num/uint_macros.rs:153:21\n --> library/core/src/num/mod.rs:1287:4\n ::: library/core/src/num/mod.rs:1311:5\n  |\n  = note: in this macro invocation\n  = note: this error originates in the macro `uint_impl` (in Nightly builds, run with -Z macro-backtrace for more info)\nhelp: remove the extra argument\n  |\n1 - fn main(){let n=1u32.leading_zeros(2u32);}\n1 + fn main(){let n=1u32.leading_zeros();}\n  |\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0061`.\n",
+      "stderr_sha256": "d09a408c873ed1f29950d84055dd34285513cb2c36793c598dbe5ff99baed801",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/arity",
+      "status": 1,
+      "stderr": "error[E0061]: this method takes 0 arguments but 1 argument was supplied\n --> main.rs:1:22\n  |\n1 | fn main(){let n=1u32.leading_zeros(2u32);}\n  |                      ^^^^^^^^^^^^^ ---- unexpected argument of type `u32`\n  |\nnote: method defined here\n --> library/core/src/num/uint_macros.rs:153:21\n --> library/core/src/num/mod.rs:1287:4\n ::: library/core/src/num/mod.rs:1311:5\n  |\n  = note: in this macro invocation\n  = note: this error originates in the macro `uint_impl` (in Nightly builds, run with -Z macro-backtrace for more info)\nhelp: remove the extra argument\n  |\n1 - fn main(){let n=1u32.leading_zeros(2u32);}\n1 + fn main(){let n=1u32.leading_zeros();}\n  |\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0061`.\n",
+      "stderr_sha256": "d09a408c873ed1f29950d84055dd34285513cb2c36793c598dbe5ff99baed801",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/turbofish",
+      "status": 1,
+      "stderr": "error[E0107]: method takes 0 generic arguments but 1 generic argument was supplied\n --> main.rs:1:22\n  |\n1 | fn main(){let n=1u32.leading_zeros::<u32>();}\n  |                      ^^^^^^^^^^^^^------- help: remove the unnecessary generics\n  |                      |\n  |                      expected 0 generic arguments\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0107`.\n",
+      "stderr_sha256": "b0b34833421bf5fdcea6b5a5c902f9f3285b7c05a05b2b1079814e5d1d2824fb",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/turbofish",
+      "status": 1,
+      "stderr": "error[E0107]: method takes 0 generic arguments but 1 generic argument was supplied\n --> main.rs:1:22\n  |\n1 | fn main(){let n=1u32.leading_zeros::<u32>();}\n  |                      ^^^^^^^^^^^^^------- help: remove the unnecessary generics\n  |                      |\n  |                      expected 0 generic arguments\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0107`.\n",
+      "stderr_sha256": "b0b34833421bf5fdcea6b5a5c902f9f3285b7c05a05b2b1079814e5d1d2824fb",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/result",
+      "status": 1,
+      "stderr": "error[E0308]: mismatched types\n --> main.rs:1:21\n  |\n1 | fn main(){let n:i32=1u32.leading_zeros();}\n  |                 --- ^^^^^^^^^^^^^^^^^^^^ expected `i32`, found `u32`\n  |                 |\n  |                 expected due to this\n  |\nhelp: you can convert a `u32` to an `i32` and panic if the converted value doesn't fit\n  |\n1 | fn main(){let n:i32=1u32.leading_zeros().try_into().unwrap();}\n  |                                         ++++++++++++++++++++\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0308`.\n",
+      "stderr_sha256": "b8c4da5395293e8c1fa370655f9dee9838ce874952678604110f912c2fc8d80a",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/result",
+      "status": 1,
+      "stderr": "error[E0308]: mismatched types\n --> main.rs:1:21\n  |\n1 | fn main(){let n:i32=1u32.leading_zeros();}\n  |                 --- ^^^^^^^^^^^^^^^^^^^^ expected `i32`, found `u32`\n  |                 |\n  |                 expected due to this\n  |\nhelp: you can convert a `u32` to an `i32` and panic if the converted value doesn't fit\n  |\n1 | fn main(){let n:i32=1u32.leading_zeros().try_into().unwrap();}\n  |                                         ++++++++++++++++++++\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0308`.\n",
+      "stderr_sha256": "b8c4da5395293e8c1fa370655f9dee9838ce874952678604110f912c2fc8d80a",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/dead",
+      "status": 1,
+      "stderr": "error[E0599]: no method named `leading_zeros` found for type `bool` in the current scope\n --> main.rs:1:24\n  |\n1 | fn unused()->u32{false.leading_zeros()} fn main(){}\n  |                        ^^^^^^^^^^^^^ method not found in `bool`\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0599`.\n",
+      "stderr_sha256": "7d49768a21c53ac0568da207c3e28a4e27c412681d0333398a1fa7c517b5f683",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/dead",
+      "status": 1,
+      "stderr": "error[E0599]: no method named `leading_zeros` found for type `bool` in the current scope\n --> main.rs:1:24\n  |\n1 | fn unused()->u32{false.leading_zeros()} fn main(){}\n  |                        ^^^^^^^^^^^^^ method not found in `bool`\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0599`.\n",
+      "stderr_sha256": "7d49768a21c53ac0568da207c3e28a4e27c412681d0333398a1fa7c517b5f683",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/ufcs",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/ufcs",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/ufcs/program"
+      ],
+      "cwd": "$OUTPUT/ufcs",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/reference",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/reference",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/reference/program"
+      ],
+      "cwd": "$OUTPUT/reference",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/unsuffixed",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/unsuffixed",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/unsuffixed/program"
+      ],
+      "cwd": "$OUTPUT/unsuffixed",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "--emit=metadata",
+        "main.rs",
+        "-o",
+        "check.rmeta"
+      ],
+      "cwd": "$OUTPUT/estimator",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "/usr/bin/rustc",
+        "--edition=2024",
+        "main.rs",
+        "-o",
+        "program"
+      ],
+      "cwd": "$OUTPUT/estimator",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "timed_out": false
+    },
+    {
+      "command": [
+        "$OUTPUT/estimator/program"
+      ],
+      "cwd": "$OUTPUT/estimator",
+      "status": 0,
+      "stderr": "",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout": "ok\n",
+      "stdout_sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+      "timed_out": false
+    }
+  ],
+  "failures": [],
+  "provider_sha256": "2d109735cfff1317afd02e093012ee4d4c3b5bf39431da45f6afe99002b0f9b5",
+  "schema": 1
+}

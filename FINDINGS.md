@@ -1,5 +1,26 @@
 # Findings: where agent build time goes
 
+## 2026-10-18: Primitive leading-zero count and original core estimator
+
+- Implemented width-correct native `.leading_zeros()` for all 12 integer types,
+  explicit checked IR/CFG, source authority, ownership/traversal and baseline
+  x86-64 BSR lowering. Preserved pending character-cast work without staging it.
+- The complete unchanged original core exponent-estimator module now passes
+  real CLI and observed CHECK/BUILD/run at workers 1/8, debug/release bootstrap,
+  with exact stock output and an independent integer oracle. Frozen corpus:
+  20 valid, eight invalid, two legal-unsupported sources. See LEADING-ZEROS.md.
+- Full isolated regression: 3,204 passed in 153.2s, run
+  `20261018-025621281-492123` (37.03s compile, 116.14s tests). This is validation
+  timing, not a compiler-performance comparison. No speedup claim is made.
+- Merged worktree: hosted library 1,316 passed
+  (`20261018-025715568-514599`), native acceptance plus preserved char controls
+  11 passed (`20261018-025820398-614301`), strict all-target lint passed
+  (`20261018-025849142-614225`). Exact-source tests run locally because hosted
+  `/usr/bin/rustc` is absent. Failed attempts and successful reruns are retained
+  in `data/runs/xps14/2026-10-18-leading-zeros.jsonl`.
+- This is one original library module and a primitive operation, not whole core,
+  CTFE, full Rust, Cargo project compatibility or an optimizing compiler claim.
+
 ## 2026-10-18: Exact associated declaration Copy/Sized bounds
 
 - Delivered ASSOCIATED-BOUNDS.md: real catalog Copy/Sized declarations retain

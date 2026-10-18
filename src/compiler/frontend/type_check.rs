@@ -480,9 +480,9 @@ impl<'a> CountEvaluator<'a> {
                         self.memo[id.0] = CountMemo::Done(CountValue::Dynamic);
                         continue;
                     }
-                    ir::ExprKind::Unary { value, .. } | ir::ExprKind::IntCast { value, .. } => {
-                        [Some(*value), None]
-                    }
+                    ir::ExprKind::Unary { value, .. }
+                    | ir::ExprKind::LeadingZeros { value }
+                    | ir::ExprKind::IntCast { value, .. } => [Some(*value), None],
                     ir::ExprKind::Binary { left, right, .. } => [Some(*left), Some(*right)],
                     ir::ExprKind::Block(block) if block.statements.is_empty() => [block.tail, None],
                     ir::ExprKind::Block(_) => {
@@ -507,6 +507,13 @@ impl<'a> CountEvaluator<'a> {
                     .map(|id| self.value(id))
                     .transpose()?
                     .unwrap_or(CountValue::Unsupported),
+                ir::ExprKind::LeadingZeros { value } => match self.value(*value)? {
+                    CountValue::Known(value) => CountValue::Known(ir::IntValue {
+                        ty: ir::IntTy::U32,
+                        bits: u128::from(value.bits.leading_zeros() - (128 - value.ty.bits())),
+                    }),
+                    other => other,
+                },
                 ir::ExprKind::IntCast { value, to } => match self.value(*value)? {
                     CountValue::Known(value) => CountValue::Known(ir::IntValue {
                         ty: *to,
@@ -566,9 +573,9 @@ impl<'a> CountEvaluator<'a> {
                 ir::ExprKind::Block(block) => {
                     block.tail.map(|id| self.heights[id.0] + 1).unwrap_or(0)
                 }
-                ir::ExprKind::IntCast { value, .. } | ir::ExprKind::Unary { value, .. } => {
-                    self.heights[value.0] + 1
-                }
+                ir::ExprKind::IntCast { value, .. }
+                | ir::ExprKind::LeadingZeros { value }
+                | ir::ExprKind::Unary { value, .. } => self.heights[value.0] + 1,
                 ir::ExprKind::Binary { left, right, .. } => {
                     self.heights[left.0].max(self.heights[right.0]) + 1
                 }
@@ -3837,6 +3844,12 @@ impl<'a> Checker<'a> {
                 )
             }
             Expr::MethodCall { receiver, .. }
+                if leading_zeros_candidate(e, self.names()?)?
+                    && matches!(self.scalar_hint(receiver)?, Some(ir::Ty::Int(_))) =>
+            {
+                Some(ir::Ty::Int(ir::IntTy::U32))
+            }
+            Expr::MethodCall { receiver, .. }
                 if slice_len_candidate(e, self.names()?)?
                     && self
                         .scalar_hint(receiver)?
@@ -3985,10 +3998,27 @@ impl<'a> Checker<'a> {
                     _ => None,
                 }
             }
-            Expr::Block(block) if block.statements.is_empty() => match &block.tail {
-                Some(tail) => self.scalar_hint(tail)?,
-                None => Some(ir::Ty::Unit),
-            },
+            // A literal or explicit cast carries its own type even behind
+            // statements that diverge. Do not look up a general tail in the
+            // outer scope: block-local bindings may shadow those names.
+            Expr::Block(block)
+                if block.statements.is_empty()
+                    || matches!(
+                        block.tail.as_deref(),
+                        Some(
+                            Expr::Integer(_)
+                                | Expr::Float(_)
+                                | Expr::Bool(_)
+                                | Expr::Char(_)
+                                | Expr::Cast { .. }
+                        )
+                    ) =>
+            {
+                match &block.tail {
+                    Some(tail) => self.scalar_hint(tail)?,
+                    None => Some(ir::Ty::Unit),
+                }
+            }
             _ => None,
         })
     }
@@ -5122,6 +5152,12 @@ impl<'a> Checker<'a> {
         e: &Expr,
         expectation: Expectation<'_>,
     ) -> Result<ir::ExprId, String> {
+        if let Some(id) = self.builtin_leading_zeros(e)? {
+            if let Some(cap) = self.canonical {
+                cap.record_builtin_leading_zeros(e, id, &self.exprs)?;
+            }
+            return Ok(id);
+        }
         if let Some(id) = self.builtin_slice_len(e)? {
             if let Some(cap) = self.canonical {
                 cap.record_builtin_len(e, id, &self.exprs)?;
@@ -5175,8 +5211,34 @@ impl<'a> Checker<'a> {
         }
         Ok(id)
     }
-    /// Builtin `.len()` only on an exactly typed shared `&[T]` receiver with
-    /// zero arguments; every other `len` goes through ordinary method resolution.
+    /// Admit only an exactly typed by-value integer and zero method arguments.
+    /// Other receiver kinds and signatures keep ordinary method resolution.
+    pub(super) fn builtin_leading_zeros(&mut self, e: &Expr) -> Result<Option<ir::ExprId>, String> {
+        let Expr::MethodCall { receiver, .. } = e else {
+            return Ok(None);
+        };
+        if !leading_zeros_candidate(e, self.names()?)?
+            || !matches!(self.scalar_hint(receiver)?, Some(ir::Ty::Int(_)))
+        {
+            return Ok(None);
+        }
+        // The hint grants no type authority. Check and evaluate the receiver once.
+        let value = self.expr(receiver)?;
+        if !matches!(self.exprs[value.0].ty, ir::Ty::Int(_)) {
+            return Err("leading_zeros receiver must be an exactly typed by-value integer".into());
+        }
+        let completion = self.exprs[value.0].completion;
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: ir::Ty::Int(ir::IntTy::U32),
+            kind: ir::ExprKind::LeadingZeros { value },
+            completion,
+        });
+        Ok(Some(id))
+    }
+
+    /// Builtin `.len()` only on an exactly typed shared slice with no arguments.
     pub(super) fn builtin_slice_len(&mut self, e: &Expr) -> Result<Option<ir::ExprId>, String> {
         let Expr::MethodCall { receiver, .. } = e else {
             return Ok(None);

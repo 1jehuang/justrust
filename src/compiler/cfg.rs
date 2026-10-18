@@ -291,6 +291,7 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
         (Rvalue::Use(a), Rvalue::Use(b))
         | (Rvalue::ArrayToSlice { reference: a }, Rvalue::ArrayToSlice { reference: b })
         | (Rvalue::SliceLen { slice: a }, Rvalue::SliceLen { slice: b })
+        | (Rvalue::LeadingZeros { value: a }, Rvalue::LeadingZeros { value: b })
         | (Rvalue::IntCast { value: a, .. }, Rvalue::IntCast { value: b, .. })
         | (Rvalue::FloatCast { value: a, .. }, Rvalue::FloatCast { value: b, .. })
         | (Rvalue::Unary { value: a, .. }, Rvalue::Unary { value: b, .. })
@@ -442,6 +443,10 @@ pub enum Operand {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rvalue {
+    /// Count leading zero bits in an integer operand, producing u32.
+    LeadingZeros {
+        value: Operand,
+    },
     IntCast {
         value: Operand,
         to: IntTy,
@@ -539,6 +544,7 @@ impl Rvalue {
     ) -> Result<(), String> {
         match self {
             Self::Use(value)
+            | Self::LeadingZeros { value }
             | Self::IntCast { value, .. }
             | Self::FloatCast { value, .. }
             | Self::Unary { value, .. }
@@ -1522,6 +1528,7 @@ impl Function {
                         path(destination, budget)?;
                         match value {
                             Rvalue::Use(value)
+                            | Rvalue::LeadingZeros { value }
                             | Rvalue::IntCast { value, .. }
                             | Rvalue::FloatCast { value, .. }
                             | Rvalue::Unary { value, .. }
@@ -1812,6 +1819,12 @@ impl Function {
     }
     fn rvalue_ty_with_facts(&self, value: &Rvalue, facts: ir::FactsCtx<'_>) -> Result<Ty, String> {
         match value {
+            Rvalue::LeadingZeros { value } => {
+                if !matches!(self.operand_ty_with_facts(value, facts)?, Ty::Int(_)) {
+                    return Err("CFG leading zeros requires integer source".into());
+                }
+                Ok(Ty::Int(IntTy::U32))
+            }
             Rvalue::IntCast { value, to } => {
                 if !matches!(self.operand_ty_with_facts(value, facts)?, Ty::Int(_)) {
                     return Err("CFG integer cast requires integer source".into());
@@ -3236,6 +3249,9 @@ impl Lowerer<'_> {
         // Keep long admitted cast chains out of the large aggregate/control
         // lowering frame. The same depth/work guard still covers every cast.
         let result = match self.source.exprs.get(id.0).map(|expr| &expr.kind) {
+            Some(ir::ExprKind::LeadingZeros { value }) => {
+                self.materialize_cast(id, *value, |value| Rvalue::LeadingZeros { value })
+            }
             Some(ir::ExprKind::IntCast { value, to }) => {
                 self.materialize_cast(id, *value, |value| Rvalue::IntCast { value, to: *to })
             }
@@ -3304,6 +3320,10 @@ impl Lowerer<'_> {
                     Rvalue::SliceIndex { slice, index },
                     origin,
                 );
+            }
+            ir::ExprKind::LeadingZeros { value } => {
+                let value = self.expression(*value)?;
+                self.assign(destination.clone(), Rvalue::LeadingZeros { value }, origin);
             }
             ir::ExprKind::IntCast { value, to } => {
                 let value = self.expression(*value)?;
@@ -4172,6 +4192,82 @@ mod panic_terminal_tests {
     }
 
     #[test]
+    fn leading_zeros_source_and_cfg_reject_replayed_operand_or_operation() {
+        let budget = ir::PlanBudget::default();
+        let publication = publish(
+            "fn f(x:u64,y:u64)->u32{x.leading_zeros()}fn main(){}",
+            &budget,
+        );
+        let source = publication.source();
+        let index = source
+            .exprs
+            .iter()
+            .position(|expression| matches!(expression.kind, ir::ExprKind::LeadingZeros { .. }))
+            .unwrap();
+        let mut forged = source.as_ref().clone();
+        let ir::ExprKind::LeadingZeros { value } = forged.exprs[index].kind else {
+            unreachable!()
+        };
+        // Change the receiver read without changing either endpoint type.
+        let ir::ExprKind::Local(local) = &mut forged.exprs[value.0].kind else {
+            unreachable!()
+        };
+        *local = forged.params[1];
+        assert!(
+            publication
+                .validate_source(&Arc::new(forged), publication.facts(), &budget)
+                .is_err()
+        );
+
+        let function = lower_source_closed(&publication, &budget).unwrap();
+        function
+            .validate_provenance(publication.facts(), &budget)
+            .unwrap();
+        for change in 0..3 {
+            let mut forged = function.clone();
+            let statement = forged
+                .blocks
+                .iter_mut()
+                .flat_map(|block| &mut block.statements)
+                .find(|statement| {
+                    matches!(
+                        statement.value,
+                        Statement::Assign {
+                            value: Rvalue::LeadingZeros { .. },
+                            ..
+                        }
+                    )
+                })
+                .unwrap();
+            if change == 0 {
+                let Statement::Assign {
+                    value: Rvalue::LeadingZeros { value },
+                    ..
+                } = &mut statement.value
+                else {
+                    unreachable!()
+                };
+                *value = Operand::Copy(place(function.params[1]));
+            } else if change == 1 {
+                let Statement::Assign { value, .. } = &mut statement.value else {
+                    unreachable!()
+                };
+                *value = Rvalue::Use(Operand::Constant(Constant::Int(IntValue {
+                    ty: IntTy::U32,
+                    bits: 0,
+                })));
+            } else {
+                statement.origin = None;
+            }
+            assert!(
+                forged
+                    .validate_provenance(publication.facts(), &budget)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn source_panic_requires_exact_never_even_in_unused_arena_entries() {
         let budget = ir::PlanBudget::default();
         let publication = publish("fn f()->i32{panic!(\"cold\")}fn main(){}", &budget);
@@ -4663,6 +4759,61 @@ mod tests {
             .unwrap();
         (names.freeze().unwrap(), modules)
     }
+    #[test]
+    fn leading_zeros_survives_substitution_and_rejects_generated_replay() {
+        use crate::compiler::{frontend, ownership};
+        let budget = ir::PlanBudget::default();
+        let program =
+            frontend::parse("fn count<T>(unused:T,x:u64)->u32{x.leading_zeros()}fn main(){}")
+                .unwrap();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let source =
+            frontend::type_callable_with_plan(&program, declaration, &plan, &budget).unwrap();
+        let template = ownership::verify_template(
+            lower_template(
+                std::sync::Arc::new(source),
+                plan.callable_facts(declaration).unwrap(),
+                &budget,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let target = ir::CallTarget {
+            declaration,
+            type_args: std::sync::Arc::from([Ty::Int(IntTy::I32)]),
+        };
+        let facts = plan.instance_facts(&target).unwrap();
+        let instance = ir::instantiate_checked(
+            &template,
+            &target.type_args,
+            &facts,
+            &mut plan.clone(),
+            &budget,
+        )
+        .unwrap();
+        instance
+            .validate_with_facts(ir::FactsCtx::from_validated(&facts))
+            .unwrap();
+        let function = lower_with_facts(&instance, &facts, &budget).unwrap();
+        function.validate_provenance(&facts, &budget).unwrap();
+        let mut forged = instance;
+        let operation = forged
+            .exprs
+            .iter_mut()
+            .find(|expression| matches!(expression.kind, ir::ExprKind::LeadingZeros { .. }))
+            .unwrap();
+        operation.kind = ir::ExprKind::Int(IntValue {
+            ty: IntTy::U32,
+            bits: 0,
+        });
+        assert!(
+            forged
+                .validate_with_facts(ir::FactsCtx::from_validated(&facts))
+                .is_err()
+        );
+    }
+
     #[test]
     fn generic_carrier_generated_body_and_lowering_proofs_reject_metadata_replay() {
         use crate::compiler::{frontend, ownership};
@@ -6835,6 +6986,188 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn leading_zeros_validate_actual_operand_and_dead_cfg_rows() {
+        let function = nominal_lowered(&with_root(Ty::Int(IntTy::U32), vec![], vec![]));
+        for ty in [
+            IntTy::I8,
+            IntTy::I16,
+            IntTy::I32,
+            IntTy::I64,
+            IntTy::I128,
+            IntTy::Isize,
+            IntTy::U8,
+            IntTy::U16,
+            IntTy::U32,
+            IntTy::U64,
+            IntTy::U128,
+            IntTy::Usize,
+        ] {
+            assert_eq!(
+                function
+                    .rvalue_ty(&Rvalue::LeadingZeros {
+                        value: Operand::Constant(Constant::Int(IntValue {
+                            ty,
+                            bits: ty.mask()
+                        })),
+                    })
+                    .unwrap(),
+                Ty::Int(IntTy::U32)
+            );
+        }
+        for root in [
+            Ty::Bool,
+            Ty::Char,
+            Ty::Float(ir::FloatTy::F64),
+            Ty::Unit,
+            Ty::Never,
+            Ty::Tuple(std::sync::Arc::from([Ty::Int(IntTy::I32)])),
+            Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: std::sync::Arc::new(Ty::Int(IntTy::I32)),
+            },
+        ] {
+            let mut invalid = nominal_lowered(&with_root(root, vec![], vec![]));
+            let destination = LocalId(invalid.locals.len());
+            invalid.locals.push(ir::LocalDecl {
+                name: "count".into(),
+                ty: Ty::Int(IntTy::U32),
+                mutable: true,
+            });
+            for value in [
+                Operand::Copy(place(LocalId(0))),
+                Operand::Move(place(LocalId(0))),
+            ] {
+                assert!(
+                    invalid
+                        .rvalue_ty(&Rvalue::LeadingZeros {
+                            value: value.clone()
+                        })
+                        .is_err()
+                );
+                // A correct u32 destination must not conceal an invalid operand,
+                // including in a block unreachable from entry.
+                invalid.blocks.push(BasicBlock {
+                    statements: vec![Located {
+                        value: Statement::Assign {
+                            destination: place(destination),
+                            value: Rvalue::LeadingZeros { value },
+                        },
+                        origin: None,
+                    }],
+                    terminator: Located {
+                        value: Terminator::Unreachable,
+                        origin: None,
+                    },
+                });
+                assert!(invalid.validate().unwrap_err().contains("integer source"));
+                invalid.blocks.pop();
+            }
+        }
+        for (destination, value, diagnostic) in [
+            (
+                LocalId(0),
+                Operand::Constant(Constant::Int(IntValue {
+                    ty: IntTy::U8,
+                    bits: 256,
+                })),
+                "noncanonical",
+            ),
+            (
+                function.return_local,
+                Operand::Constant(Constant::Int(IntValue::i32(0))),
+                "assignment type mismatch",
+            ),
+            (
+                LocalId(0),
+                Operand::Copy(place(LocalId(usize::MAX))),
+                "invalid CFG local",
+            ),
+        ] {
+            let mut invalid = function.clone();
+            invalid.blocks.push(BasicBlock {
+                statements: vec![Located {
+                    value: Statement::Assign {
+                        destination: place(destination),
+                        value: Rvalue::LeadingZeros { value },
+                    },
+                    origin: None,
+                }],
+                terminator: Located {
+                    value: Terminator::Unreachable,
+                    origin: None,
+                },
+            });
+            assert!(invalid.validate().unwrap_err().contains(diagnostic));
+        }
+    }
+
+    #[test]
+    fn leading_zeros_lower_once_preserve_origins_and_bound_cycles() {
+        let source = with_root(
+            Ty::Unit,
+            vec![
+                expr(
+                    Ty::Int(IntTy::I64),
+                    ir::ExprKind::Call {
+                        target: test_target(),
+                        name: "once".into(),
+                        args: vec![],
+                        signature: ir::Signature {
+                            ref_contract: Default::default(),
+                            params: vec![],
+                            result: Ty::Int(IntTy::I64),
+                        },
+                    },
+                ),
+                expr(
+                    Ty::Int(IntTy::U32),
+                    ir::ExprKind::LeadingZeros { value: ExprId(0) },
+                ),
+            ],
+            vec![ir::Stmt::Expr(ExprId(1))],
+        );
+        let function = nominal_lowered(&source);
+        assert_eq!(
+            function
+                .blocks
+                .iter()
+                .filter(|block| matches!(&block.terminator.value,
+            Terminator::Call { name, .. } if name == "once"))
+                .count(),
+            1
+        );
+        let operations: Vec<_> = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter(|statement| {
+                matches!(
+                    &statement.value,
+                    Statement::Assign {
+                        value: Rvalue::LeadingZeros { .. },
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].origin, Some(ExprId(1)));
+        assert_storage_paths(&function);
+        assert!(super::super::ownership::analyze(&function).passed());
+        let mut cyclic = source;
+        cyclic.exprs[0] = expr(
+            Ty::Int(IntTy::U32),
+            ir::ExprKind::LeadingZeros { value: ExprId(0) },
+        );
+        cyclic.validate().unwrap();
+        assert!(
+            lower(&cyclic)
+                .unwrap_err()
+                .contains("lowering depth resource")
+        );
     }
 
     #[test]
@@ -9782,6 +10115,7 @@ mod tests {
                                 assert!(live[array.local.0], "dynamic index reads dead array");
                             }
                             Rvalue::Use(value)
+                            | Rvalue::LeadingZeros { value }
                             | Rvalue::IntCast { value, .. }
                             | Rvalue::FloatCast { value, .. }
                             | Rvalue::Unary { value, .. }

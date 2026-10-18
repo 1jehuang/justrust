@@ -1,0 +1,7 @@
+fn c0(x:u64)->bool{let n:u32=x.leading_zeros();n==64u32}
+fn c1(x:u64)->bool{let n:u32=x.leading_zeros();n==63u32}
+fn c2(x:u64)->bool{let n:u32=x.leading_zeros();n==62u32}
+fn c3(x:u64)->bool{let n:u32=x.leading_zeros();n==0u32}
+fn c4(x:u64)->bool{let n:u32=x.leading_zeros();n==1u32}
+fn c5(x:u64)->bool{let n:u32=x.leading_zeros();n==0u32}
+fn main(){if c0(0u64) && c1(1u64) && c2(2u64) && c3(18446744073709551615u64) && c4(4611686018427387904u64) && c5(9223372036854775808u64){println!("ok");}}

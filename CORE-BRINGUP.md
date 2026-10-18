@@ -2,8 +2,11 @@
 
 ## Evidence and source boundary
 
-This is a dependency plan from static source inspection, not executed library
-acceptance. Full Rust remains open in IMPLEMENTATION.md. Inspection used the
+The original inventory below came from static source inspection. It is not whole
+library acceptance. The source-locked identity runtime probe is recorded in
+CORE-IDENTITY.md; the complete unchanged estimator module now has scoped native
+CHECK/BUILD/execution acceptance under LEADING-ZEROS.md. Full Rust remains open
+in IMPLEMENTATION.md. Inspection used the
 separate stable checkout's Rust library sources reporting version 1.101.0.
 This alone does not establish source identity with a local or hosted stock oracle
 toolchain. Record actual oracle version and source revision per run. The inventory
@@ -24,7 +27,11 @@ return the input width, so mant=1 is a critical case. Do not assume LZCNT CPU
 support. A temporary primitive binding plus an authored client only proves this
 module/client combination, not unchanged numeric-provider or core acceptance.
 The original estimator test accepts either the exact expected exponent or one
-less. An invented exact-equality oracle would be incorrect.
+less. An invented exact-equality oracle would be incorrect. LEADING-ZEROS.md now
+records exact-source stock/native differential acceptance of the complete module
+and a multi-mantissa exponent sweep. `libraries/probes/estimator/` retains its
+original bytes and licenses. Primitive method lowering is native and width-aware;
+this does not compile the original numeric macro/intrinsic provider or core root.
 
 A smaller function-only probe is the original attributed const generic
 `core::convert::identity`. Parsing its attributes and const-fn syntax and running

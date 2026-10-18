@@ -1,6 +1,8 @@
 # Integer leading-zero count and original core estimator
 
-Status: contract frozen, implementation and acceptance pending. Full Rust remains open.
+Status: native semantic and exact-source debug/release acceptance passed on
+2026-10-18. Full regression and integrated-worktree validation are recorded below.
+Full Rust remains open.
 
 ## Native semantic slice
 
@@ -49,3 +51,48 @@ malformed-IR/CFG controls. Run focused debug and release gates, full regression,
 strict lint and formatting. Retain failures and successes and separate stable
 stock semantics from bounded legal-unsupported cases. Update this status only
 after actual acceptance passes.
+
+## Acceptance results (2026-10-18)
+
+The stock-first frozen corpus contains 30 exact sources: 20 valid, eight invalid,
+and two legal but unsupported (reference autoderef and UFCS). Both public CLI and
+observed graph entrypoints pass CHECK/BUILD at workers 1 and 8, in debug and
+release bootstrap profiles. Every valid binary's complete output matches stock.
+Each profile covers 224 native check/build cells and 80 executable outputs.
+The primitive cases include all u8/i8 bit patterns, all u128 single-bit positions,
+nested calls, signed widths, nominal methods, once-only effects and divergence.
+
+The original estimator provider is byte-identical, SHA256
+`2d109735cfff1317afd02e093012ee4d4c3b5bf39431da45f6afe99002b0f9b5`.
+Its client checks nine fixed cases and 14,693 mantissa/exponent sweep cases per
+execution against a separate integer oracle and exact stock output. It is an
+external source module, not a prebuilt core artifact.
+
+Validation receipts are retained in
+`data/runs/xps14/2026-10-18-leading-zeros.jsonl`:
+
+- Debug exact-source corpus: `20261018-025509828-485800`.
+- Release exact-source corpus: `20261018-025519407-488098`.
+- Release internal controls: 24 passed, `20261018-025543486-490981`.
+- Full isolated regression: 3,204 passed, `20261018-025621281-492123`.
+- Integrated worktree hosted check: `20261018-025706102-516719`.
+- Integrated hosted library tests: 1,316 passed, `20261018-025715568-514599`.
+- Integrated native acceptance and pending character-cast controls: 11 passed,
+  `20261018-025820398-614301`.
+- Strict integrated all-target Clippy: `20261018-025849142-614225`.
+- `cargo fmt --check` and `git diff --check` passed.
+
+The hosted exact-source test initially failed because `/usr/bin/rustc` was not
+available there (`20261018-025323196-474305`), so stock-oracle/native-process tests
+ran locally. Hosted check, library tests and lint still passed. Local acceptance
+exposed a divergent block receiver inference gap (`20261018-025346734-475970`),
+then an over-broad negative-test diagnostic exclusion
+(`20261018-025437198-482227`). Both were fixed and rerun. Initial Clippy rejected
+an err/expect test idiom (`20261018-025354931-477116`), also fixed. These failed
+receipts remain alongside success records.
+
+The public immutable publication seal rejects same-expression-ID payload edits,
+including receiver swaps. Helper replay checks metadata and graph consistency,
+but does not independently reconstruct every typed expression from the AST.
+No full-Rust percentage, compiler speedup, optimization quality, whole-core,
+CTFE or general Cargo-project compatibility claim follows from these tests.

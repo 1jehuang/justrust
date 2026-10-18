@@ -4011,6 +4011,7 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
     match value {
         Rvalue::Borrow(id) => visit(&f.loan_sites[id.0].place, false),
         Rvalue::Use(op)
+        | Rvalue::LeadingZeros { value: op }
         | Rvalue::Unary { value: op, .. }
         | Rvalue::Repeat { value: op, .. }
         | Rvalue::ArrayToSlice { reference: op }
