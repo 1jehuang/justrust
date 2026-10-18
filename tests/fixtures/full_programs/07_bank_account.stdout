@@ -1,0 +1,6 @@
+transfer 30: true
+transfer 500: false
+alice: 70
+bob: 50
+alice history: [100, -30]
+bob transactions: 2

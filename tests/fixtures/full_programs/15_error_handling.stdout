@@ -1,0 +1,11 @@
+"123" -> 123
+"" -> error: empty input
+"12a" -> error: bad digit 'a'
+"99999999999" -> error: overflow
+"4294967295" -> 4294967295
+Ok(6)
+Err("bad digit 'x'")
+Some(30)
+None
+fallback = 7
+doubled = [10, 12]

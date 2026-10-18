@@ -1,0 +1,11 @@
+words: 9
+lengths: [3, 5, 5, 3, 5, 4, 3, 4, 3]
+upper: THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG
+reversed: god yzal eht revo spmuj xof nworb kciuq ehT
+caesar: Wkh txlfn eurzq ira mxpsv ryhu wkh odcb grj
+roundtrip ok: true
+"A man, a plan, a canal: Panama" palindrome: true
+"hello" palindrome: false
+"racecar" palindrome: true
+vowels: 11
+The-quick-brown-fox-jumps-over-the-lazy-dog

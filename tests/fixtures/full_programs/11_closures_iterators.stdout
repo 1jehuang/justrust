@@ -1,0 +1,12 @@
+evens: [2, 4, 6, 8, 10]
+squares: [1, 4, 9, 16, 25, 36, 49, 64, 81, 100]
+sum = 55, product = 3628800
+apply add5 to 10: 15
+compose(3) = 7
+counter = 3
+max = 10
+position of 7: Some(6)
+any > 9: true, all > 0: true
+pairs: [(1, 'a'), (2, 'b'), (3, 'c')]
+chunk sums: [6, 15, 24, 10]
+taken: [8, 5, 2]

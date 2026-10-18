@@ -1,0 +1,6 @@
+Cons(1, Cons(2, Cons(3, Nil)))
+sum = 6, len = 3
+list: [50, 40, 30, 20, 10] (size 5)
+reversed: [10, 20, 30, 40, 50]
+popped: Some(10)
+after pop: [20, 30, 40, 50] (size 4)

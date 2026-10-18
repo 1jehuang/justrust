@@ -1,0 +1,36 @@
+# Full-program target corpus manifest (see FULL-PROGRAMS.md).
+# Oracle: rustc 1.98.1 (48a229cea 2026-09-01), --edition 2024 -C panic=abort.
+# Every <name>.rs is accepted by stock rustc without warnings, exits 0, and
+# prints exactly <name>.stdout (verify: scripts/full_programs_oracle.sh).
+#
+# Columns (tab separated): name, expect, needs
+#   expect = pass : native check+build must succeed and the executable must
+#                   print exactly <name>.stdout and exit 0 (ratchet, never
+#                   flip back to fail).
+#   expect = fail : native compiler must reject with an explicit diagnostic.
+#                   Building and printing wrong output is a miscompile and
+#                   fails the test. Unexpectedly passing also fails the test:
+#                   flip the line to `pass` in the same commit.
+#   needs  = comma-separated feature tags (FULL-PROGRAMS.md glossary) the
+#            program requires beyond the already-supported core. Keep this
+#            accurate when a feature lands: delete the tag from every line.
+01_hello	fail	fmt-display,str
+02_fizzbuzz	fail	fmt-display,str,string,for
+03_collatz	fail	fmt-display,for
+04_primes_sieve	fail	fmt-display,for,vec,iter,match-ergonomics
+05_gcd_fib	fail	fmt-display,for,array-iter
+06_matrix	fail	fmt-display,for,const,autoderef,vec,iter,closure,string
+07_bank_account	fail	fmt-display,fmt-debug,str,string,vec
+08_enum_state_machine	fail	fmt-display,fmt-debug,derive,for,iter,match-ergonomics
+09_vec_stack	fail	fmt-display,fmt-debug,str,vec,option-result,for,iter,or-pat,char-pat,array-iter
+10_string_processing	fail	fmt-display,fmt-debug,str,string,for,vec,iter,closure,prim-methods,byte-lit,array-iter
+11_closures_iterators	fail	fmt-display,fmt-debug,vec,iter,closure,fn-traits,impl-trait,prim-methods,prim-consts,option-result,slice,ref-ops
+12_linked_list	fail	fmt-display,fmt-debug,derive,for,vec,closure,box,option-result,match-ergonomics,ref-ops
+13_trait_objects	fail	fmt-display,fmt-spec,fmt-float,str,string,for,vec,iter,closure,dyn,unsize,box,format-macro,prim-methods,option-result,slice,autoderef
+14_generic_container	fail	fmt-display,fmt-debug,str,string,for,vec,iter,closure,derive,std-paths,generic-bounds,impl-trait,format-macro,option-result,slice,array-iter
+15_error_handling	fail	fmt-display,fmt-debug,str,string,for,iter,closure,derive,std-paths,user-fmt,option-result,try,prim-methods,slice,array-iter,match-ergonomics,autoderef
+16_sorting	fail	fmt-display,fmt-debug,fmt-float,str,for,vec,iter,closure,generic-bounds,prim-methods,slice
+17_hashmap_word_count	fail	fmt-display,fmt-debug,str,string,for,vec,iter,closure,std-paths,hashmap,option-result
+18_tokenizer_calculator	fail	fmt-display,fmt-debug,fmt-float,str,string,vec,iter,closure,derive,format-macro,option-result,try,or-pat,char-pat,prim-methods,match-ergonomics,slice
+19_operator_overloading	fail	fmt-display,fmt-debug,for,vec,iter,closure,derive,std-paths,user-fmt,ops-traits,prim-methods
+20_inventory_system	fail	fmt-display,fmt-debug,fmt-spec,str,string,for,vec,iter,closure,derive,std-paths,user-fmt,hashmap,rc-refcell,dyn,unsize,format-macro,option-result,try,match-ergonomics,slice,array-iter

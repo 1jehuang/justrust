@@ -1,0 +1,8 @@
+largest of Pair { a: 3, b: 9 } is 9
+swapped: Pair { a: 9, b: 3 }, equal: false
+summary: (x, y)
+largest int: 42
+largest char: z
+0 < 1 < 2 < 3 < 4 < 5 < 9
+contains 4: true, contains 7: false
+apple < fig < pear

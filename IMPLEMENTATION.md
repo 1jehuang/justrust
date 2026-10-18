@@ -726,6 +726,10 @@ and measured integration throughput after each accepted slice.
 
 ## Active work and evidence limits
 
+Full-program target corpus (FULL-PROGRAMS.md, `tests/full_programs.rs`): 20
+realistic std-only programs with stock oracle stdout and a pass/fail ratchet
+manifest. Currently 0/20 pass. FULL-PROGRAMS.md ranks the blocking features.
+
 The source-type-alias checkpoint passes all 1,649 hosted tests in 86 binaries
 (`20261017-043356389-4183342`), all-target checking
 (`20261017-043354163-4183206`), strict all-target lint

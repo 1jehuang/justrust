@@ -1,0 +1,9 @@
+Red --Timer--> Green
+Green --Timer--> Yellow
+Yellow --Emergency--> Red
+Red --Timer--> Green
+Green --Timer--> Yellow
+Yellow --Timer--> Red
+Red --Reset--> Red
+total time: 150
+ended red: true

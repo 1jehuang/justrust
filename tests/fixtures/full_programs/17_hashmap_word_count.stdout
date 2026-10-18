@@ -1,0 +1,10 @@
+the: 3
+cat: 2
+mat: 1
+on: 1
+ran: 1
+sat: 1
+len 2: ["on"]
+len 3: ["the", "cat", "sat", "mat", "ran"]
+blue = 10
+has blue: false, len: 1

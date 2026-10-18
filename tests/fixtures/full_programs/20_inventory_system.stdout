@@ -1,0 +1,16 @@
+error: item 1 already exists
+error: item 3: have 500, want 1000
+error: item 9 not found
+revenue: $66.45
+Tool: $38.97
+Food: $31.50
+Part: $60.00
+out of stock: ["wrench"]
+log has 7 entries (rc count 2)
+  added hammer x5
+  added apple x100
+  added bolt x500
+  added wrench x3
+  took hammer x2 for 2598
+  took apple x30 for 1350
+  took wrench x3 for 2697
