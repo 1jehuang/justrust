@@ -11524,3 +11524,22 @@ tests `20261018-015955324-327462` pass. Bootstrap
 `20261018-015802650-322591` failed because an absolute snapshot manifest was not
 mirrored from the original cwd; rerunning inside the snapshot fixed it. All five
 exported receipts are in `data/runs/xps14/2026-10-18-real-program-benchmark.jsonl`.
+
+## 2026-10-18: graph integrity gates (324fd8bd9)
+
+Added `tests/graph_integrity.rs` and `GRAPH-INTEGRITY.md` to stop compiler
+state and phase barriers from living outside the graph. Measured on the
+baseline: leaf closure growth from 16 to 32 functions is 1.481, planning work
+growth is 3.807 (linear is about 2.0), and 100 flat functions fail at the
+shared 32M work budget (`cfg.rs:1146`, analyze[main]). These are recorded as
+shrink-only ratchets. Each gate failed as intended on an injected static
+`Mutex`, a new parameterless join node, and a per-object loop over every body.
+Validation on the pushed head: graph_integrity passed on hosted
+(`justrust test --test graph_integrity`, 5/5). Full local suite passed 3,224
+tests in 168 binaries. All-target strict clippy and `cargo fmt --check` passed.
+The gates also passed with the main checkout's uncommitted char-cast work
+applied. One hosted full-suite run failed 4 `assertions` tests with a spawn
+error at `tests/assertions.rs:902`. They pass locally, and my commit touches
+no source. A parent-commit hosted comparison was blocked because build.jcode.sh
+stopped responding (sync not acknowledged, then a connection timeout), so the
+hosted spawn failure is unconfirmed rather than ruled out.
