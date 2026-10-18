@@ -25,6 +25,8 @@ enum Native {
     Live,
     Unsupported,
     Invalid,
+    // Partition slot retained after range_pattern became Live; no frozen case uses it now.
+    #[allow(dead_code)]
     Syntax,
 }
 struct Case {
