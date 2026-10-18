@@ -391,6 +391,8 @@ pub(super) const COUNT_EVAL_WORK: usize = 1_000_000;
 #[derive(Clone, Copy, Debug)]
 pub(super) enum CountValue {
     Known(ir::IntValue),
+    // Keep scalar provenance across cast chains without admitting char arithmetic.
+    Char(u32),
     Dynamic,
     Unsupported,
 }
@@ -471,6 +473,14 @@ impl<'a> CountEvaluator<'a> {
                         self.memo[id.0] = CountMemo::Done(CountValue::Known(*value));
                         continue;
                     }
+                    ir::ExprKind::Char(value) => {
+                        value.validate()?;
+                        if expr.ty != ir::Ty::Char {
+                            return Err("shift count character type mismatch".into());
+                        }
+                        self.memo[id.0] = CountMemo::Done(CountValue::Char(value.value));
+                        continue;
+                    }
                     ir::ExprKind::Local(_)
                     | ir::ExprKind::Call { .. }
                     | ir::ExprKind::Index { .. }
@@ -481,8 +491,10 @@ impl<'a> CountEvaluator<'a> {
                         continue;
                     }
                     ir::ExprKind::Unary { value, .. }
+                    | ir::ExprKind::IntCast { value, .. }
                     | ir::ExprKind::LeadingZeros { value }
-                    | ir::ExprKind::IntCast { value, .. } => [Some(*value), None],
+                    | ir::ExprKind::CharToInt { value, .. }
+                    | ir::ExprKind::U8ToChar { value } => [Some(*value), None],
                     ir::ExprKind::Binary { left, right, .. } => [Some(*left), Some(*right)],
                     ir::ExprKind::Block(block) if block.statements.is_empty() => [block.tail, None],
                     ir::ExprKind::Block(_) => {
@@ -519,6 +531,25 @@ impl<'a> CountEvaluator<'a> {
                         ty: *to,
                         bits: count_cast(value, *to),
                     }),
+                    other => other,
+                },
+                ir::ExprKind::CharToInt { value, to } => match self.value(*value)? {
+                    CountValue::Char(value) => CountValue::Known(ir::IntValue {
+                        ty: *to,
+                        bits: u128::from(value) & to.mask(),
+                    }),
+                    CountValue::Known(_) => {
+                        return Err("noncharacter character cast operand".into());
+                    }
+                    other => other,
+                },
+                ir::ExprKind::U8ToChar { value } => match self.value(*value)? {
+                    CountValue::Known(value) if value.ty == ir::IntTy::U8 => {
+                        CountValue::Char(value.bits as u32)
+                    }
+                    CountValue::Known(_) | CountValue::Char(_) => {
+                        return Err("non-u8 character cast operand".into());
+                    }
                     other => other,
                 },
                 ir::ExprKind::Unary { op, value } => match self.value(*value)? {
@@ -569,13 +600,18 @@ impl<'a> CountEvaluator<'a> {
             {
                 return Err("shift count result type mismatch".into());
             }
+            if matches!(result, CountValue::Char(_)) && expr.ty != ir::Ty::Char {
+                return Err("shift count character result type mismatch".into());
+            }
             let height = match &expr.kind {
                 ir::ExprKind::Block(block) => {
                     block.tail.map(|id| self.heights[id.0] + 1).unwrap_or(0)
                 }
                 ir::ExprKind::IntCast { value, .. }
+                | ir::ExprKind::Unary { value, .. }
                 | ir::ExprKind::LeadingZeros { value }
-                | ir::ExprKind::Unary { value, .. } => self.heights[value.0] + 1,
+                | ir::ExprKind::CharToInt { value, .. }
+                | ir::ExprKind::U8ToChar { value } => self.heights[value.0] + 1,
                 ir::ExprKind::Binary { left, right, .. } => {
                     self.heights[left.0].max(self.heights[right.0]) + 1
                 }
@@ -721,7 +757,7 @@ pub(super) fn validate_shift_counts(
                 count_shift_amount(value, ty)?;
             }
             CountValue::Dynamic => {}
-            CountValue::Unsupported => {
+            CountValue::Unsupported | CountValue::Char(_) => {
                 return Err("unsupported static-shaped compound shift count expression".into());
             }
         }
@@ -742,7 +778,7 @@ pub(super) fn validate_shift_counts(
                     count_shift_amount(value, lhs)?;
                 }
                 CountValue::Dynamic => {}
-                CountValue::Unsupported => {
+                CountValue::Unsupported | CountValue::Char(_) => {
                     return Err("unsupported static-shaped shift count expression".into());
                 }
             }
@@ -6034,18 +6070,31 @@ impl<'a> Checker<'a> {
         target: &Type,
     ) -> Result<ir::ExprId, String> {
         let target = checked_local_ty(target, self.signatures)?;
-        let numeric = ir::NumTy::of(&target).ok_or("unsupported cast target")?;
-        let value = match numeric {
-            ir::NumTy::Int(to) => {
-                self.expr_with_expectation(value, Expectation::CastableToInt(to))?
-            }
-            ir::NumTy::Float(_) => self.expr(value)?,
+        // A char target must not infer an unsuffixed integer operand as u8.
+        // Preserve its independently inferred source type before checking the pair.
+        let value = match target {
+            ir::Ty::Int(to) => self.expr_with_expectation(value, Expectation::CastableToInt(to))?,
+            ir::Ty::Float(_) | ir::Ty::Char => self.expr(value)?,
+            _ => return Err("unsupported cast target".into()),
         };
         let source = self.flow(value);
-        let from = ir::NumTy::of(&source.ty).ok_or("unsupported cast source")?;
-        let kind = match (from, numeric) {
-            (ir::NumTy::Int(_), ir::NumTy::Int(to)) => ir::ExprKind::IntCast { value, to },
-            _ => ir::ExprKind::FloatCast { value, to: numeric },
+        let kind = match (&source.ty, &target) {
+            (ir::Ty::Char, ir::Ty::Int(to)) => ir::ExprKind::CharToInt { value, to: *to },
+            (ir::Ty::Int(ir::IntTy::U8), ir::Ty::Char) => ir::ExprKind::U8ToChar { value },
+            (_, ir::Ty::Char) => {
+                return Err("unsupported cast to char: source must be u8".into());
+            }
+            (ir::Ty::Char, _) => {
+                return Err("unsupported cast from char: target must be an integer".into());
+            }
+            _ => {
+                let from = ir::NumTy::of(&source.ty).ok_or("unsupported cast source")?;
+                let numeric = ir::NumTy::of(&target).ok_or("unsupported cast target")?;
+                match (from, numeric) {
+                    (ir::NumTy::Int(_), ir::NumTy::Int(to)) => ir::ExprKind::IntCast { value, to },
+                    _ => ir::ExprKind::FloatCast { value, to: numeric },
+                }
+            }
         };
         let id = ir::ExprId(self.exprs.len());
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;

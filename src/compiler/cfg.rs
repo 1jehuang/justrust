@@ -293,6 +293,8 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
         (Rvalue::Use(a), Rvalue::Use(b))
         | (Rvalue::ArrayToSlice { reference: a }, Rvalue::ArrayToSlice { reference: b })
         | (Rvalue::SliceLen { slice: a }, Rvalue::SliceLen { slice: b })
+        | (Rvalue::CharToInt { value: a, .. }, Rvalue::CharToInt { value: b, .. })
+        | (Rvalue::U8ToChar { value: a }, Rvalue::U8ToChar { value: b })
         | (Rvalue::LeadingZeros { value: a }, Rvalue::LeadingZeros { value: b })
         | (Rvalue::IntCast { value: a, .. }, Rvalue::IntCast { value: b, .. })
         | (Rvalue::FloatCast { value: a, .. }, Rvalue::FloatCast { value: b, .. })
@@ -445,6 +447,13 @@ pub enum Operand {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rvalue {
+    CharToInt {
+        value: Operand,
+        to: IntTy,
+    },
+    U8ToChar {
+        value: Operand,
+    },
     /// Count leading zero bits in an integer operand, producing u32.
     LeadingZeros {
         value: Operand,
@@ -552,6 +561,8 @@ impl Rvalue {
     ) -> Result<(), String> {
         match self {
             Self::Use(value)
+            | Self::CharToInt { value, .. }
+            | Self::U8ToChar { value }
             | Self::LeadingZeros { value }
             | Self::IntCast { value, .. }
             | Self::FloatCast { value, .. }
@@ -1558,6 +1569,8 @@ impl Function {
                         path(destination, budget)?;
                         match value {
                             Rvalue::Use(value)
+                            | Rvalue::CharToInt { value, .. }
+                            | Rvalue::U8ToChar { value }
                             | Rvalue::LeadingZeros { value }
                             | Rvalue::IntCast { value, .. }
                             | Rvalue::FloatCast { value, .. }
@@ -1856,6 +1869,18 @@ impl Function {
     }
     fn rvalue_ty_with_facts(&self, value: &Rvalue, facts: ir::FactsCtx<'_>) -> Result<Ty, String> {
         match value {
+            Rvalue::CharToInt { value, to } => {
+                if self.operand_ty_with_facts(value, facts)? != Ty::Char {
+                    return Err("CFG character cast requires char source".into());
+                }
+                Ok(Ty::Int(*to))
+            }
+            Rvalue::U8ToChar { value } => {
+                if self.operand_ty_with_facts(value, facts)? != Ty::Int(IntTy::U8) {
+                    return Err("CFG character cast requires u8 source".into());
+                }
+                Ok(Ty::Char)
+            }
             Rvalue::LeadingZeros { value } => {
                 if !matches!(self.operand_ty_with_facts(value, facts)?, Ty::Int(_)) {
                     return Err("CFG leading zeros requires integer source".into());
@@ -3335,6 +3360,12 @@ impl Lowerer<'_> {
         // Keep long admitted cast chains out of the large aggregate/control
         // lowering frame. The same depth/work guard still covers every cast.
         let result = match self.source.exprs.get(id.0).map(|expr| &expr.kind) {
+            Some(ir::ExprKind::CharToInt { value, to }) => {
+                self.materialize_cast(id, *value, |value| Rvalue::CharToInt { value, to: *to })
+            }
+            Some(ir::ExprKind::U8ToChar { value }) => {
+                self.materialize_cast(id, *value, |value| Rvalue::U8ToChar { value })
+            }
             Some(ir::ExprKind::LeadingZeros { value }) => {
                 self.materialize_cast(id, *value, |value| Rvalue::LeadingZeros { value })
             }
@@ -3406,6 +3437,18 @@ impl Lowerer<'_> {
                     Rvalue::SliceIndex { slice, index },
                     origin,
                 );
+            }
+            ir::ExprKind::CharToInt { value, to } => {
+                let value = self.expression(*value)?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::CharToInt { value, to: *to },
+                    origin,
+                );
+            }
+            ir::ExprKind::U8ToChar { value } => {
+                let value = self.expression(*value)?;
+                self.assign(destination.clone(), Rvalue::U8ToChar { value }, origin);
             }
             ir::ExprKind::LeadingZeros { value } => {
                 let value = self.expression(*value)?;
@@ -7113,6 +7156,231 @@ mod tests {
     }
 
     #[test]
+    fn character_cast_domains_validate_all_operands_even_in_dead_blocks() {
+        let function = nominal_lowered(&with_root(Ty::Unit, vec![], vec![]));
+        let types = [
+            IntTy::I8,
+            IntTy::I16,
+            IntTy::I32,
+            IntTy::I64,
+            IntTy::I128,
+            IntTy::Isize,
+            IntTy::U8,
+            IntTy::U16,
+            IntTy::U32,
+            IntTy::U64,
+            IntTy::U128,
+            IntTy::Usize,
+        ];
+        for to in types {
+            assert_eq!(
+                function
+                    .rvalue_ty(&Rvalue::CharToInt {
+                        value: Operand::Constant(Constant::Char(ir::CharValue { value: 0x10ffff })),
+                        to,
+                    })
+                    .unwrap(),
+                Ty::Int(to)
+            );
+        }
+        for value in 0..=255 {
+            assert_eq!(
+                function
+                    .rvalue_ty(&Rvalue::U8ToChar {
+                        value: Operand::Constant(Constant::Int(IntValue {
+                            ty: IntTy::U8,
+                            bits: value
+                        })),
+                    })
+                    .unwrap(),
+                Ty::Char
+            );
+        }
+        for source in types.into_iter().map(Ty::Int).chain([
+            Ty::Char,
+            Ty::Bool,
+            Ty::Unit,
+            Ty::Never,
+            Ty::Float(ir::FloatTy::F32),
+            Ty::Float(ir::FloatTy::F64),
+            Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: std::sync::Arc::new(Ty::Char),
+            },
+        ]) {
+            let function = nominal_lowered(&with_root(source.clone(), vec![], vec![]));
+            let operand = Operand::Copy(place(LocalId(0)));
+            assert_eq!(
+                function
+                    .rvalue_ty(&Rvalue::CharToInt {
+                        value: operand.clone(),
+                        to: IntTy::U8,
+                    })
+                    .is_ok(),
+                source == Ty::Char
+            );
+            assert_eq!(
+                function
+                    .rvalue_ty(&Rvalue::U8ToChar { value: operand })
+                    .is_ok(),
+                source == Ty::Int(IntTy::U8)
+            );
+        }
+        let invalid = [
+            (
+                Ty::Char,
+                Rvalue::U8ToChar {
+                    value: Operand::Constant(Constant::Int(IntValue {
+                        ty: IntTy::U8,
+                        bits: 256,
+                    })),
+                },
+            ),
+            (
+                Ty::Int(IntTy::U8),
+                Rvalue::CharToInt {
+                    value: Operand::Constant(Constant::Char(ir::CharValue { value: 0xd800 })),
+                    to: IntTy::U8,
+                },
+            ),
+            (
+                Ty::Int(IntTy::U8),
+                Rvalue::CharToInt {
+                    value: Operand::Constant(Constant::Char(ir::CharValue { value: 0x110000 })),
+                    to: IntTy::U8,
+                },
+            ),
+            (
+                Ty::Char,
+                Rvalue::CharToInt {
+                    value: Operand::Constant(Constant::Char(ir::CharValue { value: 65 })),
+                    to: IntTy::U8,
+                },
+            ),
+            (
+                Ty::Int(IntTy::U8),
+                Rvalue::U8ToChar {
+                    value: Operand::Constant(Constant::Int(IntValue {
+                        ty: IntTy::U8,
+                        bits: 65,
+                    })),
+                },
+            ),
+        ];
+        for (destination, value) in invalid {
+            let mut function = nominal_lowered(&with_root(destination, vec![], vec![]));
+            function.blocks.push(BasicBlock {
+                statements: vec![Located {
+                    value: Statement::Assign {
+                        destination: place(LocalId(0)),
+                        value,
+                    },
+                    origin: None,
+                }],
+                terminator: Located {
+                    value: Terminator::Unreachable,
+                    origin: None,
+                },
+            });
+            assert!(function.validate().is_err());
+            let analysis = super::super::ownership::analyze(&function);
+            assert!(analysis.complete);
+            assert!(!analysis.passed());
+        }
+    }
+
+    #[test]
+    fn character_cast_lowering_is_once_only_and_keeps_existing_depth_limit() {
+        for (from, to, cast) in [
+            (
+                Ty::Char,
+                Ty::Int(IntTy::U8),
+                ir::ExprKind::CharToInt {
+                    value: ExprId(0),
+                    to: IntTy::U8,
+                },
+            ),
+            (
+                Ty::Int(IntTy::U8),
+                Ty::Char,
+                ir::ExprKind::U8ToChar { value: ExprId(0) },
+            ),
+        ] {
+            let source = with_root(
+                Ty::Unit,
+                vec![
+                    expr(
+                        from.clone(),
+                        ir::ExprKind::Call {
+                            target: test_target(),
+                            name: "once".into(),
+                            args: vec![],
+                            signature: ir::Signature {
+                                ref_contract: Default::default(),
+                                params: vec![],
+                                result: from,
+                            },
+                        },
+                    ),
+                    expr(to, cast),
+                ],
+                vec![ir::Stmt::Expr(ExprId(1))],
+            );
+            let lowered = nominal_lowered(&source);
+            assert_eq!(lowered.blocks.iter().filter(|block| matches!(&block.terminator.value, Terminator::Call { name, .. } if name == "once")).count(), 1);
+            assert_eq!(
+                lowered
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.statements)
+                    .filter(|statement| matches!(
+                        statement.value,
+                        Statement::Assign {
+                            value: Rvalue::CharToInt { .. } | Rvalue::U8ToChar { .. },
+                            ..
+                        }
+                    ))
+                    .count(),
+                1
+            );
+            assert_storage_paths(&lowered);
+            assert!(super::super::ownership::analyze(&lowered).passed());
+        }
+        let mut chain = vec![expr(
+            Ty::Char,
+            ir::ExprKind::Char(ir::CharValue { value: 255 }),
+        )];
+        for index in 0..120 {
+            chain.push(if index % 2 == 0 {
+                expr(
+                    Ty::Int(IntTy::U8),
+                    ir::ExprKind::CharToInt {
+                        value: ExprId(index),
+                        to: IntTy::U8,
+                    },
+                )
+            } else {
+                expr(
+                    Ty::Char,
+                    ir::ExprKind::U8ToChar {
+                        value: ExprId(index),
+                    },
+                )
+            });
+        }
+        let mut source = with_root(Ty::Unit, chain, vec![ir::Stmt::Expr(ExprId(120))]);
+        assert!(super::super::ownership::analyze(&nominal_lowered(&source)).passed());
+        // A cyclic pair has valid endpoints but cannot evade bounded lowering.
+        source.exprs[0].kind = ir::ExprKind::U8ToChar { value: ExprId(1) };
+        source.validate().unwrap();
+        assert!(
+            lower(&source)
+                .unwrap_err()
+                .contains("lowering depth resource")
+        );
+    }
+
+    #[test]
     fn leading_zeros_validate_actual_operand_and_dead_cfg_rows() {
         let function = nominal_lowered(&with_root(Ty::Int(IntTy::U32), vec![], vec![]));
         for ty in [
@@ -10241,6 +10509,8 @@ mod tests {
                                 assert!(live[array.local.0], "dynamic index reads dead array");
                             }
                             Rvalue::Use(value)
+                            | Rvalue::CharToInt { value, .. }
+                            | Rvalue::U8ToChar { value }
                             | Rvalue::LeadingZeros { value }
                             | Rvalue::IntCast { value, .. }
                             | Rvalue::FloatCast { value, .. }
