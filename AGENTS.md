@@ -25,6 +25,17 @@ are historical/reference material unless explicitly adopted for the new engine.
 Preserve licensing and attribution. No compiler compatibility or speed claims
 follow from synthetic graph fixtures.
 
+### Hard rule: nothing outside the graph (GRAPH-INTEGRITY.md)
+
+The compiler is the graph. Every compiler fact is a typed graph output read
+through engine handles. No side-slot results, shared mutable state, global
+locks or budgets, lazy statics, or whole-program joins in compiler code. This
+is mandatory, not a design preference. `tests/graph_integrity.rs` enforces it
+with ratchets that may only shrink. Never raise a recorded baseline, add a
+whole-program node kind, or loosen a ceiling without explicit user approval.
+Every feature milestone must also pass these gates; correctness against stock
+rustc alone is not sufficient.
+
 justrust is Rust compile as a service for coding agents. Every change should make
 the agent edit, check, and test loop faster or more informative, and be
 backed by measurements.

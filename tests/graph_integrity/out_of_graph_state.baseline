@@ -1,0 +1,31 @@
+# Out-of-graph state debt: shared mutable state, global locks, lazy statics and
+# process-global counters in compiler code. Format: COUNT PRIMITIVE PATH.
+# These numbers may only go down. Raising one, or adding a line, requires
+# explicit user approval. See GRAPH-INTEGRITY.md. Shrink after removing debt:
+# GRAPH_INTEGRITY_SHRINK=1 justrust test --test graph_integrity
+8 Mutex src/compiler/expansion_budget.rs
+4 Mutex src/compiler/frontend.rs
+4 Atomic src/compiler/ir.rs
+3 Mutex src/compiler/ir.rs
+1 static src/compiler/ir.rs
+3 Atomic src/compiler/macro_cursor.rs
+1 static src/compiler/macro_cursor.rs
+2 Mutex src/compiler/mod.rs
+42 OnceLock src/compiler/mod.rs
+3 Atomic src/compiler/module_identity.rs
+1 static src/compiler/module_identity.rs
+3 Atomic src/compiler/semantic_scope.rs
+1 static src/compiler/semantic_scope.rs
+3 Atomic src/compiler/source_item_macro.rs
+1 static src/compiler/source_item_macro.rs
+3 Atomic src/compiler/source_lex.rs
+3 OnceLock src/compiler/source_lex.rs
+1 static src/compiler/source_lex.rs
+3 Atomic src/compiler/source_macro.rs
+1 static src/compiler/source_macro.rs
+6 Atomic src/compiler/token_session.rs
+2 static src/compiler/token_session.rs
+3 Atomic src/compiler/token_tree.rs
+1 static src/compiler/token_tree.rs
+5 Mutex src/compiler/traits.rs
+2 Mutex src/compiler/traits/equality.rs
