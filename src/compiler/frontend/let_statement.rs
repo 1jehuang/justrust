@@ -4,7 +4,10 @@ impl<'input> Parser<'input, '_> {
     /// Keep the substantial declaration temporaries off the recursive block frame.
     #[inline(never)]
     pub(super) fn let_statement(&mut self) -> Result<Stmt, ParseError> {
-        let pattern = self.pattern()?;
+        let pattern = self.pattern_no_alternatives()?;
+        if self.is("|") {
+            return Err(self.error("top-level or-patterns are not allowed in let bindings; wrap the pattern in parentheses"));
+        }
         let annotation = if self.eat(":") {
             Some(self.ty()?)
         } else {

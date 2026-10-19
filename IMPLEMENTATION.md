@@ -339,6 +339,8 @@ missing-file changes invalidate only justified consumers without stale lookup.
       Assignment/compound-assignment expressions now produce unit in match arms,
       parentheses and other expression positions, reusing ordinary checked place
       operations for fields and indexed targets (`tests/assignment_expressions.rs`).
+      Unparenthesized top-level or-patterns in let/let-else bindings are syntax
+      errors; parenthesized patterns retain ordinary checking.
 - [ ] Extend bidirectional/local inference, coercion sites, partial type holes,
       omitted method arguments and control-flow joins, preserving rigid universal
       parameters and diagnostics for unresolved constraints.
