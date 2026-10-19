@@ -10,13 +10,13 @@
 //! versions and can serve as a cache key component. Bump `ENCODING_VERSION`
 //! whenever the encoding or IR semantics change.
 use super::{
-    BinOp, Block, BlockData, CmpOp, Function, Inst, InstKind, Overflow, PanicKind, Terminator, Ty,
-    UnOp, Value,
+    BinOp, BlockData, CmpOp, Inst, InstKind, Overflow, PanicKind, SsaBlock, SsaFunction,
+    SsaTerminator, SsaTy, SsaValue, UnOp,
 };
 
-pub const ENCODING_VERSION: u32 = 1;
+pub const ENCODING_VERSION: u32 = 2;
 
-pub fn canonical(function: &Function) -> Function {
+pub fn canonical(function: &SsaFunction) -> SsaFunction {
     let order = function.reverse_postorder();
     let mut block_map = vec![u32::MAX; function.blocks.len()];
     for (index, block) in order.iter().enumerate() {
@@ -35,14 +35,15 @@ pub fn canonical(function: &Function) -> Function {
             next += 1;
         }
     }
-    let value = |value: Value| Value(value_map.get(value.0 as usize).copied().unwrap_or(u32::MAX));
+    let value =
+        |value: SsaValue| SsaValue(value_map.get(value.0 as usize).copied().unwrap_or(u32::MAX));
     let blocks = order
         .iter()
         .map(|block| {
             let data = &function.blocks[block.0 as usize];
             let mut term = data.term.clone();
             for target in term.targets_mut() {
-                target.block = Block(block_map[target.block.0 as usize]);
+                target.block = SsaBlock(block_map[target.block.0 as usize]);
             }
             for operand in term.operands_mut() {
                 *operand = value(*operand);
@@ -71,10 +72,11 @@ pub fn canonical(function: &Function) -> Function {
             }
         })
         .collect();
-    Function {
+    SsaFunction {
         params: function.params.clone(),
         ret: function.ret,
         blocks,
+        panics: function.panics.clone(),
     }
 }
 
@@ -110,11 +112,11 @@ impl Fnv {
     }
 }
 
-fn ty(h: &mut Fnv, ty: Ty) {
+fn ty(h: &mut Fnv, ty: SsaTy) {
     match ty {
-        Ty::Unit => h.u8(0),
-        Ty::Bool => h.u8(1),
-        Ty::Int(int) => {
+        SsaTy::Unit => h.u8(0),
+        SsaTy::Bool => h.u8(1),
+        SsaTy::Int(int) => {
             h.u8(2);
             h.u8(int.bits());
             h.u8(u8::from(int.signed()));
@@ -122,7 +124,7 @@ fn ty(h: &mut Fnv, ty: Ty) {
     }
 }
 
-fn values(h: &mut Fnv, values: &[Value]) {
+fn values(h: &mut Fnv, values: &[SsaValue]) {
     h.len(values.len());
     for value in values {
         h.u32(value.0);
@@ -162,8 +164,8 @@ fn overflow(mode: Overflow) -> u8 {
     }
 }
 
-fn panic(kind: PanicKind) -> u8 {
-    match kind {
+fn panic(h: &mut Fnv, kind: PanicKind) {
+    h.u8(match kind {
         PanicKind::AddOverflow => 0,
         PanicKind::SubOverflow => 1,
         PanicKind::MulOverflow => 2,
@@ -175,10 +177,15 @@ fn panic(kind: PanicKind) -> u8 {
         PanicKind::DivOverflow => 8,
         PanicKind::RemOverflow => 9,
         PanicKind::Unreachable => 10,
-    }
+        PanicKind::Message(index) => {
+            h.u8(11);
+            h.u32(index);
+            return;
+        }
+    });
 }
 
-fn encode(h: &mut Fnv, function: &Function) {
+fn encode(h: &mut Fnv, function: &SsaFunction) {
     h.bytes(b"jr-ssa");
     h.u32(ENCODING_VERSION);
     h.len(function.params.len());
@@ -187,6 +194,13 @@ fn encode(h: &mut Fnv, function: &Function) {
     }
     ty(h, function.ret);
     h.len(function.blocks.len());
+    h.len(function.panics.len());
+    for text in &function.panics {
+        h.len(text.message.len());
+        h.bytes(text.message.as_bytes());
+        h.len(text.location.len());
+        h.bytes(text.location.as_bytes());
+    }
     for data in &function.blocks {
         h.len(data.params.len());
         for (value, param) in &data.params {
@@ -233,7 +247,7 @@ fn encode(h: &mut Fnv, function: &Function) {
                 }
                 InstKind::Cast { to, value } => {
                     h.u8(4);
-                    ty(h, Ty::Int(*to));
+                    ty(h, SsaTy::Int(*to));
                     h.u32(value.0);
                 }
                 InstKind::Select {
@@ -252,12 +266,12 @@ fn encode(h: &mut Fnv, function: &Function) {
             }
         }
         match &data.term {
-            Terminator::Jump(target) => {
+            SsaTerminator::Jump(target) => {
                 h.u8(0);
                 h.u32(target.block.0);
                 values(h, &target.args);
             }
-            Terminator::Branch {
+            SsaTerminator::Branch {
                 cond,
                 then,
                 otherwise,
@@ -269,21 +283,21 @@ fn encode(h: &mut Fnv, function: &Function) {
                 h.u32(otherwise.block.0);
                 values(h, &otherwise.args);
             }
-            Terminator::Return(value) => {
+            SsaTerminator::Return(value) => {
                 h.u8(2);
                 h.u32(value.0);
             }
-            Terminator::Panic(kind) => {
+            SsaTerminator::Panic(kind) => {
                 h.u8(3);
-                h.u8(panic(*kind));
+                panic(h, *kind);
             }
         }
     }
 }
 
-/// Stable content hash of the canonical form. Callee references are hashed
+/// Stable content hash of the canonical form. SsaCallee references are hashed
 /// as given; inside the graph they become canonical item identities.
-pub fn content_hash(function: &Function) -> u128 {
+pub fn content_hash(function: &SsaFunction) -> u128 {
     let mut h = Fnv(Fnv::OFFSET);
     encode(&mut h, &canonical(function));
     h.0

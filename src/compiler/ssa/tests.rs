@@ -2,15 +2,15 @@ use super::interp::{self, InterpError, Limits, Outcome};
 use super::verify::verify;
 use super::*;
 
-fn no_calls(_: FuncRef) -> Option<Signature> {
+fn no_calls(_: FuncRef) -> Option<SsaSignature> {
     None
 }
 
-fn module(functions: Vec<Function>) -> Module {
+fn module(functions: Vec<SsaFunction>) -> Module {
     Module { functions }
 }
 
-fn run1(function: &Function, args: &[u128]) -> Result<Outcome, InterpError> {
+fn run1(function: &SsaFunction, args: &[u128]) -> Result<Outcome, InterpError> {
     interp::run(
         &module(vec![function.clone()]),
         FuncRef(0),
@@ -21,12 +21,12 @@ fn run1(function: &Function, args: &[u128]) -> Result<Outcome, InterpError> {
 
 fn bin(
     b: &mut Builder,
-    block: Block,
+    block: SsaBlock,
     op: BinOp,
     overflow: Overflow,
-    lhs: Value,
-    rhs: Value,
-) -> Value {
+    lhs: SsaValue,
+    rhs: SsaValue,
+) -> SsaValue {
     b.inst(
         block,
         InstKind::Binary {
@@ -38,8 +38,8 @@ fn bin(
     )
 }
 
-const I32: Ty = Ty::Int(IntTy::I32);
-const U32: Ty = Ty::Int(IntTy::U32);
+const I32: SsaTy = SsaTy::Int(SsaIntTy::I32);
+const U32: SsaTy = SsaTy::Int(SsaIntTy::U32);
 
 /// Deterministic local PRNG (splitmix64). Owned by each test; no shared state.
 struct Rng(u64);
@@ -63,7 +63,7 @@ impl Rng {
 
     /// Biased toward edge values that expose overflow behavior, and small
     /// values that exercise algebraic identities and shift amounts.
-    fn bits_for(&mut self, ty: Ty) -> u128 {
+    fn bits_for(&mut self, ty: SsaTy) -> u128 {
         let mask = ty.max_bits();
         match self.below(9) {
             0 => 0,
@@ -84,7 +84,7 @@ impl Rng {
 
 macro_rules! check_native {
     ($rng:expr, $t:ty, $ity:expr) => {{
-        let ty = Ty::Int($ity);
+        let ty = SsaTy::Int($ity);
         for _ in 0..4000 {
             let a = $rng.bits_for(ty);
             let b = $rng.bits_for(ty);
@@ -106,7 +106,7 @@ macro_rules! check_native {
             assert_eq!(wrap(BinOp::Or), Ok(enc(x | y)));
             assert_eq!(wrap(BinOp::Xor), Ok(enc(x ^ y)));
             let amount = (b % 200) as u32;
-            let shift_ty = Ty::Int(IntTy::U32);
+            let shift_ty = SsaTy::Int(SsaIntTy::U32);
             let shl = eval::binary(
                 BinOp::Shl,
                 Overflow::Trap,
@@ -144,9 +144,9 @@ macro_rules! check_native {
                 assert_eq!(eval::compare(op, ty, a, b), native);
             }
             assert_eq!(eval::unary(UnOp::Not, Overflow::Wrap, ty, a), Ok(enc(!x)));
-            assert_eq!(eval::cast(ty, IntTy::I8, a), (x as i8 as u128) & 0xff);
-            assert_eq!(eval::cast(ty, IntTy::U16, a), u128::from(x as u16));
-            assert_eq!(eval::cast(ty, IntTy::I128, a), x as i128 as u128);
+            assert_eq!(eval::cast(ty, SsaIntTy::I8, a), (x as i8 as u128) & 0xff);
+            assert_eq!(eval::cast(ty, SsaIntTy::U16, a), u128::from(x as u16));
+            assert_eq!(eval::cast(ty, SsaIntTy::I128, a), x as i128 as u128);
         }
     }};
 }
@@ -154,20 +154,20 @@ macro_rules! check_native {
 #[test]
 fn eval_matches_native_rust_integer_semantics() {
     let mut rng = Rng(1);
-    check_native!(rng, i8, IntTy::I8);
-    check_native!(rng, u8, IntTy::U8);
-    check_native!(rng, i16, IntTy::I16);
-    check_native!(rng, u32, IntTy::U32);
-    check_native!(rng, i32, IntTy::I32);
-    check_native!(rng, i64, IntTy::I64);
-    check_native!(rng, u64, IntTy::U64);
-    check_native!(rng, i128, IntTy::I128);
-    check_native!(rng, u128, IntTy::U128);
+    check_native!(rng, i8, SsaIntTy::I8);
+    check_native!(rng, u8, SsaIntTy::U8);
+    check_native!(rng, i16, SsaIntTy::I16);
+    check_native!(rng, u32, SsaIntTy::U32);
+    check_native!(rng, i32, SsaIntTy::I32);
+    check_native!(rng, i64, SsaIntTy::I64);
+    check_native!(rng, u64, SsaIntTy::U64);
+    check_native!(rng, i128, SsaIntTy::I128);
+    check_native!(rng, u128, SsaIntTy::U128);
 }
 
 #[test]
 fn eval_signed_negation_and_panic_kinds() {
-    let i8 = Ty::Int(IntTy::I8);
+    let i8 = SsaTy::Int(SsaIntTy::I8);
     assert_eq!(
         eval::unary(UnOp::Neg, Overflow::Trap, i8, 0x80),
         Err(PanicKind::NegOverflow)
@@ -198,9 +198,9 @@ fn eval_signed_negation_and_panic_kinds() {
 // ---------------------------------------------------------------------------
 
 /// fn(n: u32) -> u32 { let mut s = 0; let mut i = 0; while i < n { i += 1; s += i } s }
-fn sum_loop(overflow: Overflow) -> Function {
+fn sum_loop(overflow: Overflow) -> SsaFunction {
     let (mut b, params) = Builder::new(vec![U32], U32);
-    let entry = Block(0);
+    let entry = SsaBlock(0);
     let (header, hp) = b.block(&[U32, U32]);
     let (body, _) = b.block(&[]);
     let (exit, ep) = b.block(&[U32]);
@@ -217,7 +217,7 @@ fn sum_loop(overflow: Overflow) -> Function {
     );
     b.terminate(
         header,
-        Terminator::Branch {
+        SsaTerminator::Branch {
             cond,
             then: target(body, vec![]),
             otherwise: target(exit, vec![s]),
@@ -227,7 +227,7 @@ fn sum_loop(overflow: Overflow) -> Function {
     let next_i = bin(&mut b, body, BinOp::Add, overflow, i, one);
     let next_s = bin(&mut b, body, BinOp::Add, overflow, s, next_i);
     b.terminate(body, jump(header, vec![next_i, next_s]));
-    b.terminate(exit, Terminator::Return(ep[0]));
+    b.terminate(exit, SsaTerminator::Return(ep[0]));
     b.finish()
 }
 
@@ -239,25 +239,25 @@ fn verify_accepts_loop_and_reports_types() {
         types
             .iter()
             .flatten()
-            .all(|ty| *ty == U32 || *ty == Ty::Bool)
+            .all(|ty| *ty == U32 || *ty == SsaTy::Bool)
     );
 }
 
 #[test]
 fn verify_rejects_malformed_functions() {
-    let reject = |function: &Function, needle: &str| {
+    let reject = |function: &SsaFunction, needle: &str| {
         let error = verify(function, &no_calls).expect_err("must reject");
         assert!(error.0.contains(needle), "{error} lacks {needle}");
     };
     // Use without a dominating definition: value from one branch arm used
     // at the join.
-    let (mut b, params) = Builder::new(vec![Ty::Bool], I32);
+    let (mut b, params) = Builder::new(vec![SsaTy::Bool], I32);
     let (left, _) = b.block(&[]);
     let (right, _) = b.block(&[]);
     let (join, _) = b.block(&[]);
     b.terminate(
-        Block(0),
-        Terminator::Branch {
+        SsaBlock(0),
+        SsaTerminator::Branch {
             cond: params[0],
             then: target(left, vec![]),
             otherwise: target(right, vec![]),
@@ -266,94 +266,94 @@ fn verify_rejects_malformed_functions() {
     let x = b.constant(left, I32, 1);
     b.terminate(left, jump(join, vec![]));
     b.terminate(right, jump(join, vec![]));
-    b.terminate(join, Terminator::Return(x));
+    b.terminate(join, SsaTerminator::Return(x));
     reject(&b.finish(), "dominating");
 
     // Forward use inside a block.
     let mut f = Builder::new(vec![], I32).0.finish();
     f.blocks[0].insts = vec![
         Inst {
-            result: Value(0),
+            result: SsaValue(0),
             kind: InstKind::Unary {
                 op: UnOp::Not,
                 overflow: Overflow::Wrap,
-                value: Value(1),
+                value: SsaValue(1),
             },
         },
         Inst {
-            result: Value(1),
+            result: SsaValue(1),
             kind: InstKind::Const { ty: I32, bits: 3 },
         },
     ];
-    f.blocks[0].term = Terminator::Return(Value(0));
+    f.blocks[0].term = SsaTerminator::Return(SsaValue(0));
     reject(&f, "dominating");
 
     // Type errors.
     let (mut b, params) = Builder::new(vec![I32, U32], I32);
     let sum = bin(
         &mut b,
-        Block(0),
+        SsaBlock(0),
         BinOp::Add,
         Overflow::Wrap,
         params[0],
         params[1],
     );
-    b.terminate(Block(0), Terminator::Return(sum));
+    b.terminate(SsaBlock(0), SsaTerminator::Return(sum));
     reject(&b.finish(), "equal integer");
 
     let (mut b, params) = Builder::new(vec![I32], U32);
-    b.terminate(Block(0), Terminator::Return(params[0]));
+    b.terminate(SsaBlock(0), SsaTerminator::Return(params[0]));
     reject(&b.finish(), "wrong type");
 
     let (mut b, _) = Builder::new(vec![], U32);
-    let c = b.constant(Block(0), Ty::Int(IntTy::U8), 256);
-    b.terminate(Block(0), Terminator::Return(c));
+    let c = b.constant(SsaBlock(0), SsaTy::Int(SsaIntTy::U8), 256);
+    b.terminate(SsaBlock(0), SsaTerminator::Return(c));
     reject(&b.finish(), "out of range");
 
     let (mut b, params) = Builder::new(vec![I32], I32);
     let x = bin(
         &mut b,
-        Block(0),
+        SsaBlock(0),
         BinOp::And,
         Overflow::Trap,
         params[0],
         params[0],
     );
-    b.terminate(Block(0), Terminator::Return(x));
+    b.terminate(SsaBlock(0), SsaTerminator::Return(x));
     reject(&b.finish(), "Overflow::Wrap");
 
-    // Block argument mismatch and entry re-entry.
+    // SsaBlock argument mismatch and entry re-entry.
     let (mut b, params) = Builder::new(vec![I32], I32);
     let (next, _) = b.block(&[I32]);
-    b.terminate(Block(0), jump(next, vec![]));
-    b.terminate(next, Terminator::Return(params[0]));
+    b.terminate(SsaBlock(0), jump(next, vec![]));
+    b.terminate(next, SsaTerminator::Return(params[0]));
     reject(&b.finish(), "argument count");
 
     let (mut b, params) = Builder::new(vec![I32], I32);
-    b.terminate(Block(0), jump(Block(0), vec![params[0]]));
+    b.terminate(SsaBlock(0), jump(SsaBlock(0), vec![params[0]]));
     reject(&b.finish(), "entry");
 
     // Double definition.
     let (mut b, _) = Builder::new(vec![], I32);
-    let c = b.constant(Block(0), I32, 1);
+    let c = b.constant(SsaBlock(0), I32, 1);
     let mut f = b.finish();
     f.blocks[0].insts.push(Inst {
         result: c,
         kind: InstKind::Const { ty: I32, bits: 2 },
     });
-    f.blocks[0].term = Terminator::Return(c);
+    f.blocks[0].term = SsaTerminator::Return(c);
     reject(&f, "more than once");
 
     // Unknown callee.
     let (mut b, _) = Builder::new(vec![], I32);
     let r = b.inst(
-        Block(0),
+        SsaBlock(0),
         InstKind::Call {
             callee: FuncRef(7),
             args: vec![],
         },
     );
-    b.terminate(Block(0), Terminator::Return(r));
+    b.terminate(SsaBlock(0), SsaTerminator::Return(r));
     reject(&b.finish(), "unknown function");
 }
 
@@ -388,13 +388,13 @@ fn interp_runs_loops_and_reports_overflow() {
 }
 
 /// f0(n) = if n == 0 { 1 } else { n * f0(n - 1) }, checked.
-fn factorial() -> Function {
+fn factorial() -> SsaFunction {
     let (mut b, params) = Builder::new(vec![U32], U32);
     let (base, _) = b.block(&[]);
     let (step, _) = b.block(&[]);
-    let zero = b.constant(Block(0), U32, 0);
+    let zero = b.constant(SsaBlock(0), U32, 0);
     let is_zero = b.inst(
-        Block(0),
+        SsaBlock(0),
         InstKind::Cmp {
             op: CmpOp::Eq,
             lhs: params[0],
@@ -402,15 +402,15 @@ fn factorial() -> Function {
         },
     );
     b.terminate(
-        Block(0),
-        Terminator::Branch {
+        SsaBlock(0),
+        SsaTerminator::Branch {
             cond: is_zero,
             then: target(base, vec![]),
             otherwise: target(step, vec![]),
         },
     );
     let one = b.constant(base, U32, 1);
-    b.terminate(base, Terminator::Return(one));
+    b.terminate(base, SsaTerminator::Return(one));
     let one = b.constant(step, U32, 1);
     let less = bin(&mut b, step, BinOp::Sub, Overflow::Trap, params[0], one);
     let rec = b.inst(
@@ -421,7 +421,7 @@ fn factorial() -> Function {
         },
     );
     let product = bin(&mut b, step, BinOp::Mul, Overflow::Trap, params[0], rec);
-    b.terminate(step, Terminator::Return(product));
+    b.terminate(step, SsaTerminator::Return(product));
     b.finish()
 }
 
@@ -454,7 +454,7 @@ fn hash_ignores_numbering_and_dead_blocks_but_not_content() {
     // Same function with blocks stored in a different order and value IDs
     // offset, plus an unreachable block.
     let mut shuffled = base.clone();
-    let offset = |v: &mut Value| v.0 += 100;
+    let offset = |v: &mut SsaValue| v.0 += 100;
     for data in &mut shuffled.blocks {
         for (value, _) in &mut data.params {
             offset(value);
@@ -473,16 +473,16 @@ fn hash_ignores_numbering_and_dead_blocks_but_not_content() {
     for data in &mut shuffled.blocks {
         for t in data.term.targets_mut() {
             t.block = match t.block.0 {
-                1 => Block(3),
-                3 => Block(1),
-                other => Block(other),
+                1 => SsaBlock(3),
+                3 => SsaBlock(1),
+                other => SsaBlock(other),
             };
         }
     }
     shuffled.blocks.push(BlockData {
         params: vec![],
         insts: vec![],
-        term: Terminator::Panic(PanicKind::Unreachable),
+        term: SsaTerminator::Panic(PanicKind::Unreachable),
     });
     verify(&shuffled, &no_calls).expect("still valid");
     assert_eq!(hash::content_hash(&shuffled), h);
@@ -504,14 +504,14 @@ fn hash_is_pinned() {
     let h = hash::content_hash(&sum_loop(Overflow::Trap));
     assert_eq!(h, hash::content_hash(&sum_loop(Overflow::Trap)));
     assert_eq!(format!("{h:032x}").len(), 32);
-    assert_eq!(hash::ENCODING_VERSION, 1);
+    assert_eq!(hash::ENCODING_VERSION, 2);
 }
 
 // ---------------------------------------------------------------------------
 // opt
 // ---------------------------------------------------------------------------
 
-fn optimize(function: &Function) -> (Function, opt::Stats) {
+fn optimize(function: &SsaFunction) -> (SsaFunction, opt::Stats) {
     opt::local(function, &no_calls).expect("optimizes")
 }
 
@@ -521,12 +521,12 @@ fn opt_folds_constants_and_branches_to_a_single_return() {
     let (mut b, _) = Builder::new(vec![], I32);
     let (yes, _) = b.block(&[]);
     let (no, _) = b.block(&[]);
-    let six = b.constant(Block(0), I32, 6);
-    let seven = b.constant(Block(0), I32, 7);
-    let x = bin(&mut b, Block(0), BinOp::Mul, Overflow::Trap, six, seven);
-    let answer = b.constant(Block(0), I32, 42);
+    let six = b.constant(SsaBlock(0), I32, 6);
+    let seven = b.constant(SsaBlock(0), I32, 7);
+    let x = bin(&mut b, SsaBlock(0), BinOp::Mul, Overflow::Trap, six, seven);
+    let answer = b.constant(SsaBlock(0), I32, 42);
     let eq = b.inst(
-        Block(0),
+        SsaBlock(0),
         InstKind::Cmp {
             op: CmpOp::Eq,
             lhs: x,
@@ -534,8 +534,8 @@ fn opt_folds_constants_and_branches_to_a_single_return() {
         },
     );
     b.terminate(
-        Block(0),
-        Terminator::Branch {
+        SsaBlock(0),
+        SsaTerminator::Branch {
             cond: eq,
             then: target(yes, vec![]),
             otherwise: target(no, vec![]),
@@ -543,9 +543,9 @@ fn opt_folds_constants_and_branches_to_a_single_return() {
     );
     let zero = b.constant(yes, I32, 0);
     let same = bin(&mut b, yes, BinOp::Add, Overflow::Trap, x, zero);
-    b.terminate(yes, Terminator::Return(same));
+    b.terminate(yes, SsaTerminator::Return(same));
     let zero = b.constant(no, I32, 0);
-    b.terminate(no, Terminator::Return(zero));
+    b.terminate(no, SsaTerminator::Return(zero));
     let original = b.finish();
 
     let (optimized, stats) = optimize(&original);
@@ -566,12 +566,12 @@ fn opt_preserves_overflow_panics_and_wrapping() {
         (Overflow::Trap, Outcome::Panic(PanicKind::AddOverflow)),
         (Overflow::Wrap, Outcome::Return(0x80)),
     ] {
-        let i8 = Ty::Int(IntTy::I8);
+        let i8 = SsaTy::Int(SsaIntTy::I8);
         let (mut b, _) = Builder::new(vec![], i8);
-        let max = b.constant(Block(0), i8, 127);
-        let one = b.constant(Block(0), i8, 1);
-        let sum = bin(&mut b, Block(0), BinOp::Add, overflow, max, one);
-        b.terminate(Block(0), Terminator::Return(sum));
+        let max = b.constant(SsaBlock(0), i8, 127);
+        let one = b.constant(SsaBlock(0), i8, 1);
+        let sum = bin(&mut b, SsaBlock(0), BinOp::Add, overflow, max, one);
+        b.terminate(SsaBlock(0), SsaTerminator::Return(sum));
         let original = b.finish();
         let (optimized, _) = optimize(&original);
         assert_eq!(run1(&original, &[]), Ok(expected.clone()));
@@ -586,7 +586,7 @@ fn opt_dce_keeps_unused_instructions_that_may_panic() {
     let (mut b, params) = Builder::new(vec![I32, I32], I32);
     let _checked = bin(
         &mut b,
-        Block(0),
+        SsaBlock(0),
         BinOp::Add,
         Overflow::Trap,
         params[0],
@@ -594,7 +594,7 @@ fn opt_dce_keeps_unused_instructions_that_may_panic() {
     );
     let _div = bin(
         &mut b,
-        Block(0),
+        SsaBlock(0),
         BinOp::Div,
         Overflow::Wrap,
         params[0],
@@ -602,16 +602,23 @@ fn opt_dce_keeps_unused_instructions_that_may_panic() {
     );
     let _wrapped = bin(
         &mut b,
-        Block(0),
+        SsaBlock(0),
         BinOp::Add,
         Overflow::Wrap,
         params[0],
         params[1],
     );
-    let two = b.constant(Block(0), I32, 2);
-    let _safe_div = bin(&mut b, Block(0), BinOp::Div, Overflow::Wrap, params[0], two);
-    let zero = b.constant(Block(0), I32, 0);
-    b.terminate(Block(0), Terminator::Return(zero));
+    let two = b.constant(SsaBlock(0), I32, 2);
+    let _safe_div = bin(
+        &mut b,
+        SsaBlock(0),
+        BinOp::Div,
+        Overflow::Wrap,
+        params[0],
+        two,
+    );
+    let zero = b.constant(SsaBlock(0), I32, 0);
+    b.terminate(SsaBlock(0), SsaTerminator::Return(zero));
     let original = b.finish();
     let (optimized, stats) = optimize(&original);
     assert_eq!(stats.removed, 3, "wrapped add, safe div, constant 2");
@@ -625,34 +632,34 @@ fn opt_dce_keeps_unused_instructions_that_may_panic() {
 /// Random acyclic functions. Every block can use the entry block's values
 /// (the entry dominates everything) plus its own parameters and
 /// instructions. Edges only go forward, so execution terminates.
-fn random_function(rng: &mut Rng) -> Function {
+fn random_function(rng: &mut Rng) -> SsaFunction {
     let types = [
-        Ty::Bool,
-        Ty::Int(IntTy::I8),
-        Ty::Int(IntTy::U8),
-        Ty::Int(IntTy::I32),
-        Ty::Int(IntTy::U64),
-        Ty::Int(IntTy::I128),
+        SsaTy::Bool,
+        SsaTy::Int(SsaIntTy::I8),
+        SsaTy::Int(SsaIntTy::U8),
+        SsaTy::Int(SsaIntTy::I32),
+        SsaTy::Int(SsaIntTy::U64),
+        SsaTy::Int(SsaIntTy::I128),
     ];
     let pick_ty = |rng: &mut Rng| types[rng.below(types.len())];
-    let params: Vec<Ty> = (0..1 + rng.below(3)).map(|_| pick_ty(rng)).collect();
+    let params: Vec<SsaTy> = (0..1 + rng.below(3)).map(|_| pick_ty(rng)).collect();
     let ret = pick_ty(rng);
     let (mut b, entry_values) = Builder::new(params.clone(), ret);
     let block_count = 1 + rng.below(5);
-    let mut block_params: Vec<Vec<Ty>> = vec![params.clone()];
-    let mut blocks = vec![Block(0)];
+    let mut block_params: Vec<Vec<SsaTy>> = vec![params.clone()];
+    let mut blocks = vec![SsaBlock(0)];
     let mut block_values = vec![entry_values];
     for _ in 1..block_count {
-        let tys: Vec<Ty> = (0..rng.below(3)).map(|_| pick_ty(rng)).collect();
+        let tys: Vec<SsaTy> = (0..rng.below(3)).map(|_| pick_ty(rng)).collect();
         let (block, values) = b.block(&tys);
         block_params.push(tys);
         blocks.push(block);
         block_values.push(values);
     }
-    let mut entry_pool: Vec<(Value, Ty)> = Vec::new();
+    let mut entry_pool: Vec<(SsaValue, SsaTy)> = Vec::new();
     for index in 0..block_count {
         let block = blocks[index];
-        let mut pool: Vec<(Value, Ty)> = if index == 0 {
+        let mut pool: Vec<(SsaValue, SsaTy)> = if index == 0 {
             Vec::new()
         } else {
             entry_pool.clone()
@@ -663,21 +670,22 @@ fn random_function(rng: &mut Rng) -> Function {
                 .copied()
                 .zip(block_params[index].iter().copied()),
         );
-        let value_of = |b: &mut Builder, rng: &mut Rng, pool: &mut Vec<(Value, Ty)>, ty: Ty| {
-            let candidates: Vec<Value> = pool
-                .iter()
-                .filter(|(_, t)| *t == ty)
-                .map(|(v, _)| *v)
-                .collect();
-            if !candidates.is_empty() && rng.below(4) != 0 {
-                candidates[rng.below(candidates.len())]
-            } else {
-                let bits = rng.bits_for(ty);
-                let v = b.constant(block, ty, bits);
-                pool.push((v, ty));
-                v
-            }
-        };
+        let value_of =
+            |b: &mut Builder, rng: &mut Rng, pool: &mut Vec<(SsaValue, SsaTy)>, ty: SsaTy| {
+                let candidates: Vec<SsaValue> = pool
+                    .iter()
+                    .filter(|(_, t)| *t == ty)
+                    .map(|(v, _)| *v)
+                    .collect();
+                if !candidates.is_empty() && rng.below(4) != 0 {
+                    candidates[rng.below(candidates.len())]
+                } else {
+                    let bits = rng.bits_for(ty);
+                    let v = b.constant(block, ty, bits);
+                    pool.push((v, ty));
+                    v
+                }
+            };
         for _ in 0..rng.below(10) {
             let ty = pick_ty(rng);
             let overflow = if rng.below(2) == 0 {
@@ -686,7 +694,7 @@ fn random_function(rng: &mut Rng) -> Function {
                 Overflow::Wrap
             };
             let kind = match (rng.below(6), ty) {
-                (0 | 1, Ty::Int(_)) => {
+                (0 | 1, SsaTy::Int(_)) => {
                     let ops = [
                         BinOp::Add,
                         BinOp::Sub,
@@ -699,7 +707,7 @@ fn random_function(rng: &mut Rng) -> Function {
                     let op = ops[rng.below(ops.len())];
                     let lhs = value_of(&mut b, rng, &mut pool, ty);
                     let rhs_ty = if op.is_shift() {
-                        Ty::Int(IntTy::U8)
+                        SsaTy::Int(SsaIntTy::U8)
                     } else {
                         ty
                     };
@@ -727,7 +735,7 @@ fn random_function(rng: &mut Rng) -> Function {
                         rhs,
                     }
                 }
-                (3, Ty::Int(int)) => {
+                (3, SsaTy::Int(int)) => {
                     let from = pick_ty(rng);
                     let value = value_of(&mut b, rng, &mut pool, from);
                     InstKind::Cast { to: int, value }
@@ -750,7 +758,7 @@ fn random_function(rng: &mut Rng) -> Function {
                         rhs,
                     }
                 }
-                (4, Ty::Int(int)) if int.signed() => {
+                (4, SsaTy::Int(int)) if int.signed() => {
                     let value = value_of(&mut b, rng, &mut pool, ty);
                     InstKind::Unary {
                         op: UnOp::Neg,
@@ -767,7 +775,7 @@ fn random_function(rng: &mut Rng) -> Function {
                     }
                 }
                 _ => {
-                    let cond = value_of(&mut b, rng, &mut pool, Ty::Bool);
+                    let cond = value_of(&mut b, rng, &mut pool, SsaTy::Bool);
                     let then = value_of(&mut b, rng, &mut pool, ty);
                     let otherwise = value_of(&mut b, rng, &mut pool, ty);
                     InstKind::Select {
@@ -781,7 +789,7 @@ fn random_function(rng: &mut Rng) -> Function {
             pool.push((result, ty));
         }
         let later = index + 1..block_count;
-        let make_target = |b: &mut Builder, rng: &mut Rng, pool: &mut Vec<(Value, Ty)>| {
+        let make_target = |b: &mut Builder, rng: &mut Rng, pool: &mut Vec<(SsaValue, SsaTy)>| {
             let successor = later.start + rng.below(later.len());
             let args = block_params[successor]
                 .clone()
@@ -792,17 +800,17 @@ fn random_function(rng: &mut Rng) -> Function {
         };
         let term = if later.is_empty() || rng.below(5) == 0 {
             if rng.below(12) == 0 {
-                Terminator::Panic(PanicKind::Unreachable)
+                SsaTerminator::Panic(PanicKind::Unreachable)
             } else {
-                Terminator::Return(value_of(&mut b, rng, &mut pool, ret))
+                SsaTerminator::Return(value_of(&mut b, rng, &mut pool, ret))
             }
         } else if rng.below(2) == 0 {
-            Terminator::Jump(make_target(&mut b, rng, &mut pool))
+            SsaTerminator::Jump(make_target(&mut b, rng, &mut pool))
         } else {
-            let cond = value_of(&mut b, rng, &mut pool, Ty::Bool);
+            let cond = value_of(&mut b, rng, &mut pool, SsaTy::Bool);
             let then = make_target(&mut b, rng, &mut pool);
             let otherwise = make_target(&mut b, rng, &mut pool);
-            Terminator::Branch {
+            SsaTerminator::Branch {
                 cond,
                 then,
                 otherwise,
@@ -835,7 +843,7 @@ fn opt_rewrites_of_x_op_constant_are_exhaustively_sound_for_8_bit_types() {
         BinOp::Shr,
     ];
     let mut rewritten = 0usize;
-    for ty in [Ty::Int(IntTy::I8), Ty::Int(IntTy::U8)] {
+    for ty in [SsaTy::Int(SsaIntTy::I8), SsaTy::Int(SsaIntTy::U8)] {
         for op in ops {
             for overflow in [Overflow::Wrap, Overflow::Trap] {
                 if !op.has_overflow_mode() && overflow == Overflow::Trap {
@@ -844,14 +852,14 @@ fn opt_rewrites_of_x_op_constant_are_exhaustively_sound_for_8_bit_types() {
                 for c in 0..=255u128 {
                     for constant_left in [false, true] {
                         let (mut b, params) = Builder::new(vec![ty], ty);
-                        let k = b.constant(Block(0), ty, c);
+                        let k = b.constant(SsaBlock(0), ty, c);
                         let (lhs, rhs) = if constant_left {
                             (k, params[0])
                         } else {
                             (params[0], k)
                         };
-                        let r = bin(&mut b, Block(0), op, overflow, lhs, rhs);
-                        b.terminate(Block(0), Terminator::Return(r));
+                        let r = bin(&mut b, SsaBlock(0), op, overflow, lhs, rhs);
+                        b.terminate(SsaBlock(0), SsaTerminator::Return(r));
                         let original = b.finish();
                         let (optimized, _) = optimize(&original);
                         if optimized == hash::canonical(&original) {
@@ -912,7 +920,7 @@ fn opt_output_is_independent_of_input_numbering() {
     for _ in 0..200 {
         let original = random_function(&mut rng);
         let mut renumbered = original.clone();
-        let shift = |v: &mut Value| v.0 = v.0 * 3 + 5;
+        let shift = |v: &mut SsaValue| v.0 = v.0 * 3 + 5;
         for data in &mut renumbered.blocks {
             for (value, _) in &mut data.params {
                 shift(value);
@@ -932,5 +940,186 @@ fn opt_output_is_independent_of_input_numbering() {
             hash::content_hash(&renumbered)
         );
         assert_eq!(optimize(&original).0, optimize(&renumbered).0);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// inline + machine (pure-library level)
+// ---------------------------------------------------------------------------
+
+fn lowered(function: SsaFunction, callees: Vec<lower::SsaCallee>) -> lower::Lowered {
+    lower::Lowered { function, callees }
+}
+
+#[test]
+fn inline_of_leaf_matches_interpreter_on_random_callers() {
+    // Caller f(x, y) = g(x) + g(y) with a random leaf g; inlining must not
+    // change any outcome, including panics inside the inlined body.
+    let mut rng = Rng(4242);
+    let mut inlined_any = 0;
+    for case in 0..300 {
+        let g = random_function(&mut rng);
+        if g.params.len() != 1 || g.ret == SsaTy::Unit {
+            continue;
+        }
+        let pty = g.params[0];
+        let ret = g.ret;
+        let (mut b, params) = Builder::new(vec![pty, pty], ret);
+        let call = |b: &mut Builder, arg| {
+            b.inst(
+                SsaBlock(0),
+                InstKind::Call {
+                    callee: FuncRef(0),
+                    args: vec![arg],
+                },
+            )
+        };
+        let r1 = call(&mut b, params[0]);
+        let r2 = call(&mut b, params[1]);
+        let cond = b_cond(&mut b, ret, r1, r2);
+        let combined = b.inst(
+            SsaBlock(0),
+            InstKind::Select {
+                cond,
+                then: r1,
+                otherwise: r2,
+            },
+        );
+        b.terminate(SsaBlock(0), SsaTerminator::Return(combined));
+        let caller = b.finish();
+        let callee_entry = lower::SsaCallee {
+            symbol: "g".into(),
+            target: dummy_target(),
+            signature: g.signature(),
+        };
+        let caller = lowered(caller, vec![callee_entry]);
+        let leaf = lowered(g.clone(), vec![]);
+        let summary = inline::Summary::of(&leaf);
+        assert!(summary.leaf);
+        let result =
+            inline::inline(&caller, &[(0, &leaf)]).unwrap_or_else(|e| panic!("case {case}: {e}"));
+        assert!(result.callees.is_empty());
+        inlined_any += 1;
+        let module_after = Module {
+            functions: vec![result.function.clone()],
+        };
+        // The interpreter addresses callees by module index, so place g at 1.
+        let mut before_fn = caller.function.clone();
+        for data in &mut before_fn.blocks {
+            for inst in &mut data.insts {
+                if let InstKind::Call { callee, .. } = &mut inst.kind {
+                    *callee = FuncRef(1);
+                }
+            }
+        }
+        let module_before = Module {
+            functions: vec![before_fn, g.clone()],
+        };
+        for _ in 0..6 {
+            let args = [rng.bits_for(pty), rng.bits_for(pty)];
+            let before = interp::run(&module_before, FuncRef(0), &args, Limits::default());
+            let after = interp::run(&module_after, FuncRef(0), &args, Limits::default());
+            assert_eq!(before, after, "case {case} args {args:?}");
+        }
+    }
+    assert!(inlined_any > 50, "{inlined_any}");
+}
+
+fn b_cond(b: &mut Builder, ty: SsaTy, x: SsaValue, y: SsaValue) -> SsaValue {
+    if ty == SsaTy::Unit {
+        b.constant(SsaBlock(0), SsaTy::Bool, 1)
+    } else {
+        b.inst(
+            SsaBlock(0),
+            InstKind::Cmp {
+                op: CmpOp::Ge,
+                lhs: x,
+                rhs: y,
+            },
+        )
+    }
+}
+
+fn dummy_target() -> crate::compiler::ir::CallTarget {
+    crate::compiler::ir::CallTarget {
+        declaration: crate::compiler::ir::DeclId {
+            snapshot: crate::compiler::ir::SnapshotId::allocate().unwrap(),
+            index: 0,
+        },
+        type_args: std::sync::Arc::from([]),
+    }
+}
+
+#[test]
+fn block_param_elimination_turns_local_passing_into_minimal_ssa() {
+    // Every block passes every "local" through, as lowering produces.
+    let (mut b, params) = Builder::new(vec![U32, U32], U32);
+    let (mid, mp) = b.block(&[U32, U32]);
+    let (end, ep) = b.block(&[U32, U32]);
+    b.terminate(SsaBlock(0), jump(mid, vec![params[0], params[1]]));
+    let sum = bin(&mut b, mid, BinOp::Add, Overflow::Wrap, mp[0], mp[1]);
+    b.terminate(mid, jump(end, vec![sum, mp[1]]));
+    b.terminate(end, SsaTerminator::Return(ep[0]));
+    let original = b.finish();
+    let (optimized, _) = optimize(&original);
+    assert_eq!(optimized.blocks.len(), 1);
+    assert!(
+        optimized
+            .blocks
+            .iter()
+            .skip(1)
+            .all(|data| data.params.is_empty())
+    );
+    for args in [[1, 2], [u32::MAX as u128, 1]] {
+        assert_eq!(run1(&original, &args), run1(&optimized, &args));
+    }
+    // The loop parameter of a real loop must survive.
+    let (looped, _) = optimize(&sum_loop(Overflow::Trap));
+    assert!(looped.blocks.iter().any(|data| !data.params.is_empty()));
+    assert_eq!(run1(&looped, &[10]), Ok(Outcome::Return(55)));
+
+    // A loop-invariant value passed around the back edge (as lowering passes
+    // every local) is a trivial parameter and must be removed.
+    let (mut b, params) = Builder::new(vec![U32], U32);
+    let (header, hp) = b.block(&[U32, U32]); // i, invariant n
+    let (body, bp) = b.block(&[U32, U32]);
+    let (exit, xp) = b.block(&[U32, U32]);
+    let zero = b.constant(SsaBlock(0), U32, 0);
+    b.terminate(SsaBlock(0), jump(header, vec![zero, params[0]]));
+    let lt = b.inst(
+        header,
+        InstKind::Cmp {
+            op: CmpOp::Lt,
+            lhs: hp[0],
+            rhs: hp[1],
+        },
+    );
+    b.terminate(
+        header,
+        SsaTerminator::Branch {
+            cond: lt,
+            then: target(body, vec![hp[0], hp[1]]),
+            otherwise: target(exit, vec![hp[0], hp[1]]),
+        },
+    );
+    let one = b.constant(body, U32, 1);
+    let next = bin(&mut b, body, BinOp::Add, Overflow::Trap, bp[0], one);
+    b.terminate(body, jump(header, vec![next, bp[1]]));
+    b.terminate(exit, SsaTerminator::Return(xp[0]));
+    let original = b.finish();
+    let (optimized, stats) = optimize(&original);
+    assert!(stats.params_removed >= 1, "{stats:?}");
+    let params_after: usize = optimized
+        .blocks
+        .iter()
+        .skip(1)
+        .map(|d| d.params.len())
+        .sum();
+    assert_eq!(
+        params_after, 1,
+        "only the induction variable stays: {optimized:?}"
+    );
+    for n in [0, 7, 300] {
+        assert_eq!(run1(&original, &[n]), run1(&optimized, &[n]));
     }
 }

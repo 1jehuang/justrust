@@ -3,7 +3,7 @@
 //! `eval`, shared with constant folding.
 use super::eval;
 use super::verify::{self, Types};
-use super::{FuncRef, InstKind, Module, PanicKind, Terminator, Ty, Value};
+use super::{FuncRef, InstKind, Module, PanicKind, SsaTerminator, SsaTy, SsaValue};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -103,10 +103,10 @@ impl Run<'_> {
                     return Err(InterpError::OutOfFuel);
                 }
                 self.fuel -= 1;
-                let ty = |value: Value| -> Ty {
+                let ty = |value: SsaValue| -> SsaTy {
                     self.types[callee.0 as usize][value.0 as usize].expect("verified")
                 };
-                let get = |value: Value| env[value.0 as usize];
+                let get = |value: SsaValue| env[value.0 as usize];
                 let result = match &inst.kind {
                     InstKind::Const { bits, .. } => Ok(*bits),
                     InstKind::Binary {
@@ -154,10 +154,10 @@ impl Run<'_> {
             }
             self.fuel -= 1;
             let next = match &data.term {
-                Terminator::Return(value) => return Ok(Outcome::Return(env[value.0 as usize])),
-                Terminator::Panic(kind) => return Ok(Outcome::Panic(*kind)),
-                Terminator::Jump(target) => target,
-                Terminator::Branch {
+                SsaTerminator::Return(value) => return Ok(Outcome::Return(env[value.0 as usize])),
+                SsaTerminator::Panic(kind) => return Ok(Outcome::Panic(*kind)),
+                SsaTerminator::Jump(target) => target,
+                SsaTerminator::Branch {
                     cond,
                     then,
                     otherwise,

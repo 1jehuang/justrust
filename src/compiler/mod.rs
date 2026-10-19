@@ -145,6 +145,12 @@ const UNIVERSAL_EFFECTS_READY: u32 = 115;
 const BODY_LEXICAL: u32 = 116;
 const CAPTURE_ENV: u32 = 117;
 const ROOT_CLEANUP_DEMAND: u32 = 125;
+/// Optimizer nodes (OPTIMIZATION.md section 8). Per instance index; only BUILD
+/// (through OBJECT) demands them, and never when the mode is `Off`.
+const SSA: u32 = 130;
+const LOCAL_OPT: u32 = 131;
+const SUMMARY: u32 = 132;
+const IPO_OPT: u32 = 133;
 
 enum Input {
     Text(String),
@@ -184,6 +190,13 @@ struct InstanceBodyFact {
 /// `ANALYZE` output: the sealed concrete proof and its analysis.
 struct ConcreteProofFact {
     concrete: ownership::ConcreteCfg,
+}
+/// `SSA`, `LOCAL_OPT` and `IPO_OPT` output. `None` means the function is
+/// outside the optimizer's current subset and keeps the stack emitter.
+struct SsaFact {
+    lowered: Option<Arc<ssa::lower::Lowered>>,
+    unsupported: Option<&'static str>,
+    inlined: usize,
 }
 /// Analysis nodes (`UNIVERSAL_ANALYZE`, `ANALYZE`) have a second output: the
 /// complete analysis, published on success and on failure (before the node
@@ -927,11 +940,153 @@ impl Provider for CompilerProvider {
                     // against the sealed plan, which rejects any unplanned
                     // symbol, so this needs no whole-program read.
                     let types = facts.types().await?;
+                    if this.0.source_options.opt != ssa::OptMode::Off {
+                        let optimized: Arc<SsaFact> = facts.get(function(IPO_OPT, index)).await?;
+                        if let Some(lowered) = &optimized.lowered {
+                            let types = lowered.verify().map_err(|e| Error::new(e.to_string()))?;
+                            let budget = &this.0.budget;
+                            let (object, _stats) = ssa::machine::emit(lowered, &types, &|text| {
+                                backend::panic_object(&text.message, &text.location, budget)
+                            })
+                            .map_err(Error::new)?;
+                            this.retain(object.code.len())?;
+                            return cx.publish_fact(0, object);
+                        }
+                    }
                     let object = backend::emit_cfg_function(&proof.concrete, &|target| {
                         instances::symbol_of(target, &types, &this.0.budget)
                     })
                     .map_err(Error::new)?;
                     cx.publish_fact(0, object)
+                }
+                SSA => {
+                    let index = item_index(&key, "missing instance index")?;
+                    let proof: Arc<ConcreteProofFact> = facts.get(function(ANALYZE, index)).await?;
+                    let types = facts.types().await?;
+                    let function = proof.concrete.function();
+                    this.0
+                        .budget
+                        .charge_work(function.blocks.len().saturating_add(function.locals.len()))
+                        .map_err(Error::new)?;
+                    let fact = match ssa::lower::lower(function, &|target| {
+                        instances::symbol_of(target, &types, &this.0.budget)
+                    })
+                    .map_err(Error::new)?
+                    {
+                        ssa::lower::Lowering::Lowered(lowered) => SsaFact {
+                            lowered: Some(Arc::new(*lowered)),
+                            unsupported: None,
+                            inlined: 0,
+                        },
+                        ssa::lower::Lowering::Unsupported(reason) => SsaFact {
+                            lowered: None,
+                            unsupported: Some(reason),
+                            inlined: 0,
+                        },
+                    };
+                    cx.publish_fact(0, fact)
+                }
+                LOCAL_OPT => {
+                    let index = item_index(&key, "missing instance index")?;
+                    let input: Arc<SsaFact> = facts.get(function(SSA, index)).await?;
+                    let lowered = match &input.lowered {
+                        Some(lowered) => Some(Arc::new(local_opt(lowered, &this.0.budget)?)),
+                        None => None,
+                    };
+                    cx.publish_fact(
+                        0,
+                        SsaFact {
+                            lowered,
+                            unsupported: input.unsupported,
+                            inlined: 0,
+                        },
+                    )
+                }
+                SUMMARY => {
+                    let index = item_index(&key, "missing instance index")?;
+                    let body: Arc<SsaFact> = facts.get(function(LOCAL_OPT, index)).await?;
+                    let summary = body.lowered.as_deref().map(ssa::inline::Summary::of);
+                    cx.publish_fact(0, summary)
+                }
+                IPO_OPT => {
+                    let index = item_index(&key, "missing instance index")?;
+                    let body: Arc<SsaFact> = facts.get(function(LOCAL_OPT, index)).await?;
+                    let Some(lowered) = body.lowered.clone() else {
+                        return cx.publish_fact(
+                            0,
+                            SsaFact {
+                                lowered: None,
+                                unsupported: body.unsupported,
+                                inlined: 0,
+                            },
+                        );
+                    };
+                    // Callers read only their own direct callees' summaries,
+                    // requested together, then the bodies they inline. Each
+                    // inlined body is a recorded edge (OPTIMIZATION.md 8.3).
+                    let types = facts.types().await?;
+                    let mut slots = Vec::with_capacity(lowered.callees.len());
+                    for callee in &lowered.callees {
+                        this.0.budget.charge_work(1).map_err(Error::new)?;
+                        slots.push(instance_slot(&facts, &types, &callee.target).await?);
+                    }
+                    let summary_handles: Vec<_> = slots
+                        .iter()
+                        .map(|slot| {
+                            slot.filter(|slot| *slot != index)
+                                .map(|slot| cx.request(function(SUMMARY, slot)).get(0))
+                        })
+                        .collect();
+                    let mut summaries = Vec::with_capacity(summary_handles.len());
+                    for handle in summary_handles {
+                        summaries.push(match handle {
+                            Some(handle) => {
+                                let summary: Arc<Option<ssa::inline::Summary>> =
+                                    cx.read_fact(handle).await?;
+                                *summary
+                            }
+                            None => None,
+                        });
+                    }
+                    let chosen = ssa::inline::candidates(&lowered, &|callee| summaries[callee]);
+                    if chosen.is_empty() {
+                        return cx.publish_fact(
+                            0,
+                            SsaFact {
+                                lowered: Some(lowered),
+                                unsupported: None,
+                                inlined: 0,
+                            },
+                        );
+                    }
+                    let body_handles: Vec<_> = chosen
+                        .iter()
+                        .map(|callee| {
+                            let slot = slots[*callee].expect("chosen callee has a slot");
+                            cx.request(function(LOCAL_OPT, slot)).get(0)
+                        })
+                        .collect();
+                    let mut bodies = Vec::with_capacity(body_handles.len());
+                    for handle in body_handles {
+                        let body: Arc<SsaFact> = cx.read_fact(handle).await?;
+                        bodies.push(body);
+                    }
+                    let pairs: Vec<(usize, &ssa::lower::Lowered)> = chosen
+                        .iter()
+                        .zip(&bodies)
+                        .filter_map(|(callee, body)| body.lowered.as_deref().map(|b| (*callee, b)))
+                        .collect();
+                    let inlined = pairs.len();
+                    let merged = ssa::inline::inline(&lowered, &pairs).map_err(Error::new)?;
+                    let optimized = local_opt(&merged, &this.0.budget)?;
+                    cx.publish_fact(
+                        0,
+                        SsaFact {
+                            lowered: Some(Arc::new(optimized)),
+                            unsupported: None,
+                            inlined,
+                        },
+                    )
                 }
                 CHECK | BUILD => {
                     // Closed source roots have stable slots from SIGNATURES.
@@ -1034,6 +1189,47 @@ impl Provider for CompilerProvider {
         })
     }
 }
+/// Run `opt::local` on a lowered function, charging work to this node.
+fn local_opt(
+    lowered: &ssa::lower::Lowered,
+    budget: &ir::PlanBudget,
+) -> Result<ssa::lower::Lowered, Error> {
+    budget
+        .charge_work(lowered.function.inst_count().saturating_add(1))
+        .map_err(Error::new)?;
+    let (function, _stats) =
+        ssa::opt::local(&lowered.function, &|callee| lowered.signature_of(callee))
+            .map_err(|error| Error::new(error.to_string()))?;
+    Ok(ssa::lower::Lowered {
+        function,
+        callees: lowered.callees.clone(),
+    })
+}
+
+/// The instance slot of a direct call target, if it is a planned instance.
+/// Nongeneric roots resolve from SIGNATURES alone; generic targets read the
+/// sealed instance plan, which these optimizer nodes already depend on
+/// transitively through ANALYZE.
+async fn instance_slot(
+    facts: &Facts<'_>,
+    types: &frontend::PlanCtx,
+    target: &ir::CallTarget,
+) -> Result<Option<usize>, Error> {
+    if target.type_args.is_empty() {
+        let callable = types
+            .callable_index(target.declaration)
+            .map_err(Error::new)?;
+        if let Some(slot) = types
+            .closed_roots()
+            .iter()
+            .position(|root| *root == callable)
+        {
+            return Ok(Some(slot));
+        }
+    }
+    let plan = facts.plan().await?;
+    Ok(plan.plan.slot(target))
+}
 fn has_drop(function: &cfg::Function) -> bool {
     function
         .blocks
@@ -1067,6 +1263,20 @@ pub struct Compilation {
     pub source_files: usize,
     /// Shared planning-budget accounting, distinct from allocator/RSS measurements.
     pub resource_usage: ir::PlanUsageSnapshot,
+    /// Optimizer outcome per instance, read from retained IPO_OPT facts.
+    pub optimizer: OptimizerReport,
+}
+
+/// What the optimizer did in one build (OPTIMIZATION.md section 8.9).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OptimizerReport {
+    pub mode: ssa::OptMode,
+    /// Instances compiled by the SSA machine backend.
+    pub optimized: usize,
+    /// Instances kept on the stack emitter, with the first unsupported reason.
+    pub fallback: Vec<&'static str>,
+    /// Callee bodies inlined across all instances.
+    pub inlined: usize,
 }
 
 /// Compile an immutable source snapshot. Executable publication is gated on all
@@ -1352,6 +1562,22 @@ fn compile_input_configured(
         .map(|analysis| analysis.as_ref().clone())
         .collect();
     let resource_usage = metered_usage(&snapshot.budget, &report);
+    let mut optimizer = OptimizerReport {
+        mode: snapshot.source_options.opt,
+        ..OptimizerReport::default()
+    };
+    for index in 0..instances {
+        if let Some(fact) = engine.fact_of::<SsaFact>(&Key::new(IPO_OPT, vec![index as u64]), 0) {
+            if fact.lowered.is_some() {
+                optimizer.optimized += 1;
+            } else {
+                optimizer
+                    .fallback
+                    .push(fact.unsupported.unwrap_or("unknown"));
+            }
+            optimizer.inlined += fact.inlined;
+        }
+    }
     Ok(Compilation {
         executable: executable.map(|bytes| bytes.as_ref().clone()),
         report,
@@ -1366,6 +1592,7 @@ fn compile_input_configured(
         source_bytes,
         source_files,
         resource_usage,
+        optimizer,
     })
 }
 

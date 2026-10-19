@@ -732,8 +732,10 @@ the profile chooses behavior (overflow checks, debug assertions, panic strategy)
 never speed. Design in `OPTIMIZATION.md`. Nothing implemented.
 
 Phase 1 (now, alongside language work):
-- [ ] `JR_OPT=off|adaptive|final` engine switch, recorded in telemetry and cache
-      keys. Only `off` (current emitter) exists until the optimizer lands.
+- [x] `OptMode` off|adaptive|final as an explicit compile input
+      (`SourceOptions::opt`), with `--opt` and `JR_OPT` handled only in the CLI.
+      `off` demands no optimizer node. `adaptive` currently equals `final`: the
+      adaptive background scheduler is not built yet.
 - [ ] Preserve borrow/alias, validity/range/niche and drop facts in lowered
       instances (coordinate with G2/G3).
 - [x] SSA core as a pure library (`src/compiler/ssa/`, no graph state): block-
@@ -745,20 +747,36 @@ Phase 1 (now, alongside language work):
       `x op c` soundness, 1,500 random functions differential vs interpreter,
       fixpoint and numbering-independence. A planted unsound identity was
       caught by the exhaustive test. Integer/bool subset only.
-- [ ] Lower `cfg::Function` to SSA and differential-test against the stack
-      emitter (needs graph-native facts).
-- [ ] Per-function `SSA`, `LOCAL_OPT`, `FRAGMENT` graph nodes with trivial
-      passes. CHECK never demands them.
+- [x] Lower sealed concrete `cfg::Function` (ANALYZE output) to SSA
+      (`ssa::lower`) for the scalar subset: integers up to 64 bits, bool, unit,
+      whole-local places, arithmetic, comparisons, casts, branches, direct
+      scalar calls, explicit panics. Everything else returns Unsupported and
+      keeps the stack emitter for that function.
+- [x] Per-instance graph nodes `SSA` (130), `LOCAL_OPT` (131), `SUMMARY` (132),
+      `IPO_OPT` (133) as typed facts. OBJECT reads IPO_OPT unless the mode is
+      off. CHECK never demands them. No whole-program optimizer node.
+- [x] Differential acceptance (`tests/optimizer.rs`): real programs compiled
+      off and on must match in exit status, stdout and stderr, including
+      overflow, division, shift and explicit-panic aborts. Workers 1 and 8
+      give byte-identical executables.
 - [ ] Compile time, runtime and size harness versus stock `opt-level=0/3`.
+      Only an off-versus-on runtime report exists so far.
 
 Phase 2 (with the real G6 ABI):
-- [ ] Linear-scan register allocation. New features lower only to SSA. The
-      stack emitter becomes a reference oracle.
+- [x] Linear-scan register allocation (`ssa::machine`) on the existing private
+      ABI, so optimized and stack-emitted functions link together. Values live
+      across calls are spilled, constants are rematerialized, compare-and-branch
+      is fused, block parameters use parallel moves.
+- [ ] Move to the real G6 ABI. New features lower only to SSA. The stack
+      emitter becomes a reference oracle.
 
 Phase 3 (alongside core/std bring-up):
-- [ ] Function summaries with early cutoff, recorded inlining dependencies,
-      recursion fixed-point protocol, generic-template optimization and
-      instance folding.
+- [x] Function summaries and leaf inlining: IPO_OPT reads only its direct
+      callees' SUMMARY facts, then requests the LOCAL_OPT body of each inlined
+      callee as a recorded edge. Deterministic size threshold.
+- [ ] Early cutoff on unchanged summaries (needs cross-build persistence),
+      recursion fixed-point protocol, non-leaf inlining, generic-template
+      optimization and instance folding.
 - [ ] Incremental linker patching per-function fragments, with profile-guided
       hot/cold code layout under the `build` root.
 - [ ] Specialization on request: `SPECIALIZE(g, constant args)` nodes keyed by
