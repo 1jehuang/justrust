@@ -31,6 +31,7 @@ pub use super::semantic_path::{AstPath, PathAnchor};
 use super::semantic_path::{NameAccess, PathKey};
 use native_adapter::{NativeParserInput, NativeTokenBuffer};
 mod assignment_expr;
+mod break_prefix;
 mod carrier_regions;
 mod char_literal;
 pub(super) mod closures;
@@ -12306,6 +12307,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         {
             return self.local_macro_expression();
         }
+        if self.eat("break") {
+            return self.break_prefix();
+        }
         // These recursive forms must not retain the unrelated aggregate,
         // borrow, break-value and trait-call temporaries from the ordinary
         // prefix frame for every admitted syntax nesting level.
@@ -12402,20 +12406,6 @@ impl<'input, 'names> Parser<'input, 'names> {
                 label: None,
                 body: self.block()?,
             }
-        } else if self.eat("break") {
-            let label = if self.token().is_lifetime() {
-                let label = self.input.mint_name(&self.token(), self.names)?;
-                self.cursor.bump();
-                Some(label)
-            } else {
-                None
-            };
-            let value = if matches!(self.token().text, ";" | "}" | ")" | "]" | "," | "") {
-                None
-            } else {
-                Some(Box::new(self.expr(0)?))
-            };
-            Expr::Break { label, value }
         } else if self.eat("continue") {
             let label = if self.token().is_lifetime() {
                 let label = self.input.mint_name(&self.token(), self.names)?;

@@ -296,6 +296,9 @@ missing-file changes invalidate only justified consumers without stale lookup.
 - [x] Cast/repeat source-inventory chains traverse without recursive large
       dispatch frames, retaining original occurrence authority and unchanged
       nesting/resource checks (INTEGER-CASTS.md).
+- [x] Recursive break-value parsing uses a small prefix frame, preserving the
+      ordinary syntax nesting ceiling and original target authority
+      (LABELED-CONTROL-FLOW.md).
 
 - [x] Native i128/u128 scalar arithmetic, numeric casts, transport and exact
       typed constants under INTEGER128.md (not platform ABI or full Rust).

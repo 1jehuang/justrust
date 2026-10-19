@@ -3038,6 +3038,13 @@ impl Resolver<'_> {
             self.expr(value, module, locals)?;
             return self.ty(target, module);
         }
+        // Break operands also recurse without retaining constructor scratch.
+        if let Expr::Break {
+            value: Some(value), ..
+        } = expr
+        {
+            return self.expr(value, module, locals);
+        }
         self.ordinary_expr(expr, module, locals)
     }
 
@@ -3603,9 +3610,6 @@ impl Resolver<'_> {
             | Expr::Unsafe(block)
             | Expr::Loop { body: block, .. }
             | Expr::LabeledBlock { body: block, .. } => self.block(block, module, locals)?,
-            Expr::Break {
-                value: Some(value), ..
-            } => self.expr(value, module, locals)?,
             Expr::Try(value) => self.expr(value, module, locals)?,
             _ => {}
         }

@@ -3,6 +3,16 @@
 Labeled control flow is a prerequisite toward full Rust compatibility, not
 completion of the control-flow or pattern categories.
 
+## Normal-stack break parsing (2026-10-19)
+
+Break labels and values are parsed in a small dedicated prefix helper rather
+than retaining the ordinary literal/borrow dispatch frame at every nested
+operand. Root resolution likewise traverses break operands before its large
+constructor dispatch frame. Existing syntax nesting checks are unchanged.
+Regression coverage accepts 120 nested break operands, rejects 140 with a nesting
+diagnostic, and validates original labeled targets while rejecting a forged
+target identity.
+
 ## Checked representation
 
 Labels are resolved lexically to private `LoopId` values during source checking.
