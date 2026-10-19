@@ -25,6 +25,9 @@ mod normal_drop;
 mod parameter_equality;
 mod predicate_subjects;
 mod projected_methods;
+mod universal_carriers;
+mod universal_methods;
+mod universal_projections;
 pub use associated_types::NormalizedAssociatedType;
 pub use catalog::{
     CallableProvider, CatalogDecl, CatalogItem, CoreCatalog, CoreCatalogBuilder, DeclOrigin,
@@ -603,13 +606,13 @@ impl OriginalCallableView {
         }
         if let Some((call, view)) = &self.required {
             view.validate_for(facts)?;
-            let application = facts
+            let (application, _) = facts
                 .world
-                .instantiate_equality_required_item(call, facts)?;
+                .instantiate_universal_required_item(call, facts)?;
             if !facts.world.same_env(&self.schema.env, facts.env())?
                 || !facts
                     .world
-                    .eq_signature(&self.schema.signature, &application.instantiated.signature)?
+                    .eq_signature(&self.schema.signature, &application.signature)?
                 || *self.source_regions != *view.source_regions
             {
                 return Err(FactsError::invalid(
@@ -739,16 +742,17 @@ impl ValidatedFacts {
         let declaration = match subject {
             OriginalCallableSubject::Direct(declaration) => declaration,
             OriginalCallableSubject::TraitItem(call) => {
-                let application = self.world.instantiate_equality_required_item(call, self)?;
-                let required = self.world.equality_required_carrier_contract(call, self)?;
+                let (application, _) =
+                    self.world.instantiate_universal_required_item(call, self)?;
+                let required = self.world.universal_required_carrier_contract(call, self)?;
                 retain::<OriginalCallableView>(self.budget(), 1)?;
                 return Ok(Arc::new(OriginalCallableView {
                     facts: self.clone(),
                     declaration: call.item,
                     schema: GenericSchema {
                         env: self.env().clone(),
-                        signature: application.instantiated.signature,
-                        predicates: application.instantiated.predicates,
+                        signature: application.signature,
+                        predicates: application.predicates,
                     },
                     source_regions: required.source_regions.clone(),
                     receiver: self.world.info(call.item)?.receiver,
@@ -1934,11 +1938,9 @@ impl ValidatedTraitWorld {
                     child(ty, TypeUse::Root)?;
                 }
             }
-            Ty::AssociatedType(_) => {
-                return Err(FactsError::unsupported(
-                    &self.budget,
-                    "unsupported: residual associated type projection in executable type",
-                ));
+            Ty::AssociatedType(projection) => {
+                self.validate_universal_projection(projection, env)?;
+                walk.has_parameters = true;
             }
             Ty::Param(param) => {
                 walk.has_parameters = true;
@@ -2216,7 +2218,9 @@ impl ValidatedTraitWorld {
         if derived != signature.ref_contract.results {
             return Err(FactsError::invalid(
                 &self.budget,
-                "declaration return origins are not the complete rigid canonical contract",
+                &format!(
+                    "declaration return origins are not the complete rigid canonical contract for {declaration:?}: signature={signature:?}, derived={derived:?}"
+                ),
             ));
         }
         self.validate_signature_shape(signature, env, maybe_unsized)
@@ -2805,15 +2809,16 @@ impl ValidatedTraitWorld {
                     &callable.schema.env,
                     default_self,
                 )?;
-            } else if self
-                .info(callable.declaration)?
-                .owner
-                .is_some_and(|owner| self.headers.traits.iter().any(|h| h.declaration == owner))
-            {
-                return Err(FactsError::unsupported(
-                    &self.budget,
-                    "unsupported: projection-bearing trait default signatures",
-                ));
+            } else {
+                for ty in callable
+                    .schema
+                    .signature
+                    .params
+                    .iter()
+                    .chain(std::iter::once(&callable.schema.signature.result))
+                {
+                    self.validate_raw_associated_ty(ty, &callable.schema.env, 0)?;
+                }
             }
             if let ReceiverMode::Borrowed { kind } = info.receiver
                 && !matches!(callable.schema.signature.params.first(),
@@ -3337,7 +3342,7 @@ impl ValidatedTraitWorld {
             if !self.goal_is_closed(&call.trait_ref, facts.env())?
                 && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
             {
-                return self.equality_required_carrier_contract(call, facts);
+                return self.universal_required_carrier_contract(call, facts);
             }
             return self.projected_carrier_contract(call, facts);
         }
@@ -3497,12 +3502,62 @@ impl ValidatedTraitWorld {
                 })?;
             }
         }
-        for (index, parameter) in raw.env.ordered_params().enumerate() {
-            for relative in charged(
+        let mut families = Vec::new();
+        for parameter in raw.env.ordered_params() {
+            push(
                 &self.budget,
-                ir::carrier_locations(&arguments[index], &self.budget),
-            )?
+                &mut families,
+                ir::CarrierFamily::Parameter(parameter),
+            )?;
+        }
+        for location in retained
+            .contract
+            .inputs
             .iter()
+            .map(|input| &input.location)
+            .chain(
+                retained
+                    .contract
+                    .results
+                    .iter()
+                    .map(|result| &result.location),
+            )
+            .chain(
+                retained
+                    .contract
+                    .writes
+                    .iter()
+                    .map(|write| &write.destination.location),
+            )
+        {
+            if let Some(family @ ir::CarrierFamily::Projection(_)) = location.channel.family() {
+                charged(&self.budget, self.budget.charge_work(families.len()))?;
+                if !families.contains(&family) {
+                    push(&self.budget, &mut families, family)?;
+                }
+            }
+        }
+        for family in families {
+            let actual = match &family {
+                ir::CarrierFamily::Parameter(parameter) => {
+                    let index = raw
+                        .env
+                        .ordered_params()
+                        .position(|candidate| candidate == *parameter)
+                        .ok_or_else(|| {
+                            FactsError::invalid(
+                                &self.budget,
+                                "carrier parameter disappeared from original environment",
+                            )
+                        })?;
+                    arguments[index].clone()
+                }
+                ir::CarrierFamily::Projection(projection) => {
+                    self.realize_projection_family(projection, &raw.env, &arguments, facts)?
+                }
+            };
+            for relative in
+                charged(&self.budget, ir::carrier_locations(&actual, &self.budget))?.iter()
             {
                 if matches!(relative.channel, ir::CarrierChannel::Fixed(_)) {
                     component_regions = component_regions.checked_add(1).ok_or_else(|| {
@@ -3519,15 +3574,22 @@ impl ValidatedTraitWorld {
                     &self.budget,
                     &mut components,
                     ir::CarrierComponentMapping {
-                        original_parameter: parameter,
+                        original_family: family.clone(),
                         original: ir::CarrierLocation {
                             path: relative.path.clone(),
-                            channel: ir::CarrierChannel::ParamTail {
-                                parameter,
-                                prefix: match relative.channel {
-                                    ir::CarrierChannel::Fixed(position) => position.depth,
-                                    ir::CarrierChannel::ParamTail { prefix, .. } => prefix,
-                                },
+                            channel: match &family {
+                                ir::CarrierFamily::Parameter(parameter) => {
+                                    ir::CarrierChannel::ParamTail {
+                                        parameter: *parameter,
+                                        prefix: relative.channel.prefix(),
+                                    }
+                                }
+                                ir::CarrierFamily::Projection(projection) => {
+                                    ir::CarrierChannel::ProjectionTail {
+                                        projection: projection.clone(),
+                                        prefix: relative.channel.prefix(),
+                                    }
+                                }
                             },
                         },
                         substituted: relative.clone(),
@@ -3538,7 +3600,9 @@ impl ValidatedTraitWorld {
         let mut inputs = Vec::new();
         reserve_carriers(&self.budget, &mut inputs, retained.contract.inputs.len())?;
         for input in retained.contract.inputs.iter() {
-            for expanded in self.expand_carrier(&input.location, &raw.env, &arguments, &nominals)? {
+            for expanded in
+                self.expand_carrier(&input.location, &raw.env, &arguments, &nominals, facts)?
+            {
                 if inputs.len() >= ir::MAX_LOAN_SITES {
                     return Err(FactsError::resource(
                         &self.budget,
@@ -3557,13 +3621,16 @@ impl ValidatedTraitWorld {
         }
         let mut results = Vec::new();
         for result in retained.contract.results.iter() {
-            for output in self.expand_carrier(&result.location, &raw.env, &arguments, &nominals)? {
+            for output in
+                self.expand_carrier(&result.location, &raw.env, &arguments, &nominals, facts)?
+            {
                 let sources = self.expand_carrier_sources(
                     &result.sources,
                     output.component.as_ref(),
                     &raw.env,
                     &arguments,
                     &nominals,
+                    facts,
                 )?;
                 push(
                     &self.budget,
@@ -3577,9 +3644,13 @@ impl ValidatedTraitWorld {
         }
         let mut writes = Vec::new();
         for write in retained.contract.writes.iter() {
-            for destination in
-                self.expand_carrier(&write.destination.location, &raw.env, &arguments, &nominals)?
-            {
+            for destination in self.expand_carrier(
+                &write.destination.location,
+                &raw.env,
+                &arguments,
+                &nominals,
+                facts,
+            )? {
                 let destination_ty =
                     signature
                         .params
@@ -3599,6 +3670,7 @@ impl ValidatedTraitWorld {
                     &raw.env,
                     &arguments,
                     &nominals,
+                    facts,
                 )?;
                 push(
                     &self.budget,
@@ -3662,7 +3734,9 @@ impl ValidatedTraitWorld {
                 }
                 ref other => other.clone(),
             };
-            for expanded in self.expand_carrier(&row.location, &raw.env, &arguments, &nominals)? {
+            for expanded in
+                self.expand_carrier(&row.location, &raw.env, &arguments, &nominals, facts)?
+            {
                 push(
                     &self.budget,
                     &mut carrier_regions,
@@ -3756,10 +3830,11 @@ impl ValidatedTraitWorld {
         env: &GenericEnv,
         args: &[Ty],
         nominals: &[ir::NominalCarrierMapping],
+        facts: &ValidatedFacts,
     ) -> Result<Arc<[ir::InputCarrier]>> {
         let mut output = Vec::new();
         for source in sources {
-            for expanded in self.expand_carrier(&source.location, env, args, nominals)? {
+            for expanded in self.expand_carrier(&source.location, env, args, nominals, facts)? {
                 let matches = match (component, expanded.component.as_ref()) {
                     (Some(a), Some(b)) => self.same_location(a, b)?,
                     (None, None) => true,
@@ -3785,6 +3860,7 @@ impl ValidatedTraitWorld {
         env: &GenericEnv,
         args: &[Ty],
         nominals: &[ir::NominalCarrierMapping],
+        facts: &ValidatedFacts,
     ) -> Result<Vec<ExpandedCarrier>> {
         let mut path = Vec::new();
         for step in location.path.0.iter() {
@@ -3801,7 +3877,7 @@ impl ValidatedTraitWorld {
             push(&self.budget, &mut path, step)?;
         }
         let mut output = Vec::new();
-        match location.channel {
+        match &location.channel {
             ir::CarrierChannel::Fixed(position) => {
                 push(
                     &self.budget,
@@ -3809,36 +3885,46 @@ impl ValidatedTraitWorld {
                     ExpandedCarrier {
                         location: ir::CarrierLocation {
                             path: ir::CarrierPath(path.into()),
-                            channel: ir::CarrierChannel::Fixed(position),
+                            channel: ir::CarrierChannel::Fixed(*position),
                         },
                         component: None,
                     },
                 )?;
             }
-            ir::CarrierChannel::ParamTail { parameter, prefix } => {
-                let mut actual = None;
-                for (index, p) in env.ordered_params().enumerate() {
-                    charged(&self.budget, self.budget.charge_work(1))?;
-                    if p == parameter {
-                        actual = args.get(index);
-                        break;
+            ir::CarrierChannel::ParamTail { .. } | ir::CarrierChannel::ProjectionTail { .. } => {
+                let prefix = location.channel.prefix();
+                let actual = match &location.channel {
+                    ir::CarrierChannel::ProjectionTail { projection, .. } => {
+                        self.realize_projection_family(projection, env, args, facts)?
                     }
-                }
-                let actual = actual.ok_or_else(|| {
-                    FactsError::invalid(
-                        &self.budget,
-                        "carrier family is outside exact original substitution",
-                    )
-                })?;
+                    ir::CarrierChannel::ParamTail { parameter, .. } => {
+                        let mut actual = None;
+                        for (index, p) in env.ordered_params().enumerate() {
+                            charged(&self.budget, self.budget.charge_work(1))?;
+                            if p == *parameter {
+                                actual = args.get(index);
+                                break;
+                            }
+                        }
+                        let actual = actual.ok_or_else(|| {
+                            FactsError::invalid(
+                                &self.budget,
+                                "carrier family is outside exact original substitution",
+                            )
+                        })?;
+                        actual.clone()
+                    }
+                    _ => unreachable!(),
+                };
                 for relative in
-                    charged(&self.budget, ir::carrier_locations(actual, &self.budget))?.iter()
+                    charged(&self.budget, ir::carrier_locations(&actual, &self.budget))?.iter()
                 {
                     let mut full = Vec::new();
                     for step in &path {
                         push(&self.budget, &mut full, step.clone())?;
                     }
                     let channel = if relative.path.0.is_empty() {
-                        match relative.channel {
+                        match &relative.channel {
                             ir::CarrierChannel::Fixed(p) => {
                                 ir::CarrierChannel::Fixed(ir::ReferencePosition {
                                     depth: prefix.checked_add(p.depth).ok_or_else(|| {
@@ -3853,11 +3939,23 @@ impl ValidatedTraitWorld {
                                 parameter,
                                 prefix: p,
                             } => ir::CarrierChannel::ParamTail {
-                                parameter,
-                                prefix: prefix.checked_add(p).ok_or_else(|| {
+                                parameter: *parameter,
+                                prefix: prefix.checked_add(*p).ok_or_else(|| {
                                     FactsError::resource(
                                         &self.budget,
                                         "carrier symbolic prefix overflow",
+                                    )
+                                })?,
+                            },
+                            ir::CarrierChannel::ProjectionTail {
+                                projection,
+                                prefix: p,
+                            } => ir::CarrierChannel::ProjectionTail {
+                                projection: projection.clone(),
+                                prefix: prefix.checked_add(*p).ok_or_else(|| {
+                                    FactsError::resource(
+                                        &self.budget,
+                                        "projection carrier prefix overflow",
                                     )
                                 })?,
                             },
@@ -3897,7 +3995,7 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         match (original, instantiated) {
-            (Ty::Param(_), _) => {}
+            (Ty::Param(_) | Ty::AssociatedType(_), _) => {}
             (
                 Ty::Ref {
                     kind: a,
@@ -4185,10 +4283,7 @@ impl ValidatedTraitWorld {
                 }
             };
         }
-        let prefix = match location.channel {
-            ir::CarrierChannel::Fixed(p) => p.depth,
-            ir::CarrierChannel::ParamTail { prefix, .. } => prefix,
-        };
+        let prefix = location.channel.prefix();
         for _ in 0..prefix {
             charged(&self.budget, self.budget.charge_work(1))?;
             let Ty::Ref { kind, referent } = ty else {
@@ -4364,9 +4459,10 @@ impl ValidatedTraitWorld {
             )?;
         }
         for input in &inputs {
-            if let ir::CarrierChannel::ParamTail { parameter, prefix } = input.location.channel
+            if let Some(family) = input.location.channel.family()
                 && input.location.path.0.is_empty()
             {
+                let prefix = input.location.channel.prefix();
                 for row in signature.ref_contract.input_regions.iter() {
                     charged(&self.budget, self.budget.charge_work(1))?;
                     if row.input.param == input.param && row.input.position.depth < prefix {
@@ -4374,7 +4470,18 @@ impl ValidatedTraitWorld {
                             &self.budget,
                             &mut constraints,
                             ir::CarrierRegionConstraint {
-                                longer: ir::CarrierRegionTerm::Family { parameter },
+                                longer: match &family {
+                                    ir::CarrierFamily::Parameter(parameter) => {
+                                        ir::CarrierRegionTerm::Family {
+                                            parameter: *parameter,
+                                        }
+                                    }
+                                    ir::CarrierFamily::Projection(projection) => {
+                                        ir::CarrierRegionTerm::ProjectionFamily {
+                                            projection: projection.clone(),
+                                        }
+                                    }
+                                },
                                 shorter: ir::CarrierRegionTerm::Fixed(row.region),
                             },
                         )?;
@@ -4414,6 +4521,14 @@ impl ValidatedTraitWorld {
             ),
         )?;
         match (&destination.channel, &input.location.channel) {
+            (
+                ir::CarrierChannel::ProjectionTail { projection: a, .. },
+                ir::CarrierChannel::ProjectionTail { projection: b, .. },
+            ) => self.eq_ty(
+                &Ty::AssociatedType(a.clone()),
+                &Ty::AssociatedType(b.clone()),
+                0,
+            ),
             (
                 ir::CarrierChannel::ParamTail { parameter: a, .. },
                 ir::CarrierChannel::ParamTail { parameter: b, .. },
@@ -4505,16 +4620,15 @@ impl ValidatedTraitWorld {
         for declaration in declarations {
             let raw = self.normalized_declaration_schema(declaration)?;
             if self.signature_contains_projection(&raw.signature)? {
-                // A projected required declaration is a nonexecuting schema.
-                // Its topology is retained only after an exact application.
-                if self.info(declaration)?.kind != DeclKind::TraitItem {
-                    return Err(FactsError::invalid(
-                        &self.budget,
-                        "executable callable retained an unnormalized projected schema",
-                    ));
+                for ty in raw
+                    .signature
+                    .params
+                    .iter()
+                    .chain(std::iter::once(&raw.signature.result))
+                {
+                    self.validate_universal_projection_type(ty, &raw.env, 0)?;
                 }
                 self.validate_source_regions(declaration, &raw.signature)?;
-                continue;
             }
             let schema = charged(
                 &self.budget,
@@ -5121,6 +5235,7 @@ impl ValidatedTraitWorld {
                 "instantiation changed declaration-derived return authority",
             ));
         }
+        self.normalize_instantiated_projection_signature(&mut result.signature, facts)?;
         result.signature.ref_contract =
             self.realize_ref_contract(schema, args, &result.signature, declaration)?;
         if result.predicates.len() != schema.predicates.len() {
@@ -6270,11 +6385,9 @@ impl ValidatedTraitWorld {
             Ty::Slice { .. } | Ty::Str | Ty::Dyn(_) => false,
             Ty::RawPtr { .. } => true,
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => true,
-            Ty::AssociatedType(_) => {
-                return Err(FactsError::unsupported(
-                    &self.budget,
-                    "unsupported: residual associated projection in builtin obligation",
-                ));
+            Ty::AssociatedType(projection) => {
+                self.validate_universal_projection(projection, context.env())?;
+                item == CatalogItem::Sized
             }
         };
         if !known {
@@ -6546,8 +6659,8 @@ impl TraitCx for ValidatedTraitWorld {
             && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
         {
             return Ok(self
-                .instantiate_equality_required_item(call, facts)?
-                .instantiated
+                .instantiate_universal_required_item(call, facts)?
+                .0
                 .signature);
         }
         self.trait_signature_in(call, ProofContext::from_facts(facts))
@@ -6575,8 +6688,8 @@ impl TraitCx for ValidatedTraitWorld {
             && !self.goal_is_closed(&call.trait_ref, facts.env())?
             && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
         {
-            let application = self.instantiate_equality_required_item(call, facts)?;
-            let required = self.equality_required_carrier_contract(call, facts)?;
+            let (application, _) = self.instantiate_universal_required_item(call, facts)?;
+            let required = self.universal_required_carrier_contract(call, facts)?;
             let evidence = self.require_in(
                 &Predicate::Implements(call.trait_ref.clone()),
                 caller,
@@ -6584,7 +6697,7 @@ impl TraitCx for ValidatedTraitWorld {
             )?;
             return Ok(ResolvedTraitCall {
                 callee: Callee::TraitItem(call.clone()),
-                signature: application.instantiated.signature,
+                signature: application.signature,
                 _evidence: evidence,
                 _refinement: None,
                 _topology: None,

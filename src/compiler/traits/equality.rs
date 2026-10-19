@@ -167,7 +167,7 @@ pub(super) enum ProjectionReduction {
     Implementation(NormalizedAssociatedType),
 }
 impl ProjectionReduction {
-    fn ty(&self) -> &Ty {
+    pub(super) fn ty(&self) -> &Ty {
         match self {
             Self::Equality(p) => p.ty(),
             Self::Implementation(p) => p.ty(),
@@ -484,7 +484,7 @@ impl ValidatedTraitWorld {
                     &self.budget,
                     &mut components,
                     ir::CarrierComponentMapping {
-                        original_parameter: parameter,
+                        original_family: ir::CarrierFamily::Parameter(parameter),
                         original: location.clone(),
                         substituted: location.clone(),
                     },
@@ -745,7 +745,7 @@ impl ValidatedTraitWorld {
         }
         Ok(())
     }
-    fn declared_equality_rhs(
+    pub(super) fn declared_equality_rhs(
         &self,
         projection: &ir::AssociatedTypeProjection,
         rows: &[Predicate],
@@ -1038,7 +1038,7 @@ impl ValidatedTraitWorld {
             }
         })
     }
-    fn map_equality_type(
+    pub(super) fn map_equality_type(
         &self,
         ty: &Ty,
         depth: usize,

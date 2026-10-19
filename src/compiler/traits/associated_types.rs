@@ -640,7 +640,12 @@ impl ValidatedTraitWorld {
     }
 
     /// Validate identities and binder scopes without treating a raw projection as a carrier.
-    fn validate_raw_associated_ty(&self, ty: &Ty, env: &GenericEnv, depth: usize) -> Result<()> {
+    pub(super) fn validate_raw_associated_ty(
+        &self,
+        ty: &Ty,
+        env: &GenericEnv,
+        depth: usize,
+    ) -> Result<()> {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         charged(&self.budget, self.budget.charge_nodes(1))?;
@@ -667,10 +672,7 @@ impl ValidatedTraitWorld {
                 if !self.raw_associated_ty_is_closed(ty, depth + 1)?
                     && !matches!(&projection.trait_ref.self_ty, Ty::Dyn(_))
                 {
-                    return Err(FactsError::unsupported(
-                        &self.budget,
-                        "unsupported: rigid generic associated projection",
-                    ));
+                    self.validate_universal_projection(projection, env)?;
                 }
             }
             Ty::Tuple(parts) => {
@@ -986,6 +988,17 @@ impl ValidatedTraitWorld {
                         CallableHeader {
                             declaration: callable.declaration,
                             schema: owned,
+                        },
+                    )?;
+                    continue;
+                }
+                if let Some(universal) = self.normalize_universal_callable_schema(&schema)? {
+                    push(
+                        &self.budget,
+                        &mut normalized,
+                        CallableHeader {
+                            declaration: callable.declaration,
+                            schema: universal,
                         },
                     )?;
                     continue;

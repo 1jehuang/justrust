@@ -29,8 +29,11 @@ impl ValidatedTraitWorld {
             return Ok(None);
         };
         if !self.goal_is_closed(&projection.trait_ref, context.env())? {
-            // An open subject can only be proved from exact contextual facts.
-            // The assumption pass ran before this helper.
+            if goal.declaration == self.catalog.id(CatalogItem::Sized) {
+                self.validate_universal_projection(projection, context.env())?;
+                return Ok(None);
+            }
+            // Other open-subject obligations still require exact contextual facts.
             return Ok(Some(ProofOutcome::NotProven));
         }
         let (normal, reductions) = self.normalize_closed_projected_type(

@@ -13,6 +13,9 @@ use super::ir::{CheckedFunction, ExprId, FactsCtx, GenericEnv, LocalId, Place, P
 use super::traits::{FactsError, FactsPhase, ValidatedFacts};
 use std::collections::VecDeque;
 use std::sync::Arc;
+#[cfg(test)]
+#[path = "ownership/projection_tests.rs"]
+mod projection_tests;
 
 #[derive(Clone, Debug, Default)]
 pub struct AnalysisStats {
@@ -418,8 +421,11 @@ fn type_requires_carrier_proof(
     Ok(depth > 2
         || (depth > 1 && mutable)
         || locations.iter().any(|location| {
-            matches!(location.channel, super::ir::CarrierChannel::Fixed(_))
-                && !location.path.0.is_empty()
+            matches!(
+                location.channel,
+                super::ir::CarrierChannel::ProjectionTail { .. }
+            ) || (matches!(location.channel, super::ir::CarrierChannel::Fixed(_))
+                && !location.path.0.is_empty())
         }))
 }
 
@@ -1797,7 +1803,19 @@ impl<'a> MoveShape<'a> {
                 }
                 Self::OpaqueParam
             }
-            Ty::AssociatedType(_) => return Err(Exhausted),
+            Ty::AssociatedType(_) => {
+                let FactsCtx::Validated(authority) = facts else {
+                    return Err(Exhausted);
+                };
+                if authority.phase() != FactsPhase::Universal {
+                    return Err(Exhausted);
+                }
+                // Membership and the exact owning declaration are sealed by
+                // the world. An unresolved family is a single move leaf, not
+                // a layout, a Copy witness, or an invented field capability.
+                authority.validate_ty(ty).map_err(|_| Exhausted)?;
+                Self::OpaqueParam
+            }
             Ty::Never => Self::Never,
             Ty::Closure(closure) => Self::Product {
                 ty,

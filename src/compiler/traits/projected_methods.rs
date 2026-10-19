@@ -21,9 +21,28 @@ pub(super) struct ProjectedMethodEvidence {
     source_regions: Arc<ir::SourceRegionEnv>,
     dependencies: Arc<[NormalizedAssociatedType]>,
     selection: ProofEvidence,
+    universal: Option<Arc<super::universal_methods::UniversalMethodEvidence>>,
 }
 
 impl ProjectedMethodEvidence {
+    pub(super) fn universal(
+        world: WorldId,
+        facts: &ValidatedFacts,
+        authority: Arc<super::universal_methods::UniversalMethodEvidence>,
+    ) -> Self {
+        Self {
+            world,
+            environment: facts.predicates.index,
+            phase: facts.phase(),
+            item: authority.call.item,
+            goal: authority.call.trait_ref.clone(),
+            signature: authority.signature.clone(),
+            source_regions: authority.source_regions.clone(),
+            dependencies: Arc::from([]),
+            selection: authority.selection.clone(),
+            universal: Some(authority),
+        }
+    }
     pub(super) fn goal(&self) -> &TraitRef {
         &self.goal
     }
@@ -56,10 +75,21 @@ impl ValidatedTraitWorld {
             );
         }
         if item.default.is_some() {
-            return Err(FactsError::unsupported(
-                &self.budget,
-                "unsupported: projection-bearing trait default signatures",
-            ));
+            for ty in item
+                .schema
+                .signature
+                .params
+                .iter()
+                .chain(std::iter::once(&item.schema.signature.result))
+            {
+                self.validate_universal_projection_type(ty, &item.schema.env, 0)?;
+            }
+            return self.validate_schema_signature(
+                item.declaration,
+                &item.schema.signature,
+                &item.schema.env,
+                None,
+            );
         }
         self.validate_projected_value_schema(&item.schema, item.receiver)
     }
@@ -513,6 +543,15 @@ impl ValidatedTraitWorld {
                         &mut Vec::new(),
                     )?;
                     let ProofOutcome::Proved(selection) = selection else {
+                        // Prefer a proven generic implementation's assignment
+                        // (for example Index<usize>::Output = T on Vec<T>).
+                        // Only an ordinary unproved implementation lookup may
+                        // retain the exact rigid projection from a caller bound.
+                        if let Some(symbolic) =
+                            self.retain_universal_owner_projection(projection, context)?
+                        {
+                            return Ok(symbolic);
+                        }
                         return Err(FactsError::unproved(
                             &self.budget,
                             "inherited associated type has no implementation witness",
@@ -1100,6 +1139,7 @@ impl ValidatedTraitWorld {
             source_regions,
             dependencies: dependencies.into(),
             selection,
+            universal: None,
         });
         Ok(ProjectedApplication {
             instantiated,
@@ -1304,6 +1344,9 @@ impl ValidatedTraitWorld {
                 &self.budget,
                 "projected carrier changed its full trait application",
             ));
+        }
+        if let Some(authority) = &evidence.universal {
+            return self.validate_universal_required_carrier(view, authority, facts);
         }
         let application = self.instantiate_projected_item(
             self.item_header(evidence.item)?,

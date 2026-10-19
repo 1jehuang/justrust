@@ -10,6 +10,9 @@ mod iteration;
 #[path = "local_literals/positional_pattern.rs"]
 mod positional_pattern;
 
+#[path = "local_literals/projection_call.rs"]
+mod projection_call;
+
 type Term = usize;
 #[derive(Clone, Debug)]
 enum Domain {
@@ -443,7 +446,6 @@ impl<'s> Solver<'_, '_, 's> {
                 *actual,
             );
         }
-        let mut formals = schema.signature.params.iter();
         if let Some(receiver) = receiver {
             let associated = info
                 .path
@@ -453,13 +455,18 @@ impl<'s> Solver<'_, '_, 's> {
             let owner = self.schema(&associated.self_pattern, &params, 0)?;
             let receiver = self.peel_refs(receiver);
             self.unify(receiver, owner)?;
+        }
+        let instantiated = self.projection_call_signature(decl, &schema, &params)?;
+        let signature = instantiated.as_ref().unwrap_or(&schema.signature);
+        let mut formals = signature.params.iter();
+        if receiver.is_some() {
             formals.next();
         }
         for (arg, formal) in args.iter().zip(formals) {
             let formal = self.schema(formal, &params, 0)?;
             self.coerce(*arg, formal)?;
         }
-        self.schema(&schema.signature.result, &params, 0)
+        self.schema(&signature.result, &params, 0)
     }
     fn coerce(&mut self, actual: Term, expected: Term) -> Result<(), String> {
         // A producer may reveal an array or a Deref carrier, so assigning its

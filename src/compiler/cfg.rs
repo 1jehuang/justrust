@@ -3273,7 +3273,7 @@ impl Lowerer<'_> {
         destination: Place,
     ) -> Result<(), String> {
         self.source
-            .validate_match(scrutinee, arms, &self.parameters)?;
+            .validate_match_with_facts(scrutinee, arms, &self.parameters, self.facts)?;
         let source = self.pattern_source(scrutinee)?;
         let completes = self.source.exprs[scrutinee.0].completion == ir::Completion::Returns;
         let join = self.block();
@@ -3480,8 +3480,14 @@ impl Lowerer<'_> {
         pattern: &ir::MatchPattern,
         else_branch: ExprId,
     ) -> Result<(), String> {
-        self.source
-            .validate_let_else(value, ty, pattern, else_branch, &self.parameters)?;
+        self.source.validate_let_else_with_facts(
+            value,
+            ty,
+            pattern,
+            else_branch,
+            &self.parameters,
+            self.facts,
+        )?;
         let source = self.pattern_source(value)?;
         let completes = self.source.exprs[value.0].completion == ir::Completion::Returns;
         let PatternTest {
@@ -3893,10 +3899,11 @@ impl Lowerer<'_> {
                     if drop_normal::descriptor(ty, self.facts)?.is_some() && !bindings.is_empty() {
                         return Err("unsupported: destructuring a normal Drop owner".into());
                     }
-                    self.source.validate_pattern_bindings_with_params(
+                    self.source.validate_pattern_bindings_with_facts(
                         ty,
                         bindings,
                         &self.parameters,
+                        self.facts,
                     )?;
                     if bindings.is_empty()
                         && let ir::ExprKind::DynamicIndex { base, index } = self

@@ -5,6 +5,12 @@
 //! diagnostics only. This structured representation is a migration boundary,
 //! not yet an ownership-checking CFG or a target layout/ABI representation.
 use super::frontend::{BinaryOp, UnaryOp};
+#[path = "ir/schema_metadata.rs"]
+mod schema_metadata;
+pub(super) use schema_metadata::substitute_schema_metadata_ty;
+#[cfg(test)]
+#[path = "ir/projection_pattern_tests.rs"]
+mod projection_pattern_tests;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 /// Combined explicit loan sites and formal reference-parameter origins.
@@ -400,7 +406,38 @@ pub struct NominalAppInfo {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CarrierChannel {
     Fixed(ReferencePosition),
-    ParamTail { parameter: ParamId, prefix: u8 },
+    ParamTail {
+        parameter: ParamId,
+        prefix: u8,
+    },
+    /// An opaque family selected by an exact canonical associated projection.
+    /// Carrier identity alone never proves membership or authorizes execution.
+    ProjectionTail {
+        projection: Arc<AssociatedTypeProjection>,
+        prefix: u8,
+    },
+}
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CarrierFamily {
+    Parameter(ParamId),
+    Projection(Arc<AssociatedTypeProjection>),
+}
+impl CarrierChannel {
+    pub fn family(&self) -> Option<CarrierFamily> {
+        match self {
+            Self::Fixed(_) => None,
+            Self::ParamTail { parameter, .. } => Some(CarrierFamily::Parameter(*parameter)),
+            Self::ProjectionTail { projection, .. } => {
+                Some(CarrierFamily::Projection(projection.clone()))
+            }
+        }
+    }
+    pub fn prefix(&self) -> u8 {
+        match self {
+            Self::Fixed(position) => position.depth,
+            Self::ParamTail { prefix, .. } | Self::ProjectionTail { prefix, .. } => *prefix,
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CarrierStep {
@@ -420,7 +457,6 @@ pub struct CarrierLocation {
 /// One canonical typed component walk for world contracts and the SAME Plan.
 /// Presence memoization avoids expanding reference-free shared type DAGs.
 pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLocation]>, String> {
-    reject_associated_types(ty, Some(budget))?;
     fn present(
         ty: &Ty,
         budget: &PlanBudget,
@@ -434,7 +470,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
             budget.check_depth(depth.checked_add(height).ok_or("carrier depth overflow")?)?;
             return Ok((has, height));
         }
-        let mut has = matches!(ty, Ty::Ref { .. } | Ty::Param(_));
+        let mut has = matches!(ty, Ty::Ref { .. } | Ty::Param(_) | Ty::AssociatedType(_));
         let mut height = 0;
         let mut child = |ty: &Ty| -> Result<(), String> {
             let (found, h) = present(ty, budget, depth + 1, memo)?;
@@ -448,9 +484,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                     child(ty)?;
                 }
             }
-            Ty::AssociatedType(_) => {
-                return Err("unsupported: residual associated type projection in carrier".into());
-            }
+            Ty::AssociatedType(_) => {}
             Ty::Ref { referent, .. }
             | Ty::Array {
                 element: referent, ..
@@ -571,6 +605,15 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                     memo,
                 )?;
             }
+            Ty::AssociatedType(projection) => emit(
+                CarrierChannel::ProjectionTail {
+                    projection: projection.clone(),
+                    prefix,
+                },
+                path,
+                output,
+                budget,
+            )?,
             Ty::Param(parameter) => emit(
                 CarrierChannel::ParamTail {
                     parameter: *parameter,
@@ -672,7 +715,6 @@ pub fn carrier_at<'a>(
     location: &CarrierLocation,
     budget: &PlanBudget,
 ) -> Result<&'a Ty, String> {
-    reject_associated_types(ty, Some(budget))?;
     for step in location.path.0.iter() {
         budget.charge_work(1)?;
         ty = match (step, ty) {
@@ -699,7 +741,8 @@ pub fn carrier_at<'a>(
     }
     let count = match &location.channel {
         CarrierChannel::Fixed(position) => position.depth,
-        CarrierChannel::ParamTail { prefix, .. } => *prefix,
+        CarrierChannel::ParamTail { prefix, .. }
+        | CarrierChannel::ProjectionTail { prefix, .. } => *prefix,
     };
     for _ in 0..count {
         budget.charge_work(1)?;
@@ -710,6 +753,11 @@ pub fn carrier_at<'a>(
     }
     match (&location.channel, ty) {
         (CarrierChannel::Fixed(_), Ty::Ref { .. }) => Ok(ty),
+        (CarrierChannel::ProjectionTail { projection, .. }, Ty::AssociatedType(actual))
+            if projection == actual =>
+        {
+            Ok(ty)
+        }
         (CarrierChannel::ParamTail { parameter, .. }, Ty::Param(actual)) if parameter == actual => {
             Ok(ty)
         }
@@ -741,7 +789,12 @@ pub struct CarrierContract {
 pub enum CarrierRegionTerm {
     Fixed(RegionParamId),
     Named(SourceRegionId),
-    Family { parameter: ParamId },
+    Family {
+        parameter: ParamId,
+    },
+    ProjectionFamily {
+        projection: Arc<AssociatedTypeProjection>,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CarrierRegionConstraint {
@@ -808,7 +861,7 @@ pub struct NominalCarrierMapping {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CarrierComponentMapping {
-    pub original_parameter: ParamId,
+    pub original_family: CarrierFamily,
     pub original: CarrierLocation,
     pub substituted: CarrierLocation,
 }
@@ -2342,7 +2395,14 @@ pub fn substitute_ty(
         caller.validate_ty_with_budget(argument, budget)?;
         validate_root_reference_actual(argument, budget)?;
     }
-    substitute_ty_walk(ty, env, args, caller, cx, budget, 0)
+    let substituted = substitute_ty_walk(ty, env, args, caller, cx, budget, 0)?;
+    if let Some(facts) = caller.validated() {
+        facts
+            .normalize_substituted_projection_type(&substituted, budget)
+            .map_err(|error| error.into_legacy_diagnostic(budget))
+    } else {
+        Ok(substituted)
+    }
 }
 
 /// Unsealed structural substitution for nonexecuting trait-item schemas only.
@@ -2892,6 +2952,13 @@ impl<C: SubstitutionCx> SubstitutionCx for RecordingSubstitutionCx<'_, C> {
         let output = self
             .inner
             .intern_substituted_nominal(request, caller, budget)?;
+        let output = if let Some(facts) = caller.validated() {
+            facts
+                .normalize_substituted_projection_type(&output, budget)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?
+        } else {
+            output
+        };
         let instantiated = match &output {
             Ty::Struct(value) => value.def().id,
             Ty::Enum(value) => value.def().id,
@@ -3169,7 +3236,6 @@ pub fn close_checked_calls(
 }
 
 pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), String> {
-    reject_associated_types(root, Some(budget))?;
     fn walk(ty: &Ty, budget: &PlanBudget, depth: usize) -> Result<(), String> {
         budget.check_depth(depth)?;
         if ty.is_nominal_back_edge() {
@@ -3182,11 +3248,7 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
                     walk(ty, budget, depth + 1)?;
                 }
             }
-            Ty::AssociatedType(_) => {
-                return Err(
-                    "unsupported: residual associated type projection in generic argument".into(),
-                );
-            }
+            Ty::AssociatedType(_) => {}
             // References as generic/trait actuals and aggregate fields carry
             // loans checked by ownership analysis (G3). Unsized referents
             // behind a reference are fine; bare slices are not actuals.
@@ -4004,7 +4066,6 @@ fn projected_ty_inner<'a>(
     path: &[Projection],
     mutable: bool,
 ) -> Result<&'a Ty, String> {
-    reject_associated_types(root, None)?;
     if path.len() > MAX_PATTERN_PROJECTION_DEPTH {
         return Err("projection depth exceeds limit 128".into());
     }
@@ -4849,9 +4910,13 @@ impl Ty {
 }
 
 /// Bounded postorder DAG walk. Metadata and binder validation happens first.
+/// Sealed universal facts may retain an opaque projection family here. Its
+/// concrete slice/reference shape is rechecked after monomorphization. Raw
+/// structural and closed executable callers must never enable that permission.
 fn slice_boundary_walk(
     ty: &Ty,
     allow_references: bool,
+    allow_universal_projections: bool,
     budget: Option<&PlanBudget>,
     depth: usize,
     work: &mut usize,
@@ -4970,6 +5035,7 @@ fn slice_boundary_walk(
                     continue;
                 }
                 let key = match node {
+                    Ty::AssociatedType(_) if allow_universal_projections => None,
                     Ty::AssociatedType(_) => return Err("unsupported: residual associated type projection at slice boundary".into()),
                     Ty::Ref { .. } if !allow_references => return Err("unsupported: slice elements containing references or slices, or nested slice carriers".into()),
                     Ty::Slice { .. } => return Err("unsupported: slice elements containing references or slices, or nested slice carriers".into()),
@@ -5068,7 +5134,16 @@ fn validate_shared_slice_element_inner(
     } else {
         facts.validate_value_ty(element)?;
     }
-    slice_boundary_walk(element, false, budget, 0, &mut 0)
+    slice_boundary_walk(
+        element,
+        false,
+        facts
+            .validated()
+            .is_some_and(|f| f.phase() == super::traits::FactsPhase::Universal),
+        budget,
+        0,
+        &mut 0,
+    )
 }
 
 /// Validate exact element metadata, Sized obligations and the current
@@ -5094,7 +5169,16 @@ fn validate_slice_carrier_with_facts(ty: &Ty, facts: FactsCtx<'_>) -> Result<(),
     if let Some((_, element)) = ty.slice_ref_element() {
         validate_shared_slice_element_with_facts(element, facts)
     } else {
-        slice_boundary_walk(ty, true, facts.validated().map(|f| f.budget()), 0, &mut 0)
+        slice_boundary_walk(
+            ty,
+            true,
+            facts
+                .validated()
+                .is_some_and(|f| f.phase() == super::traits::FactsPhase::Universal),
+            facts.validated().map(|f| f.budget()),
+            0,
+            &mut 0,
+        )
     }
 }
 
@@ -5380,7 +5464,8 @@ pub fn derive_signature_origin_schema(
 /// Number of root reference-value layers, not memory projections.
 /// The legacy structural helper below retains its prior restricted domain.
 pub fn root_reference_layers(ty: &Ty) -> Result<usize, String> {
-    reject_associated_types(ty, None)?;
+    // This counts the explicit prefix only. Rigid projection tails are opaque
+    // and acquire concrete reference layers only through checked substitution.
     let mut current = ty;
     let mut count = 0usize;
     while let Ty::Ref { referent, .. } = current {
@@ -5735,7 +5820,11 @@ fn ref_type_walk(
         // authority for returned references, checked against actual body loans.
         let mut opaque = matches!(
             ty,
-            Ty::Param(_) | Ty::Dyn(_) | Ty::Slice { .. } | Ty::RawPtr { .. }
+            Ty::Param(_)
+                | Ty::AssociatedType(_)
+                | Ty::Dyn(_)
+                | Ty::Slice { .. }
+                | Ty::RawPtr { .. }
         );
         let mut height = 0;
         let mut child = |value: &Ty| -> Result<(), String> {
@@ -5750,11 +5839,7 @@ fn ref_type_walk(
                     child(ty)?;
                 }
             }
-            Ty::AssociatedType(_) => {
-                return Err(
-                    "unsupported: residual associated type projection in reference contract".into(),
-                );
-            }
+            Ty::AssociatedType(_) => {}
             Ty::Ref { referent, .. } => {
                 root_reference_layers(ty)?;
                 let (is_opaque, child_height) =
@@ -6401,6 +6486,15 @@ impl PatternBinding {
 }
 
 fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String> {
+    pattern_types_equal_with_facts(a, b, work, FactsCtx::Concrete)
+}
+
+fn pattern_types_equal_with_facts(
+    a: &Ty,
+    b: &Ty,
+    work: &mut usize,
+    facts: FactsCtx<'_>,
+) -> Result<bool, String> {
     let mut pending = vec![(a, b, 0)];
     while let Some((a, b, depth)) = pending.pop() {
         *work = work
@@ -6422,9 +6516,31 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
                 }
             }
             (Ty::AssociatedType(_), _) | (_, Ty::AssociatedType(_)) => {
-                return Err(
-                    "unsupported: residual associated type projection in executable pattern".into(),
-                );
+                let Some(authority) = facts
+                    .validated()
+                    .filter(|f| f.phase() == super::traits::FactsPhase::Universal)
+                else {
+                    return Err(
+                        "unsupported: residual associated type projection in executable pattern"
+                            .into(),
+                    );
+                };
+                // Shape equality cannot authorize a projection. Authenticate
+                // both operands in this exact world's universal environment
+                // before comparing canonical declaration and ordered arguments.
+                authority
+                    .validate_ty(a)
+                    .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?;
+                authority
+                    .validate_ty(b)
+                    .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?;
+                if !authority
+                    .world()
+                    .types_equal(std::slice::from_ref(a), std::slice::from_ref(b))
+                    .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?
+                {
+                    return Ok(false);
+                }
             }
             (
                 Ty::Ref {
@@ -7413,7 +7529,14 @@ impl CheckedFunction {
                 authority
                     .validate_ty_metadata_with_budget(ty, ledger)
                     .map_err(|e| e.into_legacy_diagnostic(ledger))?;
-                residual |= type_metadata_walk(ty, Some(ledger), None)?;
+                let has_projection = type_metadata_walk(ty, Some(ledger), None)?;
+                if has_projection && authority.phase() == super::traits::FactsPhase::Universal {
+                    authority
+                        .validate_ty(ty)
+                        .map_err(|e| e.into_legacy_diagnostic(ledger))?;
+                } else {
+                    residual |= has_projection;
+                }
             } else {
                 residual |= facts.validate_ty_metadata_inner(ty, budget)?;
             }
@@ -7761,6 +7884,16 @@ impl CheckedFunction {
         arms: &[MatchArm],
         parameters: &std::collections::HashSet<LocalId>,
     ) -> Result<(), String> {
+        self.validate_match_with_facts(scrutinee, arms, parameters, FactsCtx::Concrete)
+    }
+
+    pub(super) fn validate_match_with_facts(
+        &self,
+        scrutinee: ExprId,
+        arms: &[MatchArm],
+        parameters: &std::collections::HashSet<LocalId>,
+        facts: FactsCtx<'_>,
+    ) -> Result<(), String> {
         let ty = &self
             .exprs
             .get(scrutinee.0)
@@ -7783,7 +7916,7 @@ impl CheckedFunction {
                     return Err("match guard must be bool".into());
                 }
             }
-            self.validate_pattern(ty, &arm.pattern, parameters, &mut bindings)?;
+            self.validate_pattern(ty, &arm.pattern, parameters, &mut bindings, facts)?;
         }
         Ok(())
     }
@@ -7794,17 +7927,18 @@ impl CheckedFunction {
         pattern: &MatchPattern,
         parameters: &std::collections::HashSet<LocalId>,
         bindings: &mut std::collections::HashSet<LocalId>,
+        facts: FactsCtx<'_>,
     ) -> Result<(), String> {
         let valid = match pattern {
             MatchPattern::Or { ty: domain, rows } => {
-                self.validate_or_pattern(domain, rows, parameters, bindings)?;
+                self.validate_or_pattern(domain, rows, parameters, bindings, facts)?;
                 let mut work = 0;
                 *ty == Ty::Never || pattern_types_equal(ty, domain, &mut work)?
             }
             MatchPattern::Alternatives { ty: domain, rows } => {
                 validate_alternative_rows(domain, rows, None)?;
                 let mut work = 0;
-                *ty == Ty::Never || pattern_types_equal(ty, domain, &mut work)?
+                *ty == Ty::Never || pattern_types_equal_with_facts(ty, domain, &mut work, facts)?
             }
             MatchPattern::Wildcard => true,
             MatchPattern::Binding(local) => {
@@ -7816,7 +7950,7 @@ impl CheckedFunction {
                     return Err("match bindings must be distinct fresh locals".into());
                 }
                 let mut work = 0;
-                *ty == Ty::Never || pattern_types_equal(ty, &decl.ty, &mut work)?
+                *ty == Ty::Never || pattern_types_equal_with_facts(ty, &decl.ty, &mut work, facts)?
             }
             MatchPattern::Bool(_) => matches!(ty, Ty::Bool | Ty::Never),
             MatchPattern::Int(value) => {
@@ -7850,7 +7984,12 @@ impl CheckedFunction {
                                 .into(),
                         );
                 }
-                self.validate_pattern_bindings_with_params(domain, aggregate_bindings, parameters)?;
+                self.validate_pattern_bindings_with_facts(
+                    domain,
+                    aggregate_bindings,
+                    parameters,
+                    facts,
+                )?;
                 for binding in aggregate_bindings {
                     if (binding.projection.is_empty()
                         && binding.borrow.is_none()
@@ -7876,7 +8015,7 @@ impl CheckedFunction {
                     }
                 }
                 let mut work = 0;
-                *ty == Ty::Never || pattern_types_equal(ty, domain, &mut work)?
+                *ty == Ty::Never || pattern_types_equal_with_facts(ty, domain, &mut work, facts)?
             }
             MatchPattern::Unit => matches!(ty, Ty::Unit | Ty::Never),
             MatchPattern::EnumVariant {
@@ -7885,10 +8024,11 @@ impl CheckedFunction {
                 bindings: payload_bindings,
             } => {
                 pattern_ty.validate()?;
-                self.validate_pattern_bindings_with_params(
+                self.validate_pattern_bindings_with_facts(
                     &Ty::Enum(pattern_ty.clone()),
                     payload_bindings,
                     parameters,
+                    facts,
                 )?;
                 let expected = Projection::Downcast(VariantId {
                     owner: pattern_ty.def().id,
@@ -7911,14 +8051,14 @@ impl CheckedFunction {
                 tests,
                 bindings: decision_bindings,
             } => {
-                self.validate_decision(domain, tests, decision_bindings, parameters)?;
+                self.validate_decision(domain, tests, decision_bindings, parameters, facts)?;
                 for binding in decision_bindings {
                     if !bindings.insert(binding.local) {
                         return Err("match bindings must be distinct fresh locals".into());
                     }
                 }
                 let mut work = 0;
-                *ty == Ty::Never || pattern_types_equal(ty, domain, &mut work)?
+                *ty == Ty::Never || pattern_types_equal_with_facts(ty, domain, &mut work, facts)?
             }
         };
         if !valid {
@@ -7989,6 +8129,7 @@ impl CheckedFunction {
         tests: &[PatternTest],
         bindings: &[PatternBinding],
         parameters: &std::collections::HashSet<LocalId>,
+        facts: FactsCtx<'_>,
     ) -> Result<(), String> {
         let admitted = match domain {
             Ty::Bool
@@ -8033,14 +8174,19 @@ impl CheckedFunction {
                 PatternTestKind::EnumVariant { ty, variant } => {
                     ty.validate()?;
                     *variant < ty.def().variants.len()
-                        && pattern_types_equal(actual, &Ty::Enum(ty.clone()), &mut work)?
+                        && pattern_types_equal_with_facts(
+                            actual,
+                            &Ty::Enum(ty.clone()),
+                            &mut work,
+                            facts,
+                        )?
                 }
             };
             if !valid {
                 return Err("pattern decision test type or variant mismatch".into());
             }
         }
-        self.validate_pattern_bindings_with_work(domain, bindings, parameters, &mut work)?;
+        self.validate_pattern_bindings_with_work(domain, bindings, parameters, &mut work, facts)?;
         for binding in bindings {
             Self::validate_decision_path(domain, &binding.projection, tests, &mut work)?;
         }
@@ -8054,6 +8200,25 @@ impl CheckedFunction {
         pattern: &MatchPattern,
         else_branch: ExprId,
         parameters: &std::collections::HashSet<LocalId>,
+    ) -> Result<(), String> {
+        self.validate_let_else_with_facts(
+            value,
+            ty,
+            pattern,
+            else_branch,
+            parameters,
+            FactsCtx::Concrete,
+        )
+    }
+
+    pub(super) fn validate_let_else_with_facts(
+        &self,
+        value: ExprId,
+        ty: &Ty,
+        pattern: &MatchPattern,
+        else_branch: ExprId,
+        parameters: &std::collections::HashSet<LocalId>,
+        facts: FactsCtx<'_>,
     ) -> Result<(), String> {
         if matches!(
             pattern,
@@ -8070,7 +8235,9 @@ impl CheckedFunction {
             .get(else_branch.0)
             .ok_or("invalid let-else branch")?;
         let mut work = 0;
-        if value.ty != Ty::Never && !pattern_types_equal(&value.ty, ty, &mut work)? {
+        if value.ty != Ty::Never
+            && !pattern_types_equal_with_facts(&value.ty, ty, &mut work, facts)?
+        {
             return Err("let-else initializer domain mismatch".into());
         }
         if otherwise.ty != Ty::Never || otherwise.completion != Completion::Never {
@@ -8081,6 +8248,7 @@ impl CheckedFunction {
             pattern,
             parameters,
             &mut std::collections::HashSet::new(),
+            facts,
         )
     }
 
@@ -8106,10 +8274,20 @@ impl CheckedFunction {
         bindings: &[PatternBinding],
         parameters: &std::collections::HashSet<LocalId>,
     ) -> Result<(), String> {
+        self.validate_pattern_bindings_with_facts(ty, bindings, parameters, FactsCtx::Concrete)
+    }
+
+    pub(super) fn validate_pattern_bindings_with_facts(
+        &self,
+        ty: &Ty,
+        bindings: &[PatternBinding],
+        parameters: &std::collections::HashSet<LocalId>,
+        facts: FactsCtx<'_>,
+    ) -> Result<(), String> {
         if bindings.len() > MAX_PATTERN_BINDINGS {
             return Err("pattern binding limit exceeded".into());
         }
-        self.validate_pattern_bindings_with_work(ty, bindings, parameters, &mut 0)
+        self.validate_pattern_bindings_with_work(ty, bindings, parameters, &mut 0, facts)
     }
 
     fn validate_pattern_bindings_with_work(
@@ -8118,6 +8296,7 @@ impl CheckedFunction {
         bindings: &[PatternBinding],
         parameters: &std::collections::HashSet<LocalId>,
         work: &mut usize,
+        facts: FactsCtx<'_>,
     ) -> Result<(), String> {
         if bindings.len() > MAX_PATTERN_BINDINGS {
             return Err("pattern binding limit exceeded".into());
@@ -8143,7 +8322,7 @@ impl CheckedFunction {
                 return Err("pattern binding locals must be distinct fresh locals".into());
             }
             let projected = binding.local_ty(projected_ty(ty, &binding.projection)?);
-            if !pattern_types_equal(&local.ty, &projected, work)? {
+            if !pattern_types_equal_with_facts(&local.ty, &projected, work, facts)? {
                 return Err("pattern binding local type mismatch".into());
             }
             // `x @ Some(y)`: overlapping shared borrows and Copy reads are
@@ -8393,7 +8572,7 @@ impl CheckedFunction {
                         kind: *kind,
                         referent: Arc::new(referent.clone()),
                     };
-                    if !pattern_types_equal(&value.ty, &expected, &mut 0)? {
+                    if !pattern_types_equal_with_facts(&value.ty, &expected, &mut 0, facts)? {
                         return Err("borrow result type mismatch".into());
                     }
                     if let BorrowTiming::TwoPhase {
@@ -8483,7 +8662,7 @@ impl CheckedFunction {
                     else {
                         return Err("dereference requires reference type".into());
                     };
-                    if !pattern_types_equal(&value.ty, referent, &mut 0)? {
+                    if !pattern_types_equal_with_facts(&value.ty, referent, &mut 0, facts)? {
                         return Err("dereference result type mismatch".into());
                     }
                 }
@@ -8502,7 +8681,7 @@ impl CheckedFunction {
                         return Err("array length exceeds limit 4096".into());
                     }
                     let mut work = 0;
-                    if !pattern_types_equal(&value.ty, element, &mut work)? {
+                    if !pattern_types_equal_with_facts(&value.ty, element, &mut work, facts)? {
                         return Err("dynamic index result type mismatch".into());
                     }
                 }
@@ -8520,7 +8699,12 @@ impl CheckedFunction {
                     }
                     validate_shared_slice_element_with_facts(source_element, facts)?;
                     validate_shared_slice_element_with_facts(result_element, facts)?;
-                    if !pattern_types_equal(source_element, result_element, &mut 0)? {
+                    if !pattern_types_equal_with_facts(
+                        source_element,
+                        result_element,
+                        &mut 0,
+                        facts,
+                    )? {
                         return Err("array-to-slice element type mismatch".into());
                     }
                     if value.completion != source.completion {
@@ -8600,7 +8784,12 @@ impl CheckedFunction {
                         return Err("subslice requires shared slice".into());
                     };
                     validate_shared_slice_element_with_facts(element, facts)?;
-                    if !pattern_types_equal(&value.ty, &self.exprs[slice.0].ty, &mut 0)? {
+                    if !pattern_types_equal_with_facts(
+                        &value.ty,
+                        &self.exprs[slice.0].ty,
+                        &mut 0,
+                        facts,
+                    )? {
                         return Err("subslice result must equal its shared slice type".into());
                     }
                 }
@@ -8614,7 +8803,7 @@ impl CheckedFunction {
                     if self.exprs[index.0].ty != Ty::Int(IntTy::Usize) {
                         return Err("slice index requires usize".into());
                     }
-                    if !pattern_types_equal(&value.ty, element, &mut 0)? {
+                    if !pattern_types_equal_with_facts(&value.ty, element, &mut 0, facts)? {
                         return Err("slice index result element type mismatch".into());
                     }
                     if !facts.must_copy(element)? {
@@ -8698,7 +8887,7 @@ impl CheckedFunction {
                             _ => {}
                         }
                     }
-                    self.validate_match(*scrutinee, arms, &parameters)?;
+                    self.validate_match_with_facts(*scrutinee, arms, &parameters, facts)?;
                     for arm in arms {
                         if let Some(guard) = arm.guard {
                             expr(guard)?;
@@ -9227,7 +9416,12 @@ impl CheckedFunction {
                         bindings,
                     } => {
                         expr(*value)?;
-                        self.validate_pattern_bindings_with_params(ty, bindings, &parameters)?;
+                        self.validate_pattern_bindings_with_facts(
+                            ty,
+                            bindings,
+                            &parameters,
+                            facts,
+                        )?;
                     }
                     Stmt::LetElse {
                         value,
@@ -9256,7 +9450,14 @@ impl CheckedFunction {
                             }
                             _ => {}
                         }
-                        self.validate_let_else(*value, ty, pattern, *else_branch, &parameters)?;
+                        self.validate_let_else_with_facts(
+                            *value,
+                            ty,
+                            pattern,
+                            *else_branch,
+                            &parameters,
+                            facts,
+                        )?;
                     }
                     Stmt::AssignPlace { place, value } => {
                         local(place.local)?;
@@ -11245,7 +11446,7 @@ mod tests {
     }
 
     #[test]
-    fn residual_projection_has_no_copy_carrier_place_or_reference_shape() {
+    fn opaque_projection_shape_never_grants_unsealed_executable_authority() {
         let projection = projection_fixture();
         let zero = Ty::Array {
             element: Arc::new(projection.clone()),
@@ -11268,12 +11469,18 @@ mod tests {
                     .validate_ty_with_budget(&ty, &budget)
                     .is_err()
             );
-            assert!(carrier_locations(&ty, &budget).is_err());
-            assert!(reject_references(&ty, &budget).is_err());
-            assert!(projected_ty(&ty, &[]).is_err());
-            assert!(root_reference_layers(&ty).is_err());
+            let locations = carrier_locations(&ty, &budget).unwrap();
+            assert!(
+                locations.iter().all(|location| matches!(
+                    location.channel,
+                    CarrierChannel::ProjectionTail { .. }
+                ))
+            );
+            assert!(reject_references(&ty, &budget).is_ok());
+            assert_eq!(projected_ty(&ty, &[]).unwrap(), &ty);
+            assert_eq!(root_reference_layers(&ty).unwrap(), 0);
             assert!(reference_layers(&ty).is_err());
-            assert!(slice_boundary_walk(&ty, true, Some(&budget), 0, &mut 0).is_err());
+            assert!(slice_boundary_walk(&ty, true, false, Some(&budget), 0, &mut 0).is_err());
         }
         let budget = PlanBudget::default();
         assert!(

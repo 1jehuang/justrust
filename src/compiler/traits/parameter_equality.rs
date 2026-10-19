@@ -422,7 +422,8 @@ impl ValidatedTraitWorld {
         {
             let closed = self.goal_is_closed(&call.trait_ref, facts.env())?
                 || matches!(&call.trait_ref.self_ty, Ty::Dyn(_));
-            if (closed && view.projected.is_none()) || (!closed && view.equality_required.is_none())
+            if (closed && view.projected.is_none())
+                || (!closed && view.equality_required.is_none() && view.projected.is_none())
             {
                 return Err(FactsError::invalid(
                     &self.budget,
@@ -441,8 +442,8 @@ impl ValidatedTraitWorld {
             && !self.goal_is_closed(&call.trait_ref, facts.env())?
             && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
         {
-            let application = self.instantiate_equality_required_item(call, facts)?;
-            if !self.eq_signature(&application.instantiated.signature, &view.result_signature)? {
+            let (application, authority) = self.instantiate_universal_required_item(call, facts)?;
+            if !self.eq_signature(&application.signature, &view.result_signature)? {
                 return Err(FactsError::invalid(
                     &self.budget,
                     "required result signature changed",
@@ -457,8 +458,7 @@ impl ValidatedTraitWorld {
                 let Predicate::ProjectionEq { projection, ty } = &origin.row else {
                     unreachable!()
                 };
-                for (index, (actual, proof)) in application.evidence.dependencies.iter().enumerate()
-                {
+                for (index, (actual, proof)) in authority.dependencies.iter().enumerate() {
                     if let equality::ProjectionReduction::Equality(proof) = proof
                         && self.same_projection(projection, actual)?
                         && self.eq_ty(ty, proof.ty(), 0)?
@@ -467,7 +467,7 @@ impl ValidatedTraitWorld {
                     }
                 }
             }
-            for dependency in application.evidence.dependencies.iter() {
+            for dependency in authority.dependencies.iter() {
                 result_push(&self.budget, &mut dependencies, dependency.clone())?;
             }
             // Discharge all raw caller occurrences, not just those visible in
@@ -503,7 +503,7 @@ impl ValidatedTraitWorld {
         let mut certificates = Vec::new();
         for (origin, actual) in origins.iter().zip(instantiated.predicates.iter()) {
             result_push(&self.budget, &mut actual_rows, actual.clone())?;
-            self.certify_equality_results(view, origin, actual, &[], &mut certificates)?;
+            self.certify_equality_results(view, origin, actual, &[], &mut certificates, facts)?;
         }
         for (origin, dependency) in caller_origins {
             self.certify_equality_results(
@@ -512,6 +512,7 @@ impl ValidatedTraitWorld {
                 &origin.row,
                 &[dependency],
                 &mut certificates,
+                facts,
             )?;
             result_push(&self.budget, &mut actual_rows, origin.row.clone())?;
             result_push(&self.budget, &mut origins, origin)?;
@@ -574,8 +575,8 @@ impl ValidatedTraitWorld {
                 return Ok(());
             }
             let source = self.validate_source_regions(call.item, &raw.signature)?;
-            let application = self.instantiate_equality_required_item(call, facts)?;
-            let signature = &application.instantiated.signature;
+            let (application, _) = self.instantiate_universal_required_item(call, facts)?;
+            let signature = &application.signature;
             let (contract, regions) = self.derive_carriers(signature, &source)?;
             let origin = charged(
                 &self.budget,
@@ -721,6 +722,7 @@ impl ValidatedTraitWorld {
                 &canonical.env,
                 &view.arguments,
                 &view.nominals,
+                facts,
             )? {
                 let sources = self.expand_carrier_sources(
                     &result.sources,
@@ -728,6 +730,7 @@ impl ValidatedTraitWorld {
                     &canonical.env,
                     &view.arguments,
                     &view.nominals,
+                    facts,
                 )?;
                 result_push(
                     &self.budget,
@@ -755,6 +758,7 @@ impl ValidatedTraitWorld {
         actual: &Predicate,
         dependencies: &[usize],
         certificates: &mut Vec<RestrictedResultCertificate>,
+        facts: &ValidatedFacts,
     ) -> Result<()> {
         let Predicate::ProjectionEq {
             ty: Ty::Param(rhs_parameter),
@@ -783,6 +787,7 @@ impl ValidatedTraitWorld {
                     &view.original_env,
                     &view.arguments,
                     &view.nominals,
+                    facts,
                 )?
             } else {
                 let mut expanded = Vec::new();

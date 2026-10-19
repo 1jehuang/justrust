@@ -19012,9 +19012,26 @@ impl tr::SchemaCx for SchemaAdapter {
                 .map_err(|e| self.error(e))?;
             schema_only_item |= declaration.kind == ir::DeclKind::TraitItem;
         }
+        let mut projection_actuals = false;
+        if !schema_only_item {
+            for argument in args {
+                projection_actuals |= ir::contains_associated_types(argument, budget)
+                    .map_err(|error| self.error(error))?;
+            }
+        }
         let mut sub = |ty: &ir::Ty| {
             if schema_only_item {
                 ir::substitute_schema_ty(ty, &schema.env, args, facts, &mut cx, self, budget)
+            } else if projection_actuals {
+                ir::substitute_schema_metadata_ty(
+                    ty,
+                    &schema.env,
+                    args,
+                    facts,
+                    &mut cx,
+                    self,
+                    budget,
+                )
             } else {
                 ir::substitute_ty(ty, &schema.env, args, facts, &mut cx, budget)
             }

@@ -3952,7 +3952,6 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
             }
         }
     }
-    let mut projected_default = false;
     let mut equality_boundary = None;
     let mut associated_boundary = None;
     let mut associated_bound_sources = Vec::new();
@@ -4026,13 +4025,6 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                     resolver.ty(ty, declaration.module)?;
                 }
                 if let Some(function) = &mut item.default {
-                    // Inspect resolved types so alias expansion cannot hide a
-                    // projected default. Defer rejection until all source
-                    // metadata and bodies have undergone normal validation.
-                    projected_default |= resolver.contains_projection(&item.signature.result, 0)?;
-                    for (_, ty) in &item.signature.params {
-                        projected_default |= resolver.contains_projection(ty, 0)?;
-                    }
                     clone_vector(&declaration.type_params, &resolver.alias_budget)?;
                     resolver.type_params = declaration.type_params.clone();
                     resolver.charge_entries::<AstIdent>(function.type_params.len())?;
@@ -4054,11 +4046,6 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                     let names = resolver.function_locals(function, item.receiver)?;
                     validate_depth(DepthNode::Block(&function.body))?;
                     resolver.block(&mut function.body, declaration.module, &mut vec![names])?;
-                    projected_default |= resolver.contains_projection(&function.result, 0)?;
-                    for (_, ty) in &function.params {
-                        projected_default |= resolver.contains_projection(ty, 0)?;
-                    }
-                    projected_default |= resolver.body_contains_projection(&function.body)?;
                 }
             }
             Ok(())
@@ -4190,11 +4177,6 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     }
     if let Some(error) = equality_boundary {
         return Err(error);
-    }
-    if projected_default {
-        return Err(Resolver::unsupported(
-            "projection-bearing trait default signatures and bodies are unsupported",
-        ));
     }
     program.associated_bound_sources = associated_bound_sources.into();
     program.seal_resolved_c_source()?;
@@ -4349,7 +4331,7 @@ mod associated_projection_tests {
     }
 
     #[test]
-    fn projected_default_signatures_and_bodies_stay_unsupported() {
+    fn projected_default_types_are_retained_for_canonical_universal_checking() {
         for source in [
             "trait Has{type Out;fn get()->Self::Out{1}}fn main(){}",
             "trait Has{type Out;fn pass(x:Self::Out){}}fn main(){}",
@@ -4360,12 +4342,8 @@ mod associated_projection_tests {
             "trait Has{type Out;fn required()->Self::Out;fn default(){let x:Self::Out=1;}}fn main(){}",
         ] {
             let parsed = parse_unresolved(source).unwrap();
-            let error = resolve(&parsed).unwrap_err();
-            assert_eq!(
-                error,
-                "unsupported: projection-bearing trait default signatures and bodies are unsupported",
-                "{source}"
-            );
+            let resolved = resolve(&parsed).unwrap();
+            assert!(!resolved.traits.is_empty(), "{source}");
         }
         parse("trait Has{type Out;fn required()->Self::Out;fn default()->i32{1}}fn main(){}")
             .unwrap();
@@ -4411,6 +4389,11 @@ mod associated_projection_tests {
 
     #[test]
     fn ambiguous_or_foreign_self_stay_closed() {
+        let invalid = parse("trait Base{type Out;}trait Child:Base{}struct S;impl Child for S{type X=Self::Out;}fn main(){}").unwrap();
+        assert!(crate::compiler::frontend::check(&invalid).is_err());
+        assert!(
+            parse("trait Base{type Out;}trait Child:Base{fn get()->Self::Out;}fn main(){}").is_ok()
+        );
         for source in [
             "trait Has{type Out;}struct S;impl S{fn get()->Self::Out{1}}fn main(){}",
             "trait Has{type Out;}fn take<T>(x:T::Out){}fn main(){}",
@@ -4418,8 +4401,6 @@ mod associated_projection_tests {
             "trait Has{type Out;fn get()->Self::Out;}fn take(x:Self::Out){}fn main(){}",
             "trait Has{type Out;fn get()->Self::Out;}trait Other{fn get()->Self::Out;}fn main(){}",
             "trait Has{type Out;fn get()->Self::Out;}trait Other{type Different;fn get()->Self::Out;}fn main(){}",
-            "trait Base{type Out;}trait Child:Base{fn get()->Self::Out;}fn main(){}",
-            "trait Base{type Out;}trait Child:Base{}struct S;impl Child for S{type X=Self::Out;}fn main(){}",
         ] {
             assert!(parse(source).is_err(), "{source}");
         }

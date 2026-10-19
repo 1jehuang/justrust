@@ -477,6 +477,11 @@ cleanup failures.
       results, moves and genuine Copy facts pass debug/release native gates.
       Composite symbolic RHSs and reference-bearing results remain outside this
       bounded slice.
+- [x] Canonical rigid associated projection families in universal callables and
+      provided methods under UNIVERSAL-PROJECTIONS.md: exact declared membership,
+      opaque ownership/carrier identity, sealed pattern comparison and closed
+      normalization replay. Identity and Iterator `last` match stock CHECK/BUILD/run
+      at workers 1/8; full Iterator adapter integration remains a separate gate.
 - [x] Impl parameters determined by associated output equalities use a
       dependency-ordered fixed point, then canonical closed normalization to
       infer missing output actuals. Unused and cyclic unconstrained impls are

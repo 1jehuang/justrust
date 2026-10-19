@@ -12,6 +12,13 @@ use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 use std::sync::Arc;
 
+#[cfg(test)]
+#[path = "borrow/projection_family_tests.rs"]
+mod projection_family_tests;
+#[cfg(test)]
+#[path = "borrow/projection_world_tests.rs"]
+mod projection_world_tests;
+
 /// Distinct indices prevent an opaque family from indexing a loan target table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ReferenceOriginId(usize);
@@ -53,7 +60,7 @@ struct FamilyOrigin {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum CellChannel {
     ReferenceValue,
-    ParamFamily(super::ir::ParamId),
+    Family(ir::CarrierFamily),
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct CellKey {
@@ -145,6 +152,28 @@ fn checked_arc_transfer<T>(length: usize, budget: &mut Budget) -> Result<(), Exh
     budget.nodes(1)
 }
 
+fn family_region_term(family: &ir::CarrierFamily) -> ir::CarrierRegionTerm {
+    match family {
+        ir::CarrierFamily::Parameter(parameter) => ir::CarrierRegionTerm::Family {
+            parameter: *parameter,
+        },
+        ir::CarrierFamily::Projection(projection) => ir::CarrierRegionTerm::ProjectionFamily {
+            projection: projection.clone(),
+        },
+    }
+}
+fn family_channel(family: &ir::CarrierFamily, prefix: u8) -> CarrierChannel {
+    match family {
+        ir::CarrierFamily::Parameter(parameter) => CarrierChannel::ParamTail {
+            parameter: *parameter,
+            prefix,
+        },
+        ir::CarrierFamily::Projection(projection) => CarrierChannel::ProjectionTail {
+            projection: projection.clone(),
+            prefix,
+        },
+    }
+}
 fn value_projection(location: &CarrierLocation) -> Vec<Projection> {
     let mut path = Vec::new();
     for step in location.path.0.iter() {
@@ -160,7 +189,8 @@ fn value_projection(location: &CarrierLocation) -> Vec<Projection> {
     }
     let depth = match location.channel {
         CarrierChannel::Fixed(position) => position.depth,
-        CarrierChannel::ParamTail { prefix, .. } => prefix,
+        CarrierChannel::ParamTail { prefix, .. }
+        | CarrierChannel::ProjectionTail { prefix, .. } => prefix,
     };
     path.extend(std::iter::repeat_n(Projection::Deref, usize::from(depth)));
     path
@@ -213,7 +243,7 @@ enum RegionKey {
     Fixed(ir::RegionParamId),
     Named(ir::SourceRegionId),
     Family {
-        parameter: ir::ParamId,
+        family: ir::CarrierFamily,
         component: CarrierLocation,
     },
     Local(ReferenceOriginId),
@@ -449,7 +479,8 @@ fn read_cell_cover(
     if let Some(location) = location {
         let depth = match location.channel {
             CarrierChannel::Fixed(position) => position.depth,
-            CarrierChannel::ParamTail { prefix, .. } => prefix,
+            CarrierChannel::ParamTail { prefix, .. }
+            | CarrierChannel::ProjectionTail { prefix, .. } => prefix,
         };
         let length = add(mul(location.path.0.len(), 2)?, usize::from(depth))?;
         budget.reserve_bytes(mul(length, size_of::<Projection>())?)?;
@@ -661,7 +692,12 @@ impl FlowState {
 fn key_channel(ty: &Ty) -> Option<CellChannel> {
     match ty {
         Ty::Ref { .. } => Some(CellChannel::ReferenceValue),
-        Ty::Param(parameter) => Some(CellChannel::ParamFamily(*parameter)),
+        Ty::Param(parameter) => Some(CellChannel::Family(ir::CarrierFamily::Parameter(
+            *parameter,
+        ))),
+        Ty::AssociatedType(projection) => Some(CellChannel::Family(ir::CarrierFamily::Projection(
+            projection.clone(),
+        ))),
         _ => None,
     }
 }
@@ -753,7 +789,7 @@ struct CarrierBuilder<'a, 'b> {
     regions: RegionRelations,
     effect_table: Option<Arc<super::ownership::CarrierEffectTable>>,
     input_regions: Vec<(InputCarrier, AnalysisRegionId)>,
-    family_regions: Vec<(ir::ParamId, CarrierLocation, AnalysisRegionId)>,
+    family_regions: Vec<(ir::CarrierFamily, CarrierLocation, AnalysisRegionId)>,
     problems: Vec<(BlockId, Option<usize>, Problem)>,
 }
 impl CarrierBuilder<'_, '_> {
@@ -1063,7 +1099,7 @@ impl CarrierBuilder<'_, '_> {
             }
         }
         for original in view.original_contract().inputs.iter() {
-            let CarrierChannel::ParamTail { parameter, .. } = original.location.channel else {
+            let Some(family) = original.location.channel.family() else {
                 continue;
             };
             self.retain(
@@ -1076,7 +1112,7 @@ impl CarrierBuilder<'_, '_> {
             let mappings: Vec<_> = view
                 .component_mappings()
                 .iter()
-                .filter(|mapping| mapping.original_parameter == parameter)
+                .filter(|mapping| mapping.original_family == family)
                 .cloned()
                 .collect();
             for mapping in mappings {
@@ -1103,7 +1139,7 @@ impl CarrierBuilder<'_, '_> {
                     .collect();
                 let component = matches!(mapping.substituted.channel, CarrierChannel::Fixed(_))
                     .then(|| mapping.substituted.clone());
-                let term = ir::CarrierRegionTerm::Family { parameter };
+                let term = family_region_term(&family);
                 let variable = if let Some(row) = regions
                     .iter()
                     .find(|row| row.schema == term && row.component == component)
@@ -1160,7 +1196,10 @@ impl CarrierBuilder<'_, '_> {
                         }
                     }
                 }
-                if let Some((index, _)) = view.parameter_actual(parameter).map_err(|_| Exhausted)? {
+                if let ir::CarrierFamily::Parameter(parameter) = &family
+                    && let Some((index, _)) =
+                        view.parameter_actual(*parameter).map_err(|_| Exhausted)?
+                {
                     let offset = match target {
                         ir::Callee::Direct(_) => 0,
                         ir::Callee::TraitItem(call)
@@ -1284,9 +1323,10 @@ impl CarrierBuilder<'_, '_> {
         relative: &CarrierLocation,
         nominals: &[ir::NominalCarrierMapping],
     ) -> Result<CarrierLocation, Exhausted> {
-        let CarrierChannel::ParamTail { prefix, .. } = original.channel else {
+        if original.channel.family().is_none() {
             return Err(Exhausted);
-        };
+        }
+        let prefix = original.channel.prefix();
         self.retain(
             mul(
                 original.path.0.len() + relative.path.0.len() + usize::from(prefix),
@@ -1305,7 +1345,7 @@ impl CarrierBuilder<'_, '_> {
             }
         }
         let channel = if relative.path.0.is_empty() {
-            match relative.channel {
+            match relative.channel.clone() {
                 CarrierChannel::Fixed(position) => CarrierChannel::Fixed(ReferencePosition {
                     depth: prefix.checked_add(position.depth).ok_or(Exhausted)?,
                 }),
@@ -1314,6 +1354,13 @@ impl CarrierBuilder<'_, '_> {
                     prefix: inner,
                 } => CarrierChannel::ParamTail {
                     parameter,
+                    prefix: prefix.checked_add(inner).ok_or(Exhausted)?,
+                },
+                CarrierChannel::ProjectionTail {
+                    projection,
+                    prefix: inner,
+                } => CarrierChannel::ProjectionTail {
+                    projection,
                     prefix: prefix.checked_add(inner).ok_or(Exhausted)?,
                 },
             }
@@ -1330,6 +1377,26 @@ impl CarrierBuilder<'_, '_> {
             channel,
         })
     }
+    fn family_is_open(
+        &self,
+        view: &super::traits::CarrierContractView,
+        family: &ir::CarrierFamily,
+    ) -> Result<bool, Exhausted> {
+        match family {
+            ir::CarrierFamily::Parameter(parameter) => Ok(view
+                .parameter_actual(*parameter)
+                .map_err(|_| Exhausted)?
+                .is_none()),
+            ir::CarrierFamily::Projection(_) => {
+                let facts = self.authority.as_ref().ok_or(Exhausted)?;
+                match view.family_actual(family, facts).map_err(|_| Exhausted)? {
+                    Some(Ty::AssociatedType(_)) => Ok(true),
+                    Some(_) => Ok(false),
+                    None => Err(Exhausted),
+                }
+            }
+        }
+    }
     fn transport_effect_input(
         &mut self,
         input: &InputCarrier,
@@ -1337,12 +1404,13 @@ impl CarrierBuilder<'_, '_> {
         owned_destination: bool,
     ) -> Result<Vec<(InputCarrier, Option<CarrierLocation>)>, Exhausted> {
         let mut result = Vec::new();
-        match input.location.channel {
-            CarrierChannel::ParamTail { parameter, .. } => {
+        match &input.location.channel {
+            CarrierChannel::ParamTail { .. } | CarrierChannel::ProjectionTail { .. } => {
+                let family = input.location.channel.family().ok_or(Exhausted)?;
                 for mapping in view
                     .component_mappings()
                     .iter()
-                    .filter(|mapping| mapping.original_parameter == parameter)
+                    .filter(|mapping| mapping.original_family == family)
                 {
                     // A whole-value replacement transports owned channels only.
                     // Deeper referent channels describe existing pointed-to cells,
@@ -1366,12 +1434,7 @@ impl CarrierBuilder<'_, '_> {
                         Some(mapping.original.clone()),
                     ));
                 }
-                if result.is_empty()
-                    && view
-                        .parameter_actual(parameter)
-                        .map_err(|_| Exhausted)?
-                        .is_none()
-                {
+                if result.is_empty() && self.family_is_open(view, &family)? {
                     self.retain(size_of::<(InputCarrier, Option<CarrierLocation>)>(), 1)?;
                     result.push((input.clone(), None));
                 }
@@ -1455,41 +1518,34 @@ impl CarrierBuilder<'_, '_> {
             self.regions.edge(a, b, self.budget)?;
         }
         for input in body.original_contract().inputs.iter() {
-            let CarrierChannel::ParamTail { parameter, .. } = input.location.channel else {
+            let Some(family) = input.location.channel.family() else {
                 continue;
             };
             let mappings: Vec<_> = body
                 .component_mappings()
                 .iter()
-                .filter(|mapping| mapping.original_parameter == parameter)
+                .filter(|mapping| mapping.original_family == family)
                 .collect();
-            if mappings.is_empty()
-                && body
-                    .parameter_actual(parameter)
-                    .map_err(|_| Exhausted)?
-                    .is_none()
-            {
+            if mappings.is_empty() && self.family_is_open(&body, &family)? {
                 let component = CarrierLocation {
                     path: CarrierPath(Arc::from([])),
-                    channel: CarrierChannel::ParamTail {
-                        parameter,
-                        prefix: 0,
-                    },
+                    channel: family_channel(&family, 0),
                 };
                 let region = self.regions.node(
                     RegionKey::Family {
-                        parameter,
+                        family: family.clone(),
                         component: component.clone(),
                     },
                     self.budget,
                 )?;
                 self.retain(
                     4 * (size_of::<(InputCarrier, AnalysisRegionId)>()
-                        + size_of::<(ir::ParamId, CarrierLocation, AnalysisRegionId)>()),
+                        + size_of::<(ir::CarrierFamily, CarrierLocation, AnalysisRegionId)>()),
                     1,
                 )?;
                 self.input_regions.push((input.clone(), region));
-                self.family_regions.push((parameter, component, region));
+                self.family_regions
+                    .push((family.clone(), component, region));
             }
             for mapping in mappings {
                 let location = self.compose_component(
@@ -1497,22 +1553,21 @@ impl CarrierBuilder<'_, '_> {
                     &mapping.substituted,
                     body.nominal_mappings(),
                 )?;
-                let key = match mapping.substituted.channel {
-                    CarrierChannel::ParamTail {
-                        parameter: caller, ..
-                    } => RegionKey::Family {
-                        parameter: caller,
+                let key = if let Some(caller) = mapping.substituted.channel.family() {
+                    RegionKey::Family {
+                        family: caller,
                         component: mapping.substituted.clone(),
-                    },
-                    CarrierChannel::Fixed(_) => RegionKey::Family {
-                        parameter,
+                    }
+                } else {
+                    RegionKey::Family {
+                        family: family.clone(),
                         component: mapping.original.clone(),
-                    },
+                    }
                 };
                 let region = self.regions.node(key, self.budget)?;
                 self.retain(
                     4 * (size_of::<(InputCarrier, AnalysisRegionId)>()
-                        + size_of::<(ir::ParamId, CarrierLocation, AnalysisRegionId)>()),
+                        + size_of::<(ir::CarrierFamily, CarrierLocation, AnalysisRegionId)>()),
                     1,
                 )?;
                 self.input_regions.push((
@@ -1523,7 +1578,7 @@ impl CarrierBuilder<'_, '_> {
                     region,
                 ));
                 self.family_regions
-                    .push((parameter, mapping.original.clone(), region));
+                    .push((family.clone(), mapping.original.clone(), region));
             }
         }
         for constraint in body.region_schema().constraints.iter() {
@@ -1564,12 +1619,22 @@ impl CarrierBuilder<'_, '_> {
                     .unwrap_or(RegionKey::Named(*region));
                 Ok(vec![(None, self.regions.node(key, self.budget)?)])
             }
-            ir::CarrierRegionTerm::Family { parameter } => {
+            ir::CarrierRegionTerm::Family { .. }
+            | ir::CarrierRegionTerm::ProjectionFamily { .. } => {
+                let family = match term {
+                    ir::CarrierRegionTerm::Family { parameter } => {
+                        ir::CarrierFamily::Parameter(*parameter)
+                    }
+                    ir::CarrierRegionTerm::ProjectionFamily { projection } => {
+                        ir::CarrierFamily::Projection(projection.clone())
+                    }
+                    _ => unreachable!(),
+                };
                 self.budget.spend(self.family_regions.len())?;
                 Ok(self
                     .family_regions
                     .iter()
-                    .filter(|(candidate, _, _)| candidate == parameter)
+                    .filter(|(candidate, _, _)| candidate == &family)
                     .map(|(_, component, region)| (Some(component.clone()), *region))
                     .collect())
             }
@@ -1798,7 +1863,10 @@ impl CarrierBuilder<'_, '_> {
             if !matched_cell && failure.is_none() {
                 failure = Some(ResolutionFailure::EmptyOrigins);
             }
-            if matches!(channel, CellChannel::ParamFamily(_)) {
+            if matches!(
+                channel,
+                CellChannel::Family(ir::CarrierFamily::Parameter(_))
+            ) {
                 failure = None;
             }
             if let Some(failure) = failure.filter(|_| self.diagnosing) {
@@ -1957,7 +2025,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                         reference_inputs.push((input, ReferenceOriginId(kinds.len())));
                         kinds.push(*kind);
                     }
-                    CarrierChannel::ParamTail { .. } => {
+                    CarrierChannel::ParamTail { .. } | CarrierChannel::ProjectionTail { .. } => {
                         ledger.charge_nodes(1).map_err(|_| Exhausted)?;
                         ledger
                             .retain_bytes(4 * size_of::<FamilyOrigin>())
@@ -2200,7 +2268,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                             },
                         )?;
                     }
-                    CarrierChannel::ParamTail { .. } => {
+                    CarrierChannel::ParamTail { .. } | CarrierChannel::ProjectionTail { .. } => {
                         builder.budget.spend(1)?;
                         if builder
                             .family_inputs
@@ -2363,7 +2431,10 @@ impl CarrierBuilder<'_, '_> {
         // Generic actuals are never references (ir validate_argument), so a
         // type-parameter family carries no loan origins; a missing family
         // cell behind a borrowed or returned reference is simply empty.
-        if matches!(channel, CellChannel::ParamFamily(_)) {
+        if matches!(
+            channel,
+            CellChannel::Family(ir::CarrierFamily::Parameter(_))
+        ) {
             failure = None;
         }
         if let Some(failure) = failure.filter(|_| self.diagnosing) {
@@ -3103,7 +3174,15 @@ impl CarrierBuilder<'_, '_> {
                 {
                     let mut sources = Vec::new();
                     for source in write.sources.iter() {
-                        let same_family = matches!((&write.destination.location.channel, &source.location.channel), (CarrierChannel::ParamTail { parameter: a, .. }, CarrierChannel::ParamTail { parameter: b, .. }) if a == b);
+                        let same_family =
+                            write
+                                .destination
+                                .location
+                                .channel
+                                .family()
+                                .is_some_and(|family| {
+                                    source.location.channel.family().as_ref() == Some(&family)
+                                });
                         for (source, source_component) in
                             self.transport_effect_input(source, view, false)?
                         {
@@ -4057,7 +4136,11 @@ impl CarrierBuilder<'_, '_> {
                 for region in &binding.regions {
                     invalid_binding |= region.region.0 >= binding.relation.keys.len()
                         || (region.component.is_some()
-                            && !matches!(region.schema, ir::CarrierRegionTerm::Family { .. }));
+                            && !matches!(
+                                region.schema,
+                                ir::CarrierRegionTerm::Family { .. }
+                                    | ir::CarrierRegionTerm::ProjectionFamily { .. }
+                            ));
                 }
             }
             if invalid_binding {
@@ -5607,7 +5690,7 @@ mod parameter_equality_tests {
     use super::*;
     use crate::compiler::{frontend, ownership};
 
-    fn source_template(source: &str, index: usize) -> cfg::TemplateCfg {
+    pub(super) fn source_template(source: &str, index: usize) -> cfg::TemplateCfg {
         let program = frontend::parse(source).unwrap();
         let budget = ir::PlanBudget::default();
         let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();

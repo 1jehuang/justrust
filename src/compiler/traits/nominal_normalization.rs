@@ -40,10 +40,13 @@ impl ValidatedTraitWorld {
             .reapply_nominal(original, &normalized, env, &self.budget)?;
         self.validate_reapplied_nominal(original, &normalized, &result, env, depth)?;
         if self.type_contains_projection(&result, depth + 1)? {
-            return Err(FactsError::unsupported(
-                &self.budget,
-                "unsupported: residual projection in source nominal fields after actual normalization",
-            ));
+            if self.raw_associated_ty_is_closed(&result, depth + 1)? {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: residual projection in closed source nominal fields after actual normalization",
+                ));
+            }
+            self.validate_universal_projection_type(&result, env, depth + 1)?;
         }
         Ok(result)
     }
