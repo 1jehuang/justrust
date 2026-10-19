@@ -95,6 +95,37 @@ fn main() { let a = [1, 2]; f(&a, 0); }"#,
 fn main() { let v = [1, 2]; let r = f(&v, 0); println!("{}", r); }"#,
                 expect: Expect::Invalid("E0515"),
             },
+            Case {
+                name: "struct_elements_get_and_get_mut",
+                source: r#"struct P { x: i32, y: i32 }
+struct V { data: [P; 3] }
+impl V {
+    fn get(&self, i: usize) -> Option<&P> { if i < 3 { Some(&self.data[i]) } else { None } }
+    fn get_mut(&mut self, i: usize) -> &mut P { &mut self.data[i] }
+}
+fn main() {
+    let mut v = V { data: [P { x: 1, y: 2 }, P { x: 3, y: 4 }, P { x: 5, y: 6 }] };
+    v.get_mut(1).x += 10;
+    let i: usize = 2;
+    let r = &v.data[i].y;
+    println!("{}", r);
+    match v.get(1) { Some(p) => println!("{} {}", p.x, p.y), None => println!("none") }
+    match v.get(5) { Some(p) => println!("{}", p.x), None => println!("none") }
+}"#,
+                expect: Expect::Run("6\n13 4\nnone\n"),
+            },
+            Case {
+                name: "move_out_of_borrowed_element_rejected",
+                source: r#"struct S { n: String }
+fn main() { let v = [S { n: String::new() }]; let i = 0; let r = &v[i]; let s = r.n; println!("{}", s); }"#,
+                expect: Expect::Invalid("E0507"),
+            },
+            Case {
+                name: "aggregate_element_alias_rejected",
+                source: r#"struct P { x: i32 }
+fn main() { let mut v = [P { x: 1 }, P { x: 2 }]; let i = 0; let a = &mut v[i]; let b = &v[1]; a.x += b.x; }"#,
+                expect: Expect::Invalid("E0502"),
+            },
         ],
     );
 }

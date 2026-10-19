@@ -3943,24 +3943,10 @@ fn projected_ty_inner<'a>(
                     Ty::Slice { element } => element,
                     _ => return Err("runtime place index requires array or slice type".into()),
                 };
-                // Runtime elements stay restricted to scalar/unit leaves. An
-                // array element is admitted only as an interior step that is
-                // immediately indexed again (`m[i][j]`), so a whole row is
-                // never a runtime element loan. Analyses already treat a
-                // runtime element's footprint as the whole array.
-                let interior = matches!(element.as_ref(), Ty::Array { .. })
-                    && matches!(
-                        path.clone().next(),
-                        Some(Projection::ConstantIndex(_) | Projection::DynamicIndex(_))
-                    );
-                if !interior
-                    && !matches!(
-                        element.as_ref(),
-                        Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit
-                    )
-                {
-                    return Err("unsupported: runtime element loans currently require scalar or unit elements".into());
-                }
+                // Any element type may be a runtime element loan or the base
+                // of a further projection (`&v[i]`, `&v[i].x`, `m[i][j]`).
+                // Analyses treat a runtime element's footprint as the whole
+                // array and never prove disjointness by index value.
                 element
             }
             Projection::Field(index) => ty.field_ty(index).ok_or("invalid field projection")?,

@@ -2051,7 +2051,12 @@ impl Paths {
                     self.nodes[node].variant_offsets[variant.index] + index
                 }
             };
-            node = self.nodes[node].children[index];
+            // Paths below a runtime element are not separately tracked: the
+            // element's footprint is its (whole-array) ancestor node.
+            let Some(&child) = self.nodes[node].children.get(index) else {
+                return node;
+            };
+            node = child;
         }
         node
     }
@@ -2494,7 +2499,10 @@ impl Transfer<'_> {
                     self.paths.nodes[node].variant_offsets[variant.index] + index
                 }
             };
-            node = self.paths.nodes[node].children[index];
+            let Some(&child) = self.paths.nodes[node].children.get(index) else {
+                return Ok(true);
+            };
+            node = child;
         }
         Ok(true)
     }
