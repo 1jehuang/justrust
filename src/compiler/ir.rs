@@ -1765,8 +1765,9 @@ impl PlanUsageSnapshot {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct PlanUsage {
+    authority: PlanAuthority,
     applications: usize,
     nodes: usize,
     work: usize,
@@ -1818,9 +1819,9 @@ pub struct PlanBudget {
 }
 #[derive(Debug)]
 pub struct PlanReservation {
-    authority: PlanAuthority,
-    retained: bool,
-    usage: Arc<std::sync::Mutex<PlanUsage>>,
+    // Taking this niche-optimized handle consumes the lease without refunding
+    // it. Authority lives once in the runtime ledger, not in every byte lease.
+    usage: Option<Arc<std::sync::Mutex<PlanUsage>>>,
     bytes: usize,
     /// Set when the bytes were charged to a task meter instead of the ledger.
     meter: Option<crate::engine::MeterHandle>,
@@ -1828,27 +1829,30 @@ pub struct PlanReservation {
 impl PlanReservation {
     /// Consume a paid lease without releasing or admitting its bytes again.
     pub fn retain(mut self) -> Result<RetainedStorage, String> {
-        if self.meter.is_none() {
-            let mut usage = self
-                .usage
+        let authority = {
+            let ledger = self.usage.as_ref().expect("unconsumed resource lease");
+            let mut usage = ledger
                 .lock()
                 .map_err(|_| "generic planning budget poisoned".to_string())?;
-            usage.reservations.record_retention();
-            usage.reservations.current_reservations =
-                usage.reservations.current_reservations.saturating_sub(1);
-        }
-        self.retained = true;
+            if self.meter.is_none() {
+                usage.reservations.record_retention();
+                usage.reservations.current_reservations =
+                    usage.reservations.current_reservations.saturating_sub(1);
+            }
+            usage.authority.clone()
+        };
+        self.usage = None;
         Ok(RetainedStorage {
-            authority: self.authority.clone(),
+            authority,
             bytes: self.bytes,
         })
     }
 }
 impl Drop for PlanReservation {
     fn drop(&mut self) {
-        if self.retained {
+        let Some(ledger) = &self.usage else {
             return;
-        }
+        };
         if let Some(meter) = &self.meter {
             meter.meter().bytes.fetch_sub(
                 u64::try_from(self.bytes).unwrap_or(u64::MAX),
@@ -1856,7 +1860,7 @@ impl Drop for PlanReservation {
             );
             return;
         }
-        if let Ok(mut usage) = self.usage.lock() {
+        if let Ok(mut usage) = ledger.lock() {
             usage.bytes -= self.bytes;
             usage.reservations.release(self.bytes);
         }
@@ -1878,12 +1882,25 @@ impl PlanBudget {
             work: limits.work.min(defaults.work),
             bytes: limits.bytes.min(defaults.bytes),
         };
+        let authority = PlanAuthority {
+            identity: Arc::new(PlanAuthorityIdentity { limits }),
+        };
+        let usage = PlanUsage {
+            authority: authority.clone(),
+            applications: 0,
+            nodes: 0,
+            work: 0,
+            bytes: 0,
+            obligations: 0,
+            diagnostic_bytes: 0,
+            resource_failed: false,
+            reservations: ReservationAccounting::default(),
+            first_failure: None,
+        };
         Self {
             limits,
-            authority: PlanAuthority {
-                identity: Arc::new(PlanAuthorityIdentity { limits }),
-            },
-            usage: Arc::new(std::sync::Mutex::new(PlanUsage::default())),
+            authority,
+            usage: Arc::new(std::sync::Mutex::new(usage)),
         }
     }
     pub fn limits(&self) -> PlanLimits {
@@ -2066,9 +2083,7 @@ impl PlanBudget {
         if let Some(meter) = crate::engine::MeterHandle::current() {
             self.charge_meter_bytes(meter.meter(), bytes)?;
             return Ok(PlanReservation {
-                authority: self.authority.clone(),
-                retained: false,
-                usage: self.usage.clone(),
+                usage: Some(self.usage.clone()),
                 bytes,
                 meter: Some(meter),
             });
@@ -2081,9 +2096,7 @@ impl PlanBudget {
             Some(false),
         )?;
         Ok(PlanReservation {
-            authority: self.authority.clone(),
-            retained: false,
-            usage: self.usage.clone(),
+            usage: Some(self.usage.clone()),
             bytes,
             meter: None,
         })
@@ -9054,6 +9067,12 @@ mod tests {
         assert_eq!(failure.kind, ResourceBudgetKind::Depth);
         assert_eq!((failure.requested, failure.used, failure.limit), (4, 0, 3));
         assert_eq!(failure.line, line);
+    }
+
+    #[test]
+    #[cfg(all(target_pointer_width = "64", target_arch = "x86_64"))]
+    fn reservation_layout_bounds_runtime_lease_metadata() {
+        assert_eq!(std::mem::size_of::<PlanReservation>(), 24);
     }
 
     #[test]

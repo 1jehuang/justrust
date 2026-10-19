@@ -61,6 +61,30 @@ passed. Receipts: `20261018-201913209-2456507`,
 The corrected command uses the actual `ownership` and `accounting` targets.
 No graph ceiling or debt baseline is changed. Other published lease paths remain.
 
+## Compact runtime lease metadata
+
+On x86_64 the first authority foundation made each scratch `PlanReservation`
+40 bytes rather than its original 24. The ownership scratch budget retains many
+leases and conservatively accounts reservation-vector growth, so this metadata
+increase matters even though immutable output receipts are small. A hosted
+layout assertion confirmed 40 bytes in `20261018-202530169-2584119`.
+
+The compact representation stores a niche-optimized optional ledger handle.
+Consuming promotion takes that handle, disabling release exactly once. The
+immutable authority token is stored once in the existing runtime ledger and
+cloned into the immutable receipt during promotion. No receipt retains the
+ledger. A regression now requires 24 bytes on x86_64. Charges continue to use
+`size_of::<PlanReservation>()`, so this is a real representation reduction, not
+an omitted storage charge. Promotion uses the existing runtime ledger lock.
+Migration to explicit task scratch remains necessary to eliminate shared-ledger
+retention and contention completely.
+
+With the pending instance receipt migration present, hosted check, 1,379 library
+tests, 39 ownership/accounting/borrow/graph integration tests, and strict
+all-target clippy passed. This is not yet evidence that the separate composed
+proof-session checkpoint's byte rejection is recovered. No size expectation,
+resource limit, or debt baseline was increased. No timing speedup is claimed.
+
 ## Remaining stages, not delivered by this foundation
 
 Published fact holders must replace retained `PlanReservation` fields with
