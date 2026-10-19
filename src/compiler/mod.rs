@@ -1201,7 +1201,7 @@ fn compile_input_configured(
     })
 }
 
-/// The shared ledger snapshot plus all per-task metered work and nodes.
+/// The shared ledger snapshot plus all per-task metered proof work.
 fn metered_usage(budget: &ir::PlanBudget, report: &Report) -> ir::PlanUsageSnapshot {
     let mut usage = budget.usage_snapshot();
     usage.work = usage
@@ -1210,6 +1210,9 @@ fn metered_usage(budget: &ir::PlanBudget, report: &Report) -> ir::PlanUsageSnaps
     usage.nodes = usage
         .nodes
         .saturating_add(usize::try_from(report.metered_nodes).unwrap_or(usize::MAX));
+    usage.obligations = usage
+        .obligations
+        .saturating_add(usize::try_from(report.metered_obligations).unwrap_or(usize::MAX));
     usage
 }
 

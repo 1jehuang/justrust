@@ -428,7 +428,7 @@ impl ValidatedTraitWorld {
                             predicates: &owner.predicates,
                             phase: FactsPhase::Universal,
                         },
-                        &mut Vec::new(),
+                        &mut Default::default(),
                     )?;
                     Ok(normal)
                 } else {
@@ -514,7 +514,8 @@ impl ValidatedTraitWorld {
                     trait_ref: implementation.trait_ref.clone(),
                     item: value.associated,
                 }));
-                let normal = self.normalize_owner_type(&projection, &owner, &mut Vec::new(), 0)?;
+                let normal =
+                    self.normalize_owner_type(&projection, &owner, &mut Default::default(), 0)?;
                 // The owner context contains only actual impl constraints, never
                 // its own head or an equality manufactured from this assignment.
                 self.require_associated_assignment_bounds(
@@ -524,7 +525,7 @@ impl ValidatedTraitWorld {
                         predicates: &owner.predicates,
                         phase: FactsPhase::Universal,
                     },
-                    &mut Vec::new(),
+                    &mut Default::default(),
                 )?;
             }
         }
@@ -555,10 +556,14 @@ impl ValidatedTraitWorld {
             self.validate_projected_value_schema(schema, self.info(declaration)?.receiver)?;
             let mut normalized = clone_schema(schema, &self.budget)?;
             for ty in &mut normalized.signature.params {
-                *ty = self.normalize_owner_type(ty, &owner, &mut Vec::new(), 0)?;
+                *ty = self.normalize_owner_type(ty, &owner, &mut Default::default(), 0)?;
             }
-            normalized.signature.result =
-                self.normalize_owner_type(&schema.signature.result, &owner, &mut Vec::new(), 0)?;
+            normalized.signature.result = self.normalize_owner_type(
+                &schema.signature.result,
+                &owner,
+                &mut Default::default(),
+                0,
+            )?;
             self.validate_schema_signature(
                 declaration,
                 &normalized.signature,
@@ -593,7 +598,7 @@ impl ValidatedTraitWorld {
             retain::<ir::AssociatedTypeProjection>(&self.budget, 1)?;
             let ty = Ty::AssociatedType(Arc::new(projection.clone()));
             return self
-                .normalize_owner_type(&ty, &owner, &mut Vec::new(), 0)
+                .normalize_owner_type(&ty, &owner, &mut Default::default(), 0)
                 .map(Some);
         }
         Ok(None)
@@ -623,7 +628,7 @@ impl ValidatedTraitWorld {
                     "owner annotation escaped actual implementation binders",
                 ));
             }
-            let normal = self.normalize_owner_type(ty, &owner, &mut Vec::new(), 0)?;
+            let normal = self.normalize_owner_type(ty, &owner, &mut Default::default(), 0)?;
             self.validate_ty(&normal, facts.env(), None, true, 0)?;
             return Ok(Some(normal));
         }
@@ -699,7 +704,7 @@ impl ValidatedTraitWorld {
                         predicates: &self.empty,
                         phase: FactsPhase::Closed,
                     },
-                    &mut Vec::new(),
+                    &mut Default::default(),
                 )?;
                 if !matches!(&selection.0.origin,
                     ProofOrigin::Implementation { declaration, arguments }
@@ -729,7 +734,7 @@ impl ValidatedTraitWorld {
                     &normal,
                     context.env(),
                     context,
-                    &mut Vec::new(),
+                    &mut Default::default(),
                 )?;
             }
             if raw.signature.params.len() != signature.params.len() {
@@ -777,7 +782,7 @@ impl ValidatedTraitWorld {
         let original = if closed {
             ty.clone()
         } else {
-            self.normalize_owner_type(ty, owner, &mut Vec::new(), 0)?
+            self.normalize_owner_type(ty, owner, &mut Default::default(), 0)?
         };
         retain::<ir::RefContract>(&self.budget, 1)?;
         let schema = GenericSchema {
@@ -819,10 +824,10 @@ impl ValidatedTraitWorld {
         let mut value =
             self.substitute_projected_schema(&item.schema, &arguments, &implementation.schema_env)?;
         for ty in &mut value.signature.params {
-            *ty = self.normalize_owner_type(ty, &owner, &mut Vec::new(), 0)?;
+            *ty = self.normalize_owner_type(ty, &owner, &mut Default::default(), 0)?;
         }
         value.signature.result =
-            self.normalize_owner_type(&value.signature.result, &owner, &mut Vec::new(), 0)?;
+            self.normalize_owner_type(&value.signature.result, &owner, &mut Default::default(), 0)?;
         // Independently establish the required declaration's contract in the real
         // implementation environment. Never copy the provided target's topology.
         self.validate_schema_signature(
@@ -892,7 +897,7 @@ impl ValidatedTraitWorld {
                 predicates: &self.empty,
                 phase: FactsPhase::Closed,
             },
-            &mut Vec::new(),
+            &mut Default::default(),
         )?;
         if !matches!(&selection.0.origin, ProofOrigin::Implementation { .. }) {
             return Err(FactsError::invalid(
@@ -1530,7 +1535,7 @@ mod tests {
         // The other closed application is resolved by its own selected assignment,
         // never by this owner's RHS despite identical Self and associated item.
         let actual = world
-            .normalize_owner_type(&other, &context, &mut Vec::new(), 0)
+            .normalize_owner_type(&other, &context, &mut Default::default(), 0)
             .unwrap();
         assert!(
             world

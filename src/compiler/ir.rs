@@ -2002,12 +2002,14 @@ impl PlanBudget {
         let caller = std::panic::Location::caller();
         let limit = match kind {
             ResourceBudgetKind::Work => self.limits.work,
+            ResourceBudgetKind::Obligations => 4096,
             _ => self.limits.nodes,
         };
         crate::engine::with_current_meter(|meter| {
             let meter = meter?;
             let counter = match kind {
                 ResourceBudgetKind::Work => &meter.work,
+                ResourceBudgetKind::Obligations => &meter.obligations,
                 _ => &meter.nodes,
             };
             let amount64 = u64::try_from(amount).unwrap_or(u64::MAX);
@@ -2060,6 +2062,9 @@ impl PlanBudget {
     }
     #[track_caller]
     pub fn charge_obligation(&self) -> Result<(), String> {
+        if let Some(result) = self.charge_task(1, ResourceBudgetKind::Obligations) {
+            return result;
+        }
         self.charge(
             1,
             |u| &mut u.obligations,
@@ -2854,13 +2859,43 @@ pub fn substitute_callee(
     cx: &mut impl SubstitutionCx,
     budget: &PlanBudget,
 ) -> Result<Callee, String> {
+    substitute_callee_with_session(callee, env, args, closed_facts, cx, budget, None)
+}
+
+pub(crate) fn substitute_callee_in(
+    callee: &Callee,
+    env: &GenericEnv,
+    args: &[Ty],
+    closed_facts: &super::traits::ValidatedFacts,
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+    session: &mut super::traits::ProofSession,
+) -> Result<Callee, String> {
+    substitute_callee_with_session(callee, env, args, closed_facts, cx, budget, Some(session))
+}
+
+fn substitute_callee_with_session(
+    callee: &Callee,
+    env: &GenericEnv,
+    args: &[Ty],
+    closed_facts: &super::traits::ValidatedFacts,
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+    session: Option<&mut super::traits::ProofSession>,
+) -> Result<Callee, String> {
     let substituted = substitute_callee_metadata(callee, env, args, closed_facts, cx, budget)?;
     match substituted {
         Callee::Direct(target) => {
-            closed_facts
-                .service()
-                .discharge_direct(&target, closed_facts)
-                .map_err(|e| e.into_legacy_diagnostic(budget))?;
+            if let Some(session) = session {
+                closed_facts
+                    .world()
+                    .discharge_direct_in(&target, closed_facts, session)
+            } else {
+                closed_facts
+                    .service()
+                    .discharge_direct(&target, closed_facts)
+            }
+            .map_err(|e| e.into_legacy_diagnostic(budget))?;
             Ok(Callee::Direct(target))
         }
         Callee::TraitItem(call) => Ok(closed_facts

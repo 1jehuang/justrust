@@ -5,75 +5,55 @@
 # Shrink-only forever: removing a line is progress, adding one requires
 # explicit user approval. See GRAPH-INTEGRITY.md. Shrink after removal:
 # GRAPH_INTEGRITY_SHRINK=1 justrust test --test graph_integrity
-ConcreteProofFact DeclaredCallableContext Mutex  # ConcreteProofFact -> ConcreteCfg -> ClosedCfg -> ValidatedFacts -> ValidatedTraitWorld -> DeclaredCallableContext -> Mutex
 ConcreteProofFact ExpansionBudget Mutex  # ConcreteProofFact -> ConcreteCfg -> ClosedCfg -> Function -> AstPath -> PathData -> BudgetVec -> ExpansionBudget -> Mutex
 ConcreteProofFact InvocationBudget Mutex  # ConcreteProofFact -> ConcreteCfg -> ClosedCfg -> Function -> AstPath -> PathData -> BudgetVec -> ExpansionBudget -> State -> StateLease -> InvocationBudget -> Mutex
 ConcreteProofFact PlanBudget Mutex  # ConcreteProofFact -> ConcreteCfg -> ClosedCfg -> PlanBudget -> Mutex
 ConcreteProofFact PlanCtx Mutex  # ConcreteProofFact -> ConcreteCfg -> ClosedCfg -> Function -> GeneratedCfgShape -> CanonicalSourcePublication -> OriginalBody -> OriginalSource -> PlanCtx -> Mutex
 ConcreteProofFact PlanReservation Mutex  # ConcreteProofFact -> ConcreteCfg -> PlanReservation -> Mutex
-ConcreteProofFact ValidatedTraitWorld Mutex  # ConcreteProofFact -> ConcreteCfg -> ClosedCfg -> ValidatedFacts -> ValidatedTraitWorld -> Mutex
-Function DeclaredCallableContext Mutex  # Function -> GeneratedCfgShape -> ValidatedTraitWorld -> DeclaredCallableContext -> Mutex
 Function ExpansionBudget Mutex  # Function -> AstPath -> PathData -> BudgetVec -> ExpansionBudget -> Mutex
 Function InvocationBudget Mutex  # Function -> AstPath -> PathData -> BudgetVec -> ExpansionBudget -> State -> StateLease -> InvocationBudget -> Mutex
 Function PlanBudget Mutex  # Function -> GeneratedCfgShape -> PlanBudget -> Mutex
 Function PlanCtx Mutex  # Function -> GeneratedCfgShape -> CanonicalSourcePublication -> OriginalBody -> OriginalSource -> PlanCtx -> Mutex
 Function PlanReservation Mutex  # Function -> BodySubstitutionProof -> VerifiedTemplateCfg -> PlanReservation -> Mutex
-Function ValidatedTraitWorld Mutex  # Function -> GeneratedCfgShape -> ValidatedTraitWorld -> Mutex
-InstanceBodyFact DeclaredCallableContext Mutex  # InstanceBodyFact -> ValidatedFacts -> ValidatedTraitWorld -> DeclaredCallableContext -> Mutex
 InstanceBodyFact ExpansionBudget Mutex  # InstanceBodyFact -> ValidatedFacts -> ValidatedTraitWorld -> CoreCatalog -> ModuleArena -> ExpansionBudget -> Mutex
 InstanceBodyFact InvocationBudget Mutex  # InstanceBodyFact -> ValidatedFacts -> ValidatedTraitWorld -> CoreCatalog -> ModuleArena -> ExpansionBudget -> State -> StateLease -> InvocationBudget -> Mutex
 InstanceBodyFact PlanBudget Mutex  # InstanceBodyFact -> ValidatedFacts -> ValidatedTraitWorld -> PlanBudget -> Mutex
 InstanceBodyFact PlanCtx Mutex  # InstanceBodyFact -> CheckedFunction -> BodySubstitutionProof -> VerifiedTemplateCfg -> CarrierEffectProof -> Function -> GeneratedCfgShape -> CanonicalSourcePublication -> OriginalBody -> OriginalSource -> PlanCtx -> Mutex
 InstanceBodyFact PlanReservation Mutex  # InstanceBodyFact -> CheckedFunction -> BodySubstitutionProof -> VerifiedTemplateCfg -> PlanReservation -> Mutex
-InstanceBodyFact ValidatedTraitWorld Mutex  # InstanceBodyFact -> ValidatedFacts -> ValidatedTraitWorld -> Mutex
-ParsedProgram DeclaredCallableContext Mutex  # ParsedProgram -> Program -> Function -> GeneratedCfgShape -> ValidatedTraitWorld -> DeclaredCallableContext -> Mutex
 ParsedProgram ExpansionBudget Mutex  # ParsedProgram -> Program -> BudgetVec -> ExpansionBudget -> Mutex
 ParsedProgram InvocationBudget Mutex  # ParsedProgram -> Program -> BudgetVec -> ExpansionBudget -> State -> StateLease -> InvocationBudget -> Mutex
 ParsedProgram PlanBudget Mutex  # ParsedProgram -> Program -> Function -> GeneratedCfgShape -> PlanBudget -> Mutex
 ParsedProgram PlanCtx Mutex  # ParsedProgram -> Program -> Function -> GeneratedCfgShape -> CanonicalSourcePublication -> OriginalBody -> OriginalSource -> PlanCtx -> Mutex
 ParsedProgram PlanReservation Mutex  # ParsedProgram -> Program -> Function -> BodySubstitutionProof -> VerifiedTemplateCfg -> PlanReservation -> Mutex
-ParsedProgram ValidatedTraitWorld Mutex  # ParsedProgram -> Program -> Function -> GeneratedCfgShape -> ValidatedTraitWorld -> Mutex
-PlanCtx DeclaredCallableContext Mutex  # PlanCtx -> ValidatedTraitWorld -> DeclaredCallableContext -> Mutex
 PlanCtx ExpansionBudget Mutex  # PlanCtx -> CoreCatalog -> ModuleArena -> ExpansionBudget -> Mutex
 PlanCtx InvocationBudget Mutex  # PlanCtx -> CoreCatalog -> ModuleArena -> ExpansionBudget -> State -> StateLease -> InvocationBudget -> Mutex
 PlanCtx PlanBudget Mutex  # PlanCtx -> PlanBudget -> Mutex
 PlanCtx PlanCtx Mutex  # PlanCtx -> Mutex
 PlanCtx PlanReservation Mutex  # PlanCtx -> PlanState -> PlanReservation -> Mutex
-PlanCtx ValidatedTraitWorld Mutex  # PlanCtx -> ValidatedTraitWorld -> Mutex
-PlanFact DeclaredCallableContext Mutex  # PlanFact -> Plan -> ValidatedFacts -> ValidatedTraitWorld -> DeclaredCallableContext -> Mutex
 PlanFact ExpansionBudget Mutex  # PlanFact -> Plan -> ValidatedFacts -> ValidatedTraitWorld -> CoreCatalog -> ModuleArena -> ExpansionBudget -> Mutex
 PlanFact InvocationBudget Mutex  # PlanFact -> Plan -> ValidatedFacts -> ValidatedTraitWorld -> CoreCatalog -> ModuleArena -> ExpansionBudget -> State -> StateLease -> InvocationBudget -> Mutex
 PlanFact PlanBudget Mutex  # PlanFact -> Plan -> PlanBudget -> Mutex
 PlanFact PlanCtx Mutex  # PlanFact -> Plan -> CarrierEffects -> CallCarrierBinding -> ValidatedCallEvidence -> ValidatedOriginalCalls -> OriginalBody -> OriginalSource -> PlanCtx -> Mutex
 PlanFact PlanReservation Mutex  # PlanFact -> Plan -> PlanReservation -> Mutex
-PlanFact ValidatedTraitWorld Mutex  # PlanFact -> Plan -> ValidatedFacts -> ValidatedTraitWorld -> Mutex
-Program DeclaredCallableContext Mutex  # Program -> Function -> GeneratedCfgShape -> ValidatedTraitWorld -> DeclaredCallableContext -> Mutex
 Program ExpansionBudget Mutex  # Program -> BudgetVec -> ExpansionBudget -> Mutex
 Program InvocationBudget Mutex  # Program -> BudgetVec -> ExpansionBudget -> State -> StateLease -> InvocationBudget -> Mutex
 Program PlanBudget Mutex  # Program -> Function -> GeneratedCfgShape -> PlanBudget -> Mutex
 Program PlanCtx Mutex  # Program -> Function -> GeneratedCfgShape -> CanonicalSourcePublication -> OriginalBody -> OriginalSource -> PlanCtx -> Mutex
 Program PlanReservation Mutex  # Program -> Function -> BodySubstitutionProof -> VerifiedTemplateCfg -> PlanReservation -> Mutex
-Program ValidatedTraitWorld Mutex  # Program -> Function -> GeneratedCfgShape -> ValidatedTraitWorld -> Mutex
-TemplateBodyFact DeclaredCallableContext Mutex  # TemplateBodyFact -> CanonicalSourcePublication -> ValidatedFacts -> ValidatedTraitWorld -> DeclaredCallableContext -> Mutex
 TemplateBodyFact ExpansionBudget Mutex  # TemplateBodyFact -> CanonicalSourcePublication -> ValidatedFacts -> ValidatedTraitWorld -> CoreCatalog -> ModuleArena -> ExpansionBudget -> Mutex
 TemplateBodyFact InvocationBudget Mutex  # TemplateBodyFact -> CanonicalSourcePublication -> ValidatedFacts -> ValidatedTraitWorld -> CoreCatalog -> ModuleArena -> ExpansionBudget -> State -> StateLease -> InvocationBudget -> Mutex
 TemplateBodyFact PlanBudget Mutex  # TemplateBodyFact -> CanonicalSourcePublication -> ValidatedFacts -> ValidatedTraitWorld -> PlanBudget -> Mutex
 TemplateBodyFact PlanCtx Mutex  # TemplateBodyFact -> CanonicalSourcePublication -> OriginalBody -> OriginalSource -> PlanCtx -> Mutex
 TemplateBodyFact PlanReservation Mutex  # TemplateBodyFact -> CheckedFunction -> BodySubstitutionProof -> VerifiedTemplateCfg -> PlanReservation -> Mutex
-TemplateBodyFact ValidatedTraitWorld Mutex  # TemplateBodyFact -> CanonicalSourcePublication -> ValidatedFacts -> ValidatedTraitWorld -> Mutex
-TemplateCfg DeclaredCallableContext Mutex  # TemplateCfg -> ValidatedFacts -> ValidatedTraitWorld -> DeclaredCallableContext -> Mutex
 TemplateCfg ExpansionBudget Mutex  # TemplateCfg -> Function -> AstPath -> PathData -> BudgetVec -> ExpansionBudget -> Mutex
 TemplateCfg InvocationBudget Mutex  # TemplateCfg -> Function -> AstPath -> PathData -> BudgetVec -> ExpansionBudget -> State -> StateLease -> InvocationBudget -> Mutex
 TemplateCfg PlanBudget Mutex  # TemplateCfg -> PlanBudget -> Mutex
 TemplateCfg PlanCtx Mutex  # TemplateCfg -> Function -> GeneratedCfgShape -> CanonicalSourcePublication -> OriginalBody -> OriginalSource -> PlanCtx -> Mutex
 TemplateCfg PlanReservation Mutex  # TemplateCfg -> CheckedFunction -> BodySubstitutionProof -> VerifiedTemplateCfg -> PlanReservation -> Mutex
-TemplateCfg ValidatedTraitWorld Mutex  # TemplateCfg -> ValidatedFacts -> ValidatedTraitWorld -> Mutex
 UnitResult ExpansionBudget Mutex  # UnitResult -> FileUnit -> SourceError -> ByteLease -> ExpansionBudget -> Mutex
 UnitResult InvocationBudget Mutex  # UnitResult -> FileUnit -> SourceError -> ByteLease -> ExpansionBudget -> State -> StateLease -> InvocationBudget -> Mutex
-UniversalProofFact DeclaredCallableContext Mutex  # UniversalProofFact -> VerifiedTemplateCfg -> CarrierEffectProof -> ValidatedFacts -> ValidatedTraitWorld -> DeclaredCallableContext -> Mutex
 UniversalProofFact ExpansionBudget Mutex  # UniversalProofFact -> VerifiedTemplateCfg -> CarrierEffectProof -> Function -> AstPath -> PathData -> BudgetVec -> ExpansionBudget -> Mutex
 UniversalProofFact InvocationBudget Mutex  # UniversalProofFact -> VerifiedTemplateCfg -> CarrierEffectProof -> Function -> AstPath -> PathData -> BudgetVec -> ExpansionBudget -> State -> StateLease -> InvocationBudget -> Mutex
 UniversalProofFact PlanBudget Mutex  # UniversalProofFact -> VerifiedTemplateCfg -> TemplateCfg -> PlanBudget -> Mutex
 UniversalProofFact PlanCtx Mutex  # UniversalProofFact -> VerifiedTemplateCfg -> CarrierEffectProof -> Function -> GeneratedCfgShape -> CanonicalSourcePublication -> OriginalBody -> OriginalSource -> PlanCtx -> Mutex
 UniversalProofFact PlanReservation Mutex  # UniversalProofFact -> VerifiedTemplateCfg -> PlanReservation -> Mutex
-UniversalProofFact ValidatedTraitWorld Mutex  # UniversalProofFact -> VerifiedTemplateCfg -> CarrierEffectProof -> ValidatedFacts -> ValidatedTraitWorld -> Mutex
