@@ -254,6 +254,35 @@ the same domain sequence and a cross-graft rejects, and
 `owner_path_reaches_no_mutable_state`, plus workers 1/8 targeted suites only
 while the main CPU window is reserved.
 
+#### Activation blast radius (measured on 677ea96ab)
+
+Foundation landed in scratch (ef3a5e285): `OwnerTag`, sealed `TagMint`, and
+`OwnerIssuer::issue -> Issued {issuer, tag}`. Tags are minted only after
+payment, and the ordinal commits last. Gates pass: owner_path 14/14
+(sibling, cross-root, 16x8 concurrent and engine/standalone tags distinct; a
+failed issue consumes no ordinal; tag exhaustion fails closed),
+owner_authority, graph_integrity with the reachability gate, and clippy.
+
+Swapping the 8 statics for issued tags changes these constructors and their
+callers (production and tests):
+
+| Constructor | Files calling it |
+|---|---|
+| `TokenSession::new` | 21 (frontend, ir, cfg, ownership, semantic_*, macro_*, lexer, source_*) |
+| `ModuleArenaBuilder::for_source/for_catalog` | 13 (frontend, traits, traits/catalog, ir, cfg, backend, ownership, ...) |
+| `ScopeArenaBuilder::for_names` | 10 |
+| `SourceItemMacroDriver::new`, `LocalMacroDriver::new` | 2 each (frontend + own module) |
+| `SourceSnapshot` seal, `TokenSlice`, `PreparedView`, token tree stream | internal to their module |
+
+Lowest-churn sequencing: thread the issued tag by deriving it from the
+already-owned parent. Sessions get theirs from the snapshot owner, arenas and
+drivers from the `NameStoreBuilder`'s session. Only `SourceSnapshot` creation
+(one issuer per input) and the catalog arena (one per `PlanCtx`) take an
+issuer argument. That limits the public signature change to the snapshot
+constructors and `for_catalog`, and the other sites change only internally.
+This plan still needs a coordinated merge order with the owners of
+`frontend.rs`, `traits.rs`, `ir.rs` and `cfg.rs` before any edit.
+
 ## Coordination
 
 - Kind ids reserved by cricket: 121 `PARSE_FILE`, 122 `MODULE_INDEX`,
