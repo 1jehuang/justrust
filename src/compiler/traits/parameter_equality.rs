@@ -260,9 +260,9 @@ impl ValidatedTraitWorld {
             SignatureSubject::Call(Callee::Direct(target)) => {
                 EqualityResultSubject::Direct(target.clone())
             }
-            SignatureSubject::Call(Callee::TraitItem(call)) => {
-                EqualityResultSubject::Required(call.clone())
-            }
+            SignatureSubject::Call(
+                Callee::TraitItem(call) | Callee::Virtual(ir::VirtualCall { call }),
+            ) => EqualityResultSubject::Required(call.clone()),
         })
     }
 

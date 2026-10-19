@@ -150,6 +150,17 @@ fn validate_type_names(ty: &Type, names: &impl NameAccess) -> Result<(), String>
                 work(names, 1)?;
                 pending.push(referent.as_ref()).map_err(transport)?;
             }
+            Type::Dyn(trait_path) => {
+                if let TraitPath::Source(path) = trait_path.as_ref() {
+                    path.path(names)?;
+                    work(names, path.segments.len())?;
+                    for segment in &path.segments {
+                        names
+                            .key(segment.name, LookupClass::Item(Namespace::Type))
+                            .map_err(native_adapter::name_diagnostic)?;
+                    }
+                }
+            }
             Type::Array(element, _)
             | Type::Slice(element)
             | Type::RawPtr {
@@ -333,6 +344,17 @@ impl Type {
                         super::super::source::SourceError::from_token(e).to_string()
                     })?;
                 }
+                (Type::Dyn(a), Type::Dyn(b)) => match (a.as_ref(), b.as_ref()) {
+                    (TraitPath::Builtin(a), TraitPath::Builtin(b)) => equal &= a == b,
+                    (TraitPath::Source(a), TraitPath::Source(b)) => {
+                        // Written trait object principals are argument-free.
+                        let a = a.path(names)?;
+                        let b = b.path(names)?;
+                        equal &= path_key(names, &a, Namespace::Type)?
+                            == path_key(names, &b, Namespace::Type)?;
+                    }
+                    _ => equal = false,
+                },
                 (Type::Tuple(a), Type::Tuple(b)) => {
                     equal &= a.len() == b.len();
                     for (a, b) in a.iter().zip(b) {

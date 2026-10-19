@@ -68,6 +68,22 @@ pub const SHARED_BYTE_SLICE_LAYOUT: SliceLayout = SliceLayout {
     element_stride: 8,
 };
 
+/// `&dyn P` / `&mut dyn P`: a two-word carrier (data pointer at 0, vtable
+/// pointer at 8) with the same storage/transport conventions as a shared
+/// slice. Returns the principal trait.
+fn trait_object_ref(ty: &ir::Ty) -> Option<ir::DeclId> {
+    match ty {
+        ir::Ty::Ref { referent, .. } => match referent.as_ref() {
+            ir::Ty::Dyn(object) => Some(object.principal),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Words 0..2 of every two-word fat carrier (slice data/len, object data/vtable).
+const FAT_LAYOUT: SliceLayout = SHARED_BYTE_SLICE_LAYOUT;
+
 fn shared_slice_layout(element: &ir::Ty) -> Result<SliceLayout, String> {
     Ok(SliceLayout {
         element_stride: u32::try_from(value_size(element)?)
@@ -85,6 +101,9 @@ fn shared_slice_layout(element: &ir::Ty) -> Result<SliceLayout, String> {
 fn argument_words(ty: &ir::Ty) -> Result<usize, String> {
     if let Some(element) = ty.shared_descriptor_element() {
         shared_slice_layout(element)?;
+        return Ok(2);
+    }
+    if trait_object_ref(ty).is_some() {
         return Ok(2);
     }
     indirect(ty)?;
@@ -160,6 +179,9 @@ fn indirect(ty: &ir::Ty) -> Result<bool, String> {
         shared_slice_layout(element)?;
         return Ok(true);
     }
+    if trait_object_ref(ty).is_some() {
+        return Ok(true);
+    }
     if ty.contains_slice() {
         return Err(SLICE_UNSUPPORTED.into());
     }
@@ -180,6 +202,7 @@ fn indirect(ty: &ir::Ty) -> Result<bool, String> {
         ir::Ty::Param(_) => Err("type parameter has no native ABI".into()),
         ir::Ty::AssociatedType(_) => Err("unresolved associated type has no native ABI".into()),
         ir::Ty::Slice { .. } | ir::Ty::Str => Err(SLICE_UNSUPPORTED.into()),
+        ir::Ty::Dyn(_) => Err("unsized trait object value has no native ABI".into()),
     }
 }
 
@@ -195,6 +218,9 @@ fn value_size(ty: &ir::Ty) -> Result<i32, String> {
     if let Some(element) = ty.shared_descriptor_element() {
         shared_slice_layout(element)?;
         return Ok(2 * i32::from(SHARED_BYTE_SLICE_LAYOUT.word_bytes));
+    }
+    if trait_object_ref(ty).is_some() {
+        return Ok(2 * i32::from(FAT_LAYOUT.word_bytes));
     }
     if ty.contains_slice() {
         return Err(SLICE_UNSUPPORTED.into());
@@ -309,6 +335,29 @@ pub struct Object {
     pub code: Vec<u8>,
     pub calls: Vec<(usize, String)>,
     pub strings: Vec<(usize, Vec<u8>)>,
+    /// Absolute u64 immediate fields that receive the address of a linked
+    /// read-only trait object vtable.
+    pub vtables: Vec<(usize, Vtable)>,
+}
+
+/// Private trait object vtable: `[drop_in_place, size, align, methods...]`,
+/// eight bytes each. `drop` is a function symbol or `None` (written as 0) for
+/// trivially dropped types; method entries are function symbols in the
+/// principal's `vtable_methods` slot order. Identical vtables are shared.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Vtable {
+    pub drop: Option<String>,
+    pub size: u64,
+    pub align: u64,
+    pub methods: Vec<String>,
+}
+/// Byte offset of method slot `slot` inside a private vtable.
+fn vtable_slot_offset(slot: usize) -> Result<i32, String> {
+    slot.checked_add(3)
+        .and_then(|n| n.checked_mul(8))
+        .and_then(|n| i32::try_from(n).ok())
+        .filter(|n| *n < MAX_FRAME_BYTES)
+        .ok_or_else(|| "vtable slot offset exceeds private limit".into())
 }
 
 struct Emitter<'a> {
@@ -321,6 +370,8 @@ struct Emitter<'a> {
     /// 0=LHS, 16=RHS, 32=result, 48..256=wide arithmetic workspace.
     /// Independent of aggregate scratch so constructors cannot destroy inputs.
     wide_scratch: i32,
+    /// Frame slot holding the vtable word of the current virtual call.
+    vtable_scratch: i32,
     returns: Vec<usize>,
     traps: Vec<usize>,
     edges: Vec<(usize, cfg::BlockId)>,
@@ -756,6 +807,54 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
     /// rax = address of an exactly shared `&[T]` whole-local carrier.
+    /// Closed vtable of concrete Sized `concrete` for `principal`, resolved
+    /// only through this function's sealed closed facts (never by name).
+    fn vtable(&mut self, concrete: &ir::Ty, principal: ir::DeclId) -> Result<Vtable, String> {
+        let facts = self.concrete.facts();
+        let budget = facts.budget();
+        let targets = facts
+            .vtable_targets(concrete, principal)
+            .map_err(|e| e.into_legacy_diagnostic(budget))?;
+        let mut methods = Vec::with_capacity(targets.len());
+        for target in &targets {
+            methods.push((self.resolve)(target)?);
+        }
+        let drop = if facts.has_normal_drop_impls() {
+            match facts
+                .normal_drop_plan(concrete)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?
+            {
+                super::traits::NormalDropPlan::Trivial => None,
+                super::traits::NormalDropPlan::Destructor(destructor) => {
+                    Some((self.resolve)(destructor.target())?)
+                }
+                super::traits::NormalDropPlan::Unresolved => {
+                    return Err("unsupported: unresolved Drop for a trait object vtable".into());
+                }
+            }
+        } else {
+            None
+        };
+        let size = u64::try_from(value_size(concrete)?).map_err(|_| "vtable size")?;
+        Ok(Vtable {
+            drop,
+            size,
+            align: 8,
+            methods,
+        })
+    }
+    /// rax = address of a two-word `&dyn` carrier local; loads it like a slice.
+    fn fat_operand(&mut self, operand: &cfg::Operand) -> Result<(), String> {
+        let (cfg::Operand::Copy(place) | cfg::Operand::Move(place)) = operand else {
+            return Err("trait object operand requires a local carrier".into());
+        };
+        if !place.projection.is_empty()
+            || trait_object_ref(self.function().place_ty(place)?).is_none()
+        {
+            return Err("trait object operand requires a whole `&dyn` local".into());
+        }
+        self.load_place(place)
+    }
     fn slice_operand(&mut self, operand: &cfg::Operand) -> Result<(), String> {
         let (cfg::Operand::Copy(place) | cfg::Operand::Move(place)) = operand else {
             return Err("slice operand requires a local carrier".into());
@@ -1623,7 +1722,20 @@ impl<'a> Emitter<'a> {
                     .loan_sites
                     .get(loan.0)
                     .ok_or("invalid checked loan site")?;
-                self.place_address(&site.place)?;
+                if let [ir::Projection::Deref] = site.place.projection.as_slice()
+                    && trait_object_ref(self.function().place_ty(&ir::Place {
+                        local: site.place.local,
+                        projection: Vec::new(),
+                    })?)
+                    .is_some()
+                {
+                    // Whole-object reborrow `&*d`: copy both carrier words.
+                    let local = self.local_offset(site.place.local)?;
+                    self.address(local);
+                    self.copy_slice_to_frame(FAT_LAYOUT, self.aggregate_scratch)?;
+                } else {
+                    self.place_address(&site.place)?;
+                }
             }
             cfg::Rvalue::IndexCopy { array, index } => {
                 let element = self.index_address(array, index)?;
@@ -1745,6 +1857,27 @@ impl<'a> Emitter<'a> {
                 self.literal_output(&output.text, output.stream, output.newline)?;
             }
             cfg::Rvalue::Str(text) => self.str_literal(text)?,
+            cfg::Rvalue::RefToDyn {
+                reference,
+                principal,
+            } => {
+                // The operand is a thin `&T`/`&mut T` (rax = data pointer).
+                let ir::Ty::Ref { referent, .. } = self.function().operand_ty(reference)? else {
+                    return Err("trait object unsizing requires a reference operand".into());
+                };
+                let vtable = self.vtable(&referent, *principal)?;
+                self.operand(reference)?;
+                let base = self.aggregate_scratch;
+                self.bytes(&[0x48, 0x89, 0x85]); // mov [rbp+base], rax (data)
+                self.i32(base);
+                self.bytes(&[0x48, 0xb8]); // movabs rax, vtable
+                let at = self.position();
+                self.bytes(&[0; 8]);
+                self.object.vtables.push((at, vtable));
+                self.bytes(&[0x48, 0x89, 0x85]); // mov [rbp+base+8], rax
+                self.i32(base.checked_add(8).ok_or("trait object carrier offset")?);
+                self.address(base);
+            }
             cfg::Rvalue::ArrayToSlice { reference } => {
                 // N comes only from the validated operand type. The operand is
                 // the thin array pointer (the dummy word address for N == 0).
@@ -1933,8 +2066,32 @@ impl<'a> Emitter<'a> {
                 next,
                 ..
             } => {
-                let ir::Callee::Direct(target) = target else {
-                    return Err("unresolved trait dispatch has no native ABI".into());
+                // Virtual calls: argument 0 is the `&dyn` receiver carrier. The
+                // implementation receives only the thin data word as `&Self`;
+                // the vtable word selects the slot after argument evaluation.
+                let virtual_slot = match target {
+                    ir::Callee::Direct(_) => None,
+                    ir::Callee::Virtual(virtual_call) => {
+                        let principal = virtual_call.principal()?;
+                        let slots =
+                            self.concrete
+                                .facts()
+                                .vtable_methods(principal)
+                                .map_err(|e| {
+                                    e.into_legacy_diagnostic(self.concrete.facts().budget())
+                                })?;
+                        let slot = slots
+                            .iter()
+                            .position(|(_, item)| *item == virtual_call.call.item)
+                            .ok_or("virtual call item is not a vtable slot")?;
+                        if signature.params.first().and_then(trait_object_ref) != Some(principal) {
+                            return Err("virtual call receiver is not the object carrier".into());
+                        }
+                        Some(slot)
+                    }
+                    ir::Callee::TraitItem(_) => {
+                        return Err("unresolved trait dispatch has no native ABI".into());
+                    }
                 };
                 if args.len() > MAX_ARGS {
                     return Err(format!("at most {MAX_ARGS} arguments are supported"));
@@ -1942,14 +2099,30 @@ impl<'a> Emitter<'a> {
                 if args.len() != signature.params.len() {
                     return Err("call argument count does not match signature".into());
                 }
-                let words = parameter_words(&signature.params)?;
+                let mut words = parameter_words(&signature.params)?;
+                if virtual_slot.is_some() {
+                    // The callee's receiver is a thin `&Self`: one word.
+                    words[0] = 1;
+                }
                 let aggregate = result_indirect(&signature.result)?;
                 let cleanup = call_cleanup_bytes(&words, aggregate)?;
                 // Left-to-right evaluation. A two-word shared slice
                 // operand leaves its carrier address in rax; both words are
                 // pushed (data, then len), never the carrier pointer itself.
                 let mut wide_argument = 0;
-                for ((operand, words), param) in args.iter().zip(&words).zip(&signature.params) {
+                for (index, ((operand, words), param)) in
+                    args.iter().zip(&words).zip(&signature.params).enumerate()
+                {
+                    if index == 0 && virtual_slot.is_some() {
+                        // Snapshot the vtable word into the dedicated slot and
+                        // push the data word as the thin receiver.
+                        self.fat_operand(operand)?;
+                        self.load_word(1, 0, FAT_LAYOUT.len_offset); // rcx = vtable
+                        self.bytes(&[0x48, 0x89, 0x8d]); // mov [rbp+slot], rcx
+                        self.i32(self.vtable_scratch);
+                        self.bytes(&[0xff, 0x70, FAT_LAYOUT.data_offset]); // push data
+                        continue;
+                    }
                     match words {
                         1 if wide_integer(param) => {
                             // A materialized constant lives in shared result
@@ -1976,6 +2149,13 @@ impl<'a> Emitter<'a> {
                             self.slice_operand(operand)?;
                             self.push_slice_argument(SHARED_BYTE_SLICE_LAYOUT);
                         }
+                        2 if trait_object_ref(param).is_some()
+                            && trait_object_ref(&self.function().operand_ty(operand)?)
+                                .is_some() =>
+                        {
+                            self.fat_operand(operand)?;
+                            self.push_slice_argument(FAT_LAYOUT);
+                        }
                         _ => return Err("invalid multi-word argument transport".into()),
                     }
                 }
@@ -1983,8 +2163,19 @@ impl<'a> Emitter<'a> {
                     self.place_address(destination)?;
                     self.bytes(&[0x50]);
                 }
-                let at = self.jump(&[0xe8]);
-                self.object.calls.push((at, (self.resolve)(target)?));
+                match (target, virtual_slot) {
+                    (ir::Callee::Direct(target), None) => {
+                        let at = self.jump(&[0xe8]);
+                        self.object.calls.push((at, (self.resolve)(target)?));
+                    }
+                    (_, Some(slot)) => {
+                        self.bytes(&[0x48, 0x8b, 0x85]); // mov rax, [rbp+vtable slot]
+                        self.i32(self.vtable_scratch);
+                        self.bytes(&[0xff, 0x90]); // call [rax+disp32]
+                        self.i32(vtable_slot_offset(slot)?);
+                    }
+                    _ => return Err("invalid call transport".into()),
+                }
                 if cleanup != 0 {
                     self.bytes(&[0x48, 0x81, 0xc4]);
                     self.i32(cleanup);
@@ -2142,9 +2333,10 @@ pub fn emit_cfg_function(
                         value_size(ty)?
                     }
                     cfg::Rvalue::EnumVariant { ty, .. } => value_size(&ir::Ty::Enum(ty.clone()))?,
-                    cfg::Rvalue::ArrayToSlice { .. } | cfg::Rvalue::Str(_) => {
-                        2 * i32::from(SHARED_BYTE_SLICE_LAYOUT.word_bytes)
-                    }
+                    cfg::Rvalue::ArrayToSlice { .. }
+                    | cfg::Rvalue::Str(_)
+                    | cfg::Rvalue::RefToDyn { .. }
+                    | cfg::Rvalue::Borrow(_) => 2 * i32::from(SHARED_BYTE_SLICE_LAYOUT.word_bytes),
                     cfg::Rvalue::SliceIndex { slice, .. } => {
                         let slice_ty = function.operand_ty(slice)?;
                         let element = slice_ty
@@ -2178,6 +2370,11 @@ pub fn emit_cfg_function(
             .ok_or("wide arithmetic scratch exceeds private frame limit")?;
     }
     let wide_scratch = -frame_bytes;
+    frame_bytes = frame_bytes
+        .checked_add(8)
+        .filter(|size| *size <= MAX_FRAME_BYTES)
+        .ok_or("function exceeds private frame limit")?;
+    let vtable_scratch = -frame_bytes;
     let aggregate_result = result_indirect(&function.result)?;
     let result_size = value_size(&function.result)?;
     let param_offsets = argument_slot_offsets(&param_words, aggregate_result)?;
@@ -2186,6 +2383,7 @@ pub fn emit_cfg_function(
             code: Vec::new(),
             calls: Vec::new(),
             strings: Vec::new(),
+            vtables: Vec::new(),
         },
         concrete,
         resolve,
@@ -2193,6 +2391,7 @@ pub fn emit_cfg_function(
         drop_flags,
         aggregate_scratch,
         wide_scratch,
+        vtable_scratch,
         returns: Vec::new(),
         traps: Vec::new(),
         edges: Vec::new(),
@@ -2204,7 +2403,10 @@ pub fn emit_cfg_function(
     }
     for ((local, offset), words) in function.params.iter().zip(&param_offsets).zip(&param_words) {
         let local_ty = &function.locals[local.0].ty;
-        if *words == 2 && local_ty.shared_descriptor_element().is_some() {
+        if *words == 2
+            && (local_ty.shared_descriptor_element().is_some()
+                || trait_object_ref(local_ty).is_some())
+        {
             // len at offset, data at offset+8, into the local carrier.
             emitter.store_slice_parameter(
                 SHARED_BYTE_SLICE_LAYOUT,
@@ -2362,6 +2564,48 @@ pub fn link(functions: &[(String, Object)]) -> Result<Vec<u8>, String> {
                 .ok_or("ELF address overflow")?;
             code[start + at..start + at + 8].copy_from_slice(&address.to_le_bytes());
             data.extend_from_slice(literal);
+        }
+    }
+    // Trait object vtables: eight-byte aligned, deduplicated, absolute.
+    let mut vtable_addresses: HashMap<&Vtable, u64> = HashMap::new();
+    for (name, object) in functions {
+        let start = symbols[name.as_str()];
+        for (at, vtable) in &object.vtables {
+            if at.checked_add(8).is_none_or(|end| end > object.code.len()) {
+                return Err("invalid vtable relocation".into());
+            }
+            let address = if let Some(address) = vtable_addresses.get(vtable) {
+                *address
+            } else {
+                while data.len() % 8 != 0 {
+                    data.push(0);
+                }
+                let address = BASE
+                    .checked_add(data_offset as u64)
+                    .and_then(|a| a.checked_add(data.len() as u64))
+                    .ok_or("ELF address overflow")?;
+                let function_address = |symbol: &str| -> Result<u64, String> {
+                    let offset = *symbols
+                        .get(symbol)
+                        .ok_or_else(|| format!("unknown vtable function `{symbol}`"))?;
+                    BASE.checked_add(PAGE as u64)
+                        .and_then(|a| a.checked_add(offset as u64))
+                        .ok_or_else(|| "ELF address overflow".into())
+                };
+                let drop = match &vtable.drop {
+                    Some(symbol) => function_address(symbol)?,
+                    None => 0,
+                };
+                for word in [drop, vtable.size, vtable.align] {
+                    data.extend_from_slice(&word.to_le_bytes());
+                }
+                for method in &vtable.methods {
+                    data.extend_from_slice(&function_address(method)?.to_le_bytes());
+                }
+                vtable_addresses.insert(vtable, address);
+                address
+            };
+            code[start + at..start + at + 8].copy_from_slice(&address.to_le_bytes());
         }
     }
     let length = data_offset.checked_add(data.len()).ok_or("ELF too large")?;
@@ -3067,6 +3311,7 @@ mod tests {
                 code: Vec::new(),
                 calls: Vec::new(),
                 strings: Vec::new(),
+                vtables: Vec::new(),
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -3074,6 +3319,7 @@ mod tests {
             locals: Vec::new(),
             aggregate_scratch: 0,
             wide_scratch: 0,
+            vtable_scratch: 0,
             returns: Vec::new(),
             traps: Vec::new(),
             edges: Vec::new(),
@@ -3129,6 +3375,7 @@ mod tests {
                 code: Vec::new(),
                 calls: Vec::new(),
                 strings: Vec::new(),
+                vtables: Vec::new(),
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -3136,6 +3383,7 @@ mod tests {
             locals: Vec::new(),
             aggregate_scratch: 0,
             wide_scratch: -48,
+            vtable_scratch: 0,
             returns: Vec::new(),
             traps: Vec::new(),
             edges: Vec::new(),
@@ -3478,6 +3726,7 @@ mod tests {
                 code: Vec::new(),
                 calls: Vec::new(),
                 strings: Vec::new(),
+                vtables: Vec::new(),
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -3485,6 +3734,7 @@ mod tests {
             locals: Vec::new(),
             aggregate_scratch: 0,
             wide_scratch: 0,
+            vtable_scratch: 0,
             returns: Vec::new(),
             traps: Vec::new(),
             edges: Vec::new(),
@@ -3616,6 +3866,7 @@ mod tests {
                 code: Vec::new(),
                 calls: Vec::new(),
                 strings: Vec::new(),
+                vtables: Vec::new(),
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -3623,6 +3874,7 @@ mod tests {
             locals: Vec::new(),
             aggregate_scratch: -2048,
             wide_scratch: 0,
+            vtable_scratch: 0,
             returns: Vec::new(),
             traps: Vec::new(),
             edges: Vec::new(),
@@ -5776,6 +6028,7 @@ mod tests {
                 code: vec![],
                 calls: vec![],
                 strings: vec![],
+                vtables: vec![],
             },
             concrete: &concrete,
             resolve: &|_| Err("physical fixture has no instance calls".into()),
@@ -5783,6 +6036,7 @@ mod tests {
             locals: vec![],
             aggregate_scratch: -8,
             wide_scratch: -264,
+            vtable_scratch: 0,
             returns: vec![],
             traps: vec![],
             edges: vec![],
@@ -6028,6 +6282,7 @@ mod tests {
                     code: vec![],
                     calls: vec![],
                     strings: vec![],
+                    vtables: vec![],
                 },
                 concrete: &concrete,
                 resolve: &|_| Err("physical fixture has no instance calls".into()),
@@ -6035,6 +6290,7 @@ mod tests {
                 locals: vec![],
                 aggregate_scratch: 0,
                 wide_scratch: 0,
+                vtable_scratch: 0,
                 returns: vec![],
                 traps: vec![],
                 edges: vec![],
@@ -6111,6 +6367,7 @@ mod tests {
                 code: vec![],
                 calls: vec![],
                 strings: vec![],
+                vtables: vec![],
             },
             concrete: &concrete,
             resolve: &|_| Err("physical fixture has no instance calls".into()),
@@ -6118,6 +6375,7 @@ mod tests {
             locals: vec![],
             aggregate_scratch: -32,
             wide_scratch: -288,
+            vtable_scratch: 0,
             returns: vec![],
             traps: vec![],
             edges: vec![],

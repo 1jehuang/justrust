@@ -1997,6 +1997,7 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
             kind: *kind,
             pointee: std::sync::Arc::new(checked_ty_at(pointee, env, false)?),
         }),
+        Type::Dyn(_) => Err("unsupported: trait objects require the planning frontend".into()),
         Type::Ref { referent, .. } if matches!(referent.as_ref(), Type::Slice(_)) => {
             Err("unsupported: shared slices require the planning frontend".into())
         }
@@ -5442,8 +5443,87 @@ impl<'a> Checker<'a> {
             {
                 self.coerce_shared_array_to_slice(result, expected)
             }
+            Some(expected) if trait_object_target(expected).is_some() => {
+                self.coerce_ref_to_dyn(result, expected)
+            }
             _ => Ok(result),
         }
+    }
+    /// Expected-site unsizing `&T`/`&mut T` (or reborrowing `&mut T` as `&T`)
+    /// to `&dyn P`/`&mut dyn P`. Requires a proof of `T: P` in the current
+    /// facts (E0277 otherwise). Already-`dyn` operands pass through unchanged.
+    pub(super) fn coerce_ref_to_dyn(
+        &mut self,
+        value: ir::ExprId,
+        expected: &ir::Ty,
+    ) -> Result<ir::ExprId, String> {
+        let (want_kind, principal) =
+            trait_object_target(expected).ok_or("trait object coercion target")?;
+        let source = &self.exprs[value.0];
+        let ir::Ty::Ref {
+            kind: have_kind,
+            referent,
+        } = &source.ty
+        else {
+            return Ok(value);
+        };
+        if matches!(referent.as_ref(), ir::Ty::Dyn(_)) {
+            return Ok(value);
+        }
+        if matches!(source.ty, ir::Ty::Never) {
+            return Ok(value);
+        }
+        if matches!(
+            referent.as_ref(),
+            ir::Ty::Slice { .. } | ir::Ty::Never | ir::Ty::AssociatedType(_)
+        ) {
+            return Err("unsupported: trait object unsizing from this referent type".into());
+        }
+        if want_kind == ir::BorrowKind::Mut && *have_kind == ir::BorrowKind::Shared {
+            // Leave the mismatch to ordinary checking (E0308).
+            return Ok(value);
+        }
+        if want_kind != *have_kind {
+            return Err(
+                "unsupported: coercing `&mut T` to `&dyn Trait` (reborrow then unsize)".into(),
+            );
+        }
+        let referent = referent.as_ref().clone();
+        let facts = self
+            .signatures
+            .facts
+            .as_deref()
+            .ok_or("trait object coercion requires validated facts")?;
+        let goal = ir::Predicate::Implements(ir::TraitRef {
+            declaration: principal,
+            self_ty: referent.clone(),
+            args: Arc::from([]),
+        });
+        match facts
+            .service()
+            .prove_goal(&goal, facts)
+            .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?
+        {
+            super::super::traits::ProofOutcome::Proved(_) => {}
+            super::super::traits::ProofOutcome::NotProven => {
+                return Err(format!(
+                    "E0277: the trait bound `{referent:?}: {}` is not satisfied (trait object unsizing)",
+                    self.signatures.plan()?.declaration(principal)?.name
+                ));
+            }
+        }
+        let completion = source.completion;
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: expected.clone(),
+            completion,
+            kind: ir::ExprKind::RefToDyn { reference: value },
+        });
+        if let Some(cap) = self.canonical {
+            cap.record_unsize(id, value)?;
+        }
+        Ok(id)
     }
     /// Expected-site unsizing of shared `&[T; N]` to exactly shared `&[T]`.
     /// The operand keeps its own identity (including any recorded original call);
@@ -5726,7 +5806,15 @@ impl<'a> Checker<'a> {
         place: ir::Place,
     ) -> Result<ir::ExprId, String> {
         let referent = ir::projected_ty(&self.locals[place.local.0].ty, &place.projection)?.clone();
-        self.validate_borrow_referent(kind, &referent)?;
+        if matches!(referent, ir::Ty::Dyn(_)) {
+            // Only a whole-object reborrow `&*d` / `&mut *d` of a local
+            // carrier is admitted; it copies the vtable word with the data.
+            if place.projection != [ir::Projection::Deref] {
+                return Err("unsupported: borrowing trait object places".into());
+            }
+        } else {
+            self.validate_borrow_referent(kind, &referent)?;
+        }
         let id = ir::ExprId(self.exprs.len());
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         self.exprs.push(ir::TypedExpr {
@@ -5843,10 +5931,7 @@ impl<'a> Checker<'a> {
         } else {
             (target, signature)
         };
-        let actuals = match &target {
-            ir::Callee::Direct(target) => target.type_args.as_ref(),
-            ir::Callee::TraitItem(call) => call.method_args.as_ref(),
-        };
+        let actuals = target.type_arguments();
         if actuals.iter().any(ir::Ty::contains_slice) {
             return Err("unsupported: slice generic arguments".into());
         }
@@ -6025,7 +6110,7 @@ impl<'a> Checker<'a> {
         )?;
         let region_offset = match &selected.target {
             ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
-            ir::Callee::TraitItem(_) => 0,
+            ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) => 0,
         };
         // Value temporaries (rvalue receivers such as `Type::new().get()`) are
         // materialized in a block-scoped local and autoref'd. Values with drop
@@ -6104,7 +6189,37 @@ impl<'a> Checker<'a> {
                 (id, None)
             }
             ReceiverKind::Borrowed { kind } => {
-                if matches!(selected.adjustment, ReceiverAdjustment::Identity)
+                if matches!(selected.target, ir::Callee::Virtual(_)) {
+                    // The object carrier itself is the receiver: a reborrow
+                    // through `*d` would drop the vtable word.
+                    if !matches!(selected.adjustment, ReceiverAdjustment::Identity)
+                        || selected.depth != 0
+                    {
+                        return Err(
+                            "unsupported: autoref or autoderef of a trait object receiver".into(),
+                        );
+                    }
+                    if kind == ir::BorrowKind::Mut {
+                        // Implicit reborrow `&mut *d`, so `d` stays usable.
+                        let Expr::Var(name) = receiver else {
+                            return Err(
+                                "unsupported: `&mut dyn` receiver that is not a local binding"
+                                    .into(),
+                            );
+                        };
+                        let local = self.lookup(name)?;
+                        let id = self.borrow_expression(
+                            ir::BorrowKind::Mut,
+                            ir::Place {
+                                local,
+                                projection: vec![ir::Projection::Deref],
+                            },
+                        )?;
+                        (id, Some(ir::ImplicitBorrowKind::MutableReceiver))
+                    } else {
+                        (self.expr(receiver)?, None)
+                    }
+                } else if matches!(selected.adjustment, ReceiverAdjustment::Identity)
                     && (kind == ir::BorrowKind::Shared
                         || (selected.depth == 0 && genuine_call(receiver)))
                 {
@@ -6287,7 +6402,7 @@ impl<'a> Checker<'a> {
         };
         let region_offset = match &target {
             ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
-            ir::Callee::TraitItem(_) => 0,
+            ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) => 0,
         };
         self.finish_checked_call(
             target,
@@ -8513,6 +8628,17 @@ pub(super) fn range_pattern_test(
         }
         _ => Err(format!("range pattern does not match {ty:?}")),
     }
+}
+
+/// `&dyn P` / `&mut dyn P` coercion target: (reference kind, principal).
+pub(super) fn trait_object_target(ty: &ir::Ty) -> Option<(ir::BorrowKind, ir::DeclId)> {
+    let ir::Ty::Ref { kind, referent } = ty else {
+        return None;
+    };
+    let ir::Ty::Dyn(object) = referent.as_ref() else {
+        return None;
+    };
+    Some((*kind, object.principal))
 }
 
 #[cfg(test)]

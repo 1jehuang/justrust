@@ -508,6 +508,21 @@ impl PlanCtx {
         if dot && receiver == ReceiverKind::None {
             return Err("trait associated function without self is not dot-callable".into());
         }
+        if matches!(call.trait_ref.self_ty, ir::Ty::Dyn(_)) {
+            // Methods of a trait object dispatch through its vtable. By-value
+            // `self` cannot move out of an unsized object (E0161).
+            if matches!(receiver, ReceiverKind::Value { .. }) {
+                return Err(
+                    "E0161: cannot move a value of type `dyn Trait`: by-value `self` method on a trait object"
+                        .into(),
+                );
+            }
+            return Ok(Some((
+                ir::Callee::Virtual(ir::VirtualCall { call }),
+                signature,
+                receiver,
+            )));
+        }
         Ok(Some((ir::Callee::TraitItem(call), signature, receiver)))
     }
 }

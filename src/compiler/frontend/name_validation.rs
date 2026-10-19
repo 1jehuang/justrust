@@ -613,6 +613,7 @@ impl<'a> Validator<'a> {
                 | Type::RawPtr {
                     pointee: element, ..
                 } => self.push(Visit::Type(element))?,
+                Type::Dyn(trait_path) => self.push(Visit::TraitPath(trait_path))?,
                 Type::Tuple(elements) => self.many(elements, Visit::Type)?,
                 Type::SelfType
                 | Type::Int(_)

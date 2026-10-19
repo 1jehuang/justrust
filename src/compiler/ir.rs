@@ -245,6 +245,26 @@ pub struct TraitCall {
 pub enum Callee {
     Direct(CallTarget),
     TraitItem(TraitCall),
+    /// Dynamic dispatch through a trait object vtable. Argument 0 is the
+    /// `&dyn`/`&mut dyn` receiver carrier; `slot` indexes the principal
+    /// trait's method entries (declaration order, supertraits first).
+    Virtual(VirtualCall),
+}
+/// `call.trait_ref.self_ty` is the exact `Ty::Dyn` receiver object type and
+/// `call.trait_ref.declaration` the trait owning `call.item` (the principal or
+/// one of its supertraits). The slot is derived from the principal's vtable
+/// layout (`vtable_methods`) by the backend, never stored.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct VirtualCall {
+    pub call: TraitCall,
+}
+impl VirtualCall {
+    pub fn principal(&self) -> Result<DeclId, String> {
+        match &self.call.trait_ref.self_ty {
+            Ty::Dyn(object) => Ok(object.principal),
+            _ => Err("virtual call receiver is not a trait object".into()),
+        }
+    }
 }
 impl From<CallTarget> for Callee {
     fn from(target: CallTarget) -> Self {
@@ -255,13 +275,15 @@ impl Callee {
     pub fn type_arguments(&self) -> &[Ty] {
         match self {
             Self::Direct(target) => &target.type_args,
-            Self::TraitItem(call) => &call.method_args,
+            Self::TraitItem(call) | Self::Virtual(VirtualCall { call }) => &call.method_args,
         }
     }
     pub fn metadata_types(&self) -> impl Iterator<Item = &Ty> {
         let (self_ty, trait_args): (Option<&Ty>, &[Ty]) = match self {
             Self::Direct(_) => (None, &[]),
-            Self::TraitItem(call) => (Some(&call.trait_ref.self_ty), &call.trait_ref.args),
+            Self::TraitItem(call) | Self::Virtual(VirtualCall { call }) => {
+                (Some(&call.trait_ref.self_ty), &call.trait_ref.args)
+            }
         };
         self.type_arguments()
             .iter()
@@ -450,6 +472,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
             | Ty::Char
             | Ty::Bool
             | Ty::Unit
+            | Ty::Dyn(_)
             | Ty::Never => {}
         }
         budget.retain_bytes(4 * std::mem::size_of::<(usize, (bool, usize))>())?;
@@ -601,6 +624,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                     | Ty::Str
                     | Ty::Bool
                     | Ty::Unit
+                    | Ty::Dyn(_)
                     | Ty::Never
                     | Ty::RawPtr { .. } => {}
                     Ty::Ref { .. } | Ty::Param(_) => unreachable!(),
@@ -1014,10 +1038,7 @@ fn validate_call_evidence_with_policy(
                 .get(trace.value.0)
                 .ok_or("call evidence argument outside arena")?;
         }
-        let actuals: &[Ty] = match target {
-            Callee::Direct(target) => &target.type_args,
-            Callee::TraitItem(call) => &call.method_args,
-        };
+        let actuals: &[Ty] = target.type_arguments();
         for (index, region) in evidence.type_actual_regions.iter().enumerate() {
             budget.charge_work(index.saturating_add(1))?;
             for old in evidence.type_actual_regions[..index].iter() {
@@ -1079,10 +1100,7 @@ fn validate_call_evidence_with_policy(
         if let ExprKind::Call { target, .. } = &expression.kind {
             // Trait Self has a distinct canonical schema role. Only ordinary
             // method actuals participate in this source-stage evidence gate.
-            let actuals: &[Ty] = match target {
-                Callee::Direct(target) => &target.type_args,
-                Callee::TraitItem(call) => &call.method_args,
-            };
+            let actuals: &[Ty] = target.type_arguments();
             budget.charge_work(actuals.len())?;
             if actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. })) && !seen[index] {
                 return Err("new reference actual call is missing original-stage evidence".into());
@@ -1143,6 +1161,7 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
         (Ty::Tuple(a), Ty::Tuple(b)) => Arc::ptr_eq(a, b),
         (Ty::Struct(a), Ty::Struct(b)) => Arc::ptr_eq(&a.0, &b.0),
         (Ty::Enum(a), Ty::Enum(b)) => Arc::ptr_eq(&a.0, &b.0),
+        (Ty::Dyn(a), Ty::Dyn(b)) => a.principal == b.principal,
         (Ty::Param(a), Ty::Param(b)) => a == b,
         (Ty::Int(a), Ty::Int(b)) => a == b,
         (Ty::Float(a), Ty::Float(b)) => a == b,
@@ -1164,7 +1183,9 @@ pub(super) fn identical_call_types(
     let count = |target: &Callee| {
         target.type_arguments().len().saturating_add(match target {
             Callee::Direct(_) => 0,
-            Callee::TraitItem(call) => call.trait_ref.args.len().saturating_add(1),
+            Callee::TraitItem(call) | Callee::Virtual(VirtualCall { call }) => {
+                call.trait_ref.args.len().saturating_add(1)
+            }
         })
     };
     budget.charge_work(
@@ -2412,9 +2433,14 @@ fn substitute_ty_walk(
                 budget,
             )?
         }
-        Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Str | Ty::Bool | Ty::Unit | Ty::Never => {
-            ty.clone()
-        }
+        Ty::Int(_)
+        | Ty::Float(_)
+        | Ty::Char
+        | Ty::Str
+        | Ty::Bool
+        | Ty::Unit
+        | Ty::Dyn(_)
+        | Ty::Never => ty.clone(),
     })
 }
 
@@ -2532,6 +2558,7 @@ pub fn instantiate_checked(
             | ExprKind::Deref { .. }
             | ExprKind::DynamicIndex { .. }
             | ExprKind::ArrayToSlice { .. }
+            | ExprKind::RefToDyn { .. }
             | ExprKind::SliceLen { .. }
             | ExprKind::SliceIndex { .. }
             | ExprKind::Array(_)
@@ -2713,6 +2740,16 @@ fn substitute_callee_metadata(
                 method_args,
             })
         }
+        // Trait object metadata is closed: `dyn P` contains no parameters.
+        Callee::Virtual(virtual_call) => {
+            if !virtual_call.call.method_args.is_empty()
+                || !virtual_call.call.trait_ref.args.is_empty()
+            {
+                return Err("unsupported: generic virtual calls".into());
+            }
+            virtual_call.principal()?;
+            Callee::Virtual(virtual_call.clone())
+        }
     };
     Ok(substituted)
 }
@@ -2740,6 +2777,13 @@ pub fn substitute_callee(
             .map_err(|e| e.into_legacy_diagnostic(budget))?
             .callee()
             .clone()),
+        Callee::Virtual(virtual_call) => {
+            closed_facts
+                .service()
+                .instantiate_trait_signature(&virtual_call.call, closed_facts)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?;
+            Ok(Callee::Virtual(virtual_call))
+        }
     }
 }
 
@@ -2833,9 +2877,17 @@ fn canonicalize_call_metadata(
                     let proof = facts.service().resolve_trait_call(call, facts)?;
                     (proof.callee().clone(), proof.signature().clone())
                 }
+                // Dynamic dispatch stays virtual in every phase. Its canonical
+                // signature is the trait item's at the object Self type.
+                Callee::Virtual(virtual_call) => {
+                    let signature = facts
+                        .service()
+                        .instantiate_trait_signature(&virtual_call.call, facts)?;
+                    (Callee::Virtual(virtual_call.clone()), signature)
+                }
             };
             if facts.phase() == super::traits::FactsPhase::Closed
-                && !matches!(callee, Callee::Direct(_))
+                && !matches!(callee, Callee::Direct(_) | Callee::Virtual(_))
             {
                 return Err(FactsError::invalid(
                     budget,
@@ -2913,6 +2965,7 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
             | Ty::Char
             | Ty::Bool
             | Ty::Unit
+            | Ty::Dyn(_)
             | Ty::Never => {}
         }
         Ok(())
@@ -3666,6 +3719,11 @@ pub enum Ty {
         kind: BorrowKind,
         pointee: Arc<Ty>,
     },
+    /// Unsized trait object `dyn Trait<Args>`. Admitted only behind a shared or
+    /// mutable reference, whose native carrier is two words (data, vtable).
+    /// The principal trait application has a placeholder `Self` of `Unit`;
+    /// the hidden concrete type is erased at the unsizing coercion.
+    Dyn(Arc<DynTy>),
     /// The semantic never type, distinct from runtime completion information.
     Never,
 }
@@ -3694,6 +3752,24 @@ pub fn ptr_cast_valid(from: &Ty, to: &Ty) -> bool {
             !matches!(pointee.as_ref(), Ty::Slice { .. })
         }
         _ => false,
+    }
+}
+
+/// Principal trait of a trait object. This milestone admits nongeneric
+/// principal traits without associated types, so the object type is a rigid
+/// metadata leaf identified by its trait declaration alone.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DynTy {
+    pub principal: DeclId,
+}
+
+/// Words of a pointer to `pointee` in the private ABI: two for unsized slice
+/// and trait object pointees (data + len / data + vtable), one otherwise.
+/// Shared by references and (later) raw pointers and Box.
+pub fn pointer_words(pointee: &Ty) -> usize {
+    match pointee {
+        Ty::Slice { .. } | Ty::Dyn(_) => 2,
+        _ => 1,
     }
 }
 
@@ -3844,7 +3920,14 @@ fn type_metadata_walk(
                 }
                 return Ok((false, 0));
             }
-            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Str | Ty::Bool | Ty::Unit | Ty::Never => {
+            Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Char
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Dyn(_)
+            | Ty::Never => {
                 return Ok((false, 0));
             }
         };
@@ -3939,6 +4022,7 @@ fn type_metadata_walk(
             | Ty::Str
             | Ty::Bool
             | Ty::Unit
+            | Ty::Dyn(_)
             | Ty::Never => {}
         }
         memo.entries[index].1 = Some((found, height));
@@ -4084,6 +4168,7 @@ impl Ty {
                 | Self::Str
                 | Self::Bool
                 | Self::Unit
+                | Self::Dyn(_)
                 | Self::Never => {}
             }
         }
@@ -4121,6 +4206,7 @@ impl Ty {
             | Self::Enum(_)
             | Self::Param(_)
             | Self::Str
+            | Self::Dyn(_)
             | Self::Slice { .. } => false,
             Self::Tuple(_) | Self::Array { .. } => {
                 let mut pending = vec![self];
@@ -5028,7 +5114,9 @@ fn ref_type_walk(
             )?;
             return Ok((opaque, height));
         }
-        let mut opaque = matches!(ty, Ty::Param(_));
+        // A trait object erases its concrete type: like a parameter, any input
+        // referent may be the source of a returned `&dyn` (input envelope).
+        let mut opaque = matches!(ty, Ty::Param(_) | Ty::Dyn(_));
         let mut height = 0;
         let mut child = |value: &Ty| -> Result<(), String> {
             let (is_opaque, child_height) = walk(value, false, budget, depth + 1, visits, memo)?;
@@ -5090,6 +5178,7 @@ fn ref_type_walk(
             | Ty::Char
             | Ty::Bool
             | Ty::Unit
+            | Ty::Dyn(_)
             | Ty::Never => {}
         }
         budget.retain_bytes(4 * std::mem::size_of::<((usize, bool), (bool, usize))>())?;
@@ -5171,6 +5260,7 @@ fn ref_types_equal(
                 x == y && child(a, b)?
             }
             (Ty::Slice { element: a }, Ty::Slice { element: b }) => child(a, b)?,
+            (Ty::Dyn(a), Ty::Dyn(b)) => a.principal == b.principal,
             (
                 Ty::Ref {
                     kind: a,
@@ -5733,6 +5823,7 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
             (Ty::Int(a), Ty::Int(b)) if a == b => {}
             (Ty::Float(a), Ty::Float(b)) if a == b => {}
             (Ty::Param(a), Ty::Param(b)) if a == b => {}
+            (Ty::Dyn(a), Ty::Dyn(b)) if a.principal == b.principal => {}
             (Ty::Char, Ty::Char)
             | (Ty::Str, Ty::Str)
             | (Ty::Bool, Ty::Bool)
@@ -6033,6 +6124,12 @@ pub enum ExprKind {
     /// validated operand type. The operand is evaluated once and its loan is the
     /// only storage authority; this node appends length metadata only.
     ArrayToSlice {
+        reference: ExprId,
+    },
+    /// Unsizes `&T`/`&mut T` (sized concrete or rigid generic `T: Trait`) to a
+    /// trait object reference of the same kind. The vtable is chosen from the
+    /// operand's exact (substituted) referent type, never stored here.
+    RefToDyn {
         reference: ExprId,
     },
     /// Builtin length of an admitted shared slice, result `usize`.
@@ -6694,6 +6791,7 @@ impl CheckedFunction {
                 | ExprKind::Deref { .. }
                 | ExprKind::DynamicIndex { .. }
                 | ExprKind::ArrayToSlice { .. }
+                | ExprKind::RefToDyn { .. }
                 | ExprKind::SliceLen { .. }
                 | ExprKind::SliceIndex { .. }
                 | ExprKind::Repeat { .. }
@@ -7409,6 +7507,35 @@ impl CheckedFunction {
                     }
                     if value.completion != source.completion {
                         return Err("array-to-slice completion mismatch".into());
+                    }
+                }
+                ExprKind::RefToDyn { reference } => {
+                    expr(*reference)?;
+                    let source = &self.exprs[reference.0];
+                    let (
+                        Ty::Ref {
+                            kind: from,
+                            referent: concrete,
+                        },
+                        Ty::Ref {
+                            kind: to,
+                            referent: object,
+                        },
+                    ) = (&source.ty, &value.ty)
+                    else {
+                        return Err("trait object unsizing requires references".into());
+                    };
+                    if from != to || !matches!(object.as_ref(), Ty::Dyn(_)) {
+                        return Err("trait object unsizing changed reference shape".into());
+                    }
+                    if matches!(
+                        concrete.as_ref(),
+                        Ty::Dyn(_) | Ty::Slice { .. } | Ty::Never | Ty::AssociatedType(_)
+                    ) {
+                        return Err("unsupported: trait object unsizing source".into());
+                    }
+                    if value.completion != source.completion {
+                        return Err("trait object unsizing completion mismatch".into());
                     }
                 }
                 ExprKind::SliceLen { slice } => {
