@@ -440,7 +440,6 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                     Key::new(101, vec![]),
                     Key::new(104, vec![]),
                     Key::new(113, vec![]),
-                    Key::new(115, vec![]),
                     source.clone(),
                     child.clone(),
                 ];
@@ -455,7 +454,6 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                 }
                 if !check {
                     expected.push(Key::new(105, vec![]));
-                    expected.push(Key::new(114, vec![]));
                 }
                 // Include every available recipe's real universal proof, without
                 // changing source-file accounting or eager concrete roots.
@@ -471,10 +469,15 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                     match plan.callable_provider(declaration).unwrap() {
                         compiler::frontend::CallableProvider::Source { .. } => {
                             assert!(index < result.functions);
+                            if plan.callable_env(declaration).unwrap().is_generic() {
+                                for kind in [111, 112, 115] {
+                                    expected.push(Key::new(kind, vec![index as u64]));
+                                }
+                            }
                         }
                         compiler::frontend::CallableProvider::Recipe { .. } => {
                             assert!(index >= result.functions);
-                            for kind in [110, 111, 112] {
+                            for kind in [110, 111, 112, 115] {
                                 expected.push(Key::new(kind, vec![index as u64]));
                             }
                         }

@@ -192,14 +192,14 @@ fn cases() -> Vec<Case> {
             source: r#"struct Pair(i32,i32);fn main(){let value=Pair(40,2);let result=match value{Pair(ref a,b)=>*a+b};if result==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "reference_match_ergonomics_boundary",
             source: r#"struct Pair(i32,i32);fn main(){let value=Pair(40,2);let result=match &value{Pair(a,b)=>*a+*b};if result==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "nested_enum_child_boundary",
@@ -374,7 +374,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (19, 7));
-    assert_eq!(partition, (15, 7, 4));
+    assert_eq!(partition, (17, 7, 2));
 }
 #[test]
 fn stock_aggregate_matches_irrefutability_privacy_ownership_oracle_edition2024() {
@@ -418,16 +418,26 @@ fn source_aggregate_match_ir_has_checked_domains_and_only_plain_field_binding_pa
             if let ir::ExprKind::Match { arms, .. } = &expression.kind {
                 for arm in arms {
                     if let ir::MatchPattern::Aggregate { ty, bindings } = &arm.pattern {
+                        let ergonomic = case.name == "reference_match_ergonomics_boundary";
                         match ty {
                             ir::Ty::Struct(_) => {}
                             ir::Ty::Tuple(fields) => assert!(!fields.is_empty()),
+                            ir::Ty::Ref { .. } if ergonomic => {}
                             _ => panic!("{} invalidaggregate domain:{ty:?}", case.name),
                         }
                         for binding in bindings {
                             assert!(!binding.projection.is_empty());
+                            // Default binding modes: one leading deref, then
+                            // plain fields, bound by shared reference.
+                            let fields = if ergonomic {
+                                assert_eq!(binding.projection[0], ir::Projection::Deref);
+                                assert_eq!(binding.borrow, Some(ir::BorrowKind::Shared));
+                                &binding.projection[1..]
+                            } else {
+                                &binding.projection[..]
+                            };
                             assert!(
-                                binding
-                                    .projection
+                                fields
                                     .iter()
                                     .all(|step| matches!(step, ir::Projection::Field(_))),
                                 "{} aggregate path must never carry enumtag/downcast/deref/index",
@@ -460,7 +470,7 @@ fn source_aggregate_match_ir_has_checked_domains_and_only_plain_field_binding_pa
             counts.0 += 1;
         }
     }
-    assert_eq!(counts, (11, 2));
+    assert_eq!(counts, (13, 2));
 }
 #[test]
 fn aggregate_advanced_pattern_boundaries_reject_in_their_actual_frontend_phase() {
@@ -475,10 +485,7 @@ fn aggregate_advanced_pattern_boundaries_reject_in_their_actual_frontend_phase()
             &source::SourceOptions::default(),
         )
         .and_then(|prepared| frontend::parse_prepared(&prepared));
-        if matches!(
-            case.name,
-            "guard_boundary" | "or_pattern_boundary" | "ref_binding_boundary"
-        ) {
+        if matches!(case.name, "guard_boundary" | "or_pattern_boundary") {
             let error = match parsed {
                 Err(error) => error,
                 Ok(_) => panic!("{} must reject as explicit parser Unsupported", case.name),
@@ -509,7 +516,6 @@ fn aggregate_advanced_pattern_boundaries_reject_in_their_actual_frontend_phase()
                 "nested_enum_child_boundary" => {
                     "unsupported: enum children in aggregate match patterns"
                 }
-                "reference_match_ergonomics_boundary" => "unsupported:",
                 _ => unreachable!(),
             };
             assert!(
@@ -520,7 +526,7 @@ fn aggregate_advanced_pattern_boundaries_reject_in_their_actual_frontend_phase()
             counts.1 += 1;
         }
     }
-    assert_eq!(counts, (3, 1));
+    assert_eq!(counts, (2, 0));
 }
 #[test]
 fn native_aggregate_matches_workers1_8_check_build_no_compiler_fallback() {
@@ -607,9 +613,9 @@ fn native_aggregate_matches_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 104);
-    assert_eq!(modes, (30, 30, 14, 14, 8, 8));
+    assert_eq!(modes, (34, 34, 14, 14, 4, 4));
     eprintln!(
-        "NATIVE AGGREGATE MATCHES:104 cells, modes{modes:?};30 executed native images;16 Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
+        "NATIVE AGGREGATE MATCHES:104 cells, modes{modes:?};34 executed native images;8 Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
     );
 }
 

@@ -113,6 +113,12 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       refutable children are extended by PATTERN-DECISIONS.md.
 - [x] Genuine 64-bit usize and ordered, bounds-checked runtime array operations.
 - [x] Nonescaping local references, canonical provenance and last-use loan analysis.
+- [x] Explicit borrows of trivial-drop value temporaries (`&P { .. }`, `&f()`,
+      `&mut 4`, and unit constructors), with statement temporary cleanup and
+      syntactic let-initializer lifetime extension. `tests/generic_references.rs`
+      compares runtime output with stock Rust and rejects statement-temporary
+      escapes. Destructor-bearing temporaries and projected value borrows remain
+      explicit unsupported boundaries, not full temporary-lifetime compatibility.
 - [x] Noescape reference parameters and genuine expected-site carrier reborrows.
 - [x] Shared/mutable static input-path returns with explicit or elided regions.
 - [x] Builtin reference field projections and capability-sensitive mixed inputs.
@@ -284,6 +290,8 @@ missing-file changes invalidate only justified consumers without stale lookup.
 - [ ] Complete nested/or/range/ref/@/slice patterns, guards, match ergonomics,
       exhaustiveness/usefulness, conditional pattern forms beyond delivered
       IF-LET.md/WHILE-LET.md/LET-ELSE.md slices and destructuring assignment.
+      Delivered: match ergonomics (default binding modes, `ref`/`ref mut`,
+      `&pat`, enum matches through dereferences), see MATCH-ERGONOMICS.md.
 - [ ] Extend bidirectional/local inference, coercion sites, partial type holes,
       omitted method arguments and control-flow joins, preserving rigid universal
       parameters and diagnostics for unresolved constraints.

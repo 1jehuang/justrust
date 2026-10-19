@@ -61,31 +61,28 @@ fn canonical_recipe_universal_proofs_and_inner_origins_precede_every_object() {
                     _ => false,
                 })
         }));
-        let barrier_key = format!("{:?}", Key::new(114, vec![]));
-        let barrier = compiled
-            .report
-            .events
-            .iter()
-            .find(|event| event.kind == "discovered" && event.detail == barrier_key)
-            .unwrap()
-            .node
-            .unwrap();
-        let published = compiled
-            .report
-            .events
-            .iter()
-            .find(|event| event.kind == "publish" && event.node == Some(barrier))
-            .unwrap()
-            .at_ns;
-        for index in 0..compiled.control_flow.len() {
-            let object_key = format!("{:?}", Key::new(103, vec![index as u64]));
-            let object = compiled
+        // Every object follows its own instance proof (no global barrier).
+        let publish_of = |key: Key| {
+            let spelling = format!("{key:?}");
+            let node = compiled
                 .report
                 .events
                 .iter()
-                .find(|event| event.kind == "discovered" && event.detail == object_key)
+                .find(|event| event.kind == "discovered" && event.detail == spelling)
+                .unwrap()
+                .node
                 .unwrap();
-            assert!(object.at_ns >= published);
+            compiled
+                .report
+                .events
+                .iter()
+                .find(|event| event.kind == "publish" && event.node == Some(node))
+                .unwrap()
+                .at_ns
+        };
+        for index in 0..compiled.control_flow.len() {
+            let object = publish_of(Key::new(103, vec![index as u64]));
+            assert!(object >= publish_of(Key::new(109, vec![index as u64])));
         }
     }
 }
@@ -129,7 +126,6 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                         Key::new(101, vec![]),
                         Key::new(104, vec![]),
                         Key::new(113, vec![]),
-                        Key::new(115, vec![]),
                     ];
                     for index in 0..3 {
                         for kind in [102, 108, 109] {
@@ -141,7 +137,6 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                     }
                     if !check {
                         expected.push(Key::new(105, vec![]));
-                        expected.push(Key::new(114, vec![]));
                     }
                     let program = compiler::frontend::parse(source).unwrap();
                     let context = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
@@ -151,10 +146,15 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                         match context.callable_provider(declaration).unwrap() {
                             CallableProvider::Source { .. } => {
                                 assert!(index < compiled.functions);
+                                if context.callable_env(declaration).unwrap().is_generic() {
+                                    for kind in [111, 112, 115] {
+                                        expected.push(Key::new(kind, vec![index as u64]));
+                                    }
+                                }
                             }
                             CallableProvider::Recipe { .. } => {
                                 assert!(index >= compiled.functions);
-                                for kind in [111, 112] {
+                                for kind in [111, 112, 115] {
                                     expected.push(Key::new(kind, vec![index as u64]));
                                 }
                             }
@@ -189,15 +189,17 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                             .expect("required graph node did not publish")
                             .at_ns
                     };
-                    let effects = published(discovered(&Key::new(115, vec![])).node.unwrap());
-                    assert!(published(discovered(&Key::new(113, vec![])).node.unwrap()) >= effects);
+                    let effects = report
+                        .node_evaluations
+                        .iter()
+                        .filter(|(key, _)| key.kind == 115)
+                        .map(|(key, _)| published(discovered(key).node.unwrap()))
+                        .max()
+                        .expect("required universal admission fact missing");
                     for (key, _) in &report.node_evaluations {
                         let event = discovered(key);
                         if matches!(key.kind, 110 | 112) {
                             assert!(published(event.node.unwrap()) <= effects);
-                        }
-                        if matches!(key.kind, 102 | 108 | 109 | 103) {
-                            assert!(event.at_ns >= effects);
                         }
                     }
                     if check {
@@ -208,10 +210,12 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                                 .any(|(key, _)| key.kind == 103)
                         );
                     } else {
-                        let sealed = published(discovered(&Key::new(114, vec![])).node.unwrap());
+                        // Each object follows its own instance proof (no global barrier).
                         for (key, _) in &report.node_evaluations {
                             if key.kind == 103 {
-                                assert!(discovered(key).at_ns >= sealed);
+                                let proof = Key::new(109, key.params.clone());
+                                let proved = published(discovered(&proof).node.unwrap());
+                                assert!(published(discovered(key).node.unwrap()) >= proved);
                             }
                         }
                     }
@@ -223,12 +227,7 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                 .unwrap();
             let report = failure.report.unwrap();
             assert!(report.capture_complete);
-            assert!(
-                !report
-                    .node_evaluations
-                    .iter()
-                    .any(|(key, _)| key.kind == 103)
-            );
+            assert!(!report.published_kind(105));
         }
     }
     let override_source = "struct S{v:i32}impl Clone for S{fn clone(&self)->Self{S{v:self.v}}fn clone_from(&mut self,source:&Self){self.v=source.v+10;}}fn run()->i32{let mut destination=S{v:1};let source=S{v:2};destination.clone_from(&source);destination.v}\nfn main(){if run()==12{println!(\"canonical copy oracle ok\");}}\n";

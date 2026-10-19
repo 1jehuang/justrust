@@ -53,12 +53,7 @@ fn unused_generic_moves_are_checked_universally_before_native_publication() {
                 );
                 let report = failure.report.unwrap();
                 assert!(report.capture_complete);
-                assert!(
-                    !report
-                        .node_evaluations
-                        .iter()
-                        .any(|(key, _)| key.kind == 103)
-                );
+                assert!(!report.published_kind(105));
             }
         }
     }
@@ -79,12 +74,7 @@ fn inference_failures_never_publish_objects() {
                     .unwrap();
                 let report = failure.report.unwrap();
                 assert!(report.capture_complete);
-                assert!(
-                    !report
-                        .node_evaluations
-                        .iter()
-                        .any(|(key, _)| key.kind == 103)
-                );
+                assert!(!report.published_kind(105));
             }
         }
     }

@@ -53,12 +53,7 @@ fn unused_generic_moves_are_checked_universally_before_native_publication() {
                 );
                 let report = failure.report.unwrap();
                 assert!(report.capture_complete);
-                assert!(
-                    !report
-                        .node_evaluations
-                        .iter()
-                        .any(|(key, _)| key.kind == 103)
-                );
+                assert!(!report.published_kind(105));
             }
         }
     }
@@ -102,9 +97,9 @@ fn unused_generic_types_and_nominal_applications_cannot_use_concrete_witnesses()
                         Key::new(101, vec![]),
                         Key::new(104, vec![]),
                         Key::new(113, vec![]),
-                        Key::new(115, vec![]),
                         Key::new(111, vec![0]),
                         Key::new(112, vec![0]),
+                        Key::new(115, vec![0]),
                     ];
                     for index in 0..2 {
                         for kind in [110, 102, 108, 109] {
@@ -116,7 +111,6 @@ fn unused_generic_types_and_nominal_applications_cannot_use_concrete_witnesses()
                     }
                     if !check {
                         expected.push(Key::new(105, vec![]));
-                        expected.push(Key::new(114, vec![]));
                     }
                     let program = compiler::frontend::parse(source).unwrap();
                     let plan = compiler::frontend::PlanCtx::from_program(
@@ -129,10 +123,17 @@ fn unused_generic_types_and_nominal_applications_cannot_use_concrete_witnesses()
                         match plan.callable_provider(declaration).unwrap() {
                             compiler::frontend::CallableProvider::Source { .. } => {
                                 assert!(index < compiled.functions);
+                                if plan.callable_env(declaration).unwrap().is_generic()
+                                    && index != 0
+                                {
+                                    for kind in [111, 112, 115] {
+                                        expected.push(Key::new(kind, vec![index as u64]));
+                                    }
+                                }
                             }
                             compiler::frontend::CallableProvider::Recipe { .. } => {
                                 assert!(index >= compiled.functions);
-                                for kind in [110, 111, 112] {
+                                for kind in [110, 111, 112, 115] {
                                     expected.push(Key::new(kind, vec![index as u64]));
                                 }
                             }
@@ -169,15 +170,17 @@ fn unused_generic_types_and_nominal_applications_cannot_use_concrete_witnesses()
                             .expect("required graph node did not publish")
                             .at_ns
                     };
-                    let effects = published(discovered(&Key::new(115, vec![])).node.unwrap());
-                    assert!(published(discovered(&Key::new(113, vec![])).node.unwrap()) >= effects);
+                    let effects = report
+                        .node_evaluations
+                        .iter()
+                        .filter(|(key, _)| key.kind == 115)
+                        .map(|(key, _)| published(discovered(key).node.unwrap()))
+                        .max()
+                        .expect("required universal admission fact missing");
                     for (key, _) in &report.node_evaluations {
                         let event = discovered(key);
                         if matches!(key.kind, 110 | 112) {
                             assert!(published(event.node.unwrap()) <= effects);
-                        }
-                        if matches!(key.kind, 102 | 108 | 109 | 103) {
-                            assert!(event.at_ns >= effects);
                         }
                     }
                     if check {
@@ -188,10 +191,12 @@ fn unused_generic_types_and_nominal_applications_cannot_use_concrete_witnesses()
                                 .any(|(key, _)| key.kind == 103)
                         );
                     } else {
-                        let sealed = published(discovered(&Key::new(114, vec![])).node.unwrap());
+                        // Each object follows its own instance proof (no global barrier).
                         for (key, _) in &report.node_evaluations {
                             if key.kind == 103 {
-                                assert!(discovered(key).at_ns >= sealed);
+                                let proof = Key::new(109, key.params.clone());
+                                let proved = published(discovered(&proof).node.unwrap());
+                                assert!(published(discovered(key).node.unwrap()) >= proved);
                             }
                         }
                     }
@@ -202,12 +207,7 @@ fn unused_generic_types_and_nominal_applications_cannot_use_concrete_witnesses()
                     .unwrap();
                 let report = failure.report.unwrap();
                 assert!(report.capture_complete);
-                assert!(
-                    !report
-                        .node_evaluations
-                        .iter()
-                        .any(|(key, _)| key.kind == 103)
-                );
+                assert!(!report.published_kind(105));
             }
         }
     }
@@ -233,12 +233,7 @@ fn exact_generic_recursion_deduplicates_but_growing_instances_fail_boundedly() {
             );
             let report = failure.report.unwrap();
             assert!(report.capture_complete);
-            assert!(
-                !report
-                    .node_evaluations
-                    .iter()
-                    .any(|(key, _)| key.kind == 103)
-            );
+            assert!(!report.published_kind(105));
         }
     }
 }

@@ -554,8 +554,8 @@ error: aborting due to 1 previous error
             source_fingerprint: 9913753239745323877,
             source_sha256: r###"db45ade450a559baceea62b3c136890716ab0f15ec1a00ebd31e19c445c2f5ba"###,
             native: Native::Unsupported,
-            boundary: r###"borrowing requires a local-root static place; rvalues and runtime indexed borrows are unsupported"###,
-            phase: r###"parse"###,
+            boundary: r###"reference comparisons and arithmetic are unsupported"###,
+            phase: r###"check"###,
             stock_compile_code: 0,
             stock_code: Some(0),
             stock_stdout: r###"after
@@ -1198,10 +1198,7 @@ fn graph_all() {
                                 assert_eq!(report.events_dropped, 0);
                                 assert!(report.failures > 0);
                                 assert!(
-                                    !report
-                                        .node_evaluations
-                                        .iter()
-                                        .any(|(key, _)| key.kind == 103),
+                                    !report.published_kind(105),
                                     "{}: rejected source emitted object",
                                     case.name
                                 );

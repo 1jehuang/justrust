@@ -62,12 +62,7 @@ fn unrelated_pointee_lifetime_dependency_retains_failed_analysis() {
             let report = failure.report.unwrap();
             assert!(report.capture_complete);
             if check {
-                assert!(
-                    !report
-                        .node_evaluations
-                        .iter()
-                        .any(|(key, _)| key.kind == 103)
-                );
+                assert!(!report.published_kind(105));
             }
         }
     }

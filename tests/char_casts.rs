@@ -699,7 +699,7 @@ For more information about this error, try `rustc --explain E0054`.
 "###,
             bytes: 32,
             sha256: r###"076336f2b11d5cab3948d569d64bd4a32477f7e489f87d9bf5252783e1388d3b"###,
-            boundary: Boundary::ParseUnsupported,
+            boundary: Boundary::Type,
             stock_compile_code: 1,
             stock_compile_stderr: r###"error[E0606]: casting `&u8` as `char` is invalid
  --> /home/jeremy/.jcode/scratch/char-casts-stock-20261018/sources/reject_ref_to_char.rs:1:17
@@ -743,7 +743,7 @@ For more information about this error, try `rustc --explain E0605`.
 "###,
             bytes: 30,
             sha256: r###"5a757a5a215f63dc7cb21ea5b7b9e051079141849655b76a122d361d0de552c7"###,
-            boundary: Boundary::ParseUnsupported,
+            boundary: Boundary::Type,
             stock_compile_code: 1,
             stock_compile_stderr: r###"error[E0606]: casting `&char` as `u32` is invalid
  --> /home/jeremy/.jcode/scratch/char-casts-stock-20261018/sources/reject_char_ref_to_int.rs:1:17
@@ -1046,13 +1046,13 @@ fn frozen_char_casts_stock_and_frontend_boundaries() {
     );
     assert_eq!(
         all.iter().filter(|c| c.boundary == Boundary::Type).count(),
-        20
+        22
     );
     assert_eq!(
         all.iter()
             .filter(|c| c.boundary == Boundary::ParseUnsupported)
             .count(),
-        2
+        0
     );
     let mut failures = Failures::default();
     for case in all {
@@ -1239,10 +1239,7 @@ fn graph_all() {
                             assert_eq!(report.events_dropped, 0);
                             assert!(report.failures > 0);
                             assert!(
-                                !report
-                                    .node_evaluations
-                                    .iter()
-                                    .any(|(key, _)| key.kind == 103),
+                                !report.published_kind(105),
                                 "rejected source reached codegen/emission"
                             );
                             assert!(!scratch.path("input").exists());

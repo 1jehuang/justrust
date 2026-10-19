@@ -59,15 +59,6 @@ fn nested_identity_retains_both_position_rows_through_the_same_graph() {
                     .count(),
                 if check { 0 } else { 3 }
             );
-            assert_eq!(
-                compiled
-                    .report
-                    .node_evaluations
-                    .iter()
-                    .filter(|(key, _)| key.kind == 114)
-                    .count(),
-                if check { 0 } else { 1 }
-            );
         }
     }
 }
@@ -118,12 +109,7 @@ fn dangling_outer_and_unrelated_inner_regions_block_every_object() {
                     .unwrap();
                 let report = failure.report.unwrap();
                 assert!(report.capture_complete);
-                assert!(
-                    !report
-                        .node_evaluations
-                        .iter()
-                        .any(|(key, _)| key.kind == 103)
-                );
+                assert!(!report.published_kind(105));
                 assert!(
                     failure
                         .analyses

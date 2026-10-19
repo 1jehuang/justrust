@@ -198,6 +198,40 @@ pub struct Engine {
     shared: Arc<Shared>,
 }
 
+impl Report {
+    /// Whether any node with key kind `kind` published an output, from the
+    /// captured events. Requires `capture_complete` to be meaningful.
+    pub fn published_kind(&self, kind: u32) -> bool {
+        let nodes: HashSet<u64> = self
+            .node_ids
+            .iter()
+            .zip(&self.node_evaluations)
+            .filter(|(_, (key, _))| key.kind == kind)
+            .map(|(id, _)| *id)
+            .collect();
+        self.events
+            .iter()
+            .any(|event| event.kind == "publish" && event.node.is_some_and(|n| nodes.contains(&n)))
+    }
+    /// Monotonic time of the first publication by a node of key kind `kind`.
+    pub fn first_publish_ns(&self, kind: u32) -> Option<u64> {
+        let nodes: HashSet<u64> = self
+            .node_ids
+            .iter()
+            .zip(&self.node_evaluations)
+            .filter(|(_, (key, _))| key.kind == kind)
+            .map(|(id, _)| *id)
+            .collect();
+        self.events
+            .iter()
+            .filter(|event| {
+                event.kind == "publish" && event.node.is_some_and(|n| nodes.contains(&n))
+            })
+            .map(|event| event.at_ns)
+            .min()
+    }
+}
+
 #[derive(Clone)]
 pub struct Context {
     shared: Arc<Shared>,

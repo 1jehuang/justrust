@@ -186,7 +186,7 @@ fn cases() -> Vec<Case> {
             source: r#"enum Item{Only(i32,i32,i32)}fn main(){let value=Item::Only(40,7,2);let answer=match value{Item::Only(ref a,..,b)=>*a+b};if answer==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "zero_payload_tuple_variant",
@@ -362,7 +362,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (19, 5));
-    assert_eq!(partition, (17, 4, 2, 1));
+    assert_eq!(partition, (18, 4, 1, 1));
 }
 #[test]
 fn stock_enum_rest_payload_mapping_coverage_ownership_oracle_edition2024() {
@@ -396,10 +396,9 @@ fn check_binding(
 #[test]
 fn enum_rest_ir_retains_variant_authority_actual_downcasts_and_payload_indexes() {
     let mut counts = (0, 0);
-    for case in cases()
-        .into_iter()
-        .filter(|c| c.outcome == Outcome::Runtime && !matches!(c.name, "refutable_child"))
-    {
+    for case in cases().into_iter().filter(|c| {
+        c.outcome == Outcome::Runtime && !matches!(c.name, "refutable_child" | "refbinding")
+    }) {
         let program = frontend::parse(case.source)
             .unwrap_or_else(|e| panic!("{} parse/resolve:{e}", case.name));
         let signatures = frontend::signature_table(&program)
@@ -502,7 +501,7 @@ fn enum_rest_closed_patterns_reject_at_their_actual_frontend_phase() {
             &source::SourceOptions::default(),
         )
         .and_then(|p| frontend::parse_prepared(&p));
-        if matches!(case.name, "guard" | "refbinding") {
+        if matches!(case.name, "guard") {
             let error = match parsed {
                 Err(e) => e,
                 Ok(_) => panic!("{} parser boundary accepted", case.name),
@@ -532,7 +531,7 @@ fn enum_rest_closed_patterns_reject_at_their_actual_frontend_phase() {
             }
         }
     }
-    assert_eq!(counts, (2, 0, 1));
+    assert_eq!(counts, (1, 0, 1));
 }
 #[test]
 fn native_enum_rest_workers1_8_check_build_no_compiler_fallback() {
@@ -624,9 +623,9 @@ fn native_enum_rest_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 96);
-    assert_eq!(modes, (34, 34, 8, 8, 4, 4, 2, 2));
+    assert_eq!(modes, (36, 36, 8, 8, 2, 2, 2, 2));
     eprintln!(
-        "NATIVE ENUM REST:96 cells, modes{modes:?};34 executed native images;8 stock-valid Unsupported cells plus4 stock-invalid/native-Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
+        "NATIVE ENUM REST:96 cells, modes{modes:?};36 executed native images;4 stock-valid Unsupported cells plus4 stock-invalid/native-Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
     );
 }
 
