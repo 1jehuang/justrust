@@ -64,6 +64,30 @@ fn expected_type_reaches_vec_macro_elements() {
 }
 
 #[test]
+fn patterns_assignments_and_returns_solve_nominal_parameters() {
+    compare(
+        "option-assignment",
+        "fn main() { let mut value = None; value = Some(7u8); match value { Some(n) => println!(\"{}\", n), None => {} } }",
+    );
+    compare(
+        "pop-pattern",
+        "fn main() { let mut values = Vec::new(); match values.pop() { Some(n) => { let typed: u8 = n; println!(\"{}\", typed); }, None => println!(\"empty\") } }",
+    );
+    compare(
+        "trait-reference-pattern",
+        "trait View { fn view(&self) -> &Option<u8>; } struct Holder { value: Option<u8> } impl View for Holder { fn view(&self) -> &Option<u8> { &self.value } } fn main() { let h = Holder { value: Some(7u8) }; match h.view() { Some(n) => { let typed: &u8 = n; println!(\"{}\", *typed); }, None => {} } }",
+    );
+    compare(
+        "string-new",
+        "fn main() { let mut s = String::new(); s.push('x'); println!(\"{}\", s.len()); }",
+    );
+    compare(
+        "nested-return",
+        "fn create() -> Vec<Vec<u16>> { let mut outer = Vec::new(); let mut inner = Vec::new(); inner.push(7); outer.push(inner); outer } fn main() { println!(\"{}\", create().len()); }",
+    );
+}
+
+#[test]
 fn contradictory_and_underconstrained_bindings_reject() {
     for (name, source) in [
         (
@@ -71,6 +95,14 @@ fn contradictory_and_underconstrained_bindings_reject() {
             "fn main() { let mut v = Vec::new(); v.push(1u8); v.push(true); }",
         ),
         ("unknown", "fn main() { let v = Vec::new(); }"),
+        (
+            "unrelated-reference",
+            "struct A { x: u8 } struct B { x: u8 } fn take(_: &B) {} fn main() { let a = A { x: 7 }; take(&a); }",
+        ),
+        (
+            "wrong-deref-target",
+            "struct A { x: u8 } struct B { x: u8 } fn take(_: &B) {} fn main() { let a = Box::new(A { x: 7 }); take(&a); }",
+        ),
     ] {
         let dir =
             std::env::temp_dir().join(format!("jr-body-inference-{}-{name}", std::process::id()));

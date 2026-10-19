@@ -35,13 +35,16 @@ struct Projection {
     field: FieldSelector,
     result: Term,
 }
-struct Solver<'a, 'b> {
+struct Solver<'a, 'b, 's> {
     checker: &'a Checker<'b>,
     variables: Vec<Variable>,
     scopes: Vec<HashMap<LocalKey, Term>>,
     sites: Vec<(usize, Term)>,
     methods: Vec<Method>,
     projections: Vec<Projection>,
+    patterns: Vec<(&'s Pattern, Term, HashMap<LocalKey, Term>)>,
+    pattern_bindings: Option<HashMap<LocalKey, Term>>,
+    replaying_pattern: bool,
 }
 
 pub(super) fn hints(
@@ -56,6 +59,9 @@ pub(super) fn hints(
         sites: Vec::new(),
         methods: Vec::new(),
         projections: Vec::new(),
+        patterns: Vec::new(),
+        pattern_bindings: None,
+        replaying_pattern: false,
     };
     let mut outer = HashMap::new();
     for scope in &checker.scopes {
@@ -84,7 +90,7 @@ pub(super) fn hints(
     Ok(hints)
 }
 
-impl Solver<'_, '_> {
+impl<'s> Solver<'_, '_, 's> {
     fn node(&mut self, domain: Domain) -> Result<Term, String> {
         self.checker.infer_storage(1)?;
         let term = self.variables.len();
@@ -384,6 +390,14 @@ impl Solver<'_, '_> {
     }
     fn bind(&mut self, name: &impl LocalInput, term: Term) -> Result<(), String> {
         if let Some(key) = self.checker.local_key(name, true)? {
+            if let Some(previous) = self
+                .pattern_bindings
+                .as_ref()
+                .and_then(|b| b.get(&key))
+                .copied()
+            {
+                return self.unify(previous, term);
+            }
             self.scopes.last_mut().unwrap().insert(key, term);
         }
         Ok(())
@@ -433,7 +447,19 @@ impl Solver<'_, '_> {
     }
     fn coerce(&mut self, actual: Term, expected: Term) -> Result<(), String> {
         match (self.domain(actual), self.domain(expected)) {
-            (Domain::Ref(_, a), Domain::Ref(_, b)) => self.coerce(a, b),
+            (Domain::Ref(_, a), Domain::Ref(_, b)) => {
+                // A reference coercion may run an authoritative Deref chain.
+                // Only equal outer constructors imply equality of type arguments.
+                // The ordinary checker proves differing-referent coercions later.
+                if let Domain::Nominal(actual, _) = self.domain(a) {
+                    match self.domain(b) {
+                        Domain::Nominal(expected, _) if actual == expected => {}
+                        Domain::Unknown => {}
+                        _ => return Ok(()),
+                    }
+                }
+                self.coerce(a, b)
+            }
             (Domain::Array(a, _), Domain::Slice(b)) => self.unify(a, b),
             _ => self.unify(actual, expected),
         }
@@ -524,10 +550,27 @@ impl Solver<'_, '_> {
                 }
             }
             projections = pending;
+            let patterns = std::mem::take(&mut self.patterns);
+            let force = !progress;
+            for (pattern, term, bindings) in patterns {
+                if !force && matches!(self.domain(self.peel_refs(term)), Domain::Unknown) {
+                    self.patterns.push((pattern, term, bindings));
+                    continue;
+                }
+                self.pattern_bindings = Some(bindings);
+                self.replaying_pattern = true;
+                let result = self.pattern(pattern, term);
+                self.replaying_pattern = false;
+                self.pattern_bindings = None;
+                result?;
+                progress = true;
+            }
             if !progress {
                 break;
             }
         }
+        self.methods = methods;
+        self.projections = projections;
         Ok(())
     }
     fn project(&mut self, base: Term, field: &FieldSelector) -> Result<Option<Term>, String> {
@@ -590,7 +633,7 @@ impl Solver<'_, '_> {
         &mut self,
         name: &AstPath,
         variant: Option<AstIdent>,
-        fields: &[(FieldSelector, &Expr)],
+        fields: &[(FieldSelector, &'s Expr)],
         depth: usize,
     ) -> Result<Term, String> {
         let plan = self.checker.signatures.plan()?;
@@ -641,8 +684,87 @@ impl Solver<'_, '_> {
         }
         Ok(result)
     }
-    fn pattern(&mut self, pattern: &Pattern, term: Term) -> Result<(), String> {
+    fn defer_bindings(
+        &mut self,
+        pattern: &Pattern,
+        bindings: &mut HashMap<LocalKey, Term>,
+    ) -> Result<(), String> {
+        self.checker.infer_work(0)?;
         match pattern {
+            Pattern::Binding { name, .. } => {
+                if let Some(key) = self.checker.local_key(name, true)? {
+                    let term = match bindings.get(&key) {
+                        Some(term) => *term,
+                        None => self.fresh()?,
+                    };
+                    bindings.insert(key, term);
+                    self.bind(name, term)?;
+                }
+            }
+            Pattern::Variant { fields, .. } => {
+                for (_, child) in fields {
+                    self.defer_bindings(child, bindings)?;
+                }
+            }
+            Pattern::Struct { fields, .. } => {
+                for (_, child) in fields {
+                    self.defer_bindings(child, bindings)?;
+                }
+            }
+            Pattern::Apply { pattern, .. } | Pattern::Ref { pattern, .. } => {
+                self.defer_bindings(pattern, bindings)?;
+            }
+            Pattern::Tuple(fields) | Pattern::Array(fields) | Pattern::Alternatives(fields) => {
+                for child in fields {
+                    self.defer_bindings(child, bindings)?;
+                }
+            }
+            Pattern::TupleRest(fields)
+            | Pattern::ArrayRest(fields)
+            | Pattern::VariantRest { fields, .. } => {
+                for child in fields.prefix.iter().chain(&fields.suffix) {
+                    self.defer_bindings(child, bindings)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    fn pattern(&mut self, pattern: &'s Pattern, term: Term) -> Result<(), String> {
+        if !self.replaying_pattern
+            && matches!(self.domain(self.peel_refs(term)), Domain::Unknown)
+            && matches!(
+                pattern,
+                Pattern::Variant { .. } | Pattern::Struct { .. } | Pattern::Tuple(_)
+            )
+        {
+            let mut bindings = HashMap::new();
+            self.defer_bindings(pattern, &mut bindings)?;
+            self.patterns.push((pattern, term, bindings));
+            return Ok(());
+        }
+        match pattern {
+            Pattern::Variant { name, fields, .. } => {
+                let (owner, variant) = self.checker.split_variant(name)?;
+                let fields = fields
+                    .iter()
+                    .map(|(field, p)| (field.clone(), p))
+                    .collect::<Vec<_>>();
+                self.nominal_pattern(&owner, Some(variant), &fields, term)
+            }
+            Pattern::Struct { name, fields, .. } => {
+                let fields = fields
+                    .iter()
+                    .map(|(name, p)| (FieldSelector::Named(*name), p))
+                    .collect::<Vec<_>>();
+                self.nominal_pattern(name, None, &fields, term)
+            }
+            Pattern::Ref { kind, pattern } => {
+                let inner = self.fresh()?;
+                let reference = self.node(Domain::Ref(*kind, inner))?;
+                self.unify(term, reference)?;
+                self.pattern(pattern, inner)
+            }
             Pattern::Binding { name, by_ref, .. } => {
                 let bound = match by_ref {
                     Some(kind) => self.node(Domain::Ref(*kind, term))?,
@@ -651,10 +773,15 @@ impl Solver<'_, '_> {
                 self.bind(name, bound)
             }
             Pattern::Tuple(fields) => {
+                let (term, mode) = self.pattern_referent(term);
                 let mut terms = Vec::new();
                 for field in fields {
                     let t = self.fresh()?;
-                    self.pattern(field, t)?;
+                    let binding = match mode {
+                        Some(kind) => self.node(Domain::Ref(kind, t))?,
+                        None => t,
+                    };
+                    self.pattern(field, binding)?;
                     terms.push(t);
                 }
                 let tuple = self.node(Domain::Tuple(terms))?;
@@ -669,20 +796,88 @@ impl Solver<'_, '_> {
             }
             Pattern::Char(_) => {
                 let t = self.fixed(ir::Ty::Char)?;
-                self.unify(term, t)
+                self.unify(self.peel_refs(term), t)
             }
             Pattern::Bool(_) => {
                 let t = self.fixed(ir::Ty::Bool)?;
-                self.unify(term, t)
+                self.unify(self.peel_refs(term), t)
             }
             Pattern::Int { literal, .. } => {
                 let t = self.integer(literal)?;
-                self.unify(term, t)
+                self.unify(self.peel_refs(term), t)
             }
             _ => Ok(()),
         }
     }
-    fn block(&mut self, block: &Block, depth: usize) -> Result<Term, String> {
+    fn pattern_referent(&self, mut term: Term) -> (Term, Option<ir::BorrowKind>) {
+        let mut mode = None;
+        while let Domain::Ref(kind, inner) = self.domain(term) {
+            if mode != Some(ir::BorrowKind::Shared) {
+                mode = Some(kind);
+            }
+            term = inner;
+        }
+        (term, mode)
+    }
+    fn nominal_pattern(
+        &mut self,
+        name: &AstPath,
+        variant_name: Option<AstIdent>,
+        fields: &[(FieldSelector, &'s Pattern)],
+        term: Term,
+    ) -> Result<(), String> {
+        let plan = self.checker.signatures.plan()?;
+        let decl = if self.checker.self_path(name)? {
+            self.checker
+                .signatures
+                .self_ty
+                .as_ref()
+                .and_then(nominal_parts)
+                .map(|p| p.0)
+                .ok_or("missing nominal Self in pattern")?
+        } else {
+            self.checker.nominal_decl(name)?
+        };
+        let (env, schema) = plan.nominal_schema(decl, &plan.budget)?;
+        let mut params = HashMap::new();
+        for index in 0..env.arity() {
+            params.insert(
+                ir::ParamId {
+                    owner: env.binder(),
+                    index: index as u16,
+                },
+                self.fresh()?,
+            );
+        }
+        let nominal = self.schema(&schema, &params, 0)?;
+        let (term, mode) = self.pattern_referent(term);
+        self.unify(term, nominal)?;
+        let variant = variant_name
+            .map(|v| self.checker.variant_index(decl, v))
+            .transpose()?;
+        let definitions = match (&schema, variant) {
+            (ir::Ty::Struct(s), None) => &s.def().fields,
+            (ir::Ty::Enum(e), Some(v)) => &e.def().variants[v].fields,
+            _ => return Ok(()),
+        };
+        for (selector, pattern) in fields {
+            let index = match selector {
+                FieldSelector::Tuple(i) => *i,
+                FieldSelector::Named(n) => self.checker.member_index(decl, variant, *n)?,
+                _ => continue,
+            };
+            if let Some(field) = definitions.get(index) {
+                let term = self.schema(&field.ty, &params, 0)?;
+                let binding = match mode {
+                    Some(kind) => self.node(Domain::Ref(kind, term))?,
+                    None => term,
+                };
+                self.pattern(pattern, binding)?;
+            }
+        }
+        Ok(())
+    }
+    fn block(&mut self, block: &'s Block, depth: usize) -> Result<Term, String> {
         self.checker.infer_work(depth)?;
         self.scopes.push(HashMap::new());
         for stmt in &block.statements {
@@ -691,10 +886,11 @@ impl Solver<'_, '_> {
                 Stmt::Let {
                     name, ty, value, ..
                 } => {
-                    let term = self.expr(value, depth + 1)?;
+                    let mut term = self.expr(value, depth + 1)?;
                     if !matches!(ty, Type::Infer) {
                         let ty = self.source_ty(ty)?;
                         self.coerce(term, ty)?;
+                        term = ty;
                     }
                     self.sites.push((stmt as *const Stmt as usize, term));
                     self.bind(name, term)?;
@@ -704,10 +900,11 @@ impl Solver<'_, '_> {
                     self.bind(name, term)?;
                 }
                 Stmt::LetPattern { pattern, ty, value } => {
-                    let term = self.expr(value, depth + 1)?;
+                    let mut term = self.expr(value, depth + 1)?;
                     if !matches!(ty, Type::Infer) {
                         let ty = self.source_ty(ty)?;
                         self.coerce(term, ty)?;
+                        term = ty;
                     }
                     self.pattern(pattern, term)?;
                 }
@@ -818,7 +1015,7 @@ impl Solver<'_, '_> {
             None => Domain::Integer,
         })
     }
-    fn expr(&mut self, expr: &Expr, depth: usize) -> Result<Term, String> {
+    fn expr(&mut self, expr: &'s Expr, depth: usize) -> Result<Term, String> {
         self.checker.infer_work(depth)?;
         match expr {
             Expr::Struct { name, fields } => {
@@ -979,6 +1176,12 @@ impl Solver<'_, '_> {
                     .iter()
                     .map(|a| self.source_ty(a))
                     .collect::<Result<Vec<_>, _>>()?;
+                let owner = self.peel_refs(receiver);
+                if let Domain::Nominal(decl, _) = self.domain(owner) {
+                    if let Some(candidate) = self.candidate(decl, *name)? {
+                        return self.callable(candidate, &args, Some(owner), &actuals);
+                    }
+                }
                 let result = self.fresh()?;
                 self.methods.push(Method {
                     receiver,
