@@ -661,13 +661,7 @@ impl ValidatedTraitWorld {
                 self.validate_ty_metadata_in(ty, env, depth)?;
                 self.validate_raw_associated_ty(&projection.trait_ref.self_ty, env, depth + 1)?;
                 for argument in projection.trait_ref.args.iter() {
-                    if self.type_contains_projection(argument, depth + 1)? {
-                        return Err(FactsError::unsupported(
-                            &self.budget,
-                            "unsupported: projection-bearing trait actual",
-                        ));
-                    }
-                    self.validate_ty(argument, env, None, true, depth + 1)?;
+                    self.validate_raw_associated_ty(argument, env, depth + 1)?;
                 }
                 if !self.raw_associated_ty_is_closed(ty, depth + 1)?
                     && !matches!(&projection.trait_ref.self_ty, Ty::Dyn(_))

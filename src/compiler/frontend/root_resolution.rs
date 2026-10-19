@@ -1136,12 +1136,6 @@ impl Resolver<'_> {
         }
         let original = source.path(self.names())?;
         let resolved = self.path(&original, module, true, false)?;
-        let mut projected = false;
-        for segment in &source.segments {
-            for argument in &segment.args {
-                projected |= self.contains_projection(argument, 0)?;
-            }
-        }
         let misplaced = source.segments[..source.segments.len() - 1]
             .iter()
             .any(|segment| !segment.args.is_empty() || !segment.associated_types.is_empty());
@@ -1223,9 +1217,6 @@ impl Resolver<'_> {
         }
         if misplaced {
             return Err("unsupported: trait arguments and equalities must belong to the final trait segment".into());
-        }
-        if projected {
-            return Err("unsupported: projection-bearing trait actuals are unsupported".into());
         }
         if has_equalities && !allow_equalities {
             return Err(
@@ -4409,12 +4400,11 @@ mod associated_projection_tests {
     }
 
     #[test]
-    fn required_projection_does_not_admit_projected_trait_actuals() {
+    fn required_projection_retains_projected_trait_actuals_for_world_validation() {
         let parsed = parse_unresolved("trait Pair<A,B>{type Out;}trait Has{type Out;fn get()-><Self as Pair<Self::Out,i32>>::Out;}fn main(){}").unwrap();
-        assert_eq!(
-            resolve(&parsed).unwrap_err(),
-            "unsupported: projection-bearing trait actuals are unsupported"
-        );
+        // Resolution authenticates source identities. The canonical world must
+        // still reject this declaration's missing Pair membership.
+        resolve(&parsed).unwrap();
     }
 
     #[test]

@@ -3269,6 +3269,14 @@ impl ValidatedTraitWorld {
         goal: &TraitRef,
         caller: &GenericEnv,
     ) -> Result<Vec<Predicate>> {
+        self.substitute_supertrait_predicates(goal, caller, true)
+    }
+    fn substitute_supertrait_predicates(
+        &self,
+        goal: &TraitRef,
+        caller: &GenericEnv,
+        validate_types: bool,
+    ) -> Result<Vec<Predicate>> {
         let header = self.trait_header(goal.declaration)?;
         if goal.args.len().checked_add(1) != Some(header.env.total_arity()) {
             return Err(FactsError::invalid(
@@ -3315,7 +3323,13 @@ impl ValidatedTraitWorld {
         let instantiated =
             self.schema
                 .instantiate_schema(&schema, &arguments, caller, &self.budget)?;
-        self.validate_predicates(&instantiated.predicates, caller, None)?;
+        if validate_types {
+            self.validate_predicates(&instantiated.predicates, caller, None)?;
+        } else {
+            for predicate in instantiated.predicates.iter() {
+                self.validate_predicate_metadata(predicate, caller)?;
+            }
+        }
         let mut result = Vec::new();
         for predicate in instantiated.predicates.iter() {
             push(&self.budget, &mut result, predicate.clone())?;

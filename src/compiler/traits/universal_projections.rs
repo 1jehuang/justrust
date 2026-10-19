@@ -102,7 +102,28 @@ impl ValidatedTraitWorld {
                 ));
             }
         }
-        self.close_predicates(&mut predicates, env)?;
+        // Membership discovery must not recursively execute type validation on
+        // unrelated projected supertrait actuals. Every row is substituted from
+        // an authenticated declaration and checked as canonical metadata here.
+        // Executable consumers still validate the selected projection separately.
+        let mut index = 0;
+        while index < predicates.len() {
+            if let Predicate::Implements(goal) = &predicates[index] {
+                let goal = goal.clone();
+                self.validate_predicate_metadata(&predicates[index], env)?;
+                let mut inherited = self.substitute_supertrait_predicates(&goal, env, false)?;
+                for associated in self.trait_header(goal.declaration)?.associated_types.iter() {
+                    for row in self.associated_bounds_for(*associated, &goal, env)?.iter() {
+                        self.validate_predicate_metadata(row, env)?;
+                        self.append_predicate(&mut inherited, row)?;
+                    }
+                }
+                for row in inherited {
+                    self.append_predicate(&mut predicates, &row)?;
+                }
+            }
+            index += 1;
+        }
         let expected = Predicate::Implements(projection.trait_ref.clone());
         for predicate in predicates.iter() {
             if self.eq_predicate(predicate, &expected)? {
@@ -268,5 +289,70 @@ impl ValidatedTraitWorld {
             _ => {}
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compiler::frontend::{self, PlanCtx};
+
+    fn fixture() -> (
+        Arc<ValidatedTraitWorld>,
+        Arc<ValidatedFacts>,
+        ir::AssociatedTypeProjection,
+    ) {
+        let program = frontend::parse("trait Parent<A>{} trait Call<A>:Parent<A>{} trait Has<A,B>{type Out;} fn caller<I:Has<i32,bool>,F:Call<(<I as Has<i32,bool>>::Out,)>>(f:F,x:<I as Has<i32,bool>>::Out)->i32{0} fn main(){}").unwrap();
+        let ctx = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
+        let world = ctx.trait_world().unwrap();
+        let caller = ctx.function_decl(0).unwrap();
+        let facts = world.callable_facts(caller).unwrap();
+        let Ty::AssociatedType(projection) = &world
+            .callable_header(caller)
+            .unwrap()
+            .schema
+            .signature
+            .params[1]
+        else {
+            panic!("missing exact projected input")
+        };
+        let projection = projection.as_ref().clone();
+        (world, facts, projection)
+    }
+
+    #[test]
+    fn projected_argument_membership_closure_is_nonrecursive_and_exact() {
+        let (world, facts, projection) = fixture();
+        world
+            .validate_universal_projection(&projection, facts.env())
+            .unwrap();
+        let mut reordered = projection.clone();
+        reordered.trait_ref.args = Arc::from([
+            projection.trait_ref.args[1].clone(),
+            projection.trait_ref.args[0].clone(),
+        ]);
+        assert!(
+            world
+                .validate_universal_projection(&reordered, facts.env())
+                .is_err()
+        );
+        let mut foreign_item = projection.clone();
+        foreign_item.item.index = foreign_item.item.index.wrapping_add(1);
+        assert!(
+            world
+                .validate_universal_projection(&foreign_item, facts.env())
+                .is_err()
+        );
+        let (foreign, foreign_facts, _) = fixture();
+        assert!(
+            foreign
+                .validate_universal_projection(&projection, foreign_facts.env())
+                .is_err()
+        );
+        assert!(
+            world
+                .validate_universal_projection(&projection, foreign_facts.env())
+                .is_err()
+        );
     }
 }

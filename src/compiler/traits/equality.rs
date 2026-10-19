@@ -998,14 +998,8 @@ impl ValidatedTraitWorld {
                 return Ok(normal);
             }
             if !self.goal_is_closed(&projection.trait_ref, &context.env)? {
-                let rhs = self
-                    .declared_equality_rhs(projection, &context.predicates, &context.env)?
-                    .ok_or_else(|| {
-                        FactsError::unsupported(
-                            &self.budget,
-                            "unsupported: rigid declared projection has no exact equality",
-                        )
-                    })?;
+                let rhs =
+                    self.declared_equality_rhs(projection, &context.predicates, &context.env)?;
                 // Membership is structural here, not a final proof. Closure includes only genuine declared memberships.
                 let membership = Predicate::Implements(projection.trait_ref.clone());
                 let mut found = false;
@@ -1018,6 +1012,13 @@ impl ValidatedTraitWorld {
                         "declared equality lacks exact owner membership",
                     ));
                 }
+                let Some(rhs) = rhs else {
+                    // An unrelated equality must not force this exact, independently
+                    // declared family to acquire a concrete assignment. Retain its
+                    // authenticated rigid identity, without recording a reduction.
+                    self.validate_universal_projection(projection, &context.env)?;
+                    return self.projection_type(projection);
+                };
                 reductions.push(
                     DeclaredEqualityReduction {
                         world: self.id,

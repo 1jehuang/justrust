@@ -16,6 +16,9 @@ mod positional_pattern;
 #[path = "local_literals/projection_call.rs"]
 mod projection_call;
 
+#[path = "local_literals/associated_projection.rs"]
+mod associated_projection;
+
 type Term = usize;
 #[derive(Clone, Debug)]
 enum Domain {
@@ -30,6 +33,7 @@ enum Domain {
     Array(Term, usize),
     Slice(Term),
     Callable(callable::CallableTerm),
+    AssociatedProjection(associated_projection::ProjectionTerm),
 }
 struct Variable {
     parent: Term,
@@ -65,6 +69,8 @@ struct Solver<'a: 's, 'b: 's, 's> {
     local_context: Option<Option<super::super::super::semantic_scope::ScopeId>>,
     return_terms: Vec<Term>,
     unit_defaults: Vec<Term>,
+    associated_equalities: Vec<(Term, Term)>,
+    projection_defaults: bool,
 }
 
 pub(super) struct Hints {
@@ -94,6 +100,8 @@ pub(super) fn hints(
         local_context: None,
         return_terms: Vec::new(),
         unit_defaults: Vec::new(),
+        associated_equalities: Vec::new(),
+        projection_defaults: false,
     };
     let return_term = solver.fixed(checker.result.clone())?;
     solver.return_terms.push(return_term);
@@ -174,6 +182,9 @@ impl<'s> Solver<'_, '_, 's> {
             if let Some(term) = params.get(param) {
                 return Ok(*term);
             }
+        }
+        if let ir::Ty::AssociatedType(projection) = ty {
+            return self.associated_projection(projection, params, depth + 1);
         }
         let domain = match ty {
             ir::Ty::Struct(_) | ir::Ty::Enum(_) => {
@@ -276,6 +287,17 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 Ok(false)
             }
+            Domain::AssociatedProjection(projection) => {
+                if self.occurs(needle, projection.receiver, depth + 1)? {
+                    return Ok(true);
+                }
+                for term in &projection.arguments {
+                    if self.occurs(needle, *term, depth + 1)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
             Domain::Callable(callable) => {
                 for term in callable
                     .params
@@ -304,8 +326,18 @@ impl<'s> Solver<'_, '_, 's> {
         if a == b {
             return Ok(());
         }
+        self.reduce_associated_projection(a)?;
+        self.reduce_associated_projection(b)?;
         let x = self.domain(a);
         let y = self.domain(b);
+        if !matches!(x, Domain::Unknown)
+            && !matches!(y, Domain::Unknown)
+            && (matches!(x, Domain::AssociatedProjection(_))
+                || matches!(y, Domain::AssociatedProjection(_)))
+        {
+            self.associated_equalities.push((a, b));
+            return Ok(());
+        }
         if matches!(x, Domain::Fixed(ir::Ty::Never)) || matches!(y, Domain::Fixed(ir::Ty::Never)) {
             return Ok(());
         }
@@ -387,6 +419,12 @@ impl<'s> Solver<'_, '_, 's> {
             Domain::Integer => ir::Ty::Int(ir::IntTy::I32),
             Domain::Float => ir::Ty::Float(ir::FloatTy::F64),
             Domain::Fixed(ty) => ty,
+            Domain::AssociatedProjection(projection) => {
+                let Some(ty) = self.resolve_associated_projection(&projection, depth + 1)? else {
+                    return Ok(None);
+                };
+                ty
+            }
             Domain::Nominal(decl, args) => {
                 let mut actuals = Vec::new();
                 for arg in args {
@@ -641,6 +679,7 @@ impl<'s> Solver<'_, '_, 's> {
             }
             projections = pending;
             progress |= self.solve_iterator_items()?;
+            progress |= self.solve_associated_equalities()?;
             let coercions = std::mem::take(&mut self.coercions);
             for (actual, expected) in coercions {
                 if matches!(self.domain(actual), Domain::Unknown) {
@@ -666,6 +705,10 @@ impl<'s> Solver<'_, '_, 's> {
                 progress = true;
             }
             if !progress {
+                if !self.projection_defaults {
+                    self.projection_defaults = true;
+                    continue;
+                }
                 break;
             }
         }

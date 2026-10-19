@@ -220,7 +220,13 @@ impl ValidatedTraitWorld {
         context: ProofContext<'_>,
         active: &mut Vec<GoalKey>,
     ) -> Result<()> {
-        for row in rows {
+        // Keep original occurrence rows in the carrier seal, but replay their
+        // newly closed nested actuals through canonical normalization first.
+        // The helper validates every normalization dependency and preserves the
+        // root associated item and ordered trait application. Open families
+        // are retained unchanged, never assigned by this replay operation.
+        let normalized = self.normalize_instantiated_projection_predicates(rows, context)?;
+        for row in normalized.iter() {
             if let Predicate::ProjectionEq { projection, ty } = row {
                 self.validate_equality_domain_in(projection, ty, context, active)?;
                 self.require_in(row, context, active)?;
@@ -967,6 +973,64 @@ mod tests {
             view.validate_for(facts).unwrap_err().kind(),
             FactsErrorKind::InvalidMetadata
         );
+    }
+
+    #[test]
+    fn closed_projected_callable_rows_replay_exact_owner_arguments_and_occurrences() {
+        fn fixture() -> (
+            Arc<ValidatedTraitWorld>,
+            Arc<ValidatedFacts>,
+            Arc<ValidatedFacts>,
+        ) {
+            let source = frontend::parse("trait Has{type Out;} trait Call<A,B>{type Output;} struct S; impl Has for S{type Out=i32;} struct C; impl Call<(i32,),bool> for C{type Output=i32;} fn keep<I:Has,F:Call<(I::Out,),bool,Output=i32>>(f:F,x:I::Out)->i32{0} fn concrete(s:S,c:C){} fn main(){}").unwrap();
+            let plan = PlanCtx::from_program(&source, &PlanBudget::default()).unwrap();
+            let world = plan.trait_world().unwrap();
+            let keep = plan.function_decl(0).unwrap();
+            let concrete = plan.function_decl(1).unwrap();
+            let arguments = world
+                .callable_header(concrete)
+                .unwrap()
+                .schema
+                .signature
+                .params
+                .clone();
+            let closed = world
+                .instance_facts(&CallTarget {
+                    declaration: keep,
+                    type_args: arguments.into(),
+                })
+                .unwrap();
+            let universal = world.callable_facts(keep).unwrap();
+            (world, closed, universal)
+        }
+        let (_world, facts, universal) = fixture();
+        let view = body_view(&facts);
+        assert!(view.equality_results.is_some());
+        view.validate_for(&facts).unwrap();
+        assert!(view.validate_for(&universal).is_err());
+        let (_, foreign, _) = fixture();
+        assert!(view.validate_for(&foreign).is_err());
+        reject_mutation(&facts, |authority| authority.actual_rows = Arc::from([]));
+        reject_mutation(&facts, |authority| authority.origins = Arc::from([]));
+        reject_mutation(&facts, |authority| {
+            let rows = Arc::make_mut(&mut authority.actual_rows);
+            let Predicate::ProjectionEq { projection, .. } = &mut rows[0] else {
+                panic!("missing original equality occurrence")
+            };
+            let args = Arc::make_mut(&mut projection.trait_ref.args);
+            args.swap(0, 1);
+        });
+        reject_mutation(&facts, |authority| {
+            let rows = Arc::make_mut(&mut authority.actual_rows);
+            let Predicate::ProjectionEq { projection, .. } = &mut rows[0] else {
+                panic!("missing original equality occurrence")
+            };
+            projection.item.index = projection.item.index.wrapping_add(1);
+        });
+        reject_mutation(&facts, |authority| {
+            let origins = Arc::make_mut(&mut authority.origins);
+            origins[0].occurrence = origins[0].occurrence.wrapping_add(1);
+        });
     }
 
     #[test]

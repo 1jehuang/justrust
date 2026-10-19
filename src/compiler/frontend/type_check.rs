@@ -18,6 +18,8 @@ mod method_owner;
 #[path = "type_check/partial_annotation.rs"]
 pub(super) mod partial_annotation;
 mod primitive_actuals;
+#[path = "type_check/projected_formals.rs"]
+mod projected_formals;
 #[path = "type_check/shared_or_arms.rs"]
 mod shared_or_arms;
 #[path = "try_operator.rs"]
@@ -1398,10 +1400,10 @@ impl<'s> Checker<'s> {
                 solver.constrain(&formal, &actual, 0)?;
             }
         }
+        let mut projected_constraints = Vec::new();
         if let Some(expected) = expected {
-            let formal = solver.schema(&schema.signature.result, 0)?;
             let evidence = self.infer_type_term(expected, None, 0)?;
-            solver.constrain(&formal, &evidence, 0)?;
+            projected_constraints.push((&schema.signature.result, evidence));
         }
         for (formal, expr) in schema.signature.params.iter().zip(args) {
             let evidence = self.inference_evidence(expr, 0)?;
@@ -1420,13 +1422,14 @@ impl<'s> Checker<'s> {
                     _ => None,
                 };
                 if let Some(actual) = actual {
-                    let element = solver.schema(element, 1)?;
-                    solver.constrain(&element, &actual, 1)?;
+                    projected_constraints.push((element, actual));
                     continue;
                 }
             }
-            let formal = solver.schema(formal, 0)?;
-            solver.constrain(&formal, &evidence, 0)?;
+            projected_constraints.push((formal, evidence));
+        }
+        if !solver.constrain_projected_formals(projected_constraints)? {
+            return Ok(None);
         }
         solver.finish(fallback)
     }

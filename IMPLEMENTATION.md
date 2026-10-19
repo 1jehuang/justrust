@@ -509,6 +509,12 @@ cleanup failures.
       alpha-rename provider signatures and predicates exactly, and select
       overrides or provided defaults with ordered method actuals
       (`generic_trait_methods`). Universal projected signatures remain open.
+- [x] Stored closure bounds with projected argument tuples retain exact canonical
+      membership through inference and closed carrier equality replay
+      (`PROJECTED-CALLABLE-BOUNDS.md`). The untyped stored closure consumer and
+      independent Fn Output equality noninterference pass stock/native CHECK,
+      BUILD and run at workers 1/8. Reference-bearing callable tuples, named
+      function-item values and full Iterator adapter execution remain open.
 - [x] General associated declaration trait applications and equality bounds under
       ASSOCIATED-BOUNDS.md retain exact source/owner/ordered argument identity and
       prove every assignment, including unused generic impls. Transitive symbolic
