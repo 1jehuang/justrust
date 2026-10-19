@@ -647,7 +647,7 @@ const WHOLE_PROGRAM_DEBT: &[&str] = &[
 /// function grows when the program doubles from 16 to 32 functions. A value
 /// above 1.0 means unrelated functions are hidden or explicit prerequisites,
 /// which is a whole-program barrier. Target: 1.0. May only go down.
-const LEAF_CLOSURE_GROWTH_CEILING: f64 = 1.23;
+const LEAF_CLOSURE_GROWTH_CEILING: f64 = 1.02;
 
 /// Ceiling on planning work growth from 16 to 32 functions. Linear compilation
 /// is about 2.0; quadratic is 4.0. Target: at most 2.2. May only go down.

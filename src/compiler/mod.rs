@@ -215,6 +215,43 @@ impl Facts<'_> {
     async fn plan(&self) -> Result<Arc<PlanFact>, Error> {
         self.get(Self::root(MONO_PLAN)).await
     }
+    /// The target and source declaration of instance `index`. Nongeneric
+    /// Source roots occupy the first plan slots in callable order, so they
+    /// are derived from SIGNATURES alone; only demanded generic instances
+    /// read the whole-program instance plan.
+    async fn instance(&self, index: usize) -> Result<(ir::CallTarget, usize), Error> {
+        let types = self.types().await?;
+        if let Some(root) = root_instance(&types, index)? {
+            return Ok(root);
+        }
+        let plan = self.plan().await?;
+        let instance = plan
+            .plan
+            .entries
+            .get(index)
+            .ok_or_else(|| Error::new("invalid instance slot"))?;
+        Ok((instance.target.clone(), instance.source_index))
+    }
+}
+/// Nongeneric Source callables in callable order are the plan's root slots
+/// (instances::build enumerates them first, in this order). Returns the
+/// `index`-th one, or `None` if `index` is past the roots.
+fn root_instance(
+    types: &frontend::PlanCtx,
+    index: usize,
+) -> Result<Option<(ir::CallTarget, usize)>, Error> {
+    let roots = types.closed_roots();
+    Ok(roots.get(index).map(|&source_index| {
+        (
+            ir::CallTarget {
+                declaration: types
+                    .callable_decl(source_index)
+                    .expect("closed root index is a callable"),
+                type_args: Arc::from([]),
+            },
+            source_index,
+        )
+    }))
 }
 
 impl CompilerProvider {
@@ -536,23 +573,18 @@ impl Provider for CompilerProvider {
                 BODY => {
                     let index = item_index(&key, "missing instance index")?;
                     let types = facts.types().await?;
-                    let plan = facts.plan().await?;
-                    let instance = plan
-                        .plan
-                        .entries
-                        .get(index)
-                        .ok_or_else(|| Error::new("invalid instance slot"))?;
-                    let template = facts.template(instance.source_index).await?;
-                    let source = this.validated_body(&types, instance.source_index, &template)?;
-                    let fact = if !Self::universal_body(&types, instance.target.declaration)? {
+                    let (instance_target, instance_source) = facts.instance(index).await?;
+                    let template = facts.template(instance_source).await?;
+                    let source = this.validated_body(&types, instance_source, &template)?;
+                    let fact = if !Self::universal_body(&types, instance_target.declaration)? {
                         let publication = template.publication.as_ref().ok_or_else(|| {
                             Error::new("nongeneric Source has no original publication")
                         })?;
                         let closed = publication.facts();
                         if closed.phase() != traits::FactsPhase::Closed
-                            || closed.target() != Some(&instance.target)
+                            || closed.target() != Some(&instance_target)
                             || !closed
-                                .is_source_callable(instance.target.declaration)
+                                .is_source_callable(instance_target.declaration)
                                 .map_err(|error| source_fact_error(error, &this.0.budget))?
                         {
                             return Err(Error::new(
@@ -567,14 +599,14 @@ impl Provider for CompilerProvider {
                             checked: source,
                         }
                     } else {
-                        let closed = types.instance_facts(&instance.target).map_err(Error::new)?;
+                        let closed = types.instance_facts(&instance_target).map_err(Error::new)?;
                         let mut context = types.as_ref().clone();
                         let proof: Arc<UniversalProofFact> = facts
-                            .get(function(UNIVERSAL_ANALYZE, instance.source_index))
+                            .get(function(UNIVERSAL_ANALYZE, instance_source))
                             .await?;
                         let verified = &proof.verified;
                         if closed
-                            .is_source_callable(instance.target.declaration)
+                            .is_source_callable(instance_target.declaration)
                             .map_err(|error| source_fact_error(error, &this.0.budget))?
                         {
                             verified
@@ -592,7 +624,7 @@ impl Provider for CompilerProvider {
                         let checked = Arc::new(
                             ir::instantiate_checked(
                                 verified,
-                                &instance.target.type_args,
+                                &instance_target.type_args,
                                 &closed,
                                 &mut context,
                                 &this.0.budget,
@@ -609,15 +641,10 @@ impl Provider for CompilerProvider {
                 LOWER => {
                     let index = item_index(&key, "missing instance index")?;
                     let types = facts.types().await?;
-                    let plan = facts.plan().await?;
-                    let instance = plan
-                        .plan
-                        .entries
-                        .get(index)
-                        .ok_or_else(|| Error::new("invalid instance slot"))?;
+                    let (instance_target, instance_source) = facts.instance(index).await?;
                     let body: Arc<InstanceBodyFact> = facts.get(function(BODY, index)).await?;
-                    let lowered = if !Self::universal_body(&types, instance.target.declaration)? {
-                        let template = facts.template(instance.source_index).await?;
+                    let lowered = if !Self::universal_body(&types, instance_target.declaration)? {
+                        let template = facts.template(instance_source).await?;
                         let publication = template.publication.as_ref().ok_or_else(|| {
                             Error::new("closed Source lowering has no canonical publication")
                         })?;
@@ -635,18 +662,13 @@ impl Provider for CompilerProvider {
                 ANALYZE => {
                     let index = item_index(&key, "missing instance index")?;
                     let types = facts.types().await?;
-                    let plan = facts.plan().await?;
-                    let instance = plan
-                        .plan
-                        .entries
-                        .get(index)
-                        .ok_or_else(|| Error::new("invalid instance slot"))?;
+                    let (instance_target, instance_source) = facts.instance(index).await?;
                     let lowered: Arc<Arc<cfg::Function>> =
                         facts.get(function(LOWER, index)).await?;
                     let lowered = lowered.as_ref().clone();
                     let body: Arc<InstanceBodyFact> = facts.get(function(BODY, index)).await?;
-                    if !Self::universal_body(&types, instance.target.declaration)? {
-                        let template = facts.template(instance.source_index).await?;
+                    if !Self::universal_body(&types, instance_target.declaration)? {
+                        let template = facts.template(instance_source).await?;
                         lowered
                             .validate_source_publication(
                                 template.publication.as_ref().ok_or_else(|| {
@@ -656,9 +678,14 @@ impl Provider for CompilerProvider {
                             )
                             .map_err(|error| source_fact_error(error, &this.0.budget))?;
                     }
-                    plan.plan
-                        .validate_cleanup_dependencies(&lowered)
-                        .map_err(Error::new)?;
+                    if has_drop(&lowered) {
+                        facts
+                            .plan()
+                            .await?
+                            .plan
+                            .validate_cleanup_dependencies(&lowered)
+                            .map_err(Error::new)?;
+                    }
                     let closed = cfg::close(lowered, body.facts.clone(), &this.0.budget)
                         .map_err(Error::new)?;
                     // Read only the universal proofs of this instance's own
@@ -709,17 +736,25 @@ impl Provider for CompilerProvider {
                 }
                 OBJECT => {
                     let index = item_index(&key, "missing instance index")?;
-                    let plan = facts.plan().await?;
                     // Only this instance's own proof is required. Executable
                     // publication is gated on every check by BUILD (via CHECK),
                     // so object code for a ready function overlaps unrelated
                     // checking (ARCHITECTURE.md section 17).
                     let proof: Arc<ConcreteProofFact> = facts.get(function(ANALYZE, index)).await?;
-                    plan.plan
-                        .validate_cleanup_dependencies(proof.concrete.function())
-                        .map_err(Error::new)?;
+                    if has_drop(proof.concrete.function()) {
+                        facts
+                            .plan()
+                            .await?
+                            .plan
+                            .validate_cleanup_dependencies(proof.concrete.function())
+                            .map_err(Error::new)?;
+                    }
+                    // Callee symbols derive from targets alone. BUILD links
+                    // against the sealed plan, which rejects any unplanned
+                    // symbol, so this needs no whole-program read.
+                    let types = facts.types().await?;
                     let object = backend::emit_cfg_function(&proof.concrete, &|target| {
-                        plan.plan.symbol(target)
+                        instances::symbol_of(target, &types, &this.0.budget)
                     })
                     .map_err(Error::new)?;
                     cx.publish_fact(0, object)
@@ -786,6 +821,12 @@ impl Provider for CompilerProvider {
             }
         })
     }
+}
+fn has_drop(function: &cfg::Function) -> bool {
+    function
+        .blocks
+        .iter()
+        .any(|block| matches!(block.terminator.value, cfg::Terminator::Drop { .. }))
 }
 fn item_index(key: &Key, missing: &str) -> Result<usize, Error> {
     let [index] = key.params.as_slice() else {

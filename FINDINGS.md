@@ -11651,16 +11651,22 @@ artifact is published (`Report::published_kind(105)`). Check-only runs still
 assert no OBJECT is demanded. Barrier-order tests now assert per-instance
 order: each object publishes after its own proof. 3259 tests pass.
 
-### Pending: per-callee effects vs. leaf-closure ratio gate (2026-10-18)
+### Effects-per-callee plus root-instance split remove the hidden MONO_PLAN debt (2026-10-18)
 
-Branch `effects-per-callee-pending` makes ANALYZE read only its direct
-universal callees' UNIVERSAL_ANALYZE proofs and moves the program-wide
-UNIVERSAL_EFFECTS_READY admission join to gate only CHECK. All affected graph
-suites pass. It halves an independent leaf's dependency closure (body[2]:
-78 -> 41 nodes at 16 functions, 94 -> 57 at 32), but the graph_integrity
-leaf-closure gate is a ratio, so it reads 1.390 (> 1.23). Both sizes still
-carry the same +16 TEMPLATE_BODY nodes through MONO_PLAN, while the
-denominator shrank. That is a measurement artifact, not a regression. Merging
-it means either splitting MONO_PLAN into demand-driven per-instance keys first
-(which removes the +16), or having the user approve restating the gate in
-absolute terms. Not merged.
+The pending per-callee effects branch is now merged together with a root-instance
+split for MONO_PLAN. Nongeneric Source roots no longer read the whole-program
+instance plan in BODY, LOWER, ANALYZE, or OBJECT. Those nodes derive their root
+instance directly from SIGNATURES (`PlanCtx.closed_roots`), and OBJECT derives
+callee symbols from the target alone (`instances::symbol_of`). MONO_PLAN is now
+read only for demanded generic instances and for cleanup validation on CFGs that
+actually contain `Drop` terminators.
+
+That removes the fixed +16 TEMPLATE_BODY/MONO_PLAN baggage from independent leaf
+closures. `graph_integrity` now reports leaf closure growth 16->32 of exactly
+1.000 for `object[0]` (8 -> 8 nodes), so the ratchet was tightened from 1.23 to
+1.02. Targeted suites covering graph shape and instance planning all pass:
+`graph_integrity`, `compiler`, `modules`, `tuples`, `external_modules`, and
+`generic_carriers_graph` (run `20261018-181803117-2893679`). Hosted full-suite
+validation is currently blocked by unrelated tests that hard-code `/usr/bin/rustc`
+on this machine, but strict clippy passes and the targeted graph/workflow suites
+cover the changed boundaries.

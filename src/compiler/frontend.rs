@@ -13479,6 +13479,9 @@ pub struct PlanCtx {
     /// Previously each body copied every signature, which made checking
     /// quadratic in program size in both time and retained bytes.
     shared_env: Option<Arc<SharedTypeEnv>>,
+    /// Callable indices of nongeneric Source callables in callable order:
+    /// exactly the root slots `instances::build` enumerates first.
+    closed_roots: Arc<[usize]>,
     pub budget: ir::PlanBudget,
 }
 /// Shared read-only part of a [`TypeEnv`].
@@ -14952,11 +14955,32 @@ impl PlanCtx {
             registry,
             state: Arc::new(Mutex::new(state)),
             shared_env: None,
+            closed_roots: Arc::from([]),
             budget: budget.clone(),
         };
         plan.validate_inherent_overlaps(budget)?;
         plan.publish_trait_world(program)?;
+        plan.closed_roots = plan.compute_closed_roots()?;
         Ok(plan)
+    }
+    fn compute_closed_roots(&self) -> Result<Arc<[usize]>, String> {
+        let mut roots = Vec::new();
+        for index in 0..self.callable_count() {
+            self.budget.charge_work(1)?;
+            let declaration = self.callable_decl(index)?;
+            if matches!(
+                self.callable_provider(declaration)?,
+                CallableProvider::Source { .. }
+            ) && !self.callable_env(declaration)?.is_generic()
+            {
+                roots.push(index);
+            }
+        }
+        Ok(roots.into())
+    }
+    /// Nongeneric Source callable indices in callable order (plan roots).
+    pub fn closed_roots(&self) -> &[usize] {
+        &self.closed_roots
     }
     fn publish_trait_world(&mut self, program: &Program) -> Result<(), String> {
         let budget = &self.budget;
@@ -16253,6 +16277,7 @@ impl SchemaAdapter {
             world: None,
             validated: Arc::new(HashMap::new()),
             shared_env: None,
+            closed_roots: Arc::from([]),
         })
     }
     fn error(&self, e: String) -> tr::FactsError {
