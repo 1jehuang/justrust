@@ -577,8 +577,14 @@ host macro and compiles its generated target source.
       non-Copy allocation ownership with consuming munmap. Real mapping-boundary
       scalar access tests require native memory widths rather than qword local
       carriers. See NATIVE-HEAP.md. This does not close allocation compatibility:
-      general layouts, pointer methods, realloc, automatic Drop, Box/Vec/String
+      general layouts, pointer methods, realloc, Box/Vec/String
       and full alloc/core/std remain open.
+- [x] Ordinary source `Allocation` Drop reuses canonical normal-path cleanup,
+      disarming the handle before shared munmap policy so explicit release does
+      not free twice. Raw-pointer scalar fields and ordinary owner borrows use
+      normal authority/loan checks. Moves, early returns, conditional cleanup,
+      replacement/loop flags, borrow escapes and panic-abort controls are tested.
+      Generic/aggregate Drop glue and Box<T> remain open.
 - [ ] Provide debug/source information and runtime failure/exit diagnostics.
       Expand architectures/OSes only with target-specific executable evidence.
 

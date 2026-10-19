@@ -56,55 +56,10 @@ pub(super) fn descriptor(
     }
 }
 
-/// This whole-arena check includes dead syntax. Unsupported ownership cannot be
-/// hidden behind control flow or smuggled into a generic/aggregate container.
-fn reject_borrowed_owner(
-    ty: &Ty,
-    facts: ir::FactsCtx<'_>,
-    receiver: bool,
-    depth: usize,
-) -> Result<(), String> {
-    if let Some(authority) = facts.validated() {
-        authority.budget().check_depth(depth)?;
-        authority.budget().charge_work(1)?;
-    }
-    match ty {
-        Ty::Ref { referent, .. } => {
-            if !matches!(referent.as_ref(), Ty::Slice { .. })
-                && descriptor(referent, facts)?.is_some()
-                && !receiver
-            {
-                return Err(
-                    "unsupported: references to normal Drop owners outside their destructor".into(),
-                );
-            }
-            reject_borrowed_owner(referent, facts, receiver, depth + 1)?;
-        }
-        Ty::Tuple(parts) => {
-            for part in parts.iter() {
-                reject_borrowed_owner(part, facts, receiver, depth + 1)?;
-            }
-        }
-        Ty::Array { element, .. } | Ty::Slice { element } => {
-            reject_borrowed_owner(element, facts, receiver, depth + 1)?
-        }
-        Ty::Struct(s) => {
-            for field in s.def().fields.iter() {
-                reject_borrowed_owner(&field.ty, facts, receiver, depth + 1)?;
-            }
-        }
-        Ty::Enum(e) => {
-            for variant in e.def().variants.iter() {
-                for field in variant.fields.iter() {
-                    reject_borrowed_owner(&field.ty, facts, receiver, depth + 1)?;
-                }
-            }
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
+/// This whole-arena check includes dead syntax. References do not own their
+/// referents: ordinary loan analysis checks their uses against the canonical
+/// cleanup's exclusive receiver access. No separate borrowed-owner exemption
+/// is needed for either source helpers or destructor bodies.
 pub(super) fn admit(source: &ir::CheckedFunction, facts: ir::FactsCtx<'_>) -> Result<bool, String> {
     let Some(authority) = facts.validated() else {
         return Ok(false);
@@ -133,14 +88,6 @@ pub(super) fn admit(source: &ir::CheckedFunction, facts: ir::FactsCtx<'_>) -> Re
     {
         authority.budget().charge_work(1)?;
         enabled |= descriptor(ty, facts)?.is_some();
-        reject_borrowed_owner(
-            ty,
-            facts,
-            authority
-                .is_destructor_body()
-                .map_err(|e| e.into_legacy_diagnostic(authority.budget()))?,
-            0,
-        )?;
     }
     if enabled && (authority.env().is_generic() || source.body_substitution.is_some()) {
         return Err("unsupported: generic function carrying a normal Drop owner".into());

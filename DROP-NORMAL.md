@@ -162,6 +162,25 @@ For D17 the version-1 scalar-field owner cannot itself exercise a non-Copy field
 * Unsupported shape closure: generic/tuple/array/enum/wrapper/reference-bearing routes and dead syntax cannot hide a Drop owner from admission. Distinguish unsupported Rust-valid input from language-invalid input.
 * Regression gate: preserve historical scalar field reads/writes, canonical versus shadow Drop identity, Copy+Drop rejection, ordinary source call capsule checks and existing non-Drop reference/loop behavior.
 
+## Source allocator extension (2026-10-19)
+
+The ordinary embedded `Allocation` now implements canonical source Drop using
+existing cleanup authorization and runtime flags. Raw pointers are nonowning
+scalar fields, admitted alongside integers in both the trait-world and exact
+normal-drop descriptor gates. The blanket reference-to-owner exclusion is
+removed: ordinary shared/mutable borrows use the same source loan analysis and
+the cleanup operation's exclusive receiver access, not a library exemption.
+The previously frozen `unsupported/borrow.rs` fixture is now native-positive;
+its original stock receipt and source remain unchanged (27 native positives).
+
+`tests/heap.rs` checks mapping presence/absence across returned/moved owners and
+early returns, explicit-release disarming, raw-pointer destructor exact-once
+counters for conditional moves/loop continue/replacement/self-move, shared and
+mutable owner helpers, and stock/native borrow escape, move and replacement
+conflicts. A panic=abort control requires no user cleanup output. Generic and
+aggregate owners, partial moves of non-Copy fields, nested owning fields and
+unwinding remain excluded. This does not implement Box<T> or generic Drop glue.
+
 ## Approved integration constraints; concrete API refinement
 
 Prefer integrating semantic drop elaboration inside the canonical lowering publication, so existing exact shape proof naturally captures the final graph. If source-call replay makes synthetic calls impossible there, add an explicit cleanup evidence variant rather than weakening replay. Assign one owner to shared cfg/ir/ownership proof interfaces. Traits/instance discovery and oracle work can proceed in parallel only after those types are agreed.

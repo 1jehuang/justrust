@@ -1,5 +1,36 @@
 # Findings: where agent build time goes
 
+## 2026-10-19: source Allocation Drop, not manual-only ownership
+
+- Ordinary Rust `impl Drop for Allocation` calls a private Rust deallocation
+  helper. Consuming `release` uses that same helper and disarms address/length
+  before the syscall, so subsequent canonical cleanup cannot unmap twice.
+  Canonical Copy/Drop exclusion replaces the previous private marker.
+- Both canonical trait-world and exact descriptor admission accept raw pointers
+  as nonowning scalar fields. Ordinary references to supported owners use
+  existing loan and cleanup-exclusive-access checks instead of a blanket
+  borrowed-owner rejection. No special handling names Allocation or Box.
+- Hosted check and all 1355 library tests pass (`20261018-195242956-1392933`,
+  `20261018-195243500-1393121`), as do heap/authority/prelude/unchanged graph
+  gates (34 tests, `20261018-195256714-1395246`) and strict all-target clippy
+  (`20261018-195300337-1392226`). Local stock-first full frozen Drop corpus
+  plus initial heap tests passed (`20261018-195140021-1378205`), preserving all
+  56 stock sources and promoting only ordinary borrowing to native-positive.
+  Final mandatory stock/native heap gate `20261018-195736806-1513577` passes
+  all 20 tests, including exact Allocation `.drop()` stock E0040. Slim records
+  are retained in `data/runs/xps14/2026-10-19-native-heap-drop.jsonl`.
+- Added actual mapping-presence controls across normal cleanup, moves and early
+  returns; raw-pointer destructor counters check exact-once conditional/move/
+  loop/replacement flags. Abort prints no destructor marker in native/stock.
+  Borrow negatives include escaping owner and returned field references, move,
+  mutable helper calls, assignment replacement, break and destructor-local
+  lifetime errors. Ordinary cases must reject semantically, not as unsupported.
+  The continue case must report a concrete cleanup BorrowConflict while also
+  retaining the known SCC-born backedge limitation. Direct `.drop()` is rejected,
+  not a newly admitted source call. Only canonical compiler cleanup invokes Drop.
+- Generic/aggregate Drop glue, contained-owner partial moves, general layout and
+  Box<T> remain open. No graph baseline/ceiling changed and no speed claim made.
+
 ## 2026-10-18: Rust-source native heap foundation
 
 - Native `__justrust_linux_syscall6!` is an exact unsafe Linux x86-64 ABI
