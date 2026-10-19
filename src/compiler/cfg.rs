@@ -2557,6 +2557,56 @@ struct PendingBlock {
     terminator: Option<Located<Terminator>>,
 }
 
+// Conservative monotone admission: the full new backing is paid while the
+// previously admitted backing remains paid. Allocator surplus is admitted
+// before writes, not claimed to have been physically prepaid.
+fn admit_cfg_push<T>(values: &mut Vec<T>, budget: Option<&ir::PlanBudget>) -> Result<(), String> {
+    if budget.is_some_and(ir::PlanBudget::has_resource_failure) {
+        return Err("planning resource budget already exhausted".into());
+    }
+    if values.len() < values.capacity() {
+        return Ok(());
+    }
+    let needed = values.len().checked_add(1).ok_or("CFG capacity overflow")?;
+    let target = values
+        .capacity()
+        .checked_mul(2)
+        .ok_or("CFG capacity overflow")?
+        .max(needed);
+    let requested = target
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or("CFG capacity bytes overflow")?;
+    if let Some(budget) = budget {
+        budget.charge_work(values.len())?;
+        budget.retain_bytes(requested)?;
+    }
+    values
+        .try_reserve_exact(target - values.len())
+        .map_err(|_| "CFG backing allocation failed")?;
+    let actual = values
+        .capacity()
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or("CFG actual capacity bytes overflow")?;
+    admit_cfg_surplus(actual, requested, budget)
+}
+
+fn admit_cfg_surplus(
+    actual: usize,
+    requested: usize,
+    budget: Option<&ir::PlanBudget>,
+) -> Result<(), String> {
+    let excess = actual
+        .checked_sub(requested)
+        .ok_or("CFG capacity underflow")?;
+    if let Some(budget) = budget {
+        if budget.has_resource_failure() {
+            return Err("planning resource budget already exhausted".into());
+        }
+        budget.retain_bytes(excess)?;
+    }
+    Ok(())
+}
+
 struct PatternTest {
     selected: BlockId,
     rejected: BlockId,
@@ -2602,8 +2652,30 @@ struct Lowerer<'a> {
 }
 
 impl Lowerer<'_> {
+    fn check_resource(&mut self) -> Result<(), String> {
+        if self.resource_error.is_none()
+            && self
+                .budget
+                .is_some_and(ir::PlanBudget::has_resource_failure)
+        {
+            self.divergence_resource("planning resource budget already exhausted");
+        }
+        match &self.resource_error {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
+    }
+
+    fn push_scope(&mut self) -> Result<(), String> {
+        self.check_resource()?;
+        admit_cfg_push(&mut self.scopes, self.budget)
+            .map_err(|error| self.divergence_resource(&error))?;
+        self.scopes.push(Vec::new());
+        Ok(())
+    }
+
     fn allocate(&mut self, nodes: usize, bytes: usize) -> bool {
-        if self.resource_error.is_some() {
+        if self.check_resource().is_err() {
             return false;
         }
         if let Some(budget) = self.budget
@@ -2656,11 +2728,14 @@ impl Lowerer<'_> {
         if let ir::MatchPattern::Alternatives { rows, .. } = pattern {
             self.divergence_work(rows.len())?;
             let selected = self.block();
+            self.check_resource()?;
             let rejected = self.block();
+            self.check_resource()?;
             for row in rows {
                 if row.is_empty() {
                     self.terminate(Terminator::Goto(selected), Some(id))?;
                     self.current = self.block();
+                    self.check_resource()?;
                     continue;
                 }
                 let tested = self.decision_pattern_test(id, source, row, completes)?;
@@ -2685,8 +2760,10 @@ impl Lowerer<'_> {
             return self.decision_pattern_test(id, source, tests, completes);
         }
         let selected = self.block();
+        self.check_resource()?;
         let rejected = self.block();
-        self.scopes.push(Vec::new());
+        self.check_resource()?;
+        self.push_scope()?;
         let comparison = match pattern {
             ir::MatchPattern::Bool(value) => {
                 Some((Operand::Copy(source.clone()), Constant::Bool(*value)))
@@ -2762,8 +2839,10 @@ impl Lowerer<'_> {
     ) -> Result<PatternTest, String> {
         self.divergence_work(tests.len())?;
         let selected = self.block();
+        self.check_resource()?;
         let rejected = self.block();
-        self.scopes.push(Vec::new());
+        self.check_resource()?;
+        self.push_scope()?;
         if !completes {
             // IR validation still checks every dead predicate and binding.
             // No runtime read or fabricated value is needed for a Never input.
@@ -2787,6 +2866,7 @@ impl Lowerer<'_> {
                 };
                 for _ in 0..comparisons {
                     self.temporary(Ty::Bool, Some(id));
+                    self.check_resource()?;
                 }
             }
             let mut scalar = 0;
@@ -2796,22 +2876,26 @@ impl Lowerer<'_> {
                 } else {
                     self.block()
                 };
+                self.check_resource()?;
                 let inspected = self.decision_place(source, &test.projection)?;
+                self.check_resource()?;
                 let comparisons = match &test.kind {
                     ir::PatternTestKind::Bool(value) => {
-                        vec![(BinaryOp::Eq, Constant::Bool(*value))]
+                        [Some((BinaryOp::Eq, Constant::Bool(*value))), None]
                     }
-                    ir::PatternTestKind::Int(value) => vec![(BinaryOp::Eq, Constant::Int(*value))],
+                    ir::PatternTestKind::Int(value) => {
+                        [Some((BinaryOp::Eq, Constant::Int(*value))), None]
+                    }
                     ir::PatternTestKind::Char(value) => {
-                        vec![(BinaryOp::Eq, Constant::Char(*value))]
+                        [Some((BinaryOp::Eq, Constant::Char(*value))), None]
                     }
-                    ir::PatternTestKind::IntRange { lo, hi } => vec![
-                        (BinaryOp::Ge, Constant::Int(*lo)),
-                        (BinaryOp::Le, Constant::Int(*hi)),
+                    ir::PatternTestKind::IntRange { lo, hi } => [
+                        Some((BinaryOp::Ge, Constant::Int(*lo))),
+                        Some((BinaryOp::Le, Constant::Int(*hi))),
                     ],
-                    ir::PatternTestKind::CharRange { lo, hi } => vec![
-                        (BinaryOp::Ge, Constant::Char(*lo)),
-                        (BinaryOp::Le, Constant::Char(*hi)),
+                    ir::PatternTestKind::CharRange { lo, hi } => [
+                        Some((BinaryOp::Ge, Constant::Char(*lo))),
+                        Some((BinaryOp::Le, Constant::Char(*hi))),
                     ],
                     ir::PatternTestKind::EnumVariant { ty, variant } => {
                         // Retain singleton tag edges too: the true edge proves
@@ -2832,20 +2916,22 @@ impl Lowerer<'_> {
                         continue;
                     }
                 };
-                let count = comparisons.len();
-                for (step, (op, right)) in comparisons.into_iter().enumerate() {
+                let count = comparisons.iter().flatten().count();
+                for (step, (op, right)) in comparisons.into_iter().flatten().enumerate() {
                     let next = if step + 1 == count {
                         target
                     } else {
                         self.block()
                     };
+                    self.check_resource()?;
                     let local = self.scopes.last().unwrap()[scalar];
                     scalar += 1;
+                    let operand_place = self.decision_place(&inspected, &[])?;
                     self.assign(
                         place(local),
                         Rvalue::Binary {
                             op,
-                            left: Operand::Copy(inspected.clone()),
+                            left: Operand::Copy(operand_place),
                             right: Operand::Constant(right),
                         },
                         Some(id),
@@ -3013,7 +3099,7 @@ impl Lowerer<'_> {
             for local in test_scope.iter().rev() {
                 self.end_storage(*local, Some(id));
             }
-            self.scopes.push(Vec::new());
+            self.push_scope()?;
             self.initialize_pattern_bindings(id, &source, &arm.pattern, completes)?;
             let value = self.expression(arm.body)?;
             if completes {
@@ -3039,9 +3125,7 @@ impl Lowerer<'_> {
     }
 
     fn divergence_work(&mut self, amount: usize) -> Result<(), String> {
-        if let Some(error) = &self.resource_error {
-            return Err(error.clone());
-        }
+        self.check_resource()?;
         let next = self
             .lowering_work
             .checked_add(amount)
@@ -3190,7 +3274,7 @@ impl Lowerer<'_> {
         for local in temporaries.iter().rev() {
             self.end_storage(*local, Some(value));
         }
-        self.scopes.push(Vec::new());
+        self.push_scope()?;
         self.expression(else_branch)?;
         self.cleanup(self.scopes.len() - 1, Some(else_branch));
         self.scopes.pop();
@@ -3204,7 +3288,11 @@ impl Lowerer<'_> {
     }
 
     fn block(&mut self) -> BlockId {
-        if !self.allocate(1, std::mem::size_of::<PendingBlock>()) {
+        if !self.allocate(1, 0) {
+            return BlockId(0);
+        }
+        if let Err(error) = admit_cfg_push(&mut self.blocks, self.budget) {
+            self.divergence_resource(&error);
             return BlockId(0);
         }
         let id = BlockId(self.blocks.len());
@@ -3216,7 +3304,12 @@ impl Lowerer<'_> {
     }
 
     fn statement(&mut self, value: Statement, origin: Option<ExprId>) {
-        if !self.allocate(1, std::mem::size_of::<Located<Statement>>()) {
+        if !self.allocate(1, 0) {
+            return;
+        }
+        if let Err(error) = admit_cfg_push(&mut self.blocks[self.current.0].statements, self.budget)
+        {
+            self.divergence_resource(&error);
             return;
         }
         self.blocks[self.current.0]
@@ -3243,18 +3336,34 @@ impl Lowerer<'_> {
     }
 
     fn live(&mut self, local: LocalId, origin: Option<ExprId>) {
+        if self.check_resource().is_err() {
+            return;
+        }
+        if let Err(error) =
+            admit_cfg_push(self.scopes.last_mut().expect("lowering scope"), self.budget)
+        {
+            self.divergence_resource(&error);
+            return;
+        }
         self.statement(Statement::StorageLive(local), origin);
+        if self.check_resource().is_err() {
+            return;
+        }
         self.scopes.last_mut().expect("lowering scope").push(local);
     }
 
     fn cleanup(&mut self, depth: usize, origin: Option<ExprId>) {
-        let locals: Vec<_> = self.scopes[depth..]
-            .iter()
-            .rev()
-            .flat_map(|scope| scope.iter().rev().copied())
-            .collect();
-        for local in locals {
-            self.end_storage(local, origin);
+        if self.check_resource().is_err() {
+            return;
+        }
+        for scope in (depth..self.scopes.len()).rev() {
+            for index in (0..self.scopes[scope].len()).rev() {
+                let local = self.scopes[scope][index];
+                self.end_storage(local, origin);
+                if self.check_resource().is_err() {
+                    return;
+                }
+            }
         }
     }
 
@@ -3388,10 +3497,10 @@ impl Lowerer<'_> {
     }
 
     fn body_inner(&mut self, body: &ir::Block, destination: Option<Place>) -> Result<(), String> {
-        self.scopes.push(Vec::new());
+        self.push_scope()?;
         for statement in &body.statements {
             if self.drop_enabled {
-                self.scopes.push(Vec::new());
+                self.push_scope()?;
             }
             match statement {
                 ir::Stmt::AssignOp { place, op, value } => {
@@ -3571,7 +3680,7 @@ impl Lowerer<'_> {
                     });
                     self.current = head;
                     // The condition itself has an iteration-local temp scope.
-                    self.scopes.push(Vec::new());
+                    self.push_scope()?;
                     let condition_value = self.expression(*condition)?;
                     // The condition value is copied to the branch register by
                     // the consumer; StorageDead changes lifetime, not its bytes.
@@ -3984,7 +4093,7 @@ impl Lowerer<'_> {
                 // Each lazy operand is its own temporary scope: LHS temporaries
                 // end before the RHS is evaluated or the shortcut is taken.
                 if self.drop_enabled {
-                    self.scopes.push(Vec::new());
+                    self.push_scope()?;
                 }
                 let left = self.expression(*left)?;
                 let evaluate = self.block();
@@ -4025,7 +4134,7 @@ impl Lowerer<'_> {
                 for local in left_scope.iter().rev() {
                     self.end_storage(*local, origin);
                 }
-                self.scopes.push(Vec::new());
+                self.push_scope()?;
                 let right = self.expression(*right)?;
                 self.assign(destination.clone(), Rvalue::Use(right), origin);
                 self.cleanup(self.scopes.len() - 1, origin);
@@ -4097,7 +4206,7 @@ impl Lowerer<'_> {
                 // Edition 2024: the whole if condition is a temporary scope,
                 // so its temporaries end before either branch runs.
                 if self.drop_enabled {
-                    self.scopes.push(Vec::new());
+                    self.push_scope()?;
                 }
                 let condition = self.expression(*condition)?;
                 let yes = self.block();
@@ -9057,6 +9166,196 @@ mod tests {
             },
         };
         assert!(lower(&source).is_err());
+    }
+
+    #[test]
+    fn cfg_helper_growth_pays_full_actual_backings_and_scope_headers() {
+        fn exercise<T>(value: impl Fn() -> T) {
+            let budget = ir::PlanBudget::default();
+            let mut values = Vec::<T>::new();
+            let mut expected = 0;
+            for _ in 0..17 {
+                let old = values.capacity();
+                admit_cfg_push(&mut values, Some(&budget)).unwrap();
+                if values.capacity() != old {
+                    expected += values.capacity() * std::mem::size_of::<T>();
+                }
+                assert_eq!(budget.usage_snapshot().bytes, expected);
+                assert!(values.len() < values.capacity());
+                values.push(value());
+            }
+            drop(values);
+            assert_eq!(budget.usage_snapshot().bytes, expected);
+        }
+        exercise(Vec::<LocalId>::new);
+        exercise(|| LocalId(0));
+        exercise(|| PendingBlock {
+            statements: Vec::new(),
+            terminator: None,
+        });
+        exercise(|| Located {
+            value: Statement::StorageLive(LocalId(0)),
+            origin: None,
+        });
+    }
+
+    #[test]
+    fn cfg_helper_surplus_rejection_cannot_authorize_spare_capacity() {
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: 1,
+            ..Default::default()
+        });
+        budget.retain_bytes(1).unwrap();
+        // Explicit allocator-surplus stage control, not a claim that this
+        // machine's allocator rounded a particular try_reserve_exact call.
+        let mut pending = Vec::<u8>::with_capacity(2);
+        assert!(admit_cfg_surplus(pending.capacity(), 1, Some(&budget)).is_err());
+        let first = budget.first_resource_failure().unwrap();
+        assert_eq!((first.requested, first.used, first.limit), (1, 1, 1));
+        assert!(admit_cfg_push(&mut pending, Some(&budget)).is_err());
+        assert!(pending.is_empty());
+        assert!(admit_cfg_surplus(0, 1, None).is_err());
+        drop(pending);
+        assert_eq!(budget.usage_snapshot().bytes, 1);
+        assert_eq!(budget.first_resource_failure(), Some(first));
+    }
+
+    #[test]
+    fn cfg_helper_live_admits_scope_before_statement_and_stops_before_push() {
+        let source = with_root(Ty::Unit, Vec::new(), Vec::new());
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: std::mem::size_of::<LocalId>(),
+            ..Default::default()
+        });
+        let mut lowerer = divergence_probe(&source, &budget, vec![None]);
+        lowerer.current = BlockId(0);
+        lowerer.scopes.push(Vec::new());
+        lowerer.live(LocalId(0), None);
+        assert!(lowerer.scopes[0].capacity() >= 1);
+        assert!(lowerer.scopes[0].is_empty());
+        assert!(lowerer.blocks[0].statements.is_empty());
+        assert!(lowerer.resource_error.is_some());
+        let first = budget.first_resource_failure().unwrap();
+        assert_eq!(first.kind, ir::ResourceBudgetKind::Bytes);
+        lowerer.live(LocalId(0), None);
+        assert!(lowerer.scopes[0].is_empty());
+        assert_eq!(budget.first_resource_failure(), Some(first));
+    }
+
+    #[test]
+    fn cfg_helper_failure_latches_before_index_or_extra_push() {
+        let source = with_root(Ty::Unit, Vec::new(), Vec::new());
+        for mode in 0..4 {
+            let budget = ir::PlanBudget::new(ir::PlanLimits {
+                bytes: 0,
+                ..Default::default()
+            });
+            let mut lowerer = divergence_probe(&source, &budget, vec![None]);
+            lowerer.current = BlockId(0);
+            match mode {
+                0 => {
+                    assert_eq!(lowerer.block(), BlockId(0));
+                }
+                1 => lowerer.statement(Statement::StorageLive(LocalId(0)), None),
+                2 => assert!(lowerer.push_scope().is_err()),
+                3 => {
+                    lowerer.scopes.push(Vec::new());
+                    lowerer.live(LocalId(0), None);
+                }
+                _ => unreachable!(),
+            }
+            let first = budget.first_resource_failure().unwrap();
+            assert_eq!(first.kind, ir::ResourceBudgetKind::Bytes);
+            let error = lowerer.resource_error.clone().unwrap();
+            let blocks = lowerer.blocks.len();
+            let scopes = lowerer.scopes.len();
+            // These invalid indices would panic if the existing failure were
+            // checked only after indexing. No sentinel can authorize writes.
+            lowerer.current = BlockId(usize::MAX);
+            lowerer.statement(Statement::StorageLive(LocalId(0)), None);
+            lowerer.scopes.clear();
+            lowerer.live(LocalId(0), None);
+            assert!(lowerer.push_scope().is_err());
+            assert_eq!(lowerer.block(), BlockId(0));
+            assert_eq!(lowerer.blocks.len(), blocks);
+            assert!(lowerer.scopes.is_empty());
+            assert!(scopes <= 1);
+            assert!(lowerer.blocks[0].statements.is_empty());
+            assert_eq!(lowerer.resource_error.as_ref(), Some(&error));
+            assert_eq!(budget.first_resource_failure(), Some(first));
+        }
+    }
+
+    #[test]
+    fn cfg_helper_projection_copy_denied_before_emission_and_retry() {
+        let source = with_root(Ty::Unit, Vec::new(), Vec::new());
+        let budget = ir::PlanBudget::default();
+        let mut lowerer = divergence_probe(&source, &budget, vec![None]);
+        lowerer.current = BlockId(0);
+        let projected = lowerer
+            .decision_place(&place(LocalId(0)), &[Projection::Field(0)])
+            .unwrap();
+        let actual = projected.projection.capacity() * std::mem::size_of::<Projection>();
+        assert_eq!(budget.usage_snapshot().bytes, actual);
+        budget.retain_bytes(budget.limits().bytes - actual).unwrap();
+        assert!(lowerer.decision_place(&projected, &[]).is_err());
+        let first = budget.first_resource_failure().unwrap();
+        let error = lowerer.resource_error.clone();
+        assert_eq!(first.kind, ir::ResourceBudgetKind::Bytes);
+        assert!(lowerer.blocks[0].statements.is_empty());
+        assert!(lowerer.decision_place(&projected, &[]).is_err());
+        assert_eq!(lowerer.resource_error, error);
+        assert_eq!(budget.first_resource_failure(), Some(first));
+    }
+
+    #[test]
+    fn cfg_helper_decision_failure_returns_no_output_or_partial_scope() {
+        let source = with_root(Ty::Unit, Vec::new(), Vec::new());
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: 0,
+            ..Default::default()
+        });
+        let mut lowerer = divergence_probe(&source, &budget, vec![None]);
+        lowerer.current = BlockId(0);
+        let tests = [ir::PatternTest {
+            projection: Vec::new(),
+            kind: ir::PatternTestKind::Bool(true),
+        }];
+        assert!(
+            lowerer
+                .decision_pattern_test(ExprId(0), &place(LocalId(0)), &tests, true)
+                .is_err()
+        );
+        assert_eq!(lowerer.blocks.len(), 1);
+        assert!(lowerer.scopes.is_empty());
+        assert!(lowerer.blocks[0].statements.is_empty());
+        assert!(lower_with_budget(&source, &budget).is_err());
+    }
+
+    #[test]
+    fn cfg_helper_cleanup_retains_inner_then_outer_reverse_order() {
+        let source = with_root(Ty::Unit, Vec::new(), Vec::new());
+        let budget = ir::PlanBudget::default();
+        let mut lowerer = divergence_probe(&source, &budget, vec![None]);
+        lowerer.current = BlockId(0);
+        lowerer.result.locals = (0..4)
+            .map(|index| ir::LocalDecl {
+                name: format!("local{index}"),
+                ty: Ty::Bool,
+                mutable: true,
+            })
+            .collect();
+        lowerer.scopes = vec![vec![LocalId(0), LocalId(1)], vec![LocalId(2), LocalId(3)]];
+        lowerer.cleanup(0, None);
+        let dead: Vec<_> = lowerer.blocks[0]
+            .statements
+            .iter()
+            .map(|statement| match statement.value {
+                Statement::StorageDead(local) => local,
+                _ => panic!("unexpected cleanup statement"),
+            })
+            .collect();
+        assert_eq!(dead, [LocalId(3), LocalId(2), LocalId(1), LocalId(0)]);
     }
 
     fn divergence_probe<'a>(
