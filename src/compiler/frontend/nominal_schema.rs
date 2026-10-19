@@ -441,24 +441,6 @@ impl PlanState {
                         .into(),
                 );
             }
-            Type::ConstArg(value) => ir::Ty::ConstValue(*value),
-            Type::ParamArray(element, len) => {
-                let element = Arc::new(self.source_ty_with_transport(
-                    registry,
-                    element,
-                    bindings,
-                    caller,
-                    budget,
-                    depth + 1,
-                    false,
-                    transport,
-                )?);
-                let len = bindings
-                    .get(&registry.parameter_key(*len)?)
-                    .cloned()
-                    .ok_or_else(|| "unknown generic parameter".to_owned())?;
-                const_array(element, len)?
-            }
             Type::Array(element, len) => {
                 if *len > ir::MAX_ARRAY_LEN {
                     return Err("array length exceeds supported limit".into());
@@ -1030,21 +1012,5 @@ pub(super) fn source_mentions_nominal(ty: &Type) -> bool {
         Type::RawPtr { pointee, .. } => source_mentions_nominal(pointee),
         Type::Tuple(items) => items.iter().any(source_mentions_nominal),
         _ => false,
-    }
-}
-
-/// `[T; N]` once `N` is bound: a concrete array for a const value, or a
-/// symbolic `ParamArray` while `N` is still a generic parameter.
-pub(super) fn const_array(element: Arc<ir::Ty>, len: ir::Ty) -> Result<ir::Ty, String> {
-    match len {
-        ir::Ty::ConstValue(n) => {
-            let len = usize::try_from(n).map_err(|_| "array length overflow")?;
-            if len > ir::MAX_ARRAY_LEN {
-                return Err("array length exceeds supported limit".into());
-            }
-            Ok(ir::Ty::Array { element, len })
-        }
-        ir::Ty::Param(len) => Ok(ir::Ty::ParamArray { element, len }),
-        _ => Err("array length must be a const generic parameter or value".into()),
     }
 }

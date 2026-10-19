@@ -2585,12 +2585,6 @@ impl CarrierBuilder<'_, '_> {
                 Ok(output)
             }
             Rvalue::IndexCopy { array, index } => {
-                if matches!(self.place_ty(self.f, array)?, Ty::ParamArray { .. }) {
-                    // Symbolic-length elements are reference-free (carrier
-                    // presence rejects reference-bearing elements).
-                    let _ = index;
-                    return Ok(Vec::new());
-                }
                 let Ty::Array { len, .. } = self.place_ty(self.f, array)? else {
                     return Err(Exhausted);
                 };

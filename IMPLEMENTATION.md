@@ -173,12 +173,8 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       items of any type (non-scalar ones inlined at each use, still checked when
       unused), `const fn` with ordinary bodies (E0015 for non-const calls),
       inline `const { }` blocks, const-item expressions as array lengths.
-      Const generics (tests/const_generics.rs): `const N: usize` on
-      structs/impls/fns, `[T; N]`, inferred and explicit (`::<4>`, `{ expr }`)
-      arguments, `N` in expressions; universal templates check symbolically and
-      instances substitute the value. Open: non-usize const params, defaults,
-      `[x; N]` repeat with symbolic N, generic-expression arguments
-      (`{ N + 1 }`), unions, transmute, extern "C", real CTFE of non-scalars.
+      Open: const generics, static mut, unsafe/raw-pointer ops, unions,
+      extern "C", constant patterns, real CTFE of non-scalar values.
 - [x] Immutable production parser cursor over the existing lexer, exact type-only
       punctuation views and checked restoration, without macro admission
       (CURSOR-MIGRATION.md).

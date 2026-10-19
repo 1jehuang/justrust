@@ -16,8 +16,6 @@ pub(super) enum InferKind {
     Unknown(bool),
     Tuple(Arc<[InferTerm]>),
     Array(InferTerm, usize),
-    /// Schema-only `[T; N]` whose length is const generic slot `N`.
-    ParamArray(InferTerm, usize),
     Ref(ir::BorrowKind, InferTerm),
     RawPtr(ir::BorrowKind, InferTerm),
     Nominal(ir::DeclId, Arc<[InferTerm]>),
@@ -68,7 +66,7 @@ impl CallInferenceState {
             | InferKind::Float
             | InferKind::UnknownFloat
             | InferKind::Unknown(_) => None,
-            InferKind::Slot(_) | InferKind::ParamArray(..) => {
+            InferKind::Slot(_) => {
                 return Err(FactsError::invalid(
                     &self.budget,
                     "unresolved schema slot escaped inference binding",
@@ -458,36 +456,6 @@ impl CallInferenceState {
                     "generic array inference shape mismatch",
                 )),
             },
-            InferKind::ParamArray(element, slot) => match evidence.as_ref() {
-                InferKind::Array(actual, n) => {
-                    let len = self.node(InferKind::Rigid(ir::Ty::ConstValue(*n as u64)))?;
-                    self.constrain(&self.node(InferKind::Slot(*slot))?, &len, depth + 1)?;
-                    self.constrain(element, actual, depth + 1)
-                }
-                InferKind::Rigid(ir::Ty::Array {
-                    element: actual,
-                    len,
-                }) => {
-                    let len = self.node(InferKind::Rigid(ir::Ty::ConstValue(*len as u64)))?;
-                    self.constrain(&self.node(InferKind::Slot(*slot))?, &len, depth + 1)?;
-                    let actual = InferTerm::new(InferKind::Rigid(actual.as_ref().clone()));
-                    self.constrain(element, &actual, depth + 1)
-                }
-                InferKind::Rigid(ir::Ty::ParamArray {
-                    element: actual,
-                    len,
-                }) => {
-                    let len = self.node(InferKind::Rigid(ir::Ty::Param(*len)))?;
-                    self.constrain(&self.node(InferKind::Slot(*slot))?, &len, depth + 1)?;
-                    let actual = InferTerm::new(InferKind::Rigid(actual.as_ref().clone()));
-                    self.constrain(element, &actual, depth + 1)
-                }
-                InferKind::Unknown(_) => self.constrain(element, evidence, depth + 1),
-                _ => Err(FactsError::invalid(
-                    &self.budget,
-                    "generic array inference shape mismatch",
-                )),
-            },
             InferKind::Nominal(decl, args) => match evidence.as_ref() {
                 InferKind::Nominal(actual, values)
                     if decl == actual && args.len() == values.len() =>
@@ -547,12 +515,6 @@ impl CallInferenceState {
             }
             ir::Ty::Array { element, len } => {
                 InferKind::Array(self.type_term(element, schema, depth + 1)?, *len)
-            }
-            ir::Ty::ParamArray { element, len } if schema == Some(len.owner) => {
-                InferKind::ParamArray(
-                    self.type_term(element, schema, depth + 1)?,
-                    len.index as usize,
-                )
             }
             ir::Ty::Struct(ty) => {
                 self.storage(ty.def().type_args.len())?;

@@ -199,9 +199,7 @@ fn indirect(ty: &ir::Ty) -> Result<bool, String> {
         | ir::Ty::Never
         | ir::Ty::Ref { .. }
         | ir::Ty::RawPtr { .. } => Ok(false),
-        ir::Ty::Param(_) | ir::Ty::ParamArray { .. } | ir::Ty::ConstValue(_) => {
-            Err("type parameter has no native ABI".into())
-        }
+        ir::Ty::Param(_) => Err("type parameter has no native ABI".into()),
         ir::Ty::AssociatedType(_) => Err("unresolved associated type has no native ABI".into()),
         ir::Ty::Slice { .. } | ir::Ty::Str => Err(SLICE_UNSUPPORTED.into()),
         ir::Ty::Dyn(_) => Err("unsized trait object value has no native ABI".into()),

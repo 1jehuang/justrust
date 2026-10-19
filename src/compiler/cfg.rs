@@ -1995,7 +1995,7 @@ impl Function {
             validate_type(array_ty, 0)?;
         }
         facts.validate_ty(array_ty)?;
-        let (Ty::Array { element, .. } | Ty::ParamArray { element, .. }) = array_ty else {
+        let Ty::Array { element, .. } = array_ty else {
             return Err("dynamic indexing requires array place".into());
         };
         Ok(element)
@@ -3553,7 +3553,7 @@ impl Lowerer<'_> {
         let array = self.pattern_source(base)?;
         if !matches!(
             self.result.indexed_array_place_ty(&array)?,
-            Ty::Array { .. } | Ty::ParamArray { .. }
+            Ty::Array { .. }
         ) {
             return Err("dynamic indexing requires array place".into());
         }
@@ -3655,10 +3655,7 @@ impl Lowerer<'_> {
                 }
                 PendingProjection::Dynamic(index) => {
                     if !ends_in_runtime_row(&source)
-                        && !matches!(
-                            self.result.place_ty(&source)?,
-                            Ty::Array { .. } | Ty::ParamArray { .. }
-                        )
+                        && !matches!(self.result.place_ty(&source)?, Ty::Array { .. })
                     {
                         return Err("dynamic indexing requires array place".into());
                     }
@@ -4283,14 +4280,6 @@ impl Lowerer<'_> {
             ir::ExprKind::Match { scrutinee, arms } => {
                 self.match_expression(id, *scrutinee, arms, destination.clone())?;
             }
-            // Universal templates are analyzed symbolically; any usize is a
-            // sound stand-in for move/borrow analysis. Every executable
-            // instance substitutes the real value before it is lowered again.
-            ir::ExprKind::ConstParam(_) => self.assign(
-                destination.clone(),
-                Rvalue::Use(Operand::Constant(Constant::Int(ir::IntValue::usize(0)))),
-                origin,
-            ),
             ir::ExprKind::Int(value) => self.assign(
                 destination.clone(),
                 Rvalue::Use(Operand::Constant(Constant::Int(*value))),

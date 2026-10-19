@@ -319,6 +319,7 @@ impl Driver {
             options.cfg.set_debug_assertions(self.debug_assertions());
             if unit.test {
                 options.cfg.names.insert("test".into());
+                options.test_filter = test_filter(&self.sel.trailing)?;
             }
             let compiled = compiler::compile_file_observed_with_options(
                 unit.path.clone(),
@@ -384,11 +385,6 @@ impl Driver {
                 Ok(exit_code(status))
             }
             Command::Test => {
-                if !self.sel.trailing.is_empty() {
-                    return Err(err(
-                        "test name filters and harness arguments are unsupported by the native test harness",
-                    ));
-                }
                 if self.sel.no_run {
                     for (unit, file) in &artifacts {
                         eprintln!(
@@ -411,7 +407,6 @@ impl Driver {
                     );
                     let _ = std::io::stdout().flush();
                     let status = std::process::Command::new(file)
-                        .args(&self.sel.trailing)
                         .status()
                         .map_err(|e| err(format!("{}: {e}", file.display())))?;
                     if !status.success() {
@@ -458,6 +453,43 @@ impl Driver {
             }
         }
     }
+}
+
+/// Libtest arguments, applied when the harness is synthesized.
+fn test_filter(args: &[String]) -> Result<compiler::source::TestFilter, ManifestError> {
+    let mut filter = compiler::source::TestFilter::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--exact" => filter.exact = true,
+            "--ignored" => filter.ignored = true,
+            "--include-ignored" => filter.include_ignored = true,
+            "--skip" => {
+                i += 1;
+                filter.skip.push(
+                    args.get(i)
+                        .cloned()
+                        .ok_or_else(|| err("--skip requires a value"))?,
+                );
+            }
+            "--nocapture" | "--show-output" | "-q" | "--quiet" => {
+                return Err(err(format!(
+                    "test harness option `{}` is unsupported by the native harness",
+                    args[i]
+                )));
+            }
+            "--test-threads" => i += 1,
+            arg if arg.starts_with("--test-threads=") => {}
+            arg if arg.starts_with('-') => {
+                return Err(err(format!(
+                    "test harness option `{arg}` is unsupported by the native harness"
+                )));
+            }
+            name => filter.filters.push(name.to_string()),
+        }
+        i += 1;
+    }
+    Ok(filter)
 }
 
 fn explicit_targets(sel: &Selection) -> bool {
