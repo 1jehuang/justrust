@@ -6985,6 +6985,23 @@ pub enum FormatMode {
     Debug,
 }
 
+/// Native scalar formatting can retain an already checked indexed borrow
+/// through its evaluation block, rather than copying the pointee early.
+pub(super) fn native_format_borrow(expression: &TypedExpr) -> bool {
+    if matches!(
+        expression.kind,
+        ExprKind::Borrow {
+            kind: BorrowKind::Shared,
+            ..
+        }
+    ) {
+        return true;
+    }
+    matches!(&expression.kind, ExprKind::Block(_))
+        && matches!(&expression.ty, Ty::Ref { kind: BorrowKind::Shared, referent }
+            if matches!(referent.as_ref(), Ty::Int(_) | Ty::Bool | Ty::Char))
+}
+
 /// One immutable admissibility contract shared by source, typed IR and CFG.
 /// Debug aggregates are structural and Copy: no nominal/user implementation
 /// or ownership permission is invented by selecting a format mode.
@@ -9301,13 +9318,7 @@ impl CheckedFunction {
                     for (&id, &mode) in arguments.iter().zip(modes) {
                         expr(id)?;
                         let argument = &self.exprs[id.0];
-                        let ty = if matches!(
-                            argument.kind,
-                            ExprKind::Borrow {
-                                kind: BorrowKind::Shared,
-                                ..
-                            }
-                        ) {
+                        let ty = if native_format_borrow(argument) {
                             let Ty::Ref { referent, .. } = &argument.ty else {
                                 return Err("format borrow requires reference type".into());
                             };

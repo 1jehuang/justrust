@@ -178,7 +178,25 @@ impl Checker<'_> {
         // (value id, native, borrow-or-value id for the native Format)
         let mut evaluated: Vec<(ir::ExprId, bool, ir::ExprId)> = Vec::new();
         for (argument, spec) in arguments.iter().zip(specs) {
-            let id = self.expr_expected(argument, None)?;
+            let checked_index_reference =
+                if matches!(argument, Expr::Index { .. } | Expr::DynamicIndex { .. }) {
+                    self.format_indexed_place_borrow(argument)?
+                } else {
+                    None
+                };
+            let id = if let Some(reference) = checked_index_reference {
+                let ir::Ty::Ref { referent, .. } = self.exprs[reference.0].ty.clone() else {
+                    return Err("indexed format operand must be a checked reference".into());
+                };
+                let id = self.format_lit(
+                    referent.as_ref().clone(),
+                    ir::ExprKind::Deref { value: reference },
+                )?;
+                self.exprs[id.0].completion = self.exprs[reference.0].completion;
+                id
+            } else {
+                self.expr_expected(argument, None)?
+            };
             let flow = self.flow(id);
             completes &= flow.completes;
             let native = Self::native_format(spec, &flow.ty);
@@ -193,7 +211,7 @@ impl Checker<'_> {
             let place = static_source_place(argument)
                 .ok()
                 .filter(|_| place_expression(argument));
-            let indexed_reference =
+            let indexed_reference = checked_index_reference.or_else(|| {
                 if matches!(argument, Expr::Index { .. } | Expr::DynamicIndex { .. }) {
                     match self.exprs[id.0].kind {
                         ir::ExprKind::Deref { value } => Some(value),
@@ -201,7 +219,8 @@ impl Checker<'_> {
                     }
                 } else {
                     None
-                };
+                }
+            });
             let operand = if let Some(reference) = indexed_reference {
                 reference
             } else if let Some(place) = &place {
@@ -246,7 +265,7 @@ impl Checker<'_> {
                             // Native Format has special in-place handling for an
                             // explicit Borrow, not arbitrary reference-producing
                             // calls. An overloaded Index call must be dereferenced.
-                            if matches!(self.exprs[operand.0].kind, ir::ExprKind::Borrow { .. }) {
+                            if ir::native_format_borrow(&self.exprs[operand.0]) {
                                 *operand
                             } else {
                                 *value

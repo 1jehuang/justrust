@@ -4742,13 +4742,7 @@ impl Lowerer<'_> {
                 }
                 for &id in arguments {
                     let mut operand = self.expression(id)?;
-                    if matches!(
-                        self.source.exprs[id.0].kind,
-                        ir::ExprKind::Borrow {
-                            kind: ir::BorrowKind::Shared,
-                            ..
-                        }
-                    ) {
+                    if ir::native_format_borrow(&self.source.exprs[id.0]) {
                         let Operand::Copy(place) = &mut operand else {
                             return Err(
                                 "format shared borrow requires Copy reference operand".into()

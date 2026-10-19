@@ -21,6 +21,22 @@ impl type_check::Checker<'_> {
         kind: ir::BorrowKind,
         value: &Expr,
     ) -> Result<Option<ir::ExprId>, String> {
+        self.indexed_place_borrow(kind, value, false)
+    }
+
+    pub(super) fn format_indexed_place_borrow(
+        &mut self,
+        value: &Expr,
+    ) -> Result<Option<ir::ExprId>, String> {
+        self.indexed_place_borrow(ir::BorrowKind::Shared, value, true)
+    }
+
+    fn indexed_place_borrow(
+        &mut self,
+        kind: ir::BorrowKind,
+        value: &Expr,
+        constants: bool,
+    ) -> Result<Option<ir::ExprId>, String> {
         let mut steps = Vec::new();
         let mut cursor = value;
         let root = loop {
@@ -58,10 +74,10 @@ impl type_check::Checker<'_> {
                 _ => return Ok(None),
             }
         };
-        if !steps
-            .iter()
-            .any(|step| matches!(step, IndexedBorrowStep::Runtime(_)))
-        {
+        if !steps.iter().any(|step| {
+            matches!(step, IndexedBorrowStep::Runtime(_))
+                || (constants && matches!(step, IndexedBorrowStep::Const(_)))
+        }) {
             return Ok(None);
         }
         steps.reverse();
@@ -112,8 +128,32 @@ impl type_check::Checker<'_> {
                     while matches!(ty, ir::Ty::Ref { .. }) {
                         peel(&mut ty, &mut writable, &mut projection)?;
                     }
-                    ty = self.index_type(&ty, index)?;
-                    projection.push(ir::Projection::ConstantIndex(index));
+                    if let ir::Ty::Slice { element } = &ty {
+                        let element = element.as_ref().clone();
+                        let literal = Expr::Integer(IntegerLiteral {
+                            magnitude: index as u128,
+                            suffix: Some(ir::IntTy::Usize),
+                        });
+                        let value = self.expr(&literal)?;
+                        let saved = self.temporary(
+                            &format!("$bi{}", self.locals.len()),
+                            usize_ty.clone(),
+                            false,
+                        )?;
+                        self.charge_node(std::mem::size_of::<ir::Stmt>())?;
+                        statements.push(ir::Stmt::Let {
+                            local: saved,
+                            value,
+                        });
+                        projection.push(ir::Projection::DynamicIndex(saved));
+                        ty = element;
+                    } else {
+                        if constants && !matches!(ty, ir::Ty::Array { .. }) {
+                            return Ok(None);
+                        }
+                        ty = self.index_type(&ty, index)?;
+                        projection.push(ir::Projection::ConstantIndex(index));
+                    }
                 }
                 IndexedBorrowStep::Runtime(index) => {
                     while matches!(ty, ir::Ty::Ref { .. }) {
