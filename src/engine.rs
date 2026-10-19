@@ -488,7 +488,18 @@ impl Engine {
     /// Inspect a typed fact of an already-discovered node without demanding
     /// it. Returns `None` for an undiscovered key or an output with no fact.
     /// For post-run reporting of what the graph actually computed.
+    ///
+    /// Panics before execution finishes or from any provider poll. Providers
+    /// must use `Context::read_fact` so their dependency edges are recorded.
     pub fn fact_of<T: Any + Send + Sync>(&self, key: &Key, index: usize) -> Option<Arc<T>> {
+        assert!(
+            CURRENT_TASK.with(Cell::get).is_none(),
+            "Engine::fact_of is post-run only; providers must use Context::read_fact"
+        );
+        assert!(
+            lock(&self.shared.scheduler).phase == Phase::Finished,
+            "Engine::fact_of requires a finished engine"
+        );
         let hash = self.shared.hash(key);
         let node = lock(&self.shared.index[hash as usize % SHARDS])
             .get(&hash)
