@@ -841,12 +841,16 @@ pub(super) fn replay_original_calls(
 }
 #[derive(Debug)]
 pub(super) struct CanonicalSourcePublication {
+    identity: OriginalBodyId,
     source: Arc<ir::CheckedFunction>,
     original: Arc<OriginalBody>,
     replay: Arc<ValidatedOriginalCalls>,
     facts: Arc<tr::ValidatedFacts>,
 }
 impl CanonicalSourcePublication {
+    pub(super) fn identity(&self) -> &OriginalBodyId {
+        &self.identity
+    }
     pub(super) fn source(&self) -> &Arc<ir::CheckedFunction> {
         &self.source
     }
@@ -911,6 +915,7 @@ pub(super) fn publish_canonical_source(
         std::mem::size_of::<CanonicalSourcePublication>() + 32,
     )?;
     Ok(Arc::new(CanonicalSourcePublication {
+        identity: OriginalBodyId::new(budget)?,
         source: final_source,
         original,
         replay: replayed.validated,
@@ -1096,6 +1101,47 @@ pub(super) fn infer_reference_identity(
         after,
         actual,
     }))
+}
+
+#[cfg(test)]
+mod publication_identity_tests {
+    use super::*;
+
+    fn publish(
+        plan: &super::super::frontend::PlanCtx,
+        budget: &ir::PlanBudget,
+    ) -> Arc<CanonicalSourcePublication> {
+        let declaration = plan.callable_decl(0).unwrap();
+        let super::super::frontend::PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, budget).unwrap()
+        else {
+            panic!("fixture requires a canonical source publication")
+        };
+        publication
+    }
+
+    #[test]
+    fn publication_seals_are_fresh_without_retaining_authority() {
+        let budget = ir::PlanBudget::default();
+        let program = super::super::frontend::parse("fn main() {}").unwrap();
+        let plan = super::super::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let first = publish(&plan, &budget);
+        let same_body = publish(&plan, &budget);
+        assert_eq!(first.identity(), &first.identity().clone());
+        assert_eq!(first.facts().declaration(), same_body.facts().declaration());
+        assert_ne!(first.identity(), same_body.identity());
+        let retained = first.identity().clone();
+        drop(first);
+        assert_eq!(retained, retained.clone());
+        let foreign = super::super::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let foreign = publish(&foreign, &budget);
+        assert_ne!(&retained, foreign.identity());
+        assert_ne!(same_body.identity(), foreign.identity());
+        assert_ne!(
+            same_body.facts().declaration(),
+            foreign.facts().declaration()
+        );
+    }
 }
 
 #[cfg(test)]
