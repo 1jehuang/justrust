@@ -1744,7 +1744,12 @@ mod tests {
         let source = split_source("t.0.1", 3);
         let budget = ExpansionBudget::default();
         let projection = PreparedLexInput::prepared(&source, &budget).unwrap();
-        let error = super::super::native_input(&projection, budget).unwrap_err();
+        let error = super::super::native_input(
+            &projection,
+            budget.clone(),
+            super::super::super::owner_path::standalone_tag(&budget).unwrap(),
+        )
+        .unwrap_err();
         assert_eq!(error.kind, SourceErrorKind::Contract);
         for text in ["t.0.1", "t. 0.1", "t./* comment */0.1"] {
             let input = super::super::lex(text).unwrap();

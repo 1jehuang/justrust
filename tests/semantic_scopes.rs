@@ -18,7 +18,7 @@ use justrust_engine::compiler::token_primitives::{
 
 fn scanned(text: &str, budget: &ExpansionBudget) -> (NameStoreBuilder, Vec<Token>) {
     let input = PreparedLexInput::identity(Path::new("scope-control.rs"), text, budget).unwrap();
-    let mut session = TokenSession::new(input.snapshot().clone(), budget.clone()).unwrap();
+    let mut session = TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
     let lexed = lex_prepared(&input, Edition::E2024, &mut session).unwrap();
     let tokens = lexed
         .events()
@@ -735,7 +735,7 @@ fn public_name_gate_cannot_mint_unproved_marked_or_expanded_scope_occurrences() 
     let budget = ExpansionBudget::default();
     let input =
         PreparedLexInput::identity(Path::new("scope-mark-control.rs"), "x", &budget).unwrap();
-    let mut session = TokenSession::new(input.snapshot().clone(), budget.clone()).unwrap();
+    let mut session = TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
     let lexed = lex_prepared(&input, Edition::E2024, &mut session).unwrap();
     let original = lexed
         .events()

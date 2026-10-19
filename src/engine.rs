@@ -293,6 +293,11 @@ pub struct OwnerRoot {
 /// constructor and no conversion from integers or paths.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct OwnerTag(NonZeroU64);
+
+/// Test-only provenance: which engine authority minted each tag, so route
+/// tests can prove a graph tag came from its producer, not a standalone root.
+#[cfg(test)]
+pub(crate) static TAG_PROVENANCE: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
 impl OwnerTag {
     /// Raw bits for equality checks inside existing 8-byte handle owners.
     pub fn bits(self) -> NonZeroU64 {
@@ -304,7 +309,7 @@ impl OwnerTag {
 /// an `OwnerRoot`; neither `Clone` nor constructible outside this module.
 #[derive(Debug)]
 pub struct TagMint {
-    _sealed: (),
+    authority: EngineAuthority,
 }
 
 /// Process-wide tag space, shared by every engine and standalone root so tags
@@ -314,14 +319,22 @@ static NEXT_OWNER_TAG: AtomicU64 = AtomicU64::new(1);
 impl TagMint {
     /// Mint the next tag. Fails closed at exhaustion; never wraps or reuses.
     pub fn mint(&mut self) -> Result<OwnerTag, Error> {
-        allocate_graph_id(&NEXT_OWNER_TAG)
+        let tag = allocate_graph_id(&NEXT_OWNER_TAG)
             .map(OwnerTag)
-            .ok_or_else(|| Error::new("owner tag space exhausted"))
+            .ok_or_else(|| Error::new("owner tag space exhausted"))?;
+        #[cfg(test)]
+        TAG_PROVENANCE
+            .lock()
+            .unwrap()
+            .push((tag.0.get(), self.authority.get()));
+        Ok(tag)
     }
     /// The capability for an issuer created by this one. Only an existing
     /// capability (ultimately a consumed `OwnerRoot`) can derive another.
     pub fn derive(&self) -> TagMint {
-        TagMint { _sealed: () }
+        TagMint {
+            authority: self.authority,
+        }
     }
 }
 
@@ -339,7 +352,13 @@ impl OwnerRoot {
     }
     /// Consume the root into its identity and the single tag-mint capability.
     pub fn into_parts(self) -> (EngineAuthority, Option<u64>, TagMint) {
-        (self.authority, self.node, TagMint { _sealed: () })
+        (
+            self.authority,
+            self.node,
+            TagMint {
+                authority: self.authority,
+            },
+        )
     }
     /// A fresh root for one standalone, non-graph computation (direct parsing
     /// in library calls and tests). Fails closed if graph ids are exhausted.

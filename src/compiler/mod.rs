@@ -427,7 +427,16 @@ impl Provider for CompilerProvider {
                         }
                         _ => prepared,
                     };
-                    let parsed = frontend::parse_prepared(&prepared)
+                    // Graph route: the session owner is issued from this PARSE
+                    // node's own root, never a fresh standalone mint.
+                    let parse_budget = expansion_budget::ExpansionBudget::default();
+                    let mut issuer = owner_path::OwnerIssuer::new(cx.owner_root()?, &parse_budget)
+                        .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
+                    let owner = issuer
+                        .issue(owner_path::OwnerDomain::TokenSession)
+                        .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?
+                        .tag;
+                    let parsed = frontend::parse_prepared_owned(&prepared, parse_budget, owner)
                         .map_err(|error| Error::new(error.to_string()));
                     cx.publish_fact(1, prepared)?;
                     cx.publish_fact(0, parsed?)
@@ -1680,6 +1689,60 @@ pub(super) fn compile_program_observed(
         check_only,
         budget,
     )
+}
+
+#[cfg(test)]
+mod owner_route_tests {
+    use super::*;
+
+    /// The parsed program of one graph compile and its engine authority.
+    fn graph_parsed(source: &str) -> (Arc<frontend::ParsedProgram>, u64) {
+        let snapshot = Arc::new(Snapshot {
+            input: Input::Text(source.into()),
+            source_options: source::SourceOptions::default(),
+            budget: ir::PlanBudget::default(),
+        });
+        let engine = Engine::new(CompilerProvider(snapshot));
+        let authority = engine.authority().get();
+        let parse = engine.request(Key::new(PARSE, vec![]));
+        engine.run(2).unwrap();
+        parse.completion().unwrap();
+        (parse.fact::<frontend::ParsedProgram>(0).unwrap(), authority)
+    }
+
+    fn minted_by(tag: u64) -> Option<u64> {
+        crate::engine::TAG_PROVENANCE
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(t, _)| *t == tag)
+            .map(|(_, authority)| *authority)
+    }
+
+    fn owner(parsed: &frontend::ParsedProgram) -> u64 {
+        parsed.program.names.session().id().bits().get()
+    }
+
+    #[test]
+    fn graph_parse_owner_is_issued_not_a_standalone_mint() {
+        const SOURCE: &str = "fn f() -> i32 { 1 } fn main() { f(); }";
+        let (a, a_engine) = graph_parsed(SOURCE);
+        let (b, b_engine) = graph_parsed(SOURCE);
+        let direct = frontend::parse_unresolved(SOURCE).unwrap();
+        // The graph session owner was minted under its producing engine's
+        // authority: the PARSE node's own root, not a standalone mint.
+        assert_eq!(minted_by(owner(&a)), Some(a_engine));
+        assert_eq!(minted_by(owner(&b)), Some(b_engine));
+        // A direct parse mints under a fresh standalone authority.
+        let direct_root = minted_by(owner(&direct)).expect("direct parse tag recorded");
+        assert_ne!(direct_root, a_engine);
+        assert_ne!(direct_root, b_engine);
+        assert_ne!(owner(&a), owner(&b), "two graph compiles share an owner");
+        // Foreign grafts across graph compiles still reject.
+        let ident = a.program.functions[0].name.segments()[0];
+        assert!(b.program.names.spelling(ident).is_err());
+        assert!(a.program.names.spelling(ident).is_ok());
+    }
 }
 
 #[cfg(test)]

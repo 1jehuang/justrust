@@ -663,7 +663,7 @@ impl Fixture {
         let budget = ExpansionBudget::new(limits);
         let input =
             PreparedLexInput::identity(Path::new("utility-only.rs"), &text, &budget).unwrap();
-        let mut session = TokenSession::new(input.snapshot().clone(), budget).unwrap();
+        let mut session = TokenSession::standalone(input.snapshot().clone(), budget).unwrap();
         let lexed = lex_prepared(&input, Edition::E2024, &mut session).unwrap();
         let tokens = lexed
             .events()

@@ -4519,9 +4519,14 @@ impl ProgramBuilder {
     ) -> Result<Self, String> {
         let input = super::source::PreparedLexInput::identity(name, source, budget)
             .map_err(|error| error.to_string())?;
-        let mut session =
-            super::token_session::TokenSession::new(input.snapshot().clone(), budget.clone())
-                .map_err(|error| error.to_string())?;
+        // Direct fixture builder, never reached from a graph node.
+        let owner = super::owner_path::standalone_tag(budget).map_err(|error| error.to_string())?;
+        let mut session = super::token_session::TokenSession::with_owner(
+            input.snapshot().clone(),
+            budget.clone(),
+            owner,
+        )
+        .map_err(|error| error.to_string())?;
         let fixture_anchor = session
             .original_span(input.eof().map_err(|error| error.to_string())?)
             .map_err(|error| error.to_string())?;
@@ -5897,15 +5902,21 @@ fn lex(source: &str) -> Result<NativeParserInput, ParseError> {
         &budget,
     )
     .map_err(native_adapter::source_error)?;
-    native_input(&projection, budget)
+    let owner =
+        super::owner_path::standalone_tag(&budget).map_err(native_adapter::transport_error)?;
+    native_input(&projection, budget, owner)
 }
 fn native_input(
     projection: &super::source::PreparedLexInput<'_>,
     budget: super::expansion_budget::ExpansionBudget,
+    owner: crate::OwnerTag,
 ) -> Result<NativeParserInput, ParseError> {
-    let mut session =
-        super::token_session::TokenSession::new(projection.snapshot().clone(), budget)
-            .map_err(native_adapter::transport_error)?;
+    let mut session = super::token_session::TokenSession::with_owner(
+        projection.snapshot().clone(),
+        budget,
+        owner,
+    )
+    .map_err(native_adapter::transport_error)?;
     let lexed = super::lexer::lex_prepared(projection, super::token::Edition::E2024, &mut session)
         .map_err(native_adapter::lex_error)?;
     NativeParserInput::new(lexed, session, projection)
@@ -5957,7 +5968,11 @@ mod local_macro_parser_tests {
             budget,
         )
         .map_err(native_adapter::source_error)?;
-        parse_syntax_tokens(native_input(&input, budget.clone())?)
+        parse_syntax_tokens(native_input(
+            &input,
+            budget.clone(),
+            super::super::owner_path::standalone_tag(budget).unwrap(),
+        )?)
     }
     #[test]
     fn nested_source_depth_is_live_through_parse_and_restored_for_siblings() {
@@ -12279,9 +12294,14 @@ pub(super) fn validate_inactive_syntax(
         &budget,
     )
     .map_err(native_adapter::source_error)?;
-    let mut session =
-        super::token_session::TokenSession::new(projection.snapshot().clone(), budget)
-            .map_err(native_adapter::transport_error)?;
+    let owner =
+        super::owner_path::standalone_tag(&budget).map_err(native_adapter::transport_error)?;
+    let mut session = super::token_session::TokenSession::with_owner(
+        projection.snapshot().clone(),
+        budget,
+        owner,
+    )
+    .map_err(native_adapter::transport_error)?;
     let lexed = super::lexer::lex_prepared(&projection, super::token::Edition::E2024, &mut session)
         .map_err(native_adapter::lex_error)?;
     let input = NativeParserInput::new_inactive(lexed, session, &projection)?;
@@ -13102,8 +13122,22 @@ mod inactive_item_syntax_tests {
 }
 
 /// Parse mapped preparation output without reprocessing attributes or configuration.
+/// Direct, non-graph entry: mints a fresh standalone owner root per call.
 pub fn parse_prepared(
     source: &super::source::PreparedSource,
+) -> Result<ParsedProgram, super::source::SourceError> {
+    let budget = super::expansion_budget::ExpansionBudget::default();
+    let owner = super::owner_path::standalone_tag(&budget)
+        .map_err(super::source::SourceError::from_token)?;
+    parse_prepared_owned(source, budget, owner)
+}
+
+/// Graph entry: the session owner is a tag issued by the calling producer.
+/// Never mints a root, so a graph PARSE cannot fall back to standalone.
+pub fn parse_prepared_owned(
+    source: &super::source::PreparedSource,
+    budget: super::expansion_budget::ExpansionBudget,
+    owner: crate::OwnerTag,
 ) -> Result<ParsedProgram, super::source::SourceError> {
     let mapped = |error: ParseError| {
         let mut diagnostic = super::source::SourceError::syntax(
@@ -13120,9 +13154,8 @@ pub fn parse_prepared(
         diagnostic._diagnostic_lease = error._diagnostic_lease;
         diagnostic.with_sources(&source.sources)
     };
-    let budget = super::expansion_budget::ExpansionBudget::default();
     let projection = super::source::PreparedLexInput::prepared(source, &budget)?;
-    let tokens = native_input(&projection, budget).map_err(mapped)?;
+    let tokens = native_input(&projection, budget, owner).map_err(mapped)?;
     parse_syntax_tokens_configured(tokens, source.debug_assertions()).map_err(mapped)
 }
 

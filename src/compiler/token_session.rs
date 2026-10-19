@@ -94,6 +94,12 @@ struct SourceSnapshotId(NonZeroU64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct SessionId(NonZeroU64);
+impl SessionId {
+    #[cfg(test)]
+    pub(super) fn bits(self) -> NonZeroU64 {
+        self.0
+    }
+}
 
 macro_rules! session_handle {
     ($($name:ident),+ $(,)?) => {$(
@@ -557,9 +563,39 @@ pub struct TokenSession {
 }
 
 impl TokenSession {
+    /// A session whose owner is the issued tag of an existing parent issuer.
+    /// The only production constructor: callers on the graph route pass the
+    /// tag their producer's `OwnerIssuer` issued, so no fresh root is minted.
+    pub fn with_owner(
+        sources: SourceSnapshot,
+        budget: ExpansionBudget,
+        owner: crate::OwnerTag,
+    ) -> Result<Self, TokenError> {
+        Self::build(SessionId(owner.bits()), sources, budget)
+    }
+
+    /// An independent session for direct, non-graph tooling and tests. Mints
+    /// a fresh standalone owner root per call, so two standalone sessions
+    /// never accept each other's handles. Graph code must use `with_owner`.
+    pub fn standalone(
+        sources: SourceSnapshot,
+        budget: ExpansionBudget,
+    ) -> Result<Self, TokenError> {
+        let tag = super::owner_path::standalone_tag(&budget)?;
+        Self::with_owner(sources, budget, tag)
+    }
+
+    /// Test shorthand for [`Self::standalone`].
+    #[cfg(test)]
     pub fn new(sources: SourceSnapshot, budget: ExpansionBudget) -> Result<Self, TokenError> {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        let id = SessionId(allocate_identity(&NEXT)?);
+        Self::standalone(sources, budget)
+    }
+
+    fn build(
+        id: SessionId,
+        sources: SourceSnapshot,
+        budget: ExpansionBudget,
+    ) -> Result<Self, TokenError> {
         let lease = budget.reserve(Storage::Retained, size_of::<Self>() as u64)?;
         let mut contexts = BudgetVec::new(&budget, Storage::Retained)?;
         budget.charge(Counter::HygieneContexts, 1)?;

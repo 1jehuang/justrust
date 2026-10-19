@@ -209,7 +209,7 @@ fn native_lexical_categories_do_not_confuse_expression_suffix_semantics() {
         let budget = ExpansionBudget::new(ExpansionLimits::default());
         let input =
             PreparedLexInput::identity(Path::new("corpus.rs"), case.source, &budget).unwrap();
-        let mut session = TokenSession::new(input.snapshot().clone(), budget).unwrap();
+        let mut session = TokenSession::standalone(input.snapshot().clone(), budget).unwrap();
         let lexical_valid = case.stock_valid
             || matches!(
                 case.name,
@@ -280,7 +280,7 @@ fn literal_spellings_suffix_ranges_and_raw_hashes_are_preserved() {
     let text = r###"r#type β á _ 1.5e+2f64 0xffu8 r##"x"## b'a' c"x" "a\n""###;
     let budget = ExpansionBudget::new(ExpansionLimits::default());
     let input = PreparedLexInput::identity(Path::new("literals.rs"), text, &budget).unwrap();
-    let mut session = TokenSession::new(input.snapshot().clone(), budget.clone()).unwrap();
+    let mut session = TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
     let tokens = lex_prepared(&input, Edition::E2024, &mut session).unwrap();
     assert_eq!(tokens.events().len(), 10);
     let first = &tokens.events()[0];
@@ -337,7 +337,7 @@ fn spacing_lifetime_and_tuple_dot_transport_are_exact() {
     let text = "'a :: >>= + /* gap */ = .0.1";
     let budget = ExpansionBudget::new(ExpansionLimits::default());
     let input = PreparedLexInput::identity(Path::new("spacing.rs"), text, &budget).unwrap();
-    let mut session = TokenSession::new(input.snapshot().clone(), budget).unwrap();
+    let mut session = TokenSession::standalone(input.snapshot().clone(), budget).unwrap();
     let tokens = lex_prepared(&input, Edition::E2024, &mut session).unwrap();
     let punctuation: Vec<_> = tokens
         .events()
@@ -387,7 +387,7 @@ fn documentation_is_audited_once_without_reintroducing_attributes() {
     let text = "/// α\r\n//! inner\n/** outer */\n/*! inner */\n//// ordinary\n/*** ordinary */\n/**/\nfn main(){}";
     let budget = ExpansionBudget::new(ExpansionLimits::default());
     let input = PreparedLexInput::identity(Path::new("docs.rs"), text, &budget).unwrap();
-    let mut session = TokenSession::new(input.snapshot().clone(), budget.clone()).unwrap();
+    let mut session = TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
     let tokens = lex_prepared(&input, Edition::E2024, &mut session).unwrap();
     assert_eq!(tokens.docs().len(), 4);
     assert_eq!(tokens.docs().iter().filter(|doc| doc.inner).count(), 2);
@@ -419,9 +419,9 @@ fn documentation_is_audited_once_without_reintroducing_attributes() {
 fn lexed_output_rejects_other_session_or_prepared_view() {
     let budget = ExpansionBudget::new(ExpansionLimits::default());
     let input = PreparedLexInput::identity(Path::new("same.rs"), "fn main(){}", &budget).unwrap();
-    let mut session = TokenSession::new(input.snapshot().clone(), budget.clone()).unwrap();
+    let mut session = TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
     let tokens = lex_prepared(&input, Edition::E2024, &mut session).unwrap();
-    let other_session = TokenSession::new(input.snapshot().clone(), budget.clone()).unwrap();
+    let other_session = TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
     assert!(matches!(
         tokens.validate_input(&other_session, &input),
         Err(LexError::Transport(TokenError::ForeignHandle))
@@ -455,7 +455,7 @@ fn late_invalid_literal_beats_earlier_bad_projection() {
     prepared.origins[0].origin.file = FileId(99);
     let budget = ExpansionBudget::new(ExpansionLimits::default());
     let input = PreparedLexInput::prepared(&prepared, &budget).unwrap();
-    let mut session = TokenSession::new(input.snapshot().clone(), budget).unwrap();
+    let mut session = TokenSession::standalone(input.snapshot().clone(), budget).unwrap();
     assert!(matches!(
         lex_prepared(&input, Edition::E2024, &mut session),
         Err(LexError::Source {
@@ -489,7 +489,7 @@ fn guarded_strings_have_explicit_edition_specific_lexical_outcomes() {
         for edition in [Edition::E2024, Edition::E2021] {
             let budget = ExpansionBudget::new(ExpansionLimits::default());
             let input = PreparedLexInput::identity(Path::new("edition.rs"), text, &budget).unwrap();
-            let mut session = TokenSession::new(input.snapshot().clone(), budget).unwrap();
+            let mut session = TokenSession::standalone(input.snapshot().clone(), budget).unwrap();
             let result = lex_prepared(&input, edition, &mut session);
             if edition == Edition::E2024 {
                 assert!(matches!(

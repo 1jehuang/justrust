@@ -276,6 +276,33 @@ impl OwnerIssuer {
     }
 }
 
+/// One owner tag under a fresh standalone root, for independent direct
+/// tooling (`TokenSession::standalone`). Graph code never calls this; it
+/// receives tags from its producer's issuer.
+pub(super) fn standalone_tag(
+    budget: &ExpansionBudget,
+) -> Result<OwnerTag, super::token_session::TokenError> {
+    // Respect the caller's failure state, but pay the standalone root's
+    // fixed, never-refunded receipts to its own ledger, so the caller's
+    // retained bytes still return to zero when its session drops.
+    budget.check()?;
+    let own = ExpansionBudget::default();
+    let root =
+        OwnerRoot::standalone().map_err(|_| super::token_session::TokenError::IdExhausted)?;
+    let mut issuer = OwnerIssuer::new(root, &own).map_err(owner_token_error)?;
+    issuer
+        .issue(OwnerDomain::TokenSession)
+        .map(|issued| issued.tag)
+        .map_err(owner_token_error)
+}
+
+fn owner_token_error(error: OwnerError) -> super::token_session::TokenError {
+    match error {
+        OwnerError::Budget(failure) => failure.into(),
+        _ => super::token_session::TokenError::IdExhausted,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

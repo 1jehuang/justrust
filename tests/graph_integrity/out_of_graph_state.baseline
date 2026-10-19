@@ -21,8 +21,8 @@
 1 static src/compiler/source_lex.rs
 3 Atomic src/compiler/source_macro.rs
 1 static src/compiler/source_macro.rs
-6 Atomic src/compiler/token_session.rs
-2 static src/compiler/token_session.rs
+4 Atomic src/compiler/token_session.rs
+1 static src/compiler/token_session.rs
 3 Atomic src/compiler/token_tree.rs
 1 static src/compiler/token_tree.rs
 5 Mutex src/compiler/traits.rs
