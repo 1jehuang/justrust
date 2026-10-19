@@ -19,6 +19,9 @@ mod projection_call;
 #[path = "local_literals/associated_projection.rs"]
 mod associated_projection;
 
+#[path = "local_literals/operators.rs"]
+mod operators;
+
 type Term = usize;
 #[derive(Clone, Debug)]
 enum Domain {
@@ -70,6 +73,7 @@ struct Solver<'a: 's, 'b: 's, 's> {
     return_terms: Vec<Term>,
     unit_defaults: Vec<Term>,
     associated_equalities: Vec<(Term, Term)>,
+    operators: Vec<operators::Operation>,
     projection_defaults: bool,
 }
 
@@ -101,6 +105,7 @@ pub(super) fn hints(
         return_terms: Vec::new(),
         unit_defaults: Vec::new(),
         associated_equalities: Vec::new(),
+        operators: Vec::new(),
         projection_defaults: false,
     };
     let return_term = solver.fixed(checker.result.clone())?;
@@ -680,6 +685,7 @@ impl<'s> Solver<'_, '_, 's> {
             projections = pending;
             progress |= self.solve_iterator_items()?;
             progress |= self.solve_associated_equalities()?;
+            progress |= self.solve_operators()?;
             let coercions = std::mem::take(&mut self.coercions);
             for (actual, expected) in coercions {
                 if matches!(self.domain(actual), Domain::Unknown) {
@@ -1060,18 +1066,15 @@ impl<'s> Solver<'_, '_, 's> {
                     let value = self.expr(value, depth + 1)?;
                     self.coerce(value, target)?;
                 }
-                Stmt::AssignPlace { place, value, .. } | Stmt::AssignOp { place, value, .. } => {
+                Stmt::AssignPlace { place, value, .. } => {
                     let target = self.place(place)?;
                     let value = self.expr(value, depth + 1)?;
-                    if !matches!(
-                        stmt,
-                        Stmt::AssignOp {
-                            op: BinaryOp::Shl | BinaryOp::Shr,
-                            ..
-                        }
-                    ) {
-                        self.coerce(value, target)?;
-                    }
+                    self.coerce(value, target)?;
+                }
+                Stmt::AssignOp { place, op, value, .. } => {
+                    let target = self.place(place)?;
+                    let value = self.expr(value, depth + 1)?;
+                    self.operator_assignment(*op, target, value)?;
                 }
                 Stmt::AssignIndex {
                     array,
@@ -1237,30 +1240,16 @@ impl<'s> Solver<'_, '_, 's> {
                     self.fresh()
                 }
             }
-            Expr::Unary { value, .. } => self.expr(value, depth + 1),
+            Expr::Unary { op, value, .. } => {
+                let value = self.expr(value, depth + 1)?;
+                self.operator_unary(*op, value)
+            }
             Expr::Binary {
                 op, left, right, ..
             } => {
                 let left = self.expr(left, depth + 1)?;
                 let right = self.expr(right, depth + 1)?;
-                if !matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
-                    self.unify(left, right)?;
-                }
-                if matches!(
-                    op,
-                    BinaryOp::Eq
-                        | BinaryOp::Ne
-                        | BinaryOp::Lt
-                        | BinaryOp::Le
-                        | BinaryOp::Gt
-                        | BinaryOp::Ge
-                        | BinaryOp::And
-                        | BinaryOp::Or
-                ) {
-                    self.fixed(ir::Ty::Bool)
-                } else {
-                    Ok(left)
-                }
+                self.operator_binary(*op, left, right)
             }
             Expr::Cast { value, target } => {
                 self.expr(value, depth + 1)?;

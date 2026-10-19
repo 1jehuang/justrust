@@ -4586,28 +4586,7 @@ impl<'a> Checker<'a> {
                     None
                 }
             }
-            Expr::Unary { value, .. } => self.scalar_hint(value)?,
-            Expr::Binary {
-                op:
-                    BinaryOp::Eq
-                    | BinaryOp::Ne
-                    | BinaryOp::Lt
-                    | BinaryOp::Le
-                    | BinaryOp::Gt
-                    | BinaryOp::Ge
-                    | BinaryOp::And
-                    | BinaryOp::Or,
-                ..
-            } => Some(ir::Ty::Bool),
-            Expr::Binary {
-                op: BinaryOp::Shl | BinaryOp::Shr,
-                left,
-                ..
-            } => self.scalar_hint(left)?,
-            Expr::Binary { left, right, .. } => match self.scalar_hint(left)? {
-                Some(ty) => Some(ty),
-                None => self.scalar_hint(right)?,
-            },
+            Expr::Unary { .. } | Expr::Binary { .. } => self.operator_result_hint(e)?,
             Expr::Field { base, field } => {
                 if let Some(ty) = self.scalar_hint(base)? {
                     let receiver = if let ir::Ty::Ref { referent, .. } = &ty {

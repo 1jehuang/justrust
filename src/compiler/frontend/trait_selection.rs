@@ -182,6 +182,30 @@ impl PlanCtx {
         facts: &tr::ValidatedFacts,
         budget: &ir::PlanBudget,
     ) -> Result<super::super::token_session::BudgetVec<ir::TraitRef>, String> {
+        self.trait_applications_inner(owner, trait_id, facts, budget, None)
+    }
+
+    pub(super) fn inferred_trait_applications(
+        &self,
+        owner: &ir::Ty,
+        trait_id: ir::DeclId,
+        facts: &tr::ValidatedFacts,
+        budget: &ir::PlanBudget,
+    ) -> Result<(super::super::token_session::BudgetVec<ir::TraitRef>, bool), String> {
+        let mut deferred = false;
+        let applications =
+            self.trait_applications_inner(owner, trait_id, facts, budget, Some(&mut deferred))?;
+        Ok((applications, deferred))
+    }
+
+    fn trait_applications_inner(
+        &self,
+        owner: &ir::Ty,
+        trait_id: ir::DeclId,
+        facts: &tr::ValidatedFacts,
+        budget: &ir::PlanBudget,
+        mut deferred: Option<&mut bool>,
+    ) -> Result<super::super::token_session::BudgetVec<ir::TraitRef>, String> {
         use super::super::{expansion_budget::Storage, token_session::BudgetVec};
         let mut applications = BudgetVec::new(self.program.names.budget(), Storage::Temporary)
             .map_err(selection_token_error)?;
@@ -227,7 +251,7 @@ impl PlanCtx {
         if self.param_env(trait_id)?.arity() == 1 {
             return Ok(applications);
         }
-        for implementation in facts.world().impl_headers() {
+        'implementations: for implementation in facts.world().impl_headers() {
             budget.charge_work(1)?;
             if implementation.trait_ref.declaration != trait_id {
                 continue;
@@ -256,6 +280,10 @@ impl PlanCtx {
                     }
                 }
                 let Some(value) = value else {
+                    if let Some(deferred) = deferred.as_deref_mut() {
+                        *deferred = true;
+                        continue 'implementations;
+                    }
                     return Err(trait_application_ambiguity());
                 };
                 substitution.push(value);

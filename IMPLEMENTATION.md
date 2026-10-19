@@ -583,6 +583,10 @@ cleanup failures.
       Comparison autoref preserves original nested operand calls instead of
       cloning their AST, with all six comparison operators checked/built/run
       against stock at workers 1 and 8 (`tests/comparison_source.rs`).
+      Body-local operator terms retain independent receiver/RHS/Output types and
+      select canonical trait signatures, including nested overloaded results and
+      compound RHS widths (`OPERATOR-INFERENCE.md`). No complete Rust operator
+      or reference-capability support is implied.
 - [ ] Complete trait-based for desugaring. Concrete canonical IntoIterator/Iterator
       loops have stock-matching CHECK/BUILD/run coverage at workers 1 and 8,
       including char/tuple items, original method expressions and labeled control.

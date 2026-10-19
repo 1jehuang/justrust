@@ -4,6 +4,9 @@
 //! trait call (`<L as Add<R>>::add(l, r)`, `PartialEq::eq(&l, &r)`, ...).
 use super::*;
 
+#[path = "operators/hints.rs"]
+mod hints;
+
 fn overloadable(ty: &ir::Ty) -> bool {
     matches!(
         ty,
@@ -11,7 +14,7 @@ fn overloadable(ty: &ir::Ty) -> bool {
     )
 }
 
-fn binary_trait(op: BinaryOp) -> Option<(&'static str, &'static str, &'static str)> {
+pub(super) fn binary_trait(op: BinaryOp) -> Option<(&'static str, &'static str, &'static str)> {
     Some(match op {
         BinaryOp::Add => ("ops", "Add", "add"),
         BinaryOp::Sub => ("ops", "Sub", "sub"),
@@ -33,7 +36,7 @@ fn binary_trait(op: BinaryOp) -> Option<(&'static str, &'static str, &'static st
     })
 }
 
-fn assign_trait(op: BinaryOp) -> Option<(&'static str, &'static str)> {
+pub(super) fn assign_trait(op: BinaryOp) -> Option<(&'static str, &'static str)> {
     Some(match op {
         BinaryOp::Add => ("AddAssign", "add_assign"),
         BinaryOp::Sub => ("SubAssign", "sub_assign"),
@@ -359,8 +362,18 @@ impl type_check::Checker<'_> {
             .ok_or("operator call requires registry")?;
         let (declaration, ident) = self.operator_trait(module, name, method)?;
         let arity = plan.registry.declaration(declaration)?.param_env.arity();
-        // Untyped right operands (integer/float literals) try `Self`, then the
-        // literal's fallback type, like stock inference with one candidate.
+        let rhs_ty = if arity == 2 {
+            if let Some(rhs) = rest.last() {
+                self.unsuffixed_operator_rhs_hint(&self_ty, declaration, &ident, module, rhs)?
+                    .or(rhs_ty)
+            } else {
+                rhs_ty
+            }
+        } else {
+            rhs_ty
+        };
+        // A genuine numeric literal cannot have a nominal Self type. Keep its
+        // final numeric fallback distinct from speculative nonliteral hints.
         let candidates: Vec<Vec<ir::Ty>> = match (arity, rhs_ty) {
             (1, _) => vec![Vec::new()],
             // An unsuffixed integer index variable infers from the selected
@@ -376,7 +389,11 @@ impl type_check::Checker<'_> {
                     Some(Expr::Float(_)) => ir::Ty::Float(ir::FloatTy::F64),
                     _ => ir::Ty::Int(ir::IntTy::I32),
                 };
-                vec![vec![self_ty.clone()], vec![fallback]]
+                if matches!(rest.last(), Some(Expr::Integer(_) | Expr::Float(_))) {
+                    vec![vec![fallback]]
+                } else {
+                    vec![vec![self_ty.clone()], vec![fallback]]
+                }
             }
             _ => return Err("operator trait arity mismatch".into()),
         };
