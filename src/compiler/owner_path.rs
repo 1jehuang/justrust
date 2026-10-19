@@ -117,6 +117,10 @@ pub struct BuilderOwnedPath {
     root: RootId,
     steps: Box<[Step]>,
     lease: ByteLease,
+    /// The admission ledger that paid for this path. Compared by identity
+    /// (not by equal limits) so an owner paid under one budget cannot back a
+    /// session or store charged to another.
+    payer: ExpansionBudget,
 }
 
 impl PartialEq for OwnerPath {
@@ -178,6 +182,10 @@ impl BuilderOwnedPath {
     pub fn descends_from(&self, ancestor: &BuilderOwnedPath) -> bool {
         descends(&self.root, &self.steps, &ancestor.root, &ancestor.steps)
     }
+    /// Whether `budget` is the exact ledger that paid for this path.
+    pub fn paid_by(&self, budget: &ExpansionBudget) -> bool {
+        self.payer.same_authority(budget)
+    }
     /// Structural equality with a builder path (not identity of storage).
     pub fn same_identity(&self, other: &BuilderOwnedPath) -> bool {
         self.root == other.root && self.steps == other.steps
@@ -218,10 +226,44 @@ pub struct OwnerIssuer {
 ///     let _twice = (issued, again);
 /// }
 /// ```
+///
+/// The fields are private and there is no public constructor, so a tag from
+/// one issuance cannot be paired with another issuer:
+///
+/// ```compile_fail
+/// fn recombine(
+///     a: justrust_engine::compiler::owner_path::Issued,
+///     b: justrust_engine::compiler::owner_path::Issued,
+/// ) {
+///     let _ = justrust_engine::compiler::owner_path::Issued { issuer: b.issuer, tag: a.tag };
+/// }
+/// ```
 #[derive(Debug)]
 pub struct Issued {
-    pub issuer: OwnerIssuer,
-    pub tag: OwnerTag,
+    issuer: OwnerIssuer,
+    tag: OwnerTag,
+}
+
+impl Issued {
+    /// The issued owner's tag, for comparison only. It cannot be used to
+    /// construct anything: no public API accepts a bare tag.
+    pub fn tag(&self) -> OwnerTag {
+        self.tag
+    }
+    /// The issued owner's builder path, for structural checks.
+    pub fn path(&self) -> &BuilderOwnedPath {
+        &self.issuer.path
+    }
+    /// Consume the pair for exactly one owner. Crate-private: only the owner
+    /// constructors (`TokenSession::with_owner`, arena/driver builders) split
+    /// it, and none of them reassembles a pair.
+    pub(crate) fn into_parts(self) -> (OwnerIssuer, OwnerTag) {
+        (self.issuer, self.tag)
+    }
+    /// The issuer, to issue children. Crate-private for the same reason.
+    pub(crate) fn into_issuer(self) -> OwnerIssuer {
+        self.issuer
+    }
 }
 
 /// Bytes one owner path of `depth` steps occupies once published, including
@@ -260,6 +302,7 @@ fn paid_path(
         root,
         steps: steps.into_boxed_slice(),
         lease,
+        payer: budget.clone(),
     })
 }
 
@@ -375,7 +418,7 @@ mod tests {
     }
     impl Child for OwnerIssuer {
         fn child(&mut self, domain: OwnerDomain) -> Result<OwnerIssuer, OwnerError> {
-            self.issue(domain).map(|issued| issued.issuer)
+            self.issue(domain).map(|issued| issued.into_issuer())
         }
     }
 
@@ -640,14 +683,15 @@ mod tests {
         let a0 = a.issue(OwnerDomain::TokenSession).unwrap();
         let a1 = a.issue(OwnerDomain::TokenSession).unwrap();
         let b0 = b.issue(OwnerDomain::TokenSession).unwrap();
-        assert_ne!(a0.tag, a1.tag, "sibling sessions share a tag");
+        assert_ne!(a0.tag(), a1.tag(), "sibling sessions share a tag");
         assert_ne!(
-            a0.tag, b0.tag,
+            a0.tag(),
+            b0.tag(),
             "identical structure under two roots shares a tag"
         );
         // The path is the authority; equal structure under distinct roots
         // still differs, and tags never stand in for paths.
-        assert_ne!(a0.issuer.path(), b0.issuer.path());
+        assert_ne!(a0.path(), b0.path());
         // Concurrent issuance from independent roots on many threads.
         let tags: Vec<OwnerTag> = std::thread::scope(|scope| {
             let handles: Vec<_> = (0..16)
@@ -655,7 +699,7 @@ mod tests {
                     scope.spawn(|| {
                         let mut root = standalone();
                         (0..8)
-                            .map(|_| root.issue(OwnerDomain::TokenSlice).unwrap().tag)
+                            .map(|_| root.issue(OwnerDomain::TokenSlice).unwrap().tag())
                             .collect::<Vec<_>>()
                     })
                 })
@@ -685,7 +729,7 @@ mod tests {
                     let mut issuer =
                         OwnerIssuer::new(cx.owner_root()?, &ExpansionBudget::default())
                             .map_err(|e| crate::Error::new(format!("{e:?}")))?;
-                    let tag = issuer.issue(OwnerDomain::TokenSession).unwrap().tag;
+                    let tag = issuer.issue(OwnerDomain::TokenSession).unwrap().tag();
                     seen.lock().unwrap().push(tag);
                     cx.publish(0, 1)
                 })
@@ -699,7 +743,7 @@ mod tests {
             demand.completion().unwrap();
         }
         let mut tags = seen.lock().unwrap().clone();
-        tags.push(standalone().issue(OwnerDomain::TokenSession).unwrap().tag);
+        tags.push(standalone().issue(OwnerDomain::TokenSession).unwrap().tag());
         let unique: std::collections::HashSet<_> = tags.iter().collect();
         assert_eq!(unique.len(), 4, "engine/standalone tags collided: {tags:?}");
     }

@@ -607,7 +607,12 @@ impl TokenSession {
         budget: ExpansionBudget,
         owner: super::owner_path::Issued,
     ) -> Result<(Self, SessionOwnerCap), TokenError> {
-        let super::owner_path::Issued { issuer, tag } = owner;
+        // The owner must have been paid by exactly this session's ledger
+        // (identity, not equal limits) before any session is built.
+        if !owner.path().paid_by(&budget) {
+            return Err(TokenError::ForeignHandle);
+        }
+        let (issuer, tag) = owner.into_parts();
         let id = SessionId(tag.bits());
         let session = Self::build(id, sources, budget)?;
         Ok((
@@ -1055,6 +1060,29 @@ mod owner_defect_tests {
         let mut map = SourceMap::default();
         map.add("owner.rs".into(), Arc::from("x"));
         SourceSnapshot::new(map).unwrap()
+    }
+
+    /// An owner paid under one budget cannot back a session charged to
+    /// another, even when both budgets have equal limits (foreign payer).
+    #[test]
+    fn owner_paid_by_another_budget_with_equal_policy_rejects() {
+        let payer = ExpansionBudget::default();
+        let other = ExpansionBudget::default();
+        assert_eq!(payer.limits(), other.limits(), "fixture needs equal policy");
+        let mut issuer = OwnerIssuer::new(crate::OwnerRoot::standalone().unwrap(), &payer).unwrap();
+        let owner = issuer.issue(OwnerDomain::TokenSession).unwrap();
+        let minted_before = crate::engine::THREAD_MINTS.with(std::cell::Cell::get);
+        assert!(matches!(
+            TokenSession::with_owner(snapshot(), other, owner),
+            Err(TokenError::ForeignHandle)
+        ));
+        assert_eq!(
+            crate::engine::THREAD_MINTS.with(std::cell::Cell::get),
+            minted_before
+        );
+        // The same issuance under its own payer is accepted.
+        let owner = issuer.issue(OwnerDomain::TokenSession).unwrap();
+        assert!(TokenSession::with_owner(snapshot(), payer, owner).is_ok());
     }
 
     /// Defect 1 regression (review of 76eef8201): a bare `Copy` tag let one
