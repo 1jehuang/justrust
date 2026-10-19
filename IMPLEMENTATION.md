@@ -902,8 +902,13 @@ blocker, not full Vec or std acceptance.
 `Vec<T>` additionally implements source-level `contains`/`dedup` for `PartialEq`
 and stable `sort`/`binary_search` for `Ord`. `tests/vec_algorithms.rs` exercises
 empty inputs, insertion positions, generic non-Copy elements and stable equal-key
-ordering against stock Rust at workers 1 and 8. Iterator-dependent methods and
-slice delegation remain open.
+ordering against stock Rust at workers 1 and 8. Source-level `Vec::as_slice`
+and `as_mut_slice` delegate to the canonical raw-slice constructors, including
+aligned non-null empty pointers and generic non-Copy descriptor transport.
+`tests/vec_slices.rs` covers stock CHECK/BUILD/native effects at workers 1 and 8,
+conflicting aliases, local escape, and CHECK graph isolation. See
+`VEC-SLICES.md`. Iterator-dependent methods and further slice delegation remain
+open, as do native-memory pointer-layout compatibility and the rest of G7.
 
 Active source `String::trim` recognizes Unicode White_Space at UTF-8 scalar
 boundaries. Prefix/suffix checks compare bytes without creating an invalid

@@ -91,11 +91,30 @@ impl<T> Vec<T> {
     }
 
     pub fn as_ptr(&self) -> *const T {
-        self.ptr as *const T
+        if self.ptr as usize == 0usize {
+            super::mem::align_of::<T>() as *const T
+        } else {
+            self.ptr as *const T
+        }
     }
 
     pub fn as_mut_ptr(&mut self) -> *mut T {
-        self.ptr
+        if self.ptr as usize == 0usize {
+            super::mem::align_of::<T>() as *mut T
+        } else {
+            self.ptr
+        }
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        let pointer = self.as_ptr();
+        unsafe { super::slice::from_raw_parts::<T>(pointer, self.len) }
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        let length = self.len;
+        let pointer = self.as_mut_ptr();
+        unsafe { super::slice::from_raw_parts_mut::<T>(pointer, length) }
     }
 
     pub fn reserve(&mut self, additional: usize) {
