@@ -28,9 +28,19 @@ pub(super) async fn produce(
     if !encountered {
         return Ok(None);
     }
-    if !target.type_args.is_empty() || template.closure.is_some() {
+    if template.closure.is_some() {
         return Err(Error::new(
-            "unsupported: physical opaque object requires nongeneric original source owner",
+            "unsupported: physical opaque closure owner requires parent specialization replay",
+        ));
+    }
+    if !target.type_args.is_empty()
+        && source
+            .exprs
+            .iter()
+            .any(|expression| matches!(expression.kind, ir::ExprKind::Call { .. }))
+    {
+        return Err(Error::new(
+            "unsupported: generic opaque defining calls require occurrence-specific substitution replay",
         ));
     }
     let publication = template
@@ -42,6 +52,12 @@ pub(super) async fn produce(
             "physical opaque object changed exact source owner",
         ));
     }
+    let mut specialization = opaque_specialization::Specialization::new(
+        publication,
+        &target,
+        &types,
+        &provider.0.budget,
+    )?;
     let admission = cx
         .request(Facts::item(SOURCE_ADMISSION, source_index))
         .get(0);
@@ -81,9 +97,15 @@ pub(super) async fn produce(
         .and_then(|count| count.checked_add(1))
         .ok_or_else(|| Error::new("physical opaque type frontier overflow"))?;
     let (mut roots, _roots_storage) = provider.scratch_vec(root_count)?;
-    roots.extend(source.locals.iter().map(|local| local.ty.clone()));
-    roots.extend(source.exprs.iter().map(|expression| expression.ty.clone()));
-    roots.push(source.result.clone());
+    for ty in source
+        .locals
+        .iter()
+        .map(|local| &local.ty)
+        .chain(source.exprs.iter().map(|expression| &expression.ty))
+        .chain(std::iter::once(&source.result))
+    {
+        roots.push(specialization.ty(ty)?);
+    }
     // All independent source and call-authority producers are requested before
     // representation reads suspend this branch. No global hidden-type inventory.
     let representations = opaque_instances::read(&facts, &roots, &provider.0.budget).await?;

@@ -37,6 +37,7 @@ mod opaque_object;
 mod opaque_physical;
 #[cfg(test)]
 mod opaque_source_tests;
+mod opaque_specialization;
 pub mod owner_path;
 pub mod ownership;
 mod resource_accounting;

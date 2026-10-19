@@ -405,9 +405,14 @@ missing-file changes invalidate only justified consumers without stale lookup.
       per-call graph authorization gates physical CFG replay, ownership and the
       existing emitter, without a hidden MONO map or closed-facts relabel.
       Current-parent all-test compilation, representation/physical authority,
-      unused associated admission and unchanged graph gates pass. Generic/closure-backed
-      opaque values, reference-bearing hidden representations and realized
-      destructor dependencies remain unsupported, not approximated.
+      unused associated admission and unchanged graph gates pass. A bounded
+      call-free generic defining body additionally passes stock-differential
+      CHECK/BUILD/link/run at workers 1 and 8 with distinct `u8`/`u16` actuals:
+      exact declaration-owned substitution precedes hidden representation and
+      physical ABI mapping while CHECK remains representation/codegen-free.
+      Generic opaque callers with bound calls, generic defining bodies with calls,
+      closure-backed opaque values, reference-bearing hidden representations and
+      realized destructor dependencies remain unsupported, not approximated.
       Partial method inference substitutes canonical enclosing impl bindings.
       Delivered body-local structural union-find constraints: later inherent
       receiver uses, assignments and call parameters solve nested generic local

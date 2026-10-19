@@ -4184,6 +4184,20 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_work(1))?;
         match (original, instantiated) {
             (Ty::Param(_) | Ty::AssociatedType(_), _) => {}
+            (Ty::Opaque(original), Ty::Opaque(instantiated)) => {
+                // Opaque identities retain their defining owner, return site,
+                // bound topology and captured region family. Only their ordered
+                // type payloads follow the already authorized substitution.
+                if !original.try_eq(instantiated, |before, after| {
+                    self.collect_nominal_mappings(before, after, output, depth + 1)?;
+                    Ok::<bool, FactsError>(true)
+                })? {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "opaque carrier transport changed its canonical declaration identity",
+                    ));
+                }
+            }
             (
                 Ty::Ref {
                     kind: a,

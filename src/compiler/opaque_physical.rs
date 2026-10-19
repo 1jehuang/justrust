@@ -304,11 +304,24 @@ pub(super) fn normalize(
     context: &frontend::PlanCtx,
     budget: &ir::PlanBudget,
 ) -> Result<PhysicalCfgDraft, Error> {
-    if publication.facts().declaration() != target.declaration || !target.type_args.is_empty() {
+    if publication.facts().declaration() != target.declaration {
         return Err(Error::new(
-            "unsupported: physical normalization requires exact nongeneric source owner",
+            "physical normalization changed exact original source owner",
         ));
     }
+    if !target.type_args.is_empty()
+        && publication
+            .source()
+            .exprs
+            .iter()
+            .any(|expression| matches!(expression.kind, ir::ExprKind::Call { .. }))
+    {
+        return Err(Error::new(
+            "unsupported: generic physical calls require occurrence-specific substitution replay",
+        ));
+    }
+    let mut specialization =
+        opaque_specialization::Specialization::new(publication, target, context, budget)?;
     original
         .validate_source_publication(publication, budget)
         .map_err(|e| Error::new(e.to_string()))?;
@@ -325,10 +338,10 @@ pub(super) fn normalize(
     let mut output = original.clone();
     let mut local_types = Vec::with_capacity(original.locals.len());
     for local in &mut output.locals {
-        local.ty = representations.normalize(&local.ty, budget)?;
+        local.ty = representations.normalize(&specialization.ty(&local.ty)?, budget)?;
         local_types.push(local.ty.clone());
     }
-    output.result = representations.normalize(&original.result, budget)?;
+    output.result = representations.normalize(&specialization.ty(&original.result)?, budget)?;
     let parameters = output
         .params
         .iter()
@@ -369,7 +382,14 @@ pub(super) fn normalize(
                     proof
                         .validate_occurrence(publication, Some(occurrence), budget)
                         .map_err(Error::new)?;
-                    let record = representations.get(proof.opaque())?;
+                    let ir::Ty::Opaque(opaque) =
+                        specialization.ty(&ir::Ty::Opaque(proof.opaque().clone()))?
+                    else {
+                        return Err(Error::new(
+                            "opaque owner substitution changed its type kind",
+                        ));
+                    };
+                    let record = representations.get(&opaque)?;
                     if !ir::carrier_locations(record.hidden(), budget)
                         .map_err(Error::new)?
                         .is_empty()
@@ -384,6 +404,7 @@ pub(super) fn normalize(
                             ir::FactsCtx::from_validated(publication.facts()),
                         )
                         .map_err(Error::new)?;
+                    let actual = specialization.ty(&actual)?;
                     if !ir::identical_type(&actual, record.hidden(), budget).map_err(Error::new)? {
                         return Err(Error::new(
                             "physical pack operand differs from exact defining representation",
@@ -397,7 +418,7 @@ pub(super) fn normalize(
                 cfg::Rvalue::Aggregate { ty, .. }
                 | cfg::Rvalue::Repeat { ty, .. }
                 | cfg::Rvalue::PtrCast { to: ty, .. } => {
-                    *ty = representations.normalize(ty, budget)?;
+                    *ty = representations.normalize(&specialization.ty(ty)?, budget)?;
                 }
                 _ => {}
             }

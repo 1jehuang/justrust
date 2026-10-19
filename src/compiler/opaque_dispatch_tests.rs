@@ -269,9 +269,12 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
                 let defining: Arc<TemplateBodyFact> =
                     facts.get(Facts::item(TEMPLATE_BODY, 0)).await?;
                 let defining_publication = defining.publication.as_ref().unwrap();
+                let ir::Ty::Opaque(defining_opaque) = &call.trait_ref.self_ty else {
+                    return Err(Error::new("fixture lost its original opaque call identity"));
+                };
                 let defining_target = ir::CallTarget {
                     declaration: types.callable_decl(0).map_err(Error::new)?,
-                    type_args: Arc::from([]),
+                    type_args: Arc::from(defining_opaque.owner_args()),
                 };
                 let defining_lowered =
                     cfg::lower_source_template(defining_publication, &provider.0.budget)
@@ -307,6 +310,53 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
                     .function()
                     .validate_physical(&defining_closed, &defining_validation)
                     .map_err(Error::new)?;
+                if defining_target.type_args.len() == 2 {
+                    let frontend::PublishedCallableBody::Source(republished_definition) = types
+                        .publish_callable_body(defining_target.declaration, &provider.0.budget)
+                        .map_err(|error| source_fact_error(error, &provider.0.budget))?
+                    else {
+                        return Err(Error::new(
+                            "generic fixture expected canonical source publication",
+                        ));
+                    };
+                    assert!(
+                        opaque_physical::normalize(
+                            &republished_definition,
+                            &defining_target,
+                            defining_lowered.function(),
+                            &representations,
+                            &[],
+                            &types,
+                            &provider.0.budget,
+                        )
+                        .is_err(),
+                        "generic defining CFG accepted another publication of the same owner"
+                    );
+                    let mut reversed = defining_target.clone();
+                    let mut args = reversed.type_args.to_vec();
+                    args.swap(0, 1);
+                    reversed.type_args = args.into();
+                    let reversed_facts = types.instance_facts(&reversed).map_err(Error::new)?;
+                    assert!(
+                        defining_validation
+                            .validate_cfg(defining_physical.function(), &reversed_facts)
+                            .is_err(),
+                        "physical CFG accepted another ordered generic instantiation"
+                    );
+                    assert!(
+                        opaque_physical::normalize(
+                            defining_publication,
+                            &reversed,
+                            defining_lowered.function(),
+                            &representations,
+                            &[],
+                            &types,
+                            &provider.0.budget,
+                        )
+                        .is_err(),
+                        "same hidden type authorized a different ordered representation"
+                    );
+                }
                 let defining_boundary = defining_validation
                     .body_carriers(defining_physical.function(), &defining_closed)
                     .map_err(Error::new)?;
@@ -339,14 +389,19 @@ fn opaque_bound_dispatch_reads_exact_representation_before_physical_body() {
         }
     }
     for workers in [1, 8] {
-        let snapshot = Arc::new(Snapshot {
-            input: Input::Text("trait Read { fn read(&self)->i32; } struct Number { value:i32 } impl Read for Number { fn read(&self)->i32 { self.value } } fn make()->impl Read { Number {value:42} } fn use_value()->i32 { let value=make(); value.read() } fn main(){assert!(use_value()==42);}".into()),
-            source_options: source::SourceOptions::default(),
-            budget: ir::PlanBudget::default(),
-        });
-        let engine = Engine::new(Probe(CompilerProvider(snapshot)));
-        let probe = engine.request(Key::new(9001, vec![]));
-        engine.run(workers).unwrap();
-        probe.completion().unwrap();
+        for source in [
+            "trait Read { fn read(&self)->i32; } struct Number { value:i32 } impl Read for Number { fn read(&self)->i32 { self.value } } fn make()->impl Read { Number {value:42} } fn use_value()->i32 { let value=make(); value.read() } fn main(){assert!(use_value()==42);}",
+            "trait Read { fn read(&self)->i32; } struct Number { value:i32 } impl Read for Number { fn read(&self)->i32 { self.value } } fn make<A:Copy,B:Copy>(a:A,b:B)->impl Read { let copied=a; let other=b; Number {value:42} } fn use_value()->i32 { let value=make::<u8,u16>(1u8,2u16); value.read() } fn main(){assert!(use_value()==42);}",
+        ] {
+            let snapshot = Arc::new(Snapshot {
+                input: Input::Text(source.into()),
+                source_options: source::SourceOptions::default(),
+                budget: ir::PlanBudget::default(),
+            });
+            let engine = Engine::new(Probe(CompilerProvider(snapshot)));
+            let probe = engine.request(Key::new(9001, vec![]));
+            engine.run(workers).unwrap();
+            probe.completion().unwrap();
+        }
     }
 }

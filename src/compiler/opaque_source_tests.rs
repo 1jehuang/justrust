@@ -62,8 +62,6 @@ fn opaque_source_check_validates_unused_associated_constants_without_physical_de
 
 #[test]
 fn opaque_native_object_build_matches_stock_workers1_8() {
-    use std::os::unix::fs::PermissionsExt;
-    use std::process::Command;
     let source = r#"
         trait Read { fn read(&self) -> i32; }
         struct Number { value: i32 }
@@ -71,6 +69,33 @@ fn opaque_native_object_build_matches_stock_workers1_8() {
         fn make() -> impl Read { Number { value: 42 } }
         fn main() { let value = make(); assert!(value.read() == 42); }
     "#;
+    native_matches_stock(source);
+}
+
+#[test]
+fn opaque_closed_generic_producers_match_stock_workers1_8() {
+    native_matches_stock(
+        r#"
+        trait Read { fn read(&self) -> i32; }
+        struct Number { value: i32 }
+        impl Read for Number { fn read(&self) -> i32 { self.value } }
+        fn make<T: Copy>(arg: T) -> impl Read {
+            let copied = arg;
+            Number { value: 42 }
+        }
+        fn main() {
+            let first = make::<u8>(1u8);
+            let second = make::<u16>(2u16);
+            assert!(first.read() == 42);
+            assert!(second.read() == 42);
+        }
+    "#,
+    );
+}
+
+fn native_matches_stock(source: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
     let directory = std::env::temp_dir().join(format!(
         "opaque-native-object-{}-{}",
         std::process::id(),
