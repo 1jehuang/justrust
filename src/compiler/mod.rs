@@ -25,6 +25,7 @@ pub mod source;
 mod source_item_macro;
 mod source_macro;
 mod source_replay;
+pub mod ssa;
 mod token;
 pub mod token_primitives;
 mod token_session;

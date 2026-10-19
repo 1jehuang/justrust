@@ -641,8 +641,17 @@ Phase 1 (now, alongside language work):
       keys. Only `off` (current emitter) exists until the optimizer lands.
 - [ ] Preserve borrow/alias, validity/range/niche and drop facts in lowered
       instances (coordinate with G2/G3).
-- [ ] SSA representation (block parameters), canonical hashing, verifier and a
-      reference interpreter differential-tested against the stack emitter.
+- [x] SSA core as a pure library (`src/compiler/ssa/`, no graph state): block-
+      parameter IR, verifier (dominance, types, order-independent typing of
+      unreachable code), stable versioned content hash invariant to numbering
+      and dead blocks, fuel-bounded reference interpreter, and `opt::local`
+      (folding, identities, branch folding, block merging, panic-preserving
+      DCE). Tests: eval vs native Rust on all widths, exhaustive 8-bit
+      `x op c` soundness, 1,500 random functions differential vs interpreter,
+      fixpoint and numbering-independence. A planted unsound identity was
+      caught by the exhaustive test. Integer/bool subset only.
+- [ ] Lower `cfg::Function` to SSA and differential-test against the stack
+      emitter (needs graph-native facts).
 - [ ] Per-function `SSA`, `LOCAL_OPT`, `FRAGMENT` graph nodes with trivial
       passes. CHECK never demands them.
 - [ ] Compile time, runtime and size harness versus stock `opt-level=0/3`.
