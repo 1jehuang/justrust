@@ -294,9 +294,14 @@ fn read_cell_cover(
                 Ok(true)
             }
             Ty::Param(_) => Ok(false),
-            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Str | Ty::Bool | Ty::Unit | Ty::Never => {
-                Ok(true)
-            }
+            Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Char
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Never
+            | Ty::RawPtr { .. } => Ok(true),
             _ => {
                 if let Ty::Enum(value) = ty {
                     budget.spend(value.def().variants.len())?;
@@ -452,6 +457,12 @@ fn resolve_cells<'a>(
     budget: &mut Budget,
 ) -> Result<CellResolution, Exhausted> {
     budget.spend(place.projection.len() + 1)?;
+    // Storage behind a raw pointer has no canonical object or loan cells.
+    if let Some(local) = original_locals.get(place.local.0)
+        && ir::raw_deref_index(local, &place.projection).is_some()
+    {
+        return Ok((vec![], vec![], None));
+    }
     budget.reserve_bytes(target_payload_bytes_with_growth(
         1,
         place.projection.len(),
@@ -1679,6 +1690,11 @@ impl CarrierBuilder<'_, '_> {
     ) -> Result<Vec<(CarrierLocation, CarrierOrigins)>, Exhausted> {
         let locations = ir::carrier_locations(ty, &self.ledger).map_err(|_| Exhausted)?;
         let mut output = Vec::new();
+        if ir::raw_deref_index(&self.f.locals[place.local.0].ty, &place.projection).is_some() {
+            // A raw pointer read has no tracked provenance (an unbounded
+            // lifetime in Rust). Reference components gain no origins here.
+            return Ok(output);
+        }
         for location in locations.iter() {
             // Reading a value transports only its OWNED components. Pointee
             // values remain in their current canonical cells, not a snapshot.
@@ -4106,6 +4122,7 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
         | Rvalue::SliceLen { slice: op }
         | Rvalue::CharToInt { value: op, .. }
         | Rvalue::U8ToChar { value: op }
+        | Rvalue::PtrCast { value: op, .. }
         | Rvalue::IntCast { value: op, .. }
         | Rvalue::FloatCast { value: op, .. } => visit_operand(op, &mut visit),
         Rvalue::SliceIndex { slice, index } => {

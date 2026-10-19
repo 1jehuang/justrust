@@ -1,0 +1,5 @@
+write through *mut
+field through *mut
+generic read
+usize round trip
+pointer equality

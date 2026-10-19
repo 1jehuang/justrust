@@ -495,6 +495,10 @@ impl<'a> CountEvaluator<'a> {
                     | ir::ExprKind::LeadingZeros { value }
                     | ir::ExprKind::CharToInt { value, .. }
                     | ir::ExprKind::U8ToChar { value } => [Some(*value), None],
+                    ir::ExprKind::PtrCast { .. } => {
+                        self.memo[id.0] = CountMemo::Done(CountValue::Dynamic);
+                        continue;
+                    }
                     ir::ExprKind::Binary { left, right, .. } => [Some(*left), Some(*right)],
                     ir::ExprKind::Block(block) if block.statements.is_empty() => [block.tail, None],
                     ir::ExprKind::Block(_) => {
@@ -611,7 +615,8 @@ impl<'a> CountEvaluator<'a> {
                 | ir::ExprKind::Unary { value, .. }
                 | ir::ExprKind::LeadingZeros { value }
                 | ir::ExprKind::CharToInt { value, .. }
-                | ir::ExprKind::U8ToChar { value } => self.heights[value.0] + 1,
+                | ir::ExprKind::U8ToChar { value }
+                | ir::ExprKind::PtrCast { value } => self.heights[value.0] + 1,
                 ir::ExprKind::Binary { left, right, .. } => {
                     self.heights[left.0].max(self.heights[right.0]) + 1
                 }
@@ -983,7 +988,7 @@ impl<'s> Checker<'s> {
             Expr::Deref { value } => {
                 let carrier = self.inference_evidence(value, depth + 1)?;
                 match carrier.as_ref() {
-                    InferKind::Ref(_, inner) => inner.clone(),
+                    InferKind::Ref(_, inner) | InferKind::RawPtr(_, inner) => inner.clone(),
                     _ => self.infer_node(InferKind::Unknown(false))?,
                 }
             }
@@ -1312,7 +1317,7 @@ impl<'s> Checker<'s> {
                     self.check_slot_free_evidence(field, depth + 1)?;
                 }
             }
-            InferKind::Array(inner, _) | InferKind::Ref(_, inner) => {
+            InferKind::Array(inner, _) | InferKind::Ref(_, inner) | InferKind::RawPtr(_, inner) => {
                 self.check_slot_free_evidence(inner, depth + 1)?
             }
             _ => {}
@@ -1444,6 +1449,9 @@ pub(super) struct Checker<'a> {
     pub(super) applications: std::cell::RefCell<Vec<CheckedApplication>>,
     pub(super) inference_evidence_cache:
         std::cell::RefCell<HashMap<(usize, usize, usize), InferTerm>>,
+    /// Nesting depth of enclosing `unsafe` blocks; raw pointer dereference
+    /// requires at least one (E0133).
+    pub(super) unsafe_depth: usize,
 }
 #[derive(Clone, Copy)]
 pub(super) enum Expectation<'a> {
@@ -1965,6 +1973,10 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
             Err("generic types require authoritative declaration environment".into())
         }
         Type::Slice(_) => Err(BARE_SLICE_UNSUPPORTED.into()),
+        Type::RawPtr { kind, pointee } => Ok(ir::Ty::RawPtr {
+            kind: *kind,
+            pointee: std::sync::Arc::new(checked_ty_at(pointee, env, false)?),
+        }),
         Type::Ref { referent, .. } if matches!(referent.as_ref(), Type::Slice(_)) => {
             Err("unsupported: shared slices require the planning frontend".into())
         }
@@ -3149,6 +3161,7 @@ impl<'a> Checker<'a> {
             field_indices: std::cell::RefCell::new(HashMap::new()),
             applications: std::cell::RefCell::new(Vec::new()),
             inference_evidence_cache: std::cell::RefCell::new(HashMap::new()),
+            unsafe_depth: 0,
             canonical: None,
         }
     }
@@ -3776,6 +3789,15 @@ impl<'a> Checker<'a> {
                     if derefs > 128 {
                         return Err("reference dereference depth exceeds limit128".into());
                     }
+                    if let ir::Ty::RawPtr { kind, pointee } = &ty {
+                        if self.unsafe_depth == 0 {
+                            return Err("E0133: dereference of raw pointer is unsafe and requires unsafe block".into());
+                        }
+                        writable = *kind == ir::BorrowKind::Mut;
+                        ty = pointee.as_ref().clone();
+                        projection.push(ir::Projection::Deref);
+                        continue;
+                    }
                     let ir::Ty::Ref { kind, referent } = &ty else {
                         return Err("dereference requires a reference".into());
                     };
@@ -3974,6 +3996,7 @@ impl<'a> Checker<'a> {
             Expr::Cast { target, .. } => Some(checked_local_ty(target, self.signatures)?),
             Expr::Deref { value } => match self.scalar_hint(value)? {
                 Some(ir::Ty::Ref { referent, .. }) => Some(referent.as_ref().clone()),
+                Some(ir::Ty::RawPtr { pointee, .. }) => Some(pointee.as_ref().clone()),
                 _ => None,
             },
             Expr::Integer(literal) => literal.suffix.map(ir::Ty::Int),
@@ -6123,12 +6146,50 @@ impl<'a> Checker<'a> {
             adjusted,
         )
     }
+    /// `as` casts whose source or target is a raw pointer. Pairs are exactly
+    /// those admitted by `ir::ptr_cast_valid`; everything else is E0606.
+    fn pointer_cast_expression(
+        &mut self,
+        value: &Expr,
+        target: ir::Ty,
+    ) -> Result<ir::ExprId, String> {
+        let value = match &target {
+            ir::Ty::RawPtr { .. } if matches!(value, Expr::Integer(_)) => {
+                self.expr_expected(value, Some(&ir::Ty::Int(ir::IntTy::Usize)))?
+            }
+            _ => self.expr(value)?,
+        };
+        let source = self.flow(value);
+        if !ir::ptr_cast_valid(&source.ty, &target) {
+            return Err(
+                "E0606: unsupported pointer cast; supported: &T/&mut T to raw pointer, raw pointer to raw pointer, raw pointer to/from usize"
+                    .into(),
+            );
+        }
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            kind: ir::ExprKind::PtrCast { value },
+            ty: target,
+            completion: if source.completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            },
+        });
+        Ok(id)
+    }
     pub(super) fn cast_expression(
         &mut self,
         value: &Expr,
         target: &Type,
     ) -> Result<ir::ExprId, String> {
         let target = checked_local_ty(target, self.signatures)?;
+        if matches!(target, ir::Ty::RawPtr { .. })
+            || matches!(self.scalar_hint(value)?, Some(ir::Ty::RawPtr { .. }))
+        {
+            return self.pointer_cast_expression(value, target);
+        }
         // A char target must not infer an unsuffixed integer operand as u8.
         // Preserve its independently inferred source type before checking the pair.
         let value = match target {
@@ -6776,8 +6837,15 @@ impl<'a> Checker<'a> {
                 }
                 let value = self.expr(value)?;
                 let flow = self.flow(value);
-                let ir::Ty::Ref { referent, .. } = &flow.ty else {
-                    return Err("dereference requires a reference".into());
+                let referent = match &flow.ty {
+                    ir::Ty::Ref { referent, .. } => referent,
+                    ir::Ty::RawPtr { pointee, .. } => {
+                        if self.unsafe_depth == 0 {
+                            return Err("E0133: dereference of raw pointer is unsafe and requires unsafe block".into());
+                        }
+                        pointee
+                    }
+                    _ => return Err("dereference requires a reference".into()),
                 };
                 let ty = referent.as_ref().clone();
                 self.accessible(&ty)?;
@@ -7647,6 +7715,13 @@ impl<'a> Checker<'a> {
             }
             Expr::Block(b) => {
                 let (block, flow) = self.block_with_expectation(b, expectation)?;
+                (ir::ExprKind::Block(block), flow)
+            }
+            Expr::Unsafe(b) => {
+                self.unsafe_depth += 1;
+                let result = self.block_with_expectation(b, expectation);
+                self.unsafe_depth -= 1;
+                let (block, flow) = result?;
                 (ir::ExprKind::Block(block), flow)
             }
         };

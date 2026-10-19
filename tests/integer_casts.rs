@@ -491,11 +491,12 @@ fn main(){if run()==7{println!("cast oracle ok");}}"#,
 }
 
 #[test]
-fn rejects_legal_unsupported_reference_to_pointer() {
-    rejects(
-        "legalunsupported: reference_to_pointer",
+fn accepts_reference_to_pointer() {
+    // Formerly a legal-unsupported boundary; raw pointers landed (RAW-POINTERS.md).
+    runs(
         r#"fn run()->i32{let x=7;let p=&x as *const i32;7}
 fn main(){if run()==7{println!("cast oracle ok");}}"#,
+        "cast oracle ok\n",
     );
 }
 

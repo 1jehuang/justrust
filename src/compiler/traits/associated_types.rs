@@ -298,7 +298,11 @@ impl ValidatedTraitWorld {
                 }
                 child(element)?;
             }
-            Ty::Ref { referent, .. } | Ty::Slice { element: referent } => {
+            Ty::Ref { referent, .. }
+            | Ty::RawPtr {
+                pointee: referent, ..
+            }
+            | Ty::Slice { element: referent } => {
                 child(referent)?;
             }
             Ty::Struct(value) => {

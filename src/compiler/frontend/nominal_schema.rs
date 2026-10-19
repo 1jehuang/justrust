@@ -386,6 +386,19 @@ impl PlanState {
             Type::Slice(_) => {
                 return Err(BARE_SLICE_UNSUPPORTED.into());
             }
+            Type::RawPtr { kind, pointee } => ir::Ty::RawPtr {
+                kind: *kind,
+                pointee: Arc::new(self.source_ty_with_transport(
+                    registry,
+                    pointee,
+                    bindings,
+                    caller,
+                    budget,
+                    depth + 1,
+                    false,
+                    transport,
+                )?),
+            },
             Type::Array(element, len) => {
                 if *len > ir::MAX_ARRAY_LEN {
                     return Err("array length exceeds supported limit".into());

@@ -246,6 +246,7 @@ impl<'facts> CoverageMatrix<'facts> {
                 }
                 Ty::Param(_)
                 | Ty::Ref { .. }
+                | Ty::RawPtr { .. }
                 | Ty::Int(_)
                 | Ty::Float(_)
                 | Ty::Char

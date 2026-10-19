@@ -1824,6 +1824,11 @@ impl ValidatedTraitWorld {
                     },
                 )?;
             }
+            // A raw pointer is a Sized, Copy, loan-free scalar. Its pointee is
+            // validated as metadata only and may be unsized.
+            Ty::RawPtr { pointee, .. } => {
+                child(pointee, TypeUse::Root)?;
+            }
             Ty::Struct(t) => {
                 if t.def().id.snapshot != self.registry
                     || t.def().source_decl.snapshot != self.registry
@@ -2245,6 +2250,16 @@ impl ValidatedTraitWorld {
                 Ty::Ref {
                     kind: b,
                     referent: bt,
+                },
+            ) => Ok(a == b && self.eq_ty(at, bt, depth + 1)?),
+            (
+                Ty::RawPtr {
+                    kind: a,
+                    pointee: at,
+                },
+                Ty::RawPtr {
+                    kind: b,
+                    pointee: bt,
                 },
             ) => Ok(a == b && self.eq_ty(at, bt, depth + 1)?),
             (Ty::Struct(a), Ty::Struct(b)) => Ok(a.def().source_decl == b.def().source_decl
@@ -3575,6 +3590,16 @@ impl ValidatedTraitWorld {
                 Ty::Ref {
                     kind: b,
                     referent: b_ty,
+                },
+            ) if a == b => self.collect_nominal_mappings(a_ty, b_ty, output, depth + 1)?,
+            (
+                Ty::RawPtr {
+                    kind: a,
+                    pointee: a_ty,
+                },
+                Ty::RawPtr {
+                    kind: b,
+                    pointee: b_ty,
                 },
             ) if a == b => self.collect_nominal_mappings(a_ty, b_ty, output, depth + 1)?,
             (Ty::Tuple(a), Ty::Tuple(b)) if a.len() == b.len() => {
@@ -5778,6 +5803,7 @@ impl ValidatedTraitWorld {
             Ty::Ref { kind, .. } => item == CatalogItem::Sized || *kind == ir::BorrowKind::Shared,
             // `[T]` is neither Sized nor Copy/Clone.
             Ty::Slice { .. } | Ty::Str => false,
+            Ty::RawPtr { .. } => true,
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => true,
             Ty::AssociatedType(_) => {
                 return Err(FactsError::unsupported(

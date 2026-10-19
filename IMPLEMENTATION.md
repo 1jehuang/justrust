@@ -311,6 +311,9 @@ acceptance.
 - [ ] Specify unsafe validity, raw-pointer operations, alias/provenance rules,
       interior mutability and UnsafeCell interactions. Track genuinely unresolved
       language-model questions rather than inventing permissive defaults.
+      First slice landed (RAW-POINTERS.md): `*const/*mut T`, `unsafe {}`,
+      E0133-checked deref read/write, pointer casts and equality; pointee
+      storage is untracked by ownership/loan analysis.
 
 **Next:** agree a shared drop-obligation/cleanup IR contract and freeze observable
 Drop-order plus rejected-escape fixtures. In parallel classify aggregate-region

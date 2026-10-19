@@ -175,7 +175,8 @@ fn indirect(ty: &ir::Ty) -> Result<bool, String> {
         | ir::Ty::Bool
         | ir::Ty::Unit
         | ir::Ty::Never
-        | ir::Ty::Ref { .. } => Ok(false),
+        | ir::Ty::Ref { .. }
+        | ir::Ty::RawPtr { .. } => Ok(false),
         ir::Ty::Param(_) => Err("type parameter has no native ABI".into()),
         ir::Ty::AssociatedType(_) => Err("unresolved associated type has no native ABI".into()),
         ir::Ty::Slice { .. } | ir::Ty::Str => Err(SLICE_UNSUPPORTED.into()),
@@ -257,7 +258,8 @@ fn value_size(ty: &ir::Ty) -> Result<i32, String> {
             | ir::Ty::Bool
             | ir::Ty::Unit
             | ir::Ty::Never
-            | ir::Ty::Ref { .. } => Ok(8),
+            | ir::Ty::Ref { .. }
+            | ir::Ty::RawPtr { .. } => Ok(8),
             _ => Err("unknown concrete native layout shape".into()),
         },
     }
@@ -479,7 +481,11 @@ impl<'a> Emitter<'a> {
         while let Some(projection) = projections.next() {
             let (field, next) = match projection {
                 ir::Projection::Deref => {
-                    let ir::Ty::Ref { referent, .. } = ty else {
+                    let (ir::Ty::Ref { referent, .. }
+                    | ir::Ty::RawPtr {
+                        pointee: referent, ..
+                    }) = ty
+                    else {
                         return Err("dereference requires reference storage".into());
                     };
                     if indirect_base {
@@ -1575,6 +1581,13 @@ impl<'a> Emitter<'a> {
                     return Err("character cast requires u8 source".into());
                 }
                 // All 256 canonical u8 values are Unicode scalar values.
+                self.operand(value)?;
+            }
+            cfg::Rvalue::PtrCast { value, to } => {
+                if !ir::ptr_cast_valid(&self.function().operand_ty(value)?, to) {
+                    return Err("pointer cast requires a supported pointer pair".into());
+                }
+                // References, raw pointers and usize share one address word.
                 self.operand(value)?;
             }
             cfg::Rvalue::IntCast { value, to } => {

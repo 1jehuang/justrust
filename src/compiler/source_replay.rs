@@ -17,6 +17,7 @@ pub(super) enum InferKind {
     Tuple(Arc<[InferTerm]>),
     Array(InferTerm, usize),
     Ref(ir::BorrowKind, InferTerm),
+    RawPtr(ir::BorrowKind, InferTerm),
     Nominal(ir::DeclId, Arc<[InferTerm]>),
 }
 
@@ -92,6 +93,18 @@ impl CallInferenceState {
                     Some(ir::Ty::Ref {
                         kind: *kind,
                         referent: Arc::new(ty),
+                    })
+                } else {
+                    None
+                }
+            }
+            InferKind::RawPtr(kind, term) => {
+                let value = self.resolve(term, fallback, depth + 1, materialize)?;
+                if let Some(ty) = value {
+                    self.storage(1)?;
+                    Some(ir::Ty::RawPtr {
+                        kind: *kind,
+                        pointee: Arc::new(ty),
                     })
                 } else {
                     None
@@ -232,6 +245,9 @@ impl CallInferenceState {
             InferKind::Ref(kind, referent) => {
                 InferKind::Ref(*kind, self.taint(referent, depth + 1)?)
             }
+            InferKind::RawPtr(kind, pointee) => {
+                InferKind::RawPtr(*kind, self.taint(pointee, depth + 1)?)
+            }
             InferKind::Array(element, len) => {
                 InferKind::Array(self.taint(element, depth + 1)?, *len)
             }
@@ -312,6 +328,9 @@ impl CallInferenceState {
             (InferKind::Ref(k, x), InferKind::Ref(l, y)) if k == l => {
                 self.node(InferKind::Ref(*k, self.merge(x, y, depth + 1)?))
             }
+            (InferKind::RawPtr(k, x), InferKind::RawPtr(l, y)) if k == l => {
+                self.node(InferKind::RawPtr(*k, self.merge(x, y, depth + 1)?))
+            }
             (InferKind::Array(x, n), InferKind::Array(y, m)) if n == m => {
                 self.node(InferKind::Array(self.merge(x, y, depth + 1)?, *n))
             }
@@ -349,9 +368,9 @@ impl CallInferenceState {
                     self.occurs(slot, f, depth + 1)?;
                 }
             }
-            InferKind::Array(element, _) | InferKind::Ref(_, element) => {
-                self.occurs(slot, element, depth + 1)?
-            }
+            InferKind::Array(element, _)
+            | InferKind::Ref(_, element)
+            | InferKind::RawPtr(_, element) => self.occurs(slot, element, depth + 1)?,
             _ => {}
         }
         Ok(())
@@ -408,6 +427,16 @@ impl CallInferenceState {
                 _ => Err(FactsError::invalid(
                     &self.budget,
                     "generic reference inference kind or shape mismatch",
+                )),
+            },
+            InferKind::RawPtr(kind, pointee) => match evidence.as_ref() {
+                InferKind::RawPtr(actual_kind, actual) if kind == actual_kind => {
+                    self.constrain(pointee, actual, depth + 1)
+                }
+                InferKind::Unknown(_) => self.constrain(pointee, evidence, depth + 1),
+                _ => Err(FactsError::invalid(
+                    &self.budget,
+                    "generic raw pointer inference kind or shape mismatch",
                 )),
             },
             InferKind::Array(element, len) => match evidence.as_ref() {
@@ -473,6 +502,9 @@ impl CallInferenceState {
             }
             ir::Ty::Ref { kind, referent } => {
                 InferKind::Ref(*kind, self.type_term(referent, schema, depth + 1)?)
+            }
+            ir::Ty::RawPtr { kind, pointee } => {
+                InferKind::RawPtr(*kind, self.type_term(pointee, schema, depth + 1)?)
             }
             ir::Ty::Array { element, len } => {
                 InferKind::Array(self.type_term(element, schema, depth + 1)?, *len)
@@ -870,7 +902,8 @@ fn terms_equal(
         | (InferKind::Float, InferKind::Float)
         | (InferKind::UnknownFloat, InferKind::UnknownFloat) => true,
         (InferKind::Unknown(a), InferKind::Unknown(b)) => a == b,
-        (InferKind::Ref(a, x), InferKind::Ref(b, y)) => {
+        (InferKind::Ref(a, x), InferKind::Ref(b, y))
+        | (InferKind::RawPtr(a, x), InferKind::RawPtr(b, y)) => {
             a == b && terms_equal(x, y, budget, at + 1)?
         }
         (InferKind::Array(x, a), InferKind::Array(y, b)) => {

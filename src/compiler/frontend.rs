@@ -738,9 +738,11 @@ fn compare_source_type_work(
             }
             compare_source_type_work(referent, budget, at + 1)?;
         }
-        Type::Array(element, _) | Type::Slice(element) => {
-            compare_source_type_work(element, budget, at + 1)?
-        }
+        Type::Array(element, _)
+        | Type::Slice(element)
+        | Type::RawPtr {
+            pointee: element, ..
+        } => compare_source_type_work(element, budget, at + 1)?,
         Type::Tuple(fields) => {
             for field in fields {
                 compare_source_type_work(field, budget, at + 1)?;
@@ -913,6 +915,10 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
             Type::Array(Box::new(copy_source_type(element, budget, at + 1)?), *len)
         }
         Type::Slice(element) => Type::Slice(Box::new(copy_source_type(element, budget, at + 1)?)),
+        Type::RawPtr { kind, pointee } => Type::RawPtr {
+            kind: *kind,
+            pointee: Box::new(copy_source_type(pointee, budget, at + 1)?),
+        },
         Type::Tuple(fields) => {
             let mut result = Vec::new();
             result
@@ -1002,9 +1008,11 @@ fn retain_source_type(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resul
             }
             retain_source_type(referent, budget, depth + 1)?;
         }
-        Type::Array(element, _) | Type::Slice(element) => {
-            retain_source_type(element, budget, depth + 1)?
-        }
+        Type::Array(element, _)
+        | Type::Slice(element)
+        | Type::RawPtr {
+            pointee: element, ..
+        } => retain_source_type(element, budget, depth + 1)?,
         Type::Tuple(fields) => {
             for field in fields {
                 retain_source_type(field, budget, depth + 1)?;
@@ -1771,6 +1779,7 @@ impl SourceInventory {
                 )?;
             }
             Expr::Block(block)
+            | Expr::Unsafe(block)
             | Expr::Loop { body: block, .. }
             | Expr::LabeledBlock { body: block, .. } => {
                 self.block(block, &node.child(19, 0, budget)?, false, budget, depth + 1)?
@@ -4452,6 +4461,11 @@ pub enum Type {
     Array(Box<Type>, usize),
     /// Unsized `[T]`. Admitted values require a checked shared reference.
     Slice(Box<Type>),
+    /// `*const T` (Shared) or `*mut T` (Mut).
+    RawPtr {
+        kind: ir::BorrowKind,
+        pointee: Box<Type>,
+    },
     Int(ir::IntTy),
     Float(ir::FloatTy),
     Char,
@@ -5064,6 +5078,9 @@ pub enum Expr {
         else_branch: Option<Box<Expr>>,
     },
     Block(Block),
+    /// `unsafe { ... }`: an ordinary block whose body may perform unsafe
+    /// operations (raw pointer dereference, unsafe calls).
+    Unsafe(Block),
     /// `'label: { ... }`. Only labeled breaks may target it (E0695/E0696).
     LabeledBlock {
         label: AstIdent,
@@ -7534,6 +7551,20 @@ impl<'input, 'names> Parser<'input, 'names> {
                 referent: Box::new(self.ty()?),
             });
         }
+        if !self.token().string && self.is("*") {
+            self.cursor.bump();
+            let kind = if self.eat("mut") {
+                ir::BorrowKind::Mut
+            } else if self.eat("const") {
+                ir::BorrowKind::Shared
+            } else {
+                return Err(self.error("expected mut or const after * in raw pointer type"));
+            };
+            return Ok(Type::RawPtr {
+                kind,
+                pointee: Box::new(self.ty()?),
+            });
+        }
         if self.is("<") || self.is("<<") || self.is("<<=") {
             return self.qualified_type_projection();
         }
@@ -9987,8 +10018,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             } else {
                 // Statement eligibility comes from written syntax, not a
                 // lowered macro's AST shape (assert! lowers to Expr::If).
-                let source_blocklike = matches!(self.token().text, "if" | "match" | "loop" | "{")
-                    || self.token().is_lifetime();
+                let source_blocklike =
+                    matches!(self.token().text, "if" | "match" | "loop" | "{" | "unsafe")
+                        || self.token().is_lifetime();
                 let brace_macro = self.is_identifier()
                     && self.cursor.peek(1).is_some_and(|token| token.matches("!"))
                     && self.cursor.peek(2).is_some_and(|token| token.matches("{"));
@@ -10041,6 +10073,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                             Expr::If { .. }
                                 | Expr::IfLet { .. }
                                 | Expr::Block(_)
+                                | Expr::Unsafe(_)
                                 | Expr::LabeledBlock { .. }
                                 | Expr::Loop { .. }
                                 | Expr::Match { .. }
@@ -10275,7 +10308,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             return self.labeled_expression(min, statement);
         }
         let statement_blocklike =
-            statement && matches!(self.token().text, "if" | "match" | "loop" | "{");
+            statement && matches!(self.token().text, "if" | "match" | "loop" | "{" | "unsafe");
         if self.is("&&") {
             return Err(self.unsupported("nested reference borrows are unsupported in B1"));
         }
@@ -10362,6 +10395,13 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         if self.is("{") {
             return Ok(Expr::Block(self.block()?));
+        }
+        if !self.token().string
+            && self.is("unsafe")
+            && self.cursor.peek(1).is_some_and(|token| token.matches("{"))
+        {
+            self.cursor.bump();
+            return Ok(Expr::Unsafe(self.block()?));
         }
         self.ordinary_expr_prefix(statement)
     }
@@ -10672,8 +10712,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             let frontier = self.enter_lexical()?;
             self.bind_pattern_lexical(&pattern)?;
             let direct_return = self.eat("return");
-            let source_blocklike = matches!(self.token().text, "if" | "match" | "loop" | "{")
-                || self.token().is_lifetime();
+            let source_blocklike =
+                matches!(self.token().text, "if" | "match" | "loop" | "{" | "unsafe")
+                    || self.token().is_lifetime();
             let brace_macro = self.is_identifier()
                 && self.cursor.peek(1).is_some_and(|token| token.matches("!"))
                 && self.cursor.peek(2).is_some_and(|token| token.matches("{"));
@@ -10695,6 +10736,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 && matches!(
                     body,
                     Expr::Block(_)
+                        | Expr::Unsafe(_)
                         | Expr::If { .. }
                         | Expr::IfLet { .. }
                         | Expr::Loop { .. }
@@ -10730,6 +10772,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         | Expr::Loop { .. }
                         | Expr::LabeledBlock { .. }
                         | Expr::Block(_)
+                        | Expr::Unsafe(_)
                 )
                 && self.is("[")
             {
@@ -10787,6 +10830,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         | Expr::Loop { .. }
                         | Expr::LabeledBlock { .. }
                         | Expr::Block(_)
+                        | Expr::Unsafe(_)
                 )
             {
                 break;
@@ -12320,9 +12364,13 @@ fn walk_depth_inspecting(
                 }
             }
             DepthNode::Type(Type::Ref { referent, .. }) => push(DepthNode::Type(referent))?,
-            DepthNode::Type(Type::Array(element, _) | Type::Slice(element)) => {
-                push(DepthNode::Type(element))?
-            }
+            DepthNode::Type(
+                Type::Array(element, _)
+                | Type::Slice(element)
+                | Type::RawPtr {
+                    pointee: element, ..
+                },
+            ) => push(DepthNode::Type(element))?,
             DepthNode::Type(Type::Tuple(fields)) => {
                 for field in fields {
                     push(DepthNode::Type(field))?;
@@ -12526,6 +12574,7 @@ fn walk_depth_inspecting(
                     push(DepthNode::Block(else_block))?;
                 }
                 Expr::Block(block)
+                | Expr::Unsafe(block)
                 | Expr::Loop { body: block, .. }
                 | Expr::LabeledBlock { body: block, .. } => push(DepthNode::Block(block))?,
                 Expr::Break {
@@ -12727,6 +12776,16 @@ fn exact_source_type(
             exact_source_type(names, a, b, budget, depth + 1)? && al == bl
         }
         (Type::Slice(a), Type::Slice(b)) => exact_source_type(names, a, b, budget, depth + 1)?,
+        (
+            Type::RawPtr {
+                kind: ak,
+                pointee: a,
+            },
+            Type::RawPtr {
+                kind: bk,
+                pointee: b,
+            },
+        ) => exact_source_type(names, a, b, budget, depth + 1)? && ak == bk,
         (Type::Tuple(a), Type::Tuple(b)) => {
             let mut equal = a.len() == b.len();
             for (a, b) in a.iter().zip(b) {
@@ -13427,6 +13486,9 @@ fn source_type_storage(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resu
         }
         Type::Array(element, _)
         | Type::Slice(element)
+        | Type::RawPtr {
+            pointee: element, ..
+        }
         | Type::Ref {
             referent: element, ..
         } => add(source_type_storage(element, budget, depth + 1)?)?,
@@ -16574,6 +16636,16 @@ fn metered_type_equal(
                 referent: y,
             },
         ) => Ok(a == b && metered_type_equal(x, y, budget, depth + 1)?),
+        (
+            ir::Ty::RawPtr {
+                kind: a,
+                pointee: x,
+            },
+            ir::Ty::RawPtr {
+                kind: b,
+                pointee: y,
+            },
+        ) => Ok(a == b && metered_type_equal(x, y, budget, depth + 1)?),
         (ir::Ty::Struct(a), ir::Ty::Struct(b)) => Ok(a.def().id == b.def().id),
         (ir::Ty::Enum(a), ir::Ty::Enum(b)) => Ok(a.def().id == b.def().id),
         (
@@ -17212,7 +17284,10 @@ fn collect_source_params(
                 collect_source_params(names, f, used, budget, depth + 1)?;
             }
         }
-        Type::Array(t, _) | Type::Slice(t) | Type::Ref { referent: t, .. } => {
+        Type::Array(t, _)
+        | Type::Slice(t)
+        | Type::RawPtr { pointee: t, .. }
+        | Type::Ref { referent: t, .. } => {
             collect_source_params(names, t, used, budget, depth + 1)?
         }
         _ => {}

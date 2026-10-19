@@ -114,7 +114,12 @@ impl Resolver<'_> {
                     found |= self.contains_projection(field, depth + 1)?;
                 }
             }
-            Type::Ref { referent, .. } | Type::Array(referent, _) | Type::Slice(referent) => {
+            Type::Ref { referent, .. }
+            | Type::Array(referent, _)
+            | Type::Slice(referent)
+            | Type::RawPtr {
+                pointee: referent, ..
+            } => {
                 found |= self.contains_projection(referent, depth + 1)?;
             }
             _ => {}
@@ -469,7 +474,10 @@ impl Resolver<'_> {
                         Type::Tuple(fields) => pending.extend(fields),
                         Type::Ref { referent, .. }
                         | Type::Array(referent, _)
-                        | Type::Slice(referent) => pending.push(referent),
+                        | Type::Slice(referent)
+                        | Type::RawPtr {
+                            pointee: referent, ..
+                        } => pending.push(referent),
                         _ => {}
                     }
                 }
@@ -658,9 +666,12 @@ impl Resolver<'_> {
                     self.collect_params(field, used, depth + 1)?;
                 }
             }
-            Type::Ref { referent, .. } | Type::Array(referent, _) | Type::Slice(referent) => {
-                self.collect_params(referent, used, depth + 1)?
-            }
+            Type::Ref { referent, .. }
+            | Type::Array(referent, _)
+            | Type::Slice(referent)
+            | Type::RawPtr {
+                pointee: referent, ..
+            } => self.collect_params(referent, used, depth + 1)?,
             _ => {}
         }
         Ok(())
@@ -741,9 +752,12 @@ impl Resolver<'_> {
                     self.alias_use(field, source, depth + 1)?;
                 }
             }
-            Type::Ref { referent, .. } | Type::Array(referent, _) | Type::Slice(referent) => {
-                self.alias_use(referent, source, depth + 1)?
-            }
+            Type::Ref { referent, .. }
+            | Type::Array(referent, _)
+            | Type::Slice(referent)
+            | Type::RawPtr {
+                pointee: referent, ..
+            } => self.alias_use(referent, source, depth + 1)?,
             _ => {}
         }
         Ok(())
@@ -808,9 +822,12 @@ impl Resolver<'_> {
                     self.substitute(field, params, args, depth + 1)?;
                 }
             }
-            Type::Ref { referent, .. } | Type::Array(referent, _) | Type::Slice(referent) => {
-                self.substitute(referent, params, args, depth + 1)?
-            }
+            Type::Ref { referent, .. }
+            | Type::Array(referent, _)
+            | Type::Slice(referent)
+            | Type::RawPtr {
+                pointee: referent, ..
+            } => self.substitute(referent, params, args, depth + 1)?,
             _ => {}
         }
         Ok(())
@@ -1724,7 +1741,11 @@ impl Resolver<'_> {
                 }
             }
             Type::Ref { referent, .. } => self.ty(referent, module)?,
-            Type::Array(element, _) | Type::Slice(element) => self.ty(element, module)?,
+            Type::Array(element, _)
+            | Type::Slice(element)
+            | Type::RawPtr {
+                pointee: element, ..
+            } => self.ty(element, module)?,
             Type::Named(name) => {
                 let item = self
                     .path(name, module, true, false)?
@@ -2858,6 +2879,7 @@ impl Resolver<'_> {
                 self.block(else_block, module, locals)?;
             }
             Expr::Block(block)
+            | Expr::Unsafe(block)
             | Expr::Loop { body: block, .. }
             | Expr::LabeledBlock { body: block, .. } => self.block(block, module, locals)?,
             Expr::Break {

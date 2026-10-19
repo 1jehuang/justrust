@@ -307,6 +307,13 @@ impl Encoder<'_> {
                 }])?;
                 self.pattern(referent, env, depth + 1)
             }
+            ir::Ty::RawPtr { kind, pointee } => {
+                self.append(match kind {
+                    ir::BorrowKind::Shared => b"P",
+                    ir::BorrowKind::Mut => b"M",
+                })?;
+                self.pattern(pointee, env, depth + 1)
+            }
             ir::Ty::Never => Err("unsupported associated instance self pattern".into()),
             ir::Ty::AssociatedType(_) => {
                 Err("associated instance pattern contains unresolved associated type".into())
@@ -377,6 +384,13 @@ impl Encoder<'_> {
                     ir::BorrowKind::Mut => b"rm",
                 })?;
                 self.ty(referent, depth + 1)
+            }
+            ir::Ty::RawPtr { kind, pointee } => {
+                self.append(match kind {
+                    ir::BorrowKind::Shared => b"P",
+                    ir::BorrowKind::Mut => b"M",
+                })?;
+                self.ty(pointee, depth + 1)
             }
         }
     }
@@ -465,7 +479,10 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
             | ir::Ty::Bool
             | ir::Ty::Unit
             | ir::Ty::Never => {}
-            ir::Ty::Ref { referent, .. } => walk(referent, depth + 1, budget)?,
+            ir::Ty::Ref { referent, .. }
+            | ir::Ty::RawPtr {
+                pointee: referent, ..
+            } => walk(referent, depth + 1, budget)?,
             ir::Ty::Param(_) | ir::Ty::AssociatedType(_) => {
                 return Err("generic instance has non-closed argument".into());
             }

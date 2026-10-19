@@ -442,6 +442,8 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                     }
                 }
             }
+            // Raw pointers carry no loan or provenance channel.
+            Ty::RawPtr { .. } => {}
             Ty::Param(_)
             | Ty::Int(_)
             | Ty::Float(_)
@@ -599,7 +601,8 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                     | Ty::Str
                     | Ty::Bool
                     | Ty::Unit
-                    | Ty::Never => {}
+                    | Ty::Never
+                    | Ty::RawPtr { .. } => {}
                     Ty::Ref { .. } | Ty::Param(_) => unreachable!(),
                 }
                 path.truncate(saved);
@@ -1114,6 +1117,16 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
             Ty::Ref {
                 kind: bk,
                 referent: b,
+            },
+        ) => ak == bk && Arc::ptr_eq(a, b),
+        (
+            Ty::RawPtr {
+                kind: ak,
+                pointee: a,
+            },
+            Ty::RawPtr {
+                kind: bk,
+                pointee: b,
             },
         ) => ak == bk && Arc::ptr_eq(a, b),
         (
@@ -2329,6 +2342,21 @@ fn substitute_ty_walk(
                 )?),
             }
         }
+        Ty::RawPtr { kind, pointee } => {
+            budget.retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
+            Ty::RawPtr {
+                kind: *kind,
+                pointee: Arc::new(substitute_ty_walk(
+                    pointee,
+                    env,
+                    args,
+                    caller,
+                    cx,
+                    budget,
+                    depth + 1,
+                )?),
+            }
+        }
         Ty::Ref { kind, referent } => {
             budget.retain_bytes(std::mem::size_of::<Ty>() + 2 * std::mem::size_of::<usize>())?;
             Ty::Ref {
@@ -2494,6 +2522,7 @@ pub fn instantiate_checked(
             | ExprKind::LabeledBlock { body: block, .. } => visitor.block(block, 0)?,
             ExprKind::CharToInt { .. }
             | ExprKind::U8ToChar { .. }
+            | ExprKind::PtrCast { .. }
             | ExprKind::LeadingZeros { .. }
             | ExprKind::IntCast { .. }
             | ExprKind::FloatCast { .. }
@@ -2855,7 +2884,10 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
                     walk(field, budget, depth + 1)?;
                 }
             }
-            Ty::Array { element, .. } => walk(element, budget, depth + 1)?,
+            Ty::Array { element, .. }
+            | Ty::RawPtr {
+                pointee: element, ..
+            } => walk(element, budget, depth + 1)?,
             Ty::Struct(value) => {
                 for argument in value.def().type_args.iter() {
                     walk(argument, budget, depth + 1)?;
@@ -3384,6 +3416,44 @@ pub enum BorrowKind {
     Mut,
 }
 
+/// Index of the first `Deref` in `path` whose base has raw pointer type.
+/// Storage reached through a raw pointer is outside every tracked canonical
+/// root: analyses check the pointer prefix and treat the rest as untracked.
+pub fn raw_deref_index(root: &Ty, path: &[Projection]) -> Option<usize> {
+    let mut ty = root;
+    let mut steps = path.iter().enumerate();
+    while let Some((index, step)) = steps.next() {
+        ty = match step {
+            Projection::Deref => match ty {
+                Ty::RawPtr { .. } => return Some(index),
+                Ty::Ref { referent, .. } => referent,
+                _ => return None,
+            },
+            Projection::Field(field) => ty.field_ty(*field)?,
+            Projection::ConstantIndex(_) => match ty {
+                Ty::Array { element, .. } => element,
+                _ => return None,
+            },
+            Projection::Downcast(variant) => {
+                let Ty::Enum(owner) = ty else {
+                    return None;
+                };
+                let Some((_, Projection::Field(field))) = steps.next() else {
+                    return None;
+                };
+                &owner
+                    .def()
+                    .variants
+                    .get(variant.index)?
+                    .fields
+                    .get(*field)?
+                    .ty
+            }
+        };
+    }
+    None
+}
+
 /// Checks structural typing, not the runtime proof needed to read a payload.
 pub fn projected_ty<'a>(root: &'a Ty, path: &[Projection]) -> Result<&'a Ty, String> {
     projected_ty_inner(root, path, false)
@@ -3409,6 +3479,13 @@ fn projected_ty_inner<'a>(
     while let Some(projection) = path.next() {
         ty = match *projection {
             Projection::Deref => {
+                if let Ty::RawPtr { kind, pointee } = ty {
+                    if mutable && *kind != BorrowKind::Mut {
+                        return Err("mutation through a *const raw pointer".into());
+                    }
+                    ty = pointee;
+                    continue;
+                }
                 let Ty::Ref { kind, referent } = ty else {
                     return Err("dereference requires reference type".into());
                 };
@@ -3583,8 +3660,41 @@ pub enum Ty {
     /// Nominal and always non-Copy in this slice, even with only scalar fields.
     Struct(StructTy),
     Enum(EnumTy),
+    /// Raw pointer `*const T` (Shared) or `*mut T` (Mut). Always Copy, carries
+    /// no loan or provenance authority, and is only dereferenced in `unsafe`.
+    RawPtr {
+        kind: BorrowKind,
+        pointee: Arc<Ty>,
+    },
     /// The semantic never type, distinct from runtime completion information.
     Never,
+}
+
+/// Supported pointer-representation casts. All are one-word bit copies.
+/// `&T`/`&mut T` to `*const T`, `&mut T` to `*mut T`, any raw pointer to any
+/// raw pointer, raw pointer to `usize`, and `usize` to raw pointer.
+pub fn ptr_cast_valid(from: &Ty, to: &Ty) -> bool {
+    match (from, to) {
+        (
+            Ty::Ref { kind, referent },
+            Ty::RawPtr {
+                kind: target,
+                pointee,
+            },
+        ) => {
+            referent == pointee
+                && !matches!(referent.as_ref(), Ty::Slice { .. })
+                && (*target == BorrowKind::Shared || *kind == BorrowKind::Mut)
+        }
+        (Ty::RawPtr { pointee: a, .. }, Ty::RawPtr { pointee: b, .. }) => {
+            !matches!(a.as_ref(), Ty::Slice { .. }) && !matches!(b.as_ref(), Ty::Slice { .. })
+        }
+        (Ty::RawPtr { pointee, .. }, Ty::Int(IntTy::Usize))
+        | (Ty::Int(IntTy::Usize), Ty::RawPtr { pointee, .. }) => {
+            !matches!(pointee.as_ref(), Ty::Slice { .. })
+        }
+        _ => false,
+    }
 }
 
 /// Structural residual guard only. This does not establish declaration ownership,
@@ -3704,6 +3814,7 @@ fn type_metadata_walk(
                 (2, Arc::as_ptr(element) as usize)
             }
             Ty::Slice { element } => (3, Arc::as_ptr(element) as usize),
+            Ty::RawPtr { pointee, .. } => (7, Arc::as_ptr(pointee) as usize),
             Ty::Tuple(fields) => (4, fields.as_ptr() as usize),
             Ty::Struct(value) => {
                 if value.def().type_args.len() > 32 {
@@ -3783,6 +3894,9 @@ fn type_metadata_walk(
                 found = true;
             }
             Ty::Ref { referent, .. }
+            | Ty::RawPtr {
+                pointee: referent, ..
+            }
             | Ty::Array {
                 element: referent, ..
             }
@@ -3938,6 +4052,7 @@ impl Ty {
                 Self::Ref {
                     referent: inner, ..
                 }
+                | Self::RawPtr { pointee: inner, .. }
                 | Self::Array { element: inner, .. } => {
                     if seen.insert(Arc::as_ptr(inner) as usize) {
                         pending.push(inner);
@@ -3994,9 +4109,13 @@ impl Ty {
     pub fn is_copy(&self) -> bool {
         match self {
             Self::Ref { kind, .. } => *kind == BorrowKind::Shared,
-            Self::Int(_) | Self::Float(_) | Self::Char | Self::Bool | Self::Unit | Self::Never => {
-                true
-            }
+            Self::Int(_)
+            | Self::Float(_)
+            | Self::Char
+            | Self::Bool
+            | Self::Unit
+            | Self::Never
+            | Self::RawPtr { .. } => true,
             Self::AssociatedType(_)
             | Self::Struct(_)
             | Self::Enum(_)
@@ -4941,7 +5060,10 @@ fn ref_type_walk(
                 }
                 child(element)?;
             }
-            Ty::Slice { element } => child(element)?,
+            Ty::Slice { element }
+            | Ty::RawPtr {
+                pointee: element, ..
+            } => child(element)?,
             Ty::Str => {}
             Ty::Struct(value) => {
                 for argument in value.def().type_args.iter() {
@@ -5057,6 +5179,16 @@ fn ref_types_equal(
                 Ty::Ref {
                     kind: b,
                     referent: y,
+                },
+            ) => a == b && child(x, y)?,
+            (
+                Ty::RawPtr {
+                    kind: a,
+                    pointee: x,
+                },
+                Ty::RawPtr {
+                    kind: b,
+                    pointee: y,
                 },
             ) => a == b && child(x, y)?,
             (Ty::Struct(a), Ty::Struct(b)) => a.def().id == b.def().id,
@@ -5568,6 +5700,20 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
                     pending.push((a, b, depth + 1));
                 }
             }
+            (
+                Ty::RawPtr {
+                    kind: ak,
+                    pointee: a,
+                },
+                Ty::RawPtr {
+                    kind: bk,
+                    pointee: b,
+                },
+            ) if ak == bk => {
+                if !Arc::ptr_eq(a, b) {
+                    pending.push((a, b, depth + 1));
+                }
+            }
             (Ty::Int(a), Ty::Int(b)) if a == b => {}
             (Ty::Float(a), Ty::Float(b)) if a == b => {}
             (Ty::Param(a), Ty::Param(b)) if a == b => {}
@@ -5837,6 +5983,12 @@ pub enum ExprKind {
         to: IntTy,
     },
     U8ToChar {
+        value: ExprId,
+    },
+    /// Pointer-representation `as` cast: reference to raw pointer, raw pointer
+    /// to raw pointer, raw pointer to usize, or usize to raw pointer. The
+    /// result type is the expression type; `ptr_cast_valid` is authoritative.
+    PtrCast {
         value: ExprId,
     },
     IntCast {
@@ -6517,6 +6669,7 @@ impl CheckedFunction {
                 }
                 ExprKind::CharToInt { .. }
                 | ExprKind::U8ToChar { .. }
+                | ExprKind::PtrCast { .. }
                 | ExprKind::LeadingZeros { .. }
                 | ExprKind::IntCast { .. }
                 | ExprKind::FloatCast { .. }
@@ -7021,6 +7174,16 @@ impl CheckedFunction {
                         return Err("character cast completion mismatch".into());
                     }
                 }
+                ExprKind::PtrCast { value: source } => {
+                    expr(*source)?;
+                    let source = &self.exprs[source.0];
+                    if !ptr_cast_valid(&source.ty, &value.ty) {
+                        return Err("pointer cast requires a supported pointer pair".into());
+                    }
+                    if value.completion != source.completion {
+                        return Err("pointer cast completion mismatch".into());
+                    }
+                }
                 ExprKind::LeadingZeros { value: source } => {
                     expr(*source)?;
                     let source = &self.exprs[source.0];
@@ -7167,7 +7330,11 @@ impl CheckedFunction {
                 }
                 ExprKind::Deref { value: source } => {
                     expr(*source)?;
-                    let Ty::Ref { referent, .. } = &self.exprs[source.0].ty else {
+                    let (Ty::Ref { referent, .. }
+                    | Ty::RawPtr {
+                        pointee: referent, ..
+                    }) = &self.exprs[source.0].ty
+                    else {
                         return Err("dereference requires reference type".into());
                     };
                     if !pattern_types_equal(&value.ty, referent, &mut 0)? {
@@ -7390,7 +7557,12 @@ impl CheckedFunction {
                         // remains a closed scalar operation, not structural/trait equality.
                         if !matches!(
                             lhs.ty,
-                            Ty::Unit | Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_)
+                            Ty::Unit
+                                | Ty::Bool
+                                | Ty::Char
+                                | Ty::Int(_)
+                                | Ty::Float(_)
+                                | Ty::RawPtr { .. }
                         ) || !ref_types_equal(&lhs.ty, &rhs.ty, conditional_budget, 0)?
                             || !ref_types_equal(&value.ty, &Ty::Bool, conditional_budget, 0)?
                         {

@@ -608,9 +608,11 @@ impl<'a> Validator<'a> {
                     }
                     self.push(Visit::Type(referent))?;
                 }
-                Type::Array(element, _) | Type::Slice(element) => {
-                    self.push(Visit::Type(element))?
-                }
+                Type::Array(element, _)
+                | Type::Slice(element)
+                | Type::RawPtr {
+                    pointee: element, ..
+                } => self.push(Visit::Type(element))?,
                 Type::Tuple(elements) => self.many(elements, Visit::Type)?,
                 Type::SelfType
                 | Type::Int(_)
@@ -886,7 +888,7 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Block(then_block))?;
                     self.push(Visit::Expr(condition))?;
                 }
-                Expr::Block(block) => self.push(Visit::Block(block))?,
+                Expr::Block(block) | Expr::Unsafe(block) => self.push(Visit::Block(block))?,
                 Expr::LabeledBlock { label, body } => {
                     self.push(Visit::Ident(*label, LookupClass::Label))?;
                     self.push(Visit::Block(body))?;

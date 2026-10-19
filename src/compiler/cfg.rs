@@ -295,6 +295,7 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
         | (Rvalue::SliceLen { slice: a }, Rvalue::SliceLen { slice: b })
         | (Rvalue::CharToInt { value: a, .. }, Rvalue::CharToInt { value: b, .. })
         | (Rvalue::U8ToChar { value: a }, Rvalue::U8ToChar { value: b })
+        | (Rvalue::PtrCast { value: a, .. }, Rvalue::PtrCast { value: b, .. })
         | (Rvalue::LeadingZeros { value: a }, Rvalue::LeadingZeros { value: b })
         | (Rvalue::IntCast { value: a, .. }, Rvalue::IntCast { value: b, .. })
         | (Rvalue::FloatCast { value: a, .. }, Rvalue::FloatCast { value: b, .. })
@@ -454,6 +455,11 @@ pub enum Rvalue {
     U8ToChar {
         value: Operand,
     },
+    /// One-word pointer representation cast to `to` (see `ir::ptr_cast_valid`).
+    PtrCast {
+        value: Operand,
+        to: Ty,
+    },
     /// Count leading zero bits in an integer operand, producing u32.
     LeadingZeros {
         value: Operand,
@@ -565,6 +571,7 @@ impl Rvalue {
             Self::Use(value)
             | Self::CharToInt { value, .. }
             | Self::U8ToChar { value }
+            | Self::PtrCast { value, .. }
             | Self::LeadingZeros { value }
             | Self::IntCast { value, .. }
             | Self::FloatCast { value, .. }
@@ -1596,6 +1603,7 @@ impl Function {
                             Rvalue::Use(value)
                             | Rvalue::CharToInt { value, .. }
                             | Rvalue::U8ToChar { value }
+                            | Rvalue::PtrCast { value, .. }
                             | Rvalue::LeadingZeros { value }
                             | Rvalue::IntCast { value, .. }
                             | Rvalue::FloatCast { value, .. }
@@ -1852,7 +1860,8 @@ impl Function {
             return Ok(if comparison { Ty::Bool } else { left });
         }
         if !matches!(left, Ty::Int(_))
-            && !(matches!(op, BinaryOp::Eq | BinaryOp::Ne) && matches!(left, Ty::Bool | Ty::Unit))
+            && !(matches!(op, BinaryOp::Eq | BinaryOp::Ne)
+                && matches!(left, Ty::Bool | Ty::Unit | Ty::RawPtr { .. }))
             && !(matches!(op, BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor)
                 && left == Ty::Bool)
         {
@@ -1915,6 +1924,12 @@ impl Function {
                     return Err("CFG character cast requires u8 source".into());
                 }
                 Ok(Ty::Char)
+            }
+            Rvalue::PtrCast { value, to } => {
+                if !ir::ptr_cast_valid(&self.operand_ty_with_facts(value, facts)?, to) {
+                    return Err("CFG pointer cast requires a supported pointer pair".into());
+                }
+                Ok(to.clone())
             }
             Rvalue::LeadingZeros { value } => {
                 if !matches!(self.operand_ty_with_facts(value, facts)?, Ty::Int(_)) {
@@ -3409,6 +3424,10 @@ impl Lowerer<'_> {
             Some(ir::ExprKind::U8ToChar { value }) => {
                 self.materialize_cast(id, *value, |value| Rvalue::U8ToChar { value })
             }
+            Some(ir::ExprKind::PtrCast { value }) => {
+                let to = self.source.exprs[id.0].ty.clone();
+                self.materialize_cast(id, *value, |value| Rvalue::PtrCast { value, to })
+            }
             Some(ir::ExprKind::LeadingZeros { value }) => {
                 self.materialize_cast(id, *value, |value| Rvalue::LeadingZeros { value })
             }
@@ -3492,6 +3511,11 @@ impl Lowerer<'_> {
             ir::ExprKind::U8ToChar { value } => {
                 let value = self.expression(*value)?;
                 self.assign(destination.clone(), Rvalue::U8ToChar { value }, origin);
+            }
+            ir::ExprKind::PtrCast { value } => {
+                let value = self.expression(*value)?;
+                let to = expression.ty.clone();
+                self.assign(destination.clone(), Rvalue::PtrCast { value, to }, origin);
             }
             ir::ExprKind::LeadingZeros { value } => {
                 let value = self.expression(*value)?;
@@ -10523,6 +10547,7 @@ mod tests {
                             Rvalue::Use(value)
                             | Rvalue::CharToInt { value, .. }
                             | Rvalue::U8ToChar { value }
+                            | Rvalue::PtrCast { value, .. }
                             | Rvalue::LeadingZeros { value }
                             | Rvalue::IntCast { value, .. }
                             | Rvalue::FloatCast { value, .. }

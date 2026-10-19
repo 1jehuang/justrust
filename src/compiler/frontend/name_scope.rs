@@ -150,7 +150,11 @@ fn validate_type_names(ty: &Type, names: &impl NameAccess) -> Result<(), String>
                 work(names, 1)?;
                 pending.push(referent.as_ref()).map_err(transport)?;
             }
-            Type::Array(element, _) | Type::Slice(element) => {
+            Type::Array(element, _)
+            | Type::Slice(element)
+            | Type::RawPtr {
+                pointee: element, ..
+            } => {
                 work(names, 1)?;
                 pending.push(element.as_ref()).map_err(transport)?;
             }
@@ -308,6 +312,22 @@ impl Type {
                     })?;
                 }
                 (Type::Slice(a), Type::Slice(b)) => {
+                    work(names, 1)?;
+                    pending.push((a.as_ref(), b.as_ref())).map_err(|e| {
+                        super::super::source::SourceError::from_token(e).to_string()
+                    })?;
+                }
+                (
+                    Type::RawPtr {
+                        kind: ak,
+                        pointee: a,
+                    },
+                    Type::RawPtr {
+                        kind: bk,
+                        pointee: b,
+                    },
+                ) => {
+                    equal &= ak == bk;
                     work(names, 1)?;
                     pending.push((a.as_ref(), b.as_ref())).map_err(|e| {
                         super::super::source::SourceError::from_token(e).to_string()

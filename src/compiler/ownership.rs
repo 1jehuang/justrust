@@ -1466,6 +1466,10 @@ fn preflight_with_plan(
                         preflight_ty(&Ty::Char, 0, &mut budget)?;
                         operand(value, &mut budget)?;
                     }
+                    Rvalue::PtrCast { value, to } => {
+                        preflight_ty(to, 0, &mut budget)?;
+                        operand(value, &mut budget)?;
+                    }
                     Rvalue::FloatCast { value, to } => {
                         preflight_ty(&to.ty(), 0, &mut budget)?;
                         operand(value, &mut budget)?;
@@ -1692,9 +1696,13 @@ impl<'a> MoveShape<'a> {
             Ty::Ref { .. } if ty.is_shared_str() => Self::Scalar,
             Ty::Str => Self::Scalar,
             Ty::Ref { referent, .. } if referent.contains_slice() => return Err(Exhausted),
-            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Ref { .. } => {
-                Self::Scalar
-            }
+            Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Char
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Ref { .. }
+            | Ty::RawPtr { .. } => Self::Scalar,
         })
     }
 }
@@ -2149,7 +2157,15 @@ impl Transfer<'_> {
         };
         self.diagnostic(kind, place);
     }
+    /// Storage reached through a raw pointer dereference is untracked by
+    /// initialization, move and loan analysis (Rust leaves it to `unsafe`).
+    fn raw_deref(&self, place: &Place) -> Option<usize> {
+        super::ir::raw_deref_index(&self.f.locals[place.local.0].ty, &place.projection)
+    }
     fn targets(&mut self, place: &Place) -> Result<Vec<Target>, Exhausted> {
+        if self.raw_deref(place).is_some() {
+            return Ok(vec![]);
+        }
         if let Some(loans) = self.loans {
             match loans.resolve(place, self.block, self.statement, self.phase, self.budget)? {
                 Ok(targets) => Ok(targets),
@@ -2182,7 +2198,10 @@ impl Transfer<'_> {
         Ok(())
     }
     fn carrier_read(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
-        for (index, projection) in place.projection.iter().enumerate() {
+        let limit = self
+            .raw_deref(place)
+            .map_or(place.projection.len(), |index| index + 1);
+        for (index, projection) in place.projection[..limit].iter().enumerate() {
             if *projection != Projection::Deref {
                 continue;
             }
@@ -2191,6 +2210,12 @@ impl Transfer<'_> {
                 local: place.local,
                 projection: place.projection[..index].to_vec(),
             };
+            if self.loans.is_none() {
+                if index + 1 == limit && self.raw_deref(place).is_some() {
+                    self.read_raw(state, &carrier)?;
+                }
+                continue;
+            }
             for target in self.targets(&carrier)? {
                 self.check_access(&target, Access::Read)?;
                 self.read_canonical(state, &target.place)?;
@@ -2203,11 +2228,21 @@ impl Transfer<'_> {
             if *projection != Projection::Deref {
                 continue;
             }
+            let base = super::ir::projected_ty(
+                &self.f.locals[place.local.0].ty,
+                &place.projection[..index],
+            );
+            if let Ok(Ty::RawPtr { kind, .. }) = base {
+                if *kind != super::ir::BorrowKind::Mut {
+                    self.problem(
+                        Problem::Invalid("mutation through a *const raw pointer".into()),
+                        place.clone(),
+                    );
+                }
+                return;
+            }
             if !matches!(
-                super::ir::projected_ty(
-                    &self.f.locals[place.local.0].ty,
-                    &place.projection[..index]
-                ),
+                base,
                 Ok(Ty::Ref {
                     kind: super::ir::BorrowKind::Mut,
                     ..
@@ -2230,6 +2265,9 @@ impl Transfer<'_> {
         place: &Place,
         access: Access,
     ) -> Result<(), Exhausted> {
+        if self.raw_deref(place).is_some() {
+            return self.carrier_read(state, place);
+        }
         if self.loans.is_none() {
             return self.read_raw(state, place);
         }
@@ -2244,6 +2282,10 @@ impl Transfer<'_> {
         self.read_mode(state, place, Access::Read)
     }
     fn write(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
+        if self.raw_deref(place).is_some() {
+            self.mut_authority(place);
+            return self.carrier_read(state, place);
+        }
         if self.loans.is_none() {
             return self.write_raw(state, place);
         }
@@ -2612,6 +2654,7 @@ impl Transfer<'_> {
             | Rvalue::Unary { value: op, .. }
             | Rvalue::CharToInt { value: op, .. }
             | Rvalue::U8ToChar { value: op }
+            | Rvalue::PtrCast { value: op, .. }
             | Rvalue::IntCast { value: op, .. }
             | Rvalue::FloatCast { value: op, .. } => self.operand(state, op)?,
             // Unsizing copies the shared reference once. Its loan and origins
