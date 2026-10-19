@@ -280,7 +280,6 @@ fn builtin_matches_shadowing_and_source_statement_separation() {
         Some(Expr::Integer(_))
     ));
     for source in [
-        "macro_rules! matches{()=>{42};}fn main(){matches!()}",
         "fn main(){macro_rules! matches{(other)=>{42};}matches!(1,1)}",
         "fn main(){matches!(1,1) let x=1;}",
         "fn main(){matches![1,1] let x=1;}",
@@ -289,6 +288,12 @@ fn builtin_matches_shadowing_and_source_statement_separation() {
     ] {
         assert!(parse(source).is_err(), "{source}");
     }
+    // A module macro_rules! shadows the builtin, as in stock Rust.
+    let module = parse("macro_rules! matches{()=>{42};}fn main(){matches!()}").unwrap();
+    assert!(matches!(
+        module.functions[0].body.tail.as_deref(),
+        Some(Expr::Integer(_))
+    ));
     good("fn main(){matches!{1,1}; let x=1;}");
     good(
         "fn main(){matches!(1,1);{macro_rules! matches{()=>{42};}let x:i32=matches!();}matches!(1,1);}",

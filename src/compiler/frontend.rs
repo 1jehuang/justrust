@@ -42,6 +42,9 @@ mod token_cursor;
 use char_literal::{parse_byte_literal, parse_char_literal};
 mod deref_coercion;
 mod format_args;
+mod int_consts;
+mod format_macros;
+pub use format_macros::SourceFormatInto;
 mod format_spec;
 mod operators;
 mod panic_format;
@@ -1025,10 +1028,6 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
         Type::Array(element, len) => {
             Type::Array(Box::new(copy_source_type(element, budget, at + 1)?), *len)
         }
-        Type::ParamArray(element, len) => {
-            Type::ParamArray(Box::new(copy_source_type(element, budget, at + 1)?), *len)
-        }
-        Type::ConstArg(value) => Type::ConstArg(*value),
         Type::Slice(element) => Type::Slice(Box::new(copy_source_type(element, budget, at + 1)?)),
         Type::RawPtr { kind, pointee } => Type::RawPtr {
             kind: *kind,
@@ -1160,12 +1159,10 @@ fn source_type_mentions_self(
         },
         Type::Ref { referent, .. } => source_type_mentions_self(referent, budget, depth + 1)?,
         Type::Array(element, _)
-        | Type::ParamArray(element, _)
         | Type::Slice(element)
         | Type::RawPtr {
             pointee: element, ..
         } => source_type_mentions_self(element, budget, depth + 1)?,
-        Type::ConstArg(_) => false,
         Type::Tuple(fields) => {
             let mut found = false;
             for field in fields {
@@ -1837,6 +1834,35 @@ impl SourceInventory {
             )?,
             Expr::Output(output) => validate_output_site(output, &self.names)
                 .map_err(|message| source_error(budget, &message))?,
+            Expr::FormatInto(source) => {
+                for (index, argument) in source.arguments.iter().enumerate() {
+                    self.operator_site(
+                        argument as *const Expr as usize | 2,
+                        &node.child(42, index, budget)?,
+                        budget,
+                    )?;
+                    self.expr(
+                        argument,
+                        &node.child(21, index, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
+                for (index, row) in source.rest.iter().enumerate() {
+                    for (column, argument) in row.iter().enumerate() {
+                        self.expr(
+                            argument,
+                            &node.child(43, index * 16 + column, budget)?,
+                            None,
+                            None,
+                            budget,
+                            depth + 1,
+                        )?;
+                    }
+                }
+            }
             Expr::Format { arguments, .. } => {
                 for (index, argument) in arguments.iter().enumerate() {
                     self.operator_site(
@@ -2278,7 +2304,6 @@ impl SourceInventory {
                 )?;
             }
             Expr::Borrow { .. }
-            | Expr::ConstParam(_)
             | Expr::Integer(_)
             | Expr::Float(_)
             | Expr::Char(_)
@@ -5327,10 +5352,6 @@ pub enum Type {
         referent: Box<Type>,
     },
     Array(Box<Type>, usize),
-    /// `[T; N]` with `N` a const generic parameter.
-    ParamArray(Box<Type>, AstIdent),
-    /// A const generic argument value (`Buf<5>`, `f::<{ 2 + 2 }>`).
-    ConstArg(u64),
     /// Unsized `[T]`. Admitted values require a checked shared reference.
     Slice(Box<Type>),
     /// `*const T` (Shared) or `*mut T` (Mut).
@@ -5912,8 +5933,6 @@ fn validate_source_site(
 
 #[derive(Clone, Debug)]
 pub enum Expr {
-    /// Use of a `const N: usize` generic parameter as a value.
-    ConstParam(AstIdent),
     /// Bootstrap-only Linux x86-64 ABI primitive, never an allocator policy.
     NativeSyscall(Vec<Expr>),
     UnexpandedMacro(Arc<UnexpandedMacroSyntax>),
@@ -6064,6 +6083,8 @@ pub enum Expr {
         newline: bool,
     },
     Output(Box<SourceOutput>),
+    /// format!/write! placeholder calls (format_macros.rs).
+    FormatInto(Box<SourceFormatInto>),
     Panic(Box<SourcePanic>),
     /// Postfix `?` on an Option or Result operand (TRY.md).
     Try(Box<Expr>),
@@ -6881,9 +6902,6 @@ struct Parser<'input, 'names> {
     allow_struct: bool,
     condition_purpose: ConditionPurpose,
     type_params: Vec<AstIdent>,
-    /// Every parameter declared `const N: usize` in this file. Name keys are
-    /// lexically unique per declaration, so membership identifies const-ness.
-    const_params: Vec<AstIdent>,
     use_expansions: usize,
     use_expansion_bytes: usize,
 }
@@ -7035,7 +7053,6 @@ impl<'input, 'names> Parser<'input, 'names> {
             &proof,
         )?;
         let mut child = Parser {
-            const_params: self.const_params.clone(),
             debug_assertions: self.debug_assertions,
             input: &buffer,
             names: &mut *self.names,
@@ -7461,6 +7478,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         if self.builtin_macro_ahead("matches")? {
             return self.matches_expression();
+        }
+        for spelling in ["format", "write", "writeln"] {
+            if self.builtin_macro_ahead(spelling)? {
+                return self.format_into_expression(spelling);
+            }
         }
         if self.builtin_macro_ahead("vec")? {
             return self.vec_expression();
@@ -8320,7 +8342,6 @@ impl<'input, 'names> Parser<'input, 'names> {
         expansion_depth: u32,
     ) -> Result<Expr, ParseError> {
         let mut child = Parser {
-            const_params: self.const_params.clone(),
             debug_assertions: self.debug_assertions,
             input: buffer,
             names: &mut *self.names,
@@ -8720,7 +8741,6 @@ impl<'input, 'names> Parser<'input, 'names> {
             type_params: Vec::new(),
             use_expansions: 0,
             use_expansion_bytes: 0,
-            const_params: Vec::new(),
         })
     }
     fn token(&self) -> TokenView<'input> {
@@ -8854,15 +8874,6 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         Ok(false)
     }
-    /// The current token names an in-scope `const N: usize` parameter.
-    fn current_const_parameter(&mut self) -> Result<Option<AstIdent>, ParseError> {
-        let Some(name) = self.current_type_parameter()? else {
-            return Ok(None);
-        };
-        Ok(self
-            .contains_name(&self.const_params, name, LookupClass::TypeParameter)?
-            .then_some(name))
-    }
     fn current_type_parameter(&mut self) -> Result<Option<AstIdent>, ParseError> {
         if !self.token().is_ident() || self.token().text == "_" || self.type_params.is_empty() {
             return Ok(None);
@@ -8966,13 +8977,6 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return Ok(Type::Slice(Box::new(element)));
             }
             self.expect(";")?;
-            if let Some(name) = self.current_const_parameter()? {
-                if self.cursor.peek(1).is_some_and(|t| t.matches("]")) {
-                    self.cursor.bump();
-                    self.expect("]")?;
-                    return Ok(Type::ParamArray(Box::new(element), name));
-                }
-            }
             let len = self.array_number("array length")?;
             self.expect("]")?;
             Ok(Type::Array(Box::new(element), len))
@@ -9177,11 +9181,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         self.error("positional type arguments must precede associated equalities")
                     );
                 }
-                let value = if let Some(value) = self.const_argument()? {
-                    value
-                } else {
-                    self.ty()?
-                };
+                let value = self.ty()?;
                 self.reserve_parser_items(&mut args, 1)?;
                 args.push(value);
             }
@@ -9263,27 +9263,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             if params.len() >= 32 {
                 return Err(self.limit("generic parameter resource limit 32"));
             }
-            if self.eat("const") {
-                let name = self.predeclared_parameter(&declarations, params.len())?;
-                if self.contains_name(&params, name, LookupClass::TypeParameter)? {
-                    return Err(self.error("duplicate type parameter"));
-                }
-                self.expect(":")?;
-                if !self.eat("usize") {
-                    return Err(self.unsupported(
-                        "const generic parameters other than `usize` are unsupported",
-                    ));
-                }
-                if self.is("=") {
-                    return Err(self.unsupported("const generic defaults are unsupported"));
-                }
-                self.reserve_parser_items(&mut params, 1)?;
-                params.push(name);
-                self.const_params.push(name);
-                if !self.eat(",") || self.token().text.starts_with('>') {
-                    break;
-                }
-                continue;
+            if self.is("const") {
+                return Err(self.unsupported("const generic parameters are unsupported"));
             }
             if self.token().is_lifetime() {
                 if !params.is_empty() {
@@ -9471,12 +9452,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
             if at_parameter {
                 at_parameter = false;
-                if token.matches("const") {
-                    scan.bump();
-                    at_parameter = true;
-                    continue;
-                }
-                if token.is_ident() {
+                if token.is_ident() && !token.matches("const") {
                     if declarations.len() >= 32 {
                         return Err(self.limit("generic parameter resource limit 32"));
                     }
@@ -9746,72 +9722,6 @@ impl<'input, 'names> Parser<'input, 'names> {
             return self.unsupported_array_expression(context);
         }
         Ok(number)
-    }
-    /// A const generic argument: an integer literal, a `{ expr }` block, or
-    /// a constant item name, evaluated now; `{ N }` forwards a parameter.
-    fn const_argument(&mut self) -> Result<Option<Type>, ParseError> {
-        let token = self.token();
-        if token.string {
-            return Ok(None);
-        }
-        let starts_digit = token.text.starts_with(|c: char| c.is_ascii_digit());
-        let block = token.matches("{");
-        if !starts_digit && !block {
-            return Ok(None);
-        }
-        let Some(start) = self.cursor.index() else {
-            return Ok(None);
-        };
-        let tokens: &[Token] = self.input;
-        if block {
-            if tokens.get(start + 2).is_some_and(|close| close.text == "}") {
-                let checkpoint = self.cursor.checkpoint();
-                self.cursor.bump();
-                if let Some(name) = self.current_const_parameter()? {
-                    self.cursor.bump();
-                    self.expect("}")?;
-                    return Ok(Some(Type::Param(name)));
-                }
-                assert!(
-                    self.cursor.restore(checkpoint),
-                    "parser checkpoint belongs to this input"
-                );
-            }
-        }
-        // Evaluate up to the matching `>`/`,` at depth zero.
-        let mut depth = 0i32;
-        let mut end = None;
-        for (index, tok) in tokens.iter().enumerate().skip(start) {
-            if tok.kind == ParserTokenKind::Eof {
-                break;
-            }
-            match tok.text.as_str() {
-                "(" | "[" | "{" => depth += 1,
-                ")" | "]" | "}" => depth -= 1,
-                "," | ">" | ">>" if depth == 0 => {
-                    end = Some(index);
-                    break;
-                }
-                _ => {}
-            }
-        }
-        let Some(end) = end else {
-            return Err(self.error("unterminated const generic argument"));
-        };
-        let table = array_len::scan(tokens);
-        let range = if block && end > start + 1 && tokens[end - 1].text == "}" {
-            start + 1..end - 1
-        } else {
-            start..end
-        };
-        let value = array_len::evaluate(tokens, &table, range)
-            .ok_or_else(|| self.unsupported("const generic argument expression is unsupported"))?;
-        let value =
-            u64::try_from(value).map_err(|_| self.limit("const generic argument exceeds usize"))?;
-        while self.cursor.index().is_some_and(|at| at < end) {
-            self.cursor.bump();
-        }
-        Ok(Some(Type::ConstArg(value)))
     }
     fn unsupported_array_expression(&mut self, context: &str) -> Result<usize, ParseError> {
         if let Some(start) = self.cursor.index() {
@@ -10859,30 +10769,13 @@ impl<'input, 'names> Parser<'input, 'names> {
         let mut seen_type = false;
         loop {
             if self.eat("const") {
-                seen_type = true;
-                if params.len() >= 32 {
-                    return Err(self.limit("generic parameter resource limit32"));
-                }
-                let name = self.predeclared_parameter(&declarations, params.len())?;
-                if self.contains_name(&params, name, LookupClass::TypeParameter)? {
-                    return Err(self.error("duplicate type parameter"));
-                }
+                self.ident()?;
                 self.expect(":")?;
-                if !self.eat("usize") {
-                    return Err(self.unsupported(
-                        "const generic parameters other than `usize` are unsupported",
-                    ));
-                }
-                if !self.is(">") && !self.is(",") {
+                self.ty()?;
+                if !self.is(">") && !self.is(",") && !self.is("=") {
                     return Err(self.error("expected const generic parameter delimiter"));
                 }
-                self.reserve_parser_items(&mut params, 1)?;
-                params.push(name);
-                self.const_params.push(name);
-                if !self.eat(",") || self.token().text.starts_with('>') {
-                    break;
-                }
-                continue;
+                return Err(self.unsupported("const generic parameters are unsupported"));
             }
             if self.token().is_lifetime() {
                 if seen_type {
@@ -12082,6 +11975,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(expr)
     }
     fn named_expr(&mut self) -> Result<Expr, ParseError> {
+        if let Some(limit) = self.int_const_expr()? {
+            return Ok(limit);
+        }
         let println_syntax =
             self.is("println") && self.cursor.peek(1).is_some_and(|token| token.matches("!"));
         if !println_syntax && self.cursor.peek(1).is_some_and(|token| token.matches("!")) {
@@ -12091,12 +11987,6 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     #[inline(never)]
     fn ordinary_named_expr(&mut self, println_syntax: bool) -> Result<Expr, ParseError> {
-        if !self.const_params.is_empty() && !self.cursor.peek(1).is_some_and(|t| t.matches("::")) {
-            if let Some(name) = self.current_const_parameter()? {
-                self.cursor.bump();
-                return Ok(Expr::ConstParam(name));
-            }
-        }
         let generic_path = self.generic_path(false)?;
         let name = generic_path
             .checked_path(self.names)
@@ -14731,6 +14621,11 @@ fn walk_depth_inspecting(
                         push(DepthNode::Expr(arg))?;
                     }
                 }
+                Expr::FormatInto(source) => {
+                    for arg in source.arguments.iter().chain(source.rest.iter().flatten()) {
+                        push(DepthNode::Expr(arg))?;
+                    }
+                }
                 Expr::IfLet {
                     pattern,
                     scrutinee,
@@ -14956,11 +14851,6 @@ fn exact_source_type(
             exact_source_projection(names, a, b, budget, depth + 1)?
         }
         (Type::Param(a), Type::Param(b)) => exact_source_ident(names, *a, *b)?,
-        (Type::ConstArg(a), Type::ConstArg(b)) => a == b,
-        (Type::ParamArray(a, an), Type::ParamArray(b, bn)) => {
-            exact_source_ident(names, *an, *bn)?
-                && exact_source_type(names, a, b, budget, depth + 1)?
-        }
         (Type::Named(a), Type::Named(b)) => exact_source_path(names, a, b, budget)?,
         (Type::Apply(a), Type::Apply(b)) => {
             exact_source_generic_path(names, a, b, budget, depth + 1)?
@@ -19812,14 +19702,6 @@ fn collect_source_params(
             for f in fields {
                 collect_source_params(names, f, used, budget, depth + 1)?;
             }
-        }
-        Type::ParamArray(t, n) => {
-            used.insert(
-                names
-                    .key(*n, LookupClass::TypeParameter)
-                    .map_err(native_adapter::name_diagnostic)?,
-            );
-            collect_source_params(names, t, used, budget, depth + 1)?
         }
         Type::Array(t, _)
         | Type::Slice(t)

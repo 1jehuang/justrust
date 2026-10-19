@@ -294,7 +294,6 @@ impl Solver<'_, '_> {
                 None => Domain::Float,
             }),
             Expr::Bool(_) => self.fixed(ir::Ty::Bool),
-            Expr::ConstParam(_) => self.fixed(ir::Ty::Int(ir::IntTy::Usize)),
             Expr::Char(_) => self.fixed(ir::Ty::Char),
             Expr::Str(_) => self.fixed(ir::Ty::shared_str_ty()),
             Expr::Var(path)
@@ -421,6 +420,12 @@ impl Solver<'_, '_> {
             }
             Expr::Format { arguments, .. } => {
                 for arg in arguments {
+                    self.expr(arg, depth + 1)?;
+                }
+                self.fixed(ir::Ty::Unit)
+            }
+            Expr::FormatInto(source) => {
+                for arg in source.arguments.iter().chain(source.rest.iter().flatten()) {
                     self.expr(arg, depth + 1)?;
                 }
                 self.fixed(ir::Ty::Unit)

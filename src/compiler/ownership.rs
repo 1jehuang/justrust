@@ -1781,9 +1781,7 @@ impl<'a> MoveShape<'a> {
                 }
                 Self::OpaqueParam
             }
-            // A symbolic-length array moves as one opaque generic value.
-            Ty::ParamArray { .. } => Self::OpaqueParam,
-            Ty::AssociatedType(_) | Ty::ConstValue(_) => return Err(Exhausted),
+            Ty::AssociatedType(_) => return Err(Exhausted),
             Ty::Never => Self::Never,
             Ty::Tuple(fields) => Self::Product {
                 ty,
