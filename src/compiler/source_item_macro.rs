@@ -153,6 +153,7 @@ impl SourceItemMacroDriver {
     }
     /// The latest module definition of `name` visible at `call`, as its
     /// original rule body and site (for function-local re-registration).
+    #[cfg(test)]
     pub(super) fn visible_body(
         &self,
         name: AstIdent,
@@ -164,6 +165,32 @@ impl SourceItemMacroDriver {
             .find_visible(name, call, scopes, names)?
             .map(|(_, definition)| (definition.body.clone(), definition.site)))
     }
+    /// Import rules with their checked original module/source-crate selection.
+    /// The caller must not substitute its function-local definition frontier.
+    pub(super) fn visible_import(
+        &self,
+        name: AstIdent,
+        call: ModuleFrontierId,
+        scopes: &ScopeArenaBuilder,
+        names: &NameStoreBuilder,
+    ) -> Result<Option<(TokenSlice, DefinitionSite, CheckedDef)>, DriverError> {
+        self.find_visible(name, call, scopes, names)?
+            .map(|(index, definition)| {
+                Ok((
+                    definition.body.clone(),
+                    definition.site,
+                    CheckedDef {
+                        driver: self.id,
+                        index: u32::try_from(index).map_err(|_| TokenError::IdExhausted)?,
+                        definition: definition.point,
+                        call,
+                        source_crate: definition.source_crate,
+                    },
+                ))
+            })
+            .transpose()
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.definitions.len() == 0
     }

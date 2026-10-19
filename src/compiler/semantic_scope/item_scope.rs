@@ -362,6 +362,16 @@ impl ScopeArenaBuilder {
         proof: &ItemExpansionAdmission,
         declaration: AstIdent,
     ) -> Result<FrontierId, ScopeError> {
+        self.generated_receiver_function_root(names, modules, proof, declaration, None)
+    }
+    pub(crate) fn generated_receiver_function_root(
+        &mut self,
+        names: &impl NameAccess,
+        modules: &impl ModuleAccess,
+        proof: &ItemExpansionAdmission,
+        declaration: AstIdent,
+        receiver: Option<AstIdent>,
+    ) -> Result<FrontierId, ScopeError> {
         self.check_names(names)?;
         proof.check_modules(names, modules)?;
         self.arena.check_item_proof(proof)?;
@@ -374,7 +384,7 @@ impl ScopeArenaBuilder {
                 return Err(ScopeError::ConflictingAssociation);
             }
         }
-        let frontier = self.function_root(names)?;
+        let frontier = self.receiver_function_root(names, receiver)?;
         let function = self.function(frontier)?;
         self.arena.items.products.push(ItemProduct {
             function,

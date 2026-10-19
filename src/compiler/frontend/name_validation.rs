@@ -562,6 +562,7 @@ impl<'a> Validator<'a> {
                 })?;
             }
             Visit::Associated(item, module) => {
+                receiver_authority::validate_kind(self.program, &item.function, item.receiver)?;
                 self.visibility(&item.visibility, module)?;
                 self.push(Visit::Function(&item.function, Some(module)))?;
             }
@@ -584,6 +585,7 @@ impl<'a> Validator<'a> {
             Visit::TraitItem(item, module) => {
                 self.push(Visit::Head(&item.signature))?;
                 if let Some(function) = &item.default {
+                    receiver_authority::validate_kind(self.program, function, item.receiver)?;
                     self.push(Visit::Function(function, Some(module)))?;
                 }
             }
@@ -917,6 +919,9 @@ impl<'a> Validator<'a> {
                 Expr::ConstItem(path) => self.push(Visit::Path(path))?,
                 Expr::Var(path) => {
                     self.push(Visit::Path(path))?;
+                    if path.anchor() == PathAnchor::SelfModule && path.is_empty() {
+                        self.push(Visit::LocalName(receiver_authority::local(path)))?;
+                    }
                     if self.scope.is_some()
                         && path.anchor() == PathAnchor::Relative
                         && path.len() == 1
@@ -1090,7 +1095,22 @@ impl<'a> Validator<'a> {
             },
             Visit::LocalName(local) => match local {
                 LocalName::Named(name) => self.local(name, false)?,
-                LocalName::Receiver => (),
+                LocalName::ReceiverOccurrence(name) => {
+                    if let Some(function) = self.scope {
+                        self.program
+                            .scopes
+                            .as_ref()
+                            .ok_or_else(|| scope_diagnostic(ScopeError::InvalidHandle))?
+                            .check_receiver_reference(&*self.program.names, function, name.ident())
+                            .map_err(scope_diagnostic)?;
+                    }
+                    self.occurrence(name.ident())?;
+                }
+                LocalName::Receiver => {
+                    if self.scope.is_some() {
+                        return Err(scope_diagnostic(ScopeError::UnrecordedOccurrence));
+                    }
+                }
             },
             Visit::LocalDeclaration(name) => {
                 self.program

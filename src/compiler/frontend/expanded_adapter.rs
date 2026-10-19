@@ -304,13 +304,6 @@ fn push_logical(
                             "raw and non-ASCII identifiers are unsupported",
                         ));
                     }
-                    if text == "self" {
-                        return Err(failure(
-                            session,
-                            token.span,
-                            "expanded receiver self is unsupported",
-                        ));
-                    }
                     output.push_expanded(
                         session,
                         text,
@@ -1174,7 +1167,7 @@ mod tests {
 
     #[test]
     fn unsupported_expanded_namespaces_literals_and_tuple_metadata_are_explicit() {
-        for output in ["(1,2).0.1", "'a", "self"] {
+        for output in ["(1,2).0.1", "'a"] {
             let mut source = fixture(output);
             let error = run(&mut source).unwrap_err();
             assert_eq!(

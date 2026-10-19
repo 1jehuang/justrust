@@ -46,7 +46,7 @@ impl type_check::Checker<'_> {
             match cursor {
                 Expr::Var(path) => {
                     break if path.anchor() == PathAnchor::SelfModule && path.is_empty() {
-                        LocalName::Receiver
+                        receiver_authority::local(path)
                     } else if path.anchor() == PathAnchor::Relative
                         && let Some(name) = path.single()
                     {

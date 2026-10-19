@@ -64,8 +64,19 @@ pub enum PathAnchor {
     SelfType,
 }
 
+/// An authenticated parser-retained `self` token. Public ASTs may transport or
+/// transplant it, but cannot fabricate one from an unrelated identifier.
+#[derive(Clone, Copy, Debug)]
+pub struct ReceiverOccurrence(AstIdent);
+impl ReceiverOccurrence {
+    pub(crate) fn ident(self) -> AstIdent {
+        self.0
+    }
+}
+
 struct PathData {
     owner: SessionId,
+    receiver: Option<ReceiverOccurrence>,
     segments: BudgetVec<AstIdent>,
     keys: BudgetVec<NameKey>,
     // Released only after both flat payloads, including on the final Arc drop.
@@ -169,6 +180,25 @@ impl AstPath {
         Self::build(names, anchor, segments.len(), segments.iter().copied())
     }
 
+    pub(crate) fn receiver(
+        names: &impl NameAccess,
+        occurrence: AstIdent,
+    ) -> Result<Self, NameError> {
+        names.check(occurrence)?;
+        if names.spelling(occurrence)? != "self" {
+            return Err(TokenError::InvalidInput("receiver occurrence is not self").into());
+        }
+        let mut path = Self::new(names, PathAnchor::SelfModule, &[])?;
+        Arc::get_mut(&mut path.data)
+            .ok_or(TokenError::InvalidHandle)?
+            .receiver = Some(ReceiverOccurrence(occurrence));
+        Ok(path)
+    }
+
+    pub(crate) fn receiver_occurrence(&self) -> Option<ReceiverOccurrence> {
+        self.data.receiver
+    }
+
     fn build(
         names: &impl NameAccess,
         anchor: PathAnchor,
@@ -204,6 +234,7 @@ impl AstPath {
             anchor,
             data: Arc::new(PathData {
                 owner: names.session().id(),
+                receiver: None,
                 segments,
                 keys,
                 _lease: lease,
@@ -224,6 +255,15 @@ impl AstPath {
                 || origin.original.owner != self.data.owner)
         {
             return Err(TokenError::InvalidInput("resolved path use certificate mismatch").into());
+        }
+        if let Some(receiver) = self.data.receiver {
+            names.check(receiver.0)?;
+            if self.anchor != PathAnchor::SelfModule
+                || !self.is_empty()
+                || names.spelling(receiver.0)? != "self"
+            {
+                return Err(TokenError::InvalidInput("receiver path shape changed").into());
+            }
         }
         for ident in self.segments() {
             names.check(*ident)?;
@@ -268,8 +308,14 @@ impl AstPath {
     ) -> Result<&[AstIdent], NameError> {
         self.check(names)?;
         Ok(match &self.resolved_use {
-            Some(origin) => origin.original.segments.as_slice(),
-            None => self.segments(),
+            Some(origin) => match &origin.original.receiver {
+                Some(receiver) => std::slice::from_ref(&receiver.0),
+                None => origin.original.segments.as_slice(),
+            },
+            None => match &self.data.receiver {
+                Some(receiver) => std::slice::from_ref(&receiver.0),
+                None => self.segments(),
+            },
         })
     }
 
@@ -311,7 +357,7 @@ impl AstPath {
     }
 
     fn check_structural_edit(&self) -> Result<(), NameError> {
-        if self.resolved_use.is_some() {
+        if self.resolved_use.is_some() || self.data.receiver.is_some() {
             return Err(
                 TokenError::InvalidInput("cannot structurally edit a resolved use path").into(),
             );

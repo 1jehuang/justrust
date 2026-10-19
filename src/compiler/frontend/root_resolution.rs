@@ -7,8 +7,8 @@ use super::*;
 mod capture_resolution;
 mod const_inline;
 mod const_pattern;
-mod stored_closures;
 mod primitive_owners;
+mod stored_closures;
 
 #[derive(Clone, Debug)]
 enum ResolvedPath {
@@ -2003,7 +2003,11 @@ impl Resolver<'_> {
                 return self.primitive_associated_path(&prefix, item, module);
             };
             if resolved.kind == ResolvedKind::TypeAlias {
-                let owner = if prefix.segments.iter().any(|segment| !segment.args.is_empty()) {
+                let owner = if prefix
+                    .segments
+                    .iter()
+                    .any(|segment| !segment.args.is_empty())
+                {
                     Type::Apply(prefix)
                 } else {
                     Type::Named(owner_path)
@@ -2013,7 +2017,10 @@ impl Resolver<'_> {
             if resolved.kind == ResolvedKind::Module {
                 // Rust retries primitive type syntax only when the source
                 // module has no value at the complete call path.
-                if self.path(&path.path(self.names())?, module, false, false)?.is_none() {
+                if self
+                    .path(&path.path(self.names())?, module, false, false)?
+                    .is_none()
+                {
                     return self.primitive_associated_path(&prefix, item, module);
                 }
                 return Ok(None);
@@ -2383,6 +2390,19 @@ impl Resolver<'_> {
         path.check(self.names())
             .map_err(native_adapter::name_diagnostic)?;
         if path.anchor() == PathAnchor::SelfModule && path.is_empty() {
+            if let Some(function) = self.lexical_function {
+                let arena = self
+                    .program
+                    .scopes
+                    .as_ref()
+                    .ok_or("receiver has no lexical scope arena")?;
+                let occurrence = path.receiver_occurrence().ok_or_else(|| {
+                    scope_diagnostic(super::super::semantic_scope::ScopeError::UnrecordedOccurrence)
+                })?;
+                arena
+                    .check_receiver_reference(self.names(), function, occurrence.ident())
+                    .map_err(scope_diagnostic)?;
+            }
             return Ok(Some(LocalKey::Receiver));
         }
         if let Some(function) = self.lexical_function
@@ -3656,8 +3676,15 @@ impl Resolver<'_> {
                 .ok_or("macro function has no lexical scope arena")?;
             arena.check_names(self.names()).map_err(scope_diagnostic)?;
             arena.check_function(function).map_err(scope_diagnostic)?;
+            if arena.has_receiver(function).map_err(scope_diagnostic)?
+                != (receiver != ReceiverKind::None)
+            {
+                return Err("receiver binder differs from callable receiver kind".into());
+            }
             if receiver != ReceiverKind::None {
-                return Err("unsupported: lexical macro bindings for method receivers".into());
+                arena
+                    .receiver_binding(self.names(), function)
+                    .map_err(scope_diagnostic)?;
             }
         }
         let mut locals = std::collections::HashSet::new();

@@ -672,6 +672,14 @@ iteration and suspended-state destruction each have executable oracle cases.
       probe/import/selection policy and workers-1/8 stock differential gates.
       This repairs lexical binding isolation, not general macro imports/exports
       or full Rust hygiene. No new graph join or mutable fact state is admitted.
+- [x] Preserve sealed bare receiver occurrences and exact callable receiver
+      binders through macro parsing, resolution, name replay and typed local
+      lookup. Authenticated imported module definitions use an empty local
+      definition frontier, never invocation bindings, while metavariable captures
+      retain call-site identity. MACRO-RECEIVERS.md records stock/native workers
+      1/8 execution, unused invalid receiver/local leakage rejection, forged
+      occurrence/scope/source controls and no-codegen graph acceptance. Generated
+      callable container/header authority remains independently required.
 - [ ] Generalize nested/recursive expansion and namespace-specific hygiene,
       generated declarations, cfg-before-child-IO and graph discovery closure.
       Add real item/export/import/cross-crate clients and remaining fragment/AST

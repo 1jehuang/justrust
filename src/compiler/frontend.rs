@@ -729,7 +729,7 @@ fn borrow_place(mut expr: &Expr) -> Option<Place> {
         match expr {
             Expr::Var(path) => {
                 let local = if path.anchor() == PathAnchor::SelfModule && path.is_empty() {
-                    LocalName::Receiver
+                    receiver_authority::local(path)
                 } else if path.anchor() == PathAnchor::Relative {
                     LocalName::Named(path.single()?)
                 } else {
@@ -758,7 +758,7 @@ fn source_local_name(path: &AstPath, names: &NameStore) -> Result<LocalName, Str
     path.check(names).map_err(native_adapter::name_diagnostic)?;
     match (path.anchor(), path.segments()) {
         (PathAnchor::Relative, [name]) => Ok(LocalName::Named(*name)),
-        (PathAnchor::SelfModule, []) => Ok(LocalName::Receiver),
+        (PathAnchor::SelfModule, []) => Ok(receiver_authority::local(path)),
         _ => Err("expected a local-root path".into()),
     }
 }
@@ -1366,6 +1366,18 @@ impl SourceInventory {
         scopes
             .check_function(function)
             .map_err(|error| source_scope_error(budget, error))?;
+        if matches!(
+            name.checked_key(&self.names)
+                .map_err(|error| source_name_error(&self.names, budget, &error))?,
+            Some(LocalKey::Receiver)
+        ) {
+            let occurrence = name
+                .occurrence(&self.names)
+                .map_err(|error| source_name_error(&self.names, budget, &error))?;
+            return receiver_authority::key(scopes, &self.names, function, occurrence, declaration)
+                .map(Some)
+                .map_err(|error| source_scope_error(budget, error));
+        }
         let Some(ident) = name
             .occurrence(&self.names)
             .map_err(|error| source_name_error(&self.names, budget, &error))?
@@ -4859,6 +4871,7 @@ mod name_tests;
 mod or_patterns;
 mod range_expr;
 mod raw_slices;
+mod receiver_authority;
 mod recipes;
 #[cfg(test)]
 mod slice_tests;
@@ -5564,6 +5577,8 @@ pub struct Block {
 pub enum LocalName {
     Named(AstIdent),
     Receiver,
+    /// Actual source `self` token, never a synthetic receiver identity.
+    ReceiverOccurrence(super::semantic_path::ReceiverOccurrence),
 }
 #[derive(Clone, Debug)]
 pub struct Place {
@@ -7024,6 +7039,7 @@ impl<T> ParserState<'_, T> {
 }
 #[derive(Default)]
 struct ParserLexicalState {
+    pending_receiver: Option<AstIdent>,
     scopes: Option<super::semantic_scope::ScopeArenaBuilder>,
     function: Option<FunctionMacroState>,
     item_macros: Option<super::source_item_macro::SourceItemMacroDriver>,
@@ -8409,19 +8425,28 @@ impl<'input, 'names> Parser<'input, 'names> {
         ) else {
             return Ok(None);
         };
-        let Some((body, site)) = items
-            .visible_body(name, module_call, scopes, self.names)
+        let Some((body, site, origin)) = items
+            .visible_import(name, module_call, scopes, self.names)
             .map_err(|error| self.driver_error(error))?
         else {
             return Ok(None);
         };
+        let definition = self
+            .lexical
+            .scopes
+            .as_mut()
+            .ok_or_else(|| {
+                native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+            })?
+            .module_definition_frontier(origin, call)
+            .map_err(scope_parse_error)?;
         let function = self.lexical.function.as_mut().ok_or_else(|| {
             native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
         })?;
         let driver = function.driver.as_mut().ok_or_else(|| {
             native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
         })?;
-        let defined = driver.define(name, body, site, call, self.names);
+        let defined = driver.define(name, body, site, definition, self.names);
         defined.map_err(|error| self.driver_error(error))?;
         let scopes = self.lexical.scopes.as_ref().ok_or_else(|| {
             native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
@@ -8856,6 +8881,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         &mut self,
         params: &[(BindingName, Type)],
     ) -> Result<(Block, Option<super::semantic_scope::ScopeId>), ParseError> {
+        let receiver = self.lexical.pending_receiver.take();
         if self.purpose == ParserPurpose::InactiveSyntax {
             return Ok((self.block()?, None));
         }
@@ -8927,7 +8953,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             ))
         })?;
         let frontier = scopes
-            .function_root(self.names)
+            .receiver_function_root(self.names, receiver)
             .map_err(scope_parse_error)?;
         let owner = scopes.function(frontier).map_err(scope_parse_error)?;
         let driver = super::source_macro::LocalMacroDriver::new(source, owner, self.names)
@@ -8936,6 +8962,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             frontier,
             driver: Some(driver),
         });
+        self.bind_receiver_lexical(receiver)?;
         for (name, _) in params {
             if let BindingName::Named(name) = name {
                 self.bind_lexical(*name)?;
@@ -11161,6 +11188,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         // so the qualifier carries no further obligation in this draft.
         // Associated `const fn`s are ordinary methods here: their qualifier
         // only matters inside constant initializers, which are inlined.
+        self.lexical.pending_receiver = None;
         let (constness, unsafety) = self.function_qualifiers(associated)?;
         self.expect("fn")?;
         let name = self.ident()?;
@@ -11214,14 +11242,14 @@ impl<'input, 'names> Parser<'input, 'names> {
             } else {
                 ir::BorrowKind::Shared
             };
-            self.expect("self")?;
+            self.receiver_binding_token()?;
             receiver = ReceiverKind::Borrowed { kind };
             if !self.is(")") {
                 self.expect(",")?;
             }
         } else if associated && (self.is("self") || self.is("mut")) {
             let mutable = self.eat("mut");
-            self.expect("self")?;
+            self.receiver_binding_token()?;
             if self.is(":") {
                 return Err(self.unsupported("typed receivers are unsupported"));
             }
@@ -12168,7 +12196,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         loop {
             match expr {
                 Expr::Var(path) => {
-                    let local = if path.anchor() == PathAnchor::SelfModule && path.is_empty() { LocalName::Receiver } else { LocalName::Named(path.single().ok_or_else(|| self.unsupported("assignment requires a local-rooted place; destructuring and temporary assignment are unsupported"))?) };
+                    let local = if path.anchor() == PathAnchor::SelfModule && path.is_empty() { receiver_authority::local(&path) } else { LocalName::Named(path.single().ok_or_else(|| self.unsupported("assignment requires a local-rooted place; destructuring and temporary assignment are unsupported"))?) };
                     fields.reverse(); return Ok(Place { local, fields });
                 }
                 Expr::Deref {value}=>{fields.push(FieldSelector::Deref);expr = *value;}
@@ -12256,6 +12284,9 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     #[inline(never)]
     fn ordinary_named_expr(&mut self, println_syntax: bool) -> Result<Expr, ParseError> {
+        if self.is("self") && !self.cursor.peek(1).is_some_and(|token| token.matches("::")) {
+            return self.receiver_expression();
+        }
         let generic_path = self.generic_path(false)?;
         let name = generic_path
             .checked_path(self.names)

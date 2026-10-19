@@ -2,11 +2,10 @@
 use super::*;
 
 mod byte_strings;
-mod primitive_actuals;
-#[path = "format_lowering.rs"]
-mod format_lowering;
 #[path = "type_check/constructor_expectations.rs"]
 mod constructor_expectations;
+#[path = "format_lowering.rs"]
+mod format_lowering;
 #[path = "type_check/generic_placeholders.rs"]
 mod generic_placeholders;
 #[path = "type_check/inferred_owner.rs"]
@@ -18,6 +17,7 @@ mod local_literals;
 mod method_owner;
 #[path = "type_check/partial_annotation.rs"]
 pub(super) mod partial_annotation;
+mod primitive_actuals;
 #[path = "type_check/shared_or_arms.rs"]
 mod shared_or_arms;
 #[path = "try_operator.rs"]
@@ -129,19 +129,32 @@ impl LocalInput for LocalName {
     fn occurrence(&self, names: &NameStore) -> Result<Option<AstIdent>, String> {
         match self {
             Self::Named(name) => name.occurrence(names),
+            Self::ReceiverOccurrence(name) => name.ident().occurrence(names),
             Self::Receiver => Ok(None),
         }
     }
     fn checked_key(&self, names: &NameStore) -> Result<Option<LocalKey>, String> {
         match self {
             Self::Named(name) => name.checked_key(names),
+            Self::ReceiverOccurrence(name) => {
+                let name = name.ident();
+                names.check(name).map_err(native_adapter::name_diagnostic)?;
+                if names
+                    .spelling(name)
+                    .map_err(native_adapter::name_diagnostic)?
+                    != "self"
+                {
+                    return Err("receiver occurrence is not self".into());
+                }
+                Ok(Some(LocalKey::Receiver))
+            }
             Self::Receiver => Ok(Some(LocalKey::Receiver)),
         }
     }
     fn diagnostic(&self, names: &NameStore) -> Result<String, String> {
         match self {
             Self::Named(name) => name.diagnostic(names),
-            Self::Receiver => Ok("self".into()),
+            Self::Receiver | Self::ReceiverOccurrence(_) => Ok("self".into()),
         }
     }
 }
@@ -149,7 +162,7 @@ impl LocalInput for AstPath {
     fn occurrence(&self, names: &NameStore) -> Result<Option<AstIdent>, String> {
         self.check(names).map_err(native_adapter::name_diagnostic)?;
         match (self.anchor(), self.segments()) {
-            (PathAnchor::SelfModule, []) => Ok(None),
+            (PathAnchor::SelfModule, []) => Ok(self.receiver_occurrence().map(|name| name.ident())),
             (PathAnchor::Relative, [name]) => Ok(Some(*name)),
             _ => Err("expected a local-root path".into()),
         }
@@ -1601,7 +1614,7 @@ pub(super) fn static_source_place(mut expr: &Expr) -> Result<Place, String> {
                 fields.reverse();
                 return Ok(Place {
                     local: match (local.anchor(), local.segments()) {
-                        (PathAnchor::SelfModule, []) => LocalName::Receiver,
+                        (PathAnchor::SelfModule, []) => receiver_authority::local(local),
                         (PathAnchor::Relative, [name]) => LocalName::Named(*name),
                         _ => return Err("receiver requires a local-root path".into()),
                     },
@@ -1710,7 +1723,10 @@ impl<'a> Expectation<'a> {
             Self::HasType(ty) => Some(ty),
             Self::SourceSchema(actual, formal)
                 if !matches!(actual, ir::Ty::Ref { .. })
-                    || matches!(formal.as_ref(), InferKind::Ref(..)) => Some(actual),
+                    || matches!(formal.as_ref(), InferKind::Ref(..)) =>
+            {
+                Some(actual)
+            }
             Self::Application(application) => application.outer.coercion(),
             _ => None,
         }
@@ -1721,9 +1737,9 @@ impl<'a> Expectation<'a> {
     {
         match self {
             Self::Inferred(_) => ty.map_or(Expectation::None, Expectation::Inferred),
-            Self::SourceSchema(_, formal) => {
-                ty.map_or(Expectation::None, |actual| Expectation::SourceSchema(actual, formal))
-            }
+            Self::SourceSchema(_, formal) => ty.map_or(Expectation::None, |actual| {
+                Expectation::SourceSchema(actual, formal)
+            }),
             Self::Application(application) => application.outer.inherited(ty),
             _ => ty.into(),
         }
@@ -3934,6 +3950,26 @@ impl<'a> Checker<'a> {
             }
             return Ok(key);
         };
+        if matches!(input.checked_key(names)?, Some(LocalKey::Receiver)) {
+            let arena = self
+                .signatures
+                .plan()?
+                .program
+                .scopes
+                .as_ref()
+                .ok_or_else(|| {
+                    scope_diagnostic(super::super::semantic_scope::ScopeError::InvalidHandle)
+                })?;
+            return receiver_authority::key(
+                arena,
+                names,
+                function,
+                input.occurrence(names)?,
+                declaration,
+            )
+            .map(Some)
+            .map_err(scope_diagnostic);
+        }
         let Some(occurrence) = input.occurrence(names)? else {
             return match input.checked_key(names)? {
                 None if declaration => Ok(None),
@@ -6402,7 +6438,9 @@ impl<'a> Checker<'a> {
                     let extending = self.extending_borrows.len();
                     self.mark_extending_borrows(value, 0)?;
                     let expected = if matches!(written, Type::Infer) {
-                        annotation.as_ref().map_or(Expectation::None, Expectation::Inferred)
+                        annotation
+                            .as_ref()
+                            .map_or(Expectation::None, Expectation::Inferred)
                     } else {
                         annotation.as_ref().into()
                     };
@@ -8328,7 +8366,8 @@ impl<'a> Checker<'a> {
         let mut completes = true;
         for (index, field) in fields.iter().enumerate() {
             let (_, field_ty) = self.field_type(&actual, &FieldSelector::Tuple(index))?;
-            let formal = self.constructor_field_schema(ty.def().source_decl, None, index, expectation)?;
+            let formal =
+                self.constructor_field_schema(ty.def().source_decl, None, index, expectation)?;
             let value = self.expr_with_expectation_when(
                 field,
                 self.reachable && completes,
@@ -9675,7 +9714,8 @@ impl<'a> Checker<'a> {
                     Some(ir::Ty::Array { element, .. }) => Some(element.as_ref()),
                     _ => None,
                 };
-                let value = self.expr_with_expectation(value, expectation.aggregate_child(hint, 0))?;
+                let value =
+                    self.expr_with_expectation(value, expectation.aggregate_child(hint, 0))?;
                 let flow = self.flow(value);
                 if let Some(expected) = hint {
                     self.require(&flow, expected)?;
@@ -10008,7 +10048,12 @@ impl<'a> Checker<'a> {
                     if !seen.insert(index) {
                         return Err(format!("duplicate field {name:?}"));
                     }
-                    let formal = self.constructor_field_schema(ty.def().source_decl, None, index, expectation)?;
+                    let formal = self.constructor_field_schema(
+                        ty.def().source_decl,
+                        None,
+                        index,
+                        expectation,
+                    )?;
                     let value = self.expr_with_expectation_when(
                         value,
                         self.reachable && completes,
@@ -10606,7 +10651,9 @@ impl<'a> Checker<'a> {
                 {
                     Expectation::SourceSchema(actual, formal)
                 } else if self.loops[index].expected_is_inferred {
-                    expected.as_ref().map_or(Expectation::None, Expectation::Inferred)
+                    expected
+                        .as_ref()
+                        .map_or(Expectation::None, Expectation::Inferred)
                 } else {
                     expected.as_ref().into()
                 };

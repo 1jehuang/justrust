@@ -19,6 +19,7 @@ use super::token_session::{
 };
 
 mod item_scope;
+mod receiver;
 pub(crate) use item_scope::{
     ExpansionTokenAdmission, ItemExpansionAdmission, ModuleAccess, ModuleFrontierId, OccurrenceRole,
 };
@@ -134,6 +135,7 @@ pub struct ProjectedName {
 struct ScopeRecord {
     parent: Option<FrontierId>,
     function: ScopeId,
+    receiver: Option<AstIdent>,
 }
 #[derive(Clone, Copy, Debug)]
 struct FrontierRecord {
@@ -327,18 +329,7 @@ impl ScopeArenaBuilder {
         })
     }
     pub fn function_root(&mut self, names: &impl NameAccess) -> Result<FrontierId, ScopeError> {
-        self.check_names(names)?;
-        self.arena.transition()?;
-        let scope = ScopeId {
-            owner: self.arena.owner,
-            index: self.arena.index(self.arena.scopes.len())?,
-        };
-        self.arena.scopes.push(ScopeRecord {
-            parent: None,
-            function: scope,
-        })?;
-        self.arena
-            .push_frontier(FrontierRecord { scope, head: None })
+        self.receiver_function_root(names, None)
     }
     pub fn enter(
         &mut self,
@@ -355,6 +346,7 @@ impl ScopeArenaBuilder {
         self.arena.scopes.push(ScopeRecord {
             parent: Some(parent),
             function,
+            receiver: None,
         })?;
         self.arena
             .push_frontier(FrontierRecord { scope, head: None })
