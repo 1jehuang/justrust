@@ -25,8 +25,11 @@ oracle stdout) and by feature tags disappearing from it, not by slice docs.
 6. Unsupported constructs must still produce an explicit diagnostic. Never
    miscompile silently.
 7. Before pushing: `cargo fmt`, `justrust check`, the tests for your area,
-   `justrust test --test graph_integrity`, `justrust test --test full_programs`.
-   If a test outside your area breaks because of you, fix it.
+   `justrust test --test graph_integrity`, `justrust test --test full_programs`,
+   AND `justrust test --no-run` (every lib/test target must compile: adding a
+   struct field or changing a signature breaks other test files). Also run
+   `justrust test --lib` if you touched shared types. If a test outside your
+   area breaks because of you, fix it before pushing. Never push red main.
 8. No worktrees, no branches. Work in `~/justrust-clean-room` on `main`.
 
 ## Streams
