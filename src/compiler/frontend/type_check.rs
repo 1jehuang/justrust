@@ -1,6 +1,7 @@
 //! Source checking, local inference and checked body construction.
 use super::*;
 
+mod byte_strings;
 #[path = "format_lowering.rs"]
 mod format_lowering;
 #[path = "type_check/constructor_expectations.rs"]
@@ -1012,6 +1013,9 @@ impl<'s> Checker<'s> {
             Expr::Bool(_) => self.infer_node(InferKind::Rigid(ir::Ty::Bool))?,
             Expr::Char(_) => self.infer_node(InferKind::Rigid(ir::Ty::Char))?,
             Expr::Str(_) => self.infer_node(InferKind::Rigid(ir::Ty::shared_str_ty()))?,
+            Expr::ByteStr(bytes) => {
+                self.infer_node(InferKind::Rigid(ir::Ty::byte_string_ty(bytes.len())))?
+            }
             Expr::ConstItem(_) => {
                 let value = self
                     .canonical
@@ -4424,9 +4428,9 @@ impl<'a> Checker<'a> {
                 .map(|signature| signature.result),
             Expr::MethodCall { receiver, .. }
                 if slice_len_candidate(e, self.names()?)?
-                    && self
-                        .scalar_hint(receiver)?
-                        .is_some_and(|ty| ty.descriptor_element().is_some()) =>
+                    && self.scalar_hint(receiver)?.is_some_and(|ty| {
+                        ty.descriptor_element().is_some() || ty.shared_array_element_len().is_some()
+                    }) =>
             {
                 Some(ir::Ty::Int(ir::IntTy::Usize))
             }
@@ -4491,6 +4495,7 @@ impl<'a> Checker<'a> {
             Expr::Bool(_) => Some(ir::Ty::Bool),
             Expr::Char(_) => Some(ir::Ty::Char),
             Expr::Str(_) => Some(ir::Ty::shared_str_ty()),
+            Expr::ByteStr(bytes) => Some(ir::Ty::byte_string_ty(bytes.len())),
             Expr::ConstItem(_) => Some(const_inputs::scalar_ir_type(
                 self.canonical
                     .ok_or("contract: constant hint requires sealed graph inputs")?
@@ -4599,7 +4604,10 @@ impl<'a> Checker<'a> {
                 match self.scalar_hint(base)? {
                     Some(ir::Ty::Array { element, .. }) => Some(element.as_ref().clone()),
                     Some(ty) => {
-                        if let Some(element) = ty.shared_slice_element() {
+                        if let Some(element) = ty
+                            .shared_slice_element()
+                            .or_else(|| ty.shared_array_element_len().map(|(element, _)| element))
+                        {
                             ir::validate_shared_slice_element(
                                 element,
                                 self.facts(),
@@ -7220,9 +7228,9 @@ impl<'a> Checker<'a> {
             return Ok(None);
         };
         if !slice_len_candidate(e, self.names()?)?
-            || !self
-                .scalar_hint(receiver)?
-                .is_some_and(|ty| ty.descriptor_element().is_some())
+            || !self.scalar_hint(receiver)?.is_some_and(|ty| {
+                ty.descriptor_element().is_some() || ty.shared_array_element_len().is_some()
+            })
         {
             return Ok(None);
         }
@@ -7243,6 +7251,7 @@ impl<'a> Checker<'a> {
             } => self.subslice(base, start.as_deref(), end.as_deref(), *inclusive)?,
             receiver => self.expr(receiver)?,
         };
+        let slice = self.array_reference_as_slice(slice)?;
         let flow = self.flow(slice);
         if !flow.ty.is_shared_str() {
             let element = flow
@@ -9593,6 +9602,7 @@ impl<'a> Checker<'a> {
                     Some(view) => view,
                     None => self.expr(base)?,
                 };
+                let base = self.array_reference_as_slice(base)?;
                 if self.flow(base).ty.shared_slice_element().is_some() {
                     return self.slice_index(base, index);
                 }
@@ -9654,6 +9664,7 @@ impl<'a> Checker<'a> {
                     Some(view) => view,
                     None => self.expr(base)?,
                 };
+                let base = self.array_reference_as_slice(base)?;
                 let flow = self.flow(base);
                 if flow.ty.shared_slice_element().is_some() {
                     // Constant slice indexes use the same runtime-checked read.
@@ -9961,6 +9972,18 @@ impl<'a> Checker<'a> {
                 }),
                 Flow::value(ir::Ty::Char),
             ),
+            Expr::ByteStr(bytes) => {
+                self.charge_node(
+                    bytes
+                        .len()
+                        .checked_add(32)
+                        .ok_or("byte string storage overflow")?,
+                )?;
+                (
+                    ir::ExprKind::ByteStr(bytes.clone()),
+                    Flow::value(ir::Ty::byte_string_ty(bytes.len())),
+                )
+            }
             Expr::Str(text) => {
                 self.charge_node(
                     text.len()

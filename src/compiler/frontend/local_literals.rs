@@ -1112,6 +1112,7 @@ impl<'s> Solver<'_, '_, 's> {
             Expr::Bool(_) => self.fixed(ir::Ty::Bool),
             Expr::Char(_) => self.fixed(ir::Ty::Char),
             Expr::Str(_) => self.fixed(ir::Ty::shared_str_ty()),
+            Expr::ByteStr(bytes) => self.fixed(ir::Ty::byte_string_ty(bytes.len())),
             Expr::Var(path)
                 if matches!(
                     (path.anchor(), path.segments()),

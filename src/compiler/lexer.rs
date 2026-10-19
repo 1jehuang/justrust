@@ -171,7 +171,7 @@ fn at_error(text: &str, at: usize, message: &'static str) -> LexError {
         .map_or(at, |ch| at + ch.len_utf8());
     source_error(text, at..end, message)
 }
-fn literal_error(text: &str, error: LiteralError) -> LexError {
+pub(super) fn literal_error(text: &str, error: LiteralError) -> LexError {
     match error {
         LiteralError::Source { range, message } => source_error(text, range, message),
         LiteralError::Transport(error) => LexError::Transport(error),
@@ -561,6 +561,13 @@ pub fn decode_normal_string(
     budget: &ExpansionBudget,
 ) -> Result<DecodedString, LexError> {
     literal_scan::decode_normal_string(spelling, budget).map_err(|e| literal_error(spelling, e))
+}
+
+pub(super) fn decode_text_string(
+    spelling: &str,
+    budget: &ExpansionBudget,
+) -> Result<DecodedString, LexError> {
+    literal_scan::decode_text_string(spelling, budget, true).map_err(|e| literal_error(spelling, e))
 }
 
 /// Original-file lexical validation before configuration. No projected tokens,

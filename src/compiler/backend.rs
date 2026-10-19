@@ -1755,9 +1755,34 @@ impl<'a> Emitter<'a> {
         self.object.strings.push((at, bytes));
         Ok(())
     }
-    /// `&'static str` literal: write (data, len) into the aggregate scratch
-    /// carrier and leave its address in rax, like every two-word descriptor.
-    /// Empty literals still point at owned (zero-length) program data.
+    /// Exact thin `&'static [u8; N]` pointer into immutable program data.
+    fn byte_string_literal(&mut self, data: &[u8]) -> Result<(), String> {
+        let budget = self.concrete.facts().budget().clone();
+        let stride = usize::try_from(value_size(&ir::Ty::Int(ir::IntTy::U8))?)
+            .map_err(|_| "invalid byte element layout")?;
+        let size = data
+            .len()
+            .checked_mul(stride)
+            .ok_or("byte string layout overflow")?
+            .max(stride);
+        budget.charge_work(size)?;
+        budget.retain_bytes(size)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(size)
+            .map_err(|_| "byte string allocation failed")?;
+        // Static arrays use exactly the same private element storage as local
+        // arrays, dereferences and slice indexing. UTF-8 text stays packed.
+        bytes.resize(size, 0);
+        for (index, byte) in data.iter().enumerate() {
+            bytes[index * stride] = *byte;
+        }
+        self.data_relocation(bytes)?;
+        self.bytes(&[0x48, 0x89, 0xf0]); // mov rax, rsi: thin array pointer
+        Ok(())
+    }
+
+    /// `&'static str` writes its (data, len) descriptor into aggregate scratch.
     fn str_literal(&mut self, text: &str) -> Result<(), String> {
         let budget = self.concrete.facts().budget().clone();
         budget.charge_work(text.len())?;
@@ -2631,6 +2656,7 @@ impl Emitter<'_> {
                 self.literal_output(&output.text, output.stream, output.newline)?;
             }
             cfg::Rvalue::Str(text) => self.str_literal(text)?,
+            cfg::Rvalue::ByteStr(bytes) => self.byte_string_literal(bytes)?,
             cfg::Rvalue::RefToDyn { reference, object } => {
                 // The operand is a thin `&T`/`&mut T` (rax = data pointer).
                 let ir::Ty::Ref { referent, .. } = self.function().operand_ty(reference)? else {

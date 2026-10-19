@@ -261,7 +261,10 @@ fn valid_lexical_classes_remain_explicit_unsupported_parser_ingress() {
         let case = CASES.iter().find(|case| case.name == name).unwrap();
         assert!(case.stock_valid);
         let prepared = prepared_identity(case.source);
-        if matches!(name, "unicode_char" | "char") {
+        if matches!(
+            name,
+            "unicode_char" | "char" | "raw_string" | "byte_hex" | "bytestring" | "raw_bytestring"
+        ) {
             justrust_engine::compiler::frontend::parse_prepared(&prepared)
                 .unwrap_or_else(|error| panic!("{name}: character ingress rejected: {error}"));
             continue;

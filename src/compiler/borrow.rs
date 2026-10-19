@@ -731,6 +731,8 @@ struct CarrierBuilder<'a, 'b> {
     original_locals: Vec<Ty>,
     initial: FlowState,
     reference_inputs: Vec<(InputCarrier, ReferenceOriginId)>,
+    /// Issued only for literal data, never inferred from a reference type.
+    static_origin: Option<ReferenceOriginId>,
     family_inputs: Vec<FamilyOrigin>,
     targets: Vec<Vec<Target>>,
     kinds: Vec<BorrowKind>,
@@ -1607,6 +1609,10 @@ impl CarrierBuilder<'_, '_> {
         let mut pending: Vec<_> = origins.references.0.members().collect();
         let mut seen = Set::new(self.targets.len());
         while let Some(origin) = pending.pop() {
+            // Immutable program data outlives every input and output region.
+            if self.static_origin == Some(ReferenceOriginId(origin)) {
+                continue;
+            }
             if seen.has(origin) {
                 continue;
             }
@@ -1997,6 +2003,29 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
             }
             call_rows.push(rows);
         }
+        let static_origin = if f.blocks.iter().any(|block| {
+            block.statements.iter().any(|statement| {
+                matches!(
+                    &statement.value,
+                    Statement::Assign {
+                        value: Rvalue::ByteStr(_),
+                        ..
+                    }
+                )
+            })
+        }) {
+            if kinds.len() >= MAX_LOANS {
+                return Err(Exhausted);
+            }
+            ledger
+                .retain_bytes(size_of::<BorrowKind>())
+                .map_err(|_| Exhausted)?;
+            let origin = ReferenceOriginId(kinds.len());
+            kinds.push(BorrowKind::Shared);
+            Some(origin)
+        } else {
+            None
+        };
         let n = kinds.len();
         budget.reserve_bytes(mul(
             n,
@@ -2020,6 +2049,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                 overwritten: Set::default(),
             },
             reference_inputs,
+            static_origin,
             family_inputs,
             targets: vec![vec![]; n],
             kinds,
@@ -2312,6 +2342,9 @@ impl CarrierBuilder<'_, '_> {
             }
         }
         for origin in value.references.0.members() {
+            if self.static_origin == Some(ReferenceOriginId(origin)) {
+                continue;
+            }
             if self.targets[origin].is_empty() {
                 return Ok(false);
             }
@@ -2450,6 +2483,15 @@ impl CarrierBuilder<'_, '_> {
         statement: usize,
     ) -> Result<Vec<(CarrierLocation, CarrierOrigins)>, Exhausted> {
         match value {
+            Rvalue::ByteStr(_) => {
+                let origin = self.static_origin.ok_or(Exhausted)?;
+                let mut origins = self.empty_origins()?;
+                origins.references.0.insert(origin.0);
+                Ok(vec![(
+                    fixed_location(ReferencePosition { depth: 0 }),
+                    origins,
+                )])
+            }
             Rvalue::Use(operand) => self.operand_value(state, operand),
             // The slice handle carries exactly the input reference's origins
             // and loan set at the same fixed carrier position. Length metadata
@@ -4420,7 +4462,7 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
             visit(array, false);
             visit_operand(index, &mut visit);
         }
-        Rvalue::Println(_) | Rvalue::Output(_) | Rvalue::Str(_) => {}
+        Rvalue::Println(_) | Rvalue::Output(_) | Rvalue::Str(_) | Rvalue::ByteStr(_) => {}
     }
 }
 

@@ -26,6 +26,7 @@ impl TokenView<'_> {
             self.kind != ParserTokenKind::Eof
                 && self.kind != ParserTokenKind::String
                 && self.kind != ParserTokenKind::Char
+                && self.kind != ParserTokenKind::ByteString
                 && self.kind != ParserTokenKind::Byte
                 && self.kind != ParserTokenKind::OpaqueLiteral
                 && self.kind != ParserTokenKind::DeferredLiteral
@@ -41,6 +42,9 @@ impl TokenView<'_> {
     }
     pub(super) fn is_byte(&self) -> bool {
         self.kind == ParserTokenKind::Byte
+    }
+    pub(super) fn is_byte_string(&self) -> bool {
+        self.kind == ParserTokenKind::ByteString
     }
     pub(super) fn is_lifetime(&self) -> bool {
         self.kind == ParserTokenKind::Lifetime

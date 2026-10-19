@@ -15,6 +15,7 @@ mod instances;
 pub mod ir;
 mod lexer;
 mod literal_scan;
+mod literal_values;
 mod macro_cursor;
 mod macro_fragments;
 mod macro_matcher;

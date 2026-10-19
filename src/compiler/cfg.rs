@@ -546,6 +546,7 @@ pub enum Rvalue {
     Output(ir::LiteralOutput),
     /// Materialize a `&'static str` descriptor over immutable program data.
     Str(std::sync::Arc<str>),
+    ByteStr(std::sync::Arc<[u8]>),
     Println(String),
     Format {
         pieces: Vec<String>,
@@ -677,7 +678,8 @@ impl Rvalue {
             | Self::Discriminant(_)
             | Self::Println(_)
             | Self::Output(_)
-            | Self::Str(_) => {}
+            | Self::Str(_)
+            | Self::ByteStr(_) => {}
         }
         Ok(())
     }
@@ -1144,6 +1146,7 @@ impl Function {
                             }
                             Rvalue::Println(text) => add(&mut bytes, text.len(), 1, budget)?,
                             Rvalue::Str(text) => add(&mut bytes, text.len(), 1, budget)?,
+                            Rvalue::ByteStr(text) => add(&mut bytes, text.len(), 1, budget)?,
                             Rvalue::IndexCopy { array, .. } | Rvalue::Discriminant(array) => {
                                 path(&mut bytes, array, budget)?
                             }
@@ -1780,7 +1783,8 @@ impl Function {
                             Rvalue::Borrow(_)
                             | Rvalue::Println(_)
                             | Rvalue::Output(_)
-                            | Rvalue::Str(_) => {}
+                            | Rvalue::Str(_)
+                            | Rvalue::ByteStr(_) => {}
                         }
                     }
                 }
@@ -2349,6 +2353,7 @@ impl Function {
                 Ok(Ty::Unit)
             }
             Rvalue::Str(_) => Ok(Ty::shared_str_ty()),
+            Rvalue::ByteStr(bytes) => Ok(Ty::byte_string_ty(bytes.len())),
             Rvalue::Unary { op, value } => {
                 let ty = self.operand_ty_with_facts(value, facts)?;
                 match (op, &ty) {
@@ -4297,6 +4302,11 @@ impl Lowerer<'_> {
             ir::ExprKind::Str(text) => self.assign(
                 destination.clone(),
                 Rvalue::Str(std::sync::Arc::from(text.as_str())),
+                origin,
+            ),
+            ir::ExprKind::ByteStr(bytes) => self.assign(
+                destination.clone(),
+                Rvalue::ByteStr(std::sync::Arc::from(bytes.as_slice())),
                 origin,
             ),
             ir::ExprKind::Char(value) => self.assign(
@@ -11564,7 +11574,10 @@ mod tests {
                             Rvalue::Discriminant(place) => {
                                 assert!(live[place.local.0], "discriminant reads dead storage");
                             }
-                            Rvalue::Println(_) | Rvalue::Output(_) | Rvalue::Str(_) => {}
+                            Rvalue::Println(_)
+                            | Rvalue::Output(_)
+                            | Rvalue::Str(_)
+                            | Rvalue::ByteStr(_) => {}
                         }
                     }
                 }

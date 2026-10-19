@@ -994,6 +994,7 @@ impl<'a> Validator<'a> {
                 | Expr::Float(_)
                 | Expr::Char(_)
                 | Expr::Str(_)
+                | Expr::ByteStr(_)
                 | Expr::Bool(_)
                 | Expr::Println(_) => (),
             },

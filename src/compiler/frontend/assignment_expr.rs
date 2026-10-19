@@ -56,6 +56,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 | Expr::Bool(_)
                 | Expr::Char(_)
                 | Expr::Str(_)
+                | Expr::ByteStr(_)
                 | Expr::Binary { .. }
                 | Expr::Unary { .. }
         ) {

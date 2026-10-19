@@ -1625,7 +1625,10 @@ fn preflight_with_plan(
                             operand(value, &mut budget)?;
                         }
                     }
-                    Rvalue::Println(_) | Rvalue::Output(_) | Rvalue::Str(_) => {}
+                    Rvalue::Println(_)
+                    | Rvalue::Output(_)
+                    | Rvalue::Str(_)
+                    | Rvalue::ByteStr(_) => {}
                 }
             }
         }
@@ -2906,7 +2909,7 @@ impl Transfer<'_> {
                     self.operand(state, field)?;
                 }
             }
-            Rvalue::Println(_) | Rvalue::Output(_) | Rvalue::Str(_) => {}
+            Rvalue::Println(_) | Rvalue::Output(_) | Rvalue::Str(_) | Rvalue::ByteStr(_) => {}
         }
         Ok(())
     }

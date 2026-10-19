@@ -2770,6 +2770,7 @@ pub fn instantiate_checked(
             | ExprKind::FloatCast { .. }
             | ExprKind::Char(_)
             | ExprKind::Str(_)
+            | ExprKind::ByteStr(_)
             | ExprKind::Float(_)
             | ExprKind::Deref { .. }
             | ExprKind::DynamicIndex { .. }
@@ -4608,6 +4609,17 @@ impl Ty {
     /// Exactly shared `&str`.
     pub fn is_shared_str(&self) -> bool {
         matches!(self, Self::Ref { kind: BorrowKind::Shared, referent } if **referent == Self::Str)
+    }
+
+    /// The canonical byte-string type, with its decoded byte extent.
+    pub fn byte_string_ty(len: usize) -> Self {
+        Self::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(Self::Array {
+                element: Arc::new(Self::Int(IntTy::U8)),
+                len,
+            }),
+        }
     }
 
     /// The canonical `&str` type.
@@ -6877,6 +6889,8 @@ pub enum ExprKind {
     },
     /// A string literal: `&'static str` over immutable program data.
     Str(String),
+    /// Exact shared array reference over immutable static program bytes.
+    ByteStr(Vec<u8>),
     /// Count zero bits before the highest set bit within the integer's declared width.
     LeadingZeros {
         value: ExprId,
@@ -7631,6 +7645,7 @@ impl CheckedFunction {
                     storage(budget, modes.len(), std::mem::size_of::<FormatMode>())?;
                 }
                 ExprKind::Str(text) => storage(budget, text.len(), 1)?,
+                ExprKind::ByteStr(bytes) => storage(budget, bytes.len(), 1)?,
                 ExprKind::Println(text) => storage(budget, text.len(), 1)?,
                 ExprKind::Panic(payload) => {
                     storage(budget, 1, std::mem::size_of::<PanicMessage>())?;
@@ -8930,6 +8945,13 @@ impl CheckedFunction {
                     value: Some(value), ..
                 } => expr(*value)?,
                 ExprKind::Break { value: None, .. } | ExprKind::Continue { .. } => {}
+                ExprKind::ByteStr(bytes) => {
+                    if value.ty != Ty::byte_string_ty(bytes.len())
+                        || value.completion != Completion::Returns
+                    {
+                        return Err("byte string literal expression type mismatch".into());
+                    }
+                }
                 ExprKind::Str(_) => {
                     if !value.ty.is_shared_str() || value.completion != Completion::Returns {
                         return Err("string literal expression type mismatch".into());

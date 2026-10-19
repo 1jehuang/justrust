@@ -2369,6 +2369,7 @@ impl SourceInventory {
             | Expr::Float(_)
             | Expr::Char(_)
             | Expr::Str(_)
+            | Expr::ByteStr(_)
             | Expr::Bool(_)
             | Expr::Var(_)
             | Expr::Continue { .. }
@@ -6119,6 +6120,8 @@ pub enum Expr {
     Char(char),
     /// Decoded UTF-8 contents of a string literal, typed `&'static str`.
     Str(String),
+    /// Immutable program bytes, with exact type `&'static [u8; N]`.
+    ByteStr(Vec<u8>),
     DynamicIndex {
         base: Box<Expr>,
         index: Box<Expr>,
@@ -6293,6 +6296,7 @@ enum ParserTokenKind {
     Number,
     Char,
     Byte,
+    ByteString,
     String,
     Punct,
     Lifetime,
@@ -9074,15 +9078,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Ok(Type::Never);
         }
         if self.eat("&") {
-            let region = if self.token().is_lifetime()
-                && self.token().text == "'static"
-                && self
-                    .cursor
-                    .peek(1)
-                    .is_some_and(|token| token.matches("str"))
-            {
-                // Only `&'static str` (program data) is admitted. Other
-                // `'static` references keep the explicit parser boundary.
+            let region = if self.token().is_lifetime() && self.token().text == "'static" {
                 self.cursor.bump();
                 Some(RegionName::Static)
             } else if self.token().is_lifetime() {
@@ -12385,6 +12381,17 @@ impl<'input, 'names> Parser<'input, 'names> {
             let text = self.string_literal_value(self.token().text)?;
             self.cursor.bump();
             Expr::Str(text)
+        } else if self.token().is_byte_string() {
+            let value = super::literal_values::decode(self.token().text, self.names.budget())
+                .map_err(|e| {
+                    native_adapter::lex_error(super::lexer::literal_error(self.token().text, e))
+                })?;
+            self.names
+                .retain_parser_storage(value.bytes().len())
+                .map_err(native_adapter::name_error)?;
+            let bytes = value.bytes().to_vec();
+            self.cursor.bump();
+            Expr::ByteStr(bytes)
         } else if self.token().is_byte() {
             Expr::Integer(self.byte_integer_literal()?)
         } else if self.token().is_char() {

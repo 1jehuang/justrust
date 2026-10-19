@@ -67,6 +67,9 @@ pub(super) fn literal_buffer(
                 LiteralKind::Integer
                 | LiteralKind::Float
                 | LiteralKind::String
+                | LiteralKind::RawString
+                | LiteralKind::ByteString
+                | LiteralKind::RawByteString
                 | LiteralKind::Char
                 | LiteralKind::Byte,
             ..
@@ -362,7 +365,7 @@ fn push_logical(
                     )
                 }
                 TokenKind::Literal {
-                    kind: LiteralKind::String,
+                    kind: LiteralKind::String | LiteralKind::RawString,
                     spelling,
                 } => {
                     let text = session.symbol(spelling).map_err(transport_error)?;
@@ -370,24 +373,8 @@ fn push_logical(
                         .budget()
                         .charge(Counter::Work, text.len() as u64)
                         .map_err(|error| transport_error(error.into()))?;
-                    // Classify only an existing string's continuation metadata.
-                    // Skip escape pairs so an escaped backslash cannot create one.
-                    let mut at = 0;
-                    while at < text.len() {
-                        if text.as_bytes()[at] == b'\\' {
-                            at += 1;
-                            if matches!(text.as_bytes().get(at), Some(b'\n' | b'\r')) {
-                                return Err(failure(
-                                    session,
-                                    token.span,
-                                    "string continuation escapes are unsupported",
-                                ));
-                            }
-                        }
-                        at += 1;
-                    }
                     let decoded =
-                        crate::compiler::lexer::decode_normal_string(text, session.budget())
+                        crate::compiler::lexer::decode_text_string(text, session.budget())
                             .map_err(native_adapter::lex_error)?;
                     output.push_expanded(
                         session,
@@ -397,10 +384,23 @@ fn push_logical(
                         None,
                     )
                 }
+                TokenKind::Literal {
+                    kind: LiteralKind::ByteString | LiteralKind::RawByteString,
+                    spelling,
+                } => {
+                    let text = session.symbol(spelling).map_err(transport_error)?;
+                    output.push_expanded(
+                        session,
+                        text,
+                        ParserTokenKind::ByteString,
+                        &[part(session, token.span)?],
+                        None,
+                    )
+                }
                 TokenKind::Literal { .. } => Err(failure(
                     session,
                     token.span,
-                    "raw, byte string and C literals are unsupported",
+                    "C string literals are unsupported",
                 )),
                 TokenKind::Opaque(_) => {
                     output.push_opaque_literal(session, token, part(session, token.span)?)
@@ -1110,7 +1110,7 @@ mod tests {
         let released = budget.snapshot();
         assert!(released.retained_bytes < live.retained_bytes);
         assert_eq!(released.temporary_bytes, live.temporary_bytes);
-        for argument in ["(r\"raw\")", "(b\"bytes\")", "(c\"C\")"] {
+        for argument in ["(c\"C\")"] {
             let mut source = fixture_rules("($x:literal)=>{$x};", argument);
             let buffer = run(&mut source).unwrap();
             let view = super::super::TokenCursor::new(&buffer).current();
@@ -1174,7 +1174,7 @@ mod tests {
 
     #[test]
     fn unsupported_expanded_namespaces_literals_and_tuple_metadata_are_explicit() {
-        for output in ["(1,2).0.1", "'a", "self", "r\"raw\"", "\"a\\\nb\""] {
+        for output in ["(1,2).0.1", "'a", "self"] {
             let mut source = fixture(output);
             let error = run(&mut source).unwrap_err();
             assert_eq!(

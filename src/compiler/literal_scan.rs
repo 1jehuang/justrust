@@ -268,7 +268,7 @@ pub(super) fn scan(
     }
 }
 
-fn escape(
+pub(super) fn escape(
     text: &str,
     slash: usize,
     string: bool,
@@ -529,9 +529,18 @@ pub(super) fn decode_normal_string(
     text: &str,
     budget: &ExpansionBudget,
 ) -> Result<DecodedString, LiteralError> {
+    decode_text_string(text, budget, false)
+}
+
+pub(super) fn decode_text_string(
+    text: &str,
+    budget: &ExpansionBudget,
+    allow_raw: bool,
+) -> Result<DecodedString, LiteralError> {
     let literal = scan(text, 0, Edition::E2024, budget)?
-        .ok_or_else(|| fault(text, 0, "expected normal string literal"))?;
-    if literal.kind != LiteralKind::String
+        .ok_or_else(|| fault(text, 0, "expected string literal"))?;
+    if !(literal.kind == LiteralKind::String
+        || (allow_raw && literal.kind == LiteralKind::RawString))
         || literal.end != text.len()
         || !literal.info.suffix.is_empty()
     {
@@ -554,7 +563,7 @@ pub(super) fn decode_normal_string(
             .next()
             .ok_or_else(|| fault(text, at, "invalid decoded string boundary"))?;
         work(budget, ch.len_utf8())?;
-        if ch == '\\' {
+        if ch == '\\' && literal.kind == LiteralKind::String {
             let (next, decoded, _) = escape(text, at, true, false, false, budget)?;
             if let Some(c) = decoded {
                 value.push(c);

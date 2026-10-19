@@ -3,7 +3,7 @@
 use super::{ParseError, ParserTokenKind, Token, TokenPart};
 use crate::compiler::expansion_budget::Storage;
 use crate::compiler::expansion_span::{SpanId, SyntheticReason};
-use crate::compiler::lexer::{DocComment, LexError, LexedEvent, LexedTokens, decode_normal_string};
+use crate::compiler::lexer::{DocComment, LexError, LexedEvent, LexedTokens};
 use crate::compiler::semantic_scope::ExpansionTokenAdmission;
 use crate::compiler::source::PreparedLexInput;
 use crate::compiler::source::{SourceError, SourceErrorKind};
@@ -622,19 +622,17 @@ impl NativeParserInput {
                     InputToken::Leaf(crate::compiler::token::Token {
                         kind: TokenKind::Literal { kind, .. },
                         ..
-                    }) => {
-                        !matches!(
-                            kind,
-                            crate::compiler::token::LiteralKind::Integer
-                                | crate::compiler::token::LiteralKind::Float
-                                | crate::compiler::token::LiteralKind::String
-                                | crate::compiler::token::LiteralKind::Char
-                                | crate::compiler::token::LiteralKind::Byte
-                        ) || event
-                            .literal
-                            .as_ref()
-                            .is_some_and(|info| info.has_continuation)
-                    }
+                    }) => !matches!(
+                        kind,
+                        crate::compiler::token::LiteralKind::Integer
+                            | crate::compiler::token::LiteralKind::Float
+                            | crate::compiler::token::LiteralKind::String
+                            | crate::compiler::token::LiteralKind::RawString
+                            | crate::compiler::token::LiteralKind::ByteString
+                            | crate::compiler::token::LiteralKind::RawByteString
+                            | crate::compiler::token::LiteralKind::Char
+                            | crate::compiler::token::LiteralKind::Byte
+                    ),
                     _ => false,
                 };
                 if deferred {
@@ -695,7 +693,7 @@ impl NativeParserInput {
                     TokenKind::Literal { kind, spelling } => {
                         use crate::compiler::token::LiteralKind;
                         match kind {
-                            LiteralKind::String => {
+                            LiteralKind::String | LiteralKind::RawString => {
                                 let info = event.literal.as_ref().ok_or_else(|| {
                                     event_error(
                                         event,
@@ -703,13 +701,6 @@ impl NativeParserInput {
                                         "literal metadata missing",
                                     )
                                 })?;
-                                if info.has_continuation {
-                                    return Err(event_error(
-                                        event,
-                                        SourceErrorKind::Unsupported,
-                                        "string continuation escapes are unsupported",
-                                    ));
-                                }
                                 if !info.suffix.is_empty() {
                                     if input.macro_source.is_some() {
                                         // The canonical inventory retains the literal.
@@ -736,7 +727,8 @@ impl NativeParserInput {
                                 let spelling =
                                     input.session.symbol(spelling).map_err(transport_error)?;
                                 let decoded =
-                                    decode_normal_string(spelling, &budget).map_err(|e| {
+                                    crate::compiler::lexer::decode_text_string(spelling, &budget)
+                                        .map_err(|e| {
                                         let mut error = lex_error(e);
                                         if error.kind == SourceErrorKind::Syntax {
                                             error.kind = SourceErrorKind::Contract;
@@ -752,6 +744,17 @@ impl NativeParserInput {
                                     event.column,
                                     ParserTokenKind::String,
                                     Some(decoded.as_str()),
+                                    &[native_part(event)?],
+                                )?;
+                            }
+                            LiteralKind::ByteString | LiteralKind::RawByteString => {
+                                input.push_range(
+                                    projection,
+                                    event.prepared.clone(),
+                                    event.line,
+                                    event.column,
+                                    ParserTokenKind::ByteString,
+                                    None,
                                     &[native_part(event)?],
                                 )?;
                             }
@@ -777,7 +780,7 @@ impl NativeParserInput {
                                 return Err(event_error(
                                     event,
                                     SourceErrorKind::Unsupported,
-                                    "raw, byte string and C literals are unsupported",
+                                    "C string literals are unsupported",
                                 ));
                             }
                         }
@@ -1654,7 +1657,7 @@ mod tests {
             cursor.bump();
         }
         // Char and byte now have native semantic tokens rather than deferred syntax.
-        assert!(count >= 6);
+        assert!(count >= 3);
         assert!(
             buffer
                 .iter()
@@ -2056,10 +2059,7 @@ mod tests {
             "#!/bin/native\nfn f(){}",
             "r#name",
             "水",
-            "b\"x\"",
-            "r\"x\"",
             "c\"x\"",
-            "\"a\\\nb\"",
         ] {
             assert_eq!(
                 super::super::lex(text).unwrap_err().kind,

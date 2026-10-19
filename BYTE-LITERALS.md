@@ -15,9 +15,10 @@ arrays, arithmetic, casts, ownership, source replay and code generation therefor
 use existing graph facts and validation, not a parallel byte evaluator. No new
 IR operations, graph kinds, side state or ratchets are introduced.
 
-Byte strings and raw byte strings remain explicitly unsupported. They require
-correct static array-reference and lifetime semantics, not treating `b"..."` as
-a by-value array or a UTF-8 string. No such approximation is added here.
+Byte strings and raw byte strings are implemented separately in
+RAW-BYTE-LITERALS.md, using exact static array references and issued literal
+provenance. They are not by-value arrays or UTF-8 strings. This byte-character
+slice continues to use the existing rigid `u8` representation.
 
 Validation: `justrust test --local --test byte_literals` requires stock rustc,
 compiles edition 2024 with panic=abort, and compares acceptance/execution and
