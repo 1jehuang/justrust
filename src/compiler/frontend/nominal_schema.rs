@@ -388,6 +388,23 @@ impl PlanState {
                     referent: Arc::new(inner),
                 }
             }
+            // Bare `[T]` as an impl Self type (`impl Tr for [T]`); value
+            // positions are rejected by the slice admission checks.
+            Type::Slice(element) if depth == 0 => {
+                let element = self.source_ty_with_transport(
+                    registry,
+                    element,
+                    bindings,
+                    caller,
+                    budget,
+                    depth + 1,
+                    false,
+                    transport,
+                )?;
+                ir::Ty::Slice {
+                    element: Arc::new(element),
+                }
+            }
             Type::Slice(_) => {
                 return Err(BARE_SLICE_UNSUPPORTED.into());
             }

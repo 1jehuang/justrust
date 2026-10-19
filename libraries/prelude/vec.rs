@@ -48,6 +48,48 @@ impl<T> Vec<T> {
         unsafe { &*p }
     }
 
+    pub fn get(&self, index: usize) -> Option<&T> {
+        if index < self.len {
+            Option::Some(self.get_ref(index))
+        } else {
+            Option::None
+        }
+    }
+
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+        if index < self.len {
+            let p = slot(self.ptr, index);
+            Option::Some(unsafe { &mut *p })
+        } else {
+            Option::None
+        }
+    }
+
+    pub fn first(&self) -> Option<&T> {
+        self.get(0usize)
+    }
+
+    pub fn last(&self) -> Option<&T> {
+        if self.len == 0usize {
+            Option::None
+        } else {
+            self.get(self.len - 1usize)
+        }
+    }
+
+    pub fn first_mut(&mut self) -> Option<&mut T> {
+        self.get_mut(0usize)
+    }
+
+    pub fn last_mut(&mut self) -> Option<&mut T> {
+        if self.len == 0usize {
+            Option::None
+        } else {
+            let last = self.len - 1usize;
+            self.get_mut(last)
+        }
+    }
+
     pub fn as_ptr(&self) -> *const T {
         self.ptr as *const T
     }

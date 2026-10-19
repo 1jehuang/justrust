@@ -1957,8 +1957,9 @@ impl ValidatedTraitWorld {
                 )?;
             }
             Ty::Slice { element } => {
-                // Unsized: only meaningful directly behind a reference.
-                if !matches!(usage, TypeUse::Referent { .. }) {
+                // Unsized: only meaningful directly behind a reference, or
+                // as a root trait Self type (`impl Tr for [T]`), like `str`.
+                if !matches!(usage, TypeUse::Referent { .. } | TypeUse::Root) {
                     return Err(FactsError::unsupported(
                         &self.budget,
                         "unsupported: slice type outside a reference",
