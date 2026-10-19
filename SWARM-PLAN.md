@@ -38,11 +38,6 @@ oracle stdout) and by feature tags disappearing from it, not by slice docs.
    (e.g. `git stash`-free: export the index with `git checkout-index -a
    --prefix=$JCODE_SCRATCH_DIR/verify/` and `cargo test --no-run` there) before
    pushing. Commit your WIP often so other agents' commits can't depend on it.
-10. Before every commit, `git pull --rebase` FIRST, then build your index from
-   the new HEAD, then run `git diff --stat HEAD --cached` and confirm it lists
-   ONLY files you meant to change, with no deletions or reversions of code
-   you didn't write. Several commits today silently reverted other agents'
-   work (vec!, MAX/MIN hook, format macros) because of a stale index.
 
 ## Streams
 
