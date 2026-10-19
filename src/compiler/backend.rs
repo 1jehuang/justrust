@@ -379,6 +379,8 @@ struct Emitter<'a> {
     resolve: &'a dyn Fn(&ir::CallTarget) -> Result<String, String>,
     locals: Vec<i32>,
     drop_flags: Vec<Option<i32>>,
+    /// Drop-elaboration flags for moved-from field paths of owning roots.
+    path_flags: Vec<(LocalId, Vec<ir::Projection>, i32)>,
     aggregate_scratch: i32,
     /// 0=LHS, 16=RHS, 32=result, 48..256=wide arithmetic workspace.
     /// Independent of aggregate scratch so constructors cannot destroy inputs.
@@ -890,7 +892,17 @@ impl<'a> Emitter<'a> {
             {
                 super::traits::NormalDropPlan::Trivial => None,
                 super::traits::NormalDropPlan::Destructor(destructor) => {
-                    Some((self.resolve)(destructor.target())?)
+                    match (destructor.own_target(), destructor.glue()) {
+                        (Some(target), super::traits::DropGlue::None) => {
+                            Some((self.resolve)(target)?)
+                        }
+                        _ => {
+                            return Err(
+                                "unsupported: trait object of a type with structural drop glue"
+                                    .into(),
+                            );
+                        }
+                    }
                 }
                 super::traits::NormalDropPlan::Unresolved => {
                     return Err("unsupported: unresolved Drop for a trait object vtable".into());
@@ -934,13 +946,174 @@ impl<'a> Emitter<'a> {
         }
         self.load_place(place)
     }
+    /// Run the complete drop of the value whose address is at [rsp]: the
+    /// owner's own `Drop::drop`, then structural glue in declaration order.
+    /// Leaves the stack as found.
+    fn drop_glue(&mut self, destructor: &super::traits::ValidatedDestructor) -> Result<(), String> {
+        use super::traits::DropGlue;
+        if let Some(target) = destructor.own_target() {
+            self.bytes(&[0xff, 0x34, 0x24]); // push qword [rsp]
+            let at = self.jump(&[0xe8]);
+            self.object.calls.push((at, (self.resolve)(target)?));
+            self.bytes(&[0x48, 0x83, 0xc4, 8]);
+        }
+        let owner = destructor.owner().clone();
+        match destructor.glue() {
+            DropGlue::None => {}
+            DropGlue::Fields(fields) => {
+                for (index, field) in fields {
+                    let (offset, _) = field_offset(&owner, *index)?;
+                    self.drop_at_offset(offset, field)?;
+                }
+            }
+            DropGlue::Variants(variants) => {
+                let ir::Ty::Enum(enum_ty) = &owner else {
+                    return Err("variant drop glue requires an enum".into());
+                };
+                for (variant, fields) in variants {
+                    self.bytes(&[0x48, 0x8b, 0x04, 0x24, 0x8b, 0x00]); // eax = tag
+                    self.bytes(&[0x3d]);
+                    self.i32(i32::try_from(*variant).map_err(|_| "enum tag overflow")?);
+                    let skip = self.jump(&[0x0f, 0x85]);
+                    let definition = &enum_ty.def().variants[*variant];
+                    for (index, field) in fields {
+                        let offset =
+                            definition.fields[..*index].iter().try_fold(8_i32, |o, f| {
+                                o.checked_add(value_size(&f.ty)?)
+                                    .ok_or_else(|| "enum payload too large".to_string())
+                            })?;
+                        self.drop_at_offset(offset, field)?;
+                    }
+                    let here = self.position();
+                    self.patch(skip, here)?;
+                }
+            }
+            DropGlue::Array { len, element } => {
+                let stride = value_size(element.owner())?;
+                self.bytes(&[0x6a, 0x00]); // push 0 (index)
+                let top = self.position();
+                self.bytes(&[0x48, 0x8b, 0x04, 0x24, 0x48, 0x3d]); // rax=idx; cmp rax, len
+                self.i32(i32::try_from(*len).map_err(|_| "array too long")?);
+                let done = self.jump(&[0x0f, 0x83]);
+                self.bytes(&[0x48, 0x69, 0xc0]);
+                self.i32(stride);
+                self.bytes(&[0x48, 0x03, 0x44, 0x24, 0x08]); // rax += base
+                self.bytes(&[0x50]);
+                self.drop_glue(element)?;
+                self.bytes(&[0x48, 0x83, 0xc4, 8]);
+                self.bytes(&[0x48, 0xff, 0x04, 0x24]); // inc qword [rsp]
+                let back = self.jump(&[0xe9]);
+                self.patch(back, top)?;
+                let here = self.position();
+                self.patch(done, here)?;
+                self.bytes(&[0x48, 0x83, 0xc4, 8]);
+            }
+        }
+        Ok(())
+    }
+    fn drop_at_offset(
+        &mut self,
+        offset: i32,
+        field: &super::traits::ValidatedDestructor,
+    ) -> Result<(), String> {
+        self.bytes(&[0x48, 0x8b, 0x04, 0x24]); // rax = base
+        if offset != 0 {
+            self.bytes(&[0x48, 0x05]);
+            self.i32(offset);
+        }
+        self.bytes(&[0x50]);
+        self.drop_glue(field)?;
+        self.bytes(&[0x48, 0x83, 0xc4, 8]);
+        Ok(())
+    }
     fn set_drop_flag(&mut self, local: LocalId, value: bool) {
         if let Some(Some(offset)) = self.drop_flags.get(local.0) {
             let offset = *offset;
-            self.bytes(&[0xc6, 0x85]); // mov byte [rbp+disp32], imm8
-            self.i32(offset);
-            self.bytes(&[u8::from(value)]);
+            self.flag_store(offset, value);
+            // A whole-root write (re)initializes every subpath. A whole-root
+            // move or cleanup leaves subpath flags irrelevant until rewritten.
+            if value {
+                let offsets: Vec<i32> = self
+                    .path_flags
+                    .iter()
+                    .filter(|(l, _, _)| *l == local)
+                    .map(|(_, _, at)| *at)
+                    .collect();
+                for at in offsets {
+                    self.flag_store(at, true);
+                }
+            }
         }
+    }
+    fn flag_store(&mut self, offset: i32, value: bool) {
+        self.bytes(&[0xc6, 0x85]); // mov byte [rbp+disp32], imm8
+        self.i32(offset);
+        self.bytes(&[u8::from(value)]);
+    }
+    /// Set flags for `place` and every tracked path below it.
+    fn set_path_flags(&mut self, place: &ir::Place, value: bool) {
+        let offsets: Vec<i32> = self
+            .path_flags
+            .iter()
+            .filter(|(l, p, _)| *l == place.local && p.starts_with(&place.projection))
+            .map(|(_, _, at)| *at)
+            .collect();
+        for at in offsets {
+            self.flag_store(at, value);
+        }
+    }
+    /// Elaborated drop of the value at [rsp] reached by `path` from a root
+    /// that has partially moved subpaths.
+    fn drop_elaborated(
+        &mut self,
+        local: LocalId,
+        path: &mut Vec<ir::Projection>,
+        destructor: &super::traits::ValidatedDestructor,
+    ) -> Result<(), String> {
+        if let Some((_, _, at)) = self
+            .path_flags
+            .iter()
+            .find(|(l, p, _)| *l == local && p == path)
+            .cloned()
+        {
+            self.bytes(&[0x80, 0xbd]); // cmp byte [rbp+disp32], 0
+            self.i32(at);
+            self.bytes(&[0]);
+            let skip = self.jump(&[0x0f, 0x84]);
+            self.drop_glue(destructor)?;
+            let here = self.position();
+            return self.patch(skip, here);
+        }
+        let below = self
+            .path_flags
+            .iter()
+            .any(|(l, p, _)| *l == local && p.len() > path.len() && p.starts_with(path));
+        let super::traits::DropGlue::Fields(fields) = destructor.glue() else {
+            return self.drop_glue(destructor);
+        };
+        if !below {
+            return self.drop_glue(destructor);
+        }
+        if destructor.own_target().is_some() {
+            return Err(
+                "E0509: cannot move out of a type which implements the `Drop` trait".into(),
+            );
+        }
+        let owner = destructor.owner().clone();
+        for (index, field) in fields {
+            let (offset, _) = field_offset(&owner, *index)?;
+            self.bytes(&[0x48, 0x8b, 0x04, 0x24]);
+            if offset != 0 {
+                self.bytes(&[0x48, 0x05]);
+                self.i32(offset);
+            }
+            self.bytes(&[0x50]);
+            path.push(ir::Projection::Field(*index));
+            self.drop_elaborated(local, path, field)?;
+            path.pop();
+            self.bytes(&[0x48, 0x83, 0xc4, 8]);
+        }
+        Ok(())
     }
     fn store_place(&mut self, place: &ir::Place) -> Result<(), String> {
         // Rust assignment evaluates the complete owning RHS first. Resolve a
@@ -962,6 +1135,8 @@ impl<'a> Emitter<'a> {
         }
         if place.projection.is_empty() {
             self.set_drop_flag(place.local, true);
+        } else {
+            self.set_path_flags(place, true);
         }
         Ok(())
     }
@@ -1000,8 +1175,12 @@ impl<'a> Emitter<'a> {
             }),
             cfg::Operand::Copy(place) | cfg::Operand::Move(place) => {
                 self.load_place(place)?;
-                if matches!(operand, cfg::Operand::Move(_)) && place.projection.is_empty() {
-                    self.set_drop_flag(place.local, false);
+                if matches!(operand, cfg::Operand::Move(_)) {
+                    if place.projection.is_empty() {
+                        self.set_drop_flag(place.local, false);
+                    } else {
+                        self.set_path_flags(place, false);
+                    }
                 }
             }
         }
@@ -2493,6 +2672,35 @@ impl Emitter<'_> {
     }
     fn terminator(&mut self, terminator: &cfg::Terminator) -> Result<(), String> {
         match terminator {
+            cfg::Terminator::Drop { cleanup, next } if !cleanup.owner().projection.is_empty() => {
+                let owner = cleanup.owner();
+                let deref = owner.projection.contains(&ir::Projection::Deref);
+                if !deref {
+                    // Owned subpath: guarded by the root flag and its own
+                    // path flag when it was ever moved.
+                    let root = self
+                        .drop_flags
+                        .get(owner.local.0)
+                        .copied()
+                        .flatten()
+                        .ok_or("cleanup omitted runtime flag")?;
+                    self.bytes(&[0x80, 0xbd]);
+                    self.i32(root);
+                    self.bytes(&[0]);
+                    self.edge(&[0x0f, 0x84], *next);
+                }
+                self.place_address(owner)?;
+                self.bytes(&[0x50]);
+                if deref {
+                    self.drop_glue(cleanup.destructor())?;
+                } else {
+                    let mut path = owner.projection.clone();
+                    self.drop_elaborated(owner.local, &mut path, cleanup.destructor())?;
+                    self.set_path_flags(owner, false);
+                }
+                self.bytes(&[0x48, 0x83, 0xc4, 8]);
+                self.edge(&[0xe9], *next);
+            }
             cfg::Terminator::Drop { cleanup, next } => {
                 let owner = cleanup.owner();
                 let offset = self
@@ -2508,10 +2716,7 @@ impl Emitter<'_> {
                 self.set_drop_flag(owner.local, false);
                 self.place_address(owner)?;
                 self.bytes(&[0x50]); // genuine &mut Self parameter
-                let at = self.jump(&[0xe8]);
-                self.object
-                    .calls
-                    .push((at, (self.resolve)(cleanup.destructor().target())?));
+                self.drop_elaborated(owner.local, &mut Vec::new(), cleanup.destructor())?;
                 self.bytes(&[0x48, 0x83, 0xc4, 8]);
                 self.edge(&[0xe9], *next);
             }
@@ -2827,6 +3032,44 @@ pub fn emit_cfg_function(
             None
         });
     }
+    // Partial moves out of owning roots get their own runtime flags so the
+    // root's cleanup skips exactly the moved paths (drop elaboration).
+    let mut path_flags: Vec<(LocalId, Vec<ir::Projection>, i32)> = Vec::new();
+    {
+        let mut moved = |operand: &cfg::Operand| -> Result<(), String> {
+            if let cfg::Operand::Move(place) = operand
+                && !place.projection.is_empty()
+                && place
+                    .projection
+                    .iter()
+                    .all(|p| matches!(p, ir::Projection::Field(_)))
+                && drop_flags[place.local.0].is_some()
+                && !path_flags
+                    .iter()
+                    .any(|(l, p, _)| *l == place.local && *p == place.projection)
+            {
+                let ty = function.place_ty(place)?;
+                let needs = matches!(
+                    concrete
+                        .facts()
+                        .normal_drop_plan(ty)
+                        .map_err(|e| e.into_legacy_diagnostic(concrete.facts().budget()))?,
+                    super::traits::NormalDropPlan::Destructor(_)
+                );
+                if needs {
+                    let at = allocate_value(&mut frame_bytes, &ir::Ty::Bool)?;
+                    path_flags.push((place.local, place.projection.clone(), at));
+                }
+            }
+            Ok(())
+        };
+        for block in &function.blocks {
+            for statement in &block.statements {
+                statement.value.visit_operands(&mut moved)?;
+            }
+            block.terminator.value.visit_operands(&mut moved)?;
+        }
+    }
     let mut scratch_size = 0;
     for block in &function.blocks {
         for statement in &block.statements {
@@ -2893,6 +3136,7 @@ pub fn emit_cfg_function(
         resolve,
         locals,
         drop_flags,
+        path_flags,
         aggregate_scratch,
         wide_scratch,
         vtable_scratch,
@@ -3821,6 +4065,7 @@ mod tests {
             concrete: &concrete,
             resolve: &resolve,
             drop_flags: Vec::new(),
+            path_flags: Vec::new(),
             locals: Vec::new(),
             aggregate_scratch: 0,
             wide_scratch: 0,
@@ -3886,6 +4131,7 @@ mod tests {
             concrete: &concrete,
             resolve: &resolve,
             drop_flags: Vec::new(),
+            path_flags: Vec::new(),
             locals: Vec::new(),
             aggregate_scratch: 0,
             wide_scratch: -48,
@@ -3935,6 +4181,7 @@ mod tests {
             concrete: &concrete,
             resolve: &resolve,
             drop_flags: Vec::new(),
+            path_flags: Vec::new(),
             locals: Vec::new(),
             aggregate_scratch: -16,
             wide_scratch: -64,
@@ -4402,6 +4649,7 @@ mod tests {
             concrete: &concrete,
             resolve: &resolve,
             drop_flags: Vec::new(),
+            path_flags: Vec::new(),
             locals: Vec::new(),
             aggregate_scratch: 0,
             wide_scratch: 0,
@@ -4543,6 +4791,7 @@ mod tests {
             concrete: &concrete,
             resolve: &resolve,
             drop_flags: Vec::new(),
+            path_flags: Vec::new(),
             locals: Vec::new(),
             aggregate_scratch: -2048,
             wide_scratch: 0,
@@ -6866,6 +7115,7 @@ mod tests {
             concrete: &concrete,
             resolve: &|_| Err("physical fixture has no instance calls".into()),
             drop_flags: Vec::new(),
+            path_flags: Vec::new(),
             locals: vec![],
             aggregate_scratch: -8,
             wide_scratch: -264,
@@ -7121,6 +7371,7 @@ mod tests {
                 concrete: &concrete,
                 resolve: &|_| Err("physical fixture has no instance calls".into()),
                 drop_flags: Vec::new(),
+                path_flags: Vec::new(),
                 locals: vec![],
                 aggregate_scratch: 0,
                 wide_scratch: 0,
@@ -7207,6 +7458,7 @@ mod tests {
             concrete: &concrete,
             resolve: &|_| Err("physical fixture has no instance calls".into()),
             drop_flags: Vec::new(),
+            path_flags: Vec::new(),
             locals: vec![],
             aggregate_scratch: -32,
             wide_scratch: -288,

@@ -75,9 +75,14 @@ impl RootCleanupDemand {
                     .map_err(|error| error.into_legacy_diagnostic(budget))?
                 {
                     traits::NormalDropPlan::Destructor(destructor) => {
-                        budget.charge_work(targets.len())?;
-                        if !targets.contains(destructor.target()) {
-                            targets.push(destructor.target().clone());
+                        for target in destructor.targets() {
+                            budget.charge_work(targets.len())?;
+                            if !targets.contains(&target) {
+                                targets
+                                    .try_reserve(1)
+                                    .map_err(|_| "cleanup demand allocation failed")?;
+                                targets.push(target);
+                            }
                         }
                     }
                     traits::NormalDropPlan::Trivial => {}
@@ -113,9 +118,11 @@ impl RootCleanupDemand {
         for block in &function.blocks {
             budget.charge_work(1)?;
             if let cfg::Terminator::Drop { cleanup, .. } = &block.terminator.value {
-                budget.charge_work(self.targets.len())?;
-                if !self.targets.contains(cleanup.destructor().target()) {
-                    return Err("cleanup target lacks owner-local canonical demand".into());
+                for target in cleanup.destructor().targets() {
+                    budget.charge_work(self.targets.len())?;
+                    if !self.targets.contains(&target) {
+                        return Err("cleanup target lacks owner-local canonical demand".into());
+                    }
                 }
             }
         }

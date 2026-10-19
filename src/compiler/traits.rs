@@ -23,7 +23,7 @@ pub use catalog::{
     RecipeDescriptor, RecipeShapeInventory,
 };
 pub use equality::NormalizedProjectionEquality;
-pub use normal_drop::{NormalDropPlan, ValidatedDestructor};
+pub use normal_drop::{DropGlue, NormalDropPlan, ValidatedDestructor};
 
 pub const MAX_PREDICATES: usize = 256;
 const DIAGNOSTIC_LIMIT: usize = 64 * 1024;
@@ -1516,24 +1516,28 @@ impl ValidatedTraitWorld {
                 continue;
             }
             world.has_normal_drop = true;
-            let Ty::Struct(owner) = &h.trait_ref.self_ty else {
-                return Err(FactsError::unsupported(
-                    budget,
-                    "unsupported: normal Drop requires a scalar-field struct",
-                ));
+            let owner_args = match &h.trait_ref.self_ty {
+                Ty::Struct(owner) => owner.def().type_args.clone(),
+                Ty::Enum(owner) => owner.def().type_args.clone(),
+                _ => {
+                    return Err(FactsError::invalid(
+                        budget,
+                        "E0120: the Drop trait may only be implemented for local structs, enums, and unions",
+                    ));
+                }
             };
             // Drop must cover the complete nominal parameter space, never a
             // specialization such as Owner<i32> or Owner<(T,T)>.
-            if h.schema_env.total_arity() != owner.def().type_args.len() {
+            if h.schema_env.total_arity() != owner_args.len() {
                 return Err(FactsError::invalid(
                     budget,
                     "canonical Drop cannot specialize owner arguments",
                 ));
             }
-            for (index, argument) in owner.def().type_args.iter().enumerate() {
+            for (index, argument) in owner_args.iter().enumerate() {
                 charged(budget, budget.charge_work(index + 1))?;
                 if !matches!(argument, Ty::Param(param) if h.schema_env.contains(*param))
-                    || owner.def().type_args[..index].contains(argument)
+                    || owner_args[..index].contains(argument)
                 {
                     return Err(FactsError::invalid(
                         budget,
@@ -1554,29 +1558,6 @@ impl ValidatedTraitWorld {
                         "unsupported: generic Drop with additional owner predicates",
                     ));
                 }
-            }
-            if owner.def().fields.is_empty()
-                || owner
-                    .def()
-                    .fields
-                    .iter()
-                    .any(|field| field.name.parse::<usize>().is_ok())
-                || owner.def().fields.iter().any(|field| {
-                    !matches!(
-                        field.ty,
-                        Ty::Int(_)
-                            | Ty::Float(_)
-                            | Ty::Bool
-                            | Ty::Char
-                            | Ty::Unit
-                            | Ty::RawPtr { .. }
-                    )
-                })
-            {
-                return Err(FactsError::unsupported(
-                    budget,
-                    "unsupported: normal Drop requires a scalar-field struct",
-                ));
             }
         }
         world.owner_normalization_finalized = true;

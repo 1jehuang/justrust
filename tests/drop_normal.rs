@@ -276,8 +276,7 @@ fn stock(case: &Case) {
 fn attribute_blocked(case: &Case) -> bool {
     matches!(
         case.path.as_str(),
-        "negative/copy_drop.rs"
-            | "positive/scope.rs"
+        "positive/scope.rs"
             | "positive/conditional.rs"
             | "positive/moves_returns.rs"
             | "positive/loops.rs"
@@ -292,6 +291,13 @@ fn native_accepted(case: &Case) -> bool {
             "unsupported/borrow.rs"
                 | "unsupported/generic_function.rs"
                 | "unsupported/dead_generic.rs"
+                | "unsupported/array.rs"
+                | "unsupported/borrowed_replacement.rs"
+                | "unsupported/dead_aggregate.rs"
+                | "unsupported/enum.rs"
+                | "unsupported/generic.rs"
+                | "unsupported/nested.rs"
+                | "unsupported/tuple.rs"
         ))
         && !attribute_blocked(case)
         && !path_blocked(case)
@@ -302,19 +308,13 @@ fn native_accepted(case: &Case) -> bool {
 /// conformance. `parameter_paths.rs` (a `mut` by-value parameter) is native
 /// positive since MUT-PARAMS support.
 fn path_blocked(case: &Case) -> bool {
-    matches!(
-        case.path.as_str(),
-        "positive/lookalike.rs" | "negative/explicit_ufcs.rs"
-    )
+    matches!(case.path.as_str(), "negative/explicit_ufcs.rs")
 }
 /// Rejected by earlier parser/library boundaries before Drop admission runs:
 /// `String::from` (no alloc/std String) and nominal lifetime parameters.
 /// These neither claim nor refute Drop behavior.
 fn precedent_blocked(case: &Case) -> bool {
-    matches!(
-        case.path.as_str(),
-        "negative/move_field.rs" | "unsupported/reference_field.rs"
-    )
+    matches!(case.path.as_str(), "unsupported/reference_field.rs")
 }
 fn rejection_reason(message: &str, case: &Case) {
     let lower = message.to_ascii_lowercase();
@@ -371,16 +371,13 @@ fn rejection_reason(message: &str, case: &Case) {
     // Stock E0509 requires a non-Copy field, outside the scalar owner domain.
     // This case checks an explicit unsupported owner/type boundary, not native
     // field-move language conformance or diagnostic precedence.
-    if case.category == "unsupported" || case.path == "negative/move_field.rs" {
+    if case.category == "unsupported" {
         assert!(
             lower.contains("unsupported"),
             "{}: excluded domain requires explicit unsupported diagnostic: {message}",
             case.path
         );
-        let relevant = lower.contains("drop")
-            || lower.contains("destructor")
-            || (case.path == "negative/move_field.rs"
-                && (lower.contains("string") || lower.contains("type")));
+        let relevant = lower.contains("drop") || lower.contains("destructor");
         assert!(
             relevant,
             "{}: unrelated unsupported boundary: {message}",
@@ -389,10 +386,10 @@ fn rejection_reason(message: &str, case: &Case) {
         return;
     }
     let expected = match case.path.as_str() {
-        "negative/copy_drop_manual.rs" => {
+        "negative/copy_drop_manual.rs" | "negative/copy_drop.rs" => {
             lower.contains("copy") && lower.contains("drop") && lower.contains("same type")
         }
-        "negative/move_field.rs" => unreachable!("excluded owner shape handled above"),
+        "negative/move_field.rs" => lower.contains("e0509"),
         "negative/explicit_method.rs"
         | "negative/explicit_qualified.rs"
         | "negative/generic_explicit_ufcs.rs" => {
@@ -513,11 +510,11 @@ fn frozen_stock_before_native_normal_drop() {
     );
     assert_eq!(
         cases.iter().filter(|case| native_accepted(case)).count(),
-        29
+        37
     );
     assert_eq!(
         cases.iter().filter(|case| attribute_blocked(case)).count(),
-        7
+        6
     );
     if std::env::var(CHILD).ok().as_deref() == Some(MANIFEST_HASH) {
         // Exercise genuine positives before compatibility-domain diagnostics.

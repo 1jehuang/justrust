@@ -544,14 +544,16 @@ impl Plan {
         for block in &function.blocks {
             self.budget.charge_work(1)?;
             if let super::cfg::Terminator::Drop { cleanup, .. } = &block.terminator.value {
-                let target = cleanup.destructor().target();
-                self.budget.charge_work(self.cleanup_targets.len())?;
-                if !self.cleanup_targets.contains(target) {
-                    return Err("cleanup target lacks sealed implicit instance demand".into());
-                }
-                charge_target_lookup(target, &self.budget)?;
-                if !self.lookup.contains_key(target) {
-                    return Err("cleanup target is absent from executable plan".into());
+                for target in cleanup.destructor().targets() {
+                    let target = &target;
+                    self.budget.charge_work(self.cleanup_targets.len())?;
+                    if !self.cleanup_targets.contains(target) {
+                        return Err("cleanup target lacks sealed implicit instance demand".into());
+                    }
+                    charge_target_lookup(target, &self.budget)?;
+                    if !self.lookup.contains_key(target) {
+                        return Err("cleanup target is absent from executable plan".into());
+                    }
                 }
             }
         }
@@ -792,15 +794,17 @@ pub(super) fn build(
                     .map_err(|e| e.into_legacy_diagnostic(budget))?
                 {
                     traits::NormalDropPlan::Destructor(destructor) => {
-                        budget.charge_work(cleanup_targets.len())?;
-                        if !cleanup_targets.contains(destructor.target()) {
-                            budget.retain_bytes(2 * std::mem::size_of::<ir::CallTarget>())?;
-                            cleanup_targets
-                                .try_reserve(1)
-                                .map_err(|_| "cleanup demand allocation failed")?;
-                            cleanup_targets.push(destructor.target().clone());
+                        for target in destructor.targets() {
+                            budget.charge_work(cleanup_targets.len())?;
+                            if !cleanup_targets.contains(&target) {
+                                budget.retain_bytes(2 * std::mem::size_of::<ir::CallTarget>())?;
+                                cleanup_targets
+                                    .try_reserve(1)
+                                    .map_err(|_| "cleanup demand allocation failed")?;
+                                cleanup_targets.push(target.clone());
+                            }
+                            queue.add(target, depth + 1, context, budget)?;
                         }
-                        queue.add(destructor.target().clone(), depth + 1, context, budget)?;
                     }
                     traits::NormalDropPlan::Trivial => {}
                     traits::NormalDropPlan::Unresolved => {
@@ -846,7 +850,9 @@ pub(super) fn build(
                         .normal_drop_plan(referent)
                         .map_err(|e| e.into_legacy_diagnostic(budget))?
                 {
-                    queue.add(destructor.target().clone(), depth + 1, context, budget)?;
+                    for target in destructor.targets() {
+                        queue.add(target, depth + 1, context, budget)?;
+                    }
                 }
             }
             if let ir::ExprKind::Call {

@@ -20,8 +20,16 @@ impl ValidatedCleanupCall {
         function: &Function,
         facts: &ValidatedFacts,
     ) -> Result<(), String> {
-        if !self.owner.projection.is_empty() || self.owner.local == function.return_local {
-            return Err("cleanup requires an unprotected whole owning root".into());
+        if self.owner.local == function.return_local {
+            return Err("cleanup requires an unprotected owning root".into());
+        }
+        if self.owner.projection.iter().any(|p| {
+            matches!(
+                p,
+                ir::Projection::DynamicIndex(_) | ir::Projection::ConstantIndex(_)
+            )
+        }) {
+            return Err("unsupported: indexed normal Drop replacement".into());
         }
         self.destructor
             .validate(function.place_ty(&self.owner)?, facts)
@@ -143,6 +151,48 @@ impl Lowerer<'_> {
                 owner: place(local),
                 destructor,
             });
+            self.terminate(Terminator::Drop { cleanup, next }, origin)?;
+            self.current = next;
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = result {
+            self.resource_error = Some(error);
+        }
+    }
+    /// Replacement of a projected place drops its old value first.
+    pub(super) fn drop_place(&mut self, owner: Place, origin: Option<ExprId>) {
+        if self.resource_error.is_some() {
+            return;
+        }
+        let result = (|| {
+            // Stores through a raw pointer have `ptr::write` semantics in this
+            // draft: the library writes into uninitialized heap slots this way.
+            // (Rust would drop the old pointee; documented deviation.)
+            if ir::raw_deref_index(&self.result.locals[owner.local.0].ty, &owner.projection)
+                .is_some()
+            {
+                return Ok(());
+            }
+            let ty = self.result.place_ty(&owner)?.clone();
+            let Some(destructor) = descriptor(&ty, self.facts)? else {
+                return Ok(());
+            };
+            if owner.projection.iter().any(|p| {
+                matches!(
+                    p,
+                    ir::Projection::DynamicIndex(_) | ir::Projection::ConstantIndex(_)
+                )
+            }) {
+                return Err("unsupported: indexed normal Drop replacement".to_string());
+            }
+            if !self.allocate(
+                1,
+                std::mem::size_of::<ValidatedCleanupCall>() + 2 * std::mem::size_of::<usize>(),
+            ) {
+                return Ok(());
+            }
+            let next = self.block();
+            let cleanup = Arc::new(ValidatedCleanupCall { owner, destructor });
             self.terminate(Terminator::Drop { cleanup, next }, origin)?;
             self.current = next;
             Ok::<(), String>(())

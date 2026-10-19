@@ -1857,6 +1857,32 @@ impl Function {
                         "cannot move non-Copy value out of array index or dereference".into(),
                     );
                 }
+                if !raw && !place.projection.is_empty() && !facts.must_copy(ty)? {
+                    if let Some(validated) = facts.validated()
+                        && validated.has_normal_drop_impls()
+                    {
+                        for end in 0..place.projection.len() {
+                            if !matches!(place.projection[end], Projection::Field(_))
+                                || (end > 0
+                                    && matches!(place.projection[end - 1], Projection::Downcast(_)))
+                            {
+                                continue;
+                            }
+                            let base = ir::projected_ty(
+                                &self.locals[place.local.0].ty,
+                                &place.projection[..end],
+                            )?;
+                            if let crate::compiler::traits::NormalDropPlan::Destructor(d) =
+                                validated
+                                    .normal_drop_plan(base)
+                                    .map_err(|e| e.into_legacy_diagnostic(validated.budget()))?
+                                && d.own_target().is_some()
+                            {
+                                return Err("E0509: cannot move out of a type which implements the `Drop` trait".into());
+                            }
+                        }
+                    }
+                }
                 Ok(ty.clone())
             }
         }
@@ -3663,16 +3689,12 @@ impl Lowerer<'_> {
                     self.assign(place(*local), Rvalue::Use(operand), Some(*value));
                 }
                 ir::Stmt::AssignPlace { place, value } => {
-                    if !place.projection.is_empty()
-                        && drop_normal::descriptor(self.result.place_ty(place)?, self.facts)?
-                            .is_some()
-                    {
-                        return Err("unsupported: indirect normal Drop replacement".into());
-                    }
                     let operand = self.expression(*value)?;
                     self.inspect_index_prefixes(place, Some(*value))?;
                     if place.projection.is_empty() {
                         self.drop_value(place.local, Some(*value));
+                    } else {
+                        self.drop_place(place.clone(), Some(*value));
                     }
                     self.assign(place.clone(), Rvalue::Use(operand), Some(*value));
                 }

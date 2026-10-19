@@ -3016,6 +3016,31 @@ impl Transfer<'_> {
                     self.read(state, place)?;
                 }
             }
+            Terminator::Drop { cleanup, .. } if !cleanup.owner().projection.is_empty() => {
+                // Replacement of a projected place: the old value is dropped
+                // in place. It must be initialized (reads it fully) and the
+                // access requires the same authority as a write.
+                let place = cleanup.owner().clone();
+                if place.projection.contains(&Projection::Deref) {
+                    self.read(state, &place)?;
+                    self.write(state, &place)?;
+                } else {
+                    // An owned field path may be moved-from; its runtime
+                    // path flag guards the drop, like a root's flag.
+                    let node = self.paths.resolve(&place);
+                    if state.may_init.get(node) {
+                        self.check_access(
+                            &Target {
+                                precision: TargetPrecision::Exact,
+                                place: CanonicalPlace::owned(&place),
+                                authority: vec![],
+                            },
+                            Access::MutBorrow,
+                        )?;
+                    }
+                    self.initialize(state, node, false)?;
+                }
+            }
             Terminator::Drop { cleanup, .. } => {
                 let place = cleanup.owner();
                 let node = self.paths.roots[place.local.0];

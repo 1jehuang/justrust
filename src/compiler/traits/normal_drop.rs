@@ -9,12 +9,30 @@ pub enum NormalDropPlan {
     Destructor(Arc<ValidatedDestructor>),
 }
 
+/// Structural drop glue run after the owner's own `Drop::drop` (if any).
+/// Field indices follow declaration order; drops run in that order, matching
+/// Rust's field, tuple element and array element destruction order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DropGlue {
+    None,
+    /// Struct or tuple fields that need dropping.
+    Fields(Vec<(usize, Arc<ValidatedDestructor>)>),
+    /// Enum variants whose payload fields need dropping, keyed by variant index.
+    Variants(Vec<(usize, Vec<(usize, Arc<ValidatedDestructor>)>)>),
+    /// Every element of a fixed-length array.
+    Array {
+        len: usize,
+        element: Arc<ValidatedDestructor>,
+    },
+}
+
 /// Only canonical trait facts may construct this capability. Display names never participate.
 #[derive(Clone)]
 pub struct ValidatedDestructor {
     owner: Ty,
-    target: CallTarget,
-    signature: Signature,
+    target: Option<CallTarget>,
+    signature: Option<Signature>,
+    glue: DropGlue,
     world: Arc<ValidatedTraitWorld>,
     budget: PlanBudget,
 }
@@ -23,6 +41,7 @@ impl std::fmt::Debug for ValidatedDestructor {
         f.debug_struct("ValidatedDestructor")
             .field("owner", &self.owner)
             .field("target", &self.target)
+            .field("glue", &self.glue)
             .finish_non_exhaustive()
     }
 }
@@ -33,6 +52,7 @@ impl PartialEq for ValidatedDestructor {
             && self.owner == other.owner
             && self.target == other.target
             && self.signature == other.signature
+            && self.glue == other.glue
     }
 }
 impl Eq for ValidatedDestructor {}
@@ -40,11 +60,33 @@ impl ValidatedDestructor {
     pub fn owner(&self) -> &Ty {
         &self.owner
     }
-    pub fn target(&self) -> &CallTarget {
-        &self.target
+    /// The owner's own canonical `Drop::drop`, if it implements Drop.
+    pub fn own_target(&self) -> Option<&CallTarget> {
+        self.target.as_ref()
     }
-    pub fn signature(&self) -> &Signature {
-        &self.signature
+    pub fn glue(&self) -> &DropGlue {
+        &self.glue
+    }
+    /// Every user destructor reachable through this glue, deduplicated.
+    pub fn targets(&self) -> Vec<CallTarget> {
+        let mut out = Vec::new();
+        self.collect_targets(&mut out);
+        out
+    }
+    fn collect_targets(&self, out: &mut Vec<CallTarget>) {
+        if let Some(t) = &self.target
+            && !out.contains(t)
+        {
+            out.push(t.clone());
+        }
+        match &self.glue {
+            DropGlue::None => {}
+            DropGlue::Fields(fields) => fields.iter().for_each(|(_, d)| d.collect_targets(out)),
+            DropGlue::Variants(variants) => variants
+                .iter()
+                .for_each(|(_, f)| f.iter().for_each(|(_, d)| d.collect_targets(out))),
+            DropGlue::Array { element, .. } => element.collect_targets(out),
+        }
     }
     pub fn validate(&self, owner: &Ty, facts: &ValidatedFacts) -> Result<()> {
         if !Arc::ptr_eq(&self.world, facts.world()) || !self.budget.same_authority(facts.budget()) {
@@ -74,12 +116,20 @@ impl ValidatedDestructor {
                 "cleanup target is not the owner's canonical Drop item",
             ));
         }
-        let proof = self.world.discharge_direct(&self.target, facts)?;
-        if proof.signature() != &self.signature {
+        if canonical.glue != self.glue {
             return Err(FactsError::invalid(
                 facts.budget(),
-                "cleanup changed canonical signature",
+                "cleanup changed canonical drop glue",
             ));
+        }
+        if let Some(target) = &self.target {
+            let proof = self.world.discharge_direct(target, facts)?;
+            if Some(proof.signature()) != self.signature.as_ref() {
+                return Err(FactsError::invalid(
+                    facts.budget(),
+                    "cleanup changed canonical signature",
+                ));
+            }
         }
         Ok(())
     }
@@ -96,10 +146,23 @@ impl ValidatedFacts {
     fn normal_drop_plan_inner(&self, ty: &Ty, depth: usize) -> Result<NormalDropPlan> {
         charged(self.budget(), self.budget().check_depth(depth))?;
         charged(self.budget(), self.budget().charge_work(1))?;
-        // References never own their referent. Admission separately rejects unsupported
-        // source reference positions without mistaking a destructor receiver for an owner.
-        if matches!(ty, Ty::Ref { .. }) {
+        // References and raw pointers never own their referent.
+        if matches!(
+            ty,
+            Ty::Ref { .. }
+                | Ty::RawPtr { .. }
+                | Ty::Int(_)
+                | Ty::Float(_)
+                | Ty::Bool
+                | Ty::Char
+                | Ty::Unit
+                | Ty::Never
+                | Ty::Str
+        ) {
             return Ok(NormalDropPlan::Trivial);
+        }
+        if matches!(ty, Ty::Param(_) | Ty::AssociatedType(_)) {
+            return Ok(NormalDropPlan::Unresolved);
         }
         let nominal = match ty {
             Ty::Struct(t) => Some(t.def().source_decl),
@@ -124,24 +187,9 @@ impl ValidatedFacts {
                 }
             }
         }
+        let mut unresolved = false;
+        let mut own = None;
         if implementation.is_some() {
-            let Ty::Struct(s) = ty else {
-                return Err(FactsError::unsupported(
-                    self.budget(),
-                    "unsupported: normal Drop requires a scalar-field struct",
-                ));
-            };
-            if s.def().fields.iter().any(|f| {
-                !matches!(
-                    f.ty,
-                    Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char | Ty::Unit | Ty::RawPtr { .. }
-                )
-            }) {
-                return Err(FactsError::unsupported(
-                    self.budget(),
-                    "unsupported: normal Drop requires a scalar-field struct",
-                ));
-            }
             let call = TraitCall {
                 trait_ref: TraitRef {
                     declaration: self.world.catalog.id(CatalogItem::Drop),
@@ -152,75 +200,118 @@ impl ValidatedFacts {
                 method_args: Arc::from([]),
             };
             let resolved = self.world.resolve_trait_call(&call, self)?;
-            let Callee::Direct(target) = resolved.callee() else {
-                if self.phase() == FactsPhase::Universal {
-                    // Canonical trait resolution succeeded, but the generic
-                    // owner has no concrete destructor target yet. Every closed
-                    // instance must resolve and demand it before executable CFG.
-                    return Ok(NormalDropPlan::Unresolved);
+            match resolved.callee() {
+                Callee::Direct(target) => {
+                    own = Some((target.clone(), resolved.signature().clone()));
                 }
-                return Err(FactsError::unsupported(
-                    self.budget(),
-                    "unsupported: unresolved normal Drop",
-                ));
-            };
-            charged(
-                self.budget(),
-                self.budget().retain_bytes(
-                    std::mem::size_of::<ValidatedDestructor>()
-                        + 2 * std::mem::size_of::<usize>()
-                        + resolved.signature().params.len() * std::mem::size_of::<Ty>(),
-                ),
-            )?;
-            return Ok(NormalDropPlan::Destructor(Arc::new(ValidatedDestructor {
-                owner: ty.clone(),
-                target: target.clone(),
-                signature: resolved.signature().clone(),
-                world: self.world.clone(),
-                budget: self.budget().clone(),
-            })));
-        }
-        let mut unresolved = false;
-        let mut child = |child: &Ty| -> Result<()> {
-            match self.normal_drop_plan_inner(child, depth + 1)? {
-                NormalDropPlan::Destructor(_) => {
+                _ if self.phase() == FactsPhase::Universal => unresolved = true,
+                _ => {
                     return Err(FactsError::unsupported(
                         self.budget(),
-                        "unsupported: aggregate containing a normal Drop owner",
+                        "unsupported: unresolved normal Drop",
                     ));
                 }
-                NormalDropPlan::Unresolved => unresolved = true,
-                NormalDropPlan::Trivial => {}
             }
-            Ok(())
+        }
+        let mut child = |child: &Ty| -> Result<Option<Arc<ValidatedDestructor>>> {
+            match self.normal_drop_plan_inner(child, depth + 1)? {
+                NormalDropPlan::Destructor(d) => Ok(Some(d)),
+                NormalDropPlan::Unresolved => {
+                    unresolved = true;
+                    Ok(None)
+                }
+                NormalDropPlan::Trivial => Ok(None),
+            }
         };
-        match ty {
+        let glue = match ty {
             Ty::Tuple(parts) => {
-                for part in parts.iter() {
-                    child(part)?;
+                let mut fields = Vec::new();
+                for (i, part) in parts.iter().enumerate() {
+                    if let Some(d) = child(part)? {
+                        fields.push((i, d));
+                    }
+                }
+                if fields.is_empty() {
+                    DropGlue::None
+                } else {
+                    DropGlue::Fields(fields)
                 }
             }
-            Ty::Array { element, .. } | Ty::Slice { element } => child(element)?,
+            Ty::Array { element, len } => match child(element)? {
+                Some(d) if *len > 0 => DropGlue::Array {
+                    len: *len,
+                    element: d,
+                },
+                _ => DropGlue::None,
+            },
+            Ty::Slice { element } => {
+                if child(element)?.is_some() {
+                    return Err(FactsError::unsupported(
+                        self.budget(),
+                        "unsupported: drop glue for an unsized slice",
+                    ));
+                }
+                DropGlue::None
+            }
             Ty::Struct(s) => {
-                for f in s.def().fields.iter() {
-                    child(&f.ty)?;
+                let mut fields = Vec::new();
+                for (i, f) in s.def().fields.iter().enumerate() {
+                    if let Some(d) = child(&f.ty)? {
+                        fields.push((i, d));
+                    }
+                }
+                if fields.is_empty() {
+                    DropGlue::None
+                } else {
+                    DropGlue::Fields(fields)
                 }
             }
             Ty::Enum(e) => {
-                for v in e.def().variants.iter() {
-                    for f in v.fields.iter() {
-                        child(&f.ty)?;
+                let mut variants = Vec::new();
+                for (vi, v) in e.def().variants.iter().enumerate() {
+                    let mut fields = Vec::new();
+                    for (i, f) in v.fields.iter().enumerate() {
+                        if let Some(d) = child(&f.ty)? {
+                            fields.push((i, d));
+                        }
+                    }
+                    if !fields.is_empty() {
+                        variants.push((vi, fields));
                     }
                 }
+                if variants.is_empty() {
+                    DropGlue::None
+                } else {
+                    DropGlue::Variants(variants)
+                }
             }
-            Ty::Param(_) | Ty::AssociatedType(_) => return Ok(NormalDropPlan::Unresolved),
-            _ => {}
+            Ty::Dyn(_) => DropGlue::None,
+            _ => DropGlue::None,
+        };
+        if unresolved {
+            return Ok(NormalDropPlan::Unresolved);
         }
-        Ok(if unresolved {
-            NormalDropPlan::Unresolved
-        } else {
-            NormalDropPlan::Trivial
-        })
+        if own.is_none() && glue == DropGlue::None {
+            return Ok(NormalDropPlan::Trivial);
+        }
+        charged(
+            self.budget(),
+            self.budget().retain_bytes(
+                std::mem::size_of::<ValidatedDestructor>() + 2 * std::mem::size_of::<usize>(),
+            ),
+        )?;
+        let (target, signature) = match own {
+            Some((t, s)) => (Some(t), Some(s)),
+            None => (None, None),
+        };
+        Ok(NormalDropPlan::Destructor(Arc::new(ValidatedDestructor {
+            owner: ty.clone(),
+            target,
+            signature,
+            glue,
+            world: self.world.clone(),
+            budget: self.budget().clone(),
+        })))
     }
     pub fn is_canonical_drop_call(&self, callee: &Callee) -> Result<bool> {
         if let Callee::TraitItem(call) = callee {
