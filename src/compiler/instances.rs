@@ -320,7 +320,9 @@ impl Encoder<'_> {
                 self.append(b"D")?;
                 self.declaration(object.principal)
             }
-            ir::Ty::Never => Err("unsupported associated instance self pattern".into()),
+            ir::Ty::Never | ir::Ty::ParamArray { .. } | ir::Ty::ConstValue(_) => {
+                Err("unsupported associated instance self pattern".into())
+            }
             ir::Ty::AssociatedType(_) => {
                 Err("associated instance pattern contains unresolved associated type".into())
             }
@@ -344,6 +346,13 @@ impl Encoder<'_> {
             ir::Ty::Str => self.append(b"z"),
             ir::Ty::Unit => self.append(b"u"),
             ir::Ty::Never => self.append(b"n"),
+            ir::Ty::ConstValue(value) => {
+                self.append(b"k")?;
+                self.append(&value.to_le_bytes())
+            }
+            ir::Ty::ParamArray { .. } => {
+                Err("generic instance key contains unresolved parameter".into())
+            }
             ir::Ty::Tuple(fields) => {
                 self.append(b"t")?;
                 self.count(fields.len())?;
@@ -504,12 +513,13 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
             | ir::Ty::Bool
             | ir::Ty::Unit
             | ir::Ty::Dyn(_)
+            | ir::Ty::ConstValue(_)
             | ir::Ty::Never => {}
             ir::Ty::Ref { referent, .. }
             | ir::Ty::RawPtr {
                 pointee: referent, ..
             } => walk(referent, depth + 1, budget)?,
-            ir::Ty::Param(_) | ir::Ty::AssociatedType(_) => {
+            ir::Ty::Param(_) | ir::Ty::ParamArray { .. } | ir::Ty::AssociatedType(_) => {
                 return Err("generic instance has non-closed argument".into());
             }
         }

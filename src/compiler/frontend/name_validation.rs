@@ -624,6 +624,11 @@ impl<'a> Validator<'a> {
                     }
                     self.push(Visit::Type(referent))?;
                 }
+                Type::ParamArray(element, name) => {
+                    self.push(Visit::Ident(*name, LookupClass::TypeParameter))?;
+                    self.push(Visit::Type(element))?;
+                }
+                Type::ConstArg(_) => {}
                 Type::Array(element, _)
                 | Type::Slice(element)
                 | Type::RawPtr {
@@ -807,6 +812,9 @@ impl<'a> Validator<'a> {
             },
             Visit::Expr(expression) => match expression {
                 Expr::Try(inner) => self.push(Visit::Expr(inner))?,
+                Expr::ConstParam(name) => {
+                    self.push(Visit::Ident(*name, LookupClass::TypeParameter))?
+                }
                 Expr::UnexpandedMacro(_) => {
                     let mut error = crate::compiler::source::SourceError::syntax(
                         None,

@@ -991,6 +991,9 @@ impl<'s> Checker<'s> {
                 validate_panic_site(panic, self.names()?)?;
                 self.infer_node(InferKind::Rigid(ir::Ty::Never))?
             }
+            Expr::ConstParam(_) => {
+                self.infer_node(InferKind::Rigid(ir::Ty::Int(ir::IntTy::Usize)))?
+            }
             Expr::Integer(literal) => self.infer_node(match literal.suffix {
                 Some(t) => InferKind::Rigid(ir::Ty::Int(t)),
                 None => InferKind::Integer,
@@ -2066,7 +2069,7 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
         Type::Projection(_) => {
             Err("unsupported: associated type projections require authoritative planning and normalization".into())
         }
-        Type::Apply(_) | Type::Param(_) => {
+        Type::Apply(_) | Type::Param(_) | Type::ParamArray(..) | Type::ConstArg(_) => {
             Err("generic types require authoritative declaration environment".into())
         }
         Type::Slice(_) => Err(BARE_SLICE_UNSUPPORTED.into()),
@@ -4267,6 +4270,7 @@ impl<'a> Checker<'a> {
                     referent: Arc::new(referent),
                 })
             }
+            Expr::ConstParam(_) => Some(ir::Ty::Int(ir::IntTy::Usize)),
             Expr::Integer(literal) => literal.suffix.map(ir::Ty::Int),
             Expr::Float(literal) => literal.suffix.map(ir::Ty::Float),
             Expr::Bool(_) => Some(ir::Ty::Bool),
@@ -4456,6 +4460,10 @@ impl<'a> Checker<'a> {
     pub(super) fn index_type(&self, ty: &ir::Ty, index: usize) -> Result<ir::Ty, String> {
         if matches!(ty, ir::Ty::Ref { .. }) {
             return Err("implicit reference autodereference is unsupported in B1; use an explicit (*r) place".into());
+        }
+        if let ir::Ty::ParamArray { element, .. } = ty {
+            self.accessible(element)?;
+            return Ok(element.as_ref().clone());
         }
         let ir::Ty::Array { element, len } = ty else {
             return Err("indexing requires an array".into());
@@ -9095,7 +9103,9 @@ impl<'a> Checker<'a> {
                     return Err("runtime indexed access through references is unsupported in B1; snapshot a Copy referent first".into());
                 }
                 let source = self.flow(base);
-                let ir::Ty::Array { element, .. } = &source.ty else {
+                let (ir::Ty::Array { element, .. } | ir::Ty::ParamArray { element, .. }) =
+                    &source.ty
+                else {
                     // Stock auto-derefs `r[i]` for references to arrays; that
                     // legal form is outside this slice, not invalid.
                     if matches!(&source.ty, ir::Ty::Ref { referent, .. } if matches!(referent.as_ref(), ir::Ty::Array { .. }))
@@ -9158,17 +9168,41 @@ impl<'a> Checker<'a> {
                     });
                     return self.slice_index_checked(base, constant);
                 }
-                let ty = self.index_type(&flow.ty, *index)?;
-                (
-                    ir::ExprKind::Index {
-                        base,
-                        index: *index,
-                    },
-                    Flow {
-                        ty,
-                        completes: flow.completes,
-                    },
-                )
+                if let ir::Ty::ParamArray { element, .. } = &flow.ty {
+                    // Symbolic length: a runtime-checked read; stock rustc
+                    // cannot reject the index before instantiation either.
+                    let ty = element.as_ref().clone();
+                    self.accessible(&ty)?;
+                    let constant = ir::ExprId(self.exprs.len());
+                    self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+                    self.exprs.push(ir::TypedExpr {
+                        ty: ir::Ty::Int(ir::IntTy::Usize),
+                        completion: ir::Completion::Returns,
+                        kind: ir::ExprKind::Int(ir::IntValue::usize(*index as u64)),
+                    });
+                    (
+                        ir::ExprKind::DynamicIndex {
+                            base,
+                            index: constant,
+                        },
+                        Flow {
+                            ty,
+                            completes: flow.completes,
+                        },
+                    )
+                } else {
+                    let ty = self.index_type(&flow.ty, *index)?;
+                    (
+                        ir::ExprKind::Index {
+                            base,
+                            index: *index,
+                        },
+                        Flow {
+                            ty,
+                            completes: flow.completes,
+                        },
+                    )
+                }
             }
             Expr::EnumVariant {
                 name,
@@ -9422,6 +9456,18 @@ impl<'a> Checker<'a> {
                         completes: flow.completes,
                     },
                 )
+            }
+            Expr::ConstParam(name) => {
+                let plan = self.signatures.plan()?;
+                let key = plan.registry.parameter_key(*name)?;
+                let kind = match self.signatures.params.get(&key) {
+                    Some(ir::Ty::ConstValue(value)) => {
+                        ir::ExprKind::Int(ir::IntValue::usize(*value))
+                    }
+                    Some(ir::Ty::Param(param)) => ir::ExprKind::ConstParam(*param),
+                    _ => return Err("unknown const generic parameter".into()),
+                };
+                (kind, Flow::value(ir::Ty::Int(ir::IntTy::Usize)))
             }
             Expr::Integer(literal) => {
                 let value = expectation.literal(literal, false)?;

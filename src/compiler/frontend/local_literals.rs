@@ -294,6 +294,7 @@ impl Solver<'_, '_> {
                 None => Domain::Float,
             }),
             Expr::Bool(_) => self.fixed(ir::Ty::Bool),
+            Expr::ConstParam(_) => self.fixed(ir::Ty::Int(ir::IntTy::Usize)),
             Expr::Char(_) => self.fixed(ir::Ty::Char),
             Expr::Str(_) => self.fixed(ir::Ty::shared_str_ty()),
             Expr::Var(path)
