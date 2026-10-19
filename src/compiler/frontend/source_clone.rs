@@ -176,6 +176,15 @@ pub(super) fn preflight_clone_node(
             }
             Expr::Var(path) => clone_ast_path(path, budget)?,
             Expr::Println(text) => clone_text(text, budget)?,
+            Expr::Format {
+                pieces, arguments, ..
+            } => {
+                clone_vector(pieces, budget)?;
+                for piece in pieces {
+                    clone_text(piece, budget)?;
+                }
+                clone_vector(arguments, budget)?;
+            }
             Expr::Output(output) => {
                 budget.retain_bytes(std::mem::size_of::<SourceOutput>())?;
                 clone_text(&output.output.text, budget)?;
@@ -210,7 +219,9 @@ pub(super) fn preflight_clone_node(
             }
             Expr::Apply { path, .. } => clone_path(path, budget)?,
             Expr::Borrow { place, .. } => clone_place(place, budget)?,
-            Expr::Array(fields) | Expr::Tuple(fields) => clone_vector(fields, budget)?,
+            Expr::NativeSyscall(fields) | Expr::Array(fields) | Expr::Tuple(fields) => {
+                clone_vector(fields, budget)?
+            }
             Expr::EnumVariant { name, fields, .. } => {
                 clone_ast_path(name, budget)?;
                 clone_vector(fields, budget)?;
@@ -256,6 +267,14 @@ pub(super) fn preflight_clone_node(
                             std::mem::size_of::<Pattern>()
                                 .checked_add(std::mem::size_of::<Expr>())
                                 .ok_or("while-let source box bytes overflow")?,
+                        )?;
+                    }
+                    Stmt::For { source, .. } => {
+                        clone_vector(&source.adapters, budget)?;
+                        budget.retain_bytes(
+                            std::mem::size_of::<Pattern>()
+                                .checked_add(std::mem::size_of::<ForSource>())
+                                .ok_or("for source box bytes overflow")?,
                         )?;
                     }
                     Stmt::AssignPlace { place, .. } | Stmt::AssignOp { place, .. } => {

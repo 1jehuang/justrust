@@ -1,3 +1,6 @@
+#[path = "support/native_prelude.rs"]
+mod native_prelude;
+
 use justrust_engine::compiler;
 
 // Frozen canonical oracle P10. The returned inner reference outlives its handle.
@@ -5,13 +8,14 @@ const INNER: &str = "struct Opaque{v:i32}fn run()->i32{let owner=Opaque{v:11};le
 
 #[test]
 fn canonical_recipe_universal_proofs_and_inner_origins_precede_every_object() {
-    use compiler::frontend::{self, CallableProvider, PlanCtx};
+    use compiler::frontend::{CallableProvider, PlanCtx};
     use compiler::ir::{PlanBudget, ReturnContract};
     use justrust_engine::engine::Key;
 
-    let program = frontend::parse(INNER).unwrap();
+    let program = native_prelude::parse(INNER).unwrap();
     let context = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
     let mut recipes = Vec::new();
+    let mut library = Vec::new();
     let mut sources = 0;
     for index in 0..context.callable_count() {
         match context
@@ -23,7 +27,14 @@ fn canonical_recipe_universal_proofs_and_inner_origins_precede_every_object() {
                     recipes.is_empty(),
                     "source declarations precede recipe suffix"
                 );
-                sources += 1;
+                if context
+                    .is_prelude_decl(context.callable_decl(index).unwrap())
+                    .unwrap()
+                {
+                    library.push(index);
+                } else {
+                    sources += 1;
+                }
             }
             CallableProvider::Recipe { .. } => recipes.push(index),
             CallableProvider::UnavailableProvided { .. } => {
@@ -39,11 +50,36 @@ fn canonical_recipe_universal_proofs_and_inner_origins_precede_every_object() {
         assert_eq!(compiled.functions, sources);
         assert!(compiled.report.capture_complete);
         assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
-        for index in &recipes {
+        for index in recipes.iter().chain(&library) {
+            let declaration = context.callable_decl(*index).unwrap();
+            let universal = match context.callable_provider(declaration).unwrap() {
+                CallableProvider::Source { .. } => {
+                    context.callable_env(declaration).unwrap().is_generic()
+                }
+                CallableProvider::Recipe { .. } => true,
+                CallableProvider::UnavailableProvided { .. } => {
+                    panic!("unavailable provider entered proof enumeration")
+                }
+            };
+            // Every library declaration has a schema. Only generic source
+            // bodies and recipes have universal proofs; nongeneric library
+            // bodies are checked through their instances when demanded.
             for kind in [110, 111, 112] {
-                assert!(compiled.report.node_evaluations.iter().any(|(key, count)| {
-                    key.kind == kind && key.params == [*index as u64] && *count == 1
-                }));
+                let evaluations: Vec<_> = compiled
+                    .report
+                    .node_evaluations
+                    .iter()
+                    .filter(|(key, _)| key.kind == kind && key.params == [*index as u64])
+                    .collect();
+                if kind == 110 || universal {
+                    assert_eq!(evaluations.len(), 1, "missing or duplicated {kind}:{index}");
+                    assert_eq!(evaluations[0].1, 1, "repeated {kind}:{index}");
+                } else {
+                    assert!(
+                        evaluations.is_empty(),
+                        "unexpected universal {kind}:{index}"
+                    );
+                }
             }
         }
         assert!(compiled.control_flow.len() < context.callable_count());
@@ -126,7 +162,6 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                         Key::new(101, vec![]),
                         Key::new(104, vec![]),
                         Key::new(113, vec![]),
-                        Key::new(115, vec![]),
                     ];
                     for index in 0..3 {
                         for kind in [102, 108, 109] {
@@ -139,18 +174,26 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                     if !check {
                         expected.push(Key::new(105, vec![]));
                     }
-                    let program = compiler::frontend::parse(source).unwrap();
+                    let program = native_prelude::parse(source).unwrap();
                     let context = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
                     for index in 0..context.callable_count() {
                         let declaration = context.callable_decl(index).unwrap();
                         expected.push(Key::new(110, vec![index as u64]));
                         match context.callable_provider(declaration).unwrap() {
                             CallableProvider::Source { .. } => {
-                                assert!(index < compiled.functions);
+                                assert!(
+                                    context.is_prelude_decl(declaration).unwrap()
+                                        || index < compiled.functions
+                                );
+                                if context.callable_env(declaration).unwrap().is_generic() {
+                                    for kind in [111, 112, 115] {
+                                        expected.push(Key::new(kind, vec![index as u64]));
+                                    }
+                                }
                             }
                             CallableProvider::Recipe { .. } => {
                                 assert!(index >= compiled.functions);
-                                for kind in [111, 112] {
+                                for kind in [111, 112, 115] {
                                     expected.push(Key::new(kind, vec![index as u64]));
                                 }
                             }
@@ -159,6 +202,8 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                             }
                         }
                     }
+                    // Embedded native library files are independent SOURCE facts.
+                    expected.extend(native_prelude::library_source_keys());
                     assert_eq!(report.node_evaluations.len(), expected.len());
                     for key in expected {
                         let entries: Vec<_> = report
@@ -185,15 +230,17 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                             .expect("required graph node did not publish")
                             .at_ns
                     };
-                    let effects = published(discovered(&Key::new(115, vec![])).node.unwrap());
-                    assert!(published(discovered(&Key::new(113, vec![])).node.unwrap()) >= effects);
+                    let effects = report
+                        .node_evaluations
+                        .iter()
+                        .filter(|(key, _)| key.kind == 115)
+                        .map(|(key, _)| published(discovered(key).node.unwrap()))
+                        .max()
+                        .expect("required universal admission fact missing");
                     for (key, _) in &report.node_evaluations {
                         let event = discovered(key);
                         if matches!(key.kind, 110 | 112) {
                             assert!(published(event.node.unwrap()) <= effects);
-                        }
-                        if matches!(key.kind, 102 | 108 | 109 | 103) {
-                            assert!(event.at_ns >= effects);
                         }
                     }
                     if check {

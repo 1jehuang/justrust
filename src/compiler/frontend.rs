@@ -36,7 +36,7 @@ mod name_validation;
 mod pattern_usefulness;
 mod program_symbols;
 mod token_cursor;
-use char_literal::parse_char_literal;
+use char_literal::{parse_byte_literal, parse_char_literal};
 mod trait_selection;
 pub use program_symbols::ProgramSymbols;
 mod persistent_path;
@@ -486,6 +486,7 @@ mod canonical_source_replay_tests {
             calls: Default::default(),
             builtin_leading_zeros: Default::default(),
             builtin_lens: Default::default(),
+            builtin_intrinsics: Default::default(),
             unsizes: Default::default(),
             bindings: Default::default(),
             narrow: Default::default(),
@@ -603,6 +604,8 @@ struct SourceCallSite {
     /// typed receiver, and replay requires typed evidence for every builtin row.
     len_candidate: bool,
     leading_zeros_candidate: bool,
+    /// Syntactic `receiver.name(args)` with an admitted primitive method name.
+    intrinsic_candidate: bool,
     ordinary: Option<AstPath>,
     application: Option<GenericPath>,
     argument_binding: Option<sr::SourceNode>,
@@ -623,6 +626,38 @@ struct SourceInventory {
     statement_pointers: HashMap<usize, usize>,
     scopes: Vec<HashMap<LocalKey, sr::SourceNode>>,
     root_block_pointer: usize,
+}
+/// Static local-rooted place syntax for `&place`, or None for value operands.
+fn borrow_place(mut expr: &Expr) -> Option<Place> {
+    let mut fields = Vec::new();
+    loop {
+        match expr {
+            Expr::Var(path) => {
+                let local = if path.anchor() == PathAnchor::SelfModule && path.is_empty() {
+                    LocalName::Receiver
+                } else if path.anchor() == PathAnchor::Relative {
+                    LocalName::Named(path.single()?)
+                } else {
+                    return None;
+                };
+                fields.reverse();
+                return Some(Place { local, fields });
+            }
+            Expr::Deref { value } => {
+                fields.push(FieldSelector::Deref);
+                expr = value;
+            }
+            Expr::Field { base, field } => {
+                fields.push(field.clone());
+                expr = base;
+            }
+            Expr::Index { base, index } => {
+                fields.push(FieldSelector::ConstantIndex(*index));
+                expr = base;
+            }
+            _ => return None,
+        }
+    }
 }
 fn source_local_name(path: &AstPath, names: &NameStore) -> Result<LocalName, String> {
     path.check(names).map_err(native_adapter::name_diagnostic)?;
@@ -798,7 +833,11 @@ fn validate_original_callee(
     sr::work(budget, 1)?;
     let role = match (original, actual) {
         (ir::Callee::Direct(a), ir::Callee::Direct(b)) => a.declaration == b.declaration,
-        (ir::Callee::TraitItem(a), ir::Callee::TraitItem(b)) => {
+        (ir::Callee::TraitItem(a), ir::Callee::TraitItem(b))
+        | (
+            ir::Callee::Virtual(ir::VirtualCall { call: a }),
+            ir::Callee::Virtual(ir::VirtualCall { call: b }),
+        ) => {
             a.item == b.item
                 && a.trait_ref.declaration == b.trait_ref.declaration
                 && a.trait_ref.args.len() == b.trait_ref.args.len()
@@ -919,6 +958,10 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
             kind: *kind,
             pointee: Box::new(copy_source_type(pointee, budget, at + 1)?),
         },
+        Type::Dyn(trait_path) => Type::Dyn(Box::new(match trait_path.as_ref() {
+            TraitPath::Source(path) => TraitPath::Source(copy_source_path(path, budget, at + 1)?),
+            TraitPath::Builtin(kind) => TraitPath::Builtin(*kind),
+        })),
         Type::Tuple(fields) => {
             let mut result = Vec::new();
             result
@@ -1021,6 +1064,63 @@ fn retain_source_type(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resul
         _ => {}
     }
     Ok(())
+}
+/// Whether a written signature type mentions `Self` (dyn compatibility).
+/// `Self::Item` projections also count; `&Self` receivers are not params.
+fn source_type_mentions_self(
+    ty: &Type,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    Ok(match ty {
+        Type::SelfType => true,
+        Type::Projection(projection) => match projection.as_ref() {
+            SourceProjection::SelfItem { .. } => true,
+            SourceProjection::Qualified { self_ty, .. } => {
+                source_type_mentions_self(self_ty, budget, depth + 1)?
+            }
+        },
+        Type::Ref { referent, .. } => source_type_mentions_self(referent, budget, depth + 1)?,
+        Type::Array(element, _)
+        | Type::Slice(element)
+        | Type::RawPtr {
+            pointee: element, ..
+        } => source_type_mentions_self(element, budget, depth + 1)?,
+        Type::Tuple(fields) => {
+            let mut found = false;
+            for field in fields {
+                found |= source_type_mentions_self(field, budget, depth + 1)?;
+            }
+            found
+        }
+        Type::Apply(path) => {
+            let mut found = matches!(path.anchor, PathAnchor::SelfType);
+            for segment in &path.segments {
+                for arg in segment.args.iter().chain(
+                    segment
+                        .associated_types
+                        .iter()
+                        .map(|binding| &binding.value),
+                ) {
+                    found |= source_type_mentions_self(arg, budget, depth + 1)?;
+                }
+            }
+            found
+        }
+        Type::Named(path) => matches!(path.anchor(), PathAnchor::SelfType),
+        Type::Dyn(_)
+        | Type::Str
+        | Type::Param(_)
+        | Type::Int(_)
+        | Type::Float(_)
+        | Type::Char
+        | Type::Bool
+        | Type::Unit
+        | Type::Never
+        | Type::Infer => false,
+    })
 }
 impl SourceInventory {
     fn build(
@@ -1213,7 +1313,7 @@ impl SourceInventory {
                     self.bind(name, node.clone(), None, None, None, budget)?;
                 }
             }
-            Pattern::Apply { pattern, .. } => {
+            Pattern::Apply { pattern, .. } | Pattern::Ref { pattern, .. } => {
                 self.shadow_pattern(pattern, node, budget, depth + 1)?
             }
             Pattern::Tuple(fields) | Pattern::Array(fields) => {
@@ -1435,6 +1535,53 @@ impl SourceInventory {
                     self.scopes.pop();
                     body_result?;
                 }
+                Stmt::For {
+                    pattern,
+                    source,
+                    body,
+                    ..
+                } => {
+                    // Inventory tag 24: iterable start/value 0, range end 1,
+                    // pattern 2 and body 3. Bindings are body-only.
+                    let (first, end) = match &source.iterable {
+                        ForIterable::Range { start, end, .. } => (start, Some(end)),
+                        ForIterable::Value(value) => (value, None),
+                    };
+                    self.expr(
+                        first,
+                        &here.child(24, 0, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                    if let Some(end) = end {
+                        self.expr(
+                            end,
+                            &here.child(24, 1, budget)?,
+                            None,
+                            None,
+                            budget,
+                            depth + 1,
+                        )?;
+                    }
+                    sr::retain(budget, 128)?;
+                    self.scopes
+                        .try_reserve(1)
+                        .map_err(|_| FactsError::resource(budget, "source for scope allocation"))?;
+                    self.scopes.push(HashMap::new());
+                    let body_result = (|| {
+                        self.shadow_pattern(
+                            pattern,
+                            &here.child(24, 2, budget)?,
+                            budget,
+                            depth + 1,
+                        )?;
+                        self.block(body, &here.child(24, 3, budget)?, false, budget, depth + 1)
+                    })();
+                    self.scopes.pop();
+                    body_result?;
+                }
                 Stmt::While {
                     condition, body, ..
                 } => {
@@ -1484,6 +1631,18 @@ impl SourceInventory {
             }
             Expr::Output(output) => validate_output_site(output, &self.names)
                 .map_err(|message| source_error(budget, &message))?,
+            Expr::Format { arguments, .. } => {
+                for (index, argument) in arguments.iter().enumerate() {
+                    self.expr(
+                        argument,
+                        &node.child(21, index, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
+            }
             Expr::Panic(panic) => validate_panic_site(panic, &self.names)
                 .map_err(|message| source_error(budget, &message))?,
             Expr::Apply { path, value } => {
@@ -1521,6 +1680,7 @@ impl SourceInventory {
                         node: node.clone(),
                         len_candidate: false,
                         leading_zeros_candidate: false,
+                        intrinsic_candidate: false,
                         ordinary: Some(name.clone()),
                         application: application
                             .map(|path| copy_source_path(path, budget, 0))
@@ -1561,6 +1721,8 @@ impl SourceInventory {
                             .map_err(|e| source_error(budget, &e))?,
                         len_candidate: slice_len_candidate(expr, &self.names)
                             .map_err(|e| source_error(budget, &e))?,
+                        intrinsic_candidate: intrinsic_candidate(expr, &self.names)
+                            .map_err(|e| source_error(budget, &e))?,
                         ordinary: None,
                         application: None,
                         argument_binding: None,
@@ -1599,6 +1761,7 @@ impl SourceInventory {
             }
             Expr::Cast { value, .. }
             | Expr::Deref { value }
+            | Expr::BorrowValue { value, .. }
             | Expr::Repeat { value, .. }
             | Expr::Unary { value, .. } => self.expr(
                 value,
@@ -1608,8 +1771,13 @@ impl SourceInventory {
                 budget,
                 depth + 1,
             )?,
-            Expr::Array(fields) | Expr::Tuple(fields) | Expr::TupleStruct { fields, .. } => {
-                let tag = if matches!(expr, Expr::TupleStruct { .. }) {
+            Expr::NativeSyscall(fields)
+            | Expr::Array(fields)
+            | Expr::Tuple(fields)
+            | Expr::TupleStruct { fields, .. } => {
+                let tag = if matches!(expr, Expr::NativeSyscall(_)) {
+                    23
+                } else if matches!(expr, Expr::TupleStruct { .. }) {
                     14
                 } else {
                     12
@@ -1831,6 +1999,33 @@ fn slice_len_candidate(expr: &Expr, names: &NameStore) -> Result<bool, String> {
     }
 }
 
+/// Syntax alone never grants primitive-method authority: the checker resolves
+/// the actual operation from the typed receiver.
+fn intrinsic_candidate(expr: &Expr, names: &NameStore) -> Result<bool, String> {
+    if let Expr::MethodCall {
+        name, type_args, ..
+    } = expr
+    {
+        Ok(type_args.is_empty()
+            && ir::IntrinsicOp::candidate_name(
+                names
+                    .spelling(*name)
+                    .map_err(native_adapter::name_diagnostic)?,
+            ))
+    } else {
+        Ok(false)
+    }
+}
+
+/// Typed primitive-method occurrence: source call index, the checked
+/// Intrinsic expression, and its exact checked receiver.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct BuiltinIntrinsicOccurrence {
+    pub(super) source_index: usize,
+    pub(super) expr: ir::ExprId,
+    pub(super) receiver: ir::ExprId,
+}
+
 /// Stock E0658: `X..` directly inside a slice or array pattern is feature-gated.
 fn reject_slice_half_open(pattern: &Pattern) -> Result<(), &'static str> {
     if let Pattern::Range {
@@ -1901,6 +2096,7 @@ pub(super) struct CanonicalSourceCapability {
     calls: std::cell::RefCell<Vec<(usize, ir::ExprId, ir::Callee)>>,
     builtin_leading_zeros: std::cell::RefCell<Vec<BuiltinLeadingZerosOccurrence>>,
     builtin_lens: std::cell::RefCell<Vec<BuiltinLenOccurrence>>,
+    builtin_intrinsics: std::cell::RefCell<Vec<BuiltinIntrinsicOccurrence>>,
     unsizes: std::cell::RefCell<Vec<UnsizeOccurrence>>,
     bindings: std::cell::RefCell<Vec<(usize, ir::LocalId)>>,
     narrow: std::cell::RefCell<Vec<RawSharedOccurrence>>,
@@ -1918,6 +2114,7 @@ pub(super) struct OriginalSource {
     call_mapping: Vec<(usize, ir::ExprId, ir::Callee)>,
     builtin_leading_zeros_mapping: Vec<BuiltinLeadingZerosOccurrence>,
     builtin_len_mapping: Vec<BuiltinLenOccurrence>,
+    builtin_intrinsic_mapping: Vec<BuiltinIntrinsicOccurrence>,
     unsize_mapping: Vec<UnsizeOccurrence>,
     binding_mapping: Vec<(usize, ir::LocalId)>,
     narrow: Vec<RawSharedOccurrence>,
@@ -1974,6 +2171,65 @@ impl CanonicalSourceCapability {
         sr::push(
             &mut self.calls.borrow_mut(),
             (index, id, target.clone()),
+            budget,
+        )
+        .map_err(|e| self.render(e))
+    }
+    /// Record a typed primitive method at its exact original source occurrence.
+    fn record_builtin_intrinsic(
+        &self,
+        expr: &Expr,
+        id: ir::ExprId,
+        checked: &[ir::TypedExpr],
+    ) -> Result<(), String> {
+        let budget = &self.plan.budget;
+        sr::work(budget, 1).map_err(|e| self.render(e))?;
+        let index = self
+            .inventory
+            .call_pointers
+            .get(&(expr as *const Expr as usize))
+            .copied()
+            .ok_or_else(|| {
+                self.render(FactsError::invalid(
+                    budget,
+                    "primitive method has no original occurrence",
+                ))
+            })?;
+        let Some(ir::TypedExpr {
+            kind: ir::ExprKind::Intrinsic { intrinsic, args },
+            ty,
+            ..
+        }) = checked.get(id.0)
+        else {
+            return Err(self.render(FactsError::invalid(
+                budget,
+                "primitive method occurrence did not produce Intrinsic",
+            )));
+        };
+        let receiver = *args.first().ok_or_else(|| {
+            self.render(FactsError::invalid(
+                budget,
+                "primitive method lost receiver",
+            ))
+        })?;
+        if !self.inventory.calls[index].intrinsic_candidate
+            || intrinsic.signature().map(|s| s.result).as_ref() != Some(ty)
+            || !checked
+                .get(receiver.0)
+                .is_some_and(|r| r.ty == intrinsic.receiver.ty() || r.ty == ir::Ty::Never)
+        {
+            return Err(self.render(FactsError::invalid(
+                budget,
+                "primitive method occurrence has wrong typed shape",
+            )));
+        }
+        sr::push(
+            &mut self.builtin_intrinsics.borrow_mut(),
+            BuiltinIntrinsicOccurrence {
+                source_index: index,
+                expr: id,
+                receiver,
+            },
             budget,
         )
         .map_err(|e| self.render(e))
@@ -2996,6 +3252,98 @@ fn replay_builtin_leading_zeros(
     Ok(sources)
 }
 
+/// Exact replay of typed primitive-method occurrences, including unused rows.
+fn replay_builtin_intrinsics(
+    original: &OriginalSource,
+    checked: &ir::CheckedFunction,
+    ordinary: &[Option<usize>],
+    seen: &mut [bool],
+    budget: &ir::PlanBudget,
+) -> Result<Vec<bool>, FactsError> {
+    sr::work(budget, original.calls.len())?;
+    sr::retain(budget, original.calls.len())?;
+    let mut sources = Vec::new();
+    sources
+        .try_reserve_exact(original.calls.len())
+        .map_err(|_| FactsError::resource(budget, "primitive method occurrence allocation"))?;
+    sources.resize(original.calls.len(), false);
+    let mut previous: Option<(usize, ir::ExprId)> = None;
+    for row in &original.builtin_intrinsic_mapping {
+        sr::work(budget, 1)?;
+        let site = original
+            .calls
+            .get(row.source_index)
+            .ok_or_else(|| FactsError::invalid(budget, "orphan primitive method occurrence"))?;
+        if !site.intrinsic_candidate || site.ordinary.is_some() || site.application.is_some() {
+            return Err(FactsError::invalid(
+                budget,
+                "primitive method mapped from a non-candidate source call",
+            ));
+        }
+        if std::mem::replace(&mut sources[row.source_index], true)
+            || ordinary.get(row.source_index).copied().flatten().is_some()
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "duplicate primitive method correspondence",
+            ));
+        }
+        if let Some((index, expr)) = previous {
+            let prior = &original.calls[index].node.path;
+            let current = &site.node.path;
+            sr::work(budget, prior.len().saturating_add(current.len()))?;
+            // Inventory is preorder, emission is postorder: receiver and
+            // argument calls precede their enclosing method.
+            let encloses_prior = prior.len() > current.len() && prior.starts_with(current);
+            let prior_encloses = current.len() > prior.len() && current.starts_with(prior);
+            if row.expr.0 <= expr.0
+                || prior_encloses
+                || (row.source_index <= index && !encloses_prior)
+            {
+                return Err(FactsError::invalid(
+                    budget,
+                    "primitive method source order changed",
+                ));
+            }
+        }
+        previous = Some((row.source_index, row.expr));
+        let result = checked
+            .exprs
+            .get(row.expr.0)
+            .ok_or_else(|| FactsError::invalid(budget, "primitive method outside checked arena"))?;
+        let ir::ExprKind::Intrinsic { intrinsic, args } = &result.kind else {
+            return Err(FactsError::invalid(
+                budget,
+                "primitive method mapped to a different operation",
+            ));
+        };
+        if args.first() != Some(&row.receiver)
+            || intrinsic.signature().map(|s| s.result).as_ref() != Some(&result.ty)
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "primitive method receiver or type changed",
+            ));
+        }
+        if std::mem::replace(&mut seen[row.expr.0], true) {
+            return Err(FactsError::invalid(
+                budget,
+                "checked primitive method mapped from two source occurrences",
+            ));
+        }
+    }
+    sr::work(budget, checked.exprs.len())?;
+    for (index, expr) in checked.exprs.iter().enumerate() {
+        if matches!(expr.kind, ir::ExprKind::Intrinsic { .. }) && !seen[index] {
+            return Err(FactsError::invalid(
+                budget,
+                "orphan checked primitive method lacks original occurrence",
+            ));
+        }
+    }
+    Ok(sources)
+}
+
 /// Exact replay of typed builtin `.len()` occurrences and their receivers.
 fn replay_builtin_lens(
     original: &OriginalSource,
@@ -3102,7 +3450,7 @@ fn replay_unsizes(
             .exprs
             .get(row.wrapper.0)
             .ok_or_else(|| FactsError::invalid(budget, "unsize wrapper outside checked arena"))?;
-        if !matches!(value.kind, ir::ExprKind::ArrayToSlice { reference } if reference == row.reference)
+        if !matches!(value.kind, ir::ExprKind::ArrayToSlice { reference } | ir::ExprKind::RefToDyn { reference } if reference == row.reference)
         {
             return Err(FactsError::invalid(
                 budget,
@@ -3117,7 +3465,11 @@ fn replay_unsizes(
         }
     }
     for (index, expr) in checked.exprs.iter().enumerate() {
-        if matches!(expr.kind, ir::ExprKind::ArrayToSlice { .. }) && !covered[index] {
+        if matches!(
+            expr.kind,
+            ir::ExprKind::ArrayToSlice { .. } | ir::ExprKind::RefToDyn { .. }
+        ) && !covered[index]
+        {
             return Err(FactsError::invalid(budget, "orphan array-to-slice wrapper"));
         }
     }
@@ -3247,6 +3599,7 @@ pub(super) fn replay_source_body(
         if fresh.node != retained.node
             || fresh.leading_zeros_candidate != retained.leading_zeros_candidate
             || fresh.len_candidate != retained.len_candidate
+            || fresh.intrinsic_candidate != retained.intrinsic_candidate
             || !optional_source_path_equal(
                 &fresh.ordinary,
                 &retained.ordinary,
@@ -3376,10 +3729,12 @@ pub(super) fn replay_source_body(
     let leading_zero_sources =
         replay_builtin_leading_zeros(original, checked, &positions, &mut seen, budget)?;
     let builtin_sources = replay_builtin_lens(original, checked, &positions, &mut seen, budget)?;
+    let intrinsic_sources =
+        replay_builtin_intrinsics(original, checked, &positions, &mut seen, budget)?;
     replay_unsizes(original, checked, budget)?;
     for (index, site) in original.calls.iter().enumerate() {
         sr::work(budget, 1)?;
-        if builtin_sources[index] || leading_zero_sources[index] {
+        if builtin_sources[index] || leading_zero_sources[index] || intrinsic_sources[index] {
             continue;
         }
         let position = positions[index].ok_or_else(|| {
@@ -3742,6 +4097,7 @@ pub(super) fn replay_source_body(
         .call_mapping
         .len()
         .checked_add(original.builtin_len_mapping.len())
+        .and_then(|n| n.checked_add(original.builtin_intrinsic_mapping.len()))
         .and_then(|n| n.checked_add(original.builtin_leading_zeros_mapping.len()))
         != Some(original.calls.len())
     {
@@ -3836,6 +4192,7 @@ impl PlanCtx {
                     calls: Default::default(),
                     builtin_leading_zeros: Default::default(),
                     builtin_lens: Default::default(),
+                    builtin_intrinsics: Default::default(),
                     unsizes: Default::default(),
                     bindings: Default::default(),
                     narrow: Default::default(),
@@ -3877,6 +4234,7 @@ impl PlanCtx {
                     call_mapping: cap.calls.take(),
                     builtin_leading_zeros_mapping: cap.builtin_leading_zeros.take(),
                     builtin_len_mapping: cap.builtin_lens.take(),
+                    builtin_intrinsic_mapping: cap.builtin_intrinsics.take(),
                     unsize_mapping: cap.unsizes.take(),
                     binding_mapping: cap.bindings.take(),
                     narrow: cap.narrow.take(),
@@ -3919,6 +4277,12 @@ pub struct Program {
     pub impls: Vec<ImplDecl>,
     pub traits: Vec<TraitDecl>,
     pub trait_imports: Vec<(ModuleId, TraitPath)>,
+    /// Hidden crate-root module holding the embedded native prelude library,
+    /// when loaded. `std::`/`core::` paths and prelude names resolve into it.
+    pub prelude_module: Option<ModuleId>,
+    /// The `prelude::v1` module inside the prelude library. Its public names
+    /// (types, variants, traits) are in scope in every module unless shadowed.
+    pub prelude_scope: Option<ModuleId>,
     // Resolver-issued source authority. Shared unchanged by public AST clones.
     associated_bound_sources: Arc<[AssociatedBoundSource]>,
 }
@@ -3948,6 +4312,8 @@ struct ProgramDeclarations {
     impls: Vec<ImplDecl>,
     traits: Vec<TraitDecl>,
     trait_imports: Vec<(ModuleId, TraitPath)>,
+    prelude_module: Option<ModuleId>,
+    prelude_scope: Option<ModuleId>,
 }
 struct ParsedDeclarations {
     program: ProgramDeclarations,
@@ -3973,6 +4339,8 @@ impl ProgramDeclarations {
             impls: self.impls,
             traits: self.traits,
             trait_imports: self.trait_imports,
+            prelude_module: self.prelude_module,
+            prelude_scope: self.prelude_scope,
             associated_bound_sources: Arc::from([]),
         }
     }
@@ -4100,6 +4468,8 @@ impl ProgramBuilder {
             impls: self.impls,
             traits: self.traits,
             trait_imports: self.trait_imports,
+            prelude_module: None,
+            prelude_scope: None,
         }
         .publish(names, modules, self.symbols, None);
         program.validate_name_handles()?;
@@ -4107,6 +4477,24 @@ impl ProgramBuilder {
     }
 }
 impl Program {
+    fn in_prelude(&self, module: ModuleId) -> bool {
+        self.prelude_module
+            .is_some_and(|prelude| self.modules.is_descendant(module, prelude).unwrap_or(false))
+    }
+    /// User-crate struct count, excluding the embedded prelude library.
+    pub fn user_structs(&self) -> usize {
+        self.structs
+            .iter()
+            .filter(|s| !self.in_prelude(s.module))
+            .count()
+    }
+    /// User-crate enum count, excluding the embedded prelude library.
+    pub fn user_enums(&self) -> usize {
+        self.enums
+            .iter()
+            .filter(|e| !self.in_prelude(e.module))
+            .count()
+    }
     fn validate_name_handles(&self) -> Result<(), String> {
         name_validation::validate_program_names(self)
     }
@@ -4466,6 +4854,8 @@ pub enum Type {
         kind: ir::BorrowKind,
         pointee: Box<Type>,
     },
+    /// Unsized trait object `dyn Trait`. Admitted only behind a reference.
+    Dyn(Box<TraitPath>),
     Int(ir::IntTy),
     Float(ir::FloatTy),
     Char,
@@ -4537,6 +4927,14 @@ pub enum Pattern {
     Binding {
         name: AstIdent,
         mutable: bool,
+        /// Explicit `ref`/`ref mut` binding mode. Default binding modes
+        /// through references are inferred by the checker, not the parser.
+        by_ref: Option<ir::BorrowKind>,
+    },
+    /// Explicit `&pat` / `&mut pat` reference pattern.
+    Ref {
+        kind: ir::BorrowKind,
+        pattern: Box<Pattern>,
     },
     Tuple(Vec<Pattern>),
     TupleRest(PositionalRest),
@@ -4668,12 +5066,47 @@ pub enum Stmt {
         /// The actual optional token following the body, not inferred liveness.
         has_semicolon: bool,
     },
+    /// Genuine `for PAT in ITER BODY`. Range syntax and zero-argument
+    /// iterator adapters are retained as written structure, never as
+    /// fabricated method calls.
+    For {
+        label: Option<AstIdent>,
+        pattern: Box<Pattern>,
+        source: Box<ForSource>,
+        body: Block,
+        has_semicolon: bool,
+    },
     LetElse {
         pattern: Box<Pattern>,
         ty: Type,
         value: Box<Expr>,
         else_block: Block,
     },
+}
+/// The written iterable of a for loop.
+#[derive(Clone, Debug)]
+pub enum ForIterable {
+    /// `start..end` or `start..=end`, evaluated once, start first.
+    Range {
+        start: Expr,
+        end: Expr,
+        inclusive: bool,
+    },
+    /// Any other expression; its type selects the iteration plan.
+    Value(Expr),
+}
+/// Zero-argument adapters written after the iterable, in source order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForAdapter {
+    Iter,
+    IntoIter,
+    Rev,
+    Enumerate,
+}
+#[derive(Clone, Debug)]
+pub struct ForSource {
+    pub iterable: ForIterable,
+    pub adapters: Vec<ForAdapter>,
 }
 /// Source literal magnitude, before contextual signedness and range checking.
 #[derive(Clone, Debug)]
@@ -4975,6 +5408,8 @@ fn validate_source_site(
 
 #[derive(Clone, Debug)]
 pub enum Expr {
+    /// Bootstrap-only Linux x86-64 ABI primitive, never an allocator policy.
+    NativeSyscall(Vec<Expr>),
     UnexpandedMacro(Arc<UnexpandedMacroSyntax>),
     TraitCall {
         owner: Type,
@@ -5005,6 +5440,13 @@ pub enum Expr {
     Borrow {
         kind: ir::BorrowKind,
         place: Place,
+    },
+    /// Borrow of a value expression that is not a static place, such as
+    /// `&P { .. }`, `&f()` or `&a[i]`. The operand is evaluated into a
+    /// temporary whose scope follows Rust's temporary lifetime rules.
+    BorrowValue {
+        kind: ir::BorrowKind,
+        value: Box<Expr>,
     },
     Deref {
         value: Box<Expr>,
@@ -5098,6 +5540,12 @@ pub enum Expr {
         label: Option<AstIdent>,
     },
     Println(String),
+    Format {
+        pieces: Vec<String>,
+        arguments: Vec<Expr>,
+        stream: ir::OutputStream,
+        newline: bool,
+    },
     Output(Box<SourceOutput>),
     Panic(Box<SourcePanic>),
 }
@@ -5165,6 +5613,7 @@ enum ParserTokenKind {
     Ident,
     Number,
     Char,
+    Byte,
     String,
     Punct,
     Lifetime,
@@ -6233,12 +6682,16 @@ impl<'input, 'names> Parser<'input, 'names> {
         };
         Ok((name, body, site))
     }
+    #[inline(never)]
     fn local_macro_expression(&mut self) -> Result<Expr, ParseError> {
         if self.purpose == ParserPurpose::InactiveSyntax {
             let span = self.token().span;
             let path = self.path()?;
             self.expect("!")?;
             return Ok(Expr::UnexpandedMacro(self.inactive_invocation(path, span)?));
+        }
+        if self.builtin_macro_ahead("__justrust_linux_syscall6")? {
+            return self.native_syscall_expression();
         }
         for spelling in ["print", "eprint", "eprintln"] {
             if self.builtin_macro_ahead(spelling)? {
@@ -6278,6 +6731,31 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         let (buffer, admission, depth) = self.prepare_local_macro()?;
         self.isolated_expression_at(&buffer, Some(admission), depth)
+    }
+    // Syscall operands are unrelated to recursive user-macro expansion. Keep
+    // their Expr/Result and allocation scratch out of each expansion frame.
+    #[inline(never)]
+    fn native_syscall_expression(&mut self) -> Result<Expr, ParseError> {
+        self.ident()?;
+        self.expect("!")?;
+        self.expect("(")?;
+        let mut arguments = Vec::new();
+        for index in 0..7 {
+            if index != 0 {
+                self.expect(",")?;
+            }
+            let argument = self.expr(0)?;
+            self.names
+                .retain_parser_text(std::mem::size_of::<Expr>())
+                .map_err(native_adapter::name_error)?;
+            arguments.try_reserve_exact(1).map_err(|_| {
+                native_adapter::transport_error(self.names.budget().poison_allocation().into())
+            })?;
+            arguments.push(argument);
+        }
+        self.eat(",");
+        self.expect(")")?;
+        Ok(Expr::NativeSyscall(arguments))
     }
     /// Select the builtin only after checked lexical and module lookup miss.
     fn builtin_macro_ahead(&mut self, spelling: &str) -> Result<bool, ParseError> {
@@ -6443,6 +6921,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else {
             return Err(self.error("expected an output macro delimiter"));
         };
+        if !self.is(close) {
+            return self.scalar_output(close, spelling, Some(site));
+        }
         let (nonliteral, placeholders, arguments) = match spelling {
             "print" => (
                 "print! nonliteral arguments are unsupported",
@@ -6488,6 +6969,105 @@ impl<'input, 'names> Parser<'input, 'names> {
             })
             .map_err(native_adapter::name_error)?;
         Ok(Expr::Output(payload))
+    }
+    fn scalar_output(
+        &mut self,
+        close: &str,
+        spelling: &str,
+        site: Option<super::expansion_span::SpanId>,
+    ) -> Result<Expr, ParseError> {
+        let buffer;
+        let token = if self.token().is_opaque_literal() {
+            buffer = self
+                .input
+                .opaque_literal_buffer(&self.token(), self.names)?;
+            TokenCursor::new(&buffer).current()
+        } else {
+            self.token()
+        };
+        if !token.string {
+            if spelling == "println" {
+                return Err(self.error("println! requires one literal string"));
+            }
+            return Err(
+                self.unsupported(&format!("{spelling}! nonliteral arguments are unsupported"))
+            );
+        }
+        let text = self.string_literal_value(token.text)?;
+        self.cursor.bump();
+        let mut pieces = Vec::new();
+        let mut piece = String::new();
+        let mut chars = text.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '{' => match chars.next() {
+                    Some('{') => piece.push('{'),
+                    Some('}') => {
+                        pieces.push(std::mem::take(&mut piece));
+                    }
+                    None => return Err(self.error("unmatched opening brace in format string")),
+                    _ => {
+                        return Err(
+                            self.unsupported("only bare {} formatting placeholders are supported")
+                        );
+                    }
+                },
+                '}' => {
+                    if chars.next() == Some('}') {
+                        piece.push('}');
+                    } else {
+                        return Err(self.error("unmatched closing brace in format string"));
+                    }
+                }
+                _ => piece.push(c),
+            }
+        }
+        pieces.push(piece);
+        let mut arguments = Vec::new();
+        while self.eat(",") && !self.is(close) {
+            arguments.push(self.nested_expr()?);
+        }
+        self.expect(close)?;
+        if pieces.len() != arguments.len() + 1 {
+            return Err(self.error("format argument count mismatch"));
+        }
+        let stream = if matches!(spelling, "print" | "println") {
+            ir::OutputStream::Stdout
+        } else {
+            ir::OutputStream::Stderr
+        };
+        let newline = matches!(spelling, "println" | "eprintln");
+        if arguments.is_empty() {
+            let text = pieces.pop().unwrap();
+            return if let Some(site) = site {
+                Ok(Expr::Output(
+                    self.names
+                        .try_parser_box(SourceOutput {
+                            output: ir::LiteralOutput {
+                                text,
+                                stream,
+                                newline,
+                            },
+                            site,
+                        })
+                        .map_err(native_adapter::name_error)?,
+                ))
+            } else {
+                Ok(Expr::Println(text))
+            };
+        }
+        self.names
+            .retain_parser_text(
+                pieces.len() * std::mem::size_of::<String>()
+                    + arguments.len() * std::mem::size_of::<Expr>(),
+            )
+            .map_err(native_adapter::name_error)?;
+        Ok(Expr::Format {
+            pieces,
+            arguments,
+            stream,
+            newline,
+        })
     }
     fn panic_expression(&mut self, spelling: &'static str) -> Result<Expr, ParseError> {
         let (default, delimiter, nonliteral, placeholders, arguments) = match spelling {
@@ -7050,43 +7630,6 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.cursor.bump();
         Ok(text)
     }
-    fn println_literal(&mut self) -> Result<String, ParseError> {
-        if self.token().is_opaque_literal() {
-            let buffer = self
-                .input
-                .opaque_literal_buffer(&self.token(), self.names)?;
-            let mut cursor = TokenCursor::new(&buffer);
-            if !cursor.current().string {
-                return Err(self.error("println! requires one literal string"));
-            }
-            let text =
-                literal_format_owned(cursor.current().text, self.names).map_err(|error| {
-                    if error.kind == super::source::SourceErrorKind::Syntax {
-                        self.error(&error.message)
-                    } else {
-                        error
-                    }
-                })?;
-            cursor.bump();
-            if !cursor.current().matches("") {
-                return Err(self.error("println! requires one literal string"));
-            }
-            self.cursor.bump();
-            return Ok(text);
-        }
-        if !self.token().string {
-            return Err(self.error("println! requires one literal string"));
-        }
-        let text = literal_format_owned(self.token().text, self.names).map_err(|error| {
-            if error.kind == super::source::SourceErrorKind::Syntax {
-                self.error(&error.message)
-            } else {
-                error
-            }
-        })?;
-        self.cursor.bump();
-        Ok(text)
-    }
     fn enter_lexical(&mut self) -> Result<Option<super::semantic_scope::FrontierId>, ParseError> {
         let previous = self.frontier();
         if let Some(frontier) = previous {
@@ -7217,7 +7760,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                             .map_err(native_adapter::transport_error)?;
                     }
                 }
-                Pattern::Apply { pattern, .. } => pending
+                Pattern::Apply { pattern, .. } | Pattern::Ref { pattern, .. } => pending
                     .push(pattern)
                     .map_err(native_adapter::transport_error)?,
                 _ => {}
@@ -7570,6 +8113,18 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         if self.is("impl") {
             return self.impl_trait_param();
+        }
+        if self.eat("dyn") {
+            if self.token().is_lifetime() || self.is("?") || self.is("(") {
+                return Err(self.unsupported("unsupported trait object bound syntax"));
+            }
+            let path = self.trait_path()?;
+            if self.is("+") {
+                return Err(self.unsupported(
+                    "trait objects with auto-trait or lifetime bounds (`dyn A + B`) are unsupported",
+                ));
+            }
+            return Ok(Type::Dyn(Box::new(path)));
         }
         if self.eat("[") {
             let element = self.ty()?;
@@ -8427,6 +8982,38 @@ impl<'input, 'names> Parser<'input, 'names> {
                     .modules
                     .intern_child(self.names, module, name)
                     .map_err(module_parse_error)?;
+                if module == self.modules.source_root().map_err(module_parse_error)?
+                    && self
+                        .names
+                        .spelling(name)
+                        .map_err(native_adapter::name_error)?
+                        == super::source::source_prelude::PRELUDE_MODULE
+                {
+                    if parsed.program.prelude_module.is_some() {
+                        return Err(self.error("duplicate native prelude module"));
+                    }
+                    parsed.program.prelude_module = Some(child);
+                }
+                if let Some(prelude) = parsed.program.prelude_module {
+                    let spelling = self
+                        .names
+                        .spelling(name)
+                        .map_err(native_adapter::name_error)?;
+                    let parent = self.modules.parent(module).map_err(module_parse_error)?;
+                    if spelling == "v1"
+                        && parent == Some(prelude)
+                        && self
+                            .modules
+                            .name(module)
+                            .map_err(module_parse_error)?
+                            .map(|ident| self.names.spelling(ident).map(|s| s == "prelude"))
+                            .transpose()
+                            .map_err(native_adapter::name_error)?
+                            == Some(true)
+                    {
+                        parsed.program.prelude_scope = Some(child);
+                    }
+                }
                 if self.eat(";") {
                     return Err(
                         self.unsupported("external module files are unsupported; use inline mod")
@@ -9425,6 +10012,16 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.nesting -= 1;
         result
     }
+    /// The operand of a reference pattern binds tighter than `|` and `@`.
+    fn pattern_no_alternatives(&mut self) -> Result<Pattern, ParseError> {
+        if self.nesting >= 128 {
+            return Err(self.limit("pattern nesting exceeds limit 128"));
+        }
+        self.nesting += 1;
+        let result = self.pattern_inner();
+        self.nesting -= 1;
+        result
+    }
     fn pattern(&mut self) -> Result<Pattern, ParseError> {
         if self.nesting >= 128 {
             return Err(self.limit("pattern nesting exceeds limit 128"));
@@ -9537,6 +10134,7 @@ impl<'input, 'names> Parser<'input, 'names> {
     fn range_bound_start(&self) -> bool {
         !self.token().string
             && (self.token().is_char()
+                || self.token().is_byte()
                 || self.is("-")
                 || self.token().text.starts_with(|c: char| c.is_ascii_digit())
                 || self.int_limit_start())
@@ -9551,8 +10149,30 @@ impl<'input, 'names> Parser<'input, 'names> {
                 .peek(2)
                 .is_some_and(|t| t.matches("MAX") || t.matches("MIN"))
     }
-    /// One literal range or scalar pattern endpoint: char, or optionally negated integer.
+    /// Bytes reuse the rigid u8 integer path, including inference and patterns.
+    fn byte_integer_literal(&mut self) -> Result<IntegerLiteral, ParseError> {
+        self.names
+            .budget()
+            .charge(
+                super::expansion_budget::Counter::Work,
+                self.token().text.len() as u64,
+            )
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        let value = parse_byte_literal(self.token().text).map_err(|e| self.error(e))?;
+        self.cursor.bump();
+        Ok(IntegerLiteral {
+            magnitude: u128::from(value),
+            suffix: Some(ir::IntTy::U8),
+        })
+    }
+    /// One literal range or scalar pattern endpoint: char, byte, or optionally negated integer.
     fn range_bound(&mut self) -> Result<RangeBound, ParseError> {
+        if self.token().is_byte() {
+            return Ok(RangeBound::Int {
+                literal: self.byte_integer_literal()?,
+                negative: false,
+            });
+        }
         if self.token().is_char() {
             self.names
                 .budget()
@@ -9638,6 +10258,43 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         Err(self.error("expected a literal or range pattern"))
     }
+    /// `ref`/`ref mut` bindings and `&pat`/`&mut pat`, kept out of
+    /// `pattern_inner` so the recursive parser frame stays small.
+    #[inline(never)]
+    fn reference_pattern(&mut self) -> Result<Pattern, ParseError> {
+        if self.eat("ref") {
+            let kind = if self.eat("mut") {
+                ir::BorrowKind::Mut
+            } else {
+                ir::BorrowKind::Shared
+            };
+            return Ok(Pattern::Binding {
+                name: self.ident()?,
+                mutable: false,
+                by_ref: Some(kind),
+            });
+        }
+        let double = self.is("&&");
+        self.cursor.bump();
+        let kind = if self.eat("mut") {
+            ir::BorrowKind::Mut
+        } else {
+            ir::BorrowKind::Shared
+        };
+        let inner = self.pattern_no_alternatives()?;
+        let pattern = Pattern::Ref {
+            kind,
+            pattern: Box::new(inner),
+        };
+        Ok(if double {
+            Pattern::Ref {
+                kind: ir::BorrowKind::Shared,
+                pattern: Box::new(pattern),
+            }
+        } else {
+            pattern
+        })
+    }
     fn pattern_inner(&mut self) -> Result<Pattern, ParseError> {
         if self.is("..=") || self.is("..") || self.range_bound_start() {
             return self.scalar_pattern();
@@ -9645,13 +10302,8 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.token().string {
             return Err(self.unsupported("string literal patterns are unsupported"));
         }
-        if self.is("ref") {
-            return Err(self.unsupported("reference binding patterns are unsupported"));
-        }
-        if self.is("&") || self.is("&&") {
-            return Err(
-                self.unsupported("reference patterns and match ergonomics are unsupported in B1")
-            );
+        if self.is("ref") || self.is("&") || self.is("&&") {
+            return self.reference_pattern();
         }
         if self.eat("true") {
             return Ok(Pattern::Bool(true));
@@ -9706,6 +10358,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Ok(Pattern::Binding {
                 name: self.ident()?,
                 mutable: true,
+                by_ref: None,
             });
         }
         let generic_path = self.generic_path(false)?;
@@ -9768,6 +10421,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     .single()
                     .ok_or_else(|| self.error("expected local binding name"))?,
                 mutable: false,
+                by_ref: None,
             });
         }
         let mut fields = Vec::new();
@@ -9780,21 +10434,33 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
                 break;
             }
-            let mutable = self.eat("mut");
+            let by_ref = if self.eat("ref") {
+                Some(if self.eat("mut") {
+                    ir::BorrowKind::Mut
+                } else {
+                    ir::BorrowKind::Shared
+                })
+            } else {
+                None
+            };
+            let mutable = by_ref.is_none() && self.eat("mut");
             let token = self.token();
             if token.matches(token.text) && token.text.starts_with(|c: char| c.is_ascii_digit()) {
                 return Err(self.unsupported("numeric braced constructor patterns are unsupported"));
             }
             let field = self.ident()?;
             let pattern = if self.eat(":") {
-                if mutable {
-                    return Err(self.error("mut must apply to a binding, not a field selector"));
+                if mutable || by_ref.is_some() {
+                    return Err(
+                        self.error("mut or ref must apply to a binding, not a field selector")
+                    );
                 }
                 self.pattern()?
             } else {
                 Pattern::Binding {
                     name: field,
                     mutable,
+                    by_ref,
                 }
             };
             fields.push((field, pattern));
@@ -9895,6 +10561,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             if self.is("mod") || self.is("use") || self.is("fn") || self.is("pub") {
                 return Err(self.unsupported("block-local items are unsupported"));
             }
+            if self.try_for_statement(&mut statements)? {
+                continue;
+            }
             if self.eat("let") {
                 let pattern = self.pattern()?;
                 // Local inference is performed by each independent function checker.
@@ -9913,7 +10582,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                     ) {
                         return Err(self.error("refutable literal pattern in let binding"));
                     }
-                    let Pattern::Binding { name, mutable } = pattern else {
+                    let Pattern::Binding {
+                        name,
+                        mutable,
+                        by_ref: None,
+                    } = pattern
+                    else {
                         return Err(
                             self.unsupported("deferred pattern declarations are unsupported")
                         );
@@ -9966,7 +10640,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                 self.expect(";")?;
                 self.bind_pattern_lexical(&pattern)?;
                 let ty = annotation.unwrap_or(Type::Infer);
-                if let Pattern::Binding { name, mutable } = pattern {
+                if let Pattern::Binding {
+                    name,
+                    mutable,
+                    by_ref: None,
+                } = pattern
+                {
                     statements.push(Stmt::Let {
                         name: BindingName::Named(name),
                         mutable,
@@ -10011,10 +10690,6 @@ impl<'input, 'names> Parser<'input, 'names> {
                     condition,
                     body,
                 });
-            } else if self.is("for") {
-                return Err(self.error(
-                    "unsupported: for loops and iterators (including slice iteration); use while with an index",
-                ));
             } else {
                 // Statement eligibility comes from written syntax, not a
                 // lowered macro's AST shape (assert! lowers to Expr::If).
@@ -10187,10 +10862,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return Err(self.error("only println! is supported"));
             }
             self.expect("(")?;
-            let text = self.println_literal()?;
-            self.eat(",");
-            self.expect(")")?;
-            Expr::Println(text)
+            if self.is(")") {
+                self.expect(")")?;
+                Expr::Println(String::new())
+            } else {
+                return self.scalar_output(")", "println", None);
+            }
         } else if self.eat("(") {
             let mut args = Vec::new();
             if !self.is(")") {
@@ -10429,8 +11106,13 @@ impl<'input, 'names> Parser<'input, 'names> {
                 ir::BorrowKind::Shared
             };
             let value = self.expr(11)?;
-            let place=self.assignment_place(value).map_err(|_|self.unsupported("borrowing requires a local-root static place; rvalues and runtime indexed borrows are unsupported"))?;
-            Expr::Borrow { kind, place }
+            match borrow_place(&value) {
+                Some(place) => Expr::Borrow { kind, place },
+                None => Expr::BorrowValue {
+                    kind,
+                    value: Box::new(value),
+                },
+            }
         } else if self.eat("*") {
             Expr::Deref {
                 value: Box::new(self.expr(11)?),
@@ -10449,6 +11131,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             let text = self.string_literal_value(self.token().text)?;
             self.cursor.bump();
             Expr::Str(text)
+        } else if self.token().is_byte() {
+            Expr::Integer(self.byte_integer_literal()?)
         } else if self.token().is_char() {
             self.names
                 .budget()
@@ -10655,6 +11339,173 @@ impl<'input, 'names> Parser<'input, 'names> {
             then_block,
             else_branch,
         })
+    }
+    /// Keep the new statement's large parse temporaries off recursive block frames.
+    #[inline(never)]
+    fn try_for_statement(&mut self, statements: &mut Vec<Stmt>) -> Result<bool, ParseError> {
+        if !self.is("for")
+            && !(self.token().is_lifetime()
+                && self.cursor.peek(1).is_some_and(|t| t.text == ":")
+                && self.cursor.peek(2).is_some_and(|t| t.text == "for"))
+        {
+            return Ok(false);
+        }
+        let label = if self.is("for") {
+            None
+        } else {
+            let label = self.input.mint_name(&self.token(), self.names)?;
+            self.cursor.bump();
+            self.expect(":")?;
+            Some(label)
+        };
+        self.expect("for")?;
+        statements.push(self.for_statement(label)?);
+        Ok(true)
+    }
+    #[inline(never)]
+    fn for_statement(&mut self, label: Option<AstIdent>) -> Result<Stmt, ParseError> {
+        let pattern = self.pattern()?;
+        self.expect("in")?;
+        let mut adapters = Vec::new();
+        let iterable = if self.is("(") {
+            let mark = self.cursor.checkpoint();
+            self.cursor.bump();
+            let start = self.nested_expr()?;
+            if self.is("..") || self.is("..=") {
+                let inclusive = self.eat("..=");
+                if !inclusive {
+                    self.expect("..")?;
+                }
+                let end = self.nested_expr()?;
+                self.expect(")")?;
+                while self.eat(".") {
+                    let name = self.token().text;
+                    let adapter = match name {
+                        "rev" => ForAdapter::Rev,
+                        "enumerate" => ForAdapter::Enumerate,
+                        "into_iter" => ForAdapter::IntoIter,
+                        "iter" => ForAdapter::Iter,
+                        _ => {
+                            return Err(self.unsupported(
+                                "unsupported: for-loop range adapter (supported: rev, enumerate, into_iter)",
+                            ));
+                        }
+                    };
+                    self.cursor.bump();
+                    self.expect("(")?;
+                    self.expect(")")?;
+                    if adapters.len() >= 16 {
+                        return Err(self.limit("for-loop adapter count exceeds limit 16"));
+                    }
+                    adapters.push(adapter);
+                }
+                ForIterable::Range {
+                    start,
+                    end,
+                    inclusive,
+                }
+            } else {
+                if !self.cursor.restore(mark) {
+                    return Err(self.error("for-loop iterable checkpoint lost"));
+                }
+                self.for_value_iterable(&mut adapters)?
+            }
+        } else if self.is("..") || self.is("..=") {
+            return Err(
+                self.unsupported("unsupported: unbounded or half-open-start for-loop ranges")
+            );
+        } else {
+            let start = self.condition()?;
+            if self.is("..") || self.is("..=") {
+                let inclusive = self.eat("..=");
+                if !inclusive {
+                    self.expect("..")?;
+                }
+                if self.is("{") {
+                    return Err(self.unsupported("unsupported: unbounded for-loop ranges"));
+                }
+                let end = self.condition()?;
+                ForIterable::Range {
+                    start,
+                    end,
+                    inclusive,
+                }
+            } else {
+                self.peel_for_adapters(start, &mut adapters)?
+            }
+        };
+        let pattern = self
+            .names
+            .try_parser_box(pattern)
+            .map_err(native_adapter::name_error)?;
+        let source = self
+            .names
+            .try_parser_box(ForSource { iterable, adapters })
+            .map_err(native_adapter::name_error)?;
+        let frontier = self.enter_lexical()?;
+        let body_result = (|| {
+            self.bind_pattern_lexical(&pattern)?;
+            self.block()
+        })();
+        self.restore_frontier(frontier);
+        let body = body_result?;
+        let has_semicolon = self.eat(";");
+        Ok(Stmt::For {
+            label,
+            pattern,
+            source,
+            body,
+            has_semicolon,
+        })
+    }
+    fn for_value_iterable(
+        &mut self,
+        adapters: &mut Vec<ForAdapter>,
+    ) -> Result<ForIterable, ParseError> {
+        let value = self.condition()?;
+        if self.is("..") || self.is("..=") {
+            return Err(self.unsupported("unsupported: parenthesized range start in for loop"));
+        }
+        self.peel_for_adapters(value, adapters)
+    }
+    /// Retain trailing zero-argument iterator adapters as written structure.
+    fn peel_for_adapters(
+        &mut self,
+        mut value: Expr,
+        adapters: &mut Vec<ForAdapter>,
+    ) -> Result<ForIterable, ParseError> {
+        while let Expr::MethodCall {
+            name,
+            type_args,
+            args,
+            ..
+        } = &value
+        {
+            if !type_args.is_empty() || !args.is_empty() {
+                break;
+            }
+            let adapter = match self
+                .names
+                .spelling(*name)
+                .map_err(native_adapter::name_error)?
+            {
+                "iter" => ForAdapter::Iter,
+                "into_iter" => ForAdapter::IntoIter,
+                "rev" => ForAdapter::Rev,
+                "enumerate" => ForAdapter::Enumerate,
+                _ => break,
+            };
+            if adapters.len() >= 16 {
+                return Err(self.limit("for-loop adapter count exceeds limit 16"));
+            }
+            adapters.push(adapter);
+            let Expr::MethodCall { receiver, .. } = value else {
+                unreachable!()
+            };
+            value = *receiver;
+        }
+        adapters.reverse();
+        Ok(ForIterable::Value(value))
     }
     #[inline(never)]
     fn while_let_statement(&mut self, label: Option<AstIdent>) -> Result<Stmt, ParseError> {
@@ -11333,24 +12184,9 @@ mod inactive_item_syntax_tests {
     }
 
     #[test]
-    fn aggregate_ref_binding_is_typed_unsupported_at_the_original_keyword() {
+    fn aggregate_ref_binding_parses_as_a_borrowing_binding() {
         let source = "struct Pair(i32,i32);fn main(){match Pair(40,2){Pair(ref a,b)=>*a+b};}";
-        let error = parse_syntax_unprepared(source).unwrap_err();
-        assert_eq!(
-            error.kind,
-            super::super::source::SourceErrorKind::Unsupported
-        );
-        let at = source.find("ref").unwrap();
-        assert_eq!(error.bytes, at..at + 3);
-        assert_eq!(&source[error.bytes.clone()], "ref");
-        let primary = error.primary.unwrap();
-        assert_eq!(primary.lo as usize, at);
-        assert_eq!(primary.hi as usize, at + 3);
-        assert!(
-            error
-                .message
-                .starts_with("reference binding patterns are unsupported")
-        );
+        parse_syntax_unprepared(source).unwrap();
     }
 
     #[test]
@@ -12432,6 +13268,7 @@ fn walk_depth_inspecting(
                             push(DepthNode::Pattern(pattern))?;
                         }
                     }
+                    Pattern::Ref { pattern, .. } => push(DepthNode::Pattern(pattern))?,
                     _ => {}
                 }
             }
@@ -12511,7 +13348,9 @@ fn walk_depth_inspecting(
                         push(DepthNode::Expr(e))?;
                     }
                 }
-                Expr::Deref { value } => push(DepthNode::Expr(value))?,
+                Expr::Deref { value } | Expr::BorrowValue { value, .. } => {
+                    push(DepthNode::Expr(value))?
+                }
                 Expr::Repeat { value, .. } => push(DepthNode::Expr(value))?,
                 Expr::DynamicIndex { base, index } => {
                     push(DepthNode::Expr(base))?;
@@ -12530,7 +13369,9 @@ fn walk_depth_inspecting(
                         push(DepthNode::Expr(&arm.body))?;
                     }
                 }
-                Expr::Tuple(fields) | Expr::TupleStruct { fields, .. } => {
+                Expr::NativeSyscall(fields)
+                | Expr::Tuple(fields)
+                | Expr::TupleStruct { fields, .. } => {
                     for field in fields {
                         push(DepthNode::Expr(field))?;
                     }
@@ -12546,7 +13387,10 @@ fn walk_depth_inspecting(
                     push(DepthNode::Expr(left))?;
                     push(DepthNode::Expr(right))?;
                 }
-                Expr::Call { args, .. } => {
+                Expr::Call { args, .. }
+                | Expr::Format {
+                    arguments: args, ..
+                } => {
                     for arg in args {
                         push(DepthNode::Expr(arg))?;
                     }
@@ -12591,6 +13435,9 @@ fn walk_depth_inspecting(
                             label: Some(label), ..
                         }
                         | Stmt::WhileLet {
+                            label: Some(label), ..
+                        }
+                        | Stmt::For {
                             label: Some(label), ..
                         },
                     ) = (names, stmt)
@@ -12644,6 +13491,22 @@ fn walk_depth_inspecting(
                         } => {
                             push(DepthNode::Pattern(pattern))?;
                             push(DepthNode::Expr(scrutinee))?;
+                            push(DepthNode::Block(body))?;
+                        }
+                        Stmt::For {
+                            pattern,
+                            source,
+                            body,
+                            ..
+                        } => {
+                            push(DepthNode::Pattern(pattern))?;
+                            match &source.iterable {
+                                ForIterable::Range { start, end, .. } => {
+                                    push(DepthNode::Expr(start))?;
+                                    push(DepthNode::Expr(end))?;
+                                }
+                                ForIterable::Value(value) => push(DepthNode::Expr(value))?,
+                            }
                             push(DepthNode::Block(body))?;
                         }
                         Stmt::While {
@@ -12786,6 +13649,13 @@ fn exact_source_type(
                 pointee: b,
             },
         ) => exact_source_type(names, a, b, budget, depth + 1)? && ak == bk,
+        (Type::Dyn(a), Type::Dyn(b)) => match (a.as_ref(), b.as_ref()) {
+            (TraitPath::Builtin(a), TraitPath::Builtin(b)) => a == b,
+            (TraitPath::Source(a), TraitPath::Source(b)) => {
+                exact_source_generic_path(names, a, b, budget, depth + 1)?
+            }
+            _ => false,
+        },
         (Type::Tuple(a), Type::Tuple(b)) => {
             let mut equal = a.len() == b.len();
             for (a, b) in a.iter().zip(b) {
@@ -13362,6 +14232,109 @@ impl DeclRegistry {
             .copied()
             .ok_or_else(|| "unknown trait".into())
     }
+    /// Lower a written `dyn Trait` to its rigid object type after checking
+    /// stock dyn compatibility (E0038). Unused object types are checked too.
+    pub(super) fn trait_object_ty(
+        &self,
+        path: &TraitPath,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::Ty, String> {
+        let TraitPath::Source(source) = path else {
+            return Err(
+                "E0038: builtin marker traits (Sized, Copy, Clone, Drop) are not dyn compatible"
+                    .into(),
+            );
+        };
+        if source
+            .segments
+            .iter()
+            .any(|s| !s.args.is_empty() || !s.associated_types.is_empty())
+        {
+            return Err("unsupported: generic or associated-type trait object principals".into());
+        }
+        let principal = self.resolve_trait_path(path)?;
+        self.check_dyn_compatible(principal, budget, 0)?;
+        Ok(ir::Ty::Dyn(Arc::new(ir::DynTy { principal })))
+    }
+    /// Source trait declaration behind a trait DeclId.
+    pub(super) fn source_trait(&self, principal: ir::DeclId) -> Result<&TraitDecl, String> {
+        let info = self.declaration(principal)?;
+        if info.kind != ir::DeclKind::Trait || info.source_index == usize::MAX {
+            return Err("E0038: builtin marker traits are not dyn compatible".into());
+        }
+        self.program
+            .traits
+            .get(info.source_index)
+            .ok_or_else(|| "missing source trait declaration".into())
+    }
+    fn check_dyn_compatible(
+        &self,
+        principal: ir::DeclId,
+        budget: &ir::PlanBudget,
+        depth: usize,
+    ) -> Result<(), String> {
+        budget.check_depth(depth)?;
+        budget.charge_work(1)?;
+        let declaration = self.source_trait(principal)?;
+        let not_compatible = |why: &str| -> Result<(), String> {
+            Err(format!(
+                "E0038: the trait `{}` is not dyn compatible: {why}",
+                self.declaration(principal)
+                    .map(|i| i.name.clone())
+                    .unwrap_or_default()
+            ))
+        };
+        if !declaration.type_params.is_empty() {
+            return Err("unsupported: generic trait object principals".into());
+        }
+        if !declaration.associated_types.is_empty() {
+            return Err("unsupported: trait objects of traits with associated types".into());
+        }
+        for supertrait in &declaration.supertraits {
+            match supertrait {
+                TraitPath::Builtin(BuiltinTrait::Sized) => {
+                    return not_compatible("it requires `Self: Sized`");
+                }
+                TraitPath::Builtin(_) => {
+                    return not_compatible("a supertrait mentions `Self` (Copy/Clone/Drop)");
+                }
+                TraitPath::Source(_) => {
+                    let parent = self.resolve_trait_path(supertrait)?;
+                    self.check_dyn_compatible(parent, budget, depth + 1)?;
+                }
+            }
+        }
+        for item in &declaration.items {
+            budget.charge_work(1)?;
+            let head = &item.signature;
+            let names = self.names.as_ref();
+            let method = names
+                .spelling(head.name)
+                .map_err(native_adapter::name_diagnostic)?
+                .to_owned();
+            if matches!(item.receiver, ReceiverKind::None) {
+                return not_compatible(&format!(
+                    "associated function `{method}` has no `self` parameter"
+                ));
+            }
+            if !head.type_params.is_empty() {
+                return not_compatible(&format!("method `{method}` has generic type parameters"));
+            }
+            for (_, ty) in &head.params {
+                if source_type_mentions_self(ty, budget, 0)? {
+                    return not_compatible(&format!(
+                        "method `{method}` references the `Self` type in its parameters"
+                    ));
+                }
+            }
+            if source_type_mentions_self(&head.result, budget, 0)? {
+                return not_compatible(&format!(
+                    "method `{method}` references the `Self` type in its return type"
+                ));
+            }
+        }
+        Ok(())
+    }
     fn parameter_key(&self, ident: AstIdent) -> Result<GenericBindingKey, String> {
         Ok(GenericBindingKey::Param(
             self.names
@@ -13419,6 +14392,9 @@ pub struct PlanCtx {
     /// Previously each body copied every signature, which made checking
     /// quadratic in program size in both time and retained bytes.
     shared_env: Option<Arc<SharedTypeEnv>>,
+    /// Callable indices of nongeneric Source callables in callable order:
+    /// exactly the root slots `instances::build` enumerates first.
+    closed_roots: Arc<[usize]>,
     pub budget: ir::PlanBudget,
 }
 /// Shared read-only part of a [`TypeEnv`].
@@ -14028,6 +15004,8 @@ impl PlanCtx {
                 .schemas
                 .insert(id, Arc::new(NominalSchema::Enum(d.clone())));
         }
+        // User callables keep their indices; native prelude callables follow.
+        let mut prelude_callables: Vec<(ir::DeclId, CallableSource)> = Vec::new();
         for (index, f) in program.functions.iter().enumerate() {
             let item = *f
                 .name
@@ -14042,8 +15020,12 @@ impl PlanCtx {
                 ir::DeclKind::Function,
                 index,
             )?;
-            registry.function_ids.push(id);
-            registry.callable_sources.push(CallableSource::Free(index));
+            if program.in_prelude(f.module) {
+                prelude_callables.push((id, CallableSource::Free(index)));
+            } else {
+                registry.function_ids.push(id);
+                registry.callable_sources.push(CallableSource::Free(index));
+            }
         }
         for (index, declaration) in program.traits.iter().enumerate() {
             let item = *declaration
@@ -14087,13 +15069,16 @@ impl PlanCtx {
                         ir::DeclKind::AssociatedFunction,
                         item,
                     )?;
-                    registry.function_ids.push(id);
-                    registry
-                        .callable_sources
-                        .push(CallableSource::TraitDefault {
-                            trait_index: index,
-                            item,
-                        });
+                    let source = CallableSource::TraitDefault {
+                        trait_index: index,
+                        item,
+                    };
+                    if program.in_prelude(declaration.module) {
+                        prelude_callables.push((id, source));
+                    } else {
+                        registry.function_ids.push(id);
+                        registry.callable_sources.push(source);
+                    }
                 }
             }
             let mut associated_types = Vec::new();
@@ -14162,14 +15147,23 @@ impl PlanCtx {
                     ir::DeclKind::AssociatedFunction,
                     item,
                 )?;
-                registry.function_ids.push(id);
-                registry.callable_sources.push(CallableSource::Associated {
+                let source = CallableSource::Associated {
                     implementation,
                     item,
-                });
+                };
+                if program.in_prelude(block.module) {
+                    prelude_callables.push((id, source));
+                } else {
+                    registry.function_ids.push(id);
+                    registry.callable_sources.push(source);
+                }
                 ids.push(id);
             }
             registry.associated_ids.push(ids);
+        }
+        for (id, source) in prelude_callables {
+            registry.function_ids.push(id);
+            registry.callable_sources.push(source);
         }
         for entry in catalog_builder.base_declarations() {
             if entry.info.kind != ir::DeclKind::Trait {
@@ -14207,9 +15201,13 @@ impl PlanCtx {
             )?];
             registry.declarations[id.index as usize].visibility = declaration.visibility.clone();
         }
-        for (index, function) in program.functions.iter().enumerate() {
+        for (position, source) in registry.callable_sources.iter().enumerate() {
+            let CallableSource::Free(index) = *source else {
+                continue;
+            };
+            let function = &program.functions[index];
             clone_visibility(&function.visibility, budget)?;
-            let id = registry.function_ids[index];
+            let id = registry.function_ids[position];
             registry.declarations[id.index as usize].visibility = function.visibility.clone();
         }
         for (index, declaration) in program.traits.iter().enumerate() {
@@ -14892,11 +15890,33 @@ impl PlanCtx {
             registry,
             state: Arc::new(Mutex::new(state)),
             shared_env: None,
+            closed_roots: Arc::from([]),
             budget: budget.clone(),
         };
         plan.validate_inherent_overlaps(budget)?;
         plan.publish_trait_world(program)?;
+        plan.closed_roots = plan.compute_closed_roots()?;
         Ok(plan)
+    }
+    fn compute_closed_roots(&self) -> Result<Arc<[usize]>, String> {
+        let mut roots = Vec::new();
+        for index in 0..self.callable_count() {
+            self.budget.charge_work(1)?;
+            let declaration = self.callable_decl(index)?;
+            if matches!(
+                self.callable_provider(declaration)?,
+                CallableProvider::Source { .. }
+            ) && !self.callable_env(declaration)?.is_generic()
+                && !self.is_prelude_decl(declaration)?
+            {
+                roots.push(index);
+            }
+        }
+        Ok(roots.into())
+    }
+    /// Nongeneric Source callable indices in callable order (plan roots).
+    pub fn closed_roots(&self) -> &[usize] {
+        &self.closed_roots
     }
     fn publish_trait_world(&mut self, program: &Program) -> Result<(), String> {
         let budget = &self.budget;
@@ -15200,6 +16220,19 @@ impl PlanCtx {
             .catalog
             .declaration(id)
             .map_or(tr::DeclOrigin::Source, |d| d.origin))
+    }
+    /// Whether a declaration lives in the embedded native prelude library.
+    /// Prelude items are library code: not user telemetry, and nongeneric
+    /// prelude bodies are instantiated only on demand.
+    pub fn is_prelude_decl(&self, id: ir::DeclId) -> Result<bool, String> {
+        let Some(prelude) = self.program.prelude_module else {
+            return Ok(false);
+        };
+        let module = self.declaration(id)?.path.module;
+        self.program
+            .modules
+            .is_descendant(module, prelude)
+            .map_err(module_diagnostic)
     }
     pub fn callable_provider(&self, id: ir::DeclId) -> Result<CallableProvider, String> {
         self.declaration(id)?;
@@ -16193,6 +17226,7 @@ impl SchemaAdapter {
             world: None,
             validated: Arc::new(HashMap::new()),
             shared_env: None,
+            closed_roots: Arc::from([]),
         })
     }
     fn error(&self, e: String) -> tr::FactsError {
@@ -16626,6 +17660,7 @@ fn metered_type_equal(
         (ir::Ty::Slice { element: a }, ir::Ty::Slice { element: b }) => {
             metered_type_equal(a, b, budget, depth + 1)
         }
+        (ir::Ty::Dyn(a), ir::Ty::Dyn(b)) => Ok(a.principal == b.principal),
         (
             ir::Ty::Ref {
                 kind: a,

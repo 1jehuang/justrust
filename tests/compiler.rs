@@ -2,6 +2,9 @@
 //! No guest rustc, shell, linker, or third-party test dependency is required.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
+#[path = "support/native_prelude.rs"]
+mod native_prelude;
+
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -489,6 +492,11 @@ fn checked_runtime_arithmetic_traps_exit_101() {
 }
 
 #[test]
+fn formerly_unsupported_scalar_println_executes() {
+    runs("fn main() { println!(\"{}\", 1); }", "1\n", 2);
+}
+
+#[test]
 fn invalid_programs_fail_without_publishing_an_executable() {
     let cases = [
         ("unknown value", "fn main() { let x = missing; }"),
@@ -528,9 +536,13 @@ fn invalid_programs_fail_without_publishing_an_executable() {
         ),
         ("main arguments", "fn main(x: i32) {}"),
         ("main return", "fn main() -> i32 { 0 }"),
-        ("formatted println", "fn main() { println!(\"{}\", 1); }"),
+        (
+            "missing format argument",
+            "fn main() { println!(\"{} {}\", 1); }",
+        ),
         ("nonliteral println", "fn main() { println!(1); }"),
-        ("for loop", "fn main() { for x in 0..2 {} }"),
+        ("refutable for pattern", "fn main() { for 1 in 0..2 {} }"),
+        ("noniterable for loop", "fn main() { for x in 2 {} }"),
         ("struct", "struct X {} fn main() {}"),
         ("malformed syntax", "fn main( {"),
     ];
@@ -735,7 +747,6 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                     Key::new(101, vec![]),
                     Key::new(104, vec![]),
                     Key::new(113, vec![]),
-                    Key::new(115, vec![]),
                 ];
                 for index in 0..3 {
                     expected.push(Key::new(110, vec![index]));
@@ -752,7 +763,7 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                 }
                 // Available catalog recipes add real universal proof nodes, but
                 // never eager concrete roots. Keep every historical source key.
-                let program = compiler::frontend::parse(source).unwrap();
+                let program = native_prelude::parse(source).unwrap();
                 let plan = compiler::frontend::PlanCtx::from_program(
                     &program,
                     &compiler::ir::PlanBudget::default(),
@@ -762,11 +773,20 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                     let declaration = plan.callable_decl(index).unwrap();
                     match plan.callable_provider(declaration).unwrap() {
                         compiler::frontend::CallableProvider::Source { .. } => {
-                            assert!(index < result.functions);
+                            if plan.is_prelude_decl(declaration).unwrap() {
+                                expected.push(Key::new(110, vec![index as u64]));
+                            } else {
+                                assert!(index < result.functions);
+                            }
+                            if plan.callable_env(declaration).unwrap().is_generic() {
+                                for kind in [111, 112, 115] {
+                                    expected.push(Key::new(kind, vec![index as u64]));
+                                }
+                            }
                         }
                         compiler::frontend::CallableProvider::Recipe { .. } => {
                             assert!(index >= result.functions);
-                            for kind in [110, 111, 112] {
+                            for kind in [110, 111, 112, 115] {
                                 expected.push(Key::new(kind, vec![index as u64]));
                             }
                         }
@@ -775,6 +795,8 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                         }
                     }
                 }
+                // Embedded native library files are independent SOURCE facts.
+                expected.extend(native_prelude::library_source_keys());
                 assert_eq!(report.node_evaluations.len(), expected.len());
                 for key in expected {
                     let entries: Vec<_> = report

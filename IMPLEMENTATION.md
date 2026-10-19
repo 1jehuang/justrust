@@ -73,6 +73,20 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       124-binary hosted gate. Actual trailing semicolon syntax preserves source
       Unit obligations separately from intrinsic runtime loop divergence.
       Expression-position while-let, chains and refutable payload matrices remain open.
+- [x] Genuine statement-position integer range for loops (`start..end` and
+      `start..=end`) through existing checked while/match IR. Bounds evaluate
+      once, left to right, before body-only source bindings. Pre-body advancement
+      preserves break/continue/labels and never increments an inclusive maximum.
+      `tests/loops.rs` compares stock execution and invalid type/scope/control
+      cases with native check/build at one and eight workers. By-value Copy-array
+      iteration snapshots its iterable once, advances before the body, and supports
+      existing irrefutable scalar/tuple/array patterns. Referenced fixed arrays
+      (`&array` and `&mut array`) now yield genuine scalar/unit element loans
+      through typed runtime Place projections, with one source body and canonical
+      whole-array overlap/initialization authority. FOR-LOANS.md records the
+      contract and explicit boundaries. Structured referenced elements, runtime
+      slices, SCC-born item loans retained across backedges, non-Copy by-value
+      elements, adapters and expression-position for loops remain open.
 - [x] Genuine let-else with old-frontier initializer/else validation, dedicated
       persistent-binding IR and checked failure divergence. LET-ELSE.md records
       stock33/native132 cells per bootstrap profile,26 public authority controls
@@ -94,6 +108,14 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       retain conservative coverage; cyclic metadata and resource failures fail
       closed. This is not general Rust pattern grammar or full compatibility.
 - [x] Fieldless nominal enums and scalar/enum match with exhaustive coverage.
+- [x] Scoped local numeric literal constraints from later scalar uses, returns,
+      assignments and monomorphic calls, before existing peer-aware fallback.
+      `LOCAL-LITERALS.md` records 28 stock-differential witnesses and unchanged
+      Collatz exact native check/build/run acceptance. A further 27 iterable
+      differential cases plus an empty-array ambiguity control propagate loop
+      item evidence into range bounds and direct array/repeat literals,
+      unlocking unchanged GCD/Fibonacci exact output. General structured and
+      reference inference remain open, with no new graph kinds or ratchet changes.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
 - [x] Payload enums, typed downcasts, bounded selection proofs and native tagged values.
 - [x] Fixed arrays, repeat effects, literal indexing and private by-value array ABI.
@@ -106,6 +128,12 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       refutable children are extended by PATTERN-DECISIONS.md.
 - [x] Genuine 64-bit usize and ordered, bounds-checked runtime array operations.
 - [x] Nonescaping local references, canonical provenance and last-use loan analysis.
+- [x] Explicit borrows of trivial-drop value temporaries (`&P { .. }`, `&f()`,
+      `&mut 4`, and unit constructors), with statement temporary cleanup and
+      syntactic let-initializer lifetime extension. `tests/generic_references.rs`
+      compares runtime output with stock Rust and rejects statement-temporary
+      escapes. Destructor-bearing temporaries and projected value borrows remain
+      explicit unsupported boundaries, not full temporary-lifetime compatibility.
 - [x] Noescape reference parameters and genuine expected-site carrier reborrows.
 - [x] Shared/mutable static input-path returns with explicit or elided regions.
 - [x] Builtin reference field projections and capability-sensitive mixed inputs.
@@ -246,6 +274,7 @@ missing-file changes invalidate only justified consumers without stale lookup.
 - [x] Native i128/u128 scalar arithmetic, numeric casts, transport and exact
       typed constants under INTEGER128.md (not platform ABI or full Rust).
 - [x] Bounded Unicode `char` literals, scalar transport, Copy/Clone/Sized and comparisons (CHARS.md). Character casts `char as int`/`u8 as char` are implemented (CHAR-CASTS.md).
+- [x] Exact ASCII byte literals and byte escapes with rigid `u8` typing, pattern/range and macro forwarding support (BYTE-LITERALS.md). Byte strings remain unsupported.
 - [x] Character literal patterns and integer/char range patterns with exact interval exhaustiveness (SCALAR-PATTERNS.md).
 - [x] Width-correct primitive integer `.leading_zeros()` and unchanged original
       core exponent-estimator module acceptance under LEADING-ZEROS.md. This is
@@ -277,6 +306,8 @@ missing-file changes invalidate only justified consumers without stale lookup.
 - [ ] Complete nested/or/range/ref/@/slice patterns, guards, match ergonomics,
       exhaustiveness/usefulness, conditional pattern forms beyond delivered
       IF-LET.md/WHILE-LET.md/LET-ELSE.md slices and destructuring assignment.
+      Delivered: match ergonomics (default binding modes, `ref`/`ref mut`,
+      `&pat`, enum matches through dereferences), see MATCH-ERGONOMICS.md.
 - [ ] Extend bidirectional/local inference, coercion sites, partial type holes,
       omitted method arguments and control-flow joins, preserving rigid universal
       parameters and diagnostics for unresolved constraints.
@@ -366,6 +397,7 @@ cleanup failures.
 - [ ] Implement trait-based autoderef, overloaded operators/indexing, coercions,
       dyn compatibility/vtables, unsizing and `?Sized` with authoritative layout
       and receiver adjustments rather than name- or pointer-based permissions.
+      Delivered: `&dyn`/`&mut dyn` vtables, unsizing, E0038 (TRAIT-OBJECTS.md).
 - [ ] Complete closures and capture modes, callable traits, function values,
       iterator/for desugaring, async/await/Future state machines and pinning.
       Include capture lifetimes, suspension-safe moves, cancellation and Drop.
@@ -512,6 +544,12 @@ host macro and compiles its generated target source.
       passed. See `LITERAL-OUTPUT.md`; general formatting, buffering and platform
       IO compatibility remain open.
 
+- [x] Native bare `{}` scalar print formatting for integers through 128 bits,
+      bool, char and shared str, with once-only left-to-right argument evaluation
+      and shared place loans. Frozen scalar stock corpus and graph-integrity
+      gates pass; first full-program corpus source `01_hello` executes with exact
+      stock stdout. See `FORMAT-SCALARS.md`; general Rust formatting remains open.
+
 - [x] Bounded `assert_eq!`/`assert_ne!` use existing Unit/Bool/integer/float
       comparisons, evaluate operands once in source order, and retain checked
       literal panic locations. Stock-first 27-source debug/release CLI and graph
@@ -538,6 +576,14 @@ host macro and compiles its generated target source.
 - [ ] Implement allocation/deallocation, startup/termination, panic abort/unwind,
       cleanup/personality support, TLS, threads, atomics/memory ordering, intrinsics,
       target features and inline/global assembly for the declared target contract.
+- [x] First Linux x86-64 heap foundation: exact unsafe raw syscall ABI primitive,
+      ordinary per-file Rust-source native_heap library with checked byte-address
+      arithmetic/null helpers, bounded mmap layout/error policy and private
+      non-Copy allocation ownership with consuming munmap. Real mapping-boundary
+      scalar access tests require native memory widths rather than qword local
+      carriers. See NATIVE-HEAP.md. This does not close allocation compatibility:
+      general layouts, pointer methods, realloc, automatic Drop, Box/Vec/String
+      and full alloc/core/std remain open.
 - [ ] Provide debug/source information and runtime failure/exit diagnostics.
       Expand architectures/OSes only with target-specific executable evidence.
 

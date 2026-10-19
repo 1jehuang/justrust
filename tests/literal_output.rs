@@ -1,9 +1,12 @@
 //! Frozen20 literal-output corpus, not full formatting support.
 //! Stock-first receipt: /home/jeremy/.jcode/scratch/literal-output-stock/results.json
 //! Receipt SHA256 fc6e2ce07ef6f51abdfa87952c6b6a51ee965eeab1925a59573de897bd0aba4b
-//! Native: 13 live, 7 unsupported. Stock: 16 pass, 4 reject.
+//! Native: 16 live, 4 unsupported/invalid. Stock: 16 pass, 4 reject.
 //! Retained sources immutable. Author ran stock only. Root owns debug/release gates.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/native_prelude.rs"]
+mod native_prelude;
+
 use justrust_engine::compiler::{self, frontend, ir};
 use justrust_engine::{Key, Report};
 use std::fs::{self, OpenOptions};
@@ -274,8 +277,8 @@ warning: 1 warning emitted
             source_bytes: 44,
             source_fingerprint: 12956414326750447664,
             source_sha256: r###"7fbb79ce92721d460eac1913a4bb2ed7e186ca6af30b5b052db3fa1cad4e052d"###,
-            native: Native::Unsupported,
-            boundary: r###"print! formatting placeholders are unsupported"###,
+            native: Native::Live,
+            boundary: r###""###,
             phase: "parse",
             stock_compile_code: 0,
             stock_code: Some(0),
@@ -290,8 +293,8 @@ warning: 1 warning emitted
             source_bytes: 47,
             source_fingerprint: 6610763975645302790,
             source_sha256: r###"b24a0e384cde9676a1b8a0694304cc1676bb82cd3da2f77c9259fc79e3331bdd"###,
-            native: Native::Unsupported,
-            boundary: r###"eprint! formatting placeholders are unsupported"###,
+            native: Native::Live,
+            boundary: r###""###,
             phase: "parse",
             stock_compile_code: 0,
             stock_code: Some(0),
@@ -346,7 +349,7 @@ error: aborting due to 1 previous error
             source_fingerprint: 15547478099473764768,
             source_sha256: r###"7963f3634c5ce0856c43b4c14c172897f3d99ea5cda86d4448f79261cba988a8"###,
             native: Native::Unsupported,
-            boundary: r###"eprintln! formatting arguments are unsupported"###,
+            boundary: r###"format argument count mismatch"###,
             phase: "parse",
             stock_compile_code: 1,
             stock_code: None,
@@ -376,8 +379,8 @@ error: aborting due to 1 previous error
             source_bytes: 34,
             source_fingerprint: 13385027587059320723,
             source_sha256: r###"0af90f83d611c3f65da515068267eafddfe5eee8476b7a06fad5aabc8c526af9"###,
-            native: Native::Unsupported,
-            boundary: r###"eprintln! formatting placeholders are unsupported"###,
+            native: Native::Live,
+            boundary: r###""###,
             phase: "parse",
             stock_compile_code: 0,
             stock_code: Some(0),
@@ -671,7 +674,7 @@ fn frozen_literal_output_sources_and_strict_phases() {
             }
         });
     }
-    assert_eq!(partition, [13, 7]);
+    assert_eq!(partition, [16, 4]);
     failures.finish();
 }
 fn stock_all() {
@@ -766,7 +769,7 @@ fn evaluated_once(report: &Report, kind: u32, index: usize, case: &Case) {
     assert_eq!(nodes[0].1, 1, "{}: repeated {key:?}", case.name);
 }
 fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, check: bool) {
-    let program = frontend::parse(case.source).expect("positive frozen source parses");
+    let program = native_prelude::parse(case.source).expect("positive frozen source parses");
     frontend::check(&program).expect("all bodies checked independent of reachability");
     let plan = frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
     assert_eq!(compiled.source_bytes, case.source.len());
@@ -781,7 +784,7 @@ fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, chec
         evaluated_once(&compiled.report, 110, index, case);
         let universal = match plan.callable_provider(declaration).unwrap() {
             frontend::CallableProvider::Source { .. } => {
-                source_bodies += 1;
+                source_bodies += usize::from(!plan.is_prelude_decl(declaration).unwrap());
                 plan.callable_env(declaration).unwrap().is_generic()
             }
             frontend::CallableProvider::Recipe { .. } => true,

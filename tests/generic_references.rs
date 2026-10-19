@@ -542,3 +542,32 @@ fn main(){if run()==7{println!("generic references oracle ok");}}
         false,
     );
 }
+
+#[test]
+fn accepts_borrowed_value_temporaries_with_rust_scopes() {
+    runs(
+        r###"struct P{a:i32}struct W<T>(T);struct S;impl S{fn b(&self)->i32{3}}
+fn f(p:&P)->i32{p.a}fn g(x:&mut i32)->i32{*x+=1;*x}fn mk(a:i32)->P{P{a}}fn s(x:&[i64])->i64{x[1]}fn u(_s:&S)->i32{4}
+fn run()->i32{let x=1;let r=&P{a:x};let t=(&mk(2),);let w=[&P{a:3}];let m=&mut P{a:x};m.a+=1;
+let mut i=0;while f(&P{a:i})<3{i+=1;}
+let n=f(&mk(9))+f(&mk(1))+g(&mut 4)+(s(&[1,2]) as i32)+u(&S)+S.b();
+r.a+t.0.a+w[0].a+m.a+i+n}
+fn main(){if run()==1+2+3+2+3+10+5+2+4+3{println!("generic references oracle ok");}}
+"###,
+        "generic references oracle ok\n",
+    );
+}
+
+#[test]
+fn rejects_statement_temporary_borrow_escaping_its_statement() {
+    for source in [
+        r###"struct P{a:i32}fn id(p:&P)->&P{p}fn run(x:i32)->i32{let r=id(&P{a:x});r.a}
+fn main(){if run(7)==7{println!("generic references oracle ok");}}
+"###,
+        r###"struct P{a:i32}fn run(x:i32)->i32{let r;r=&P{a:x};r.a}
+fn main(){if run(7)==7{println!("generic references oracle ok");}}
+"###,
+    ] {
+        rejects("statement_temporary_escape", source, true);
+    }
+}

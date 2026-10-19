@@ -195,7 +195,7 @@ impl<'facts> CoverageMatrix<'facts> {
             }
             let next = depth.checked_add(1).ok_or_else(overflow)?;
             match ty {
-                Ty::Never | Ty::Slice { .. } | Ty::Str | Ty::AssociatedType(_) => {
+                Ty::Never | Ty::Slice { .. } | Ty::Str | Ty::Dyn(_) | Ty::AssociatedType(_) => {
                     applicable = false
                 }
                 Ty::Tuple(fields) => {
@@ -244,6 +244,9 @@ impl<'facts> CoverageMatrix<'facts> {
                         }
                     }
                 }
+                // References stay opaque for inhabitance (`&!` is not treated
+                // as empty, and referents may be recursive). Rows still test
+                // through them with explicit Deref projections.
                 Ty::Param(_)
                 | Ty::Ref { .. }
                 | Ty::RawPtr { .. }
@@ -376,7 +379,10 @@ impl<'facts> CoverageMatrix<'facts> {
         for (index, step) in path.iter().enumerate() {
             self.work(1)?;
             match step {
-                Projection::Field(_) | Projection::ConstantIndex(_) => {}
+                Projection::DynamicIndex(_) => {
+                    return Err("runtime index is not a source pattern projection".into());
+                }
+                Projection::Field(_) | Projection::ConstantIndex(_) | Projection::Deref => {}
                 Projection::Downcast(variant) => {
                     let mut found = false;
                     for previous in earlier {
@@ -396,7 +402,6 @@ impl<'facts> CoverageMatrix<'facts> {
                         return Err("coverage payload path lacks an earlier exact tag".into());
                     }
                 }
-                _ => return Err("unsupported coverage projection".into()),
             }
         }
         Ok(())

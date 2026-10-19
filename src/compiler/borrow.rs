@@ -1107,7 +1107,10 @@ impl CarrierBuilder<'_, '_> {
                 if let Some((index, _)) = view.parameter_actual(parameter).map_err(|_| Exhausted)? {
                     let offset = match target {
                         ir::Callee::Direct(_) => 0,
-                        ir::Callee::TraitItem(call) => 1 + call.trait_ref.args.len(),
+                        ir::Callee::TraitItem(call)
+                        | ir::Callee::Virtual(ir::VirtualCall { call }) => {
+                            1 + call.trait_ref.args.len()
+                        }
                     };
                     if let Some(source_index) = index.checked_sub(offset) {
                         for row in evidence.trace().type_actual_regions.iter().filter(|row| {
@@ -2380,6 +2383,9 @@ impl CarrierBuilder<'_, '_> {
             // and loan set at the same fixed carrier position. Length metadata
             // contributes no provenance.
             Rvalue::ArrayToSlice { reference } => self.operand_value(state, reference),
+            // A trait object carrier holds exactly the input reference's loan
+            // and origins; the vtable word is static metadata.
+            Rvalue::RefToDyn { reference, .. } => self.operand_value(state, reference),
             Rvalue::Borrow(id) => {
                 let site = &self.f.loan_sites[id.0];
                 let (targets, trace, failure) = self.lens(state, &site.place)?;
@@ -3293,7 +3299,10 @@ impl CarrierBuilder<'_, '_> {
             };
             let actuals = match target {
                 ir::Callee::Direct(target) => target.type_args.as_ref(),
-                ir::Callee::TraitItem(target) => target.method_args.as_ref(),
+                ir::Callee::TraitItem(target)
+                | ir::Callee::Virtual(ir::VirtualCall { call: target }) => {
+                    target.method_args.as_ref()
+                }
             };
             self.budget.spend(actuals.len())?;
             if !actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. })) {
@@ -3353,7 +3362,10 @@ impl CarrierBuilder<'_, '_> {
                     };
                     let actuals = match target {
                         ir::Callee::Direct(target) => target.type_args.as_ref(),
-                        ir::Callee::TraitItem(target) => target.method_args.as_ref(),
+                        ir::Callee::TraitItem(target)
+                        | ir::Callee::Virtual(ir::VirtualCall { call: target }) => {
+                            target.method_args.as_ref()
+                        }
                     };
                     self.budget.spend(actuals.len())?;
                     if !actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. })) {
@@ -4119,6 +4131,7 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
         | Rvalue::Unary { value: op, .. }
         | Rvalue::Repeat { value: op, .. }
         | Rvalue::ArrayToSlice { reference: op }
+        | Rvalue::RefToDyn { reference: op, .. }
         | Rvalue::SliceLen { slice: op }
         | Rvalue::CharToInt { value: op, .. }
         | Rvalue::U8ToChar { value: op }
@@ -4133,7 +4146,13 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
             visit_operand(left, &mut visit);
             visit_operand(right, &mut visit);
         }
-        Rvalue::Aggregate { fields, .. } | Rvalue::EnumVariant { fields, .. } => {
+        Rvalue::NativeSyscall(fields)
+        | Rvalue::Aggregate { fields, .. }
+        | Rvalue::EnumVariant { fields, .. }
+        | Rvalue::Intrinsic { args: fields, .. }
+        | Rvalue::Format {
+            arguments: fields, ..
+        } => {
             for op in fields {
                 visit_operand(op, &mut visit);
             }
@@ -4154,7 +4173,13 @@ fn overlap(a: &CanonicalPlace, b: &CanonicalPlace, budget: &mut Budget) -> Resul
     }
     for (a, b) in a.projection.iter().zip(&b.projection) {
         // Safe Rust's ordinary indexed borrows overlap the entire array in B1.
-        if matches!(a, Projection::ConstantIndex(_)) || matches!(b, Projection::ConstantIndex(_)) {
+        if matches!(
+            a,
+            Projection::ConstantIndex(_) | Projection::DynamicIndex(_)
+        ) || matches!(
+            b,
+            Projection::ConstantIndex(_) | Projection::DynamicIndex(_)
+        ) {
             return Ok(true);
         }
         if a != b {

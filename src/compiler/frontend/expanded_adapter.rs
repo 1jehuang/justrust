@@ -64,7 +64,11 @@ pub(super) fn literal_buffer(
     match parts.value.kind {
         TokenKind::Literal {
             kind:
-                LiteralKind::Integer | LiteralKind::Float | LiteralKind::String | LiteralKind::Char,
+                LiteralKind::Integer
+                | LiteralKind::Float
+                | LiteralKind::String
+                | LiteralKind::Char
+                | LiteralKind::Byte,
             ..
         } => {}
         TokenKind::Ident(ident)
@@ -341,14 +345,18 @@ fn push_logical(
                     )
                 }
                 TokenKind::Literal {
-                    kind: LiteralKind::Char,
+                    kind: kind @ (LiteralKind::Char | LiteralKind::Byte),
                     spelling,
                 } => {
                     let text = session.symbol(spelling).map_err(transport_error)?;
                     output.push_expanded(
                         session,
                         text,
-                        ParserTokenKind::Char,
+                        if kind == LiteralKind::Byte {
+                            ParserTokenKind::Byte
+                        } else {
+                            ParserTokenKind::Char
+                        },
                         &[part(session, token.span)?],
                         None,
                     )
@@ -392,7 +400,7 @@ fn push_logical(
                 TokenKind::Literal { .. } => Err(failure(
                     session,
                     token.span,
-                    "raw, byte and C literals are unsupported",
+                    "raw, byte string and C literals are unsupported",
                 )),
                 TokenKind::Opaque(_) => {
                     output.push_opaque_literal(session, token, part(session, token.span)?)
@@ -1100,7 +1108,7 @@ mod tests {
         let released = budget.snapshot();
         assert!(released.retained_bytes < live.retained_bytes);
         assert_eq!(released.temporary_bytes, live.temporary_bytes);
-        for argument in ["(b'x')", "(r\"raw\")", "(b\"bytes\")", "(c\"C\")"] {
+        for argument in ["(r\"raw\")", "(b\"bytes\")", "(c\"C\")"] {
             let mut source = fixture_rules("($x:literal)=>{$x};", argument);
             let buffer = run(&mut source).unwrap();
             let view = super::super::TokenCursor::new(&buffer).current();
@@ -1146,8 +1154,25 @@ mod tests {
     }
 
     #[test]
+    fn byte_literals_keep_spelling_kind_and_opaque_literal_forwarding() {
+        let mut source = fixture("b'x'");
+        let buffer = run(&mut source).unwrap();
+        assert_eq!(buffer[0].kind, ParserTokenKind::Byte);
+        assert_eq!(buffer[0].text, "b'x'");
+        assert!(buffer[0].name.is_none());
+        let mut source = fixture_rules("($x:literal)=>{$x};", "(b'\\xff')");
+        let buffer = run(&mut source).unwrap();
+        let view = super::super::TokenCursor::new(&buffer).current();
+        let isolated = buffer
+            .opaque_literal_buffer(&view, &mut source.names)
+            .unwrap();
+        assert_eq!(isolated[0].kind, ParserTokenKind::Byte);
+        assert_eq!(isolated[0].text, "b'\\xff'");
+    }
+
+    #[test]
     fn unsupported_expanded_namespaces_literals_and_tuple_metadata_are_explicit() {
-        for output in ["(1,2).0.1", "'a", "self", "r\"raw\"", "b'x'", "\"a\\\nb\""] {
+        for output in ["(1,2).0.1", "'a", "self", "r\"raw\"", "\"a\\\nb\""] {
             let mut source = fixture(output);
             let error = run(&mut source).unwrap_err();
             assert_eq!(

@@ -26,9 +26,13 @@ milestone, not full Rust support (see RUST-COMPATIBILITY.md).
 Landed since bf4ad37: char literal/range patterns (671f9090f), argument-position
 `impl Trait` (8347eaf25), rvalue method receivers (2dcaa3841), char casts.
 
-0/20 pass. First native diagnostics: derive attribute 8, `for` 4,
-string literal in expression position 4, `vec!`/`write!` style macro 2,
-const 1, byte literal 1, `Fn` bound syntax 1.
+3/20 pass: `01_hello`, unchanged `03_collatz`, and unchanged `05_gcd_fib`
+check, build and execute with exact frozen stock stdout. The numeric programs
+combine native scalar formatting, loops and scoped future-use numeric literal
+constraints, including bidirectional range/array item evidence
+(`LOCAL-LITERALS.md`). Other programs retain explicit rejection diagnostics
+until their remaining features land. This is not full formatting or full Rust
+support. See `FORMAT-SCALARS.md`.
 
 ## Ranked blockers (feature -> programs blocked)
 

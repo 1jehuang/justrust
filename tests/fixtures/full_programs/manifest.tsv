@@ -14,11 +14,11 @@
 #   needs  = comma-separated feature tags (FULL-PROGRAMS.md glossary) the
 #            program requires beyond the already-supported core. Keep this
 #            accurate when a feature lands: delete the tag from every line.
-01_hello	fail	fmt-display,str
+01_hello	pass
 02_fizzbuzz	fail	fmt-display,str,string,for
-03_collatz	fail	fmt-display,for
+03_collatz	pass
 04_primes_sieve	fail	fmt-display,for,vec,iter,match-ergonomics
-05_gcd_fib	fail	fmt-display,for,array-iter
+05_gcd_fib	pass
 06_matrix	fail	fmt-display,for,const,autoderef,vec,iter,closure,string
 07_bank_account	fail	fmt-display,fmt-debug,str,string,vec
 08_enum_state_machine	fail	fmt-display,fmt-debug,derive,for,iter,match-ergonomics

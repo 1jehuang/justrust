@@ -119,14 +119,93 @@ pub(super) struct CarrierEffectProof {
     effects: Arc<borrow::CarrierEffects>,
 }
 
-/// Published only by the root's acyclic universal-effects join. Absence is
-/// conservative declaration authority, never a successful family proof.
+/// Published only by exact universal proof readers. Absence is conservative
+/// declaration authority, never a successful family proof.
 #[derive(Clone, Debug)]
 pub(super) struct CarrierEffectTable {
     templates: Arc<[VerifiedTemplateCfg]>,
     budget: super::ir::PlanBudget,
 }
 impl CarrierEffectTable {
+    fn validate_template(
+        template: &VerifiedTemplateCfg,
+        budget: &super::ir::PlanBudget,
+    ) -> Result<(), String> {
+        if !template.budget().same_authority(budget)
+            || template.facts().phase() != FactsPhase::Universal
+            || !template.analysis().passed()
+        {
+            return Err("carrier effect table contains foreign or unsuccessful template".into());
+        }
+        if let Some(proof) = template.carrier_effects()
+            && (!Arc::ptr_eq(&proof.source, template.source())
+                || !Arc::ptr_eq(&proof.function, template.function())
+                || !Arc::ptr_eq(&proof.facts, template.facts())
+                || !Arc::ptr_eq(&proof.analysis, template.analysis()))
+        {
+            return Err("carrier effect proof changed its exact verified inputs".into());
+        }
+        Ok(())
+    }
+    fn validate_pair(
+        previous: &VerifiedTemplateCfg,
+        template: &VerifiedTemplateCfg,
+    ) -> Result<(), String> {
+        if !Arc::ptr_eq(previous.facts().world(), template.facts().world()) {
+            return Err("carrier effect table mixes canonical worlds".into());
+        }
+        if previous.facts().declaration() == template.facts().declaration()
+            && (!Arc::ptr_eq(previous.source(), template.source())
+                || !Arc::ptr_eq(previous.function(), template.function())
+                || !Arc::ptr_eq(previous.analysis(), template.analysis())
+                || !Arc::ptr_eq(previous.facts(), template.facts())
+                || !match (previous.carrier_effects(), template.carrier_effects()) {
+                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                    (None, None) => true,
+                    _ => false,
+                })
+        {
+            return Err("carrier effect table has conflicting provider proof identities".into());
+        }
+        Ok(())
+    }
+    fn validate_reference_actual_calls(
+        caller: &VerifiedTemplateCfg,
+        templates: &[VerifiedTemplateCfg],
+        budget: &super::ir::PlanBudget,
+    ) -> Result<(), String> {
+        for expression in &caller.source().exprs {
+            budget.charge_work(1)?;
+            let super::ir::ExprKind::Call { target, .. } = &expression.kind else {
+                continue;
+            };
+            let actuals = match target {
+                super::ir::Callee::Direct(target) => target.type_args.as_ref(),
+                super::ir::Callee::TraitItem(call)
+                | super::ir::Callee::Virtual(super::ir::VirtualCall { call }) => {
+                    call.method_args.as_ref()
+                }
+            };
+            budget.charge_work(actuals.len())?;
+            if !actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. })) {
+                continue;
+            }
+            let super::ir::Callee::Direct(target) = target else {
+                return Err("unsupported abstract method reference-actual body admission".into());
+            };
+            budget.charge_work(templates.len())?;
+            let callee = std::iter::once(caller)
+                .chain(templates.iter())
+                .find(|candidate| candidate.facts().declaration() == target.declaration)
+                .ok_or("reference-actual call has no canonical universal body")?;
+            if callee.carrier_effects().is_none() {
+                return Err(
+                    "unsupported reference-actual call requires its callee's complete universal family proof".into(),
+                );
+            }
+        }
+        Ok(())
+    }
     /// `caller_validated` is true only when the borrow plan already validated
     /// this exact caller CFG against these exact facts. Otherwise the caller
     /// provenance is checked here as before.
@@ -207,9 +286,36 @@ impl CarrierEffectTable {
         }
         Ok(None)
     }
-    pub(super) fn from_verified(
+    /// A table of only the universal proofs one closed instance's calls need.
+    /// Identity and world consistency are checked exactly as in
+    /// [`Self::from_verified`]. The program-wide admission rule for
+    /// reference-actual calls is checked once by the CHECK root, not here.
+    pub(super) fn for_callees(
         templates: &[VerifiedTemplateCfg],
         budget: &super::ir::PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        Self::validated(templates, budget, false)
+    }
+    pub(super) fn admit_reference_actual_calls(
+        caller: &VerifiedTemplateCfg,
+        templates: &[VerifiedTemplateCfg],
+        budget: &super::ir::PlanBudget,
+    ) -> Result<(), String> {
+        Self::validate_template(caller, budget)?;
+        for (index, template) in templates.iter().enumerate() {
+            Self::validate_template(template, budget)?;
+            budget.charge_work(index)?;
+            Self::validate_pair(caller, template)?;
+            for previous in &templates[..index] {
+                Self::validate_pair(previous, template)?;
+            }
+        }
+        Self::validate_reference_actual_calls(caller, templates, budget)
+    }
+    fn validated(
+        templates: &[VerifiedTemplateCfg],
+        budget: &super::ir::PlanBudget,
+        admit_reference_calls: bool,
     ) -> Result<Arc<Self>, String> {
         // Both the table and its retained slice have independent Arc control
         // blocks, including the empty-table case. The caller's source slice
@@ -225,76 +331,18 @@ impl CarrierEffectTable {
             .ok_or("carrier effect table size overflow")?;
         budget.retain_bytes(bytes)?;
         for (index, template) in templates.iter().enumerate() {
-            if !template.budget().same_authority(budget)
-                || template.facts().phase() != FactsPhase::Universal
-                || !template.analysis().passed()
-            {
-                return Err(
-                    "carrier effect table contains foreign or unsuccessful template".into(),
-                );
-            }
+            Self::validate_template(template, budget)?;
             budget.charge_work(index)?;
             for previous in &templates[..index] {
-                if !Arc::ptr_eq(previous.facts().world(), template.facts().world()) {
-                    return Err("carrier effect table mixes canonical worlds".into());
-                }
-                if previous.facts().declaration() == template.facts().declaration()
-                    && (!Arc::ptr_eq(previous.source(), template.source())
-                        || !Arc::ptr_eq(previous.function(), template.function())
-                        || !Arc::ptr_eq(previous.analysis(), template.analysis())
-                        || !Arc::ptr_eq(previous.facts(), template.facts())
-                        || !match (previous.carrier_effects(), template.carrier_effects()) {
-                            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                            (None, None) => true,
-                            _ => false,
-                        })
-                {
-                    return Err(
-                        "carrier effect table has conflicting provider proof identities".into(),
-                    );
-                }
-            }
-            if let Some(proof) = template.carrier_effects()
-                && (!Arc::ptr_eq(&proof.source, template.source())
-                    || !Arc::ptr_eq(&proof.function, template.function())
-                    || !Arc::ptr_eq(&proof.facts, template.facts())
-                    || !Arc::ptr_eq(&proof.analysis, template.analysis()))
-            {
-                return Err("carrier effect proof changed its exact verified inputs".into());
+                Self::validate_pair(previous, template)?;
             }
         }
         // Universal analysis assumes declaration envelopes, never another
         // body's summary. Once every universal proof exists, independently
         // check new ordinary reference-actual calls even in unused/dead source
         // metadata. A reference-free-only callee proof is not sufficient.
-        for caller in templates {
-            for expression in &caller.source().exprs {
-                budget.charge_work(1)?;
-                let super::ir::ExprKind::Call { target, .. } = &expression.kind else {
-                    continue;
-                };
-                let actuals = match target {
-                    super::ir::Callee::Direct(target) => target.type_args.as_ref(),
-                    super::ir::Callee::TraitItem(call) => call.method_args.as_ref(),
-                };
-                budget.charge_work(actuals.len())?;
-                if !actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. })) {
-                    continue;
-                }
-                let super::ir::Callee::Direct(target) = target else {
-                    return Err(
-                        "unsupported abstract method reference-actual body admission".into(),
-                    );
-                };
-                budget.charge_work(templates.len())?;
-                let callee = templates
-                    .iter()
-                    .find(|candidate| candidate.facts().declaration() == target.declaration)
-                    .ok_or("reference-actual call has no canonical universal body")?;
-                if callee.carrier_effects().is_none() {
-                    return Err("unsupported reference-actual call requires its callee's complete universal family proof".into());
-                }
-            }
+        for caller in templates.iter().filter(|_| admit_reference_calls) {
+            Self::validate_reference_actual_calls(caller, templates, budget)?;
         }
         Ok(Arc::new(Self {
             templates: Arc::from(templates),
@@ -369,7 +417,10 @@ fn source_requires_carrier_proof(
         {
             let actuals = match target {
                 super::ir::Callee::Direct(target) => target.type_args.as_ref(),
-                super::ir::Callee::TraitItem(call) => call.method_args.as_ref(),
+                super::ir::Callee::TraitItem(call)
+                | super::ir::Callee::Virtual(super::ir::VirtualCall { call }) => {
+                    call.method_args.as_ref()
+                }
             };
             budget.charge_work(actuals.len()).map_err(classify)?;
             required |= actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. }));
@@ -743,14 +794,21 @@ pub(super) enum RecipeAdmission {
     IntrinsicLimit(RecipeLimit),
 }
 
-fn ownership_state_bytes(locals: usize, paths: usize, blocks: usize) -> Result<usize, Exhausted> {
+fn ownership_state_bytes(
+    locals: usize,
+    paths: usize,
+    selected_slots: usize,
+    blocks: usize,
+) -> Result<usize, Exhausted> {
     let per_state = locals
         .div_ceil(64)
         .checked_mul(2)
         .and_then(|n| n.checked_add(paths.div_ceil(64).checked_mul(3)?))
-        .and_then(|n| n.checked_add(paths))
         .ok_or(Exhausted)?
         .checked_mul(8)
+        .and_then(|n| {
+            n.checked_add(selected_slots.checked_mul(std::mem::size_of::<(usize, usize)>())?)
+        })
         .and_then(|n| n.checked_add(std::mem::size_of::<State>()))
         .ok_or(Exhausted)?;
     per_state
@@ -838,8 +896,15 @@ pub(super) fn preflight_recipe_counts(
             .and_then(|n| n.checked_add(counts.lifetime_dependency_memberships))
             .and_then(|n| n.checked_add(counts.target_memberships))
             .ok_or(Exhausted)?;
-        let ownership_bytes =
-            ownership_state_bytes(counts.locals, counts.path_nodes, counts.blocks)?;
+        // Sparse variant-selection storage carries at most one entry per enum
+        // path node, and `variant_offsets` is a safe preflight upper bound on
+        // that count because every such node has at least one variant.
+        let ownership_bytes = ownership_state_bytes(
+            counts.locals,
+            counts.path_nodes,
+            counts.variant_offsets,
+            counts.blocks,
+        )?;
         let mut borrow_bytes = if origins != 0 || counts.carrier_slots != 0 {
             borrow::plan_storage_bytes(
                 counts.locals,
@@ -1327,6 +1392,12 @@ fn preflight_with_plan(
                     }
                     element
                 }
+                Projection::DynamicIndex(_) => {
+                    let Ty::Array { element, .. } = ty else {
+                        return Ok(());
+                    };
+                    element
+                }
                 Projection::Downcast(variant) => {
                     let Ty::Enum(enumeration) = ty else {
                         return Ok(());
@@ -1478,6 +1549,7 @@ fn preflight_with_plan(
                     | Rvalue::LeadingZeros { value: op }
                     | Rvalue::Unary { value: op, .. }
                     | Rvalue::ArrayToSlice { reference: op }
+                    | Rvalue::RefToDyn { reference: op, .. }
                     | Rvalue::SliceLen { slice: op } => operand(op, &mut budget)?,
                     Rvalue::SliceIndex { slice, index } => {
                         operand(slice, &mut budget)?;
@@ -1500,10 +1572,20 @@ fn preflight_with_plan(
                             operand(field, &mut budget)?;
                         }
                     }
+                    Rvalue::NativeSyscall(args) | Rvalue::Intrinsic { args, .. } => {
+                        for arg in args {
+                            operand(arg, &mut budget)?;
+                        }
+                    }
                     Rvalue::EnumVariant { ty, fields, .. } => {
                         preflight_ty(&Ty::Enum(ty.clone()), 0, &mut budget)?;
                         for field in fields {
                             operand(field, &mut budget)?;
+                        }
+                    }
+                    Rvalue::Format { arguments, .. } => {
+                        for value in arguments {
+                            operand(value, &mut budget)?;
                         }
                     }
                     Rvalue::Println(_) | Rvalue::Output(_) | Rvalue::Str(_) => {}
@@ -1528,7 +1610,8 @@ fn preflight_with_plan(
                             preflight_ty(argument, 0, &mut budget)?;
                         }
                     }
-                    super::ir::Callee::TraitItem(call) => {
+                    super::ir::Callee::TraitItem(call)
+                    | super::ir::Callee::Virtual(super::ir::VirtualCall { call }) => {
                         budget.spend(call.trait_ref.args.len() + call.method_args.len() + 1)?;
                         preflight_ty(&call.trait_ref.self_ty, 0, &mut budget)?;
                         for argument in call.trait_ref.args.iter().chain(call.method_args.iter()) {
@@ -1695,6 +1778,9 @@ impl<'a> MoveShape<'a> {
             // Exactly shared `&str` is a Copy two-word descriptor leaf.
             Ty::Ref { .. } if ty.is_shared_str() => Self::Scalar,
             Ty::Str => Self::Scalar,
+            // An unsized trait object referent is one opaque leaf: dyn
+            // places are only reached through method receivers, never moved.
+            Ty::Dyn(_) => Self::Scalar,
             Ty::Ref { referent, .. } if referent.contains_slice() => return Err(Exhausted),
             Ty::Int(_)
             | Ty::Float(_)
@@ -1923,6 +2009,9 @@ impl Paths {
                 Projection::Deref => {
                     unreachable!("deref must be resolved through canonical loan provenance")
                 }
+                // A runtime element has a whole-array initialization
+                // footprint. Never select or initialize one guessed child.
+                Projection::DynamicIndex(_) => return node,
                 Projection::Field(index) | Projection::ConstantIndex(index) => *index,
                 Projection::Downcast(variant) => {
                     let Some(Projection::Field(index)) = projection.next() else {
@@ -2084,7 +2173,12 @@ impl Selected {
             }
             Ok(position) => self.0[position].1 = variant,
             Err(_) if variant == usize::MAX => {}
-            Err(position) => self.0.insert(position, (node, variant)),
+            Err(position) => {
+                // Keep allocation proportional to the admitted enum slots, not
+                // Vec's geometric growth (including its minimum capacity).
+                self.0.reserve_exact(1);
+                self.0.insert(position, (node, variant));
+            }
         }
     }
     /// Forget every selection in the preorder interval `[start, end)`.
@@ -2198,6 +2292,18 @@ impl Transfer<'_> {
         Ok(())
     }
     fn carrier_read(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
+        self.budget.spend(place.projection.len())?;
+        for projection in &place.projection {
+            if let Projection::DynamicIndex(local) = projection {
+                self.read(
+                    state,
+                    &Place {
+                        local: *local,
+                        projection: vec![],
+                    },
+                )?;
+            }
+        }
         let limit = self
             .raw_deref(place)
             .map_or(place.projection.len(), |index| index + 1);
@@ -2334,6 +2440,9 @@ impl Transfer<'_> {
                 Projection::Deref => {
                     unreachable!("deref must be canonicalized before authorization")
                 }
+                // A runtime element has a whole-array initialization
+                // footprint. Never select or initialize one guessed child.
+                Projection::DynamicIndex(_) => return Ok(true),
                 Projection::Field(index) | Projection::ConstantIndex(index) => *index,
                 Projection::Downcast(variant) => {
                     if let Some(report) = &mut self.report {
@@ -2401,6 +2510,18 @@ impl Transfer<'_> {
         state.may_init.range(node, end, value, self.budget)
     }
     fn read_raw(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
+        self.budget.spend(place.projection.len())?;
+        for projection in &place.projection {
+            if let Projection::DynamicIndex(local) = projection {
+                self.read_raw(
+                    state,
+                    &Place {
+                        local: *local,
+                        projection: vec![],
+                    },
+                )?;
+            }
+        }
         self.read_canonical(state, &CanonicalPlace::owned(place))
     }
     fn read_canonical(
@@ -2542,6 +2663,16 @@ impl Transfer<'_> {
         self.read(state, &root_place(self.f.return_local))
     }
     fn write_raw(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
+        self.budget.spend(place.projection.len())?;
+        if place
+            .projection
+            .iter()
+            .any(|part| matches!(part, Projection::DynamicIndex(_)))
+        {
+            // An unknown element write is never proof that the entire array
+            // has become initialized. Require its conservative read first.
+            self.read_raw(state, place)?;
+        }
         self.budget.spend(1)?;
         if let Some(report) = &mut self.report {
             report.stats.writes += 1;
@@ -2660,6 +2791,8 @@ impl Transfer<'_> {
             // Unsizing copies the shared reference once. Its loan and origins
             // are the operand's; length metadata grants no storage authority.
             Rvalue::ArrayToSlice { reference } => self.operand(state, reference)?,
+            // Unsizing moves/copies the reference once; the vtable is static.
+            Rvalue::RefToDyn { reference, .. } => self.operand(state, reference)?,
             // Length reads only the slice handle, never the referent storage.
             Rvalue::SliceLen { slice } => self.operand(state, slice)?,
             // Receiver snapshot, index snapshot, then a live shared read of the
@@ -2688,7 +2821,13 @@ impl Transfer<'_> {
                 self.operand(state, left)?;
                 self.operand(state, right)?;
             }
-            Rvalue::Aggregate { fields, .. } | Rvalue::EnumVariant { fields, .. } => {
+            Rvalue::NativeSyscall(fields)
+            | Rvalue::Aggregate { fields, .. }
+            | Rvalue::EnumVariant { fields, .. }
+            | Rvalue::Intrinsic { args: fields, .. }
+            | Rvalue::Format {
+                arguments: fields, ..
+            } => {
                 for field in fields {
                     self.operand(state, field)?;
                 }
@@ -3077,10 +3216,20 @@ fn analyze_with_context(
         drop(verification_scratch);
         let paths = Paths::with_facts(f, limits.paths, facts, &mut budget)?;
         report.stats.move_paths = paths.nodes.len();
-        // Account for dense retained entry states and transient states as well
-        // as Vec headers. No allocation proportional to blocks*paths precedes
-        // this checked bound.
-        let bytes = ownership_state_bytes(f.locals.len(), paths.nodes.len(), f.blocks.len())?;
+        // Account for retained entry states and transient states up front,
+        // including sparse variant-selection storage and Vec headers. No
+        // allocation proportional to blocks*paths precedes this checked bound.
+        let selected_slots = paths
+            .nodes
+            .iter()
+            .filter(|node| !node.variant_offsets.is_empty())
+            .count();
+        let bytes = ownership_state_bytes(
+            f.locals.len(),
+            paths.nodes.len(),
+            selected_slots,
+            f.blocks.len(),
+        )?;
         if bytes > limits.state_bytes {
             return Err(Exhausted);
         }
@@ -3275,6 +3424,39 @@ fn analyze_with_context(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sparse_ownership_storage_bound_covers_retained_capacity() {
+        use super::*;
+        for slots in [0, 1, 2, 3, 4, 5, 8, 9, 17, 65] {
+            let mut state = State::new(65, 129);
+            for node in 0..slots {
+                state.selected.set(node, 0);
+                assert_eq!(state.selected.0.capacity(), node + 1);
+            }
+            state.selected.clear_range(0, slots);
+            // Clearing and meeting retain capacity, so charge the maximum
+            // admitted slot count rather than the current selection length.
+            let heap = (state.must_live.0.capacity()
+                + state.may_live.0.capacity()
+                + state.must_init.0.capacity()
+                + state.may_init.0.capacity()
+                + state.ever_written.0.capacity())
+                * std::mem::size_of::<u64>()
+                + state.selected.0.capacity() * std::mem::size_of::<(usize, usize)>();
+            let per_state = heap + std::mem::size_of::<State>();
+            for blocks in [0, 1, 7] {
+                assert_eq!(
+                    ownership_state_bytes(65, 129, slots, blocks).unwrap(),
+                    per_state * (blocks + 3) + 3 * 8 + std::mem::size_of::<Bits>()
+                );
+            }
+            let cloned = state.clone();
+            assert!(cloned.selected.0.capacity() <= slots);
+        }
+        assert!(ownership_state_bytes(0, 0, usize::MAX, 0).is_err());
+        assert!(ownership_state_bytes(0, 0, 0, usize::MAX).is_err());
+        assert!(ownership_state_bytes(usize::MAX, usize::MAX, 0, 1).is_err());
+    }
 
     // Retain the real checked source-name owner alongside its module arena.
     fn fixture_modules() -> (
@@ -3456,7 +3638,7 @@ mod tests {
         assert_eq!(footprint.memberships, 17);
         assert_eq!(
             footprint.ownership_bytes,
-            ownership_state_bytes(8, 11, 3).unwrap()
+            ownership_state_bytes(8, 11, 2, 3).unwrap()
         );
         assert_eq!(footprint.path_bytes, paths_storage_bytes(8, 11, 2).unwrap());
         assert_eq!(
@@ -3946,7 +4128,7 @@ mod tests {
             bytes: 0,
             ..super::super::ir::PlanLimits::default()
         });
-        assert!(CarrierEffectTable::from_verified(&[], &exhausted).is_err());
+        assert!(CarrierEffectTable::for_callees(&[], &exhausted).is_err());
     }
 
     #[test]
@@ -6472,6 +6654,99 @@ mod tests {
         f.validate().unwrap();
         let result = analyze(&f);
         assert!(result.passed(), "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn runtime_element_loan_requires_initialized_index_and_whole_array() {
+        for source in [
+            "fn f(){let mut a=[1,2];let index:usize;let r=&mut a[0];*r=3;}",
+            "fn f(){let mut a:[i32;2];let index=0usize;let r=&mut a[0];*r=3;}",
+        ] {
+            let mut f = borrowed_source(source);
+            let index = LocalId(
+                f.locals
+                    .iter()
+                    .position(|local| local.name == "index")
+                    .unwrap(),
+            );
+            let loan = f
+                .loan_sites
+                .iter_mut()
+                .find(|site| site.place.projection == [Projection::ConstantIndex(0)])
+                .unwrap();
+            loan.place.projection = vec![Projection::DynamicIndex(index)];
+            f.validate().unwrap();
+            let result = analyze(&f);
+            assert!(result.complete, "{:?}", result.diagnostics);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.kind == ErrorKind::ReadNotDefinitelyInitialized),
+                "{:?}",
+                result.diagnostics
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_element_loan_rejects_invalid_index_local_metadata() {
+        let f = borrowed_source("fn f(){let mut a=[1,2];let index=0usize;let r=&mut a[0];*r=3;}");
+        for index in [
+            LocalId(usize::MAX),
+            LocalId(f.locals.iter().position(|local| local.name == "a").unwrap()),
+        ] {
+            let mut invalid = f.clone();
+            let loan = invalid
+                .loan_sites
+                .iter_mut()
+                .find(|site| site.place.projection == [Projection::ConstantIndex(0)])
+                .unwrap();
+            loan.place.projection = vec![Projection::DynamicIndex(index)];
+            assert!(
+                invalid
+                    .validate()
+                    .unwrap_err()
+                    .contains("valid usize local")
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_element_loans_do_not_prove_distinct_indices_disjoint() {
+        let mut f = borrowed_source(
+            "fn f(){let mut a=[1,2];let first=0usize;let second=1usize;let x=&mut a[0];let y=&mut a[1];*x=3;*y=4;}",
+        );
+        let first = LocalId(
+            f.locals
+                .iter()
+                .position(|local| local.name == "first")
+                .unwrap(),
+        );
+        let second = LocalId(
+            f.locals
+                .iter()
+                .position(|local| local.name == "second")
+                .unwrap(),
+        );
+        for site in &mut f.loan_sites {
+            if site.place.projection == [Projection::ConstantIndex(0)] {
+                site.place.projection = vec![Projection::DynamicIndex(first)];
+            } else if site.place.projection == [Projection::ConstantIndex(1)] {
+                site.place.projection = vec![Projection::DynamicIndex(second)];
+            }
+        }
+        f.validate().unwrap();
+        let result = analyze(&f);
+        assert!(result.complete);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| matches!(diagnostic.kind, ErrorKind::BorrowConflict(_))),
+            "{:?}",
+            result.diagnostics
+        );
     }
 
     #[test]

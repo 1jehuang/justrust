@@ -1,5 +1,5 @@
 //! Bounded native CLI acceptance of loops, break and continue.
-//! Stock rustc is never invoked by these tests.
+//! Range fixtures also execute stock rustc as an external oracle.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 use std::fs::{self, OpenOptions};
@@ -415,7 +415,6 @@ fn loop_milestone_boundaries_reject_without_silent_fallback() {
     for (label, source) in [
         ("labelled break", "fn main(){loop {break 'missing;}}"),
         ("labelled continue", "fn main(){loop {continue 'missing;}}"),
-        ("for loop", "fn main(){for i in 0..3 {}}"),
         ("while expression", "fn main(){let x=while false {}; }"),
         ("continue value", "fn main(){loop {continue 1;}}"),
     ] {
@@ -486,4 +485,343 @@ fn unreachable_typed_values_still_constrain_breaks_conditions_and_results() {
     // A pure Never operand has no concrete i32 constraint to conflict with
     // the later bool break. The early return means there is no output.
     runs("fn main(){let x=loop{break {return;};break false;};}", "");
+}
+
+fn stock(source: &str, expected: Option<&str>) {
+    let scratch = Scratch::new();
+    let input = scratch.source(source);
+    let output = scratch.path("stock");
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let result = capture(
+        Command::new(rustc)
+            .env_remove("RUSTC_BOOTSTRAP")
+            .args(["--edition=2024", "-Cpanic=abort"])
+            .arg(&input)
+            .arg("-o")
+            .arg(&output),
+        &scratch,
+        Duration::from_secs(30),
+    );
+    if let Some(expected) = expected {
+        result.success(source);
+        let result = capture(&mut Command::new(output), &scratch, Duration::from_secs(5));
+        result.success(source);
+        assert_eq!(result.stdout, expected.as_bytes(), "{source}");
+    } else {
+        assert!(
+            !result.status.success(),
+            "stock accepted invalid fixture: {source}"
+        );
+    }
+}
+
+#[test]
+fn range_for_matches_stock_once_only_bounds_scope_and_control() {
+    let source = r#"
+fn bound(x:i32)->i32 { if x==2 {println!("two");} if x==4 {println!("four");} if x==6 {println!("six");} x }
+fn main() {
+    let i=2;
+    let mut sum=0;
+    for i in bound(i)..bound(6) {
+        if i==3 {continue;}
+        sum=sum+i;
+        if i==4 {break;}
+    }
+    if i==2 && sum==6 {println!("scope sum ok");}
+    for _ in bound(4)..bound(2) {println!("bad");}
+    for _ in 3..3 {println!("bad");}
+    let mut count=0;
+    'outer: for n in 0..=3 {
+        for j in 0..3 {
+            if j==1 {continue 'outer;}
+            count=count+n;
+        }
+    }
+    if count==6 {println!("continue ok");}
+    'stop: for _ in 0..5 {for _ in 0..5 {break 'stop;}}
+    for mut x in 1..3 {x=x+10;if x==11 {println!("eleven");} if x==12 {println!("twelve");}}
+}
+"#;
+    let expected = "two\nsix\nscope sum ok\nfour\ntwo\ncontinue ok\neleven\ntwelve\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn inclusive_range_maxima_do_not_overflow_or_repeat_on_continue() {
+    let source = r#"
+fn main(){
+    let mut count=0;
+    for x in 254u8..=255u8 {if x==254u8 || x==255u8 {count=count+1;}continue;}
+    for x in 126i8..=127i8 {if x==126i8 || x==127i8 {count=count+1;}}
+    for x in 18446744073709551615u64..=18446744073709551615u64 {if x==18446744073709551615u64 {count=count+1;}}
+    for x in -128i8..=-127i8 {if x== -128i8 || x== -127i8 {count=count+1;}}
+    for x in 340282366920938463463374607431768211455u128..=340282366920938463463374607431768211455u128 {if x==340282366920938463463374607431768211455u128 {count=count+1;}}
+    for x in 170141183460469231731687303715884105727i128..=170141183460469231731687303715884105727i128 {if x==170141183460469231731687303715884105727i128 {count=count+1;}}
+    if count==9 {println!("maxima ok");}
+    for _ in 2..=1 {println!("bad");}
+}
+"#;
+    let expected = "maxima ok\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn range_for_invalid_patterns_types_binding_scope_and_break_values() {
+    for source in [
+        "fn main(){for i in 0..3 {} let x=i;}",
+        "fn main(){for i in i..3 {}}",
+        "fn main(){for i in 0..3 {i=4;}}",
+        "fn main(){for i in 0..3 {break 1;}}",
+        "fn main(){for i in 0..3 {break ();}}",
+        "fn main(){for i in 0u8..3i32 {}}",
+        "fn main(){for i in false..true {}}",
+        "fn main(){for 1 in 0..3 {}}",
+        "fn main(){for i in 0..3 {1}}",
+        "fn main(){for i in 3..0 {missing;}}",
+        "fn main(){for i in 0..3 {continue 'missing;}}",
+        "fn f()->i32{for _ in ({return 7;0}..3) {}} fn main(){}",
+        "fn f()->i32{return 7;for _ in 0..3 {}} fn main(){}",
+        "fn main(){for _ in ({return;0}..3) {missing;}}",
+    ] {
+        stock(source, None);
+        rejects("invalid range for", source);
+    }
+}
+
+#[test]
+fn range_bounds_keep_enclosing_control_and_once_only_mutation() {
+    let source = r#"
+fn main(){
+    let mut n=0;
+    let mut end=4;
+    let mut sum=0;
+    for x in ({n=n+1;1}..{n=n+10;end}) {
+        end=0;
+        sum=sum+x;
+    }
+    if n==11 && sum==6 && end==0 {println!("bounds snapshot ok");}
+    let mut attempts=0;
+    'outer: loop {
+        attempts=attempts+1;
+        for _ in ({if attempts<3 {continue 'outer;} 0}..2) {break 'outer;}
+    }
+    if attempts==3 {println!("bound control ok");}
+    for _ in ({return;}..3) {println!("bad");}
+}
+"#;
+    let expected = "bounds snapshot ok\nbound control ok\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn copy_array_for_matches_stock_snapshot_patterns_and_control() {
+    let source = r#"
+fn values()->[i32;3]{println!("array once");[2,3,4]}
+fn main(){
+    let mut values=[1,2,3];
+    let mut sum=0;
+    for x in values {values[1]=99;sum=sum+x;}
+    if sum==6 && values[1]==99 {println!("array snapshot ok");}
+    let mut total=0;
+    for x in [2,3,4] {if x==3 {continue;} total=total+x;}
+    if total==6 {println!("array continue ok");}
+    let mut pairs=0;
+    for (a,b) in [(1,2),(3,4)] {pairs=pairs+a+b;}
+    for [a,b] in [[5,6],[7,8]] {pairs=pairs+a+b;}
+    if pairs==36 {println!("array patterns ok");}
+    let mut nested=0;
+    'outer: for x in [1,2,3] {
+        for y in [4,5] {if y==5 {continue 'outer;} nested=nested+x;}
+    }
+    if nested==6 {println!("array labels ok");}
+    let mut first=0;
+    for x in [7,8] {first=x;break;}
+    if first==7 {println!("array break ok");}
+    let x=9;
+    for mut x in [x,10] {x=x+1;}
+    if x==9 {println!("array scope ok");}
+    for _ in crate::values() {}
+}
+"#;
+    let expected = "array snapshot ok\narray continue ok\narray patterns ok\narray labels ok\narray break ok\narray scope ok\narray once\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn copy_array_for_invalid_scope_mutability_refutability_and_unit_obligations() {
+    for source in [
+        "fn main(){for x in [1,2] {} let y=x;}",
+        "fn main(){for x in [1,2] {x=3;}}",
+        "fn main(){for 1 in [1,2] {}}",
+        "fn main(){for (a,b) in [1,2] {}}",
+        "fn main(){for x in [1,2] {break 7;}}",
+        "fn main(){for x in [1,2] {true}}",
+        "fn f()->i32{for _ in [1,2] {}} fn main(){}",
+    ] {
+        stock(source, None);
+        rejects("invalid Copy-array iteration", source);
+    }
+}
+
+#[test]
+fn referenced_array_for_uses_real_shared_and_mutable_elements() {
+    let source = r#"
+fn main(){
+    let mut values=[1,2,3];
+    let mut sum=0;
+    for x in &values {sum=sum+*x;}
+    if sum==6 {println!("shared ok");}
+    for x in &mut values {*x=*x+10;}
+    if values[0]==11 && values[1]==12 && values[2]==13 {println!("mutation ok");}
+    let mut sum=0;
+    for x in &values {if *x==12 {continue;}sum=sum+*x;}
+    if sum==24 {println!("continue ok");}
+    for x in &mut values {*x=5;break;}
+    values[2]=7;
+    if values[0]==5 && values[2]==7 {println!("last use ok");}
+}
+"#;
+    let expected = "shared ok\nmutation ok\ncontinue ok\nlast use ok\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn referenced_array_for_keeps_once_only_control() {
+    let source = r#"
+fn update(a:&mut [i32;3])->i32 {
+    for x in a {*x=*x+1;if *x==3 {return *x;}}
+    0
+}
+fn main(){
+    let mut values=[1,2,3];
+    let mut hits=0;
+    for x in ({hits=hits+1;&mut values}) {*x=*x+1;}
+    if hits==1 && values[2]==4 {println!("source once ok");}
+    let mut count=0;
+    'outer: for x in &mut values {
+        *x=*x+1;
+        for y in [0,1] {if y==1 {continue 'outer;}count=count+1;}
+    }
+    if count==3 && values[2]==5 {println!("labels ok");}
+    let mut more=[1,2,3];
+    if update(&mut more)==3 && more[0]==2 && more[1]==3 && more[2]==3 {println!("return ok");}
+}
+"#;
+    let expected = "source once ok\nlabels ok\nreturn ok\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn referenced_array_for_empty_and_singleton_keep_body_types() {
+    let source = r#"
+fn main(){
+    let mut empty:[i32;0]=[];
+    for x in &empty {let n=*x;println!("bad");}
+    for x in &mut empty {*x=7;println!("bad");}
+    let mut one=[8];
+    for x in &mut one {*x=*x+1;}
+    if one[0]==9 {println!("empty singleton ok");}
+}
+"#;
+    stock(source, Some("empty singleton ok\n"));
+    runs(source, "empty singleton ok\n");
+}
+
+#[test]
+fn referenced_array_for_preserves_body_identity_and_captured_addresses() {
+    let source = r#"
+fn identity<'a>(x:&'a mut i32)->&'a mut i32 {x}
+fn main(){
+    let mut values=[1;40];
+    let mut count=0;
+    for x in &mut values {let before=*x;let y=identity(x);*y=before+count;count=count+1;}
+    if count==40 && values[0]==1 && values[39]==40 {println!("single body identity ok");}
+    let mut last=&values[0];
+    for x in &values {last=x;break;}
+    if *last==1 {println!("captured address ok");}
+    values[39]=99;
+    if values[39]==99 {println!("escaped last use ok");}
+    let units=[(),(),()];
+    let mut count=0;
+    for x in &units {let unit=*x;count=count+1;}
+    if count==3 {println!("unit elements ok");}
+}
+"#;
+    let expected =
+        "single body identity ok\ncaptured address ok\nescaped last use ok\nunit elements ok\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn referenced_array_for_scalar_widths_and_drop_exits_match_stock() {
+    let source = r#"
+struct Token {id:i32}
+impl Drop for Token {fn drop(&mut self){if self.id==1 {println!("drop one");}else{println!("drop two");}}}
+fn early(a:&[i32;2]) {for x in a {let token=Token{id:*x};return;}}
+fn main(){
+    let mut bytes=[255u8,254u8];
+    for x in &mut bytes {*x=*x-1u8;}
+    let mut signed=[-128i8,-2i8];
+    for x in &mut signed {*x=*x+1i8;}
+    let mut wide=[170141183460469231731687303715884105726i128];
+    for x in &mut wide {*x=*x+1i128;}
+    let mut floats=[1.5f32,2.5f32];
+    for x in &mut floats {*x=*x+1.0f32;}
+    let mut flags=[true,false];
+    for x in &mut flags {*x=!*x;}
+    let mut chars=['a','b'];
+    for x in &mut chars {*x='z';}
+    if bytes[0]==254u8 && bytes[1]==253u8 && signed[0]==-127i8 && signed[1]==-1i8 && wide[0]==170141183460469231731687303715884105727i128 && floats[0]==2.5f32 && floats[1]==3.5f32 && !flags[0] && flags[1] && chars[1]=='z' {println!("scalar layouts ok");}
+    let values=[1,2];
+    for x in &values {let token=Token{id:*x};if *x==1 {continue;}break;}
+    early(&values);
+    println!("exits done");
+}
+"#;
+    let expected = "scalar layouts ok\ndrop one\ndrop two\ndrop one\nexits done\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn referenced_array_for_rejects_aliasing_mutability_and_escape() {
+    for source in [
+        "fn main(){let a=[1,2];for x in &a {*x=3;}}",
+        "fn main(){let a=[1,2];for x in &mut a {*x=3;}}",
+        "fn main(){let mut a=[1,2];for x in &a {a[0]=3;let n=*x;}}",
+        "fn main(){let mut a=[1,2];for x in &mut a {let n=a[0];*x=n;}}",
+        "fn main(){let mut a=[1,2];for x in &mut a {let y=&*x;*x=3;let n=*y;}}",
+        "fn main(){let mut a=[1,2];for x in &mut a {let y=&mut *x;*x=3;*y=4;}}",
+        "fn main(){let a=[1,2];for x in &a {} let n=*x;}",
+        "fn main(){let mut a=[1,2];let r=&a;for x in &mut a {*x=3;} let n=(*r)[0];}",
+        "fn main(){let mut a=[1,2];let r=&mut a;for x in r {*x=3;}for x in r {*x=4;}}",
+        "fn bad<'a>()->&'a i32{let a=[1,2];for x in &a {return x;}loop{}}fn main(){}",
+        "fn main(){let a:[i32;0]=[];for x in &a {*x=3;}}",
+        "fn main(){let a=[1,2];for x in &a {true}}",
+    ] {
+        stock(source, None);
+        rejects("invalid referenced-array element loan", source);
+    }
+}
+
+#[test]
+fn array_iteration_unsupported_boundaries_are_stock_valid_not_invalid_claims() {
+    for source in [
+        "struct Item{x:i32} fn main(){for item in [Item{x:1},Item{x:2}] {}}",
+        "struct Item{x:i32} fn main(){let a=[Item{x:1},Item{x:2}];for x in &a {let n=x.x;}}",
+        "fn main(){let a=[1,2];let mut last=&a[0];for x in &a {last=x;}let n=*last;}",
+        "fn scan(a:&[i32]){for x in a {let n=*x;}}fn main(){let a=[1,2];scan(&a);}",
+        "fn main(){for x in [1,2].iter() {}}",
+        "fn main(){for x in [1,2].into_iter() {}}",
+    ] {
+        stock(source, Some(""));
+        rejects("explicit unsupported iterator boundary", source);
+    }
 }

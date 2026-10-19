@@ -68,6 +68,22 @@ pub const SHARED_BYTE_SLICE_LAYOUT: SliceLayout = SliceLayout {
     element_stride: 8,
 };
 
+/// `&dyn P` / `&mut dyn P`: a two-word carrier (data pointer at 0, vtable
+/// pointer at 8) with the same storage/transport conventions as a shared
+/// slice. Returns the principal trait.
+fn trait_object_ref(ty: &ir::Ty) -> Option<ir::DeclId> {
+    match ty {
+        ir::Ty::Ref { referent, .. } => match referent.as_ref() {
+            ir::Ty::Dyn(object) => Some(object.principal),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Words 0..2 of every two-word fat carrier (slice data/len, object data/vtable).
+const FAT_LAYOUT: SliceLayout = SHARED_BYTE_SLICE_LAYOUT;
+
 fn shared_slice_layout(element: &ir::Ty) -> Result<SliceLayout, String> {
     Ok(SliceLayout {
         element_stride: u32::try_from(value_size(element)?)
@@ -85,6 +101,9 @@ fn shared_slice_layout(element: &ir::Ty) -> Result<SliceLayout, String> {
 fn argument_words(ty: &ir::Ty) -> Result<usize, String> {
     if let Some(element) = ty.shared_descriptor_element() {
         shared_slice_layout(element)?;
+        return Ok(2);
+    }
+    if trait_object_ref(ty).is_some() {
         return Ok(2);
     }
     indirect(ty)?;
@@ -160,6 +179,9 @@ fn indirect(ty: &ir::Ty) -> Result<bool, String> {
         shared_slice_layout(element)?;
         return Ok(true);
     }
+    if trait_object_ref(ty).is_some() {
+        return Ok(true);
+    }
     if ty.contains_slice() {
         return Err(SLICE_UNSUPPORTED.into());
     }
@@ -180,6 +202,7 @@ fn indirect(ty: &ir::Ty) -> Result<bool, String> {
         ir::Ty::Param(_) => Err("type parameter has no native ABI".into()),
         ir::Ty::AssociatedType(_) => Err("unresolved associated type has no native ABI".into()),
         ir::Ty::Slice { .. } | ir::Ty::Str => Err(SLICE_UNSUPPORTED.into()),
+        ir::Ty::Dyn(_) => Err("unsized trait object value has no native ABI".into()),
     }
 }
 
@@ -195,6 +218,9 @@ fn value_size(ty: &ir::Ty) -> Result<i32, String> {
     if let Some(element) = ty.shared_descriptor_element() {
         shared_slice_layout(element)?;
         return Ok(2 * i32::from(SHARED_BYTE_SLICE_LAYOUT.word_bytes));
+    }
+    if trait_object_ref(ty).is_some() {
+        return Ok(2 * i32::from(FAT_LAYOUT.word_bytes));
     }
     if ty.contains_slice() {
         return Err(SLICE_UNSUPPORTED.into());
@@ -265,6 +291,15 @@ fn value_size(ty: &ir::Ty) -> Result<i32, String> {
     }
 }
 
+fn scalar_memory_bytes(ty: &ir::Ty) -> u32 {
+    match ty {
+        ir::Ty::Int(integer) => integer.bits() / 8,
+        ir::Ty::Bool => 1,
+        ir::Ty::Char | ir::Ty::Float(ir::FloatTy::F32) => 4,
+        _ => 8,
+    }
+}
+
 fn field_offset(ty: &ir::Ty, index: usize) -> Result<(i32, &ir::Ty), String> {
     let field = ty
         .field_ty(index)
@@ -309,6 +344,29 @@ pub struct Object {
     pub code: Vec<u8>,
     pub calls: Vec<(usize, String)>,
     pub strings: Vec<(usize, Vec<u8>)>,
+    /// Absolute u64 immediate fields that receive the address of a linked
+    /// read-only trait object vtable.
+    pub vtables: Vec<(usize, Vtable)>,
+}
+
+/// Private trait object vtable: `[drop_in_place, size, align, methods...]`,
+/// eight bytes each. `drop` is a function symbol or `None` (written as 0) for
+/// trivially dropped types; method entries are function symbols in the
+/// principal's `vtable_methods` slot order. Identical vtables are shared.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Vtable {
+    pub drop: Option<String>,
+    pub size: u64,
+    pub align: u64,
+    pub methods: Vec<String>,
+}
+/// Byte offset of method slot `slot` inside a private vtable.
+fn vtable_slot_offset(slot: usize) -> Result<i32, String> {
+    slot.checked_add(3)
+        .and_then(|n| n.checked_mul(8))
+        .and_then(|n| i32::try_from(n).ok())
+        .filter(|n| *n < MAX_FRAME_BYTES)
+        .ok_or_else(|| "vtable slot offset exceeds private limit".into())
 }
 
 struct Emitter<'a> {
@@ -321,6 +379,8 @@ struct Emitter<'a> {
     /// 0=LHS, 16=RHS, 32=result, 48..256=wide arithmetic workspace.
     /// Independent of aggregate scratch so constructors cannot destroy inputs.
     wide_scratch: i32,
+    /// Frame slot holding the vtable word of the current virtual call.
+    vtable_scratch: i32,
     returns: Vec<usize>,
     traps: Vec<usize>,
     edges: Vec<(usize, cfg::BlockId)>,
@@ -506,6 +566,37 @@ impl<'a> Emitter<'a> {
                 }
                 ir::Projection::Field(index) => field_offset(ty, *index)?,
                 ir::Projection::ConstantIndex(index) => array_offset(ty, *index)?,
+                ir::Projection::DynamicIndex(index) => {
+                    let ir::Ty::Array { element, len } = ty else {
+                        return Err("runtime place index requires array storage".into());
+                    };
+                    if indirect_base {
+                        if offset != 0 {
+                            self.bytes(&[0x48, 0x05]);
+                            self.i32(offset);
+                        }
+                    } else {
+                        self.address(offset);
+                    }
+                    self.bytes(&[0x49, 0x89, 0xc1]); // r9 = array base
+                    let index = self.local_offset(*index)?;
+                    self.bytes(&[0x48, 0x8b, 0x85]); // rax = saved usize index
+                    self.i32(index);
+                    self.bytes(&[0x48, 0x3d]);
+                    self.i32(
+                        i32::try_from(*len).map_err(|_| "array length exceeds backend limit")?,
+                    );
+                    self.trap_if(0x83); // jae, before scaling/address formation
+                    self.bytes(&[0x48, 0x69, 0xc0]);
+                    self.i32(value_size(element)?);
+                    self.bytes(&[0x4c, 0x01, 0xc8]); // rax += r9
+                    // The reference stores this address, not a recipe that
+                    // reads the cursor again when the reference is used.
+                    indirect_base = true;
+                    offset = 0;
+                    ty = element;
+                    continue;
+                }
                 ir::Projection::Downcast(variant) => {
                     let ir::Ty::Enum(enum_ty) = ty else {
                         return Err("downcast requires enum storage".into());
@@ -756,6 +847,54 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
     /// rax = address of an exactly shared `&[T]` whole-local carrier.
+    /// Closed vtable of concrete Sized `concrete` for `principal`, resolved
+    /// only through this function's sealed closed facts (never by name).
+    fn vtable(&mut self, concrete: &ir::Ty, principal: ir::DeclId) -> Result<Vtable, String> {
+        let facts = self.concrete.facts();
+        let budget = facts.budget();
+        let targets = facts
+            .vtable_targets(concrete, principal)
+            .map_err(|e| e.into_legacy_diagnostic(budget))?;
+        let mut methods = Vec::with_capacity(targets.len());
+        for target in &targets {
+            methods.push((self.resolve)(target)?);
+        }
+        let drop = if facts.has_normal_drop_impls() {
+            match facts
+                .normal_drop_plan(concrete)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?
+            {
+                super::traits::NormalDropPlan::Trivial => None,
+                super::traits::NormalDropPlan::Destructor(destructor) => {
+                    Some((self.resolve)(destructor.target())?)
+                }
+                super::traits::NormalDropPlan::Unresolved => {
+                    return Err("unsupported: unresolved Drop for a trait object vtable".into());
+                }
+            }
+        } else {
+            None
+        };
+        let size = u64::try_from(value_size(concrete)?).map_err(|_| "vtable size")?;
+        Ok(Vtable {
+            drop,
+            size,
+            align: 8,
+            methods,
+        })
+    }
+    /// rax = address of a two-word `&dyn` carrier local; loads it like a slice.
+    fn fat_operand(&mut self, operand: &cfg::Operand) -> Result<(), String> {
+        let (cfg::Operand::Copy(place) | cfg::Operand::Move(place)) = operand else {
+            return Err("trait object operand requires a local carrier".into());
+        };
+        if !place.projection.is_empty()
+            || trait_object_ref(self.function().place_ty(place)?).is_none()
+        {
+            return Err("trait object operand requires a whole `&dyn` local".into());
+        }
+        self.load_place(place)
+    }
     fn slice_operand(&mut self, operand: &cfg::Operand) -> Result<(), String> {
         let (cfg::Operand::Copy(place) | cfg::Operand::Move(place)) = operand else {
             return Err("slice operand requires a local carrier".into());
@@ -785,7 +924,18 @@ impl<'a> Emitter<'a> {
         self.bytes(&[0x49, 0x89, 0xc1]); // r9 = RHS
         let ty = self.place_address(place)?;
         self.bytes(&[0x48, 0x89, 0xc7, 0x4c, 0x89, 0xc8]);
-        self.store_address_value(ty)?;
+        if place.projection.contains(&ir::Projection::Deref) && !indirect(ty)? {
+            // Heap storage is byte-addressed, unlike private eight-byte local
+            // carriers. Never overwrite adjacent bytes or a mapping boundary.
+            match scalar_memory_bytes(ty) {
+                1 => self.bytes(&[0x88, 0x07]),
+                2 => self.bytes(&[0x66, 0x89, 0x07]),
+                4 => self.bytes(&[0x89, 0x07]),
+                _ => self.bytes(&[0x48, 0x89, 0x07]),
+            }
+        } else {
+            self.store_address_value(ty)?;
+        }
         if place.projection.is_empty() {
             self.set_drop_flag(place.local, true);
         }
@@ -838,7 +988,17 @@ impl<'a> Emitter<'a> {
     fn load_place(&mut self, place: &ir::Place) -> Result<(), String> {
         let ty = self.place_address(place)?;
         if !indirect(ty)? {
-            self.bytes(&[0x48, 0x8b, 0x00]);
+            let dereferenced = place.projection.contains(&ir::Projection::Deref);
+            match if dereferenced {
+                scalar_memory_bytes(ty)
+            } else {
+                8
+            } {
+                1 => self.bytes(&[0x0f, 0xb6, 0x00]),
+                2 => self.bytes(&[0x0f, 0xb7, 0x00]),
+                4 => self.bytes(&[0x8b, 0x00]),
+                _ => self.bytes(&[0x48, 0x8b, 0x00]),
+            }
             if let ir::Ty::Int(integer) = ty {
                 self.normalize_integer(*integer);
             }
@@ -1423,6 +1583,15 @@ impl<'a> Emitter<'a> {
         self.object.strings.push((at, bytes));
         self.bytes(&[0x48, 0xba]);
         self.bytes(&length.to_le_bytes());
+        self.write_output(stream)?;
+        self.immediate(0);
+        Ok(())
+    }
+    /// Write the complete (rsi, rdx) byte range. Empty descriptors are valid.
+    /// Linux may interrupt or partially satisfy a write, including pipe writes.
+    fn write_output(&mut self, stream: ir::OutputStream) -> Result<(), String> {
+        self.bytes(&[0x48, 0x85, 0xd2]);
+        let empty = self.jump(&[0x0f, 0x84]);
         let retry = self.position();
         let descriptor = match stream {
             ir::OutputStream::Stdout => 1,
@@ -1437,7 +1606,137 @@ impl<'a> Emitter<'a> {
         self.bytes(&[0x48, 0x01, 0xc6, 0x48, 0x29, 0xc2]);
         let more = self.jump(&[0x0f, 0x85]);
         self.patch(more, retry)?;
-        self.immediate(0);
+        self.patch(empty, self.position())?;
+        Ok(())
+    }
+    fn format_integer(&mut self, ty: ir::IntTy, stream: ir::OutputStream) -> Result<(), String> {
+        // Two-limb unsigned magnitude, including the magnitude of i128::MIN.
+        if ty.bits() == 128 {
+            self.bytes(&[0x48, 0x8b, 0x50, 8, 0x48, 0x8b, 0x00]);
+        } else {
+            self.bytes(&[0x31, 0xd2]);
+            if ty.is_signed() {
+                self.bytes(&[0x48, 0x99]); // cqo
+            }
+        }
+        self.bytes(&[0x45, 0x31, 0xd2]); // sign flag r10
+        if ty.is_signed() {
+            self.bytes(&[0x48, 0x85, 0xd2]);
+            let positive = self.jump(&[0x0f, 0x89]);
+            self.bytes(&[0x41, 0xba, 1, 0, 0, 0]);
+            self.bytes(&[0x48, 0xf7, 0xd8, 0x48, 0x83, 0xd2, 0, 0x48, 0xf7, 0xda]);
+            self.patch(positive, self.position())?;
+        }
+        self.bytes(&[0x49, 0x89, 0xd0, 0x49, 0x89, 0xc1]); // r8 high, r9 low
+        self.bytes(&[0x48, 0x83, 0xec, 64, 0x48, 0x8d, 0x74, 0x24, 64]);
+        self.bytes(&[0x31, 0xc9, 0xbf, 10, 0, 0, 0]);
+        let digit = self.position();
+        self.bytes(&[0x4c, 0x89, 0xc0, 0x31, 0xd2, 0x48, 0xf7, 0xf7]);
+        self.bytes(&[0x49, 0x89, 0xc0, 0x4c, 0x89, 0xc8, 0x48, 0xf7, 0xf7]);
+        self.bytes(&[0x49, 0x89, 0xc1, 0x80, 0xc2, b'0', 0x48, 0xff, 0xce]);
+        self.bytes(&[0x88, 0x16, 0x48, 0xff, 0xc1, 0x4c, 0x09, 0xc0]);
+        let more = self.jump(&[0x0f, 0x85]);
+        self.patch(more, digit)?;
+        self.bytes(&[0x45, 0x85, 0xd2]);
+        let unsigned = self.jump(&[0x0f, 0x84]);
+        self.bytes(&[0x48, 0xff, 0xce, 0xc6, 0x06, b'-', 0x48, 0xff, 0xc1]);
+        self.patch(unsigned, self.position())?;
+        self.bytes(&[0x48, 0x89, 0xca]);
+        self.write_output(stream)?;
+        self.bytes(&[0x48, 0x83, 0xc4, 64]);
+        Ok(())
+    }
+    fn format_char(&mut self, stream: ir::OutputStream) -> Result<(), String> {
+        self.bytes(&[0x48, 0x83, 0xec, 16]);
+        let mut done = Vec::new();
+        for width in 1..=4_u8 {
+            let next = if width < 4 {
+                self.bytes(&[0x3d]);
+                self.i32(match width {
+                    1 => 0x80,
+                    2 => 0x800,
+                    _ => 0x10000,
+                });
+                Some(self.jump(&[0x0f, 0x83]))
+            } else {
+                None
+            };
+            for index in 0..width {
+                self.bytes(&[0x89, 0xc2]); // edx = scalar
+                let shift = 6 * (width - index - 1);
+                if shift != 0 {
+                    self.bytes(&[0xc1, 0xea, shift]);
+                }
+                if width != 1 {
+                    self.bytes(&[0x83, 0xe2, if index == 0 { 0x7f >> width } else { 0x3f }]);
+                    self.bytes(&[
+                        0x80,
+                        0xca,
+                        if index == 0 {
+                            match width {
+                                2 => 0xc0,
+                                3 => 0xe0,
+                                _ => 0xf0,
+                            }
+                        } else {
+                            0x80
+                        },
+                    ]);
+                }
+                self.bytes(&[0x88, 0x54, 0x24, index]);
+            }
+            self.bytes(&[0xba, width, 0, 0, 0]);
+            done.push(self.jump(&[0xe9]));
+            if let Some(next) = next {
+                self.patch(next, self.position())?;
+            }
+        }
+        for jump in done {
+            self.patch(jump, self.position())?;
+        }
+        self.bytes(&[0x48, 0x89, 0xe6]);
+        self.write_output(stream)?;
+        self.bytes(&[0x48, 0x83, 0xc4, 16]);
+        Ok(())
+    }
+    fn format_output(
+        &mut self,
+        pieces: &[String],
+        arguments: &[cfg::Operand],
+        stream: ir::OutputStream,
+        newline: bool,
+    ) -> Result<(), String> {
+        if pieces.len() != arguments.len() + 1 {
+            return Err("invalid format piece count".into());
+        }
+        for (piece, argument) in pieces.iter().zip(arguments) {
+            self.literal_output(piece, stream, false)?;
+            let ty = self.function().operand_ty(argument)?;
+            self.operand(argument)?;
+            match ty {
+                ir::Ty::Int(integer) => self.format_integer(integer, stream)?,
+                ir::Ty::Bool => {
+                    self.bytes(&[0x48, 0x85, 0xc0]);
+                    let false_value = self.jump(&[0x0f, 0x84]);
+                    self.literal_output("true", stream, false)?;
+                    let done = self.jump(&[0xe9]);
+                    self.patch(false_value, self.position())?;
+                    self.literal_output("false", stream, false)?;
+                    self.patch(done, self.position())?;
+                }
+                ir::Ty::Char => self.format_char(stream)?,
+                ty if ty.is_shared_str() => {
+                    self.bytes(&[0x48, 0x8b, 0x70, 0, 0x48, 0x8b, 0x50, 8]);
+                    self.write_output(stream)?;
+                }
+                _ => return Err("unsupported native format argument".into()),
+            }
+        }
+        self.literal_output(
+            pieces.last().ok_or("missing format piece")?,
+            stream,
+            newline,
+        )?;
         Ok(())
     }
     /// A panic is terminal, not a value-producing print followed by a trap.
@@ -1558,8 +1857,85 @@ impl<'a> Emitter<'a> {
         ]);
         Ok(())
     }
+    /// Native primitive-method kernels. The CFG expands every other
+    /// intrinsic into checked comparisons and arithmetic before emission.
+    fn intrinsic(&mut self, intrinsic: ir::Intrinsic, args: &[cfg::Operand]) -> Result<(), String> {
+        use ir::IntrinsicOp::*;
+        for arg in args {
+            if self.function().operand_ty(arg)? == ir::Ty::Never {
+                // A diverged operand already ended this path.
+                return Ok(());
+            }
+        }
+        let ir::ScalarTy::Float(ty) = intrinsic.receiver else {
+            return Err("primitive method has no native kernel for its receiver".into());
+        };
+        let [value] = args else {
+            return Err("native primitive method arity mismatch".into());
+        };
+        self.operand(value)?;
+        let sign = match ty {
+            ir::FloatTy::F64 => 63,
+            ir::FloatTy::F32 => 31,
+        };
+        match intrinsic.op {
+            Sqrt => {
+                self.float_operands(ty);
+                // sqrts? xmm0, xmm0: IEEE correctly rounded, as stock.
+                let prefix = if ty == ir::FloatTy::F64 { 0xf2 } else { 0xf3 };
+                self.bytes(&[prefix, 0x0f, 0x51, 0xc0]);
+                self.float_result(ty);
+            }
+            FloatAbs => {
+                if ty == ir::FloatTy::F64 {
+                    self.bytes(&[0x48, 0x0f, 0xba, 0xf0, sign]); // btr rax, 63
+                } else {
+                    self.bytes(&[0x0f, 0xba, 0xf0, sign]); // btr eax, 31
+                }
+            }
+            IsSignNegative | IsSignPositive => {
+                if ty == ir::FloatTy::F64 {
+                    self.bytes(&[0x48, 0xc1, 0xe8, sign]); // shr rax, 63
+                } else {
+                    self.bytes(&[0xc1, 0xe8, sign]); // shr eax, 31
+                }
+                if intrinsic.op == IsSignPositive {
+                    self.bytes(&[0x83, 0xf0, 0x01]); // xor eax, 1
+                }
+            }
+            _ => return Err("primitive method has no native kernel".into()),
+        }
+        Ok(())
+    }
     fn rvalue(&mut self, value: &cfg::Rvalue) -> Result<(), String> {
         match value {
+            cfg::Rvalue::NativeSyscall(arguments) => {
+                if arguments.len() != 7 {
+                    return Err("native syscall requires number and six arguments".into());
+                }
+                // Every operand was evaluated in source order by CFG lowering.
+                // Stage words before loading ABI registers: operand addressing
+                // uses rbp and may clobber any caller-saved scratch register.
+                for argument in arguments {
+                    if self.function().operand_ty(argument)? != ir::Ty::Int(ir::IntTy::Usize) {
+                        return Err("native syscall arguments must be usize".into());
+                    }
+                    self.operand(argument)?;
+                    self.bytes(&[0x50]); // push rax
+                }
+                self.bytes(&[
+                    0x41, 0x59, // pop r9: argument 6
+                    0x41, 0x58, // pop r8: argument 5
+                    0x41, 0x5a, // pop r10: argument 4 (not rcx)
+                    0x5a, // pop rdx: argument 3
+                    0x5e, // pop rsi: argument 2
+                    0x5f, // pop rdi: argument 1
+                    0x58, // pop rax: syscall number
+                    0x0f, 0x05, // syscall, clobbers rcx and r11
+                ]);
+                // Preserve the exact kernel return word, including -errno.
+                // Allocation policy and error interpretation live in Rust.
+            }
             cfg::Rvalue::Use(operand) => self.operand(operand)?,
             cfg::Rvalue::CharToInt { value, to } => {
                 if self.function().operand_ty(value)? != ir::Ty::Char {
@@ -1596,6 +1972,7 @@ impl<'a> Emitter<'a> {
                 // Wide endpoints use limbs, never the legacy word kernel.
                 self.integer_cast(value, *to)?;
             }
+            cfg::Rvalue::Intrinsic { intrinsic, args } => self.intrinsic(*intrinsic, args)?,
             cfg::Rvalue::LeadingZeros { value } => {
                 let ty = self.function().operand_ty(value)?;
                 if ty == ir::Ty::Never {
@@ -1623,7 +2000,20 @@ impl<'a> Emitter<'a> {
                     .loan_sites
                     .get(loan.0)
                     .ok_or("invalid checked loan site")?;
-                self.place_address(&site.place)?;
+                if let [ir::Projection::Deref] = site.place.projection.as_slice()
+                    && trait_object_ref(self.function().place_ty(&ir::Place {
+                        local: site.place.local,
+                        projection: Vec::new(),
+                    })?)
+                    .is_some()
+                {
+                    // Whole-object reborrow `&*d`: copy both carrier words.
+                    let local = self.local_offset(site.place.local)?;
+                    self.address(local);
+                    self.copy_slice_to_frame(FAT_LAYOUT, self.aggregate_scratch)?;
+                } else {
+                    self.place_address(&site.place)?;
+                }
             }
             cfg::Rvalue::IndexCopy { array, index } => {
                 let element = self.index_address(array, index)?;
@@ -1741,10 +2131,39 @@ impl<'a> Emitter<'a> {
                 self.address(self.aggregate_scratch);
             }
             cfg::Rvalue::Println(text) => self.println(text)?,
+            cfg::Rvalue::Format {
+                pieces,
+                arguments,
+                stream,
+                newline,
+            } => {
+                self.format_output(pieces, arguments, *stream, *newline)?;
+            }
             cfg::Rvalue::Output(output) => {
                 self.literal_output(&output.text, output.stream, output.newline)?;
             }
             cfg::Rvalue::Str(text) => self.str_literal(text)?,
+            cfg::Rvalue::RefToDyn {
+                reference,
+                principal,
+            } => {
+                // The operand is a thin `&T`/`&mut T` (rax = data pointer).
+                let ir::Ty::Ref { referent, .. } = self.function().operand_ty(reference)? else {
+                    return Err("trait object unsizing requires a reference operand".into());
+                };
+                let vtable = self.vtable(&referent, *principal)?;
+                self.operand(reference)?;
+                let base = self.aggregate_scratch;
+                self.bytes(&[0x48, 0x89, 0x85]); // mov [rbp+base], rax (data)
+                self.i32(base);
+                self.bytes(&[0x48, 0xb8]); // movabs rax, vtable
+                let at = self.position();
+                self.bytes(&[0; 8]);
+                self.object.vtables.push((at, vtable));
+                self.bytes(&[0x48, 0x89, 0x85]); // mov [rbp+base+8], rax
+                self.i32(base.checked_add(8).ok_or("trait object carrier offset")?);
+                self.address(base);
+            }
             cfg::Rvalue::ArrayToSlice { reference } => {
                 // N comes only from the validated operand type. The operand is
                 // the thin array pointer (the dummy word address for N == 0).
@@ -1933,8 +2352,32 @@ impl<'a> Emitter<'a> {
                 next,
                 ..
             } => {
-                let ir::Callee::Direct(target) = target else {
-                    return Err("unresolved trait dispatch has no native ABI".into());
+                // Virtual calls: argument 0 is the `&dyn` receiver carrier. The
+                // implementation receives only the thin data word as `&Self`;
+                // the vtable word selects the slot after argument evaluation.
+                let virtual_slot = match target {
+                    ir::Callee::Direct(_) => None,
+                    ir::Callee::Virtual(virtual_call) => {
+                        let principal = virtual_call.principal()?;
+                        let slots =
+                            self.concrete
+                                .facts()
+                                .vtable_methods(principal)
+                                .map_err(|e| {
+                                    e.into_legacy_diagnostic(self.concrete.facts().budget())
+                                })?;
+                        let slot = slots
+                            .iter()
+                            .position(|(_, item)| *item == virtual_call.call.item)
+                            .ok_or("virtual call item is not a vtable slot")?;
+                        if signature.params.first().and_then(trait_object_ref) != Some(principal) {
+                            return Err("virtual call receiver is not the object carrier".into());
+                        }
+                        Some(slot)
+                    }
+                    ir::Callee::TraitItem(_) => {
+                        return Err("unresolved trait dispatch has no native ABI".into());
+                    }
                 };
                 if args.len() > MAX_ARGS {
                     return Err(format!("at most {MAX_ARGS} arguments are supported"));
@@ -1942,14 +2385,30 @@ impl<'a> Emitter<'a> {
                 if args.len() != signature.params.len() {
                     return Err("call argument count does not match signature".into());
                 }
-                let words = parameter_words(&signature.params)?;
+                let mut words = parameter_words(&signature.params)?;
+                if virtual_slot.is_some() {
+                    // The callee's receiver is a thin `&Self`: one word.
+                    words[0] = 1;
+                }
                 let aggregate = result_indirect(&signature.result)?;
                 let cleanup = call_cleanup_bytes(&words, aggregate)?;
                 // Left-to-right evaluation. A two-word shared slice
                 // operand leaves its carrier address in rax; both words are
                 // pushed (data, then len), never the carrier pointer itself.
                 let mut wide_argument = 0;
-                for ((operand, words), param) in args.iter().zip(&words).zip(&signature.params) {
+                for (index, ((operand, words), param)) in
+                    args.iter().zip(&words).zip(&signature.params).enumerate()
+                {
+                    if index == 0 && virtual_slot.is_some() {
+                        // Snapshot the vtable word into the dedicated slot and
+                        // push the data word as the thin receiver.
+                        self.fat_operand(operand)?;
+                        self.load_word(1, 0, FAT_LAYOUT.len_offset); // rcx = vtable
+                        self.bytes(&[0x48, 0x89, 0x8d]); // mov [rbp+slot], rcx
+                        self.i32(self.vtable_scratch);
+                        self.bytes(&[0xff, 0x70, FAT_LAYOUT.data_offset]); // push data
+                        continue;
+                    }
                     match words {
                         1 if wide_integer(param) => {
                             // A materialized constant lives in shared result
@@ -1976,6 +2435,13 @@ impl<'a> Emitter<'a> {
                             self.slice_operand(operand)?;
                             self.push_slice_argument(SHARED_BYTE_SLICE_LAYOUT);
                         }
+                        2 if trait_object_ref(param).is_some()
+                            && trait_object_ref(&self.function().operand_ty(operand)?)
+                                .is_some() =>
+                        {
+                            self.fat_operand(operand)?;
+                            self.push_slice_argument(FAT_LAYOUT);
+                        }
                         _ => return Err("invalid multi-word argument transport".into()),
                     }
                 }
@@ -1983,8 +2449,19 @@ impl<'a> Emitter<'a> {
                     self.place_address(destination)?;
                     self.bytes(&[0x50]);
                 }
-                let at = self.jump(&[0xe8]);
-                self.object.calls.push((at, (self.resolve)(target)?));
+                match (target, virtual_slot) {
+                    (ir::Callee::Direct(target), None) => {
+                        let at = self.jump(&[0xe8]);
+                        self.object.calls.push((at, (self.resolve)(target)?));
+                    }
+                    (_, Some(slot)) => {
+                        self.bytes(&[0x48, 0x8b, 0x85]); // mov rax, [rbp+vtable slot]
+                        self.i32(self.vtable_scratch);
+                        self.bytes(&[0xff, 0x90]); // call [rax+disp32]
+                        self.i32(vtable_slot_offset(slot)?);
+                    }
+                    _ => return Err("invalid call transport".into()),
+                }
                 if cleanup != 0 {
                     self.bytes(&[0x48, 0x81, 0xc4]);
                     self.i32(cleanup);
@@ -2142,9 +2619,10 @@ pub fn emit_cfg_function(
                         value_size(ty)?
                     }
                     cfg::Rvalue::EnumVariant { ty, .. } => value_size(&ir::Ty::Enum(ty.clone()))?,
-                    cfg::Rvalue::ArrayToSlice { .. } | cfg::Rvalue::Str(_) => {
-                        2 * i32::from(SHARED_BYTE_SLICE_LAYOUT.word_bytes)
-                    }
+                    cfg::Rvalue::ArrayToSlice { .. }
+                    | cfg::Rvalue::Str(_)
+                    | cfg::Rvalue::RefToDyn { .. }
+                    | cfg::Rvalue::Borrow(_) => 2 * i32::from(SHARED_BYTE_SLICE_LAYOUT.word_bytes),
                     cfg::Rvalue::SliceIndex { slice, .. } => {
                         let slice_ty = function.operand_ty(slice)?;
                         let element = slice_ty
@@ -2178,6 +2656,11 @@ pub fn emit_cfg_function(
             .ok_or("wide arithmetic scratch exceeds private frame limit")?;
     }
     let wide_scratch = -frame_bytes;
+    frame_bytes = frame_bytes
+        .checked_add(8)
+        .filter(|size| *size <= MAX_FRAME_BYTES)
+        .ok_or("function exceeds private frame limit")?;
+    let vtable_scratch = -frame_bytes;
     let aggregate_result = result_indirect(&function.result)?;
     let result_size = value_size(&function.result)?;
     let param_offsets = argument_slot_offsets(&param_words, aggregate_result)?;
@@ -2186,6 +2669,7 @@ pub fn emit_cfg_function(
             code: Vec::new(),
             calls: Vec::new(),
             strings: Vec::new(),
+            vtables: Vec::new(),
         },
         concrete,
         resolve,
@@ -2193,6 +2677,7 @@ pub fn emit_cfg_function(
         drop_flags,
         aggregate_scratch,
         wide_scratch,
+        vtable_scratch,
         returns: Vec::new(),
         traps: Vec::new(),
         edges: Vec::new(),
@@ -2204,7 +2689,10 @@ pub fn emit_cfg_function(
     }
     for ((local, offset), words) in function.params.iter().zip(&param_offsets).zip(&param_words) {
         let local_ty = &function.locals[local.0].ty;
-        if *words == 2 && local_ty.shared_descriptor_element().is_some() {
+        if *words == 2
+            && (local_ty.shared_descriptor_element().is_some()
+                || trait_object_ref(local_ty).is_some())
+        {
             // len at offset, data at offset+8, into the local carrier.
             emitter.store_slice_parameter(
                 SHARED_BYTE_SLICE_LAYOUT,
@@ -2362,6 +2850,48 @@ pub fn link(functions: &[(String, Object)]) -> Result<Vec<u8>, String> {
                 .ok_or("ELF address overflow")?;
             code[start + at..start + at + 8].copy_from_slice(&address.to_le_bytes());
             data.extend_from_slice(literal);
+        }
+    }
+    // Trait object vtables: eight-byte aligned, deduplicated, absolute.
+    let mut vtable_addresses: HashMap<&Vtable, u64> = HashMap::new();
+    for (name, object) in functions {
+        let start = symbols[name.as_str()];
+        for (at, vtable) in &object.vtables {
+            if at.checked_add(8).is_none_or(|end| end > object.code.len()) {
+                return Err("invalid vtable relocation".into());
+            }
+            let address = if let Some(address) = vtable_addresses.get(vtable) {
+                *address
+            } else {
+                while data.len() % 8 != 0 {
+                    data.push(0);
+                }
+                let address = BASE
+                    .checked_add(data_offset as u64)
+                    .and_then(|a| a.checked_add(data.len() as u64))
+                    .ok_or("ELF address overflow")?;
+                let function_address = |symbol: &str| -> Result<u64, String> {
+                    let offset = *symbols
+                        .get(symbol)
+                        .ok_or_else(|| format!("unknown vtable function `{symbol}`"))?;
+                    BASE.checked_add(PAGE as u64)
+                        .and_then(|a| a.checked_add(offset as u64))
+                        .ok_or_else(|| "ELF address overflow".into())
+                };
+                let drop = match &vtable.drop {
+                    Some(symbol) => function_address(symbol)?,
+                    None => 0,
+                };
+                for word in [drop, vtable.size, vtable.align] {
+                    data.extend_from_slice(&word.to_le_bytes());
+                }
+                for method in &vtable.methods {
+                    data.extend_from_slice(&function_address(method)?.to_le_bytes());
+                }
+                vtable_addresses.insert(vtable, address);
+                address
+            };
+            code[start + at..start + at + 8].copy_from_slice(&address.to_le_bytes());
         }
     }
     let length = data_offset.checked_add(data.len()).ok_or("ELF too large")?;
@@ -3067,6 +3597,7 @@ mod tests {
                 code: Vec::new(),
                 calls: Vec::new(),
                 strings: Vec::new(),
+                vtables: Vec::new(),
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -3074,6 +3605,7 @@ mod tests {
             locals: Vec::new(),
             aggregate_scratch: 0,
             wide_scratch: 0,
+            vtable_scratch: 0,
             returns: Vec::new(),
             traps: Vec::new(),
             edges: Vec::new(),
@@ -3129,6 +3661,7 @@ mod tests {
                 code: Vec::new(),
                 calls: Vec::new(),
                 strings: Vec::new(),
+                vtables: Vec::new(),
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -3136,6 +3669,7 @@ mod tests {
             locals: Vec::new(),
             aggregate_scratch: 0,
             wide_scratch: -48,
+            vtable_scratch: 0,
             returns: Vec::new(),
             traps: Vec::new(),
             edges: Vec::new(),
@@ -3164,6 +3698,169 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(path.parent().unwrap()).unwrap();
         assert!(output.status.success(), "{output:?}; cases: {cases:?}");
+    }
+
+    #[test]
+    fn format_native_integer_boundaries_and_utf8() {
+        let concrete = unit_concrete_fixture();
+        let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
+        let mut e = Emitter {
+            object: Object {
+                code: Vec::new(),
+                calls: Vec::new(),
+                strings: Vec::new(),
+                vtables: Vec::new(),
+            },
+            concrete: &concrete,
+            resolve: &resolve,
+            drop_flags: Vec::new(),
+            locals: Vec::new(),
+            aggregate_scratch: -16,
+            wide_scratch: -64,
+            vtable_scratch: 0,
+            returns: Vec::new(),
+            traps: Vec::new(),
+            edges: Vec::new(),
+        };
+        e.bytes(&[0x55, 0x48, 0x89, 0xe5, 0x48, 0x83, 0xec, 96]);
+        let mut expected = String::new();
+        for ty in [
+            ir::IntTy::I8,
+            ir::IntTy::U8,
+            ir::IntTy::I16,
+            ir::IntTy::U16,
+            ir::IntTy::I32,
+            ir::IntTy::U32,
+            ir::IntTy::I64,
+            ir::IntTy::U64,
+            ir::IntTy::Isize,
+            ir::IntTy::Usize,
+            ir::IntTy::I128,
+            ir::IntTy::U128,
+        ] {
+            let width = ty.bits();
+            let mask = u128::MAX >> (128 - width);
+            for bits in [0, 1, mask >> 1, mask, 1_u128 << (width - 1)] {
+                let signed = if width == 128 {
+                    bits as i128
+                } else {
+                    ((bits << (128 - width)) as i128) >> (128 - width)
+                };
+                if ty.bits() == 128 {
+                    e.wide_constant(ir::IntValue { ty, bits });
+                } else {
+                    e.word(if ty.is_signed() {
+                        signed as u64
+                    } else {
+                        bits as u64
+                    });
+                }
+                e.format_integer(ty, ir::OutputStream::Stdout).unwrap();
+                e.literal_output("|", ir::OutputStream::Stdout, false)
+                    .unwrap();
+                expected.push_str(&if ty.is_signed() {
+                    signed.to_string()
+                } else {
+                    bits.to_string()
+                });
+                expected.push('|');
+            }
+        }
+        for ch in [
+            '\0',
+            '\u{7f}',
+            '\u{80}',
+            '\u{7ff}',
+            '\u{800}',
+            '\u{d7ff}',
+            '\u{e000}',
+            '\u{ffff}',
+            '\u{10000}',
+            '\u{10ffff}',
+        ] {
+            e.word(ch as u64);
+            e.format_char(ir::OutputStream::Stdout).unwrap();
+            expected.push(ch);
+        }
+        e.bytes(&[0x31, 0xff, 0xb8, 60, 0, 0, 0, 0x0f, 0x05]);
+        // Writes in this fixture are expected to succeed. Still resolve every
+        // emitted failure edge so malformed branches cannot silently pass.
+        let trap = e.position();
+        e.bytes(&[0x0f, 0x0b]);
+        for at in e.traps.clone() {
+            e.patch(at, trap).unwrap();
+        }
+        let path = executable_bytes(&link(&[("main".into(), e.object)]).unwrap());
+        let output = execute(Command::new(&path).stdout(Stdio::piped()));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, expected.as_bytes());
+    }
+
+    #[test]
+    fn format_native_full_pipeline_streams_and_evaluation_order() {
+        let program = frontend::parse(
+            r#"
+            fn next(calls: &mut u32) -> u32 {
+                *calls += 1u32;
+                print!("eval");
+                *calls
+            }
+            fn main() {
+                println!("Hello, world!");
+                let name = "justrust";
+                let version = 1u32;
+                println!("{} v{}", name, version);
+                let mut calls = 0u32;
+                println!("{}:{}", next(&mut calls), next(&mut calls));
+                println!("{} {} {} {} {}", true, false, 'é', '🦀', "");
+                eprint!("{}", "");
+                eprintln!("{}:{}", -170141183460469231731687303715884105728i128,
+                    340282366920938463463374607431768211455u128);
+                println!("{}", calls);
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&program);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            output.stdout,
+            "Hello, world!\njustrust v1\nevaleval1:2\ntrue false é 🦀 \n2\n".as_bytes()
+        );
+        assert_eq!(
+            output.stderr,
+            b"-170141183460469231731687303715884105728:340282366920938463463374607431768211455\n"
+        );
+    }
+
+    #[test]
+    fn format_native_empty_failed_and_large_descriptor_writes() {
+        for (source, expected) in [
+            ("fn main(){print!(\"{}\",\"\");}", 0),
+            ("fn main(){print!(\"{}\",1u8);}", 101),
+            ("fn main(){print!(\"{}\",false);}", 101),
+            ("fn main(){print!(\"{}\",'🦀');}", 101),
+            ("fn main(){print!(\"{}\",\"x\");}", 101),
+        ] {
+            let program = frontend::parse(source).unwrap();
+            let path = executable(&program);
+            let full = std::fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/full")
+                .unwrap();
+            let output = execute(Command::new(&path).stdout(Stdio::from(full)));
+            std::fs::remove_file(&path).unwrap();
+            std::fs::remove_dir(path.parent().unwrap()).unwrap();
+            assert_eq!(output.status.code(), Some(expected), "{source}: {output:?}");
+        }
+        let text = "世界🦀".repeat(16_384);
+        let source = format!("fn main(){{let text=\"{text}\";eprintln!(\"[{{}}]\",text);}}");
+        let output = run(&frontend::parse(&source).unwrap());
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stdout.is_empty());
+        assert_eq!(output.stderr, format!("[{text}]\n").as_bytes());
     }
 
     #[test]
@@ -3478,6 +4175,7 @@ mod tests {
                 code: Vec::new(),
                 calls: Vec::new(),
                 strings: Vec::new(),
+                vtables: Vec::new(),
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -3485,6 +4183,7 @@ mod tests {
             locals: Vec::new(),
             aggregate_scratch: 0,
             wide_scratch: 0,
+            vtable_scratch: 0,
             returns: Vec::new(),
             traps: Vec::new(),
             edges: Vec::new(),
@@ -3616,6 +4315,7 @@ mod tests {
                 code: Vec::new(),
                 calls: Vec::new(),
                 strings: Vec::new(),
+                vtables: Vec::new(),
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -3623,6 +4323,7 @@ mod tests {
             locals: Vec::new(),
             aggregate_scratch: -2048,
             wide_scratch: 0,
+            vtable_scratch: 0,
             returns: Vec::new(),
             traps: Vec::new(),
             edges: Vec::new(),
@@ -5491,6 +6192,73 @@ mod tests {
     }
 
     #[test]
+    fn runtime_element_loans_check_bounds_even_for_unit_and_unused_handles() {
+        for element in ["7i32", "()"] {
+            for (index, expected) in [(0u64, 0), (1, 101), (u64::MAX, 101)] {
+                let source =
+                    format!("fn main(){{let a=[{element}];let index={index}usize;let r=&a[0];}}");
+                let program = frontend::parse(&source).unwrap();
+                let signatures = frontend::signature_table(&program).unwrap();
+                let mut checked =
+                    frontend::type_function_with_signatures(&program, 0, &signatures).unwrap();
+                let index = LocalId(
+                    checked
+                        .locals
+                        .iter()
+                        .position(|local| local.name == "index")
+                        .unwrap(),
+                );
+                for expression in &mut checked.exprs {
+                    if let ir::ExprKind::Borrow { place, .. } = &mut expression.kind
+                        && place.projection == [ir::Projection::ConstantIndex(0)]
+                    {
+                        place.projection = vec![ir::Projection::DynamicIndex(index)];
+                    }
+                }
+                let object = emit_checked_fixture(&checked, &signatures, 0).unwrap();
+                let bytes = link(&[("main".into(), object)]).unwrap();
+                let path = executable_bytes(&bytes);
+                let output = execute(&mut Command::new(&path));
+                std::fs::remove_file(&path).unwrap();
+                std::fs::remove_dir(path.parent().unwrap()).unwrap();
+                assert_eq!(output.status.code(), Some(expected), "{source}: {output:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_element_loan_captures_address_before_index_mutation() {
+        let program = frontend::parse(
+            "fn main(){let a=[7,8];let mut index=0usize;let r=&a[0];index=1usize;if *r!=7 {1/0;}}",
+        )
+        .unwrap();
+        let signatures = frontend::signature_table(&program).unwrap();
+        let mut checked =
+            frontend::type_function_with_signatures(&program, 0, &signatures).unwrap();
+        let index = LocalId(
+            checked
+                .locals
+                .iter()
+                .position(|local| local.name == "index")
+                .unwrap(),
+        );
+        for expression in &mut checked.exprs {
+            if let ir::ExprKind::Borrow { place, .. } = &mut expression.kind
+                && place.projection == [ir::Projection::ConstantIndex(0)]
+            {
+                place.projection = vec![ir::Projection::DynamicIndex(index)];
+            }
+        }
+        let object = emit_checked_fixture(&checked, &signatures, 0).unwrap();
+        let bytes = link(&[("main".into(), object)]).unwrap();
+        let path = executable_bytes(&bytes);
+        let output = execute(&mut Command::new(&path));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+    }
+
+    #[test]
     fn borrowing_checked_emission_rejects_loan_conflicts_before_pointer_codegen() {
         let program = frontend::parse(
             r#"
@@ -5776,6 +6544,7 @@ mod tests {
                 code: vec![],
                 calls: vec![],
                 strings: vec![],
+                vtables: vec![],
             },
             concrete: &concrete,
             resolve: &|_| Err("physical fixture has no instance calls".into()),
@@ -5783,6 +6552,7 @@ mod tests {
             locals: vec![],
             aggregate_scratch: -8,
             wide_scratch: -264,
+            vtable_scratch: 0,
             returns: vec![],
             traps: vec![],
             edges: vec![],
@@ -6028,6 +6798,7 @@ mod tests {
                     code: vec![],
                     calls: vec![],
                     strings: vec![],
+                    vtables: vec![],
                 },
                 concrete: &concrete,
                 resolve: &|_| Err("physical fixture has no instance calls".into()),
@@ -6035,6 +6806,7 @@ mod tests {
                 locals: vec![],
                 aggregate_scratch: 0,
                 wide_scratch: 0,
+                vtable_scratch: 0,
                 returns: vec![],
                 traps: vec![],
                 edges: vec![],
@@ -6111,6 +6883,7 @@ mod tests {
                 code: vec![],
                 calls: vec![],
                 strings: vec![],
+                vtables: vec![],
             },
             concrete: &concrete,
             resolve: &|_| Err("physical fixture has no instance calls".into()),
@@ -6118,6 +6891,7 @@ mod tests {
             locals: vec![],
             aggregate_scratch: -32,
             wide_scratch: -288,
+            vtable_scratch: 0,
             returns: vec![],
             traps: vec![],
             edges: vec![],

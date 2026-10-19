@@ -1,32 +1,31 @@
 # Scalar `{}` formatting in print macros
 
-Status: stock corpus frozen, native implementation in progress (not merged).
-Full Rust remains open.
+Native milestone: `print!`, `println!`, `eprint!`, `eprintln!` with bare `{}`
+arguments for all integer widths (including i128/u128 extremes), bool, char and
+shared str. Arguments are evaluated once, left to right, into CFG snapshots
+before any format bytes are written. Place arguments retain shared loans until
+output, preventing later argument mutations from silently changing borrowed
+values. Dynamic-index and temporary-rooted place arguments remain explicitly
+unsupported. Escaped `{{` and `}}` remain literal braces.
 
-## Intended slice
+The AST and typed IR retain the argument expressions. CFG format operands are
+ordinary graph-owned values, visible to validation, ownership and borrow
+visitors. Native x86-64 emission converts integer magnitudes by two-limb decimal
+division, encodes scalar chars as UTF-8, and writes descriptors directly through
+Linux syscalls, retrying interrupted/partial writes. No runtime host compiler,
+external formatter, whole-program node or shared compiler state is introduced.
 
-`println!`, `print!`, `eprintln!`, `eprint!` with bare `{}` placeholders over
-integer (all widths, including i128/u128 extremes), `bool` and `char`
-arguments. Arguments are evaluated once, left to right; `{{`/`}}` escapes are
-preserved; argument-count mismatches and non-Display types are rejected, even
-in unused functions.
+`tests/format_scalars.rs` checks the frozen 20-source stock corpus: seven positive
+sources and the shared-str boundary now execute identically to stock, five
+invalid sources reject, and the remaining seven boundaries reject explicitly.
+The first full-program corpus source `01_hello.rs` now checks, builds and runs
+with stdout equal to its frozen stock oracle, and is ratcheted to `pass`.
+Backend tests additionally execute all 12 integer types at boundaries, Unicode
+encoding boundaries, evaluation order, all four streams/newline combinations,
+empty descriptors, failed writes and large writes.
 
-Explicit unsupported boundaries: `{:?}`, width/precision, positional `{0}`,
-inline named `{x}`, floats, `&str` arguments, reference arguments, and
-primitive associated constants such as `i8::MIN` (the last is an existing
-path-resolution gap, so the integer extremes case uses typed literals).
-
-## Corpus
-
-`tests/fixtures/format_scalars/stock.json` records stock rustc 1.98.1
-(`--edition=2024 -C panic=abort`) results for 20 sources: 7 positive,
-5 invalid, 8 legal-unsupported boundaries. It was produced before any native
-expectation.
-
-## Resume point
-
-Work-in-progress compiler changes (AST `Expr::Format`, bounded `{}` splitter,
-argument parser helper) live outside the repository as a patch. Remaining:
-wire parser dispatch, type checking, IR/CFG node with operands, ownership and
-borrow visitors, native decimal emission (including 128-bit), an acceptance
-harness, and integrated regression.
+This is not full Rust formatting or full Rust support. Debug/specifiers,
+width/precision, positional/named fields, floats, arbitrary references and
+user-defined Display remain unsupported. Primitive associated constants remain
+a separate path-resolution gap. Full-program corpus entries beyond `01_hello`
+still depend on other compiler features.

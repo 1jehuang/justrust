@@ -1,6 +1,9 @@
 //! Native inline-module acceptance tests. Stock Rust is deliberately not used here.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
+#[path = "support/native_prelude.rs"]
+mod native_prelude;
+
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -520,7 +523,6 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                     Key::new(101, vec![]),
                     Key::new(104, vec![]),
                     Key::new(113, vec![]),
-                    Key::new(115, vec![]),
                 ];
                 for index in 0..3 {
                     expected.push(Key::new(110, vec![index]));
@@ -536,7 +538,7 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                 }
                 // Available catalog recipes add real universal proof nodes, but
                 // never eager concrete roots. Keep every historical source key.
-                let program = compiler::frontend::parse(source).unwrap();
+                let program = native_prelude::parse(source).unwrap();
                 let plan = compiler::frontend::PlanCtx::from_program(
                     &program,
                     &compiler::ir::PlanBudget::default(),
@@ -546,11 +548,20 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                     let declaration = plan.callable_decl(index).unwrap();
                     match plan.callable_provider(declaration).unwrap() {
                         compiler::frontend::CallableProvider::Source { .. } => {
-                            assert!(index < result.functions);
+                            if plan.is_prelude_decl(declaration).unwrap() {
+                                expected.push(Key::new(110, vec![index as u64]));
+                            } else {
+                                assert!(index < result.functions);
+                            }
+                            if plan.callable_env(declaration).unwrap().is_generic() {
+                                for kind in [111, 112, 115] {
+                                    expected.push(Key::new(kind, vec![index as u64]));
+                                }
+                            }
                         }
                         compiler::frontend::CallableProvider::Recipe { .. } => {
                             assert!(index >= result.functions);
-                            for kind in [110, 111, 112] {
+                            for kind in [110, 111, 112, 115] {
                                 expected.push(Key::new(kind, vec![index as u64]));
                             }
                         }
@@ -559,8 +570,8 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                         }
                     }
                 }
-                // Effect publication joins every original body and required universal
-                // proof before the instance plan can publish any concrete work.
+                // Universal admission is per-caller. Each admission fact still
+                // publishes only after the body and required universal proofs.
                 let discovered = |key: &Key| {
                     let spelling = format!("{key:?}");
                     report
@@ -577,20 +588,19 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                         .expect("required graph node did not publish")
                         .at_ns
                 };
-                let effects = published(discovered(&Key::new(115, vec![])).node.unwrap());
-                assert!(published(discovered(&Key::new(113, vec![])).node.unwrap()) >= effects);
+                let effects = report
+                    .node_evaluations
+                    .iter()
+                    .filter(|(key, _)| key.kind == 115)
+                    .map(|(key, _)| published(discovered(key).node.unwrap()))
+                    .max()
+                    .expect("required universal admission fact missing");
                 for (key, _) in &report.node_evaluations {
                     let event = discovered(key);
                     if matches!(key.kind, 110 | 112) {
                         assert!(
                             published(event.node.unwrap()) <= effects,
-                            "effect publication preceded mandatory body proof: {key:?}"
-                        );
-                    }
-                    if matches!(key.kind, 102 | 108 | 109 | 103) {
-                        assert!(
-                            event.at_ns >= effects,
-                            "closed work preceded effects: {key:?}"
+                            "universal admission preceded mandatory body proof: {key:?}"
                         );
                     }
                 }
@@ -611,6 +621,7 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                         }
                     }
                 }
+                expected.extend(native_prelude::library_source_keys());
                 assert_eq!(report.node_evaluations.len(), expected.len());
                 for key in expected {
                     let entries: Vec<_> = report

@@ -6,6 +6,7 @@
 use super::frontend::{BinaryOp, UnaryOp};
 use super::ir::{self, ExprId, IntTy, IntValue, LocalId, LoopId, Place, Projection, Ty};
 mod drop_normal;
+mod intrinsics;
 pub use drop_normal::ValidatedCleanupCall;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -280,6 +281,16 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
             Ok(ir::identical_type(a, b, budget)? && same_operand_list(aa, bb, budget)?)
         }
         (
+            Rvalue::Intrinsic {
+                intrinsic: a,
+                args: aa,
+            },
+            Rvalue::Intrinsic {
+                intrinsic: b,
+                args: bb,
+            },
+        ) => Ok(a == b && same_operand_list(aa, bb, budget)?),
+        (
             Rvalue::EnumVariant {
                 ty: a, fields: aa, ..
             },
@@ -292,6 +303,7 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
         ),
         (Rvalue::Use(a), Rvalue::Use(b))
         | (Rvalue::ArrayToSlice { reference: a }, Rvalue::ArrayToSlice { reference: b })
+        | (Rvalue::RefToDyn { reference: a, .. }, Rvalue::RefToDyn { reference: b, .. })
         | (Rvalue::SliceLen { slice: a }, Rvalue::SliceLen { slice: b })
         | (Rvalue::CharToInt { value: a, .. }, Rvalue::CharToInt { value: b, .. })
         | (Rvalue::U8ToChar { value: a }, Rvalue::U8ToChar { value: b })
@@ -448,6 +460,12 @@ pub enum Operand {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rvalue {
+    NativeSyscall(Vec<Operand>),
+    /// Inherent primitive method over exact `intrinsic.signature()` operands.
+    Intrinsic {
+        intrinsic: ir::Intrinsic,
+        args: Vec<Operand>,
+    },
     CharToInt {
         value: Operand,
         to: IntTy,
@@ -508,11 +526,24 @@ pub enum Rvalue {
     /// Materialize a `&'static str` descriptor over immutable program data.
     Str(std::sync::Arc<str>),
     Println(String),
+    Format {
+        pieces: Vec<String>,
+        arguments: Vec<Operand>,
+        stream: ir::OutputStream,
+        newline: bool,
+    },
     /// Unsizes exactly shared `&[u8; N]` to shared `&[u8]`. N comes from the
     /// operand's validated type. The operand is evaluated once and its loan
     /// and origin set is the only storage authority of the result.
     ArrayToSlice {
         reference: Operand,
+    },
+    /// Unsizes `&T`/`&mut T` to `&dyn P`/`&mut dyn P` with the same kind. The
+    /// result carrier is two words: the operand's data pointer and the vtable
+    /// of the operand's exact referent type for principal `P`.
+    RefToDyn {
+        reference: Operand,
+        principal: ir::DeclId,
     },
     /// Builtin length of exactly shared `&[u8]`, result `usize`. Grants no
     /// storage authority and performs no read through the reference.
@@ -578,6 +609,9 @@ impl Rvalue {
             | Self::Unary { value, .. }
             | Self::Repeat { value, .. }
             | Self::ArrayToSlice { reference: value }
+            | Self::RefToDyn {
+                reference: value, ..
+            }
             | Self::SliceLen { slice: value } => visit(value)?,
             Self::SliceIndex { slice, index } => {
                 visit(slice)?;
@@ -587,7 +621,13 @@ impl Rvalue {
                 visit(left)?;
                 visit(right)?;
             }
-            Self::Aggregate { fields, .. } | Self::EnumVariant { fields, .. } => {
+            Self::NativeSyscall(fields)
+            | Self::Aggregate { fields, .. }
+            | Self::EnumVariant { fields, .. }
+            | Self::Intrinsic { args: fields, .. }
+            | Self::Format {
+                arguments: fields, ..
+            } => {
                 for value in fields {
                     visit(value)?;
                 }
@@ -1023,7 +1063,8 @@ impl Function {
                     Statement::Assign { destination, value } => {
                         path(&mut bytes, destination, budget)?;
                         match value {
-                            Rvalue::Aggregate { fields, .. }
+                            Rvalue::NativeSyscall(fields)
+                            | Rvalue::Aggregate { fields, .. }
                             | Rvalue::EnumVariant { fields, .. } => add(
                                 &mut bytes,
                                 fields.len(),
@@ -1032,6 +1073,25 @@ impl Function {
                             )?,
                             Rvalue::Output(output) => {
                                 add(&mut bytes, output.text.len(), 1, budget)?
+                            }
+                            Rvalue::Format {
+                                pieces, arguments, ..
+                            } => {
+                                add(
+                                    &mut bytes,
+                                    pieces.len(),
+                                    std::mem::size_of::<String>(),
+                                    budget,
+                                )?;
+                                for piece in pieces {
+                                    add(&mut bytes, piece.len(), 1, budget)?;
+                                }
+                                add(
+                                    &mut bytes,
+                                    arguments.len(),
+                                    std::mem::size_of::<Operand>(),
+                                    budget,
+                                )?;
                             }
                             Rvalue::Println(text) => add(&mut bytes, text.len(), 1, budget)?,
                             Rvalue::Str(text) => add(&mut bytes, text.len(), 1, budget)?,
@@ -1196,7 +1256,9 @@ impl Function {
             });
             let ordinary_actuals: &[Ty] = match target {
                 ir::Callee::Direct(target) => &target.type_args,
-                ir::Callee::TraitItem(call) => &call.method_args,
+                ir::Callee::TraitItem(call) | ir::Callee::Virtual(ir::VirtualCall { call }) => {
+                    &call.method_args
+                }
             };
             budget.charge_work(ordinary_actuals.len())?;
             let requires = ordinary_actuals
@@ -1609,6 +1671,9 @@ impl Function {
                             | Rvalue::FloatCast { value, .. }
                             | Rvalue::Unary { value, .. }
                             | Rvalue::ArrayToSlice { reference: value }
+                            | Rvalue::RefToDyn {
+                                reference: value, ..
+                            }
                             | Rvalue::SliceLen { slice: value } => operand(value, budget, facts)?,
                             Rvalue::SliceIndex { slice, index } => {
                                 operand(slice, budget, facts)?;
@@ -1628,9 +1693,19 @@ impl Function {
                                     operand(value, budget, facts)?;
                                 }
                             }
+                            Rvalue::NativeSyscall(fields) => {
+                                for value in fields {
+                                    operand(value, budget, facts)?;
+                                }
+                            }
                             Rvalue::EnumVariant { ty, fields, .. } => {
                                 facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?;
                                 for value in fields {
+                                    operand(value, budget, facts)?;
+                                }
+                            }
+                            Rvalue::Intrinsic { args, .. } => {
+                                for value in args {
                                     operand(value, budget, facts)?;
                                 }
                             }
@@ -1639,6 +1714,11 @@ impl Function {
                                 operand(index, budget, facts)?;
                             }
                             Rvalue::Discriminant(place) => path(place, budget)?,
+                            Rvalue::Format { arguments, .. } => {
+                                for value in arguments {
+                                    operand(value, budget, facts)?;
+                                }
+                            }
                             Rvalue::Borrow(_)
                             | Rvalue::Println(_)
                             | Rvalue::Output(_)
@@ -1693,6 +1773,13 @@ impl Function {
             .get(place.local.0)
             .ok_or("invalid CFG local")?
             .ty;
+        for projection in &place.projection {
+            if let Projection::DynamicIndex(index) = projection
+                && self.locals.get(index.0).map(|local| &local.ty) != Some(&Ty::Int(IntTy::Usize))
+            {
+                return Err("runtime place index requires a valid usize local".into());
+            }
+        }
         ir::projected_ty(ty, &place.projection)
     }
 
@@ -1913,6 +2000,18 @@ impl Function {
     }
     fn rvalue_ty_with_facts(&self, value: &Rvalue, facts: ir::FactsCtx<'_>) -> Result<Ty, String> {
         match value {
+            Rvalue::Intrinsic { intrinsic, args } => {
+                let signature = intrinsic
+                    .signature()
+                    .ok_or("CFG primitive method has no signature for its receiver")?;
+                if args.len() != signature.params.len() {
+                    return Err("CFG primitive method arity mismatch".into());
+                }
+                for (arg, param) in args.iter().zip(&signature.params) {
+                    self.require_operand_with_facts(arg, param, facts)?;
+                }
+                Ok(signature.result)
+            }
             Rvalue::CharToInt { value, to } => {
                 if self.operand_ty_with_facts(value, facts)? != Ty::Char {
                     return Err("CFG character cast requires char source".into());
@@ -2045,6 +2144,24 @@ impl Function {
                     }),
                 })
             }
+            Rvalue::RefToDyn {
+                reference,
+                principal,
+            } => {
+                let Ty::Ref { kind, referent } = self.operand_ty_with_facts(reference, facts)?
+                else {
+                    return Err("CFG trait object unsizing requires a reference".into());
+                };
+                if matches!(referent.as_ref(), Ty::Dyn(_) | Ty::Slice { .. }) {
+                    return Err("CFG trait object unsizing requires a sized referent".into());
+                }
+                Ok(Ty::Ref {
+                    kind,
+                    referent: std::sync::Arc::new(Ty::Dyn(std::sync::Arc::new(ir::DynTy {
+                        principal: *principal,
+                    }))),
+                })
+            }
             Rvalue::SliceLen { slice } => {
                 let source = self.slice_operand_ty(slice, facts)?;
                 if !source.is_shared_str() {
@@ -2067,7 +2184,34 @@ impl Function {
                 }
                 Ok(element.clone())
             }
+            Rvalue::NativeSyscall(arguments) => {
+                if arguments.len() != 7 {
+                    return Err("CFG native syscall arity mismatch".into());
+                }
+                for argument in arguments {
+                    self.require_operand_with_facts(argument, &Ty::Int(IntTy::Usize), facts)?;
+                }
+                Ok(Ty::Int(IntTy::Usize))
+            }
             Rvalue::Println(_) | Rvalue::Output(_) => Ok(Ty::Unit),
+            Rvalue::Format {
+                pieces, arguments, ..
+            } => {
+                if pieces.len() != arguments.len() + 1 {
+                    return Err("format argument count mismatch".into());
+                }
+                for argument in arguments {
+                    let ty = self.operand_ty_with_facts(argument, facts)?;
+                    if !matches!(ty, Ty::Int(_) | Ty::Bool | Ty::Char | Ty::Never)
+                        && !ty.is_shared_str()
+                    {
+                        return Err(
+                            "format argument requires integer, bool, char or &str Display".into(),
+                        );
+                    }
+                }
+                Ok(Ty::Unit)
+            }
             Rvalue::Str(_) => Ok(Ty::shared_str_ty()),
             Rvalue::Unary { op, value } => {
                 let ty = self.operand_ty_with_facts(value, facts)?;
@@ -2724,6 +2868,44 @@ impl Lowerer<'_> {
         })
     }
 
+    /// Initialize one pattern binding from its selected source place. A
+    /// borrowing binding issues a fresh immediate loan of exactly that place,
+    /// so borrow and ownership analysis see a genuine reference, never a copy.
+    fn bind_selected(
+        &mut self,
+        binding: &ir::PatternBinding,
+        selected: Place,
+        origin: ExprId,
+    ) -> Result<(), String> {
+        let Some(kind) = binding.borrow else {
+            let operand = self.consume(selected)?;
+            self.assign(place(binding.local), Rvalue::Use(operand), Some(origin));
+            return Ok(());
+        };
+        if self.result.loan_sites.len() >= ir::MAX_LOAN_SITES || self.origins >= ir::MAX_LOAN_SITES
+        {
+            return Err("CFG loan site limit exceeded".into());
+        }
+        if !self.allocate(
+            1,
+            std::mem::size_of::<LoanSite>()
+                + selected.projection.len() * std::mem::size_of::<Projection>(),
+        ) {
+            return Err(self.resource_error.clone().unwrap());
+        }
+        self.origins += 1;
+        let loan = LoanId(self.result.loan_sites.len());
+        self.result.loan_sites.push(LoanSite {
+            kind,
+            place: selected,
+            origin: Some(origin),
+            timing: LoanTiming::Immediate,
+        });
+        self.used_loans.insert(loan);
+        self.assign(place(binding.local), Rvalue::Borrow(loan), Some(origin));
+        Ok(())
+    }
+
     /// Storage belongs to the caller's active scope. Match arms open a fresh
     /// arm scope; let-else success deliberately keeps the enclosing scope.
     fn initialize_pattern_bindings(
@@ -2763,11 +2945,7 @@ impl Lowerer<'_> {
                         selected.projection.extend_from_slice(&binding.projection);
                         selected
                     };
-                    self.assign(
-                        place(binding.local),
-                        Rvalue::Use(self.consume(selected)?),
-                        Some(id),
-                    );
+                    self.bind_selected(binding, selected, id)?;
                 }
             }
         }
@@ -3144,7 +3322,10 @@ impl Lowerer<'_> {
     ) -> Result<(), String> {
         self.result.place_ty(destination)?;
         for (index, part) in destination.projection.iter().enumerate() {
-            if matches!(part, Projection::ConstantIndex(_)) {
+            if matches!(
+                part,
+                Projection::ConstantIndex(_) | Projection::DynamicIndex(_)
+            ) {
                 self.statement(
                     Statement::Inspect(Place {
                         local: destination.local,
@@ -3152,6 +3333,9 @@ impl Lowerer<'_> {
                     }),
                     origin,
                 );
+                if let Projection::DynamicIndex(local) = part {
+                    self.statement(Statement::Inspect(place(*local)), origin);
+                }
             }
         }
         Ok(())
@@ -3275,8 +3459,7 @@ impl Lowerer<'_> {
                         if completes {
                             let mut selected = source.clone();
                             selected.projection.extend_from_slice(&binding.projection);
-                            let operand = self.consume(selected)?;
-                            self.assign(place(binding.local), Rvalue::Use(operand), Some(*value));
+                            self.bind_selected(binding, selected, *value)?;
                         }
                     }
                     // Wildcard/rest have no bindings, loads, moves or storage
@@ -3486,6 +3669,24 @@ impl Lowerer<'_> {
                     origin,
                 );
             }
+            ir::ExprKind::RefToDyn { reference } => {
+                let Ty::Ref { referent, .. } = &expression.ty else {
+                    return Err("trait object unsizing result must be a reference".into());
+                };
+                let Ty::Dyn(object) = referent.as_ref() else {
+                    return Err("trait object unsizing result must be a trait object".into());
+                };
+                let principal = object.principal;
+                let reference = self.expression(*reference)?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::RefToDyn {
+                        reference,
+                        principal,
+                    },
+                    origin,
+                );
+            }
             ir::ExprKind::SliceLen { slice } => {
                 let slice = self.expression(*slice)?;
                 self.assign(destination.clone(), Rvalue::SliceLen { slice }, origin);
@@ -3675,6 +3876,16 @@ impl Lowerer<'_> {
                 let p = self.pattern_source(id)?;
                 self.assign(destination.clone(), Rvalue::Use(self.consume(p)?), origin);
             }
+            ir::ExprKind::NativeSyscall(arguments) => {
+                if !self.allocate(0, arguments.len() * std::mem::size_of::<Operand>()) {
+                    return Err(self.resource_error.clone().unwrap());
+                }
+                let operands = arguments
+                    .iter()
+                    .map(|id| self.expression(*id))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.assign(destination.clone(), Rvalue::NativeSyscall(operands), origin);
+            }
             ir::ExprKind::Tuple(fields) => {
                 let operands = fields
                     .iter()
@@ -3782,6 +3993,10 @@ impl Lowerer<'_> {
                 self.scopes.pop();
                 self.terminate(Terminator::Goto(join), origin)?;
                 self.current = join;
+            }
+            ir::ExprKind::Intrinsic { intrinsic, args } => {
+                // Receiver first, then arguments, each once into its own snapshot.
+                self.lower_intrinsic(&destination, *intrinsic, args, origin)?;
             }
             ir::ExprKind::Binary { op, left, right } => {
                 let left = self.expression(*left)?;
@@ -3969,6 +4184,54 @@ impl Lowerer<'_> {
             }
             ir::ExprKind::Println(text) => {
                 self.assign(destination.clone(), Rvalue::Println(text.clone()), origin)
+            }
+            ir::ExprKind::Format {
+                pieces,
+                arguments,
+                stream,
+                newline,
+            } => {
+                let mut operands = Vec::new();
+                if !self.allocate(
+                    0,
+                    arguments.len() * std::mem::size_of::<Operand>()
+                        + pieces.len() * std::mem::size_of::<String>(),
+                ) {
+                    return Err(self.resource_error.clone().unwrap());
+                }
+                for piece in pieces {
+                    if !self.allocate(0, piece.len()) {
+                        return Err(self.resource_error.clone().unwrap());
+                    }
+                }
+                for &id in arguments {
+                    let mut operand = self.expression(id)?;
+                    if matches!(
+                        self.source.exprs[id.0].kind,
+                        ir::ExprKind::Borrow {
+                            kind: ir::BorrowKind::Shared,
+                            ..
+                        }
+                    ) {
+                        let Operand::Copy(place) = &mut operand else {
+                            return Err(
+                                "format shared borrow requires Copy reference operand".into()
+                            );
+                        };
+                        place.projection.push(ir::Projection::Deref);
+                    }
+                    operands.push(operand);
+                }
+                self.assign(
+                    destination.clone(),
+                    Rvalue::Format {
+                        pieces: pieces.clone(),
+                        arguments: operands,
+                        stream: *stream,
+                        newline: *newline,
+                    },
+                    origin,
+                );
             }
         }
         Ok(destination)
@@ -8591,6 +8854,7 @@ mod tests {
                                     bindings: vec![ir::PatternBinding {
                                         local: LocalId(1),
                                         projection: vec![projection],
+                                        borrow: None,
                                     }],
                                 },
                                 body: ExprId(1),
@@ -9416,6 +9680,7 @@ mod tests {
                                     bindings: vec![ir::PatternBinding {
                                         local: LocalId(1),
                                         projection: vec![Projection::Field(0)],
+                                        borrow: None,
                                     }],
                                 },
                                 body: ExprId(1),
@@ -9529,6 +9794,7 @@ mod tests {
                     bindings: vec![ir::PatternBinding {
                         local: LocalId(1),
                         projection: vec![Projection::Field(0)],
+                        borrow: None,
                     }],
                 },
                 ir::Stmt::Expr(ExprId(1)),
@@ -10554,6 +10820,9 @@ mod tests {
                             | Rvalue::Unary { value, .. }
                             | Rvalue::Repeat { value, .. }
                             | Rvalue::ArrayToSlice { reference: value }
+                            | Rvalue::RefToDyn {
+                                reference: value, ..
+                            }
                             | Rvalue::SliceLen { slice: value } => live_operand(value, &live),
                             Rvalue::Binary { left, right, .. }
                             | Rvalue::SliceIndex {
@@ -10563,8 +10832,13 @@ mod tests {
                                 live_operand(left, &live);
                                 live_operand(right, &live);
                             }
-                            Rvalue::Aggregate { fields, .. }
-                            | Rvalue::EnumVariant { fields, .. } => {
+                            Rvalue::NativeSyscall(fields)
+                            | Rvalue::Aggregate { fields, .. }
+                            | Rvalue::EnumVariant { fields, .. }
+                            | Rvalue::Intrinsic { args: fields, .. }
+                            | Rvalue::Format {
+                                arguments: fields, ..
+                            } => {
                                 for value in fields {
                                     live_operand(value, &live);
                                 }

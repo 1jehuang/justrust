@@ -1,6 +1,9 @@
 //! External-file module acceptance through the native CLI, with bounded children.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
+#[path = "support/native_prelude.rs"]
+mod native_prelude;
+
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -440,7 +443,6 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                     Key::new(101, vec![]),
                     Key::new(104, vec![]),
                     Key::new(113, vec![]),
-                    Key::new(115, vec![]),
                     source.clone(),
                     child.clone(),
                 ];
@@ -459,7 +461,7 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                 // Include every available recipe's real universal proof, without
                 // changing source-file accounting or eager concrete roots.
                 let loaded = compiler::source::load(&scratch.path("src/input.rs")).unwrap();
-                let program = compiler::frontend::parse(&loaded.text).unwrap();
+                let program = native_prelude::parse(&loaded.text).unwrap();
                 let plan = compiler::frontend::PlanCtx::from_program(
                     &program,
                     &compiler::ir::PlanBudget::default(),
@@ -469,11 +471,20 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                     let declaration = plan.callable_decl(index).unwrap();
                     match plan.callable_provider(declaration).unwrap() {
                         compiler::frontend::CallableProvider::Source { .. } => {
-                            assert!(index < result.functions);
+                            if plan.is_prelude_decl(declaration).unwrap() {
+                                expected.push(Key::new(110, vec![index as u64]));
+                            } else {
+                                assert!(index < result.functions);
+                            }
+                            if plan.callable_env(declaration).unwrap().is_generic() {
+                                for kind in [111, 112, 115] {
+                                    expected.push(Key::new(kind, vec![index as u64]));
+                                }
+                            }
                         }
                         compiler::frontend::CallableProvider::Recipe { .. } => {
                             assert!(index >= result.functions);
-                            for kind in [110, 111, 112] {
+                            for kind in [110, 111, 112, 115] {
                                 expected.push(Key::new(kind, vec![index as u64]));
                             }
                         }
@@ -482,6 +493,8 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                         }
                     }
                 }
+                // Embedded native library files are independent SOURCE facts.
+                expected.extend(native_prelude::library_source_keys());
                 assert_eq!(result.report.node_evaluations.len(), expected.len());
                 for key in expected {
                     let entries: Vec<_> = result

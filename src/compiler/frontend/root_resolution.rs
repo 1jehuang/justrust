@@ -67,6 +67,8 @@ struct Resolver<'a> {
     active: std::collections::HashSet<(PathKey, usize, bool)>,
     type_params: Vec<AstIdent>,
     lexical_function: Option<ScopeId>,
+    /// Interpret `crate` as the user crate root even inside the prelude.
+    user_crate_anchor: bool,
 }
 impl Resolver<'_> {
     fn with_source_owner<T>(
@@ -553,6 +555,9 @@ impl Resolver<'_> {
                     return Err("explicit lifetime type aliases are unsupported".into());
                 }
                 Type::Slice(_) => return Err("unsized type aliases are unsupported".into()),
+                Type::Dyn(_) => {
+                    return Err("unsupported: trait object type aliases are unsupported".into());
+                }
                 Type::Array(t, _) => check_target(t)?,
                 Type::Tuple(fields) => {
                     for field in fields {
@@ -1362,12 +1367,15 @@ impl Resolver<'_> {
         let parts = path.segments();
         let mut at = 0;
         let initial_module = match path.anchor() {
-            PathAnchor::Crate => Some(
-                self.program
+            // Inside the native prelude library `crate` names the library root.
+            PathAnchor::Crate => Some(match self.prelude_root_of(from)? {
+                Some(prelude) if !self.user_crate_anchor => prelude,
+                _ => self
+                    .program
                     .modules
                     .source_root()
                     .map_err(module_diagnostic)?,
-            ),
+            }),
             PathAnchor::SelfModule => Some(from),
             PathAnchor::Super(levels) => {
                 let mut current = from;
@@ -1448,6 +1456,8 @@ impl Resolver<'_> {
                 self.item(&full, from, type_namespace, importing && parts.len() == 1)?
             {
                 item
+            } else if let Some(found) = self.prelude_path(path, from, namespace, type_namespace)? {
+                return Ok(found);
             } else if type_namespace
                 && (self.atom_is(*ident, BuiltinAtom::Core, Namespace::Type)?
                     || self.atom_is(*ident, BuiltinAtom::Std, Namespace::Type)?)
@@ -1499,6 +1509,65 @@ impl Resolver<'_> {
             at += 1;
         }
         Ok((current.module == namespace).then_some(current))
+    }
+    /// The native prelude library root containing `module`, if any.
+    fn prelude_root_of(&self, module: ModuleId) -> Result<Option<ModuleId>, String> {
+        let Some(prelude) = self.program.prelude_module else {
+            return Ok(None);
+        };
+        Ok(self
+            .program
+            .modules
+            .is_descendant(module, prelude)
+            .map_err(module_diagnostic)?
+            .then_some(prelude))
+    }
+    /// Fallback for an unresolved relative first segment: `std`/`core` name
+    /// the native prelude library, and any other name is looked up in the
+    /// library's `prelude::v1` module. User items and imports were tried first,
+    /// so they shadow both. `Ok(None)` means not found (the caller continues
+    /// with closed catalog paths such as `core::marker::Copy`).
+    fn prelude_path(
+        &mut self,
+        path: &AstPath,
+        from: ModuleId,
+        namespace: bool,
+        type_namespace: bool,
+    ) -> Result<Option<Option<ResolvedItem>>, String> {
+        let Some(prelude) = self.program.prelude_module else {
+            return Ok(None);
+        };
+        let parts = path.segments();
+        let Some(first) = parts.first().copied() else {
+            return Ok(None);
+        };
+        let rest = &parts[1..];
+        let library = type_namespace
+            && !rest.is_empty()
+            && (self.atom_is(first, BuiltinAtom::Core, Namespace::Type)?
+                || self.atom_is(first, BuiltinAtom::Std, Namespace::Type)?);
+        let (base, suffix) = if library {
+            (prelude, rest)
+        } else if let Some(scope) = self.program.prelude_scope {
+            (scope, parts)
+        } else {
+            return Ok(None);
+        };
+        let base_path = self.module_path(base)?;
+        let mut segments = base_path.segments().to_vec();
+        segments.extend_from_slice(suffix);
+        let full = AstPath::new(self.names(), PathAnchor::Crate, &segments)
+            .map_err(native_adapter::name_diagnostic)?;
+        // The rebuilt canonical path is anchored at the user crate root even
+        // when the requester is inside the prelude library.
+        let previous = std::mem::replace(&mut self.user_crate_anchor, true);
+        let found = self.path(&full, from, namespace, false);
+        self.user_crate_anchor = previous;
+        let found = found?;
+        if found.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(found))
     }
     fn reject_nonbound_equalities(
         &mut self,
@@ -1741,6 +1810,7 @@ impl Resolver<'_> {
                 }
             }
             Type::Ref { referent, .. } => self.ty(referent, module)?,
+            Type::Dyn(trait_path) => self.trait_path(trait_path, module)?,
             Type::Array(element, _)
             | Type::Slice(element)
             | Type::RawPtr {
@@ -2150,6 +2220,7 @@ impl Resolver<'_> {
                 self.generic_path(path, module)?;
                 self.pattern(pattern, module, names)?;
             }
+            Pattern::Ref { pattern, .. } => self.pattern(pattern, module, names)?,
             Pattern::Variant { name, fields, .. } if name.anchor() == PathAnchor::SelfType => {
                 if !self.self_allowed {
                     return Err("Self outside impl".into());
@@ -2201,10 +2272,14 @@ impl Resolver<'_> {
                     .ok_or("unresolved zero-field constructor pattern")?;
                 *pattern = self.constructor_pattern(&item, name, false)?;
             }
-            Pattern::Binding { name, mutable } => {
+            Pattern::Binding {
+                name,
+                mutable,
+                by_ref,
+            } => {
                 let path = self.single_path(*name)?;
                 if let Some(item) = self.zero_constructor(&path, module)? {
-                    if *mutable {
+                    if *mutable || by_ref.is_some() {
                         return Err(format!(
                             "binding {} cannot shadow an enum variant",
                             self.ident_display(*name)?
@@ -2361,6 +2436,7 @@ impl Resolver<'_> {
                 | Stmt::ImplicitExpr(value)
                 | Stmt::Return(Some(value)) => self.expr(value, module, locals)?,
                 Stmt::WhileLet { .. } => self.while_let(stmt, module, locals)?,
+                Stmt::For { .. } => self.for_loop(stmt, module, locals)?,
                 Stmt::While {
                     condition, body, ..
                 } => {
@@ -2450,6 +2526,43 @@ impl Resolver<'_> {
         let result = self.block(body, module, locals);
         // Nested failures can retain more than one scope, so restore depth
         // rather than popping only the most recently entered block.
+        locals.truncate(previous_depth);
+        result
+    }
+
+    #[inline(never)]
+    fn for_loop(
+        &mut self,
+        statement: &mut Stmt,
+        module: ModuleId,
+        locals: &mut Vec<std::collections::HashSet<LocalKey>>,
+    ) -> Result<(), String> {
+        let Stmt::For {
+            pattern,
+            source,
+            body,
+            ..
+        } = statement
+        else {
+            return Err("for loop bypassed resolver statement dispatcher".into());
+        };
+        let previous_depth = locals.len();
+        let result = match &mut source.iterable {
+            ForIterable::Range { start, end, .. } => self
+                .expr(start, module, locals)
+                .and_then(|()| self.expr(end, module, locals)),
+            ForIterable::Value(value) => self.expr(value, module, locals),
+        };
+        locals.truncate(previous_depth);
+        result?;
+        let mut names = std::collections::HashSet::new();
+        self.pattern(pattern, module, &mut names)?;
+        self.charge_entries::<std::collections::HashSet<LocalKey>>(1)?;
+        locals
+            .try_reserve(1)
+            .map_err(|_| "for scope stack allocation failed")?;
+        locals.push(names);
+        let result = self.block(body, module, locals);
         locals.truncate(previous_depth);
         result
     }
@@ -2689,7 +2802,13 @@ impl Resolver<'_> {
                     self.expr(arg, module, locals)?;
                 }
             }
-            Expr::Array(elements) | Expr::Tuple(elements) => {
+            Expr::NativeSyscall(elements)
+            | Expr::Array(elements)
+            | Expr::Tuple(elements)
+            | Expr::Format {
+                arguments: elements,
+                ..
+            } => {
                 for value in elements {
                     self.expr(value, module, locals)?;
                 }
@@ -2698,10 +2817,35 @@ impl Resolver<'_> {
                 return Err("cast bypassed resolver expression dispatcher".into());
             }
             Expr::Deref { value }
+            | Expr::BorrowValue { value, .. }
             | Expr::Repeat { value, .. }
             | Expr::Index { base: value, .. }
             | Expr::Unary { value, .. } => self.expr(value, module, locals)?,
-            Expr::Borrow { .. } => {}
+            Expr::Borrow { kind, place } => {
+                // A bare non-local root such as `&Marker` or an imported unit
+                // variant names a value constructor, not a place.
+                if let LocalName::Named(ident) = place.local
+                    && place.fields.is_empty()
+                {
+                    let path = AstPath::new(self.names(), PathAnchor::Relative, &[ident])
+                        .map_err(native_adapter::name_diagnostic)?;
+                    let constructor = !self.local_contains(&path, locals)?
+                        && (self
+                            .path(&path, module, false, false)?
+                            .is_some_and(|item| item.kind == ResolvedKind::Variant)
+                            || match self.path(&path, module, true, false)? {
+                                Some(item) => self.is_unit_struct(&item)?,
+                                None => false,
+                            });
+                    if constructor {
+                        *expr = Expr::BorrowValue {
+                            kind: *kind,
+                            value: Box::new(Expr::Var(path)),
+                        };
+                        return self.expr(expr, module, locals);
+                    }
+                }
+            }
             Expr::DynamicIndex { base, index } => {
                 self.expr(base, module, locals)?;
                 self.expr(index, module, locals)?;
@@ -3026,6 +3170,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         active: std::collections::HashSet::new(),
         type_params: Vec::new(),
         lexical_function: None,
+        user_crate_anchor: false,
     };
     for (bucket, items) in &parsed.items {
         for item in items {

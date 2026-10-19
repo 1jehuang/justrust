@@ -224,11 +224,11 @@ At a call, evaluate all return/write substitutions from the SAME captured entry+
 
 Initial recursive, mutual-recursive and abstract calls use conservative canonical declaration envelopes including OLD. SAME universal Plan proves body effects refine them. No initial SCC summary precision solver, unchecked inferred canonical summary, or world-to-body callback is assumed. Private CarrierEffectProof is retained with exact successful VerifiedTemplateCfg source/CFG/analysis/world/ledger and records may effects plus MustOverwrite across ALL normal exits. Joins intersect must-overwrite facts. Divergence is not a fabricated write.
 
-Precise selected-body refinement may be consumed only after the universal effect-publication gate defined below. A CALL strong replacement needs singleton Exact unique mutable destination AND sealed exact-body MustOverwrite. An &mut formal alone grants neither. Direct stores can establish their actual definite update locally. Valid programs requiring unavailable transitive precision are Unsupported, not Invalid.
+Precise selected-body refinement may be consumed only after the exact callee proofs required for that caller are available. A CALL strong replacement needs singleton Exact unique mutable destination AND sealed exact-body MustOverwrite. An &mut formal alone grants neither. Direct stores can establish their actual definite update locally. Valid programs requiring unavailable transitive precision are Unsupported, not Invalid.
 
-The root UNIVERSAL_EFFECTS_READY key is 115. It joins ALL source typing at TEMPLATE_BODY 110 plus successful required generic-Source and ALL-Recipe UNIVERSAL_LOWER/UNIVERSAL_ANALYZE 111/112. It does NOT depend on closed caller ANALYZE or CONCRETE_PROOFS 114. The immutable summary table keys the canonical provider declaration, exact original checked source/VerifiedTemplateCfg and world/ledger; every use separately validates the selected target and certified substitution. Missing entries use the conservative declaration envelope without waiting on another body. Nongeneric Source bodies remain closed-only and supply no early summary; this does not silently add an extra universal pass. Universal body analysis itself always uses declaration envelopes, not this table. Thus no caller-analysis-to-114 backedge, world callback or body-summary bootstrap cycle exists. Final 114 still gates native emission. Summary absence never supplies missing reference-family capability or skips an all-body check.
+Kind 115 is now a per-universal admission fact, not a root join. For one universal caller, it reads that caller's TEMPLATE_BODY/UNIVERSAL_ANALYZE proof plus only the universal callees required by reference-actual calls. It does NOT depend on closed caller ANALYZE or CONCRETE_PROOFS 114. Exact-body refinements are still keyed by the canonical provider declaration, exact original checked source/VerifiedTemplateCfg and world/ledger, and every use separately validates the selected target and certified substitution. Missing entries use the conservative declaration envelope without waiting on another body. Nongeneric Source bodies remain closed-only and supply no early summary; this does not silently add an extra universal pass. Universal body analysis itself always uses declaration envelopes, not another body's summary. Thus no caller-analysis-to-114 backedge, world callback or body-summary bootstrap cycle exists.
 
-The root-facing publication seam is the following SAME ownership analysis API:
+The publication seam is the following SAME ownership analysis API:
 
 ```rust
 // Compiler-visible opaque capability, private fields and constructors:
@@ -237,8 +237,13 @@ impl VerifiedTemplateCfg {
     fn carrier_effects(&self) -> Option<&Arc<CarrierEffectProof>>;
 }
 impl CarrierEffectTable {
-    fn from_verified(templates: &[VerifiedTemplateCfg], budget: &PlanBudget)
+    fn for_callees(templates: &[VerifiedTemplateCfg], budget: &PlanBudget)
         -> Result<Arc<Self>, String>;
+    fn admit_reference_actual_calls(
+        caller: &VerifiedTemplateCfg,
+        templates: &[VerifiedTemplateCfg],
+        budget: &PlanBudget,
+    ) -> Result<(), String>;
 }
 fn analyze_closed_with_effects(
     closed: cfg::ClosedCfg,
@@ -246,18 +251,17 @@ fn analyze_closed_with_effects(
 ) -> Result<ConcreteCfg, Analysis>;
 ```
 
-Root 115 alone constructs the immutable table from successful required
-universal templates. Provider/source/CFG/analysis/world/ledger identities are
-derived from those proofs, not supplied raw keys or a caller success flag.
-Reject foreign bindings and conflicting duplicate identities. Precharge table
-rows, index/duplicate scans, Arc retention and lookup work on the SAME ledger;
-no uncharged deep payload clone. A proof retains exact source/CFG/analysis/facts,
-not its enclosing VerifiedTemplateCfg. The table may retain original templates,
-but no proof-to-table or output-source backedge exists. Closed lookup is private
-and validates the exact BodySubstitutionProof/template, canonical target,
-certified substitution, facts and phase bridge before using a refinement.
-The existing analyze_closed remains the conservative no-summary path. Missing
-summaries do not grant family proof or skip the normal lifetime/effect checks.
+Each 115 fact validates one caller against the exact universal proofs it needs.
+Provider/source/CFG/analysis/world/ledger identities are derived from those
+proofs, not supplied raw keys or a caller success flag. Reject foreign bindings
+and conflicting duplicate identities. Precharge duplicate scans, per-call
+admission work and lookup work on the SAME ledger; no uncharged deep payload
+clone. A proof retains exact source/CFG/analysis/facts, not its enclosing
+VerifiedTemplateCfg. Closed lookup is private and validates the exact
+BodySubstitutionProof/template, canonical target, certified substitution, facts
+and phase bridge before using a refinement. The existing analyze_closed remains
+the conservative no-summary path. Missing summaries do not grant family proof
+or skip the normal lifetime/effect checks.
 
 The existing exact verified-source capability retains universal carrier/effect analysis, not just header topology. Closed actual expansion, re-lowering using actual Copy/Move facts, SAME closed Plan and ConcreteCfg/native seals remain mandatory. World header topology never substitutes for body success. Both Source and Recipe require the SAME capability.
 

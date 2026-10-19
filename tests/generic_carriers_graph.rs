@@ -50,25 +50,47 @@ fn universal_effect_publication_is_acyclic_and_precedes_every_closed_instance() 
                 assert_eq!(report.events_dropped, 0);
                 assert!(result.analyses.iter().all(|analysis| analysis.passed()));
                 assert_eq!(result.executable.is_none(), check_only);
-                assert_eq!(
-                    report
-                        .node_evaluations
-                        .iter()
-                        .filter(|(key, count)| key.kind == 115
-                            && key.params.is_empty()
-                            && *count == 1)
-                        .count(),
-                    1
-                );
-                let (ready, _) = discovered(report, Key::new(115, vec![]));
-                let publication = report
-                    .events
+                let admissions: Vec<_> = report
+                    .node_evaluations
                     .iter()
-                    .find(|event| event.kind == "publish" && event.node == Some(ready))
-                    .expect("effect table not published")
-                    .at_ns;
+                    .filter(|(key, count)| key.kind == 115 && *count == 1)
+                    .map(|(key, _)| key.clone())
+                    .collect();
+                assert!(
+                    !admissions.is_empty(),
+                    "required universal admission fact missing"
+                );
+                let publish_of = |key: Key| {
+                    let (node, _) = discovered(report, key);
+                    report
+                        .events
+                        .iter()
+                        .find(|event| event.kind == "publish" && event.node == Some(node))
+                        .unwrap()
+                        .at_ns
+                };
+                let publication = admissions
+                    .iter()
+                    .map(|key| publish_of(key.clone()))
+                    .max()
+                    .unwrap();
                 for (key, count) in &report.node_evaluations {
                     assert_eq!(*count, 1, "shared node evaluated repeatedly: {key:?}");
+                    if key.kind == 115 {
+                        let proof = Key::new(112, key.params.clone());
+                        let (node, _) = discovered(report, key.clone());
+                        let admitted = report
+                            .events
+                            .iter()
+                            .find(|event| event.kind == "publish" && event.node == Some(node))
+                            .unwrap()
+                            .at_ns;
+                        let proved = publish_of(proof);
+                        assert!(
+                            proved <= admitted,
+                            "universal admission preceded its own proof"
+                        );
+                    }
                     if matches!(key.kind, 110 | 112) {
                         let (node, _) = discovered(report, key.clone());
                         let completed = report
@@ -82,13 +104,26 @@ fn universal_effect_publication_is_acyclic_and_precedes_every_closed_instance() 
                             "effect table preceded mandatory body proof: {key:?}"
                         );
                     }
-                    if matches!(key.kind, 102 | 108 | 109 | 103) {
-                        assert!(
-                            discovered(report, key.clone()).1 >= publication,
-                            "closed work preceded effect table: {key:?}"
-                        );
-                    }
+                    // Closed analysis reads its callees' universal proofs
+                    // directly; the program-wide table gates only CHECK.
                 }
+                // Every closed analysis that read a universal proof did so
+                // through a recorded edge to that proof node.
+                let universal: std::collections::HashSet<u64> = report
+                    .node_ids
+                    .iter()
+                    .zip(&report.node_evaluations)
+                    .filter(|(_, (key, _))| key.kind == 112)
+                    .map(|(id, _)| *id)
+                    .collect();
+                assert!(
+                    universal.is_empty()
+                        || report
+                            .dependency_edges
+                            .iter()
+                            .any(|(_, producer, _)| universal.contains(producer)),
+                    "universal proofs were never read through graph edges"
+                );
                 if check_only {
                     assert!(
                         !report

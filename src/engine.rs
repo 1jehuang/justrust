@@ -492,7 +492,18 @@ impl Engine {
     /// Inspect a typed fact of an already-discovered node without demanding
     /// it. Returns `None` for an undiscovered key or an output with no fact.
     /// For post-run reporting of what the graph actually computed.
+    ///
+    /// Panics before execution finishes or from any provider poll. Providers
+    /// must use `Context::read_fact` so their dependency edges are recorded.
     pub fn fact_of<T: Any + Send + Sync>(&self, key: &Key, index: usize) -> Option<Arc<T>> {
+        assert!(
+            CURRENT_TASK.with(Cell::get).is_none(),
+            "Engine::fact_of is post-run only; providers must use Context::read_fact"
+        );
+        assert!(
+            lock(&self.shared.scheduler).phase == Phase::Finished,
+            "Engine::fact_of requires a finished engine"
+        );
         let hash = self.shared.hash(key);
         let node = lock(&self.shared.index[hash as usize % SHARDS])
             .get(&hash)
@@ -677,6 +688,7 @@ impl Demand {
     /// Nonblocking producer status, separate from independently valid facts.
     /// Every branch and required output must finish before this returns `Ok`.
     pub fn completion(&self) -> Result<(), Error> {
+        reject_provider_inspection()?;
         if self.cancelled.load(Ordering::Acquire) {
             return Err(Error::new("demand cancelled"));
         }
@@ -691,7 +703,9 @@ impl Demand {
     }
 
     /// Nonblocking, including before `run`. Early valid facts survive failure.
+    /// Providers must await output handles instead of inspecting demand results.
     pub fn result(&self, index: usize) -> Result<u64, Error> {
+        reject_provider_inspection()?;
         if self.cancelled.load(Ordering::Acquire) {
             return Err(Error::new("demand cancelled"));
         }
@@ -703,6 +717,15 @@ impl Demand {
         self.result(index)?;
         self.outputs.node.fact(index)
     }
+}
+
+fn reject_provider_inspection() -> Result<(), Error> {
+    if CURRENT_TASK.with(Cell::get).is_some() {
+        return Err(Error::new(
+            "synchronous demand inspection is unavailable to providers; await output handles through Context",
+        ));
+    }
+    Ok(())
 }
 
 impl Node {

@@ -23,7 +23,7 @@ impl ValidatedFacts {
                     ));
                 }
             }
-            Callee::TraitItem(call) => {
+            Callee::TraitItem(call) | Callee::Virtual(ir::VirtualCall { call }) => {
                 self.world
                     .validate_ty_metadata_in(&call.trait_ref.self_ty, self.env(), 0)?;
                 for argument in call.trait_ref.args.iter().chain(call.method_args.iter()) {
@@ -305,6 +305,9 @@ impl ValidatedTraitWorld {
             }
             | Ty::Slice { element: referent } => {
                 child(referent)?;
+            }
+            Ty::Dyn(object) => {
+                self.trait_header(object.principal)?;
             }
             Ty::Struct(value) => {
                 if value.def().id.snapshot != self.registry
@@ -1371,6 +1374,7 @@ impl ValidatedTraitWorld {
             (Ty::Slice { element: left }, Ty::Slice { element: right }) => {
                 return child(left, right);
             }
+            (Ty::Dyn(left), Ty::Dyn(right)) if left.principal == right.principal => {}
             (Ty::Tuple(_), Ty::Tuple(_)) => {}
             (Ty::Struct(left), Ty::Struct(right))
                 if left.def().source_decl == right.def().source_decl => {}

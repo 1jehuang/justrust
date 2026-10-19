@@ -1,5 +1,62 @@
 # Findings: where agent build time goes
 
+## 2026-10-18: Recover sparse ownership byte accounting
+
+- Replaced stale dense selection charges with two-usize sparse entries per
+  enum path. Exact reservation before insertion prevents Vec minimum/geometric
+  capacity from exceeding that admitted bound. New tests cover retained capacity,
+  non-power-of-two slot counts and checked arithmetic overflow.
+- Hosted graph acceptance `20261018-194603349-1204567` on base `427b5db32`
+  plus the narrow patch compiled 996 generated functions. At 997, the unchanged
+  work limit rejected requested 1994 at used 31999051 / 32000000 in
+  `src/compiler/ir.rs:1941:47`. The size ratchet tightens from 540/570 to
+  adjacent 996/997, not a resource-limit increase or scalability completion.
+- Work growth 1.692 reflects additional fixed native-heap source proofs, not
+  an algorithmic speedup. No compile-time speed claim. Exact commands and
+  nine redacted exported validation records are in `data/runs/graph-recovery/`.
+
+## 2026-10-18: Rust-source native heap foundation
+
+- Native `__justrust_linux_syscall6!` is an exact unsafe Linux x86-64 ABI
+  primitive, not an allocator or collection hook. The ordinary per-file
+  `libraries/prelude/native_heap.rs` graph input implements mmap layout/error
+  policy, generic null helpers, checked byte-address arithmetic and a private
+  non-Copy owning handle consumed by munmap. NATIVE-HEAP.md records boundaries.
+- Real executable page-end u8 accesses exposed qword raw-pointer memory
+  transport, fixed with scalar-width dereferenced loads/stores. Tests include
+  neighbor sentinels, signed narrow values, Unicode, floats, u128 and independent
+  mincore ENOMEM proof that release actually unmapped the allocation.
+- Embedding non-generic library functions exposed inconsistent closed-root
+  inventories: `compute_closed_roots` included prelude bodies excluded by the
+  instance planner, assigning unrelated library bodies to demanded symbols.
+  The frozen graph-native root inventory now uses the same prelude exclusion.
+- Final hosted stable check `20261018-193740851-832554`, heap/authority/unchanged
+  graph gate `20261018-193746077-840673` (22 passed), strict all-target clippy
+  `20261018-193752668-853011` pass. Earlier integrated prelude/primitive/format
+  coverage `20261018-193238009-450116` passed 31 tests. Final required local
+  stock oracle `20261018-193816682-887080` passed 15 tests, including six positive
+  programs at stock opt-level 0/2 and native workers 1/8, plus stock E0204 for
+  user Copy on the owning type and a positive legitimate Copy control.
+- After merging the latest source prelude, hosted check
+  `20261018-194345812-1132954`, heap/authority/prelude/unchanged graph gate
+  `20261018-194349971-1133289` (29 passed), and strict all-target clippy
+  `20261018-194400456-1132821` pass. Required local stock plus assertion/debug
+  graph and executable suites `20261018-194354287-1133496` pass all 23 tests.
+  The merged real-source harness preserves every library schema110 proof and
+  applicable universal111/112 proofs, without treating library bodies as roots.
+- Complete hosted test attempt `20261018-193311352-498403` passed 1470 tests
+  before four assertions harness failures because /usr/bin/rustc is absent.
+  Earlier full local no-fail-fast run `20261018-193502577-635541` completed
+  3283 passing and 47 failing tests before the latest prelude harness updates.
+  Its user-only graph inventories produced shifted callable keys and source
+  counts. The final merged assertion/debug suites above resolve their observed
+  graph failures. This is not a full-suite pass; existing associated-bound/
+  equality work is not masked or changed here. Own slim receipts are retained
+  separately in `data/runs/xps14/2026-10-18-native-heap.jsonl`.
+- No compiler performance claim, no graph ratchet changes, no experimental
+  package installation over the stable client. General allocation/layout,
+  raw-pointer methods, automatic Drop and Box/Vec/String remain open.
+
 ## 2026-10-18: `mut` by-value parameters
 
 - Parser accepts `mut name: T` parameters; the checker marks those locals
@@ -11650,3 +11707,40 @@ removed internal ordering. They now assert the external contract: no `BUILD`
 artifact is published (`Report::published_kind(105)`). Check-only runs still
 assert no OBJECT is demanded. Barrier-order tests now assert per-instance
 order: each object publishes after its own proof. 3259 tests pass.
+
+### Effects-per-callee plus root-instance split remove the hidden MONO_PLAN debt (2026-10-18)
+
+The pending per-callee effects branch is now merged together with a root-instance
+split for MONO_PLAN. Nongeneric Source roots no longer read the whole-program
+instance plan in BODY, LOWER, ANALYZE, or OBJECT. Those nodes derive their root
+instance directly from SIGNATURES (`PlanCtx.closed_roots`), and OBJECT derives
+callee symbols from the target alone (`instances::symbol_of`). MONO_PLAN is now
+read only for demanded generic instances and for cleanup validation on CFGs that
+actually contain `Drop` terminators.
+
+That removes the fixed +16 TEMPLATE_BODY/MONO_PLAN baggage from independent leaf
+closures. `graph_integrity` now reports leaf closure growth 16->32 of exactly
+1.000 for `object[0]` (8 -> 8 nodes), so the ratchet was tightened from 1.23 to
+1.02. Targeted suites covering graph shape and instance planning all pass:
+`graph_integrity`, `compiler`, `modules`, `tuples`, `external_modules`, and
+`generic_carriers_graph` (run `20261018-181803117-2893679`). Hosted full-suite
+validation is currently blocked by unrelated tests that hard-code `/usr/bin/rustc`
+on this machine, but strict clippy passes and the targeted graph/workflow suites
+cover the changed boundaries.
+
+### Universal admission is per-caller, not a root join (2026-10-18)
+
+The remaining whole-program `effects_ready` node was only enforcing the
+reference-actual admission rule for universal bodies. Kind 115 is now one fact
+per universal callable instead of a root join. Each admission fact reads that
+caller's own `UNIVERSAL_ANALYZE` proof and only the universal callees actually
+needed by reference-actual calls. `CHECK` now waits on `TEMPLATE_BODY` for every
+callable plus the per-caller 115 facts for universal bodies, rather than one
+global join.
+
+This removes `effects_ready` from `WHOLE_PROGRAM_DEBT` and keeps the graph
+honest: the remaining root joins in this lane are no longer pretending to be
+item-local. Targeted graph suites all pass with the new shape (`graph_integrity`,
+`compiler`, `external_modules`, `generic_carriers_graph`, `generics_graph`,
+`modules`, `tuples`, `canonical_copy_graph`, run `20261018-182437837-2935726`),
+and strict clippy stays clean on hosted (`20261018-182437813-2935601`).

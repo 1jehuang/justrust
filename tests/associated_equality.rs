@@ -16,6 +16,9 @@
 //! Native outcomes are acceptance requirements, NOT measured native results.
 //! Run debug/release separately. No compiler-compatibility or speed claim.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/native_prelude.rs"]
+mod native_prelude;
+
 use justrust_engine::compiler::{self, frontend, ir};
 use justrust_engine::{Key, Report};
 use std::fs::{self, OpenOptions};
@@ -1203,7 +1206,7 @@ fn evaluated_once(report: &Report, kind: u32, index: usize, case: &Case) {
     assert_eq!(entries[0].1, 1, "{}: repeated {key:?}", case.name);
 }
 fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, check: bool) {
-    let program = frontend::parse(case.source).expect("frozen positive source parses");
+    let program = native_prelude::parse(case.source).expect("frozen positive source parses");
     frontend::check(&program).expect("all bodies check independently of reachability");
     let plan = frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default())
         .expect("real source binders and declared predicates");
@@ -1220,7 +1223,7 @@ fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, chec
         evaluated_once(&compiled.report, 110, index, case);
         let universal = match plan.callable_provider(declaration).unwrap() {
             frontend::CallableProvider::Source { .. } => {
-                source_bodies += 1;
+                source_bodies += usize::from(!plan.is_prelude_decl(declaration).unwrap());
                 let generic = plan.callable_env(declaration).unwrap().is_generic();
                 generic_bodies += usize::from(generic);
                 generic
@@ -1342,7 +1345,6 @@ fn all_body_graph() {
                                     if let frontend::CallableProvider::Source { .. } =
                                         plan.callable_provider(declaration).unwrap()
                                     {
-                                        evaluated_once(&report, 110, index, &case);
                                         let body =
                                             plan.callable_body(&program, declaration).unwrap();
                                         if body.name.segments().last().is_some_and(|name| {
@@ -1359,7 +1361,7 @@ fn all_body_graph() {
                                 }
                                 assert!(
                                     saw_unused,
-                                    "{}: genuinely unused universal body checked",
+                                    "{}: genuinely unused universal bad body still rejected",
                                     case.name
                                 );
                                 unused_failures += 1;

@@ -250,7 +250,7 @@ fn cases() -> Vec<Case> {
             source: r#"struct Wrap<T>(T);fn main(){let value=Wrap(42);let Wrap(ref x)=value;if *x==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
     ]
 }
@@ -418,7 +418,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (22, 10));
-    assert_eq!(partition, (18, 10, 4));
+    assert_eq!(partition, (19, 10, 3));
 }
 #[test]
 fn stock_generic_tuple_oracle_edition2024_actual_toolchain() {
@@ -462,7 +462,7 @@ fn source_generic_tuple_declarations_keep_real_parameters_and_numeric_fields() {
         }
         count += 1;
     }
-    assert_eq!(count, 18);
+    assert_eq!(count, 19);
 }
 fn all_blocks(function: &ir::CheckedFunction) -> Vec<&ir::Block> {
     let mut blocks = vec![&function.body];
@@ -610,7 +610,7 @@ fn generic_tuple_templates_and_concrete_domains_preserve_application_and_field_p
         counts.0 += 1;
         counts.2 += constructors;
     }
-    assert_eq!(counts.0, 18);
+    assert_eq!(counts.0, 19);
     assert_eq!(counts.1, 3);
     assert!(counts.2 >= 18);
 }
@@ -675,7 +675,7 @@ fn valid_closed_tuple_forms_keep_precise_parser_and_resolution_boundaries() {
             counts.0 += 1;
         }
     }
-    assert_eq!(counts, (3, 1));
+    assert_eq!(counts, (2, 1));
 }
 #[test]
 fn native_generic_tuple_structs_workers1_8_check_build_no_compiler_fallback() {
@@ -762,7 +762,7 @@ fn native_generic_tuple_structs_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 128);
-    assert_eq!(modes, (36, 36, 20, 20, 8, 8));
+    assert_eq!(modes, (38, 38, 20, 20, 6, 6));
     eprintln!(
         "NATIVE GENERIC TUPLES:128 cells, modes{modes:?};36 nonempty-output main images;16 stock-valid Unsupported cells are boundaries, not Rust-invalid parity or full Rust support"
     );

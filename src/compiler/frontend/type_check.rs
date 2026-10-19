@@ -1,6 +1,9 @@
 //! Source checking, local inference and checked body construction.
 use super::*;
 
+#[path = "local_literals.rs"]
+mod local_literals;
+
 /// Borrowed source bodies and the semantic unit value of an absent else.
 #[derive(Clone, Copy)]
 enum MatchBody<'a> {
@@ -179,9 +182,11 @@ pub(super) struct LoopFrame {
 }
 pub(super) struct PatternLocal {
     pub(super) name: AstIdent,
+    /// The binding local's own type: `&kind T` for a borrowing binding.
     pub(super) ty: ir::Ty,
     pub(super) mutable: bool,
     pub(super) projection: Vec<ir::Projection>,
+    pub(super) borrow: Option<ir::BorrowKind>,
 }
 
 struct PendingPatternBinding {
@@ -307,6 +312,18 @@ pub(super) struct PatternLocalInput<'p> {
     ty: &'p ir::Ty,
     mutable: bool,
     path: &'p [ir::Projection],
+    borrow: Option<ir::BorrowKind>,
+}
+impl PatternLocalInput<'_> {
+    fn local_ty(&self) -> ir::Ty {
+        match self.borrow {
+            None => self.ty.clone(),
+            Some(kind) => ir::Ty::Ref {
+                kind,
+                referent: Arc::new(self.ty.clone()),
+            },
+        }
+    }
 }
 pub(super) trait PatternLocalSink {
     fn len(&self) -> usize;
@@ -332,9 +349,10 @@ impl PatternLocalSink for Vec<PatternLocal> {
         }
         self.push(PatternLocal {
             name: input.name,
-            ty: input.ty.clone(),
+            ty: input.local_ty(),
             mutable: input.mutable,
             projection: input.path.to_vec(),
+            borrow: input.borrow,
         });
         Ok(())
     }
@@ -360,9 +378,10 @@ impl PatternLocalSink for PendingPatternBindings {
             .push(PendingPatternBinding {
                 local: PatternLocal {
                     name: input.name,
-                    ty: input.ty.clone(),
+                    ty: input.local_ty(),
                     mutable: input.mutable,
                     projection,
+                    borrow: input.borrow,
                 },
                 key: input.key,
                 _projection_lease: lease,
@@ -953,6 +972,9 @@ impl<'s> Checker<'s> {
             .as_ref()
             .ok_or("inference requires planning context")?;
         let term = match expr {
+            Expr::NativeSyscall(_) => {
+                self.infer_node(InferKind::Rigid(ir::Ty::Int(ir::IntTy::Usize)))?
+            }
             Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
             Expr::Output(output) => {
                 validate_output_site(output, self.names()?)?;
@@ -983,6 +1005,10 @@ impl<'s> Checker<'s> {
                 let (_, referent, _) = self.checked_place(place)?;
                 self.validate_borrow_referent(*kind, &referent)?;
                 let inner = self.infer_type_term(&referent, None, depth + 1)?;
+                self.infer_node(InferKind::Ref(*kind, inner))?
+            }
+            Expr::BorrowValue { kind, value } => {
+                let inner = self.inference_evidence(value, depth + 1)?;
                 self.infer_node(InferKind::Ref(*kind, inner))?
             }
             Expr::Deref { value } => {
@@ -1380,6 +1406,14 @@ pub(super) fn genuine_call(expr: &Expr) -> bool {
         _ => false,
     }
 }
+/// Place expressions that an rvalue temporary would wrongly copy.
+pub(super) fn place_expression(expr: &Expr) -> bool {
+    match expr {
+        Expr::Var(_) | Expr::Deref { .. } | Expr::DynamicIndex { .. } => true,
+        Expr::Field { base, .. } | Expr::Index { base, .. } => place_expression(base),
+        _ => false,
+    }
+}
 pub(super) fn static_source_place(mut expr: &Expr) -> Result<Place, String> {
     let mut fields = Vec::new();
     loop {
@@ -1452,6 +1486,17 @@ pub(super) struct Checker<'a> {
     /// Nesting depth of enclosing `unsafe` blocks; raw pointer dereference
     /// requires at least one (E0133).
     pub(super) unsafe_depth: usize,
+    /// Default binding mode of the pattern position being checked. `None` is
+    /// move mode; implicit dereferences of matched references switch it to a
+    /// borrow. Always restored after each implicit dereference.
+    pub(super) binding_mode: std::cell::Cell<Option<ir::BorrowKind>>,
+    /// Storage for borrowed value temporaries (`&P { .. }`, `&f()`), with
+    /// whether the temporary is lifetime-extended by an enclosing `let`.
+    /// Extended temporaries are declared by the enclosing block; others are
+    /// declared by a block wrapping only their statement or initializer.
+    pub(super) borrow_temporaries: Vec<(ir::LocalId, bool)>,
+    /// Source addresses of borrow operands in extending `let` positions.
+    pub(super) extending_borrows: Vec<usize>,
 }
 #[derive(Clone, Copy)]
 pub(super) enum Expectation<'a> {
@@ -1977,6 +2022,7 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
             kind: *kind,
             pointee: std::sync::Arc::new(checked_ty_at(pointee, env, false)?),
         }),
+        Type::Dyn(_) => Err("unsupported: trait objects require the planning frontend".into()),
         Type::Ref { referent, .. } if matches!(referent.as_ref(), Type::Slice(_)) => {
             Err("unsupported: shared slices require the planning frontend".into())
         }
@@ -2068,6 +2114,9 @@ pub(super) fn coerces(got: &ir::Ty, want: &ir::Ty) -> bool {
         _ => false,
     }
 }
+/// Reference layers peeled from a primitive-method receiver.
+const MAX_INTRINSIC_AUTODEREF: usize = 8;
+
 impl<'a> Checker<'a> {
     pub(super) fn names(&self) -> Result<&NameStore, String> {
         let names = &self.signatures.plan()?.program.names;
@@ -2387,8 +2436,18 @@ impl<'a> Checker<'a> {
         }
         self.infer_work(0)?;
         self.accessible(ty)?;
+        if Self::implicitly_dereferenced(pattern, ty) {
+            return self.implicit_deref(ty, &mut Vec::new(), |this, referent, _| {
+                this.validate_aggregate_pattern(pattern, referent, depth + 1, work, binders)
+            });
+        }
         let pattern = self.pattern_source(pattern, ty)?;
         match pattern {
+            Pattern::Ref { kind, pattern } => {
+                self.explicit_deref(*kind, ty, &mut Vec::new(), |this, referent, _| {
+                    this.validate_aggregate_pattern(pattern, referent, depth + 1, work, binders)
+                })
+            }
             Pattern::Array(fields) => {
                 let (element, _) = self.array_pattern_type(pattern, ty)?;
                 for field in fields {
@@ -2641,13 +2700,18 @@ impl<'a> Checker<'a> {
             path.len().checked_add(1).ok_or("decision path overflow")?,
         )?;
         self.accessible(ty)?;
-        if matches!(ty, ir::Ty::Ref { .. })
-            && !matches!(pattern, Pattern::Wildcard | Pattern::Binding { .. })
-        {
-            return Err(self.reference_pattern_unsupported());
+        if Self::implicitly_dereferenced(pattern, ty) {
+            return self.implicit_deref(ty, path, |this, referent, path| {
+                this.collect_decision(pattern, referent, path, pending, depth + 1)
+            });
         }
         let pattern = self.pattern_source(pattern, ty)?;
         match pattern {
+            Pattern::Ref { kind, pattern } => {
+                self.explicit_deref(*kind, ty, path, |this, referent, path| {
+                    this.collect_decision(pattern, referent, path, pending, depth + 1)
+                })?;
+            }
             Pattern::Wildcard => {}
             Pattern::Binding { .. } => self.pattern_locals(
                 pattern,
@@ -2935,15 +2999,16 @@ impl<'a> Checker<'a> {
         pattern: &Pattern,
         domain: &ir::Ty,
     ) -> Result<PendingPatternPlan, String> {
-        if matches!(domain, ir::Ty::Ref { .. })
-            && !matches!(pattern, Pattern::Wildcard | Pattern::Binding { .. })
-        {
-            return Err(self.reference_pattern_unsupported());
+        if Self::implicitly_dereferenced(pattern, domain) {
+            return self.collect_complex_pattern(pattern, domain);
         }
         let pattern = self.pattern_source(pattern, domain)?;
         let mut bindings = self.pending_pattern_bindings()?;
         let test = match pattern {
             Pattern::Wildcard => PatternTest::Wildcard,
+            Pattern::Binding {
+                by_ref: Some(_), ..
+            } => return self.collect_complex_pattern(pattern, domain),
             Pattern::Binding { .. } => {
                 self.pattern_locals(
                     pattern,
@@ -3022,13 +3087,22 @@ impl<'a> Checker<'a> {
             let mut projection = self.retained_pattern_vec(binding.projection.len())?;
             projection.extend_from_slice(&binding.projection);
             let local = self.local(binding.name, binding.ty.clone(), binding.mutable)?;
-            bindings.push(ir::PatternBinding { local, projection });
+            bindings.push(ir::PatternBinding {
+                local,
+                projection,
+                borrow: binding.borrow,
+            });
         }
         Ok(match plan.test {
             PatternTest::Wildcard => ir::MatchPattern::Wildcard,
             PatternTest::Bool(value) => ir::MatchPattern::Bool(value),
             PatternTest::Int(value) => ir::MatchPattern::Int(value),
             PatternTest::Unit => ir::MatchPattern::Unit,
+            // Selecting through a reference without binding anything reads
+            // nothing: it is exactly an irrefutable wildcard.
+            PatternTest::Aggregate(ir::Ty::Ref { .. }) if bindings.is_empty() => {
+                ir::MatchPattern::Wildcard
+            }
             PatternTest::Aggregate(ty) => ir::MatchPattern::Aggregate { ty, bindings },
             PatternTest::EnumVariant { ty, variant } => ir::MatchPattern::EnumVariant {
                 ty,
@@ -3162,6 +3236,9 @@ impl<'a> Checker<'a> {
             applications: std::cell::RefCell::new(Vec::new()),
             inference_evidence_cache: std::cell::RefCell::new(HashMap::new()),
             unsafe_depth: 0,
+            binding_mode: std::cell::Cell::new(None),
+            borrow_temporaries: Vec::new(),
+            extending_borrows: Vec::new(),
             canonical: None,
         }
     }
@@ -3872,6 +3949,7 @@ impl<'a> Checker<'a> {
     }
     pub(super) fn scalar_hint(&self, e: &Expr) -> Result<Option<ir::Ty>, String> {
         Ok(match e {
+            Expr::NativeSyscall(_) => Some(ir::Ty::Int(ir::IntTy::Usize)),
             Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
             Expr::Output(output) => {
                 validate_output_site(output, self.names()?)?;
@@ -3948,6 +4026,10 @@ impl<'a> Checker<'a> {
             {
                 Some(ir::Ty::Int(ir::IntTy::U32))
             }
+            Expr::MethodCall { .. } if self.intrinsic_target(e)?.is_some() => self
+                .intrinsic_target(e)?
+                .and_then(ir::Intrinsic::signature)
+                .map(|signature| signature.result),
             Expr::MethodCall { receiver, .. }
                 if slice_len_candidate(e, self.names()?)?
                     && self
@@ -3999,6 +4081,12 @@ impl<'a> Checker<'a> {
                 Some(ir::Ty::RawPtr { pointee, .. }) => Some(pointee.as_ref().clone()),
                 _ => None,
             },
+            Expr::BorrowValue { kind, value } => {
+                self.scalar_hint(value)?.map(|referent| ir::Ty::Ref {
+                    kind: *kind,
+                    referent: Arc::new(referent),
+                })
+            }
             Expr::Integer(literal) => literal.suffix.map(ir::Ty::Int),
             Expr::Float(literal) => literal.suffix.map(ir::Ty::Float),
             Expr::Bool(_) => Some(ir::Ty::Bool),
@@ -4241,16 +4329,291 @@ impl<'a> Checker<'a> {
         self.accessible(&projected)?;
         Ok((index, projected))
     }
-    fn reference_pattern_unsupported(&self) -> String {
-        super::super::source::SourceError {
-            kind: super::super::source::SourceErrorKind::Unsupported,
-            primary: None,
-            message: "reference patterns and implicit match ergonomics are unsupported in B1"
-                .into(),
-            _diagnostic_lease: None,
-            location: None,
+    /// A non-reference pattern matched against a reference implicitly
+    /// dereferences it (RFC 2005 default binding modes, edition 2024 rules).
+    pub(super) fn implicitly_dereferenced(pattern: &Pattern, ty: &ir::Ty) -> bool {
+        matches!(ty, ir::Ty::Ref { .. })
+            && !matches!(
+                pattern,
+                Pattern::Wildcard | Pattern::Binding { .. } | Pattern::Ref { .. }
+            )
+    }
+    /// Check `pattern` against the referent of `ty` with the default binding
+    /// mode switched to a borrow, recording the dereference in `path`.
+    pub(super) fn implicit_deref<R>(
+        &self,
+        ty: &ir::Ty,
+        path: &mut Vec<ir::Projection>,
+        f: impl FnOnce(&Self, &ir::Ty, &mut Vec<ir::Projection>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let ir::Ty::Ref { kind, referent } = ty else {
+            return Err("contract: implicit dereference of a non-reference".into());
+        };
+        if path.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+            return Err("pattern projection depth exceeds limit".into());
         }
-        .to_string()
+        let previous = self.binding_mode.get();
+        let mode = match (previous, kind) {
+            (Some(ir::BorrowKind::Shared), _) | (_, ir::BorrowKind::Shared) => {
+                ir::BorrowKind::Shared
+            }
+            _ => ir::BorrowKind::Mut,
+        };
+        self.binding_mode.set(Some(mode));
+        path.push(ir::Projection::Deref);
+        let result = f(self, referent, path);
+        path.pop();
+        self.binding_mode.set(previous);
+        result
+    }
+    /// An explicit `&pat`/`&mut pat` dereference, only valid in move mode.
+    pub(super) fn explicit_deref<R>(
+        &self,
+        kind: ir::BorrowKind,
+        ty: &ir::Ty,
+        path: &mut Vec<ir::Projection>,
+        f: impl FnOnce(&Self, &ir::Ty, &mut Vec<ir::Projection>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        if self.binding_mode.get().is_some() {
+            return Err(
+                "cannot explicitly dereference within an implicitly-borrowing pattern".into(),
+            );
+        }
+        let ir::Ty::Ref {
+            kind: actual,
+            referent,
+        } = ty
+        else {
+            return Err(format!(
+                "mismatched types: reference pattern against {ty:?}"
+            ));
+        };
+        if *actual != kind {
+            return Err("mismatched types: reference pattern mutability differs".into());
+        }
+        if path.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+            return Err("pattern projection depth exceeds limit".into());
+        }
+        path.push(ir::Projection::Deref);
+        let result = f(self, referent, path);
+        path.pop();
+        result
+    }
+    /// `&value` where `value` is not a place: evaluate it into a fresh
+    /// temporary declared by the enclosing block, then borrow that.
+    pub(super) fn borrow_value(
+        &mut self,
+        kind: ir::BorrowKind,
+        value: &Expr,
+        expected: Option<&ir::Ty>,
+    ) -> Result<ir::ExprId, String> {
+        let source = value;
+        if place_expression(value) {
+            return Err(
+                "unsupported: borrowing runtime indexed or dereferenced places is unsupported"
+                    .into(),
+            );
+        }
+        if matches!(value, Expr::Field { .. } | Expr::Index { .. }) {
+            // `&call().field` may name a place behind a returned reference
+            // (autoderef), which a copied temporary would not alias.
+            return Err(
+                "unsupported: borrowing a field or element of a value expression is unsupported"
+                    .into(),
+            );
+        }
+        let hint = match (expected, value) {
+            // `&[a, b]` at a `&[T]` site: the array literal gets element type T.
+            (Some(ir::Ty::Ref { referent, .. }), Expr::Array(elements)) => {
+                match referent.as_ref() {
+                    ir::Ty::Slice { element } => Some(ir::Ty::Array {
+                        element: element.clone(),
+                        len: elements.len(),
+                    }),
+                    other => Some(other.clone()),
+                }
+            }
+            (Some(ir::Ty::Ref { referent, .. }), Expr::Repeat { len, .. }) => {
+                match referent.as_ref() {
+                    ir::Ty::Slice { element } => Some(ir::Ty::Array {
+                        element: element.clone(),
+                        len: *len,
+                    }),
+                    other => Some(other.clone()),
+                }
+            }
+            (Some(ir::Ty::Ref { referent, .. }), _)
+                if !matches!(referent.as_ref(), ir::Ty::Slice { .. }) =>
+            {
+                Some(referent.as_ref().clone())
+            }
+            _ => None,
+        };
+        let value = self.expr_expected(value, hint.as_ref())?;
+        let flow = self.flow(value);
+        if !flow.completes {
+            return Ok(value);
+        }
+        if !self.trivially_dropped(&flow.ty)? {
+            return Err("unsupported: borrowing a temporary whose type has a destructor".into());
+        }
+        let local = self.temporary("$borrow_temporary", flow.ty.clone(), true)?;
+        self.charge_node(std::mem::size_of::<ir::LocalId>())?;
+        let extended = self
+            .extending_borrows
+            .contains(&(source as *const Expr as usize));
+        self.borrow_temporaries.push((local, extended));
+        let borrowed = self.borrow_expression(
+            kind,
+            ir::Place {
+                local,
+                projection: Vec::new(),
+            },
+        )?;
+        let ty = self.exprs[borrowed.0].ty.clone();
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 64)?;
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty,
+            completion: ir::Completion::Returns,
+            kind: ir::ExprKind::Block(ir::Block {
+                statements: vec![ir::Stmt::Assign { local, value }],
+                tail: Some(borrowed),
+            }),
+        });
+        Ok(id)
+    }
+    /// Record borrow operands in extending positions of a `let` initializer:
+    /// the initializer itself, operands of extending borrows, and fields of
+    /// tuple, array, struct and variant constructors in extending positions.
+    fn mark_extending_borrows(&mut self, expr: &Expr, depth: usize) -> Result<(), String> {
+        if depth >= 128 {
+            return Ok(());
+        }
+        self.charge_node(std::mem::size_of::<usize>())?;
+        match expr {
+            Expr::BorrowValue { value, .. } => {
+                self.extending_borrows
+                    .push(value.as_ref() as *const Expr as usize);
+                self.mark_extending_borrows(value, depth + 1)?;
+            }
+            Expr::Apply { value, .. } => self.mark_extending_borrows(value, depth + 1)?,
+            Expr::Tuple(fields) | Expr::Array(fields) | Expr::TupleStruct { fields, .. } => {
+                for field in fields {
+                    self.mark_extending_borrows(field, depth + 1)?;
+                }
+            }
+            Expr::Struct { fields, .. } => {
+                for (_, field) in fields {
+                    self.mark_extending_borrows(field, depth + 1)?;
+                }
+            }
+            Expr::EnumVariant { fields, .. } => {
+                for (_, field) in fields {
+                    self.mark_extending_borrows(field, depth + 1)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    /// Give the borrowed temporaries created by one statement their Rust
+    /// scope. Extended temporaries are declared in the enclosing block. The
+    /// others end with the statement: a `let` initializer is wrapped in its own
+    /// block, and any other statement is wrapped together with its storage.
+    fn scope_borrow_temporaries(
+        &mut self,
+        start: usize,
+        statement: ir::Stmt,
+        completes: bool,
+        statements: &mut Vec<ir::Stmt>,
+    ) -> Result<ir::Stmt, String> {
+        if self.borrow_temporaries.len() == start {
+            return Ok(statement);
+        }
+        let mut local_scope = Vec::new();
+        for (local, extended) in self.borrow_temporaries.drain(start..) {
+            if extended {
+                statements.push(ir::Stmt::Declare { local });
+            } else {
+                local_scope.push(ir::Stmt::Declare { local });
+            }
+        }
+        if local_scope.is_empty() {
+            return Ok(statement);
+        }
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 64)?;
+        let completion = if completes {
+            ir::Completion::Returns
+        } else {
+            ir::Completion::Never
+        };
+        Ok(match statement {
+            ir::Stmt::Let { local, value } => {
+                let wrapped = self.temporary_block(local_scope, Some(value))?;
+                ir::Stmt::Let {
+                    local,
+                    value: wrapped,
+                }
+            }
+            ir::Stmt::LetPattern {
+                value,
+                ty,
+                bindings,
+            } => {
+                let wrapped = self.temporary_block(local_scope, Some(value))?;
+                ir::Stmt::LetPattern {
+                    value: wrapped,
+                    ty,
+                    bindings,
+                }
+            }
+            ir::Stmt::Assign { local, value } => {
+                let wrapped = self.temporary_block(local_scope, Some(value))?;
+                ir::Stmt::Assign {
+                    local,
+                    value: wrapped,
+                }
+            }
+            ir::Stmt::LetElse { .. } => {
+                return Err("unsupported: borrowed temporaries in let-else initializers".into());
+            }
+            other => {
+                local_scope.push(other);
+                let id = ir::ExprId(self.exprs.len());
+                self.exprs.push(ir::TypedExpr {
+                    ty: if completes {
+                        ir::Ty::Unit
+                    } else {
+                        ir::Ty::Never
+                    },
+                    completion,
+                    kind: ir::ExprKind::Block(ir::Block {
+                        statements: local_scope,
+                        tail: None,
+                    }),
+                });
+                ir::Stmt::Expr(id)
+            }
+        })
+    }
+    fn temporary_block(
+        &mut self,
+        statements: Vec<ir::Stmt>,
+        tail: Option<ir::ExprId>,
+    ) -> Result<ir::ExprId, String> {
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 64)?;
+        let (ty, completion) = match tail {
+            Some(tail) => (self.exprs[tail.0].ty.clone(), self.exprs[tail.0].completion),
+            None => (ir::Ty::Unit, ir::Completion::Returns),
+        };
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty,
+            completion,
+            kind: ir::ExprKind::Block(ir::Block { statements, tail }),
+        });
+        Ok(id)
     }
     /// True when dropping a value of `ty` runs no user destructor.
     pub(super) fn trivially_dropped(&self, ty: &ir::Ty) -> Result<bool, String> {
@@ -4283,12 +4646,19 @@ impl<'a> Checker<'a> {
         {
             return Err("unsupported: destructuring a normal Drop owner".into());
         }
-        if matches!(ty, ir::Ty::Ref { .. })
-            && !matches!(pattern, Pattern::Wildcard | Pattern::Binding { .. })
-        {
-            return Err(self.reference_pattern_unsupported());
+        if Self::implicitly_dereferenced(pattern, ty) {
+            self.implicit_deref(ty, &mut Vec::new(), |this, referent, _| {
+                this.pattern_ty(pattern, referent)
+            })?;
+            return Ok(ty.clone());
         }
         match pattern {
+            Pattern::Ref { kind, pattern: inner } => {
+                self.explicit_deref(*kind, ty, &mut Vec::new(), |this, referent, _| {
+                    this.pattern_ty(inner, referent)
+                })?;
+                Ok(ty.clone())
+            }
             Pattern::Path(name) | Pattern::Variant { name,.. } | Pattern::VariantRest { name, .. } => {
                 if let Some(tuple) = self.tuple_pattern_type(pattern, ty)? { return Ok(ir::Ty::Struct(tuple)); }
                 let expected = if let ir::Ty::Enum(enumeration) = ty {
@@ -4350,7 +4720,17 @@ impl<'a> Checker<'a> {
         if path.len() > ir::MAX_PATTERN_PROJECTION_DEPTH {
             return Err("pattern projection depth exceeds limit".into());
         }
+        if Self::implicitly_dereferenced(pattern, ty) {
+            return self.implicit_deref(ty, path, |this, referent, path| {
+                this.pattern_locals(pattern, referent, path, names, pending, work)
+            });
+        }
         match pattern {
+            Pattern::Ref { kind, pattern } => {
+                return self.explicit_deref(*kind, ty, path, |this, referent, path| {
+                    this.pattern_locals(pattern, referent, path, names, pending, work)
+                });
+            }
             Pattern::Apply { .. } => {
                 return self.pattern_locals(
                     self.pattern_source(pattern, ty)?,
@@ -4467,10 +4847,38 @@ impl<'a> Checker<'a> {
             Pattern::Bool(_) | Pattern::Int { .. } | Pattern::Char(_) | Pattern::Range { .. } => {
                 return Err(Self::nested_refutable_literal_unsupported());
             }
-            Pattern::Binding { name, mutable } => {
-                if path
-                    .iter()
-                    .any(|step| matches!(step, ir::Projection::ConstantIndex(_)))
+            Pattern::Binding {
+                name,
+                mutable,
+                by_ref,
+            } => {
+                let mode = self.binding_mode.get();
+                let borrow = match (by_ref, mode) {
+                    (Some(_), Some(_)) => {
+                        return Err(
+                            "cannot explicitly borrow within an implicitly-borrowing pattern"
+                                .into(),
+                        );
+                    }
+                    (Some(kind), None) => Some(*kind),
+                    (None, Some(_)) if *mutable => {
+                        return Err(
+                            "cannot mutably bind by value within an implicitly-borrowing pattern"
+                                .into(),
+                        );
+                    }
+                    (None, mode) => mode,
+                };
+                if borrow.is_none()
+                    && path.contains(&ir::Projection::Deref)
+                    && !self.facts().must_copy(ty)?
+                {
+                    return Err("cannot move a non-Copy value out of a reference".into());
+                }
+                if borrow.is_none()
+                    && path
+                        .iter()
+                        .any(|step| matches!(step, ir::Projection::ConstantIndex(_)))
                     && !self.facts().must_copy(ty)?
                 {
                     return Err(Self::array_pattern_unsupported(
@@ -4499,6 +4907,7 @@ impl<'a> Checker<'a> {
                         ty,
                         mutable: *mutable,
                         path,
+                        borrow,
                     },
                     names,
                 )?;
@@ -4849,8 +5258,10 @@ impl<'a> Checker<'a> {
         b: &Block,
         expectation: Expectation<'_>,
     ) -> Result<(ir::Block, Flow), String> {
+        let literal_hints = local_literals::hints(self, b, expectation.hard())?;
         let entered_reachable = self.reachable;
         let pending_start = self.pending_references.len();
+        let temporaries_start = self.borrow_temporaries.len();
         self.scopes.push(HashMap::new());
         let mut live = true;
         // While-let remains a source Unit obligation even when its genuine
@@ -4897,11 +5308,15 @@ impl<'a> Checker<'a> {
                     value,
                 } => {
                     let annotation = if matches!(ty, Type::Infer) {
-                        None
+                        literal_hints.get(&(s as *const Stmt as usize)).cloned()
                     } else {
                         Some(checked_local_ty(ty, self.signatures)?)
                     };
-                    let value = self.expr_expected(value, annotation.as_ref())?;
+                    let extending = self.extending_borrows.len();
+                    self.mark_extending_borrows(value, 0)?;
+                    let value = self.expr_expected(value, annotation.as_ref());
+                    self.extending_borrows.truncate(extending);
+                    let value = value?;
                     let f = self.flow(value);
                     let t = if matches!(ty, Type::Infer) {
                         f.ty.clone()
@@ -4932,7 +5347,11 @@ impl<'a> Checker<'a> {
                     };
                     let direct_dynamic = matches!(value, Expr::DynamicIndex { .. });
                     let direct_wildcard = matches!(pattern, Pattern::Wildcard);
-                    let value = self.expr_expected(value, annotation.as_ref())?;
+                    let extending = self.extending_borrows.len();
+                    self.mark_extending_borrows(value, 0)?;
+                    let value = self.expr_expected(value, annotation.as_ref());
+                    self.extending_borrows.truncate(extending);
+                    let value = value?;
                     let flow = self.flow(value);
                     if direct_dynamic && !self.facts().must_copy(&flow.ty)? && !direct_wildcard {
                         return Err("non-Copy runtime indexed pattern extraction is unsupported; only direct let _ inspection is admitted".into());
@@ -4964,6 +5383,7 @@ impl<'a> Checker<'a> {
                         bindings.push(ir::PatternBinding {
                             local,
                             projection: binding.projection,
+                            borrow: binding.borrow,
                         });
                     }
                     (
@@ -5023,7 +5443,13 @@ impl<'a> Checker<'a> {
                             mutable: declaration.mutable,
                         });
                         self.scopes[declaration.scope].insert(key, local);
-                        statements.push(ir::Stmt::Assign { local, value });
+                        let statement = self.scope_borrow_temporaries(
+                            temporaries_start,
+                            ir::Stmt::Assign { local, value },
+                            flow.completes,
+                            &mut statements,
+                        )?;
+                        statements.push(statement);
                         live &= flow.completes;
                         continue;
                     }
@@ -5184,6 +5610,19 @@ impl<'a> Checker<'a> {
                         f.completes,
                     )
                 }
+                Stmt::For {
+                    label,
+                    pattern,
+                    source,
+                    body,
+                    ..
+                } => self.for_range_statement(
+                    *label,
+                    pattern,
+                    source,
+                    body,
+                    literal_hints.get(&(s as *const Stmt as usize)),
+                )?,
                 Stmt::WhileLet {
                     label,
                     pattern,
@@ -5192,12 +5631,18 @@ impl<'a> Checker<'a> {
                     ..
                 } => self.while_let_statement(*label, pattern, scrutinee, body)?,
             };
+            let statement = self.scope_borrow_temporaries(
+                temporaries_start,
+                statement,
+                completes,
+                &mut statements,
+            )?;
             if let Some(cap) = self.canonical {
                 cap.record_emission(s, statements.len())?;
             }
             statements.push(statement);
             live &= completes;
-            if !matches!(s, Stmt::WhileLet { .. }) {
+            if !matches!(s, Stmt::WhileLet { .. } | Stmt::For { .. }) {
                 source_live &= completes;
             }
         }
@@ -5208,6 +5653,10 @@ impl<'a> Checker<'a> {
             .map(|e| self.expr_with_expectation(e, expectation))
             .transpose()?;
         self.reachable = entered_reachable;
+        // Tail temporaries live until the end of this block.
+        for (local, _) in self.borrow_temporaries.drain(temporaries_start..) {
+            statements.push(ir::Stmt::Declare { local });
+        }
         let mut flow = tail.map_or_else(
             || {
                 // An undiscarded genuine final while-let is a Unit-valued
@@ -5215,10 +5664,15 @@ impl<'a> Checker<'a> {
                 if source_live
                     || matches!(
                         b.statements.last(),
-                        Some(Stmt::WhileLet {
-                            has_semicolon: false,
-                            ..
-                        })
+                        Some(
+                            Stmt::WhileLet {
+                                has_semicolon: false,
+                                ..
+                            } | Stmt::For {
+                                has_semicolon: false,
+                                ..
+                            }
+                        )
                     )
                 {
                     Flow::value(ir::Ty::Unit)
@@ -5281,6 +5735,12 @@ impl<'a> Checker<'a> {
             }
             return Ok(id);
         }
+        if let Some(id) = self.builtin_intrinsic(e)? {
+            if let Some(cap) = self.canonical {
+                cap.record_builtin_intrinsic(e, id, &self.exprs)?;
+            }
+            return Ok(id);
+        }
         let result = self.expr_with_expectation_inner(e, expectation)?;
         let result = self.record_original_call(e, result)?;
         match expectation.hard() {
@@ -5290,8 +5750,87 @@ impl<'a> Checker<'a> {
             {
                 self.coerce_shared_array_to_slice(result, expected)
             }
+            Some(expected) if trait_object_target(expected).is_some() => {
+                self.coerce_ref_to_dyn(result, expected)
+            }
             _ => Ok(result),
         }
+    }
+    /// Expected-site unsizing `&T`/`&mut T` (or reborrowing `&mut T` as `&T`)
+    /// to `&dyn P`/`&mut dyn P`. Requires a proof of `T: P` in the current
+    /// facts (E0277 otherwise). Already-`dyn` operands pass through unchanged.
+    pub(super) fn coerce_ref_to_dyn(
+        &mut self,
+        value: ir::ExprId,
+        expected: &ir::Ty,
+    ) -> Result<ir::ExprId, String> {
+        let (want_kind, principal) =
+            trait_object_target(expected).ok_or("trait object coercion target")?;
+        let source = &self.exprs[value.0];
+        let ir::Ty::Ref {
+            kind: have_kind,
+            referent,
+        } = &source.ty
+        else {
+            return Ok(value);
+        };
+        if matches!(referent.as_ref(), ir::Ty::Dyn(_)) {
+            return Ok(value);
+        }
+        if matches!(source.ty, ir::Ty::Never) {
+            return Ok(value);
+        }
+        if matches!(
+            referent.as_ref(),
+            ir::Ty::Slice { .. } | ir::Ty::Never | ir::Ty::AssociatedType(_)
+        ) {
+            return Err("unsupported: trait object unsizing from this referent type".into());
+        }
+        if want_kind == ir::BorrowKind::Mut && *have_kind == ir::BorrowKind::Shared {
+            // Leave the mismatch to ordinary checking (E0308).
+            return Ok(value);
+        }
+        if want_kind != *have_kind {
+            return Err(
+                "unsupported: coercing `&mut T` to `&dyn Trait` (reborrow then unsize)".into(),
+            );
+        }
+        let referent = referent.as_ref().clone();
+        let facts = self
+            .signatures
+            .facts
+            .as_deref()
+            .ok_or("trait object coercion requires validated facts")?;
+        let goal = ir::Predicate::Implements(ir::TraitRef {
+            declaration: principal,
+            self_ty: referent.clone(),
+            args: Arc::from([]),
+        });
+        match facts
+            .service()
+            .prove_goal(&goal, facts)
+            .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?
+        {
+            super::super::traits::ProofOutcome::Proved(_) => {}
+            super::super::traits::ProofOutcome::NotProven => {
+                return Err(format!(
+                    "E0277: the trait bound `{referent:?}: {}` is not satisfied (trait object unsizing)",
+                    self.signatures.plan()?.declaration(principal)?.name
+                ));
+            }
+        }
+        let completion = source.completion;
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            ty: expected.clone(),
+            completion,
+            kind: ir::ExprKind::RefToDyn { reference: value },
+        });
+        if let Some(cap) = self.canonical {
+            cap.record_unsize(id, value)?;
+        }
+        Ok(id)
     }
     /// Expected-site unsizing of shared `&[T; N]` to exactly shared `&[T]`.
     /// The operand keeps its own identity (including any recorded original call);
@@ -5350,6 +5889,117 @@ impl<'a> Checker<'a> {
         self.exprs.push(ir::TypedExpr {
             ty: ir::Ty::Int(ir::IntTy::U32),
             kind: ir::ExprKind::LeadingZeros { value },
+            completion,
+        });
+        Ok(Some(id))
+    }
+
+    /// Resolve `receiver.name(args)` to an inherent primitive method only when
+    /// the receiver is independently known to be an exact scalar by value.
+    /// Other receivers keep ordinary method resolution.
+    fn intrinsic_target(&self, e: &Expr) -> Result<Option<ir::Intrinsic>, String> {
+        let Expr::MethodCall {
+            receiver,
+            name,
+            type_args,
+            ..
+        } = e
+        else {
+            return Ok(None);
+        };
+        if !type_args.is_empty() {
+            return Ok(None);
+        }
+        let spelling = self
+            .names()?
+            .spelling(*name)
+            .map_err(native_adapter::name_diagnostic)?;
+        if !ir::IntrinsicOp::candidate_name(spelling) {
+            return Ok(None);
+        }
+        // Method autoderef: `&T`/`&mut T` receivers (to bounded depth) reach
+        // the scalar's by-value inherent method, as in stock resolution.
+        let mut hint = self.scalar_hint(receiver)?;
+        for _ in 0..MAX_INTRINSIC_AUTODEREF {
+            match hint {
+                Some(ir::Ty::Ref { referent, .. }) => hint = Some(referent.as_ref().clone()),
+                _ => break,
+            }
+        }
+        let Some(scalar) = hint.as_ref().and_then(ir::ScalarTy::of) else {
+            return Ok(None);
+        };
+        Ok(ir::Intrinsic::resolve(scalar, spelling))
+    }
+
+    pub(super) fn builtin_intrinsic(&mut self, e: &Expr) -> Result<Option<ir::ExprId>, String> {
+        let Some(intrinsic) = self.intrinsic_target(e)? else {
+            return Ok(None);
+        };
+        let Expr::MethodCall { receiver, args, .. } = e else {
+            return Ok(None);
+        };
+        if let Some(reason) = intrinsic.unsupported_reason() {
+            return Err(format!("unsupported: {reason}"));
+        }
+        let signature = intrinsic
+            .signature()
+            .ok_or("primitive method signature invariant")?;
+        if args.len() + 1 != signature.params.len() {
+            return Err(format!(
+                "E0061: primitive method takes {} argument(s) but {} were supplied",
+                signature.params.len() - 1,
+                args.len()
+            ));
+        }
+        // The hint grants no type authority. Check the receiver, then each
+        // argument once, in source order against the exact signature.
+        let mut checked = Vec::with_capacity(signature.params.len());
+        let mut value = self.expr(receiver)?;
+        for _ in 0..MAX_INTRINSIC_AUTODEREF {
+            let ir::Ty::Ref { referent, .. } = &self.exprs[value.0].ty else {
+                break;
+            };
+            let ty = referent.as_ref().clone();
+            let completion = self.exprs[value.0].completion;
+            self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+            let id = ir::ExprId(self.exprs.len());
+            self.exprs.push(ir::TypedExpr {
+                ty,
+                kind: ir::ExprKind::Deref { value },
+                completion,
+            });
+            value = id;
+        }
+        if self.exprs[value.0].ty != signature.params[0] {
+            return Err("primitive method receiver must be an exactly typed scalar".into());
+        }
+        checked.push(value);
+        for (arg, param) in args.iter().zip(&signature.params[1..]) {
+            let id = self.expr_expected(arg, Some(param))?;
+            let flow = self.flow(id);
+            self.require(&flow, param)?;
+            checked.push(id);
+        }
+        let completion = if checked
+            .iter()
+            .all(|id| self.exprs[id.0].completion == ir::Completion::Returns)
+        {
+            ir::Completion::Returns
+        } else {
+            ir::Completion::Never
+        };
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(
+            std::mem::size_of::<ir::TypedExpr>()
+                + checked.len() * std::mem::size_of::<ir::ExprId>(),
+        )?;
+        self.exprs.push(ir::TypedExpr {
+            ty: signature.result,
+            kind: ir::ExprKind::Intrinsic {
+                intrinsic,
+                args: checked,
+            },
             completion,
         });
         Ok(Some(id))
@@ -5574,7 +6224,15 @@ impl<'a> Checker<'a> {
         place: ir::Place,
     ) -> Result<ir::ExprId, String> {
         let referent = ir::projected_ty(&self.locals[place.local.0].ty, &place.projection)?.clone();
-        self.validate_borrow_referent(kind, &referent)?;
+        if matches!(referent, ir::Ty::Dyn(_)) {
+            // Only a whole-object reborrow `&*d` / `&mut *d` of a local
+            // carrier is admitted; it copies the vtable word with the data.
+            if place.projection != [ir::Projection::Deref] {
+                return Err("unsupported: borrowing trait object places".into());
+            }
+        } else {
+            self.validate_borrow_referent(kind, &referent)?;
+        }
         let id = ir::ExprId(self.exprs.len());
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         self.exprs.push(ir::TypedExpr {
@@ -5691,10 +6349,7 @@ impl<'a> Checker<'a> {
         } else {
             (target, signature)
         };
-        let actuals = match &target {
-            ir::Callee::Direct(target) => target.type_args.as_ref(),
-            ir::Callee::TraitItem(call) => call.method_args.as_ref(),
-        };
+        let actuals = target.type_arguments();
         if actuals.iter().any(ir::Ty::contains_slice) {
             return Err("unsupported: slice generic arguments".into());
         }
@@ -5873,7 +6528,7 @@ impl<'a> Checker<'a> {
         )?;
         let region_offset = match &selected.target {
             ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
-            ir::Callee::TraitItem(_) => 0,
+            ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) => 0,
         };
         // Value temporaries (rvalue receivers such as `Type::new().get()`) are
         // materialized in a block-scoped local and autoref'd. Values with drop
@@ -5952,7 +6607,47 @@ impl<'a> Checker<'a> {
                 (id, None)
             }
             ReceiverKind::Borrowed { kind } => {
-                if matches!(selected.adjustment, ReceiverAdjustment::Identity)
+                if matches!(selected.target, ir::Callee::Virtual(_)) {
+                    // Virtual dispatch keeps the complete object carrier.
+                    // A shared method on `&mut dyn P` is selected after one
+                    // dereference and shared autoref, and must create a real
+                    // loan of the object instead of moving its mutable carrier.
+                    let shared_reborrow = kind == ir::BorrowKind::Shared
+                        && selected.depth == 1
+                        && matches!(selected.adjustment, ReceiverAdjustment::SharedAutoref);
+                    if !(matches!(selected.adjustment, ReceiverAdjustment::Identity)
+                        && selected.depth == 0
+                        || shared_reborrow)
+                    {
+                        return Err(
+                            "unsupported: autoref or autoderef of a trait object receiver".into(),
+                        );
+                    }
+                    if kind == ir::BorrowKind::Mut || shared_reborrow {
+                        // Whole-object reborrow preserves both carrier words.
+                        let Expr::Var(name) = receiver else {
+                            return Err(
+                                "unsupported: reborrowed trait object receiver that is not a local binding"
+                                    .into(),
+                            );
+                        };
+                        let local = self.lookup(name)?;
+                        let id = self.borrow_expression(
+                            kind,
+                            ir::Place {
+                                local,
+                                projection: vec![ir::Projection::Deref],
+                            },
+                        )?;
+                        (
+                            id,
+                            (kind == ir::BorrowKind::Mut)
+                                .then_some(ir::ImplicitBorrowKind::MutableReceiver),
+                        )
+                    } else {
+                        (self.expr(receiver)?, None)
+                    }
+                } else if matches!(selected.adjustment, ReceiverAdjustment::Identity)
                     && (kind == ir::BorrowKind::Shared
                         || (selected.depth == 0 && genuine_call(receiver)))
                 {
@@ -6135,7 +6830,7 @@ impl<'a> Checker<'a> {
         };
         let region_offset = match &target {
             ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
-            ir::Callee::TraitItem(_) => 0,
+            ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) => 0,
         };
         self.finish_checked_call(
             target,
@@ -6275,6 +6970,446 @@ impl<'a> Checker<'a> {
                 completes,
             },
         ))
+    }
+    #[inline(never)]
+    /// Construct only checked storage, never synthetic source occurrences.
+    fn for_expr(&mut self, ty: ir::Ty, kind: ir::ExprKind) -> Result<ir::ExprId, String> {
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty,
+            completion: ir::Completion::Returns,
+            kind,
+        });
+        Ok(id)
+    }
+    #[inline(never)]
+    fn for_range_statement(
+        &mut self,
+        label: Option<AstIdent>,
+        pattern: &Pattern,
+        source: &ForSource,
+        body: &Block,
+        item_hint: Option<&ir::Ty>,
+    ) -> Result<(ir::Stmt, bool), String> {
+        if !source.adapters.is_empty() {
+            return Err("for iterator adapters are not supported yet".into());
+        }
+        let ForIterable::Range {
+            start,
+            end,
+            inclusive,
+        } = &source.iterable
+        else {
+            let ForIterable::Value(value) = &source.iterable else {
+                unreachable!()
+            };
+            return self.for_array_statement(label, pattern, value, body, item_hint);
+        };
+        let loop_depth = self.loops.len();
+        let scope_depth = self.scopes.len();
+        let outer_reachable = self.reachable;
+        let result = (|| {
+            // Bounds are ordinary expressions evaluated before entering the loop.
+            // They can target an enclosing loop but cannot see this loop's binder.
+            let hint = item_hint
+                .filter(|ty| matches!(ty, ir::Ty::Int(_)))
+                .cloned()
+                .or(self
+                    .scalar_hint(start)?
+                    .filter(|ty| matches!(ty, ir::Ty::Int(_))))
+                .or(self
+                    .scalar_hint(end)?
+                    .filter(|ty| matches!(ty, ir::Ty::Int(_))));
+            let start = self.expr_expected(start, hint.as_ref())?;
+            let sf = self.flow(start);
+            let end = self.expr_expected_when(
+                end,
+                outer_reachable && sf.completes,
+                if sf.ty == ir::Ty::Never {
+                    hint.as_ref()
+                } else {
+                    Some(&sf.ty)
+                },
+            )?;
+            let ef = self.flow(end);
+            let bound_ty = if sf.ty == ir::Ty::Never {
+                &ef.ty
+            } else {
+                &sf.ty
+            };
+            self.require(&sf, bound_ty)?;
+            self.require(&ef, bound_ty)?;
+            let ir::Ty::Int(int_ty) = *bound_ty else {
+                return Err("for range bounds must have an integer type".into());
+            };
+            self.charge_node(std::mem::size_of::<ir::Stmt>() * 10)?;
+            let ty = ir::Ty::Int(int_ty);
+            let cursor = self.temporary("$for_cursor", ty.clone(), true)?;
+            let limit = self.temporary("$for_end", ty.clone(), false)?;
+            let current = self.temporary("$for_current", ty.clone(), true)?;
+            let done = self.temporary("$for_done", ir::Ty::Bool, true)?;
+            let read_cursor = self.for_expr(ty.clone(), ir::ExprKind::Local(cursor))?;
+            let read_limit = self.for_expr(ty.clone(), ir::ExprKind::Local(limit))?;
+            let read_current = self.for_expr(ty.clone(), ir::ExprKind::Local(current))?;
+            let read_done = self.for_expr(ir::Ty::Bool, ir::ExprKind::Local(done))?;
+            let yes = self.for_expr(ir::Ty::Bool, ir::ExprKind::Bool(true))?;
+            let no = self.for_expr(ir::Ty::Bool, ir::ExprKind::Bool(false))?;
+            let one = self.for_expr(
+                ty.clone(),
+                ir::ExprKind::Int(ir::IntValue {
+                    ty: int_ty,
+                    bits: 1,
+                }),
+            )?;
+            let increment_cursor = self.for_expr(ty.clone(), ir::ExprKind::Local(cursor))?;
+            let compare_cursor = self.for_expr(ty.clone(), ir::ExprKind::Local(cursor))?;
+            let compare_limit = self.for_expr(ty.clone(), ir::ExprKind::Local(limit))?;
+            let snapshot_cursor = self.for_expr(ty.clone(), ir::ExprKind::Local(cursor))?;
+            let initialize_cursor = self.for_expr(ty.clone(), ir::ExprKind::Local(cursor))?;
+            let available_yes = self.for_expr(ir::Ty::Bool, ir::ExprKind::Bool(true))?;
+            let exhausted_no = self.for_expr(ir::Ty::Bool, ir::ExprKind::Bool(false))?;
+            let initial_no = self.for_expr(ir::Ty::Bool, ir::ExprKind::Bool(false))?;
+            let next = self.for_expr(
+                ty.clone(),
+                ir::ExprKind::Binary {
+                    op: BinaryOp::Add,
+                    left: increment_cursor,
+                    right: one,
+                },
+            )?;
+            let at_end = self.for_expr(
+                ir::Ty::Bool,
+                ir::ExprKind::Binary {
+                    op: BinaryOp::Eq,
+                    left: read_cursor,
+                    right: read_limit,
+                },
+            )?;
+            let in_range = self.for_expr(
+                ir::Ty::Bool,
+                ir::ExprKind::Binary {
+                    op: if *inclusive {
+                        BinaryOp::Le
+                    } else {
+                        BinaryOp::Lt
+                    },
+                    left: compare_cursor,
+                    right: compare_limit,
+                },
+            )?;
+            // Advance before the source body, so every continue (including a
+            // labeled continue from a nested loop) takes the next item. Never
+            // add one to the inclusive maximum: mark exhaustion instead.
+            let advance = self.for_expr(
+                ir::Ty::Unit,
+                ir::ExprKind::If {
+                    condition: at_end,
+                    then_block: ir::Block {
+                        statements: vec![ir::Stmt::Assign {
+                            local: done,
+                            value: yes,
+                        }],
+                        tail: None,
+                    },
+                    else_block: ir::Block {
+                        statements: vec![ir::Stmt::Assign {
+                            local: cursor,
+                            value: next,
+                        }],
+                        tail: None,
+                    },
+                },
+            )?;
+            let available = self.for_expr(
+                ir::Ty::Bool,
+                ir::ExprKind::If {
+                    condition: in_range,
+                    then_block: ir::Block {
+                        statements: vec![
+                            ir::Stmt::Assign {
+                                local: current,
+                                value: snapshot_cursor,
+                            },
+                            ir::Stmt::Expr(advance),
+                        ],
+                        tail: Some(available_yes),
+                    },
+                    else_block: ir::Block {
+                        statements: vec![],
+                        tail: Some(no),
+                    },
+                },
+            )?;
+            let condition = self.for_expr(
+                ir::Ty::Bool,
+                ir::ExprKind::If {
+                    condition: read_done,
+                    then_block: ir::Block {
+                        statements: vec![],
+                        tail: Some(exhausted_no),
+                    },
+                    else_block: ir::Block {
+                        statements: vec![],
+                        tail: Some(available),
+                    },
+                },
+            )?;
+            let id = self.enter_loop(false);
+            let key = self.label_key(label)?;
+            let frame = self.loops.last_mut().unwrap();
+            frame.label = key;
+            frame.checking_condition = false;
+            self.reachable = true;
+            // One exhaustive arm gives the source pattern its genuine body-only
+            // scope and rejects refutable patterns without fabricating binders.
+            let (kind, flow) = self.lower_match_value(
+                read_current,
+                [BorrowedMatchArm {
+                    pattern: Some(pattern),
+                    guarded: false,
+                    body: MatchBody::Block(body),
+                }]
+                .into_iter(),
+                Some(&ir::Ty::Unit),
+            )?;
+            self.require(&flow, &ir::Ty::Unit)?;
+            let matched = self.for_expr(flow.ty, kind)?;
+            self.exprs[matched.0].completion = if flow.completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            };
+            let block = ir::Block {
+                statements: vec![
+                    ir::Stmt::Let {
+                        local: cursor,
+                        value: start,
+                    },
+                    ir::Stmt::Let {
+                        local: limit,
+                        value: end,
+                    },
+                    ir::Stmt::Let {
+                        local: current,
+                        value: initialize_cursor,
+                    },
+                    ir::Stmt::Let {
+                        local: done,
+                        value: initial_no,
+                    },
+                    ir::Stmt::While {
+                        id,
+                        condition,
+                        body: ir::Block {
+                            statements: vec![ir::Stmt::Expr(matched)],
+                            tail: None,
+                        },
+                    },
+                ],
+                tail: None,
+            };
+            let completes = sf.completes && ef.completes;
+            let block = self.for_expr(ir::Ty::Unit, ir::ExprKind::Block(block))?;
+            self.exprs[block.0].completion = if completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            };
+            Ok((ir::Stmt::Expr(block), completes))
+        })();
+        self.loops.truncate(loop_depth);
+        self.scopes.truncate(scope_depth);
+        self.reachable = outer_reachable;
+        result
+    }
+    #[inline(never)]
+    fn for_array_statement(
+        &mut self,
+        label: Option<AstIdent>,
+        pattern: &Pattern,
+        source: &Expr,
+        body: &Block,
+        item_hint: Option<&ir::Ty>,
+    ) -> Result<(ir::Stmt, bool), String> {
+        let loop_depth = self.loops.len();
+        let scope_depth = self.scopes.len();
+        let outer_reachable = self.reachable;
+        let result = (|| {
+            // Only written array/repeat literals have a known shape here.
+            // Other iterable forms retain their ordinary independent checking.
+            let expected = item_hint.and_then(|item| {
+                let len = match source {
+                    Expr::Array(elements) => elements.len(),
+                    Expr::Repeat { len, .. } => *len,
+                    _ => return None,
+                };
+                Some(ir::Ty::Array {
+                    element: Arc::new(item.clone()),
+                    len,
+                })
+            });
+            let value = self.expr_expected(source, expected.as_ref())?;
+            let flow = self.flow(value);
+            let (element, len, borrowed) = match &flow.ty {
+                ir::Ty::Array { element, len } => {
+                    if !self.facts().must_copy(element)? {
+                        return Err(
+                            "unsupported: by-value for array iteration requires Copy elements"
+                                .into(),
+                        );
+                    }
+                    (element.as_ref().clone(), *len, None)
+                }
+                ir::Ty::Ref { kind, referent } => {
+                    let ir::Ty::Array { element, len } = referent.as_ref() else {
+                        return Err("unsupported: for iteration requires an array element-place authority; runtime slices are not supported".into());
+                    };
+                    (element.as_ref().clone(), *len, Some(*kind))
+                }
+                _ => return Err("for currently requires an integer range or an array".into()),
+            };
+            self.charge_node(std::mem::size_of::<ir::Stmt>() * 7)?;
+            let array = self.temporary("$for_array", flow.ty.clone(), false)?;
+            let index_ty = ir::Ty::Int(ir::IntTy::Usize);
+            let index = self.temporary("$for_index", index_ty.clone(), true)?;
+            let saved_index = self.temporary("$for_item_index", index_ty.clone(), true)?;
+            // Every written checked expression occurrence owns distinct storage.
+            let zero =
+                self.for_expr(index_ty.clone(), ir::ExprKind::Int(ir::IntValue::usize(0)))?;
+            let saved_zero =
+                self.for_expr(index_ty.clone(), ir::ExprKind::Int(ir::IntValue::usize(0)))?;
+            let length = self.for_expr(
+                index_ty.clone(),
+                ir::ExprKind::Int(ir::IntValue::usize(len as u64)),
+            )?;
+            let one = self.for_expr(index_ty.clone(), ir::ExprKind::Int(ir::IntValue::usize(1)))?;
+            let compare_index = self.for_expr(index_ty.clone(), ir::ExprKind::Local(index))?;
+            let snapshot_index = self.for_expr(index_ty.clone(), ir::ExprKind::Local(index))?;
+            let increment_index = self.for_expr(index_ty.clone(), ir::ExprKind::Local(index))?;
+            let in_range = self.for_expr(
+                ir::Ty::Bool,
+                ir::ExprKind::Binary {
+                    op: BinaryOp::Lt,
+                    left: compare_index,
+                    right: length,
+                },
+            )?;
+            let next = self.for_expr(
+                index_ty.clone(),
+                ir::ExprKind::Binary {
+                    op: BinaryOp::Add,
+                    left: increment_index,
+                    right: one,
+                },
+            )?;
+            let yes = self.for_expr(ir::Ty::Bool, ir::ExprKind::Bool(true))?;
+            let no = self.for_expr(ir::Ty::Bool, ir::ExprKind::Bool(false))?;
+            let condition = self.for_expr(
+                ir::Ty::Bool,
+                ir::ExprKind::If {
+                    condition: in_range,
+                    then_block: ir::Block {
+                        statements: vec![
+                            ir::Stmt::Assign {
+                                local: saved_index,
+                                value: snapshot_index,
+                            },
+                            ir::Stmt::Assign {
+                                local: index,
+                                value: next,
+                            },
+                        ],
+                        tail: Some(yes),
+                    },
+                    else_block: ir::Block {
+                        statements: vec![],
+                        tail: Some(no),
+                    },
+                },
+            )?;
+            let id = self.enter_loop(false);
+            let key = self.label_key(label)?;
+            let frame = self.loops.last_mut().unwrap();
+            frame.label = key;
+            frame.checking_condition = false;
+            self.reachable = true;
+            let item = if let Some(kind) = borrowed {
+                self.borrow_expression(
+                    kind,
+                    ir::Place {
+                        local: array,
+                        projection: vec![
+                            ir::Projection::Deref,
+                            ir::Projection::DynamicIndex(saved_index),
+                        ],
+                    },
+                )?
+            } else {
+                let base = self.for_expr(flow.ty.clone(), ir::ExprKind::Local(array))?;
+                let item_index = self.for_expr(index_ty, ir::ExprKind::Local(saved_index))?;
+                self.for_expr(
+                    element,
+                    ir::ExprKind::DynamicIndex {
+                        base,
+                        index: item_index,
+                    },
+                )?
+            };
+            let (kind, body_flow) = self.lower_match_value(
+                item,
+                [BorrowedMatchArm {
+                    pattern: Some(pattern),
+                    guarded: false,
+                    body: MatchBody::Block(body),
+                }]
+                .into_iter(),
+                Some(&ir::Ty::Unit),
+            )?;
+            self.require(&body_flow, &ir::Ty::Unit)?;
+            let matched = self.for_expr(body_flow.ty, kind)?;
+            self.exprs[matched.0].completion = if body_flow.completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            };
+            let block = ir::Block {
+                statements: vec![
+                    ir::Stmt::Let {
+                        local: array,
+                        value,
+                    },
+                    ir::Stmt::Let {
+                        local: index,
+                        value: zero,
+                    },
+                    ir::Stmt::Let {
+                        local: saved_index,
+                        value: saved_zero,
+                    },
+                    ir::Stmt::While {
+                        id,
+                        condition,
+                        body: ir::Block {
+                            statements: vec![ir::Stmt::Expr(matched)],
+                            tail: None,
+                        },
+                    },
+                ],
+                tail: None,
+            };
+            let block = self.for_expr(ir::Ty::Unit, ir::ExprKind::Block(block))?;
+            self.exprs[block.0].completion = if flow.completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            };
+            Ok((ir::Stmt::Expr(block), flow.completes))
+        })();
+        self.loops.truncate(loop_depth);
+        self.scopes.truncate(scope_depth);
+        self.reachable = outer_reachable;
+        result
     }
     #[inline(never)]
     fn while_let_statement(
@@ -6589,15 +7724,6 @@ impl<'a> Checker<'a> {
             }
         }
         self.accessible(&domain)?;
-        if matches!(domain, ir::Ty::Ref { .. })
-            && arms.clone().any(|arm| {
-                arm.pattern.is_some_and(|pattern| {
-                    !matches!(pattern, Pattern::Wildcard | Pattern::Binding { .. })
-                })
-            })
-        {
-            return Err(self.reference_pattern_unsupported());
-        }
         let mut matrix = super::pattern_usefulness::CoverageMatrix::new(
             domain.clone(),
             self.facts(),
@@ -6815,6 +7941,9 @@ impl<'a> Checker<'a> {
                         referent: std::sync::Arc::new(referent),
                     }),
                 )
+            }
+            Expr::BorrowValue { kind, value } => {
+                return self.borrow_value(*kind, value, expected);
             }
             Expr::Deref { value } => {
                 let mut root = value.as_ref();
@@ -7326,10 +8455,96 @@ impl<'a> Checker<'a> {
                     Flow::value(ir::Ty::Unit),
                 )
             }
+            Expr::NativeSyscall(arguments) => {
+                if self.unsafe_depth == 0 {
+                    return Err("E0133: native syscall requires unsafe block".into());
+                }
+                if arguments.len() != 7 {
+                    return Err("native syscall requires number and six usize arguments".into());
+                }
+                self.charge_node(7 * std::mem::size_of::<ir::ExprId>())?;
+                let ty = ir::Ty::Int(ir::IntTy::Usize);
+                let mut values = Vec::new();
+                let mut completes = true;
+                for argument in arguments {
+                    let id = self.expr_expected(argument, Some(&ty))?;
+                    if self.exprs[id.0].ty != ty {
+                        return Err("native syscall arguments must be usize".into());
+                    }
+                    completes &= self.flow(id).completes;
+                    values.push(id);
+                }
+                (ir::ExprKind::NativeSyscall(values), Flow { ty, completes })
+            }
             Expr::Println(text) => (
                 ir::ExprKind::Println(text.clone()),
                 Flow::value(ir::Ty::Unit),
             ),
+            Expr::Format {
+                pieces,
+                arguments,
+                stream,
+                newline,
+            } => {
+                let mut ids = Vec::new();
+                let mut completion = ir::Completion::Returns;
+                for argument in arguments {
+                    let id = self.expr_expected(argument, None)?;
+                    let flow = self.flow(id);
+                    if !matches!(
+                        flow.ty,
+                        ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char | ir::Ty::Never
+                    ) && !flow.ty.is_shared_str()
+                    {
+                        return Err(
+                            "format argument requires integer, bool, char or &str Display".into(),
+                        );
+                    }
+                    if !flow.completes {
+                        completion = ir::Completion::Never;
+                    }
+                    // format_args borrows place arguments until the output call.
+                    // Keep that loan live across later argument evaluation rather
+                    // than accepting mutation of an already-snapshotted place.
+                    let id = if let Ok(place) = static_source_place(argument) {
+                        let (place, _, _) = self.checked_place(&place)?;
+                        self.borrow_expression(ir::BorrowKind::Shared, place)?
+                    } else if matches!(
+                        argument,
+                        Expr::DynamicIndex { .. }
+                            | Expr::Deref { .. }
+                            | Expr::Field { .. }
+                            | Expr::Index { .. }
+                    ) {
+                        return Err(
+                            "unsupported: dynamic or temporary-rooted format place arguments"
+                                .into(),
+                        );
+                    } else {
+                        id
+                    };
+                    ids.push(id);
+                }
+                for piece in pieces {
+                    self.charge_node(piece.len())?;
+                }
+                self.charge_node(
+                    ids.len() * std::mem::size_of::<ir::ExprId>()
+                        + pieces.len() * std::mem::size_of::<String>(),
+                )?;
+                (
+                    ir::ExprKind::Format {
+                        pieces: pieces.clone(),
+                        arguments: ids,
+                        stream: *stream,
+                        newline: *newline,
+                    },
+                    Flow {
+                        ty: ir::Ty::Unit,
+                        completes: completion == ir::Completion::Returns,
+                    },
+                )
+            }
             Expr::Unary { op, value } => {
                 if matches!(op, UnaryOp::Neg)
                     && let Expr::Integer(literal) = value.as_ref()
@@ -8372,6 +9587,17 @@ pub(super) fn range_pattern_test(
     }
 }
 
+/// `&dyn P` / `&mut dyn P` coercion target: (reference kind, principal).
+pub(super) fn trait_object_target(ty: &ir::Ty) -> Option<(ir::BorrowKind, ir::DeclId)> {
+    let ir::Ty::Ref { kind, referent } = ty else {
+        return None;
+    };
+    let ir::Ty::Dyn(object) = referent.as_ref() else {
+        return None;
+    };
+    Some((*kind, object.principal))
+}
+
 #[cfg(test)]
 mod checked_identity_tests {
     #[test]
@@ -8531,16 +9757,12 @@ mod checked_identity_tests {
     }
 
     #[test]
-    fn typed_slice_inference_does_not_admit_temporary_array_borrows() {
+    fn typed_slice_inference_types_temporary_array_borrows() {
         for source in [
             "fn read<T:Copy>(s:&[T])->T{s[0]}fn value()->u16{read(&[42])}fn main(){}",
             "fn read<T:Copy>(s:&[T],later:T)->T{s[0]}fn main(){let answer=read(&[42],7u16);}",
         ] {
-            let error = parse(source).unwrap_err();
-            assert!(
-                error.contains("borrowing requires a local-root static place"),
-                "{error}"
-            );
+            check(&parse(source).unwrap()).unwrap();
         }
     }
 

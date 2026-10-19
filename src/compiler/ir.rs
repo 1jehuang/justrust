@@ -10,6 +10,9 @@ use std::sync::Arc;
 /// Combined explicit loan sites and formal reference-parameter origins.
 pub const MAX_LOAN_SITES: usize = 4096;
 use std::sync::atomic::{AtomicU64, Ordering};
+#[path = "ir/intrinsics.rs"]
+mod intrinsics;
+pub use intrinsics::{Intrinsic, IntrinsicOp, IntrinsicSignature, ScalarTy};
 
 /// Process-local namespace for one validated declaration environment. IDs must
 /// not be persisted as cache identities or reused by another environment.
@@ -245,6 +248,26 @@ pub struct TraitCall {
 pub enum Callee {
     Direct(CallTarget),
     TraitItem(TraitCall),
+    /// Dynamic dispatch through a trait object vtable. Argument 0 is the
+    /// `&dyn`/`&mut dyn` receiver carrier; `slot` indexes the principal
+    /// trait's method entries (declaration order, supertraits first).
+    Virtual(VirtualCall),
+}
+/// `call.trait_ref.self_ty` is the exact `Ty::Dyn` receiver object type and
+/// `call.trait_ref.declaration` the trait owning `call.item` (the principal or
+/// one of its supertraits). The slot is derived from the principal's vtable
+/// layout (`vtable_methods`) by the backend, never stored.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct VirtualCall {
+    pub call: TraitCall,
+}
+impl VirtualCall {
+    pub fn principal(&self) -> Result<DeclId, String> {
+        match &self.call.trait_ref.self_ty {
+            Ty::Dyn(object) => Ok(object.principal),
+            _ => Err("virtual call receiver is not a trait object".into()),
+        }
+    }
 }
 impl From<CallTarget> for Callee {
     fn from(target: CallTarget) -> Self {
@@ -255,13 +278,15 @@ impl Callee {
     pub fn type_arguments(&self) -> &[Ty] {
         match self {
             Self::Direct(target) => &target.type_args,
-            Self::TraitItem(call) => &call.method_args,
+            Self::TraitItem(call) | Self::Virtual(VirtualCall { call }) => &call.method_args,
         }
     }
     pub fn metadata_types(&self) -> impl Iterator<Item = &Ty> {
         let (self_ty, trait_args): (Option<&Ty>, &[Ty]) = match self {
             Self::Direct(_) => (None, &[]),
-            Self::TraitItem(call) => (Some(&call.trait_ref.self_ty), &call.trait_ref.args),
+            Self::TraitItem(call) | Self::Virtual(VirtualCall { call }) => {
+                (Some(&call.trait_ref.self_ty), &call.trait_ref.args)
+            }
         };
         self.type_arguments()
             .iter()
@@ -450,6 +475,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
             | Ty::Char
             | Ty::Bool
             | Ty::Unit
+            | Ty::Dyn(_)
             | Ty::Never => {}
         }
         budget.retain_bytes(4 * std::mem::size_of::<(usize, (bool, usize))>())?;
@@ -601,6 +627,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                     | Ty::Str
                     | Ty::Bool
                     | Ty::Unit
+                    | Ty::Dyn(_)
                     | Ty::Never
                     | Ty::RawPtr { .. } => {}
                     Ty::Ref { .. } | Ty::Param(_) => unreachable!(),
@@ -1014,10 +1041,7 @@ fn validate_call_evidence_with_policy(
                 .get(trace.value.0)
                 .ok_or("call evidence argument outside arena")?;
         }
-        let actuals: &[Ty] = match target {
-            Callee::Direct(target) => &target.type_args,
-            Callee::TraitItem(call) => &call.method_args,
-        };
+        let actuals: &[Ty] = target.type_arguments();
         for (index, region) in evidence.type_actual_regions.iter().enumerate() {
             budget.charge_work(index.saturating_add(1))?;
             for old in evidence.type_actual_regions[..index].iter() {
@@ -1079,10 +1103,7 @@ fn validate_call_evidence_with_policy(
         if let ExprKind::Call { target, .. } = &expression.kind {
             // Trait Self has a distinct canonical schema role. Only ordinary
             // method actuals participate in this source-stage evidence gate.
-            let actuals: &[Ty] = match target {
-                Callee::Direct(target) => &target.type_args,
-                Callee::TraitItem(call) => &call.method_args,
-            };
+            let actuals: &[Ty] = target.type_arguments();
             budget.charge_work(actuals.len())?;
             if actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. })) && !seen[index] {
                 return Err("new reference actual call is missing original-stage evidence".into());
@@ -1143,6 +1164,7 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
         (Ty::Tuple(a), Ty::Tuple(b)) => Arc::ptr_eq(a, b),
         (Ty::Struct(a), Ty::Struct(b)) => Arc::ptr_eq(&a.0, &b.0),
         (Ty::Enum(a), Ty::Enum(b)) => Arc::ptr_eq(&a.0, &b.0),
+        (Ty::Dyn(a), Ty::Dyn(b)) => a.principal == b.principal,
         (Ty::Param(a), Ty::Param(b)) => a == b,
         (Ty::Int(a), Ty::Int(b)) => a == b,
         (Ty::Float(a), Ty::Float(b)) => a == b,
@@ -1164,7 +1186,9 @@ pub(super) fn identical_call_types(
     let count = |target: &Callee| {
         target.type_arguments().len().saturating_add(match target {
             Callee::Direct(_) => 0,
-            Callee::TraitItem(call) => call.trait_ref.args.len().saturating_add(1),
+            Callee::TraitItem(call) | Callee::Virtual(VirtualCall { call }) => {
+                call.trait_ref.args.len().saturating_add(1)
+            }
         })
     };
     budget.charge_work(
@@ -2417,9 +2441,14 @@ fn substitute_ty_walk(
                 budget,
             )?
         }
-        Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Str | Ty::Bool | Ty::Unit | Ty::Never => {
-            ty.clone()
-        }
+        Ty::Int(_)
+        | Ty::Float(_)
+        | Ty::Char
+        | Ty::Str
+        | Ty::Bool
+        | Ty::Unit
+        | Ty::Dyn(_)
+        | Ty::Never => ty.clone(),
     })
 }
 
@@ -2528,6 +2557,7 @@ pub fn instantiate_checked(
             ExprKind::CharToInt { .. }
             | ExprKind::U8ToChar { .. }
             | ExprKind::PtrCast { .. }
+            | ExprKind::Intrinsic { .. }
             | ExprKind::LeadingZeros { .. }
             | ExprKind::IntCast { .. }
             | ExprKind::FloatCast { .. }
@@ -2537,6 +2567,7 @@ pub fn instantiate_checked(
             | ExprKind::Deref { .. }
             | ExprKind::DynamicIndex { .. }
             | ExprKind::ArrayToSlice { .. }
+            | ExprKind::RefToDyn { .. }
             | ExprKind::SliceLen { .. }
             | ExprKind::SliceIndex { .. }
             | ExprKind::Array(_)
@@ -2545,6 +2576,7 @@ pub fn instantiate_checked(
             | ExprKind::Int(_)
             | ExprKind::Bool(_)
             | ExprKind::Local(_)
+            | ExprKind::NativeSyscall(_)
             | ExprKind::Tuple(_)
             | ExprKind::Field { .. }
             | ExprKind::Unary { .. }
@@ -2552,6 +2584,7 @@ pub fn instantiate_checked(
             | ExprKind::Break { .. }
             | ExprKind::Continue { .. }
             | ExprKind::Output(_)
+            | ExprKind::Format { .. }
             | ExprKind::Println(_)
             | ExprKind::Panic(_) => {}
         }
@@ -2718,6 +2751,16 @@ fn substitute_callee_metadata(
                 method_args,
             })
         }
+        // Trait object metadata is closed: `dyn P` contains no parameters.
+        Callee::Virtual(virtual_call) => {
+            if !virtual_call.call.method_args.is_empty()
+                || !virtual_call.call.trait_ref.args.is_empty()
+            {
+                return Err("unsupported: generic virtual calls".into());
+            }
+            virtual_call.principal()?;
+            Callee::Virtual(virtual_call.clone())
+        }
     };
     Ok(substituted)
 }
@@ -2745,6 +2788,13 @@ pub fn substitute_callee(
             .map_err(|e| e.into_legacy_diagnostic(budget))?
             .callee()
             .clone()),
+        Callee::Virtual(virtual_call) => {
+            closed_facts
+                .service()
+                .instantiate_trait_signature(&virtual_call.call, closed_facts)
+                .map_err(|e| e.into_legacy_diagnostic(budget))?;
+            Ok(Callee::Virtual(virtual_call))
+        }
     }
 }
 
@@ -2838,9 +2888,17 @@ fn canonicalize_call_metadata(
                     let proof = facts.service().resolve_trait_call(call, facts)?;
                     (proof.callee().clone(), proof.signature().clone())
                 }
+                // Dynamic dispatch stays virtual in every phase. Its canonical
+                // signature is the trait item's at the object Self type.
+                Callee::Virtual(virtual_call) => {
+                    let signature = facts
+                        .service()
+                        .instantiate_trait_signature(&virtual_call.call, facts)?;
+                    (Callee::Virtual(virtual_call.clone()), signature)
+                }
             };
             if facts.phase() == super::traits::FactsPhase::Closed
-                && !matches!(callee, Callee::Direct(_))
+                && !matches!(callee, Callee::Direct(_) | Callee::Virtual(_))
             {
                 return Err(FactsError::invalid(
                     budget,
@@ -2918,6 +2976,7 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
             | Ty::Char
             | Ty::Bool
             | Ty::Unit
+            | Ty::Dyn(_)
             | Ty::Never => {}
         }
         Ok(())
@@ -3101,6 +3160,18 @@ impl IntTy {
 
     pub const fn mask(self) -> u128 {
         u128::MAX >> (128 - self.bits())
+    }
+
+    /// The same-width unsigned type.
+    pub const fn unsigned(self) -> Self {
+        match self {
+            Self::I8 | Self::U8 => Self::U8,
+            Self::I16 | Self::U16 => Self::U16,
+            Self::I32 | Self::U32 => Self::U32,
+            Self::I64 | Self::U64 => Self::U64,
+            Self::Isize | Self::Usize => Self::Usize,
+            Self::I128 | Self::U128 => Self::U128,
+        }
     }
 
     pub const fn name(self) -> &'static str {
@@ -3412,6 +3483,9 @@ pub enum Projection {
     Field(usize),
     Downcast(VariantId),
     ConstantIndex(usize),
+    /// Runtime index read exactly once when a borrow address is materialized.
+    /// Canonical overlap never uses the index value to prove disjointness.
+    DynamicIndex(LocalId),
     Deref,
 }
 
@@ -3435,7 +3509,7 @@ pub fn raw_deref_index(root: &Ty, path: &[Projection]) -> Option<usize> {
                 _ => return None,
             },
             Projection::Field(field) => ty.field_ty(*field)?,
-            Projection::ConstantIndex(_) => match ty {
+            Projection::ConstantIndex(_) | Projection::DynamicIndex(_) => match ty {
                 Ty::Array { element, .. } => element,
                 _ => return None,
             },
@@ -3508,6 +3582,21 @@ fn projected_ty_inner<'a>(
                 };
                 if *len > MAX_ARRAY_LEN || index >= *len {
                     return Err("array index out of bounds".into());
+                }
+                element
+            }
+            Projection::DynamicIndex(_) => {
+                let Ty::Array { element, len } = ty else {
+                    return Err("runtime place index requires array type".into());
+                };
+                if *len > MAX_ARRAY_LEN {
+                    return Err("array length exceeds limit".into());
+                }
+                if !matches!(
+                    element.as_ref(),
+                    Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit
+                ) {
+                    return Err("unsupported: runtime element loans currently require scalar or unit elements".into());
                 }
                 element
             }
@@ -3609,7 +3698,7 @@ pub struct FieldDef {
     pub visibility: Visibility,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LocalId(pub usize);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ExprId(pub usize);
@@ -3671,6 +3760,11 @@ pub enum Ty {
         kind: BorrowKind,
         pointee: Arc<Ty>,
     },
+    /// Unsized trait object `dyn Trait<Args>`. Admitted only behind a shared or
+    /// mutable reference, whose native carrier is two words (data, vtable).
+    /// The principal trait application has a placeholder `Self` of `Unit`;
+    /// the hidden concrete type is erased at the unsizing coercion.
+    Dyn(Arc<DynTy>),
     /// The semantic never type, distinct from runtime completion information.
     Never,
 }
@@ -3699,6 +3793,24 @@ pub fn ptr_cast_valid(from: &Ty, to: &Ty) -> bool {
             !matches!(pointee.as_ref(), Ty::Slice { .. })
         }
         _ => false,
+    }
+}
+
+/// Principal trait of a trait object. This milestone admits nongeneric
+/// principal traits without associated types, so the object type is a rigid
+/// metadata leaf identified by its trait declaration alone.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DynTy {
+    pub principal: DeclId,
+}
+
+/// Words of a pointer to `pointee` in the private ABI: two for unsized slice
+/// and trait object pointees (data + len / data + vtable), one otherwise.
+/// Shared by references and (later) raw pointers and Box.
+pub fn pointer_words(pointee: &Ty) -> usize {
+    match pointee {
+        Ty::Slice { .. } | Ty::Dyn(_) => 2,
+        _ => 1,
     }
 }
 
@@ -3849,7 +3961,14 @@ fn type_metadata_walk(
                 }
                 return Ok((false, 0));
             }
-            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Str | Ty::Bool | Ty::Unit | Ty::Never => {
+            Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Char
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Dyn(_)
+            | Ty::Never => {
                 return Ok((false, 0));
             }
         };
@@ -3944,6 +4063,7 @@ fn type_metadata_walk(
             | Ty::Str
             | Ty::Bool
             | Ty::Unit
+            | Ty::Dyn(_)
             | Ty::Never => {}
         }
         memo.entries[index].1 = Some((found, height));
@@ -4089,6 +4209,7 @@ impl Ty {
                 | Self::Str
                 | Self::Bool
                 | Self::Unit
+                | Self::Dyn(_)
                 | Self::Never => {}
             }
         }
@@ -4126,6 +4247,7 @@ impl Ty {
             | Self::Enum(_)
             | Self::Param(_)
             | Self::Str
+            | Self::Dyn(_)
             | Self::Slice { .. } => false,
             Self::Tuple(_) | Self::Array { .. } => {
                 let mut pending = vec![self];
@@ -5033,7 +5155,9 @@ fn ref_type_walk(
             )?;
             return Ok((opaque, height));
         }
-        let mut opaque = matches!(ty, Ty::Param(_));
+        // A trait object erases its concrete type: like a parameter, any input
+        // referent may be the source of a returned `&dyn` (input envelope).
+        let mut opaque = matches!(ty, Ty::Param(_) | Ty::Dyn(_));
         let mut height = 0;
         let mut child = |value: &Ty| -> Result<(), String> {
             let (is_opaque, child_height) = walk(value, false, budget, depth + 1, visits, memo)?;
@@ -5095,6 +5219,7 @@ fn ref_type_walk(
             | Ty::Char
             | Ty::Bool
             | Ty::Unit
+            | Ty::Dyn(_)
             | Ty::Never => {}
         }
         budget.retain_bytes(4 * std::mem::size_of::<((usize, bool), (bool, usize))>())?;
@@ -5176,6 +5301,7 @@ fn ref_types_equal(
                 x == y && child(a, b)?
             }
             (Ty::Slice { element: a }, Ty::Slice { element: b }) => child(a, b)?,
+            (Ty::Dyn(a), Ty::Dyn(b)) => a.principal == b.principal,
             (
                 Ty::Ref {
                     kind: a,
@@ -5671,6 +5797,22 @@ pub const MAX_PATTERN_PROJECTION_WORK: usize = 1_000_000;
 pub struct PatternBinding {
     pub local: LocalId,
     pub projection: Vec<Projection>,
+    /// `None` binds the selected place by value (Copy or move). `Some(kind)`
+    /// is a `ref`/`ref mut` or default-binding-mode borrow of that place; the
+    /// local then has type `&kind T` and lowering issues a genuine loan.
+    pub borrow: Option<BorrowKind>,
+}
+impl PatternBinding {
+    /// The binding local's type for a selected place of type `selected`.
+    pub fn local_ty(&self, selected: &Ty) -> Ty {
+        match self.borrow {
+            None => selected.clone(),
+            Some(kind) => Ty::Ref {
+                kind,
+                referent: Arc::new(selected.clone()),
+            },
+        }
+    }
 }
 
 fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String> {
@@ -5722,6 +5864,7 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
             (Ty::Int(a), Ty::Int(b)) if a == b => {}
             (Ty::Float(a), Ty::Float(b)) if a == b => {}
             (Ty::Param(a), Ty::Param(b)) if a == b => {}
+            (Ty::Dyn(a), Ty::Dyn(b)) if a.principal == b.principal => {}
             (Ty::Char, Ty::Char)
             | (Ty::Str, Ty::Str)
             | (Ty::Bool, Ty::Bool)
@@ -5976,7 +6119,15 @@ pub struct LiteralOutput {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExprKind {
+    /// Linux syscall number followed by its six usize ABI arguments.
+    NativeSyscall(Vec<ExprId>),
     Char(CharValue),
+    /// Inherent primitive method. `args[0]` is the by-value receiver; all
+    /// operand and result types are exactly `intrinsic.signature()`.
+    Intrinsic {
+        intrinsic: Intrinsic,
+        args: Vec<ExprId>,
+    },
     /// A string literal: `&'static str` over immutable program data.
     Str(String),
     /// Count zero bits before the highest set bit within the integer's declared width.
@@ -6022,6 +6173,12 @@ pub enum ExprKind {
     /// validated operand type. The operand is evaluated once and its loan is the
     /// only storage authority; this node appends length metadata only.
     ArrayToSlice {
+        reference: ExprId,
+    },
+    /// Unsizes `&T`/`&mut T` (sized concrete or rigid generic `T: Trait`) to a
+    /// trait object reference of the same kind. The vtable is chosen from the
+    /// operand's exact (substituted) referent type, never stored here.
+    RefToDyn {
         reference: ExprId,
     },
     /// Builtin length of an admitted shared slice, result `usize`.
@@ -6113,6 +6270,12 @@ pub enum ExprKind {
     },
     Output(LiteralOutput),
     Println(String),
+    Format {
+        pieces: Vec<String>,
+        arguments: Vec<ExprId>,
+        stream: OutputStream,
+        newline: bool,
+    },
     Panic(Box<PanicMessage>),
 }
 
@@ -6661,10 +6824,22 @@ impl CheckedFunction {
                 ExprKind::Block(value)
                 | ExprKind::Loop { body: value, .. }
                 | ExprKind::LabeledBlock { body: value, .. } => block(value, facts, budget, 0)?,
-                ExprKind::Tuple(values) | ExprKind::Array(values) => {
+                ExprKind::NativeSyscall(values)
+                | ExprKind::Tuple(values)
+                | ExprKind::Array(values)
+                | ExprKind::Intrinsic { args: values, .. } => {
                     storage(budget, values.len(), std::mem::size_of::<ExprId>())?
                 }
                 ExprKind::Output(output) => storage(budget, output.text.len(), 1)?,
+                ExprKind::Format {
+                    pieces, arguments, ..
+                } => {
+                    storage(budget, pieces.len(), std::mem::size_of::<String>())?;
+                    for piece in pieces {
+                        storage(budget, piece.len(), 1)?;
+                    }
+                    storage(budget, arguments.len(), std::mem::size_of::<ExprId>())?;
+                }
                 ExprKind::Str(text) => storage(budget, text.len(), 1)?,
                 ExprKind::Println(text) => storage(budget, text.len(), 1)?,
                 ExprKind::Panic(payload) => {
@@ -6683,6 +6858,7 @@ impl CheckedFunction {
                 | ExprKind::Deref { .. }
                 | ExprKind::DynamicIndex { .. }
                 | ExprKind::ArrayToSlice { .. }
+                | ExprKind::RefToDyn { .. }
                 | ExprKind::SliceLen { .. }
                 | ExprKind::SliceIndex { .. }
                 | ExprKind::Repeat { .. }
@@ -6759,7 +6935,18 @@ impl CheckedFunction {
                     Ty::Struct(_) => true,
                     Ty::Tuple(fields) => !fields.is_empty(),
                     Ty::Array { len, .. } => *len > 0 && *len <= MAX_ARRAY_LEN,
-                    _ => false,
+                    // A matched reference is selected through: some binding
+                    // must dereference it (a binding-free match is a wildcard).
+                    Ty::Ref { .. } => aggregate_bindings
+                        .iter()
+                        .any(|binding| binding.projection.first() == Some(&Projection::Deref)),
+                    // A whole-value `ref` binding of a scalar place.
+                    _ => {
+                        !aggregate_bindings.is_empty()
+                            && aggregate_bindings.iter().all(|binding| {
+                                binding.borrow.is_some() && binding.projection.is_empty()
+                            })
+                    }
                 };
                 if !aggregate {
                     return Err(
@@ -6769,9 +6956,14 @@ impl CheckedFunction {
                 }
                 self.validate_pattern_bindings_with_params(domain, aggregate_bindings, parameters)?;
                 for binding in aggregate_bindings {
-                    if binding.projection.is_empty()
+                    if (binding.projection.is_empty() && binding.borrow.is_none())
                         || binding.projection.iter().any(|step| {
-                            !matches!(step, Projection::Field(_) | Projection::ConstantIndex(_))
+                            !matches!(
+                                step,
+                                Projection::Field(_)
+                                    | Projection::ConstantIndex(_)
+                                    | Projection::Deref
+                            )
                         })
                     {
                         return Err(
@@ -6859,7 +7051,10 @@ impl CheckedFunction {
         Self::decision_work(work, path.len())?;
         for (index, step) in path.iter().enumerate() {
             match step {
-                Projection::Field(_) | Projection::ConstantIndex(_) => {}
+                Projection::DynamicIndex(_) => {
+                    return Err("runtime index is not a source pattern projection".into());
+                }
+                Projection::Field(_) | Projection::ConstantIndex(_) | Projection::Deref => {}
                 Projection::Downcast(variant) => {
                     let mut authorized = false;
                     for test in earlier {
@@ -6880,11 +7075,6 @@ impl CheckedFunction {
                         return Err("pattern decision downcast lacks earlier exact tag test".into());
                     }
                 }
-                _ => {
-                    return Err(
-                        "pattern decision requires typed field, index or downcast paths".into(),
-                    );
-                }
             }
         }
         // This independently checks owner, shape and physical bounds at every
@@ -6901,7 +7091,13 @@ impl CheckedFunction {
         parameters: &std::collections::HashSet<LocalId>,
     ) -> Result<(), String> {
         let admitted = match domain {
-            Ty::Bool | Ty::Int(_) | Ty::Char | Ty::Unit | Ty::Struct(_) | Ty::Enum(_) => true,
+            Ty::Bool
+            | Ty::Int(_)
+            | Ty::Char
+            | Ty::Unit
+            | Ty::Struct(_)
+            | Ty::Enum(_)
+            | Ty::Ref { .. } => true,
             Ty::Tuple(fields) => !fields.is_empty(),
             Ty::Array { len, .. } => *len > 0 && *len <= MAX_ARRAY_LEN,
             _ => false,
@@ -7040,8 +7236,8 @@ impl CheckedFunction {
             if !locals.insert(binding.local) || parameters.contains(&binding.local) {
                 return Err("pattern binding locals must be distinct fresh locals".into());
             }
-            let projected = projected_ty(ty, &binding.projection)?;
-            if !pattern_types_equal(&local.ty, projected, work)? {
+            let projected = binding.local_ty(projected_ty(ty, &binding.projection)?);
+            if !pattern_types_equal(&local.ty, &projected, work)? {
                 return Err("pattern binding local type mismatch".into());
             }
             paths.push(binding.projection.as_slice());
@@ -7189,6 +7385,31 @@ impl CheckedFunction {
                         return Err("pointer cast completion mismatch".into());
                     }
                 }
+                ExprKind::Intrinsic { intrinsic, args } => {
+                    let signature = intrinsic
+                        .signature()
+                        .ok_or("primitive method has no signature for its receiver")?;
+                    if args.len() != signature.params.len() {
+                        return Err("primitive method arity mismatch".into());
+                    }
+                    let mut completion = Completion::Returns;
+                    for (arg, param) in args.iter().zip(&signature.params) {
+                        expr(*arg)?;
+                        let operand = &self.exprs[arg.0];
+                        if operand.ty != *param && operand.ty != Ty::Never {
+                            return Err("primitive method operand type mismatch".into());
+                        }
+                        if operand.completion == Completion::Never {
+                            completion = Completion::Never;
+                        }
+                    }
+                    if value.ty != signature.result {
+                        return Err("primitive method result type mismatch".into());
+                    }
+                    if value.completion != completion {
+                        return Err("primitive method completion mismatch".into());
+                    }
+                }
                 ExprKind::LeadingZeros { value: source } => {
                     expr(*source)?;
                     let source = &self.exprs[source.0];
@@ -7247,6 +7468,14 @@ impl CheckedFunction {
                         .get(place.local.0)
                         .ok_or("invalid borrow local")?
                         .ty;
+                    for projection in &place.projection {
+                        if let Projection::DynamicIndex(index) = projection
+                            && self.locals.get(index.0).map(|local| &local.ty)
+                                != Some(&Ty::Int(IntTy::Usize))
+                        {
+                            return Err("runtime borrow index requires a valid usize local".into());
+                        }
+                    }
                     let referent = projected_ty(root, &place.projection)?;
                     let expected = Ty::Ref {
                         kind: *kind,
@@ -7383,6 +7612,35 @@ impl CheckedFunction {
                         return Err("array-to-slice completion mismatch".into());
                     }
                 }
+                ExprKind::RefToDyn { reference } => {
+                    expr(*reference)?;
+                    let source = &self.exprs[reference.0];
+                    let (
+                        Ty::Ref {
+                            kind: from,
+                            referent: concrete,
+                        },
+                        Ty::Ref {
+                            kind: to,
+                            referent: object,
+                        },
+                    ) = (&source.ty, &value.ty)
+                    else {
+                        return Err("trait object unsizing requires references".into());
+                    };
+                    if from != to || !matches!(object.as_ref(), Ty::Dyn(_)) {
+                        return Err("trait object unsizing changed reference shape".into());
+                    }
+                    if matches!(
+                        concrete.as_ref(),
+                        Ty::Dyn(_) | Ty::Slice { .. } | Ty::Never | Ty::AssociatedType(_)
+                    ) {
+                        return Err("unsupported: trait object unsizing source".into());
+                    }
+                    if value.completion != source.completion {
+                        return Err("trait object unsizing completion mismatch".into());
+                    }
+                }
                 ExprKind::SliceLen { slice } => {
                     expr(*slice)?;
                     let source = &self.exprs[slice.0];
@@ -7496,6 +7754,23 @@ impl CheckedFunction {
                     }
                 }
                 ExprKind::Local(id) => local(*id)?,
+                ExprKind::NativeSyscall(arguments) => {
+                    if arguments.len() != 7 || value.ty != Ty::Int(IntTy::Usize) {
+                        return Err("invalid native syscall shape".into());
+                    }
+                    let mut completes = true;
+                    for &id in arguments {
+                        expr(id)?;
+                        let argument = &self.exprs[id.0];
+                        if argument.ty != Ty::Int(IntTy::Usize) {
+                            return Err("native syscall arguments must be usize".into());
+                        }
+                        completes &= argument.completion == Completion::Returns;
+                    }
+                    if (value.completion == Completion::Returns) != completes {
+                        return Err("native syscall completion mismatch".into());
+                    }
+                }
                 ExprKind::Tuple(elements) => {
                     for &id in elements {
                         expr(id)?;
@@ -7832,6 +8107,46 @@ impl CheckedFunction {
                     }
                 }
                 ExprKind::Bool(_) | ExprKind::Println(_) => {}
+                ExprKind::Format {
+                    pieces, arguments, ..
+                } => {
+                    if pieces.len() != arguments.len() + 1 {
+                        return Err("format argument count mismatch".into());
+                    }
+                    let mut completion = Completion::Returns;
+                    for &id in arguments {
+                        expr(id)?;
+                        let argument = &self.exprs[id.0];
+                        let ty = if matches!(
+                            argument.kind,
+                            ExprKind::Borrow {
+                                kind: BorrowKind::Shared,
+                                ..
+                            }
+                        ) {
+                            let Ty::Ref { referent, .. } = &argument.ty else {
+                                return Err("format borrow requires reference type".into());
+                            };
+                            referent.as_ref()
+                        } else {
+                            &argument.ty
+                        };
+                        if !matches!(ty, Ty::Int(_) | Ty::Bool | Ty::Char | Ty::Never)
+                            && !ty.is_shared_str()
+                        {
+                            return Err(
+                                "format argument requires integer, bool, char or &str Display"
+                                    .into(),
+                            );
+                        }
+                        if argument.completion == Completion::Never {
+                            completion = Completion::Never;
+                        }
+                    }
+                    if value.ty != Ty::Unit || value.completion != completion {
+                        return Err("format output type or completion mismatch".into());
+                    }
+                }
             }
         }
         while let Some(block) = blocks.pop() {
@@ -12092,10 +12407,12 @@ mod tests {
             PatternBinding {
                 local: LocalId(2),
                 projection: vec![0].into_iter().map(Projection::Field).collect(),
+                borrow: None,
             },
             PatternBinding {
                 local: LocalId(1),
                 projection: vec![1].into_iter().map(Projection::Field).collect(),
+                borrow: None,
             },
         ];
         function.body.statements = vec![Stmt::LetPattern {
@@ -12163,6 +12480,7 @@ mod tests {
         let binding = PatternBinding {
             local: LocalId(1),
             projection: vec![],
+            borrow: None,
         };
         let oversized = vec![binding.clone(); MAX_PATTERN_BINDINGS + 1];
         assert!(
@@ -12174,6 +12492,7 @@ mod tests {
         let deep = PatternBinding {
             local: LocalId(1),
             projection: vec![Projection::Field(0); MAX_PATTERN_PROJECTION_DEPTH + 1],
+            borrow: None,
         };
         assert!(
             function
@@ -12198,6 +12517,7 @@ mod tests {
             bindings.push(PatternBinding {
                 local: LocalId(index + 1),
                 projection: vec![Projection::Field(0); MAX_PATTERN_PROJECTION_DEPTH],
+                borrow: None,
             });
         }
         assert!(
@@ -12223,6 +12543,7 @@ mod tests {
         let bindings = [PatternBinding {
             local: LocalId(1),
             projection: vec![],
+            borrow: None,
         }];
         assert!(
             function
@@ -12490,6 +12811,7 @@ mod tests {
                         bindings: vec![PatternBinding {
                             local: LocalId(1),
                             projection: vec![Projection::Field(0)],
+                            borrow: None,
                         }],
                     },
                     body: ExprId(1),
@@ -12930,6 +13252,7 @@ mod tests {
             bindings: vec![PatternBinding {
                 local: LocalId(1),
                 projection: vec![old, Projection::Field(0)],
+                borrow: None,
             }],
         };
         let budget = PlanBudget::default();

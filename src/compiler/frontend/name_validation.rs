@@ -613,6 +613,7 @@ impl<'a> Validator<'a> {
                 | Type::RawPtr {
                     pointee: element, ..
                 } => self.push(Visit::Type(element))?,
+                Type::Dyn(trait_path) => self.push(Visit::TraitPath(trait_path))?,
                 Type::Tuple(elements) => self.many(elements, Visit::Type)?,
                 Type::SelfType
                 | Type::Int(_)
@@ -743,6 +744,25 @@ impl<'a> Validator<'a> {
                     self.push(Visit::IfLetThen(pattern, body))?;
                     self.push(Visit::Expr(scrutinee))?;
                 }
+                Stmt::For {
+                    label,
+                    pattern,
+                    source,
+                    body,
+                    ..
+                } => {
+                    if let Some(label) = label {
+                        self.push(Visit::Ident(*label, LookupClass::Label))?;
+                    }
+                    self.push(Visit::IfLetThen(pattern, body))?;
+                    match &source.iterable {
+                        ForIterable::Range { start, end, .. } => {
+                            self.push(Visit::Expr(end))?;
+                            self.push(Visit::Expr(start))?;
+                        }
+                        ForIterable::Value(value) => self.push(Visit::Expr(value))?,
+                    }
+                }
                 Stmt::While {
                     label,
                     condition,
@@ -807,6 +827,7 @@ impl<'a> Validator<'a> {
                 }
                 Expr::Borrow { place, .. } => self.push(Visit::Place(place))?,
                 Expr::Deref { value }
+                | Expr::BorrowValue { value, .. }
                 | Expr::Repeat { value, .. }
                 | Expr::Index { base: value, .. }
                 | Expr::Unary { value, .. } => self.push(Visit::Expr(value))?,
@@ -814,7 +835,7 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Expr(base))?;
                     self.push(Visit::Expr(index))?;
                 }
-                Expr::Array(elements) | Expr::Tuple(elements) => {
+                Expr::NativeSyscall(elements) | Expr::Array(elements) | Expr::Tuple(elements) => {
                     self.many(elements, Visit::Expr)?
                 }
                 Expr::EnumVariant { name, fields, .. } => {
@@ -913,6 +934,11 @@ impl<'a> Validator<'a> {
                     }
                 }
                 Expr::Output(output) => validate_output_site(output, &self.program.names)?,
+                Expr::Format { arguments, .. } => {
+                    for argument in arguments {
+                        self.push(Visit::Expr(argument))?;
+                    }
+                }
                 Expr::Panic(panic) => validate_panic_site(panic, &self.program.names)?,
                 Expr::Integer(_)
                 | Expr::Float(_)
@@ -926,6 +952,7 @@ impl<'a> Validator<'a> {
                     self.push(Visit::GenericPath(path))?;
                     self.push(Visit::Pattern(pattern))?;
                 }
+                Pattern::Ref { pattern, .. } => self.push(Visit::Pattern(pattern))?,
                 Pattern::Variant { name, fields, .. } => {
                     self.push(Visit::Path(name))?;
                     self.pattern_fields(fields)?;
@@ -1569,6 +1596,7 @@ mod tests {
                 Pattern::Binding {
                     name,
                     mutable: false,
+                    by_ref: None,
                 },
             ]),
             ty: Type::Unit,
@@ -1670,6 +1698,7 @@ mod tests {
                     **pattern = Pattern::Binding {
                         name: foreign_name,
                         mutable: false,
+                        by_ref: None,
                     }
                 }
                 1 => *ty = Type::Param(foreign_name),
@@ -1758,6 +1787,7 @@ mod tests {
                     **pattern = Pattern::Binding {
                         name: foreign_name,
                         mutable: false,
+                        by_ref: None,
                     }
                 }
                 2 => **scrutinee = Expr::Var(foreign_path.clone()),
@@ -1979,6 +2009,7 @@ mod tests {
                         **pattern = Pattern::Binding {
                             name: foreign_name,
                             mutable: false,
+                            by_ref: None,
                         }
                     }
                     1 => **scrutinee = Expr::Var(foreign_path.clone()),
@@ -2036,6 +2067,7 @@ mod tests {
                 *target = Pattern::Binding {
                     name: foreign_name,
                     mutable: false,
+                    by_ref: None,
                 };
                 assert!(validate_program_names(&malformed).is_err());
                 assert!(
@@ -2091,6 +2123,7 @@ mod tests {
                 target[0] = Pattern::Binding {
                     name: foreign_name,
                     mutable: false,
+                    by_ref: None,
                 };
                 assert!(validate_program_names(&malformed).is_err());
                 assert!(

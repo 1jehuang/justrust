@@ -325,6 +325,7 @@ pub(super) fn inventory(
                 generic_path(path, ds, b, depth)?;
                 pattern(child, ds, b, depth + 1)?;
             }
+            Pattern::Ref { pattern: child, .. } => pattern(child, ds, b, depth + 1)?,
             Pattern::Tuple(children) | Pattern::Array(children) => {
                 b.charge_work(children.len())?;
                 for child in children {
@@ -430,6 +431,22 @@ pub(super) fn inventory(
                     expr(scrutinee, ds, b, d + 1)?;
                     block(body, ds, b, d + 1)?;
                 }
+                Stmt::For {
+                    pattern: child,
+                    source,
+                    body,
+                    ..
+                } => {
+                    pattern(child, ds, b, d + 1)?;
+                    match &source.iterable {
+                        ForIterable::Range { start, end, .. } => {
+                            expr(start, ds, b, d + 1)?;
+                            expr(end, ds, b, d + 1)?;
+                        }
+                        ForIterable::Value(value) => expr(value, ds, b, d + 1)?,
+                    }
+                    block(body, ds, b, d + 1)?;
+                }
                 Stmt::Return(None) => {}
             }
         }
@@ -447,6 +464,11 @@ pub(super) fn inventory(
         b.check_depth(d)?;
         b.charge_work(1)?;
         match e {
+            Expr::NativeSyscall(arguments) | Expr::Format { arguments, .. } => {
+                for argument in arguments {
+                    expr(argument, ds, b, d + 1)?;
+                }
+            }
             Expr::Tuple(es) => {
                 add(
                     ds,
@@ -536,6 +558,7 @@ pub(super) fn inventory(
                 expr(value, ds, b, d + 1)?;
             }
             Expr::Deref { value }
+            | Expr::BorrowValue { value, .. }
             | Expr::Unary { value, .. }
             | Expr::Field { base: value, .. }
             | Expr::Index { base: value, .. } => expr(value, ds, b, d + 1)?,

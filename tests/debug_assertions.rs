@@ -5,6 +5,9 @@
 //! /usr/bin/rustc 1.98.1, edition2024, panic=abort. Native gates were not run to freeze this corpus.
 //! Default panic meaning is required, not stock expression/value rendering.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/native_prelude.rs"]
+mod native_prelude;
+
 use justrust_engine::compiler::{self, frontend, ir};
 use justrust_engine::{Key, Report};
 use std::fs::{self, OpenOptions};
@@ -2542,11 +2545,6 @@ fn configured(enabled: bool) -> compiler::source::SourceOptions {
     options.cfg.set_debug_assertions(enabled);
     options
 }
-fn parsed(case: &Case, enabled: bool) -> frontend::Program {
-    let prepared =
-        compiler::source::prepare_text("source.rs", case.source, &configured(enabled)).unwrap();
-    frontend::resolve(&frontend::parse_prepared(&prepared).unwrap()).unwrap()
-}
 #[test]
 fn stock_debug_assertions_exact_sources_both_profiles() {
     stock_all();
@@ -2607,7 +2605,12 @@ fn frozen_debug_assertions_sources_and_profile_independent_rejections() {
     failures.finish();
 }
 fn successful_graph(case: &Case, enabled: bool, compiled: &compiler::Compilation, check: bool) {
-    let program = parsed(case, enabled);
+    let program = if enabled {
+        native_prelude::parse(case.source)
+    } else {
+        native_prelude::parse_configured(case.source, &configured(enabled))
+    }
+    .expect("configured source and native library parse");
     frontend::check(&program).expect("all bodies checked even with debug assertions disabled");
     let plan = frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
     assert_eq!(compiled.source_bytes, case.source.len());
@@ -2622,7 +2625,7 @@ fn successful_graph(case: &Case, enabled: bool, compiled: &compiler::Compilation
         evaluated_once(&compiled.report, 110, index, case);
         let universal = match plan.callable_provider(declaration).unwrap() {
             frontend::CallableProvider::Source { .. } => {
-                source_bodies += 1;
+                source_bodies += usize::from(!plan.is_prelude_decl(declaration).unwrap());
                 plan.callable_env(declaration).unwrap().is_generic()
             }
             frontend::CallableProvider::Recipe { .. } => true,

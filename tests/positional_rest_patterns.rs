@@ -185,7 +185,7 @@ fn cases() -> Vec<Case> {
             source: r#"fn main(){let value=(40,7,2);let result=match value{(ref a,..,b)=>*a+b};if result==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "refutable_leaf_boundary",
@@ -360,7 +360,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (17, 7));
-    assert_eq!(partition, (14, 7, 3));
+    assert_eq!(partition, (15, 7, 2));
 }
 #[test]
 fn stock_positional_rest_mapping_privacy_ownership_oracle_edition2024() {
@@ -491,6 +491,7 @@ fn source_positional_rest_ir_uses_actual_field_indexes_without_omitted_bindings(
                     vec![vec![a], vec![b]]
                 }
                 "tuple_rest_zero_width" => vec![vec![0], vec![1]],
+                "ref_binding_boundary" => vec![vec![0], vec![2]],
                 "tuple_all_rest_noncopy" | "tuple_struct_allrest_reuse" => vec![],
                 "nested_positional_rest" => vec![vec![0, 0], vec![0, 2]],
                 "macro_captured_rest_binder" => vec![vec![1]],
@@ -526,7 +527,7 @@ fn source_positional_rest_ir_uses_actual_field_indexes_without_omitted_bindings(
         }
         counts.0 += 1;
     }
-    assert_eq!(counts, (13, 12));
+    assert_eq!(counts, (14, 13));
 }
 
 #[test]
@@ -542,7 +543,7 @@ fn positional_rest_closed_domains_reject_in_their_actual_frontend_phase() {
             &source::SourceOptions::default(),
         )
         .and_then(|prepared| frontend::parse_prepared(&prepared));
-        if matches!(case.name, "guard_boundary" | "ref_binding_boundary") {
+        if matches!(case.name, "guard_boundary") {
             let error = match parsed {
                 Err(error) => error,
                 Ok(_) => panic!("{} must reject as explicit parser Unsupported", case.name),
@@ -581,7 +582,7 @@ fn positional_rest_closed_domains_reject_in_their_actual_frontend_phase() {
             counts.1 += 1;
         }
     }
-    assert_eq!(counts, (2, 1, 0));
+    assert_eq!(counts, (1, 1, 0));
 }
 #[test]
 fn native_positional_rest_workers1_8_check_build_no_compiler_fallback() {
@@ -668,7 +669,7 @@ fn native_positional_rest_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 96);
-    assert_eq!(modes, (28, 28, 14, 14, 6, 6));
+    assert_eq!(modes, (30, 30, 14, 14, 4, 4));
     eprintln!(
         "NATIVE POSITIONAL REST:96 cells, modes{modes:?};28 executed native images;12 Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
     );
