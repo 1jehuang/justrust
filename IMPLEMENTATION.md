@@ -520,6 +520,16 @@ which each oracle run must record. No source-matched compiler claim follows.
 General target-aware const-value contracts and array-length const evaluation
 remain separate open work.
 
+- [x] Original-source free immutable fixed-width integer/bool constants use
+      per-declaration CONST_DECL/CONST_BODY/CONST_VALUE graph facts (118/119/120),
+      checked scalar evaluation, all-reference qualification and lazy executed
+      value reads. Unused invalid items fail CHECK; exact source-use replay and
+      immutable paid publication receipts prevent detached value substitution.
+      Frozen `dd403c1cd` passes 3,472 full-suite tests plus strict hosted lint and
+      formatting. See CONST-EVAL-SCALAR.md and data/runs/const-source/. Target-sized
+      types, array lengths/repeats, const patterns, generated/associated consts,
+      statics and general const-fn execution remain unsupported; corpus stays 3/20.
+
 **Acceptance:**
 expansion order/hygiene, const failures and generated diagnostics match pinned
 cases, invalid unused expanded items reject, and changed cfg or observed inputs

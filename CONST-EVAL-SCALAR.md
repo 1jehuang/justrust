@@ -1,15 +1,16 @@
-# Scalar source constants: private M1 integration
+# Scalar source constants: accepted M1 slice
 
-Status: private implementation in `cr-consteval`, pending complete authority,
-regression and coordinator integration gates. Not full Rust const support.
-No performance or whole-compiler compatibility claim follows from these tests.
+Status: integrated source slice validated on frozen `dd403c1cd`: 3,472 full
+suite tests passed, plus strict hosted all-target lint and formatting. Exact
+central receipts are in `data/runs/const-source/`. This is not full Rust const
+support, and no performance or whole-compiler compatibility claim follows.
 
 The durable isolated evaluator checkpoint is `2199b26f0`. It deliberately did
-not admit source const items. Subsequent private work connects the evaluator to
+not admit source const items. The integrated source work connects the evaluator to
 original-source declarations and graph consumers. Tests now use the normal
 compiler module rather than a standalone `#[path]` copy.
 
-## Exact implemented slice under validation
+## Exact accepted slice
 
 - Original-source free immutable `const NAME: TYPE = EXPR;` items only.
 - Explicit fixed-width signed/unsigned integers (8 through 128 bits) and bool.
