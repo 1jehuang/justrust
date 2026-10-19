@@ -21,7 +21,9 @@ pub fn read_u8(address: usize) -> u8 {
 }
 
 pub fn str_from_raw_parts(ptr: usize, len: usize) -> &'static str {
-    let pair = (ptr, len);
+    // Even an empty Rust reference needs a non-null, aligned data pointer.
+    let data = if ptr == 0usize && len == 0usize { 1usize } else { ptr };
+    let pair = (data, len);
     let r = &pair;
     let p = r as *const (usize, usize) as *const &'static str;
     unsafe { *p }
@@ -47,7 +49,8 @@ fn write_u8(address: usize, value: u8) {
 impl String {
     pub fn new() -> String {
         String {
-            ptr: 0usize,
+            // Non-null dangling storage, aligned for u8. Zero capacity owns no mapping.
+            ptr: 1usize,
             len: 0usize,
             cap: 0usize,
         }
@@ -191,13 +194,11 @@ impl String {
     }
 
     pub fn starts_with(&self, pattern: &str) -> bool {
-        let (_, n) = str_parts(pattern);
-        n <= self.len && str_eq(str_from_raw_parts(self.ptr, n), pattern)
+        str_starts_with(self.as_str(), pattern)
     }
 
     pub fn ends_with(&self, pattern: &str) -> bool {
-        let (_, n) = str_parts(pattern);
-        n <= self.len && str_eq(str_from_raw_parts(self.ptr + self.len - n, n), pattern)
+        str_ends_with(self.as_str(), pattern)
     }
 
     pub fn find(&self, pattern: &str) -> Option<usize> {
@@ -309,19 +310,52 @@ pub fn str_find(haystack: &str, needle: &str) -> Option<usize> {
     Option::None
 }
 
-fn ascii_space(b: u8) -> bool {
-    b == 32u8 || b == 9u8 || b == 10u8 || b == 13u8 || b == 12u8 || b == 11u8
+pub fn str_starts_with(text: &str, pattern: &str) -> bool {
+    let (base, len) = str_parts(text);
+    let (needle, count) = str_parts(pattern);
+    if count > len { return false; }
+    let mut i = 0usize;
+    while i < count {
+        if read_u8(base + i) != read_u8(needle + i) { return false; }
+        i += 1usize;
+    }
+    true
+}
+
+pub fn str_ends_with(text: &str, pattern: &str) -> bool {
+    let (base, len) = str_parts(text);
+    let (needle, count) = str_parts(pattern);
+    if count > len { return false; }
+    let start = len - count;
+    let mut i = 0usize;
+    while i < count {
+        if read_u8(base + start + i) != read_u8(needle + i) { return false; }
+        i += 1usize;
+    }
+    true
+}
+
+// Unicode White_Space, the property used by Rust's char::is_whitespace.
+pub fn char_is_whitespace(ch: char) -> bool {
+    let c = ch as u32;
+    (c >= 9u32 && c <= 13u32) || c == 32u32 || c == 133u32
+        || c == 160u32 || c == 5760u32 || (c >= 8192u32 && c <= 8202u32)
+        || c == 8232u32 || c == 8233u32 || c == 8239u32
+        || c == 8287u32 || c == 12288u32
 }
 
 pub fn str_trim(s: &str) -> &str {
     let (p, n) = str_parts(s);
     let mut start = 0usize;
-    while start < n && ascii_space(read_u8(p + start)) {
-        start += 1usize;
+    while start < n && char_is_whitespace(decode_utf8_at(p, start)) {
+        start += utf8_width(read_u8(p + start));
     }
     let mut end = n;
-    while end > start && ascii_space(read_u8(p + end - 1usize)) {
-        end -= 1usize;
+    while end > start {
+        let mut at = end - 1usize;
+        while at > start && (read_u8(p + at) & 192u8) == 128u8 { at -= 1usize; }
+        if !char_is_whitespace(decode_utf8_at(p, at)) { break; }
+        end = at;
     }
     str_from_raw_parts(p + start, end - start)
 }

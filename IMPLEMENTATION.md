@@ -742,6 +742,14 @@ empty inputs, insertion positions, generic non-Copy elements and stable equal-ke
 ordering against stock Rust at workers 1 and 8. Iterator-dependent methods and
 slice delegation remain open.
 
+Active source `String::trim` recognizes Unicode White_Space at UTF-8 scalar
+boundaries. Prefix/suffix checks compare bytes without creating an invalid
+intermediate `&str`, and zero-capacity strings retain non-null dangling storage.
+`tests/string_scalars.rs` compares CHECK/BUILD/output at workers 1 and 8 with
+stock Rust over all 25 whitespace scalars, non-whitespace controls, multibyte
+prefix/suffix boundaries, empty strings and growth after zero capacity. This
+is not full `str`, casing, parsing or Iterator acceptance.
+
 - [ ] Establish pinned library source manifests, language-item/intrinsic inventory,
       sysroot identity and library feature/target configuration without embedding
       rustc or pretending catalog recipes compile the libraries.
