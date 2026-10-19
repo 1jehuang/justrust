@@ -137,7 +137,7 @@ fn invalid_projects_are_rejected_explicitly() {
     for (manifest, message) in [
         (
             "[package]\nname = \"x\"\nversion = \"0.1.0\"\n[dependencies]\nserde = \"1\"\n",
-            "registry dependencies are unsupported",
+            "which the native driver cannot fetch",
         ),
         (
             "[package]\nversion = \"0.1.0\"\n",

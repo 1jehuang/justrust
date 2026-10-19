@@ -546,6 +546,8 @@ impl Filter<'_> {
                         if a.len() == 1
                             && a[0].name == "hidden"
                             && matches!(a[0].value, MetaValue::Word) => {}
+                    // Rustdoc-only crate metadata (html_root_url, test(...)).
+                    MetaValue::List(_) if owner == Owner::Crate => {}
                     _ => {
                         return Err(error(
                             AttributeErrorKind::Unsupported,
@@ -577,6 +579,12 @@ impl Filter<'_> {
                         }
                     }
                 }
+                // Crate-level `no_std`: core and alloc paths resolve into the
+                // same native library. `std::` remains resolvable (lenient).
+                // Lint levels: this compiler emits no lints yet, so they are
+                // inert (lint names are not validated).
+                "allow" | "warn" | "deny" | "forbid" | "expect" => {}
+                "no_std" if owner == Owner::Crate => {}
                 "test" | "ignore" | "should_panic" if owner == Owner::Function => {
                     self.test_attribute(&meta)?;
                     // Outside `cfg(test)` a test function is configured out.
@@ -752,7 +760,7 @@ impl Filter<'_> {
                         result?;
                     } else if matches!(kind, "impl" | "trait") {
                         self.associated_function_attributes(open + 1, close)?;
-                    } else if kind != "macro_rules" {
+                    } else if kind != "macro_rules" && !self.is_macro_invocation(item_start, open) {
                         self.reject_nested(open + 1, close)?;
                     }
                 }
@@ -834,6 +842,16 @@ impl Filter<'_> {
             ignore: pending.ignore,
             should_panic: pending.should_panic,
         });
+    }
+    /// `path::name! { ... }`: an item macro invocation whose body is an
+    /// opaque token tree. Attributes inside belong to the macro's input.
+    fn is_macro_invocation(&self, start: usize, open: usize) -> bool {
+        open >= start + 2
+            && self.tokens[open - 1].text(self.text) == "!"
+            && self.tokens[start..open - 1].iter().all(|t| {
+                let text = t.text(self.text);
+                text == "::" || text == ":" || text.chars().all(|c| c == '_' || c.is_alphanumeric())
+            })
     }
     fn item_kind(&self, mut i: usize, end: usize) -> (&'static str, usize) {
         if self.tokens[i].text(self.text) == "pub" {

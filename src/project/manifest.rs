@@ -410,16 +410,18 @@ impl Loader {
                 ));
             }
         }
-        if get_str(package, "build", "package")?.is_some() || dir.join("build.rs").is_file() {
-            match get(package, "build") {
-                Some(Value::Boolean(false)) => {}
-                _ => {
-                    return err(format!(
-                        "`{}`: build scripts are unsupported",
-                        path.display()
-                    ));
-                }
-            }
+        let build_script = match get(package, "build") {
+            Some(Value::Boolean(false)) => false,
+            Some(Value::Boolean(true)) => true,
+            Some(Value::String(_)) => true,
+            Some(v) => return err(format!("package.build: unexpected {}", v.type_name())),
+            None => dir.join("build.rs").is_file(),
+        };
+        if build_script {
+            return err(format!(
+                "`{}`: build scripts are unsupported",
+                path.display()
+            ));
         }
         let mut features = BTreeMap::new();
         if let Some(Value::Table(table)) = get(&table, "features") {
@@ -455,11 +457,7 @@ impl Loader {
     ) -> Result<Dependency, ManifestError> {
         let what = format!("{section}.{key}");
         let mut table = match spec {
-            Value::String(_) => {
-                return err(format!(
-                    "{what}: registry dependencies are unsupported (no native registry source); use a path dependency"
-                ));
-            }
+            Value::String(_) => Table::new(),
             Value::Table(t) => t.clone(),
             v => {
                 return err(format!(
@@ -475,9 +473,7 @@ impl Loader {
             };
             let mut merged = match &inherited.value {
                 Value::Table(t) => t.clone(),
-                Value::String(_) => {
-                    return err(format!("{what}: registry dependencies are unsupported"));
-                }
+                Value::String(_) => Table::new(),
                 _ => return err(format!("workspace.dependencies.{key}: expected a table")),
             };
             for (k, v) in table {
@@ -501,14 +497,12 @@ impl Loader {
             }
             base = root;
         }
-        if get(&table, "git").is_some() {
-            return err(format!("{what}: git dependencies are unsupported"));
-        }
-        let path = get_str(&table, "path", &what)?;
-        let Some(path) = path else {
-            return err(format!(
-                "{what}: registry dependencies are unsupported (no native registry source); use a path dependency"
-            ));
+        // Registry and git sources have no native fetcher. They are kept
+        // unresolved and rejected only when a build actually activates them.
+        let path = if get(&table, "git").is_some() {
+            None
+        } else {
+            get_str(&table, "path", &what)?
         };
         let features = match get(&table, "features") {
             Some(Value::Array(a)) => strings(a, &what)?,
@@ -518,7 +512,7 @@ impl Loader {
         Ok(Dependency {
             name: key.replace('-', "_"),
             package: get_str(&table, "package", &what)?.unwrap_or_else(|| key.to_string()),
-            path: Some(base.join(path)),
+            path: path.map(|path| base.join(path)),
             dev,
             optional: get_bool(&table, "optional", &what)?.unwrap_or(false),
             features,
@@ -549,7 +543,7 @@ fn discover_targets(
         Some(_) => return err("lib: expected a table"),
     };
     let lib_default = dir.join("src/lib.rs");
-    if lib_table.is_some() || lib_default.is_file() {
+    if lib_table.is_some() || (auto("autolib") && lib_default.is_file()) {
         let t = lib_table.unwrap_or_default();
         if let Some(Value::Boolean(true)) = get(&t, "proc-macro") {
             return err("proc-macro crates are unsupported");
@@ -800,6 +794,7 @@ pub fn visible_dependencies(
     package: usize,
     dev: bool,
     active_deps: &BTreeSet<String>,
+    unresolved: &mut Vec<String>,
 ) -> Vec<(String, usize)> {
     let mut out = Vec::new();
     for d in &ws.packages[package].dependencies {
@@ -810,6 +805,10 @@ pub fn visible_dependencies(
             continue;
         }
         let Some(path) = d.path.as_ref().and_then(|p| p.canonicalize().ok()) else {
+            unresolved.push(format!(
+                "package `{}`: dependency `{}` is a registry or git dependency, which the native driver cannot fetch; use a path dependency",
+                ws.packages[package].name, d.package
+            ));
             continue;
         };
         if let Some(index) = ws.packages.iter().position(|p| p.root == path) {
