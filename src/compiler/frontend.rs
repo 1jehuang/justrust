@@ -31,7 +31,7 @@ pub use super::semantic_path::{AstPath, PathAnchor};
 use super::semantic_path::{NameAccess, PathKey};
 use native_adapter::{NativeParserInput, NativeTokenBuffer};
 mod char_literal;
-mod closures;
+pub(super) mod closures;
 mod name_scope;
 mod name_validation;
 mod pattern_usefulness;
@@ -4368,6 +4368,9 @@ pub struct Program {
     pub prelude_scope: Option<ModuleId>,
     // Resolver-issued source authority. Shared unchanged by public AST clones.
     associated_bound_sources: Arc<[AssociatedBoundSource]>,
+    /// Immutable parser/resolver output, never a mutable callable side slot.
+    closure_sources: Arc<HashMap<PathKey, closures::ClosureSource>>,
+    closure_owners: Arc<HashMap<PathKey, Arc<[PathKey]>>>,
 }
 #[derive(Clone, Debug)]
 struct AssociatedBoundSource {
@@ -4397,6 +4400,7 @@ struct ProgramDeclarations {
     trait_imports: Vec<(ModuleId, TraitPath)>,
     prelude_module: Option<ModuleId>,
     prelude_scope: Option<ModuleId>,
+    closure_sources: HashMap<PathKey, closures::ClosureSource>,
 }
 struct ParsedDeclarations {
     program: ProgramDeclarations,
@@ -4425,6 +4429,8 @@ impl ProgramDeclarations {
             prelude_module: self.prelude_module,
             prelude_scope: self.prelude_scope,
             associated_bound_sources: Arc::from([]),
+            closure_sources: Arc::new(self.closure_sources),
+            closure_owners: Arc::new(HashMap::new()),
         }
     }
 }
@@ -4553,6 +4559,7 @@ impl ProgramBuilder {
             trait_imports: self.trait_imports,
             prelude_module: None,
             prelude_scope: None,
+            closure_sources: HashMap::new(),
         }
         .publish(names, modules, self.symbols, None);
         program.validate_name_handles()?;
@@ -6221,6 +6228,8 @@ struct ParserLexicalState {
     closure_functions: Vec<Function>,
     closure_serial: usize,
     closure_depth: usize,
+    closure_parent: Option<closures::ClosureParent>,
+    closure_sources: Vec<closures::ClosureSource>,
 }
 struct FunctionMacroState {
     frontier: super::semantic_scope::FrontierId,
@@ -9790,59 +9799,70 @@ impl<'input, 'names> Parser<'input, 'names> {
         associated: bool,
     ) -> Result<(Function, ReceiverKind), ParseError> {
         let (head, receiver) = self.function_head(inherited, associated)?;
-        let (body, lexical_scope) = if let Some(proof) = self.item_expansion {
-            if associated
-                || !inherited.is_empty()
-                || !head.type_params.is_empty()
-                || !head.regions.params.is_empty()
-            {
-                return Err(
-                    self.unsupported("item macro products must be nongeneric free functions")
-                );
-            }
-            let scopes = self.lexical.scopes.as_mut().ok_or_else(|| {
-                native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
-            })?;
-            let frontier = scopes
-                .generated_function_root(self.names, &*self.modules, &proof, head.name)
-                .map_err(scope_parse_error)?;
-            let owner = scopes.function(frontier).map_err(scope_parse_error)?;
-            let previous = self.lexical.function.replace(FunctionMacroState {
-                frontier,
-                driver: None,
+        let previous_parent = self.lexical.closure_parent.take();
+        if !associated && head.type_params.is_empty() {
+            self.lexical.closure_parent = Some(closures::ClosureParent {
+                name: self.closure_path(head.name)?,
+                params: head.params.clone(),
             });
-            let result = (|| {
-                for (name, _) in &head.params {
-                    if let BindingName::Named(name) = name {
-                        self.bind_lexical(*name)?;
-                    }
+        }
+        let result = (|| {
+            let (body, lexical_scope) = if let Some(proof) = self.item_expansion {
+                if associated
+                    || !inherited.is_empty()
+                    || !head.type_params.is_empty()
+                    || !head.regions.params.is_empty()
+                {
+                    return Err(
+                        self.unsupported("item macro products must be nongeneric free functions")
+                    );
                 }
-                self.block()
-            })();
-            self.lexical.function = previous;
-            (result?, Some(owner))
-        } else {
-            self.function_body(&head.params)?
-        };
-        Ok((
-            Function {
-                lexical_scope,
-                module: self.module,
-                constness: head.constness,
-                visibility: ir::Visibility::Public,
-                name: AstPath::new(self.names, PathAnchor::Relative, &[head.name])
-                    .map_err(native_adapter::name_error)?,
-                regions: head.regions,
-                type_params: head.type_params,
-                bounds: head.bounds,
-                params: head.params,
-                param_mut: head.param_mut,
-                result: head.result,
-                impl_params: head.impl_params,
-                body,
-            },
-            receiver,
-        ))
+                let scopes = self.lexical.scopes.as_mut().ok_or_else(|| {
+                    native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+                })?;
+                let frontier = scopes
+                    .generated_function_root(self.names, &*self.modules, &proof, head.name)
+                    .map_err(scope_parse_error)?;
+                let owner = scopes.function(frontier).map_err(scope_parse_error)?;
+                let previous = self.lexical.function.replace(FunctionMacroState {
+                    frontier,
+                    driver: None,
+                });
+                let result = (|| {
+                    for (name, _) in &head.params {
+                        if let BindingName::Named(name) = name {
+                            self.bind_lexical(*name)?;
+                        }
+                    }
+                    self.block()
+                })();
+                self.lexical.function = previous;
+                (result?, Some(owner))
+            } else {
+                self.function_body(&head.params)?
+            };
+            Ok((
+                Function {
+                    lexical_scope,
+                    module: self.module,
+                    constness: head.constness,
+                    visibility: ir::Visibility::Public,
+                    name: AstPath::new(self.names, PathAnchor::Relative, &[head.name])
+                        .map_err(native_adapter::name_error)?,
+                    regions: head.regions,
+                    type_params: head.type_params,
+                    bounds: head.bounds,
+                    params: head.params,
+                    param_mut: head.param_mut,
+                    result: head.result,
+                    impl_params: head.impl_params,
+                    body,
+                },
+                receiver,
+            ))
+        })();
+        self.lexical.closure_parent = previous_parent;
+        result
     }
     fn callable_generics(
         &mut self,
@@ -11997,6 +12017,27 @@ fn parse_syntax_unit(
         .program
         .functions
         .append(&mut parser.lexical.closure_functions);
+    let sources = std::mem::take(&mut parser.lexical.closure_sources);
+    parsed
+        .program
+        .closure_sources
+        .try_reserve(sources.len())
+        .map_err(|_| parser.limit("closure source index allocation"))?;
+    for source in sources {
+        parser
+            .names
+            .budget()
+            .charge(super::expansion_budget::Counter::Work, 1)
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        if parsed
+            .program
+            .closure_sources
+            .insert(source.name.key(Namespace::Type), source)
+            .is_some()
+        {
+            return Err(parser.error("duplicate anonymous source declaration"));
+        }
+    }
     for function in &parsed.program.functions {
         let function_name = function
             .name

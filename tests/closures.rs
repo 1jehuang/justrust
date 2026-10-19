@@ -92,6 +92,77 @@ fn immediate_noncapturing_closures_match_stock() {
 }
 
 #[test]
+fn shared_scalar_parameter_captures_match_stock() {
+    assert!(
+        std::process::Command::new("rustc")
+            .arg("-vV")
+            .output()
+            .is_ok_and(|out| out.status.success()),
+        "local stock oracle required"
+    );
+    oracle::check(
+        "closure-captures",
+        &[
+            Case {
+                name: "shared_parameter",
+                source: "fn run(n:i32)->i32{(||->i32{n+n})()}fn main(){assert_eq!(run(21),42);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "multiple_first_use_and_dedup",
+                source: "fn run(a:i32,b:i32)->i32{(||->i32{b+a+b})()}fn main(){assert_eq!(run(2,20),42);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "closure_local_shadow",
+                source: "fn run(n:i32)->i32{(||->i32{let out=n;let n=2;out+n})()}fn main(){assert_eq!(run(40),42);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "capture_last_use",
+                source: "fn run(mut n:i32)->i32{let out=(||->i32{n})();n+=1;out+n}fn main(){assert_eq!(run(20),41);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "capture_and_argument_order_once",
+                source: "fn mark(n:i32)->i32{println!(\"{}\",n);n}fn run(n:i32)->i32{(|x:i32,y:i32|->i32{n+x+y})(crate::mark(1),crate::mark(2))}fn main(){assert_eq!(run(39),42);}",
+                expect: Expect::Run("1\n2\n"),
+            },
+            Case {
+                name: "shared_capture_place",
+                source: "fn read(n:&i32)->i32{*n}fn run(n:i32)->i32{(||->i32{crate::read(&n)})()}fn main(){assert_eq!(run(42),42);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "nested_capture_environments",
+                source: "fn run(n:i32)->i32{(|x:i32|->i32{n+(||->i32{x})()})(2)}fn main(){assert_eq!(run(40),42);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "unused_captured_type_error",
+                source: "fn unused(n:i32){(||->i32{let x=n;true})();}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_captured_move_error",
+                source: "struct Value{n:i32}fn unused(n:i32){(|v:Value|->i32{let moved=v;n+v.n})(Value{n:1});}fn main(){}",
+                expect: Expect::Invalid("E0382"),
+            },
+            Case {
+                name: "capture_loan_argument_write",
+                source: "fn run(mut n:i32){(|x:()|->i32{n})({n=2;});}fn main(){run(1);}",
+                expect: Expect::Invalid("E0506"),
+            },
+            Case {
+                name: "capture_loan_argument_borrow",
+                source: "fn run(mut n:i32){(|x:&mut i32|->i32{n})(&mut n);}fn main(){run(1);}",
+                expect: Expect::Invalid("E0502"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn unsupported_closure_values_and_inference_fail_explicitly() {
     for source in [
         "fn main() { let f = |x: i32| -> i32 { x }; }",
