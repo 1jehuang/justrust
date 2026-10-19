@@ -68,7 +68,7 @@ enum First<'e> {
 
 impl type_check::Checker<'_> {
     /// Prelude trait `std::<module>::<name>` and its method `method`.
-    fn operator_trait(
+    pub(super) fn operator_trait(
         &self,
         module: &str,
         name: &str,
@@ -315,7 +315,7 @@ impl type_check::Checker<'_> {
         Ok(Some(id))
     }
 
-    fn record_operator(&self, pointer: usize, id: ir::ExprId) -> Result<(), String> {
+    pub(super) fn record_operator(&self, pointer: usize, id: ir::ExprId) -> Result<(), String> {
         if let Some(cap) = self.canonical {
             cap.record_call_at(pointer, id, &self.exprs[id.0].kind)?;
         }

@@ -40,12 +40,13 @@ mod source_schemas;
 use source_schemas::{SourceSchemas, SourceSchemasBuilder, StoredSchema};
 mod token_cursor;
 use char_literal::{parse_byte_literal, parse_char_literal};
+mod deref_coercion;
 mod format_args;
-mod panic_format;
-mod vec_macro;
 mod format_spec;
 mod operators;
+mod panic_format;
 mod trait_selection;
+mod vec_macro;
 pub use program_symbols::ProgramSymbols;
 mod persistent_path;
 pub use persistent_path::{
@@ -1800,6 +1801,19 @@ impl SourceInventory {
     ) -> Result<(), FactsError> {
         sr::depth(budget, depth)?;
         sr::work(budget, 1)?;
+        if deref_coercion::candidate(expr)
+            && !self
+                .call_pointers
+                .contains_key(&deref_coercion::site(expr as *const Expr as usize, 1))
+        {
+            for step in 1..=deref_coercion::MAX_DEREF_STEPS {
+                self.operator_site(
+                    deref_coercion::site(expr as *const Expr as usize, step),
+                    node,
+                    budget,
+                )?;
+            }
+        }
         match expr {
             Expr::UnexpandedMacro(_) => {
                 return Err(source_error(

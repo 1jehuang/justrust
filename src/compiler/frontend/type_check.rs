@@ -6466,6 +6466,7 @@ impl<'a> Checker<'a> {
             Some(expected) if trait_object_target(expected).is_some() => {
                 self.coerce_ref_to_dyn(result, expected)
             }
+            Some(expected) => Ok(self.deref_coercion(e, result, expected)?.unwrap_or(result)),
             _ => Ok(result),
         }
     }

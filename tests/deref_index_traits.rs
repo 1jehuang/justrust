@@ -65,3 +65,13 @@ fn box_deref() {
         "6\n",
     );
 }
+
+#[test]
+fn deref_coercion_at_call_and_let_sites() {
+    run(
+        "struct N { v: i32 }
+fn get(n: &N) -> i32 { n.v }
+fn main() { let b = Box::new(N { v: 7 }); let bb = Box::new(Box::new(N { v: 2 })); let r: &N = &b; println!(\"{} {} {}\", get(&b), get(&bb), r.v); }",
+        "7 2 7\n",
+    );
+}
