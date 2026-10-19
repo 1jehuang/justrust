@@ -1428,7 +1428,7 @@ impl<'s> Checker<'s> {
             }
             projected_constraints.push((formal, evidence));
         }
-        if !solver.constrain_projected_formals(projected_constraints)? {
+        if !solver.constrain_projected_formals(projected_constraints, fallback)? {
             return Ok(None);
         }
         solver.finish(fallback)

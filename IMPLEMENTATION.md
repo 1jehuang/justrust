@@ -513,7 +513,9 @@ cleanup failures.
       membership through inference and closed carrier equality replay
       (`PROJECTED-CALLABLE-BOUNDS.md`). The untyped stored closure consumer and
       independent Fn Output equality noninterference pass stock/native CHECK,
-      BUILD and run at workers 1/8. Reference-bearing callable tuples, named
+      BUILD and run at workers 1/8. Numeric projection receivers default to
+      i32/f64 only after constraint quiescence, preserving later explicit widths
+      (`tests/projection_defaults.rs`). Reference-bearing callable tuples, named
       function-item values and full Iterator adapter execution remain open.
 - [x] General associated declaration trait applications and equality bounds under
       ASSOCIATED-BOUNDS.md retain exact source/owner/ordered argument identity and

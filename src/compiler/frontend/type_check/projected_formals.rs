@@ -7,35 +7,40 @@ impl Inference<'_, '_> {
         &self,
         ty: &ir::Ty,
         depth: usize,
+        defaults: bool,
     ) -> Result<Option<InferTerm>, String> {
         let term = self.schema(ty, depth)?;
-        self.normalize_schema_projections(&term, depth + 1)
+        self.normalize_schema_projections(&term, depth + 1, defaults)
     }
 
     fn normalize_schema_projections(
         &self,
         term: &InferTerm,
         depth: usize,
+        defaults: bool,
     ) -> Result<Option<InferTerm>, String> {
         self.checker.infer_work(depth)?;
         let kind = match term.as_ref() {
             InferKind::Rigid(ir::Ty::AssociatedType(projection)) => {
                 let Some(receiver) =
-                    self.projected_schema(&projection.trait_ref.self_ty, depth + 1)?
+                    self.projected_schema(&projection.trait_ref.self_ty, depth + 1, defaults)?
                 else {
                     return Ok(None);
                 };
-                let Some(receiver) = self.resolve_projection_input(&receiver, depth + 1)? else {
+                let Some(receiver) =
+                    self.resolve_projection_input(&receiver, depth + 1, defaults)?
+                else {
                     return Ok(None);
                 };
                 let mut arguments = Vec::new();
                 self.checker
                     .infer_storage(projection.trait_ref.args.len())?;
                 for argument in projection.trait_ref.args.iter() {
-                    let Some(term) = self.projected_schema(argument, depth + 1)? else {
+                    let Some(term) = self.projected_schema(argument, depth + 1, defaults)? else {
                         return Ok(None);
                     };
-                    let Some(actual) = self.resolve_projection_input(&term, depth + 1)? else {
+                    let Some(actual) = self.resolve_projection_input(&term, depth + 1, defaults)?
+                    else {
                         return Ok(None);
                     };
                     arguments.push(actual);
@@ -68,7 +73,9 @@ impl Inference<'_, '_> {
                 self.checker.infer_storage(fields.len())?;
                 let mut mapped = Vec::new();
                 for field in fields.iter() {
-                    let Some(field) = self.normalize_schema_projections(field, depth + 1)? else {
+                    let Some(field) =
+                        self.normalize_schema_projections(field, depth + 1, defaults)?
+                    else {
                         return Ok(None);
                     };
                     mapped.push(field);
@@ -81,7 +88,8 @@ impl Inference<'_, '_> {
                 }
             }
             InferKind::Ref(kind, child) | InferKind::RawPtr(kind, child) => {
-                let Some(child) = self.normalize_schema_projections(child, depth + 1)? else {
+                let Some(child) = self.normalize_schema_projections(child, depth + 1, defaults)?
+                else {
                     return Ok(None);
                 };
                 if matches!(term.as_ref(), InferKind::Ref(..)) {
@@ -91,13 +99,15 @@ impl Inference<'_, '_> {
                 }
             }
             InferKind::Array(child, len) => {
-                let Some(child) = self.normalize_schema_projections(child, depth + 1)? else {
+                let Some(child) = self.normalize_schema_projections(child, depth + 1, defaults)?
+                else {
                     return Ok(None);
                 };
                 InferKind::Array(child, *len)
             }
             InferKind::Slice(child) => {
-                let Some(child) = self.normalize_schema_projections(child, depth + 1)? else {
+                let Some(child) = self.normalize_schema_projections(child, depth + 1, defaults)?
+                else {
                     return Ok(None);
                 };
                 InferKind::Slice(child)
@@ -111,15 +121,16 @@ impl Inference<'_, '_> {
         &self,
         term: &InferTerm,
         depth: usize,
+        defaults: bool,
     ) -> Result<Option<ir::Ty>, String> {
         self.checker.infer_work(depth)?;
         if let InferKind::Slot(index) = term.as_ref() {
             return match self.core.slots().get(*index).and_then(Option::as_ref) {
-                Some(bound) => self.resolve_projection_input(bound, depth + 1),
+                Some(bound) => self.resolve_projection_input(bound, depth + 1, defaults),
                 None => Ok(None),
             };
         }
-        let map = |child: &InferTerm| self.resolve_projection_input(child, depth + 1);
+        let map = |child: &InferTerm| self.resolve_projection_input(child, depth + 1, defaults);
         let ty = match term.as_ref() {
             InferKind::Tuple(fields) | InferKind::Nominal(_, fields) => {
                 self.checker.infer_storage(fields.len())?;
@@ -172,7 +183,7 @@ impl Inference<'_, '_> {
                     element: Arc::new(element),
                 }
             }
-            _ => return self.resolve(term, false, depth + 1),
+            _ => return self.resolve(term, defaults, depth + 1),
         };
         Ok(Some(ty))
     }
@@ -180,20 +191,28 @@ impl Inference<'_, '_> {
     pub(super) fn constrain_projected_formals(
         &mut self,
         constraints: Vec<(&ir::Ty, InferTerm)>,
+        fallback: bool,
     ) -> Result<bool, String> {
         let mut pending = constraints;
+        let mut defaults = false;
         while !pending.is_empty() {
             let count = pending.len();
             let mut deferred = Vec::new();
             for (formal, actual) in pending {
-                if let Some(formal) = self.projected_schema(formal, 0)? {
+                if let Some(formal) = self.projected_schema(formal, 0, defaults)? {
                     self.constrain(&formal, &actual, 0)?;
                 } else {
                     deferred.push((formal, actual));
                 }
             }
             if deferred.len() == count {
-                return Ok(false);
+                if fallback && !defaults {
+                    // Numeric defaults are a final phase, after every ordinary
+                    // and currently closed projected constraint has settled.
+                    defaults = true;
+                } else {
+                    return Ok(false);
+                }
             }
             pending = deferred;
         }

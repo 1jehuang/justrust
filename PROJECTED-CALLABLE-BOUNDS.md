@@ -31,6 +31,10 @@ source Iterator library is not claimed to pass by these focused consumers.
   equality or a fabricated type actual.
 - Authoritative callable checking reconstructs projected formals from the same
   canonical inference slots and replays actual trait and method obligations.
+- Numeric projection inputs default to i32/f64 only when the caller permits
+  fallback and all ordinary and currently closed projected constraints have
+  quiesced. Later known widths are applied before defaulting. Unknown nonnumeric
+  generic slots never receive fabricated defaults.
 - Closed carrier equality replay first validates the original occurrence rows,
   normalizes newly closed nested trait actuals with dependency-proof replay,
   and discharges the normalized obligations. The sealed result authority retains
@@ -50,6 +54,10 @@ Wyvern acceptance harness at workers 1 and 8, receipt
 `20261019-123149230-4107123`. A further unchanged source infers `I` from a later
 ordinary owner argument before resolving the projected input and untyped closure,
 with stock/native CHECK, BUILD, and run at workers 1 and 8.
+
+`tests/projection_defaults.rs` additionally checks i32/f64 projection-receiver
+fallback, a later u8 argument overriding an earlier unsuffixed integer, and
+contradictory projected values against stock Rust at workers 1 and 8.
 
 Source-backed private authority tests in `traits/universal_projections.rs` cover
 an exact projected tuple through an applied supertrait, reordered arguments,
