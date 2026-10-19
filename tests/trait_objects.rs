@@ -189,7 +189,16 @@ fn dyn_drop_owner_preserves_all_body_proofs_and_object_gates() {
                             assert!(id(103, index).is_none());
                         } else {
                             let object = id(103, index).expect("missing object");
-                            assert!(report.dependency_edges.contains(&(object, proof, 0)));
+                            assert!(report.dependency_edges.iter().any(
+                                |&(consumer, producer, output)| {
+                                    producer == proof
+                                        && output == 0
+                                        && report.events.iter().any(|event| {
+                                            event.node == Some(object)
+                                                && event.task == Some(consumer)
+                                        })
+                                }
+                            ));
                         }
                     }
                     assert_eq!(report.published_kind(103), !check_only);
