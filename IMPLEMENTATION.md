@@ -10,6 +10,10 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Direct native Linux x86-64 executable generation for the initial subset.
 - [x] Inline modules, qualified calls, simple imports and namespace/privacy checks.
 - [x] External module source trees with bounded loading and observed source facts.
+- [x] Per-file SOURCE graph nodes (child-ordinal keys), assembled in order by PARSE.
+- [ ] Per-file parse, per-module declaration index, per-item resolve and
+      signatures (PARSE/RESOLVE/SIGNATURES remain whole-program; parsing shares
+      one NameStore/ModuleArena, and resolve memoizes imports/aliases program-wide).
 - [x] Scalar checked-function IR shared directly by checking and native emission.
 - [x] Unlabelled loop values, break/continue and exact native temporary cleanup.
 - [x] Separate semantic Never typing from completion, including typed dead tails.
