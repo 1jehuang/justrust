@@ -1,12 +1,36 @@
 # rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1) --edition 2024 -C panic=abort
 # path	stock	code
+positive/dyn_mut.rs	accept	-
+positive/dyn_shared_reborrow.rs	accept	-
+positive/dyn_shapes.rs	accept	-
+positive/dyn_super.rs	accept	-
+positive/dyn_values.rs	accept	-
 positive/impl_arg_basic.rs	accept	-
+negative/dyn_assoc_fn.rs	reject	E0038
+negative/dyn_bare_trait.rs	reject	E0782
+negative/dyn_borrow_conflict.rs	reject	E0506
+negative/dyn_by_value_call.rs	reject	E0161
+negative/dyn_clone_super.rs	reject	E0038
+negative/dyn_generic_method.rs	reject	E0038
+negative/dyn_mut_through_shared.rs	reject	E0596
+negative/dyn_not_impl.rs	reject	E0277
+negative/dyn_self_param.rs	reject	E0038
+negative/dyn_self_return.rs	reject	E0038
+negative/dyn_shared_reborrow_conflict.rs	reject	E0502
+negative/dyn_shared_to_mut.rs	reject	E0308
+negative/dyn_sized_super.rs	reject	E0038
+negative/dyn_unused_wrong_type.rs	reject	E0308
 negative/impl_field.rs	reject	E0562
 negative/impl_let.rs	reject	E0562
 negative/impl_turbofish.rs	reject	E0107
 negative/impl_unknown_method.rs	reject	E0599
 negative/impl_unsatisfied.rs	reject	E0277
 negative/impl_unused_unsatisfied.rs	reject	E0277
+boundary/dyn_assoc_type.rs	accept	-
+boundary/dyn_drop_owner.rs	accept	-
+boundary/dyn_mut_to_shared.rs	accept	-
+boundary/dyn_plus_bound.rs	accept	-
+boundary/dyn_where_self_sized.rs	accept	-
 boundary/impl_arg_methods.rs	accept	-
 boundary/impl_partial_turbofish.rs	accept	-
 boundary/impl_trait_method_param.rs	accept	-

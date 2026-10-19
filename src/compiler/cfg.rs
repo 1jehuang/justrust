@@ -303,6 +303,7 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
         ),
         (Rvalue::Use(a), Rvalue::Use(b))
         | (Rvalue::ArrayToSlice { reference: a }, Rvalue::ArrayToSlice { reference: b })
+        | (Rvalue::RefToDyn { reference: a, .. }, Rvalue::RefToDyn { reference: b, .. })
         | (Rvalue::SliceLen { slice: a }, Rvalue::SliceLen { slice: b })
         | (Rvalue::CharToInt { value: a, .. }, Rvalue::CharToInt { value: b, .. })
         | (Rvalue::U8ToChar { value: a }, Rvalue::U8ToChar { value: b })
@@ -536,6 +537,13 @@ pub enum Rvalue {
     ArrayToSlice {
         reference: Operand,
     },
+    /// Unsizes `&T`/`&mut T` to `&dyn P`/`&mut dyn P` with the same kind. The
+    /// result carrier is two words: the operand's data pointer and the vtable
+    /// of the operand's exact referent type for principal `P`.
+    RefToDyn {
+        reference: Operand,
+        principal: ir::DeclId,
+    },
     /// Builtin length of exactly shared `&[u8]`, result `usize`. Grants no
     /// storage authority and performs no read through the reference.
     SliceLen {
@@ -600,6 +608,9 @@ impl Rvalue {
             | Self::Unary { value, .. }
             | Self::Repeat { value, .. }
             | Self::ArrayToSlice { reference: value }
+            | Self::RefToDyn {
+                reference: value, ..
+            }
             | Self::SliceLen { slice: value } => visit(value)?,
             Self::SliceIndex { slice, index } => {
                 visit(slice)?;
@@ -1242,7 +1253,9 @@ impl Function {
             });
             let ordinary_actuals: &[Ty] = match target {
                 ir::Callee::Direct(target) => &target.type_args,
-                ir::Callee::TraitItem(call) => &call.method_args,
+                ir::Callee::TraitItem(call) | ir::Callee::Virtual(ir::VirtualCall { call }) => {
+                    &call.method_args
+                }
             };
             budget.charge_work(ordinary_actuals.len())?;
             let requires = ordinary_actuals
@@ -1655,6 +1668,9 @@ impl Function {
                             | Rvalue::FloatCast { value, .. }
                             | Rvalue::Unary { value, .. }
                             | Rvalue::ArrayToSlice { reference: value }
+                            | Rvalue::RefToDyn {
+                                reference: value, ..
+                            }
                             | Rvalue::SliceLen { slice: value } => operand(value, budget, facts)?,
                             Rvalue::SliceIndex { slice, index } => {
                                 operand(slice, budget, facts)?;
@@ -2111,6 +2127,24 @@ impl Function {
                     referent: std::sync::Arc::new(Ty::Slice {
                         element: element.clone(),
                     }),
+                })
+            }
+            Rvalue::RefToDyn {
+                reference,
+                principal,
+            } => {
+                let Ty::Ref { kind, referent } = self.operand_ty_with_facts(reference, facts)?
+                else {
+                    return Err("CFG trait object unsizing requires a reference".into());
+                };
+                if matches!(referent.as_ref(), Ty::Dyn(_) | Ty::Slice { .. }) {
+                    return Err("CFG trait object unsizing requires a sized referent".into());
+                }
+                Ok(Ty::Ref {
+                    kind,
+                    referent: std::sync::Arc::new(Ty::Dyn(std::sync::Arc::new(ir::DynTy {
+                        principal: *principal,
+                    }))),
                 })
             }
             Rvalue::SliceLen { slice } => {
@@ -3602,6 +3636,24 @@ impl Lowerer<'_> {
                 self.assign(
                     destination.clone(),
                     Rvalue::ArrayToSlice { reference },
+                    origin,
+                );
+            }
+            ir::ExprKind::RefToDyn { reference } => {
+                let Ty::Ref { referent, .. } = &expression.ty else {
+                    return Err("trait object unsizing result must be a reference".into());
+                };
+                let Ty::Dyn(object) = referent.as_ref() else {
+                    return Err("trait object unsizing result must be a trait object".into());
+                };
+                let principal = object.principal;
+                let reference = self.expression(*reference)?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::RefToDyn {
+                        reference,
+                        principal,
+                    },
                     origin,
                 );
             }
@@ -10728,6 +10780,9 @@ mod tests {
                             | Rvalue::Unary { value, .. }
                             | Rvalue::Repeat { value, .. }
                             | Rvalue::ArrayToSlice { reference: value }
+                            | Rvalue::RefToDyn {
+                                reference: value, ..
+                            }
                             | Rvalue::SliceLen { slice: value } => live_operand(value, &live),
                             Rvalue::Binary { left, right, .. }
                             | Rvalue::SliceIndex {

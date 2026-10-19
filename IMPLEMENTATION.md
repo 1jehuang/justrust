@@ -383,6 +383,7 @@ cleanup failures.
 - [ ] Implement trait-based autoderef, overloaded operators/indexing, coercions,
       dyn compatibility/vtables, unsizing and `?Sized` with authoritative layout
       and receiver adjustments rather than name- or pointer-based permissions.
+      Delivered: `&dyn`/`&mut dyn` vtables, unsizing, E0038 (TRAIT-OBJECTS.md).
 - [ ] Complete closures and capture modes, callable traits, function values,
       iterator/for desugaring, async/await/Future state machines and pinning.
       Include capture lifetimes, suspension-safe moves, cancellation and Drop.

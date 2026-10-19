@@ -363,6 +363,19 @@ impl PlanState {
                 // in aggregate positions such as struct fields.
                 ir::Ty::shared_str_ty()
             }
+            Type::Ref {
+                kind,
+                referent: object,
+                ..
+            } if matches!(object.as_ref(), Type::Dyn(_)) => {
+                let Type::Dyn(trait_path) = object.as_ref() else {
+                    return Err("invalid trait object source shape".into());
+                };
+                ir::Ty::Ref {
+                    kind: *kind,
+                    referent: Arc::new(registry.trait_object_ty(trait_path, budget)?),
+                }
+            }
             Type::Ref { kind, referent, .. } => {
                 if !allow_ref {
                     return Err("references in generic or aggregate types are unsupported".into());
@@ -399,6 +412,12 @@ impl PlanState {
                     transport,
                 )?),
             },
+            Type::Dyn(_) => {
+                return Err(
+                    "unsupported: trait object types are only admitted directly behind a reference"
+                        .into(),
+                );
+            }
             Type::Array(element, len) => {
                 if *len > ir::MAX_ARRAY_LEN {
                     return Err("array length exceeds supported limit".into());

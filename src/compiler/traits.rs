@@ -585,6 +585,77 @@ impl OriginalCallableView {
     }
 }
 impl ValidatedFacts {
+    /// Ordered method slots of a trait object's vtable for `principal`:
+    /// supertrait methods first (depth-first, declaration order, each trait
+    /// once), then the principal's own methods in declaration order. Every
+    /// slot is `(owning trait, trait item)`. Shared by `&dyn` and `Box<dyn>`.
+    /// The private native vtable is `[drop_in_place or 0, size, align,
+    /// slot 0, slot 1, ...]`, eight bytes per entry.
+    pub fn vtable_methods(&self, principal: DeclId) -> Result<Vec<(DeclId, DeclId)>> {
+        fn visit(
+            world: &ValidatedTraitWorld,
+            declaration: DeclId,
+            seen: &mut Vec<DeclId>,
+            out: &mut Vec<(DeclId, DeclId)>,
+            depth: usize,
+        ) -> Result<()> {
+            charged(&world.budget, world.budget.check_depth(depth))?;
+            charged(&world.budget, world.budget.charge_work(1))?;
+            if seen.contains(&declaration) {
+                return Ok(());
+            }
+            push(&world.budget, seen, declaration)?;
+            let header = world.trait_header(declaration)?;
+            for parent in header.supertraits.iter() {
+                visit(world, parent.declaration, seen, out, depth + 1)?;
+            }
+            for item in header.items.iter() {
+                push(&world.budget, out, (declaration, *item))?;
+            }
+            Ok(())
+        }
+        let mut seen = Vec::new();
+        let mut out = Vec::new();
+        visit(&self.world, principal, &mut seen, &mut out, 0)?;
+        Ok(out)
+    }
+    /// Closed implementation of every vtable slot of `principal` for the
+    /// concrete Sized type `concrete` (`concrete: principal` must hold).
+    pub fn vtable_targets(&self, concrete: &Ty, principal: DeclId) -> Result<Vec<CallTarget>> {
+        if self.phase() != FactsPhase::Closed {
+            return Err(FactsError::invalid(
+                self.budget(),
+                "vtable targets require closed facts",
+            ));
+        }
+        if matches!(concrete, Ty::Dyn(_) | Ty::Slice { .. } | Ty::Param(_)) {
+            return Err(FactsError::unsupported(
+                self.budget(),
+                "unsupported: vtable for an unsized or open concrete type",
+            ));
+        }
+        let mut targets = Vec::new();
+        for (owner, item) in self.vtable_methods(principal)? {
+            let call = TraitCall {
+                trait_ref: TraitRef {
+                    declaration: owner,
+                    self_ty: concrete.clone(),
+                    args: Arc::from([]),
+                },
+                item,
+                method_args: Arc::from([]),
+            };
+            let resolved = self.world.resolve_trait_call(&call, self)?;
+            let Callee::Direct(target) = resolved.callee() else {
+                return Err(FactsError::unsupported(
+                    self.budget(),
+                    "unsupported: vtable slot without a closed implementation",
+                ));
+            };
+            push(self.budget(), &mut targets, target.clone())?;
+        }
+        Ok(targets)
+    }
     pub fn world(&self) -> &Arc<ValidatedTraitWorld> {
         &self.world
     }
@@ -848,6 +919,9 @@ enum ProofOrigin {
         declaration: DeclId,
         arguments: Arc<[Ty]>,
     },
+    /// `dyn P: Q` where Q is P or one of its (transitive) supertraits. The
+    /// object's vtable provides the methods; dispatch is `Callee::Virtual`.
+    TraitObject,
 }
 #[derive(Clone, Debug)]
 struct ProofRecord {
@@ -1891,6 +1965,23 @@ impl ValidatedTraitWorld {
                     ));
                 }
             }
+            Ty::Dyn(object) => {
+                // Unsized: only meaningful directly behind a reference, or as
+                // the root Self of a trait goal (`dyn T: T` dispatch schema).
+                if !matches!(usage, TypeUse::Referent { .. } | TypeUse::Root) {
+                    return Err(FactsError::unsupported(
+                        &self.budget,
+                        "unsupported: trait object type outside a reference",
+                    ));
+                }
+                let header = self.trait_header(object.principal)?;
+                if header.declaration != object.principal {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "foreign trait object principal",
+                    ));
+                }
+            }
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => {}
         }
         if let Some(key) = key {
@@ -2242,6 +2333,7 @@ impl ValidatedTraitWorld {
                 },
             ) => Ok(al == bl && self.eq_ty(a, b, depth + 1)?),
             (Ty::Slice { element: a }, Ty::Slice { element: b }) => self.eq_ty(a, b, depth + 1),
+            (Ty::Dyn(a), Ty::Dyn(b)) => Ok(a.principal == b.principal),
             (
                 Ty::Ref {
                     kind: a,
@@ -3093,7 +3185,9 @@ impl ValidatedTraitWorld {
                 target.type_args.clone(),
                 self.discharge_direct(target, facts)?.signature,
             ),
-            SignatureSubject::Call(Callee::TraitItem(call)) => {
+            SignatureSubject::Call(
+                Callee::TraitItem(call) | Callee::Virtual(ir::VirtualCall { call }),
+            ) => {
                 let mut args = Vec::new();
                 push(&self.budget, &mut args, call.trait_ref.self_ty.clone())?;
                 for arg in call.trait_ref.args.iter().chain(call.method_args.iter()) {
@@ -5632,7 +5726,38 @@ impl ValidatedTraitWorld {
         if let Some(outcome) = self.prove_builtin(predicate, facts, active)? {
             return Ok(outcome);
         }
+        if let Predicate::Implements(goal) = predicate
+            && let Ty::Dyn(object) = &goal.self_ty
+        {
+            // Trait objects implement exactly their principal and its
+            // supertraits (never through a user impl: E0371 overlap aside).
+            if goal.args.is_empty()
+                && self.trait_object_implements(object.principal, goal.declaration, 0)?
+            {
+                return self.evidence(predicate, facts, ProofOrigin::TraitObject);
+            }
+        }
         self.prove_implementation_in(predicate, facts, active)
+    }
+    /// Whether `principal` is `goal` or transitively has it as a supertrait.
+    fn trait_object_implements(
+        &self,
+        principal: DeclId,
+        goal: DeclId,
+        depth: usize,
+    ) -> Result<bool> {
+        charged(&self.budget, self.budget.check_depth(depth))?;
+        charged(&self.budget, self.budget.charge_work(1))?;
+        if principal == goal {
+            return Ok(true);
+        }
+        let header = self.trait_header(principal)?;
+        for parent in header.supertraits.iter() {
+            if self.trait_object_implements(parent.declaration, goal, depth + 1)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
     fn prove_implementation_in(
         &self,
@@ -5801,8 +5926,8 @@ impl ValidatedTraitWorld {
                 true
             }
             Ty::Ref { kind, .. } => item == CatalogItem::Sized || *kind == ir::BorrowKind::Shared,
-            // `[T]` is neither Sized nor Copy/Clone.
-            Ty::Slice { .. } | Ty::Str => false,
+            // `[T]`, `str` and `dyn Trait` are neither Sized nor Copy/Clone.
+            Ty::Slice { .. } | Ty::Str | Ty::Dyn(_) => false,
             Ty::RawPtr { .. } => true,
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => true,
             Ty::AssociatedType(_) => {
@@ -6013,9 +6138,9 @@ impl TraitCx for ValidatedTraitWorld {
             SignatureSubject::Call(Callee::Direct(target)) => {
                 self.discharge_direct(target, facts)?.signature
             }
-            SignatureSubject::Call(Callee::TraitItem(call)) => {
-                self.instantiate_trait_signature(call, facts)?
-            }
+            SignatureSubject::Call(
+                Callee::TraitItem(call) | Callee::Virtual(ir::VirtualCall { call }),
+            ) => self.instantiate_trait_signature(call, facts)?,
         };
         if !self.eq_signature(&expected, signature)? {
             return Err(FactsError::invalid(
@@ -6032,7 +6157,7 @@ impl TraitCx for ValidatedTraitWorld {
                 self.discharge_direct(target, facts)?;
                 Ok(self.info(target.declaration)?.receiver)
             }
-            Callee::TraitItem(call) => {
+            Callee::TraitItem(call) | Callee::Virtual(ir::VirtualCall { call }) => {
                 self.instantiate_trait_signature(call, facts)?;
                 Ok(self.item_header(call.item)?.receiver)
             }

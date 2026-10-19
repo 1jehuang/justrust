@@ -555,6 +555,9 @@ impl Resolver<'_> {
                     return Err("explicit lifetime type aliases are unsupported".into());
                 }
                 Type::Slice(_) => return Err("unsized type aliases are unsupported".into()),
+                Type::Dyn(_) => {
+                    return Err("unsupported: trait object type aliases are unsupported".into());
+                }
                 Type::Array(t, _) => check_target(t)?,
                 Type::Tuple(fields) => {
                     for field in fields {
@@ -1807,6 +1810,7 @@ impl Resolver<'_> {
                 }
             }
             Type::Ref { referent, .. } => self.ty(referent, module)?,
+            Type::Dyn(trait_path) => self.trait_path(trait_path, module)?,
             Type::Array(element, _)
             | Type::Slice(element)
             | Type::RawPtr {

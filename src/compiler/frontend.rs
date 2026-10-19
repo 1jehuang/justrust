@@ -833,7 +833,11 @@ fn validate_original_callee(
     sr::work(budget, 1)?;
     let role = match (original, actual) {
         (ir::Callee::Direct(a), ir::Callee::Direct(b)) => a.declaration == b.declaration,
-        (ir::Callee::TraitItem(a), ir::Callee::TraitItem(b)) => {
+        (ir::Callee::TraitItem(a), ir::Callee::TraitItem(b))
+        | (
+            ir::Callee::Virtual(ir::VirtualCall { call: a }),
+            ir::Callee::Virtual(ir::VirtualCall { call: b }),
+        ) => {
             a.item == b.item
                 && a.trait_ref.declaration == b.trait_ref.declaration
                 && a.trait_ref.args.len() == b.trait_ref.args.len()
@@ -954,6 +958,10 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
             kind: *kind,
             pointee: Box::new(copy_source_type(pointee, budget, at + 1)?),
         },
+        Type::Dyn(trait_path) => Type::Dyn(Box::new(match trait_path.as_ref() {
+            TraitPath::Source(path) => TraitPath::Source(copy_source_path(path, budget, at + 1)?),
+            TraitPath::Builtin(kind) => TraitPath::Builtin(*kind),
+        })),
         Type::Tuple(fields) => {
             let mut result = Vec::new();
             result
@@ -1056,6 +1064,63 @@ fn retain_source_type(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resul
         _ => {}
     }
     Ok(())
+}
+/// Whether a written signature type mentions `Self` (dyn compatibility).
+/// `Self::Item` projections also count; `&Self` receivers are not params.
+fn source_type_mentions_self(
+    ty: &Type,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<bool, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    Ok(match ty {
+        Type::SelfType => true,
+        Type::Projection(projection) => match projection.as_ref() {
+            SourceProjection::SelfItem { .. } => true,
+            SourceProjection::Qualified { self_ty, .. } => {
+                source_type_mentions_self(self_ty, budget, depth + 1)?
+            }
+        },
+        Type::Ref { referent, .. } => source_type_mentions_self(referent, budget, depth + 1)?,
+        Type::Array(element, _)
+        | Type::Slice(element)
+        | Type::RawPtr {
+            pointee: element, ..
+        } => source_type_mentions_self(element, budget, depth + 1)?,
+        Type::Tuple(fields) => {
+            let mut found = false;
+            for field in fields {
+                found |= source_type_mentions_self(field, budget, depth + 1)?;
+            }
+            found
+        }
+        Type::Apply(path) => {
+            let mut found = matches!(path.anchor, PathAnchor::SelfType);
+            for segment in &path.segments {
+                for arg in segment.args.iter().chain(
+                    segment
+                        .associated_types
+                        .iter()
+                        .map(|binding| &binding.value),
+                ) {
+                    found |= source_type_mentions_self(arg, budget, depth + 1)?;
+                }
+            }
+            found
+        }
+        Type::Named(path) => matches!(path.anchor(), PathAnchor::SelfType),
+        Type::Dyn(_)
+        | Type::Str
+        | Type::Param(_)
+        | Type::Int(_)
+        | Type::Float(_)
+        | Type::Char
+        | Type::Bool
+        | Type::Unit
+        | Type::Never
+        | Type::Infer => false,
+    })
 }
 impl SourceInventory {
     fn build(
@@ -3380,7 +3445,7 @@ fn replay_unsizes(
             .exprs
             .get(row.wrapper.0)
             .ok_or_else(|| FactsError::invalid(budget, "unsize wrapper outside checked arena"))?;
-        if !matches!(value.kind, ir::ExprKind::ArrayToSlice { reference } if reference == row.reference)
+        if !matches!(value.kind, ir::ExprKind::ArrayToSlice { reference } | ir::ExprKind::RefToDyn { reference } if reference == row.reference)
         {
             return Err(FactsError::invalid(
                 budget,
@@ -3395,7 +3460,11 @@ fn replay_unsizes(
         }
     }
     for (index, expr) in checked.exprs.iter().enumerate() {
-        if matches!(expr.kind, ir::ExprKind::ArrayToSlice { .. }) && !covered[index] {
+        if matches!(
+            expr.kind,
+            ir::ExprKind::ArrayToSlice { .. } | ir::ExprKind::RefToDyn { .. }
+        ) && !covered[index]
+        {
             return Err(FactsError::invalid(budget, "orphan array-to-slice wrapper"));
         }
     }
@@ -4780,6 +4849,8 @@ pub enum Type {
         kind: ir::BorrowKind,
         pointee: Box<Type>,
     },
+    /// Unsized trait object `dyn Trait`. Admitted only behind a reference.
+    Dyn(Box<TraitPath>),
     Int(ir::IntTy),
     Float(ir::FloatTy),
     Char,
@@ -8005,6 +8076,18 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         if self.is("impl") {
             return self.impl_trait_param();
+        }
+        if self.eat("dyn") {
+            if self.token().is_lifetime() || self.is("?") || self.is("(") {
+                return Err(self.unsupported("unsupported trait object bound syntax"));
+            }
+            let path = self.trait_path()?;
+            if self.is("+") {
+                return Err(self.unsupported(
+                    "trait objects with auto-trait or lifetime bounds (`dyn A + B`) are unsupported",
+                ));
+            }
+            return Ok(Type::Dyn(Box::new(path)));
         }
         if self.eat("[") {
             let element = self.ty()?;
@@ -13502,6 +13585,13 @@ fn exact_source_type(
                 pointee: b,
             },
         ) => exact_source_type(names, a, b, budget, depth + 1)? && ak == bk,
+        (Type::Dyn(a), Type::Dyn(b)) => match (a.as_ref(), b.as_ref()) {
+            (TraitPath::Builtin(a), TraitPath::Builtin(b)) => a == b,
+            (TraitPath::Source(a), TraitPath::Source(b)) => {
+                exact_source_generic_path(names, a, b, budget, depth + 1)?
+            }
+            _ => false,
+        },
         (Type::Tuple(a), Type::Tuple(b)) => {
             let mut equal = a.len() == b.len();
             for (a, b) in a.iter().zip(b) {
@@ -14077,6 +14167,109 @@ impl DeclRegistry {
             .get(&self.trait_key(path)?)
             .copied()
             .ok_or_else(|| "unknown trait".into())
+    }
+    /// Lower a written `dyn Trait` to its rigid object type after checking
+    /// stock dyn compatibility (E0038). Unused object types are checked too.
+    pub(super) fn trait_object_ty(
+        &self,
+        path: &TraitPath,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::Ty, String> {
+        let TraitPath::Source(source) = path else {
+            return Err(
+                "E0038: builtin marker traits (Sized, Copy, Clone, Drop) are not dyn compatible"
+                    .into(),
+            );
+        };
+        if source
+            .segments
+            .iter()
+            .any(|s| !s.args.is_empty() || !s.associated_types.is_empty())
+        {
+            return Err("unsupported: generic or associated-type trait object principals".into());
+        }
+        let principal = self.resolve_trait_path(path)?;
+        self.check_dyn_compatible(principal, budget, 0)?;
+        Ok(ir::Ty::Dyn(Arc::new(ir::DynTy { principal })))
+    }
+    /// Source trait declaration behind a trait DeclId.
+    pub(super) fn source_trait(&self, principal: ir::DeclId) -> Result<&TraitDecl, String> {
+        let info = self.declaration(principal)?;
+        if info.kind != ir::DeclKind::Trait || info.source_index == usize::MAX {
+            return Err("E0038: builtin marker traits are not dyn compatible".into());
+        }
+        self.program
+            .traits
+            .get(info.source_index)
+            .ok_or_else(|| "missing source trait declaration".into())
+    }
+    fn check_dyn_compatible(
+        &self,
+        principal: ir::DeclId,
+        budget: &ir::PlanBudget,
+        depth: usize,
+    ) -> Result<(), String> {
+        budget.check_depth(depth)?;
+        budget.charge_work(1)?;
+        let declaration = self.source_trait(principal)?;
+        let not_compatible = |why: &str| -> Result<(), String> {
+            Err(format!(
+                "E0038: the trait `{}` is not dyn compatible: {why}",
+                self.declaration(principal)
+                    .map(|i| i.name.clone())
+                    .unwrap_or_default()
+            ))
+        };
+        if !declaration.type_params.is_empty() {
+            return Err("unsupported: generic trait object principals".into());
+        }
+        if !declaration.associated_types.is_empty() {
+            return Err("unsupported: trait objects of traits with associated types".into());
+        }
+        for supertrait in &declaration.supertraits {
+            match supertrait {
+                TraitPath::Builtin(BuiltinTrait::Sized) => {
+                    return not_compatible("it requires `Self: Sized`");
+                }
+                TraitPath::Builtin(_) => {
+                    return not_compatible("a supertrait mentions `Self` (Copy/Clone/Drop)");
+                }
+                TraitPath::Source(_) => {
+                    let parent = self.resolve_trait_path(supertrait)?;
+                    self.check_dyn_compatible(parent, budget, depth + 1)?;
+                }
+            }
+        }
+        for item in &declaration.items {
+            budget.charge_work(1)?;
+            let head = &item.signature;
+            let names = self.names.as_ref();
+            let method = names
+                .spelling(head.name)
+                .map_err(native_adapter::name_diagnostic)?
+                .to_owned();
+            if matches!(item.receiver, ReceiverKind::None) {
+                return not_compatible(&format!(
+                    "associated function `{method}` has no `self` parameter"
+                ));
+            }
+            if !head.type_params.is_empty() {
+                return not_compatible(&format!("method `{method}` has generic type parameters"));
+            }
+            for (_, ty) in &head.params {
+                if source_type_mentions_self(ty, budget, 0)? {
+                    return not_compatible(&format!(
+                        "method `{method}` references the `Self` type in its parameters"
+                    ));
+                }
+            }
+            if source_type_mentions_self(&head.result, budget, 0)? {
+                return not_compatible(&format!(
+                    "method `{method}` references the `Self` type in its return type"
+                ));
+            }
+        }
+        Ok(())
     }
     fn parameter_key(&self, ident: AstIdent) -> Result<GenericBindingKey, String> {
         Ok(GenericBindingKey::Param(
@@ -17402,6 +17595,7 @@ fn metered_type_equal(
         (ir::Ty::Slice { element: a }, ir::Ty::Slice { element: b }) => {
             metered_type_equal(a, b, budget, depth + 1)
         }
+        (ir::Ty::Dyn(a), ir::Ty::Dyn(b)) => Ok(a.principal == b.principal),
         (
             ir::Ty::Ref {
                 kind: a,

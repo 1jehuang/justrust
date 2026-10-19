@@ -314,6 +314,11 @@ impl Encoder<'_> {
                 })?;
                 self.pattern(pointee, env, depth + 1)
             }
+            // --- trait objects (snail): `dyn Trait` identity tag b'D' ---
+            ir::Ty::Dyn(object) => {
+                self.append(b"D")?;
+                self.declaration(object.principal)
+            }
             ir::Ty::Never => Err("unsupported associated instance self pattern".into()),
             ir::Ty::AssociatedType(_) => {
                 Err("associated instance pattern contains unresolved associated type".into())
@@ -373,6 +378,11 @@ impl Encoder<'_> {
                     self.ty(argument, depth + 1)?;
                 }
                 Ok(())
+            }
+            // --- trait objects (snail): `dyn Trait` identity tag b'D' ---
+            ir::Ty::Dyn(object) => {
+                self.append(b"D")?;
+                self.declaration(object.principal)
             }
             ir::Ty::Param(_) => Err("generic instance key contains unresolved parameter".into()),
             ir::Ty::AssociatedType(_) => {
@@ -492,6 +502,7 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
             | ir::Ty::Str
             | ir::Ty::Bool
             | ir::Ty::Unit
+            | ir::Ty::Dyn(_)
             | ir::Ty::Never => {}
             ir::Ty::Ref { referent, .. }
             | ir::Ty::RawPtr {
@@ -784,6 +795,53 @@ pub(super) fn build(
         }
         for expression in &source.exprs {
             budget.charge_work(1)?;
+            // --- trait objects (snail): each unsizing site demands every
+            // vtable slot implementation for its exact substituted referent.
+            if let ir::ExprKind::RefToDyn { reference } = &expression.kind {
+                let ir::Ty::Ref { referent, .. } = &expression.ty else {
+                    return Err("trait object unsizing result must be a reference".into());
+                };
+                let ir::Ty::Dyn(object) = referent.as_ref() else {
+                    return Err("trait object unsizing result must be a trait object".into());
+                };
+                let operand = source
+                    .exprs
+                    .get(reference.0)
+                    .ok_or("trait object unsizing operand outside arena")?;
+                let concrete = ir::substitute_ty(
+                    &operand.ty,
+                    &env,
+                    &target.type_args,
+                    ir::FactsCtx::from_validated(&closed_facts),
+                    context,
+                    budget,
+                )?;
+                let ir::Ty::Ref { referent, .. } = &concrete else {
+                    return Err("trait object unsizing operand must be a reference".into());
+                };
+                for slot in closed_facts
+                    .vtable_targets(referent, object.principal)
+                    .map_err(|e| e.into_legacy_diagnostic(budget))?
+                {
+                    queue.add(slot, depth + 1, context, budget)?;
+                }
+                if closed_facts.has_normal_drop_impls()
+                    && let traits::NormalDropPlan::Destructor(destructor) = closed_facts
+                        .normal_drop_plan(referent)
+                        .map_err(|e| e.into_legacy_diagnostic(budget))?
+                {
+                    queue.add(destructor.target().clone(), depth + 1, context, budget)?;
+                }
+            }
+            if let ir::ExprKind::Call {
+                target: ir::Callee::Virtual(_),
+                ..
+            } = &expression.kind
+            {
+                // Dispatch targets are demanded at the unsizing sites above.
+                continue;
+            }
+            // --- end trait objects ---
             if let ir::ExprKind::Call { target: callee, .. } = &expression.kind {
                 let resolved = ir::substitute_callee(
                     callee,

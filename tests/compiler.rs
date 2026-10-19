@@ -489,6 +489,11 @@ fn checked_runtime_arithmetic_traps_exit_101() {
 }
 
 #[test]
+fn formerly_unsupported_scalar_println_executes() {
+    runs("fn main() { println!(\"{}\", 1); }", "1\n", 2);
+}
+
+#[test]
 fn invalid_programs_fail_without_publishing_an_executable() {
     let cases = [
         ("unknown value", "fn main() { let x = missing; }"),

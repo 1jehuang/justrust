@@ -181,7 +181,10 @@ impl CarrierEffectTable {
             };
             let actuals = match target {
                 super::ir::Callee::Direct(target) => target.type_args.as_ref(),
-                super::ir::Callee::TraitItem(call) => call.method_args.as_ref(),
+                super::ir::Callee::TraitItem(call)
+                | super::ir::Callee::Virtual(super::ir::VirtualCall { call }) => {
+                    call.method_args.as_ref()
+                }
             };
             budget.charge_work(actuals.len())?;
             if !actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. })) {
@@ -414,7 +417,10 @@ fn source_requires_carrier_proof(
         {
             let actuals = match target {
                 super::ir::Callee::Direct(target) => target.type_args.as_ref(),
-                super::ir::Callee::TraitItem(call) => call.method_args.as_ref(),
+                super::ir::Callee::TraitItem(call)
+                | super::ir::Callee::Virtual(super::ir::VirtualCall { call }) => {
+                    call.method_args.as_ref()
+                }
             };
             budget.charge_work(actuals.len()).map_err(classify)?;
             required |= actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. }));
@@ -1523,6 +1529,7 @@ fn preflight_with_plan(
                     | Rvalue::LeadingZeros { value: op }
                     | Rvalue::Unary { value: op, .. }
                     | Rvalue::ArrayToSlice { reference: op }
+                    | Rvalue::RefToDyn { reference: op, .. }
                     | Rvalue::SliceLen { slice: op } => operand(op, &mut budget)?,
                     Rvalue::SliceIndex { slice, index } => {
                         operand(slice, &mut budget)?;
@@ -1583,7 +1590,8 @@ fn preflight_with_plan(
                             preflight_ty(argument, 0, &mut budget)?;
                         }
                     }
-                    super::ir::Callee::TraitItem(call) => {
+                    super::ir::Callee::TraitItem(call)
+                    | super::ir::Callee::Virtual(super::ir::VirtualCall { call }) => {
                         budget.spend(call.trait_ref.args.len() + call.method_args.len() + 1)?;
                         preflight_ty(&call.trait_ref.self_ty, 0, &mut budget)?;
                         for argument in call.trait_ref.args.iter().chain(call.method_args.iter()) {
@@ -1750,6 +1758,9 @@ impl<'a> MoveShape<'a> {
             // Exactly shared `&str` is a Copy two-word descriptor leaf.
             Ty::Ref { .. } if ty.is_shared_str() => Self::Scalar,
             Ty::Str => Self::Scalar,
+            // An unsized trait object referent is one opaque leaf: dyn
+            // places are only reached through method receivers, never moved.
+            Ty::Dyn(_) => Self::Scalar,
             Ty::Ref { referent, .. } if referent.contains_slice() => return Err(Exhausted),
             Ty::Int(_)
             | Ty::Float(_)
@@ -2715,6 +2726,8 @@ impl Transfer<'_> {
             // Unsizing copies the shared reference once. Its loan and origins
             // are the operand's; length metadata grants no storage authority.
             Rvalue::ArrayToSlice { reference } => self.operand(state, reference)?,
+            // Unsizing moves/copies the reference once; the vtable is static.
+            Rvalue::RefToDyn { reference, .. } => self.operand(state, reference)?,
             // Length reads only the slice handle, never the referent storage.
             Rvalue::SliceLen { slice } => self.operand(state, slice)?,
             // Receiver snapshot, index snapshot, then a live shared read of the
