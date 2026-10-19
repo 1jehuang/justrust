@@ -404,33 +404,94 @@ impl ByteLease {
     /// The producer must admit the actual retained allocation and relocation
     /// peak before allocating it. Sealing cannot repair underpaid storage.
     /// Temporary leases must be explicitly promoted before publication.
-    pub fn retain(mut self) -> Result<RetainedBytes, BudgetFailure> {
-        let authority = {
+    pub fn retain(self) -> Result<RetainedBytes, BudgetFailure> {
+        // Same contract as before: on failure the lease drops here (refund).
+        self.retain_or_return().map_err(|(failure, lease)| {
+            drop(lease);
+            failure
+        })
+    }
+    /// Like [`Self::retain`], but on failure returns the original live lease
+    /// unchanged (same bytes, storage, payer and ledger reservation): nothing
+    /// is converted or refunded. A sticky or storage failure is latched per
+    /// the existing contract. The caller must destroy the storage this lease
+    /// pays for before dropping the returned lease, so the ledger never shows
+    /// bytes as free while they are still allocated. Do not discard the
+    /// returned lease through `map_err` or `?`.
+    pub fn retain_or_return(mut self) -> Result<RetainedBytes, (BudgetFailure, ByteLease)> {
+        let sealed = {
             let budget = self.budget.as_ref().expect("live byte lease");
             let mut state = budget.lock();
-            state.healthy()?;
-            if self.storage != Storage::Retained {
-                return Err(state.latch(infrastructure()));
+            match state.healthy() {
+                Err(failure) => Err(failure),
+                Ok(()) if self.storage != Storage::Retained => Err(state.latch(infrastructure())),
+                Ok(()) => {
+                    state.snapshot.reservations.current_reservations = state
+                        .snapshot
+                        .reservations
+                        .current_reservations
+                        .saturating_sub(1);
+                    Ok(state.authority.clone())
+                }
             }
-            state.snapshot.reservations.current_reservations = state
-                .snapshot
-                .reservations
-                .current_reservations
-                .saturating_sub(1);
-            state.authority.clone()
         };
-        self.budget = None;
-        Ok(RetainedBytes {
-            authority,
-            bytes: self.bytes,
-        })
+        // The guard is dropped: only now is `self` moved or disconnected.
+        match sealed {
+            Err(failure) => Err((failure, self)),
+            Ok(authority) => {
+                self.budget = None;
+                Ok(RetainedBytes {
+                    authority,
+                    bytes: self.bytes,
+                })
+            }
+        }
     }
     pub fn bytes(&self) -> u64 {
         self.bytes
     }
     pub fn resize(&mut self, new_bytes: u64) -> Result<(), BudgetFailure> {
-        let mut s = self.budget.as_ref().expect("live byte lease").lock();
+        let budget = self.budget.clone().expect("live byte lease");
+        let mut s = budget.lock();
         s.healthy()?;
+        self.resize_locked(&mut s, new_bytes)
+    }
+    /// Resize to exactly `count * elem + header` bytes. The budget is checked
+    /// first, so a poisoned ledger fails even for a zero or no-op size.
+    /// Arithmetic overflow latches `Overflow` on `Bytes` under this lease's
+    /// budget; callers cannot choose the failure.
+    pub fn resize_array(
+        &mut self,
+        count: u64,
+        elem: u64,
+        header: u64,
+    ) -> Result<(), BudgetFailure> {
+        let budget = self.budget.clone().expect("live byte lease");
+        let mut s = budget.lock();
+        s.healthy()?;
+        let limit = s.limits.bytes;
+        let Some(payload) = count.checked_mul(elem) else {
+            return Err(s.latch(BudgetFailure {
+                kind: BudgetFailureKind::Overflow,
+                resource: BudgetResource::Bytes,
+                used: count,
+                requested: elem,
+                limit,
+            }));
+        };
+        let Some(new_bytes) = payload.checked_add(header) else {
+            return Err(s.latch(BudgetFailure {
+                kind: BudgetFailureKind::Overflow,
+                resource: BudgetResource::Bytes,
+                used: payload,
+                requested: header,
+                limit,
+            }));
+        };
+        self.resize_locked(&mut s, new_bytes)
+    }
+    /// The one resize implementation, under an already checked guard.
+    fn resize_locked(&mut self, s: &mut State, new_bytes: u64) -> Result<(), BudgetFailure> {
         if new_bytes >= self.bytes {
             let add = new_bytes - self.bytes;
             let total = s.bytes(add)?;
@@ -746,6 +807,173 @@ mod tests {
 
     use std::sync::Barrier;
     use std::thread;
+
+    fn live(budget: &ExpansionBudget) -> (u64, usize) {
+        let s = budget.snapshot();
+        (s.retained_bytes, s.reservations.current_reservations)
+    }
+
+    #[test]
+    fn retain_or_return_on_sticky_failure_returns_the_unchanged_live_lease() {
+        let budget = ExpansionBudget::default();
+        let lease = budget.reserve(Storage::Retained, 40).unwrap();
+        let before = live(&budget);
+        let first = budget.poison_allocation();
+        let (failure, lease) = match lease.retain_or_return() {
+            Ok(_) => panic!("poisoned retain succeeded"),
+            Err(pair) => pair,
+        };
+        assert_eq!(failure, first);
+        // No refund, no conversion: same bytes, storage, payer, reservation.
+        assert_eq!(live(&budget), before);
+        assert_eq!(lease.bytes(), 40);
+        assert_eq!(lease.storage, Storage::Retained);
+        assert!(lease.budget.as_ref().unwrap().same_authority(&budget));
+        drop(lease);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+    }
+
+    #[test]
+    fn retain_or_return_preserves_the_first_failure() {
+        let budget = ExpansionBudget::new(small());
+        let lease = budget.reserve(Storage::Retained, 4).unwrap();
+        let first = budget.reserve(Storage::Retained, 1_000).unwrap_err();
+        budget.poison_allocation();
+        let Err((failure, lease)) = lease.retain_or_return() else {
+            panic!("poisoned retain succeeded");
+        };
+        assert_eq!(failure, first);
+        assert_eq!(failure.resource, BudgetResource::Bytes);
+        drop(lease);
+    }
+
+    #[test]
+    fn retain_or_return_temporary_lease_fails_without_refund() {
+        let budget = ExpansionBudget::default();
+        let lease = budget.reserve(Storage::Temporary, 8).unwrap();
+        let before = budget.snapshot();
+        let Err((failure, lease)) = lease.retain_or_return() else {
+            panic!("temporary lease sealed");
+        };
+        assert_eq!(failure.kind, BudgetFailureKind::Infrastructure);
+        assert_eq!(budget.snapshot().temporary_bytes, before.temporary_bytes);
+        assert_eq!(
+            budget.snapshot().reservations.current_reservations,
+            before.reservations.current_reservations
+        );
+        assert_eq!(lease.storage, Storage::Temporary);
+        drop(lease);
+        assert_eq!(budget.snapshot().temporary_bytes, 0);
+        // An earlier failure wins over the storage failure.
+        let budget = ExpansionBudget::default();
+        let lease = budget.reserve(Storage::Temporary, 8).unwrap();
+        let first = budget.poison_allocation();
+        let Err((failure, _lease)) = lease.retain_or_return() else {
+            panic!("poisoned temporary sealed");
+        };
+        assert_eq!(failure, first);
+    }
+
+    #[test]
+    fn retain_or_return_success_matches_retain_including_zero_bytes() {
+        for bytes in [0, 24] {
+            let a = ExpansionBudget::default();
+            let b = ExpansionBudget::default();
+            let ra = a
+                .reserve(Storage::Retained, bytes)
+                .unwrap()
+                .retain()
+                .unwrap();
+            let rb = match b
+                .reserve(Storage::Retained, bytes)
+                .unwrap()
+                .retain_or_return()
+            {
+                Ok(receipt) => receipt,
+                Err(_) => panic!("healthy retain failed"),
+            };
+            assert_eq!(ra.bytes(), rb.bytes());
+            assert_eq!(live(&a), live(&b));
+            assert_eq!(a.snapshot().retained_bytes, bytes);
+            assert!(rb.authority().same_authority(&b.authority()));
+        }
+        // A zero-byte lease on a poisoned budget does not succeed either.
+        let budget = ExpansionBudget::default();
+        let lease = budget.reserve(Storage::Retained, 0).unwrap();
+        let first = budget.poison_allocation();
+        assert_eq!(lease.retain().unwrap_err(), first);
+    }
+
+    #[test]
+    fn retain_compatibility_refunds_on_failure() {
+        let budget = ExpansionBudget::default();
+        let lease = budget.reserve(Storage::Retained, 16).unwrap();
+        let first = budget.poison_allocation();
+        assert_eq!(lease.retain().unwrap_err(), first);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        assert_eq!(budget.snapshot().reservations.current_reservations, 0);
+    }
+
+    #[test]
+    fn resize_array_overflow_in_mul_and_add_latches_typed_overflow() {
+        let budget = ExpansionBudget::default();
+        let mut lease = budget.reserve(Storage::Retained, 8).unwrap();
+        let failure = lease.resize_array(u64::MAX, 2, 0).unwrap_err();
+        assert_eq!(failure.kind, BudgetFailureKind::Overflow);
+        assert_eq!(failure.resource, BudgetResource::Bytes);
+        assert_eq!((failure.used, failure.requested), (u64::MAX, 2));
+        assert_eq!(budget.check().unwrap_err(), failure, "latched");
+        assert_eq!(lease.bytes(), 8);
+        drop(lease);
+
+        let budget = ExpansionBudget::default();
+        let mut lease = budget.reserve(Storage::Retained, 8).unwrap();
+        let failure = lease.resize_array(1, u64::MAX, 1).unwrap_err();
+        assert_eq!(failure.kind, BudgetFailureKind::Overflow);
+        assert_eq!(failure.resource, BudgetResource::Bytes);
+        assert_eq!((failure.used, failure.requested), (u64::MAX, 1));
+        assert_eq!(budget.check().unwrap_err(), failure);
+        assert_eq!(lease.bytes(), 8);
+    }
+
+    #[test]
+    fn resize_array_after_poison_fails_even_for_noop_or_zero() {
+        let budget = ExpansionBudget::default();
+        let mut lease = budget.reserve(Storage::Retained, 0).unwrap();
+        lease.resize_array(2, 4, 8).unwrap();
+        let first = budget.poison_allocation();
+        // Same size (no-op), zero, shrink and an overflowing request all
+        // report the first failure and change nothing.
+        for (count, elem, header) in [(2, 4, 8), (0, 0, 0), (1, 1, 0), (u64::MAX, 2, 0)] {
+            assert_eq!(lease.resize_array(count, elem, header).unwrap_err(), first);
+            assert_eq!(lease.bytes(), 16);
+            assert_eq!(budget.snapshot().retained_bytes, 16);
+        }
+        assert_eq!(lease.resize(16).unwrap_err(), first);
+    }
+
+    #[test]
+    fn resize_array_limit_and_success_match_resize() {
+        let budget = ExpansionBudget::new(small());
+        let mut lease = budget.reserve(Storage::Retained, 0).unwrap();
+        let failure = lease.resize_array(3, 4, 8).unwrap_err();
+        assert_eq!(failure.kind, BudgetFailureKind::Limit);
+        assert_eq!(failure.resource, BudgetResource::Bytes);
+        assert_eq!(lease.bytes(), 0);
+
+        let a = ExpansionBudget::default();
+        let b = ExpansionBudget::default();
+        let mut la = a.reserve(Storage::Retained, 5).unwrap();
+        let mut lb = b.reserve(Storage::Retained, 5).unwrap();
+        la.resize(3 * 4 + 8).unwrap();
+        lb.resize_array(3, 4, 8).unwrap();
+        assert_eq!(la.bytes(), lb.bytes());
+        assert_eq!(a.snapshot(), b.snapshot());
+        // Shrink through the same implementation.
+        la.resize(4).unwrap();
+        lb.resize_array(1, 4, 0).unwrap();
+        assert_eq!(a.snapshot(), b.snapshot());
+    }
 
     fn small() -> ExpansionLimits {
         ExpansionLimits {

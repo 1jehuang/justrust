@@ -215,11 +215,14 @@ impl BuilderOwnedPath {
             Some(self.lease.bytes()),
             "owner lease must pay the actual step capacity"
         );
-        let receipt = self.lease.retain()?;
+        let BuilderOwnedPath {
+            root, steps, lease, ..
+        } = self;
+        let (steps, receipt) = seal(steps, lease)?;
         Ok(OwnerPath {
             inner: Arc::new(PublishedPath {
-                root: self.root,
-                steps: self.steps,
+                root,
+                steps,
                 _receipt: receipt,
             }),
         })
@@ -287,18 +290,32 @@ impl Issued {
     }
 }
 
+/// Fixed bytes of one published path besides its steps: the `PublishedPath`
+/// value plus the `Arc` strong and weak counts.
+const PATH_HEADER: u64 =
+    (std::mem::size_of::<PublishedPath>() + 2 * std::mem::size_of::<usize>()) as u64;
+const STEP_BYTES: u64 = std::mem::size_of::<Step>() as u64;
+
+// Invariant for the unchecked depth and work arithmetic in `paid_path`:
+// supported targets have `usize` of at most 64 bits, and a `Step` is at least
+// 2 bytes. A genuine allocated `&[Step]` prefix therefore has at most
+// `isize::MAX / 2 < 2^62` elements, so `len + 1` fits `usize` and
+// `len + 2` fits `u64`. Byte arithmetic is never unchecked: it goes through
+// `ByteLease::resize_array`, which latches typed `Overflow` itself.
+const _: () = assert!(std::mem::size_of::<usize>() <= 8 && std::mem::size_of::<Step>() >= 2);
+
 /// Bytes one owner path with step capacity `capacity` occupies once
-/// published, including the shared `Arc` header. `None` on overflow.
+/// published (read-only expectation; admission uses `resize_array`).
 fn path_bytes(capacity: usize) -> Option<u64> {
-    let bytes = capacity
-        .checked_mul(std::mem::size_of::<Step>())?
-        .checked_add(std::mem::size_of::<PublishedPath>() + 2 * std::mem::size_of::<usize>())?;
-    u64::try_from(bytes).ok()
+    (capacity as u64)
+        .checked_mul(STEP_BYTES)?
+        .checked_add(PATH_HEADER)
 }
 
-/// `path_bytes`, with overflow latched on `budget` as a typed failure.
-fn admitted_bytes(budget: &ExpansionBudget, capacity: usize) -> Result<u64, OwnerError> {
-    path_bytes(capacity).ok_or_else(|| OwnerError::Budget(budget.poison_allocation()))
+/// Pay `lease` for exactly `capacity` steps plus the header.
+fn pay_capacity(lease: &mut ByteLease, capacity: usize) -> Result<(), BudgetFailure> {
+    // `usize <= 64 bits` (const invariant above), so the cast is lossless.
+    lease.resize_array(capacity as u64, STEP_BYTES, PATH_HEADER)
 }
 
 /// Allocated step storage whose capacity can be read and paid for.
@@ -315,18 +332,26 @@ impl StepBuffer for Vec<Step> {
 /// step is written. On failure the buffer is destroyed first, then the error
 /// is returned so the caller's lease refunds afterwards: no unpaid allocation
 /// outlives its admission, and no partially paid buffer is reusable.
-fn admit_capacity<B: StepBuffer>(
-    budget: &ExpansionBudget,
-    lease: &mut ByteLease,
-    buffer: B,
-) -> Result<B, OwnerError> {
-    let paid = admitted_bytes(budget, buffer.capacity())
-        .and_then(|bytes| lease.resize(bytes).map_err(OwnerError::Budget));
-    match paid {
+fn admit_capacity<B: StepBuffer>(lease: &mut ByteLease, buffer: B) -> Result<B, OwnerError> {
+    match pay_capacity(lease, buffer.capacity()) {
         Ok(()) => Ok(buffer),
-        Err(error) => {
+        Err(failure) => {
             drop(buffer);
-            Err(error)
+            Err(OwnerError::Budget(failure))
+        }
+    }
+}
+
+/// Seal `lease` for `buffer`. On failure the buffer is destroyed first, and
+/// only then the still-live returned lease, so the ledger never shows the
+/// bytes as free while the storage is allocated.
+fn seal<B>(buffer: B, lease: ByteLease) -> Result<(B, RetainedBytes), BudgetFailure> {
+    match lease.retain_or_return() {
+        Ok(receipt) => Ok((buffer, receipt)),
+        Err((failure, lease)) => {
+            drop(buffer);
+            drop(lease);
+            Err(failure)
         }
     }
 }
@@ -360,21 +385,20 @@ fn paid_path(
     prefix: &[Step],
     last: Option<Step>,
 ) -> Result<BuilderOwnedPath, OwnerError> {
-    let depth = prefix
-        .len()
-        .checked_add(usize::from(last.is_some()))
-        .ok_or_else(|| OwnerError::Budget(budget.poison_allocation()))?;
-    let work = u64::try_from(depth)
-        .ok()
-        .and_then(|depth| depth.checked_add(1))
-        .ok_or_else(|| OwnerError::Budget(budget.poison_allocation()))?;
-    budget.charge(Counter::Work, work)?;
-    let mut lease = budget.reserve(Storage::Retained, admitted_bytes(budget, depth)?)?;
+    // Cannot overflow: see the const invariant on `PATH_HEADER`.
+    let depth = prefix.len() + usize::from(last.is_some());
+    // One Work admission for the whole path; lossless and non-overflowing by
+    // the same invariant.
+    budget.charge(Counter::Work, depth as u64 + 1)?;
+    // A zero reservation still fails with the first latched failure.
+    let mut lease = budget.reserve(Storage::Retained, 0)?;
+    pay_capacity(&mut lease, depth)?;
     let mut steps = Vec::new();
     if steps.try_reserve_exact(requested_capacity(depth)).is_err() {
+        // A real allocator failure: the only use of `poison_allocation`.
         return Err(OwnerError::Budget(budget.poison_allocation()));
     }
-    let mut steps = admit_capacity(budget, &mut lease, steps)?;
+    let mut steps = admit_capacity(&mut lease, steps)?;
     let capacity = steps.capacity();
     steps.extend_from_slice(prefix);
     steps.extend(last);
@@ -650,10 +674,12 @@ mod tests {
         ));
     }
 
-    /// A buffer with real spare capacity, observing its own destruction.
+    /// A buffer with real spare capacity that records the ledger's retained
+    /// bytes at the moment it is destroyed (the DropProbe).
     struct Observed {
         steps: Vec<Step>,
         destroyed: std::rc::Rc<std::cell::Cell<bool>>,
+        ledger: Option<(ExpansionBudget, std::rc::Rc<std::cell::Cell<u64>>)>,
     }
     impl StepBuffer for Observed {
         fn capacity(&self) -> usize {
@@ -663,7 +689,62 @@ mod tests {
     impl Drop for Observed {
         fn drop(&mut self) {
             self.destroyed.set(true);
+            if let Some((budget, seen)) = &self.ledger {
+                seen.set(budget.snapshot().retained_bytes);
+            }
         }
+    }
+
+    #[test]
+    fn freeze_failure_destroys_buffer_before_returned_lease_refunds() {
+        use super::super::expansion_budget::BudgetResource;
+        let budget = budget();
+        let lease = budget.reserve(Storage::Retained, 0).unwrap();
+        let mut lease = lease;
+        pay_capacity(&mut lease, 3).unwrap();
+        let held = budget.snapshot().retained_bytes;
+        assert_eq!(held, path_bytes(3).unwrap());
+        let destroyed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let seen = std::rc::Rc::new(std::cell::Cell::new(u64::MAX));
+        let buffer = Observed {
+            steps: Vec::with_capacity(3),
+            destroyed: destroyed.clone(),
+            ledger: Some((budget.clone(), seen.clone())),
+        };
+        budget.check().unwrap();
+        // A sibling poisons the shared ledger after the precheck passed.
+        let latched = budget.poison_allocation();
+        let failure = match seal(buffer, lease) {
+            Ok(_) => panic!("poisoned seal published"),
+            Err(failure) => failure,
+        };
+        assert!(destroyed.get());
+        assert_eq!(
+            seen.get(),
+            held,
+            "buffer destroyed after its bytes were refunded"
+        );
+        assert_eq!(failure, latched);
+        assert_eq!(failure.resource, BudgetResource::Allocation);
+        assert_eq!(budget.snapshot().retained_bytes, 0, "lease refunds after");
+    }
+
+    #[test]
+    fn poisoned_budget_mints_and_commits_nothing() {
+        let budget = budget();
+        let mut root = OwnerIssuer::new(OwnerRoot::standalone().unwrap(), &budget).unwrap();
+        let first = budget.poison_allocation();
+        let mints = crate::engine::THREAD_MINTS.with(|count| count.get());
+        assert_eq!(
+            root.issue(OwnerDomain::TokenSession).unwrap_err(),
+            OwnerError::Budget(first.clone())
+        );
+        assert_eq!(root.next[domain_index(OwnerDomain::TokenSession)], 0);
+        assert_eq!(crate::engine::THREAD_MINTS.with(|count| count.get()), mints);
+        assert_eq!(
+            OwnerIssuer::new(OwnerRoot::standalone().unwrap(), &budget).unwrap_err(),
+            OwnerError::Budget(first)
+        );
     }
 
     #[test]
@@ -674,23 +755,25 @@ mod tests {
             bytes: path_bytes(1).unwrap(),
             ..ExpansionLimits::default()
         });
-        let mut lease = budget
-            .reserve(Storage::Retained, path_bytes(1).unwrap())
-            .unwrap();
+        let mut lease = budget.reserve(Storage::Retained, 0).unwrap();
+        pay_capacity(&mut lease, 1).unwrap();
         let mut steps = Vec::new();
         steps.try_reserve_exact(1 + 7).unwrap();
         assert!(steps.capacity() >= 8, "spare capacity really allocated");
         let destroyed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let seen = std::rc::Rc::new(std::cell::Cell::new(u64::MAX));
         let buffer = Observed {
             steps,
             destroyed: destroyed.clone(),
+            ledger: Some((budget.clone(), seen.clone())),
         };
-        let error = match admit_capacity(&budget, &mut lease, buffer) {
+        let error = match admit_capacity(&mut lease, buffer) {
             Ok(_) => panic!("surplus was not admitted"),
             Err(error) => error,
         };
         // Destroyed while the lease is still held (not yet refunded).
         assert!(destroyed.get(), "buffer outlived its failed admission");
+        assert_eq!(seen.get(), path_bytes(1).unwrap(), "destroyed after refund");
         assert_eq!(budget.snapshot().retained_bytes, path_bytes(1).unwrap());
         assert!(matches!(
             error,
