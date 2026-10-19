@@ -23,7 +23,6 @@ enum NativeGate {
     InvalidType,
     InvalidSuffix,
     InvalidLexical,
-    UnsupportedStringValue,
     StockOnlyPostfixAtomicity,
 }
 struct Case {
@@ -318,7 +317,6 @@ fn stock_all() {
             NativeGate::InvalidType => partition.1 += 1,
             NativeGate::InvalidSuffix => partition.2 += 1,
             NativeGate::InvalidLexical => partition.3 += 1,
-            NativeGate::UnsupportedStringValue => partition.4 += 1,
             NativeGate::StockOnlyPostfixAtomicity => partition.5 += 1,
         }
         let scratch = Scratch::new();
@@ -392,10 +390,6 @@ fn typed_literal_parser_errors_distinguish_suffix_syntax_from_string_boundaries(
                 counts.1 += 1;
                 source::SourceErrorKind::Syntax
             }
-            NativeGate::UnsupportedStringValue => {
-                counts.2 += 1;
-                source::SourceErrorKind::Unsupported
-            }
             _ => continue,
         };
         let parsed =
@@ -461,15 +455,6 @@ fn native_literal_consumption_workers1_8_check_build_no_compiler_fallback() {
                 );
                 match case.native {
                     NativeGate::Runtime => categories.0 += 1,
-                    NativeGate::UnsupportedStringValue => {
-                        categories.2 += 1;
-                        assert!(result.stdout.is_empty());
-                        assert!(
-                            diagnostic.contains("unsupported:"),
-                            "{} must be explicit Unsupported, not Syntax:{diagnostic}",
-                            case.name
-                        );
-                    }
                     NativeGate::InvalidType
                     | NativeGate::InvalidSuffix
                     | NativeGate::InvalidLexical => {

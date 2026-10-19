@@ -6954,7 +6954,6 @@ impl<'input, 'names> Parser<'input, 'names> {
         let buffer = self
             .input
             .opaque_literal_buffer(&self.token(), self.names)?;
-        let cursor = TokenCursor::new(&buffer);
         let value = self.isolated_expression(&buffer)?;
         self.cursor.bump();
         Ok(value)
