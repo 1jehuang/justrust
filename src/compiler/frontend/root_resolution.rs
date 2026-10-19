@@ -7,6 +7,7 @@ use super::*;
 mod capture_resolution;
 mod const_inline;
 mod const_pattern;
+mod lexical_calls;
 mod primitive_owners;
 mod stored_closures;
 
@@ -3207,32 +3208,13 @@ impl Resolver<'_> {
             };
             return self.expr(expr, module, locals);
         }
-        if let Expr::Var(path) | Expr::Call { name: path, .. } = expr
+        if self.resolve_lexical_call(expr, module, locals)? {
+            return Ok(());
+        }
+        if let Expr::Var(path) = expr
             && self.local_contains(path, locals)?
         {
-            return if let Expr::Call { name, args } = expr {
-                // `f(a, b)` on a local callable value: `f.call((a, b))`.
-                let method = self.callable_call_ident()?;
-                let receiver = Expr::Var(name.clone());
-                let args = std::mem::take(args);
-                let arguments = if args.is_empty() {
-                    Expr::Block(Block {
-                        statements: Vec::new(),
-                        tail: None,
-                    })
-                } else {
-                    Expr::Tuple(args)
-                };
-                *expr = Expr::MethodCall {
-                    receiver: Box::new(receiver),
-                    name: method,
-                    type_args: Vec::new(),
-                    args: vec![arguments],
-                };
-                self.expr(expr, module, locals)
-            } else {
-                Ok(())
-            };
+            return Ok(());
         }
         let source_path = match expr {
             Expr::Apply { path, .. } => {

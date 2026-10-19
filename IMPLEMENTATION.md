@@ -622,7 +622,12 @@ cleanup failures.
       receiver mode's immutable typed payload before child execution, rejecting
       raw or copied-seal metadata, foreign recipes and changed body payloads.
       This authority prerequisite does not authorize arbitrary callback-based
-      generic substitution. Generic-parent closures, opaque returns and iterator
+      generic substitution. Unqualified closure calls now resolve genuine lexical
+      bindings before item/import lookup, preserving local/parameter shadowing
+      and rejecting unused non-callable or invalid item calls
+      (`tests/closure_lexical_calls.rs`, explicit worker-1/8 CHECK/BUILD/run).
+      Unauthenticated cross-function macro capture occurrences remain unsupported.
+      Generic-parent closures, opaque returns and iterator
       integration remain open.
       Implementation/default closure syntax now retains canonical owner ordinals
       and selected-body occurrence authority, with final resolver publication

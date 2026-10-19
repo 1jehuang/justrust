@@ -12472,9 +12472,9 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return self.scalar_output(")", "println", None);
             }
         } else if self.eat("(") {
-            if self.lexical.closure_depth != 0 && name.single().is_some() {
-                return Err(self.unsupported("unqualified calls inside closures require capture-aware resolution; use a crate-qualified function path"));
-            }
+            // Retain the original occurrence and its recorded lexical
+            // association. Resolution distinguishes captured/local callees
+            // from genuine module items before checking callable bounds.
             let mut args = Vec::new();
             if !self.is(")") {
                 loop {

@@ -37,6 +37,23 @@ programs with 124 explicit native CHECK/BUILD cells. Its first successful
 worker-1/8 execution is new evidence, not a retroactive description of the old
 oracle runs.
 
+## Lexical calls inside stored closures
+
+Unqualified call syntax retains its source occurrence through parsing. Resolution
+checks the genuine lexical binding first, including captured local callables and
+closure parameters, and only otherwise resolves a module item or import. A local
+non-callable binding cannot silently fall through to a same-spelled function.
+The canonical callable-method lowering evaluates the receiver and argument tuple
+once. `tests/closure_lexical_calls.rs` covers four valid programs and three unused
+invalid bodies at workers 1 and 8 through CHECK and BUILD (28 native cells).
+
+Cross-function macro-scope occurrences that lack an authenticated capture binding
+remain explicitly unsupported rather than being guessed from spelling. This does
+not complete generic-parent, reference-result or iterator adapter support. The
+unchanged error-handling and sorting corpus programs advance past the former
+parser guard but still reject at their subsequent slice-carrier and unresolved
+method boundaries respectively.
+
 ## Canonical method source owners
 
 Stored closures in implementation bodies retain their exact implementation/item
