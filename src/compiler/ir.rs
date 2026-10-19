@@ -1896,12 +1896,14 @@ impl PlanBudget {
     fn charge_task(&self, amount: usize, kind: ResourceBudgetKind) -> Option<Result<(), String>> {
         let limit = match kind {
             ResourceBudgetKind::Work => self.limits.work,
+            ResourceBudgetKind::Obligations => 4096,
             _ => self.limits.nodes,
         };
         crate::engine::with_current_meter(|meter| {
             let meter = meter?;
             let counter = match kind {
                 ResourceBudgetKind::Work => &meter.work,
+                ResourceBudgetKind::Obligations => &meter.obligations,
                 _ => &meter.nodes,
             };
             let amount64 = u64::try_from(amount).unwrap_or(u64::MAX);
@@ -1950,6 +1952,9 @@ impl PlanBudget {
     }
     #[track_caller]
     pub fn charge_obligation(&self) -> Result<(), String> {
+        if let Some(result) = self.charge_task(1, ResourceBudgetKind::Obligations) {
+            return result;
+        }
         self.charge(
             1,
             |u| &mut u.obligations,

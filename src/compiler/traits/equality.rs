@@ -28,10 +28,10 @@ pub(super) struct DeclaredCallableContext {
     pub(super) predicates: Arc<[Predicate]>,
     pub(super) raw: GenericSchema,
     pub(super) origins: Arc<[super::parameter_equality::EqualityObligationOrigin]>,
-    reductions: Mutex<Vec<DeclaredEqualityReduction>>,
+    pub(super) reductions: Vec<DeclaredEqualityReduction>,
 }
 
-struct DeclaredEqualityReduction {
+pub(super) struct DeclaredEqualityReduction {
     world: WorldId,
     stage: DeclaredStageId,
     declaration: DeclId,
@@ -82,7 +82,7 @@ impl NormalizedProjectionEquality {
             projection,
             &evidence.rhs,
             ProofContext::from_facts(facts),
-            &mut Vec::new(),
+            &mut Default::default(),
         )?;
         world.compare_predicate_rows(&evidence.rows, &facts.predicates.predicates)?;
         let actual = world
@@ -107,7 +107,7 @@ impl NormalizedProjectionEquality {
         world.require_in(
             &Predicate::Implements(projection.trait_ref.clone()),
             ProofContext::from_facts(facts),
-            &mut Vec::new(),
+            &mut Default::default(),
         )?;
         Ok(())
     }
@@ -210,13 +210,7 @@ impl ValidatedTraitWorld {
                     ));
                 }
             }
-            let reductions = context.reductions.lock().map_err(|_| {
-                FactsError::resource(
-                    &self.budget,
-                    "declared equality dependency storage poisoned",
-                )
-            })?;
-            for reduction in reductions.iter() {
+            for reduction in &context.reductions {
                 if reduction.world != self.id
                     || reduction.stage != context.stage
                     || reduction.declaration != context.declaration
@@ -315,7 +309,7 @@ impl ValidatedTraitWorld {
         self.require_in(
             &Predicate::Implements(call.trait_ref.clone()),
             context,
-            &mut Vec::new(),
+            &mut Default::default(),
         )?;
         let raw = clone_schema(&item.schema, &self.budget)?;
         let source_regions = self.validate_source_regions(call.item, &raw.signature)?;
@@ -324,7 +318,12 @@ impl ValidatedTraitWorld {
         let mut dependencies = Vec::new();
         let mut reduce = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
             let proof = self.normalize_projection_for_facts(projection, facts)?;
-            self.validate_equality_domain_in(projection, proof.ty(), context, &mut Vec::new())?;
+            self.validate_equality_domain_in(
+                projection,
+                proof.ty(),
+                context,
+                &mut Default::default(),
+            )?;
             let normal = proof.ty().clone();
             push(&self.budget, &mut dependencies, (projection.clone(), proof))?;
             Ok(normal)
@@ -344,7 +343,7 @@ impl ValidatedTraitWorld {
             ));
         }
         for row in instantiated.predicates.iter() {
-            self.require_in(row, context, &mut Vec::new())?;
+            self.require_in(row, context, &mut Default::default())?;
         }
         self.validate_schema_signature(call.item, &instantiated.signature, facts.env(), None)?;
         let normalized_regions =
@@ -629,7 +628,7 @@ impl ValidatedTraitWorld {
         projection: &ir::AssociatedTypeProjection,
         rhs: &Ty,
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         self.validate_equality_domain(projection, rhs, context.env())?;
         self.require_equality_rhs_sized(rhs, context, active)
@@ -639,7 +638,7 @@ impl ValidatedTraitWorld {
         &self,
         rhs: &Ty,
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         let sized = Predicate::Implements(TraitRef {
             declaration: self.catalog.id(CatalogItem::Sized),
@@ -674,7 +673,7 @@ impl ValidatedTraitWorld {
                         predicates: &self.empty,
                         phase: FactsPhase::Closed,
                     },
-                    &mut Vec::new(),
+                    &mut Default::default(),
                 )?;
             }
         }
@@ -751,7 +750,7 @@ impl ValidatedTraitWorld {
         let membership = self.require_in(
             &Predicate::Implements(projection.trait_ref.clone()),
             ProofContext::from_facts(facts),
-            &mut Vec::new(),
+            &mut Default::default(),
         )?;
         retain::<ProjectionEqualityEvidence>(&self.budget, 1)?;
         let proof = NormalizedProjectionEquality(Arc::new(ProjectionEqualityEvidence {
@@ -787,7 +786,7 @@ impl ValidatedTraitWorld {
         projection: &ir::AssociatedTypeProjection,
         rhs: &Ty,
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<ProofOutcome> {
         self.check_context(context)?;
         self.validate_equality_domain_in(projection, rhs, context, active)?;
@@ -882,7 +881,7 @@ impl ValidatedTraitWorld {
                     predicates: rows.into(),
                     raw: clone_schema(&callable.schema, &self.budget)?,
                     origins: super::parameter_equality::result_slice(&self.budget, origins)?,
-                    reductions: Mutex::new(Vec::new()),
+                    reductions: Vec::new(),
                 },
             )?;
         }
@@ -907,7 +906,7 @@ impl ValidatedTraitWorld {
         &self,
         declaration: DeclId,
         raw: &GenericSchema,
-    ) -> Result<GenericSchema> {
+    ) -> Result<(GenericSchema, Vec<DeclaredEqualityReduction>)> {
         let context = self.declared_callable_context(declaration)?;
         if context.world != self.id
             || context.stage != DeclaredStageId(self.id)
@@ -922,18 +921,20 @@ impl ValidatedTraitWorld {
         }
         self.compare_predicate_rows(&context.raw.predicates, &raw.predicates)?;
         let mut schema = clone_schema(raw, &self.budget)?;
+        let mut reductions = Vec::new();
         for ty in &mut schema.signature.params {
-            *ty = self.normalize_declared_type(ty, context, 0)?;
+            *ty = self.normalize_declared_type(ty, context, &mut reductions, 0)?;
         }
         schema.signature.result =
-            self.normalize_declared_type(&schema.signature.result, context, 0)?;
+            self.normalize_declared_type(&schema.signature.result, context, &mut reductions, 0)?;
         self.validate_schema_signature(declaration, &schema.signature, &schema.env, None)?;
-        Ok(schema)
+        Ok((schema, reductions))
     }
     fn normalize_declared_type(
         &self,
         ty: &Ty,
         context: &DeclaredCallableContext,
+        reductions: &mut Vec<DeclaredEqualityReduction>,
         depth: usize,
     ) -> Result<Ty> {
         self.map_equality_type(ty, depth, &mut |projection| {
@@ -963,15 +964,9 @@ impl ValidatedTraitWorld {
                         "declared equality lacks exact owner membership",
                     ));
                 }
-                let mut reductions = context.reductions.lock().map_err(|_| {
-                    FactsError::resource(
-                        &self.budget,
-                        "declared equality dependency storage poisoned",
-                    )
-                })?;
                 push(
                     &self.budget,
-                    &mut reductions,
+                    reductions,
                     DeclaredEqualityReduction {
                         world: self.id,
                         stage: context.stage,
@@ -1123,7 +1118,7 @@ mod tests {
         };
         plan.checked_body(&target, &facts, &budget).unwrap();
         let context = world.declared_callable_context(declaration).unwrap();
-        assert!(!context.reductions.lock().unwrap().is_empty());
+        assert!(!context.reductions.is_empty());
         assert!(
             world
                 .requirements

@@ -45,6 +45,9 @@ thread_local! {
 pub struct Meter {
     pub work: AtomicU64,
     pub nodes: AtomicU64,
+    /// Trait obligations belong to the task doing the proof, not a shared
+    /// compilation ledger or another worker's memoization history.
+    pub obligations: AtomicU64,
     /// Live (reserved or retained) bytes attributed to this task.
     pub bytes: AtomicU64,
 }
@@ -191,6 +194,7 @@ pub struct Report {
     /// Sum of every node's per-task metered work and node charges.
     pub metered_work: u64,
     pub metered_nodes: u64,
+    pub metered_obligations: u64,
 }
 
 #[derive(Clone)]
@@ -615,6 +619,10 @@ impl Engine {
         accounting.report.metered_nodes = nodes
             .iter()
             .map(|node| node.meter.nodes.load(Ordering::Relaxed))
+            .fold(0u64, u64::saturating_add);
+        accounting.report.metered_obligations = nodes
+            .iter()
+            .map(|node| node.meter.obligations.load(Ordering::Relaxed))
             .fold(0u64, u64::saturating_add);
         accounting.report.node_errors = node_errors;
         let report = accounting.report.clone();

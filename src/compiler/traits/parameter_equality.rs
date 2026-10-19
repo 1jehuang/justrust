@@ -202,7 +202,7 @@ impl ValidatedTraitWorld {
         &self,
         rows: &[Predicate],
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         // Metadata errors win over domain restrictions, even for unused rows.
         for row in rows {
@@ -218,7 +218,7 @@ impl ValidatedTraitWorld {
         &self,
         rows: &[Predicate],
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         for row in rows {
             if let Predicate::ProjectionEq { projection, ty } = row {
@@ -475,7 +475,11 @@ impl ValidatedTraitWorld {
             for origin in context.origins.iter() {
                 result_push(&self.budget, &mut rows, origin.row.clone())?;
             }
-            self.replay_equality_rows(&rows, ProofContext::from_facts(facts), &mut Vec::new())?;
+            self.replay_equality_rows(
+                &rows,
+                ProofContext::from_facts(facts),
+                &mut Default::default(),
+            )?;
         }
         let mut raw_rows = Vec::new();
         for origin in &origins {
@@ -495,7 +499,7 @@ impl ValidatedTraitWorld {
         self.replay_equality_rows(
             &instantiated.predicates,
             ProofContext::from_facts(facts),
-            &mut Vec::new(),
+            &mut Default::default(),
         )?;
         let mut actual_rows = Vec::new();
         let mut certificates = Vec::new();
@@ -1026,12 +1030,12 @@ mod tests {
             ..ir::PlanLimits::default()
         });
         assert_eq!(
-            result_push(&tiny, &mut Vec::new(), 0_u64)
+            result_push(&tiny, &mut Default::default(), 0_u64)
                 .unwrap_err()
                 .kind(),
             FactsErrorKind::Resource
         );
-        assert!(result_push(&tiny, &mut Vec::new(), ()).is_err());
+        assert!(result_push(&tiny, &mut Default::default(), ()).is_err());
     }
 
     #[test]

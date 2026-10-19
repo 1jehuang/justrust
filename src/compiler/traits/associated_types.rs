@@ -122,7 +122,8 @@ struct NormalizationContext<'a> {
 #[derive(Default)]
 struct NormalizationStack {
     active: Vec<(NormalizationKey, DeclId)>,
-    obligations: Vec<GoalKey>,
+    obligations: ProofScratch,
+    memo: Vec<NormalizationMemo>,
 }
 
 impl ValidatedTraitWorld {
@@ -413,7 +414,7 @@ impl ValidatedTraitWorld {
             ty,
             context,
             &mut NormalizationStack::default(),
-            &mut Vec::new(),
+            &mut Default::default(),
             0,
         )?;
         self.validate_ty(&normal, facts.env(), None, true, 0)?;
@@ -457,7 +458,7 @@ impl ValidatedTraitWorld {
     ) -> Result<NormalizedAssociatedType> {
         let mut stack = NormalizationStack::default();
         for goal in active {
-            push(&self.budget, &mut stack.obligations, goal.clone())?;
+            push(&self.budget, &mut stack.obligations.active, goal.clone())?;
         }
         let context = NormalizationContext {
             proof,
@@ -839,7 +840,7 @@ impl ValidatedTraitWorld {
         associated: DeclId,
         normal: &Ty,
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         if !self.has_associated_bounds {
             return Ok(());
@@ -887,8 +888,16 @@ impl ValidatedTraitWorld {
             let mut schema = clone_schema(&callable.schema, &self.budget)?;
             if self.schema_contains_projection(&schema)? {
                 if self.has_declared_callable_equalities(callable.declaration)? {
-                    schema =
+                    let (normalized_schema, reductions) =
                         self.normalize_declared_callable_schema(callable.declaration, &schema)?;
+                    schema = normalized_schema;
+                    let position = self
+                        .declared_callable_index
+                        .get(&self.budget, callable.declaration)?
+                        .ok_or_else(|| {
+                            FactsError::invalid(&self.budget, "missing declared callable stage")
+                        })?;
+                    self.declared_callables[position].reductions = reductions;
                     push(
                         &self.budget,
                         &mut normalized,
@@ -1102,11 +1111,8 @@ impl ValidatedTraitWorld {
             }
         }
         let cached = {
-            let memo = self.projection_memo.lock().map_err(|_| {
-                FactsError::resource(&self.budget, "associated normalization cache poisoned")
-            })?;
             let mut cached = None;
-            for entry in memo.iter() {
+            for entry in &stack.memo {
                 if self.normalization_key_equal(&entry.key, &key)? {
                     cached = Some(entry.result.clone());
                     break;
@@ -1278,12 +1284,9 @@ impl ValidatedTraitWorld {
             Ok(evidence)
         })();
         stack.active.pop();
-        let mut memo = self.projection_memo.lock().map_err(|_| {
-            FactsError::resource(&self.budget, "associated normalization cache poisoned")
-        })?;
         push(
             &self.budget,
-            &mut memo,
+            &mut stack.memo,
             NormalizationMemo {
                 key,
                 result: result.clone(),
@@ -1402,7 +1405,7 @@ impl ValidatedTraitWorld {
         normal: &Ty,
         env: &GenericEnv,
         context: ProofContext<'_>,
-        active: &mut Vec<GoalKey>,
+        active: &mut ProofScratch,
     ) -> Result<()> {
         if self.type_contains_projection(normal, 0)? {
             return Err(FactsError::invalid(
@@ -1493,7 +1496,7 @@ impl ValidatedTraitWorld {
                 predicates: &self.empty,
                 phase: FactsPhase::Closed,
             },
-            &mut Vec::new(),
+            &mut Default::default(),
         )?;
         Ok(())
     }
@@ -1895,10 +1898,25 @@ mod tests {
         let first = world
             .normalize_associated_type(&projection, &facts)
             .unwrap();
-        let cached = world
+        let independent = world
             .normalize_associated_type(&projection, &facts)
             .unwrap();
-        assert!(Arc::ptr_eq(&first.0, &cached.0));
+        assert!(!Arc::ptr_eq(&first.0, &independent.0));
+        independent.validate_for(&projection, &facts).unwrap();
+        let context = NormalizationContext {
+            proof: ProofContext::from_facts(&facts),
+            staged: false,
+        };
+        let mut scratch = NormalizationStack::default();
+        let local = world
+            .normalize_projection_in(&projection, context, &mut scratch)
+            .unwrap();
+        let cached = NormalizedAssociatedType(
+            world
+                .normalize_projection_in(&projection, context, &mut scratch)
+                .unwrap(),
+        );
+        assert!(Arc::ptr_eq(&local, &cached.0));
         cached.validate_for(&projection, &facts).unwrap();
         let mut forged = (*cached.0).clone();
         forged.normal = Ty::Slice {
