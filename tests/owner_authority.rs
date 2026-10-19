@@ -112,6 +112,28 @@ fn duplicate_occurrence_within_one_program_is_not_a_foreign_owner() {
     }
 }
 
+/// Owner depth is bounded only by the caller's input-scaled budget: no
+/// owner-local depth constant or variant may return, and owner storage must
+/// never be converted after its capacity is paid.
+#[test]
+fn owner_paths_have_no_local_depth_cap_or_unpaid_conversion() {
+    let source = include_str!("../src/compiler/owner_path.rs");
+    let code = source.split("#[cfg(test)]\nmod tests").next().unwrap();
+    for forbidden in [
+        "MAX_OWNER_DEPTH",
+        "DepthExceeded",
+        "check_depth",
+        "Depth::",
+        "into_boxed_slice",
+        "shrink_to",
+    ] {
+        assert!(
+            !code.contains(forbidden),
+            "owner_path.rs reintroduced `{forbidden}`"
+        );
+    }
+}
+
 #[test]
 fn standalone_owner_roots_are_distinct_across_threads() {
     let roots: Vec<_> = std::thread::scope(|scope| {

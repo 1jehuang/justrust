@@ -160,12 +160,24 @@ fn lexical_validity_does_not_silently_admit_new_name_classes() {
     ));
 }
 
+/// The frozen store's owner receipt, checked to pay exactly the step capacity
+/// actually allocated (not an assumed logical size).
+fn exact_owner_receipt(store: &justrust_engine::compiler::semantic_name::NameStore) -> u64 {
+    let path = store.owner_path().expect("frozen store has an owner");
+    assert_eq!(
+        path.receipt_bytes(),
+        justrust_engine::compiler::owner_path::owner_receipt_bytes(path.step_capacity())
+    );
+    path.receipt_bytes()
+}
+
 #[test]
 fn frozen_clone_owns_names_and_storage_until_last_program_owner_drops() {
     let budget = ExpansionBudget::default();
     let (mut builder, tokens) = scanned("item", Edition::E2021, &budget);
     let ident = builder.from_token(tokens[0], Edition::E2021).unwrap();
     let store = builder.freeze().unwrap();
+    let receipt = exact_owner_receipt(&store);
     let retained = budget.snapshot().retained_bytes;
     assert!(retained > 0);
     let another_program_owner = Arc::clone(&store);
@@ -176,10 +188,7 @@ fn frozen_clone_owns_names_and_storage_until_last_program_owner_drops() {
     drop(another_program_owner);
     // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md):
     // it is paid once at freeze and never refunded.
-    assert_eq!(
-        budget.snapshot().retained_bytes,
-        justrust_engine::compiler::owner_path::standalone_session_receipt_bytes()
-    );
+    assert_eq!(budget.snapshot().retained_bytes, receipt);
     assert_eq!(budget.snapshot().temporary_bytes, 0);
     assert!(budget.snapshot().counters[Counter::Work as usize] > 0);
 }

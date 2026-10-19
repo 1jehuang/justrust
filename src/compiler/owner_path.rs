@@ -18,6 +18,18 @@
 //! the step storage is allocated, then sealed into an immutable
 //! [`RetainedBytes`] receipt. Paths hold no budget handle or lock.
 //!
+//! Depth has no owner-local cap: owner steps are structural issuance, not
+//! syntax nesting, so they are bounded only by the caller's input-scaled Work
+//! and retained-byte admission. Each level needs an already paid parent.
+//!
+//! Storage is paid for the capacity actually allocated, not the logical
+//! length: the step `Vec` is never converted or reallocated after admission,
+//! and freeze moves the same allocation into the published path.
+//!
+//! Known caveat: publication uses `Arc::new`, an infallible allocation. Its
+//! header bytes are prepaid in the receipt, but an allocator abort there is
+//! not fail-closed (no stable fallible `Arc` constructor).
+//!
 //! Not yet activated: the process-global counters still issue live owner ids.
 #![allow(dead_code)]
 
@@ -65,16 +77,13 @@ struct Step {
     ordinal: u64,
 }
 
-/// Maximum path depth, checked before any allocation.
-pub const MAX_OWNER_DEPTH: usize = 256;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OwnerError {
-    DepthExceeded,
     OrdinalExhausted,
     TagExhausted,
+    /// Every admission, arithmetic and allocator failure, typed and latched
+    /// on the caller's budget.
     Budget(BudgetFailure),
-    Allocation,
 }
 
 impl From<BudgetFailure> for OwnerError {
@@ -103,7 +112,8 @@ pub struct OwnerPath {
 #[derive(Debug)]
 struct PublishedPath {
     root: RootId,
-    steps: Box<[Step]>,
+    /// The same allocation the builder paid for, moved, never converted.
+    steps: Vec<Step>,
     _receipt: RetainedBytes,
 }
 
@@ -115,7 +125,9 @@ struct PublishedPath {
 #[derive(Debug)]
 pub struct BuilderOwnedPath {
     root: RootId,
-    steps: Box<[Step]>,
+    /// Immutable after admission: no API pushes, extends or exposes `&mut`.
+    /// The lease pays `path_bytes(steps.capacity())` exactly.
+    steps: Vec<Step>,
     lease: ByteLease,
     /// The admission ledger that paid for this path. Compared by identity
     /// (not by equal limits) so an owner paid under one budget cannot back a
@@ -193,7 +205,16 @@ impl BuilderOwnedPath {
     /// Publish: convert the refundable reservation into an immutable receipt
     /// for the same bytes, exactly once. Consumes the builder path, so it can
     /// be neither refunded nor charged again.
-    pub fn freeze(self) -> Result<OwnerPath, OwnerError> {
+    ///
+    /// The only failure is the budget's own typed, latched failure (for
+    /// example one poisoned by a sibling after the caller's precheck). On
+    /// failure nothing is published and the lease refunds on drop.
+    pub fn freeze(self) -> Result<OwnerPath, BudgetFailure> {
+        debug_assert_eq!(
+            path_bytes(self.steps.capacity()),
+            Some(self.lease.bytes()),
+            "owner lease must pay the actual step capacity"
+        );
         let receipt = self.lease.retain()?;
         Ok(OwnerPath {
             inner: Arc::new(PublishedPath {
@@ -266,41 +287,101 @@ impl Issued {
     }
 }
 
-/// Bytes one owner path of `depth` steps occupies once published, including
-/// the shared `Arc` header. The same bytes are reserved while building.
-fn path_bytes(depth: usize) -> Result<u64, OwnerError> {
-    let bytes = depth
-        .checked_mul(std::mem::size_of::<Step>())
-        .and_then(|n| {
-            n.checked_add(std::mem::size_of::<PublishedPath>() + 2 * std::mem::size_of::<usize>())
-        })
-        .ok_or(OwnerError::Allocation)?;
-    u64::try_from(bytes).map_err(|_| OwnerError::Allocation)
+/// Bytes one owner path with step capacity `capacity` occupies once
+/// published, including the shared `Arc` header. `None` on overflow.
+fn path_bytes(capacity: usize) -> Option<u64> {
+    let bytes = capacity
+        .checked_mul(std::mem::size_of::<Step>())?
+        .checked_add(std::mem::size_of::<PublishedPath>() + 2 * std::mem::size_of::<usize>())?;
+    u64::try_from(bytes).ok()
 }
 
-/// One paid, refundable builder path: work and bytes are charged before the
-/// step storage is allocated.
+/// `path_bytes`, with overflow latched on `budget` as a typed failure.
+fn admitted_bytes(budget: &ExpansionBudget, capacity: usize) -> Result<u64, OwnerError> {
+    path_bytes(capacity).ok_or_else(|| OwnerError::Budget(budget.poison_allocation()))
+}
+
+/// Allocated step storage whose capacity can be read and paid for.
+trait StepBuffer {
+    fn capacity(&self) -> usize;
+}
+impl StepBuffer for Vec<Step> {
+    fn capacity(&self) -> usize {
+        Vec::capacity(self)
+    }
+}
+
+/// Resize `lease` to pay exactly for `buffer`'s actual capacity, before any
+/// step is written. On failure the buffer is destroyed first, then the error
+/// is returned so the caller's lease refunds afterwards: no unpaid allocation
+/// outlives its admission, and no partially paid buffer is reusable.
+fn admit_capacity<B: StepBuffer>(
+    budget: &ExpansionBudget,
+    lease: &mut ByteLease,
+    buffer: B,
+) -> Result<B, OwnerError> {
+    let paid = admitted_bytes(budget, buffer.capacity())
+        .and_then(|bytes| lease.resize(bytes).map_err(OwnerError::Budget));
+    match paid {
+        Ok(()) => Ok(buffer),
+        Err(error) => {
+            drop(buffer);
+            Err(error)
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only: extra spare capacity requested on top of the logical
+    /// depth, to exercise surplus admission deterministically.
+    static SPARE_CAPACITY: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn requested_capacity(depth: usize) -> usize {
+    #[cfg(test)]
+    {
+        depth.saturating_add(SPARE_CAPACITY.with(|spare| spare.get()))
+    }
+    #[cfg(not(test))]
+    {
+        depth
+    }
+}
+
+/// One paid, refundable builder path. Work and the logical minimum bytes are
+/// charged before the step storage is allocated. The surplus the allocator
+/// actually granted is then paid on the same lease before any step is
+/// written, so the receipt equals the real capacity. The logical-minimum
+/// admission is not a preflight for the surplus.
 fn paid_path(
     budget: &ExpansionBudget,
     root: RootId,
     prefix: &[Step],
     last: Option<Step>,
 ) -> Result<BuilderOwnedPath, OwnerError> {
-    let depth = prefix.len() + usize::from(last.is_some());
-    if depth > MAX_OWNER_DEPTH {
-        return Err(OwnerError::DepthExceeded);
-    }
-    budget.charge(Counter::Work, depth as u64 + 1)?;
-    let lease = budget.reserve(Storage::Retained, path_bytes(depth)?)?;
+    let depth = prefix
+        .len()
+        .checked_add(usize::from(last.is_some()))
+        .ok_or_else(|| OwnerError::Budget(budget.poison_allocation()))?;
+    let work = u64::try_from(depth)
+        .ok()
+        .and_then(|depth| depth.checked_add(1))
+        .ok_or_else(|| OwnerError::Budget(budget.poison_allocation()))?;
+    budget.charge(Counter::Work, work)?;
+    let mut lease = budget.reserve(Storage::Retained, admitted_bytes(budget, depth)?)?;
     let mut steps = Vec::new();
-    steps
-        .try_reserve_exact(depth)
-        .map_err(|_| OwnerError::Allocation)?;
+    if steps.try_reserve_exact(requested_capacity(depth)).is_err() {
+        return Err(OwnerError::Budget(budget.poison_allocation()));
+    }
+    let mut steps = admit_capacity(budget, &mut lease, steps)?;
+    let capacity = steps.capacity();
     steps.extend_from_slice(prefix);
     steps.extend(last);
+    debug_assert_eq!(steps.capacity(), capacity, "paid step storage reallocated");
     Ok(BuilderOwnedPath {
         root,
-        steps: steps.into_boxed_slice(),
+        steps,
         lease,
         payer: budget.clone(),
     })
@@ -369,16 +450,27 @@ impl OwnerIssuer {
 }
 
 /// Peak bytes a standalone session owner reserves while it is issued: the
-/// root issuer's path plus the session's child path. Admitted up front.
+/// root issuer's path plus the session's child path at their logical
+/// minimum capacity. This is an early-rejection probe only: any allocator
+/// surplus is admitted later on the same budget and may still fail.
 pub fn standalone_admission_bytes() -> u64 {
     path_bytes(0).unwrap_or(0) + path_bytes(1).unwrap_or(0)
 }
 
-/// Bytes that stay charged after a standalone session's store is frozen:
-/// only the session's own published path receipt. The issuer's root path is
-/// refunded when the issuer drops; the receipt is never refunded.
-pub fn standalone_session_receipt_bytes() -> u64 {
-    path_bytes(1).unwrap_or(0)
+/// Bytes a published owner path with step capacity `capacity` keeps charged.
+pub fn owner_receipt_bytes(capacity: usize) -> u64 {
+    path_bytes(capacity).unwrap_or(u64::MAX)
+}
+
+impl OwnerPath {
+    /// Bytes this published path's receipt holds: exactly its step capacity.
+    pub fn receipt_bytes(&self) -> u64 {
+        self.inner._receipt.bytes()
+    }
+    /// The step storage capacity the receipt pays for.
+    pub fn step_capacity(&self) -> usize {
+        self.inner.steps.capacity()
+    }
 }
 
 /// One session owner under a fresh standalone root, for independent direct
@@ -401,10 +493,14 @@ pub(super) fn standalone_issued(
         .map_err(owner_token_error)
 }
 
+/// Exact conversion: budget failures keep their typed resource and kind;
+/// only real id-space exhaustion becomes `IdExhausted`.
 fn owner_token_error(error: OwnerError) -> super::token_session::TokenError {
     match error {
         OwnerError::Budget(failure) => failure.into(),
-        _ => super::token_session::TokenError::IdExhausted,
+        OwnerError::OrdinalExhausted | OwnerError::TagExhausted => {
+            super::token_session::TokenError::IdExhausted
+        }
     }
 }
 
@@ -490,15 +586,181 @@ mod tests {
         }
     }
 
-    #[test]
-    fn depth_is_bounded_before_allocation() {
-        let mut issuer = standalone();
-        for _ in 0..MAX_OWNER_DEPTH {
-            issuer = issuer.child(OwnerDomain::TokenSlice).unwrap();
+    /// Total work and bytes to hold one issuer chain of `levels` children
+    /// below the root, every level alive (each child path is paid on its own).
+    fn chain_cost(levels: usize) -> (u64, u64) {
+        let mut work = 1u64; // root path: depth 0 + 1
+        let mut bytes = path_bytes(0).unwrap();
+        for depth in 1..=levels {
+            work += 1 + depth as u64 + 1; // issue charge + path work
+            bytes += path_bytes(depth).unwrap();
         }
+        (work, bytes)
+    }
+
+    fn chain(budget: &ExpansionBudget, levels: usize) -> Vec<OwnerIssuer> {
+        let mut chain = vec![OwnerIssuer::new(OwnerRoot::standalone().unwrap(), budget).unwrap()];
+        for _ in 0..levels {
+            let next = chain
+                .last_mut()
+                .unwrap()
+                .child(OwnerDomain::TokenSlice)
+                .unwrap();
+            chain.push(next);
+        }
+        chain
+    }
+
+    #[test]
+    fn depth_is_bounded_only_by_caller_budget() {
+        use super::super::expansion_budget::{BudgetResource, ExpansionLimits};
+        // Far beyond any former fixed cap: succeeds when the caller pays.
+        let deep = chain(&budget(), 1_000);
+        assert_eq!(deep.last().unwrap().path().depth(), 1_000);
+        // Exactly k levels fit the retained-byte limit; level k+1 fails as a
+        // typed budget failure, consuming no ordinal and no tag.
+        let k = 40;
+        let (_, bytes) = chain_cost(k);
+        let tight = ExpansionBudget::new(ExpansionLimits {
+            bytes,
+            ..ExpansionLimits::default()
+        });
+        let mut held = chain(&tight, k);
+        let before = tight.snapshot().retained_bytes;
+        let mints = crate::engine::THREAD_MINTS.with(|count| count.get());
+        let last = held.last_mut().unwrap();
+        let error = last.child(OwnerDomain::TokenSlice).unwrap_err();
+        assert!(matches!(
+            error,
+            OwnerError::Budget(ref failure) if failure.resource == BudgetResource::Bytes
+        ));
+        assert_eq!(last.next[domain_index(OwnerDomain::TokenSlice)], 0);
+        assert_eq!(crate::engine::THREAD_MINTS.with(|count| count.get()), mints);
+        assert_eq!(tight.snapshot().retained_bytes, before);
+        // The same holds for work: k levels fit, k+1 is a typed Work failure.
+        let (work, _) = chain_cost(k);
+        let mut limits = ExpansionLimits::default();
+        limits.counters[Counter::Work as usize] = work;
+        let work_budget = ExpansionBudget::new(limits);
+        let mut held = chain(&work_budget, k);
+        assert!(matches!(
+            held.last_mut().unwrap().child(OwnerDomain::TokenSlice),
+            Err(OwnerError::Budget(failure))
+                if failure.resource == BudgetResource::Counter(Counter::Work)
+        ));
+    }
+
+    /// A buffer with real spare capacity, observing its own destruction.
+    struct Observed {
+        steps: Vec<Step>,
+        destroyed: std::rc::Rc<std::cell::Cell<bool>>,
+    }
+    impl StepBuffer for Observed {
+        fn capacity(&self) -> usize {
+            self.steps.capacity()
+        }
+    }
+    impl Drop for Observed {
+        fn drop(&mut self) {
+            self.destroyed.set(true);
+        }
+    }
+
+    #[test]
+    fn surplus_capacity_failure_destroys_buffer_before_refund() {
+        use super::super::expansion_budget::{BudgetResource, ExpansionLimits};
+        // Logical minimum fits; the real surplus does not.
+        let budget = ExpansionBudget::new(ExpansionLimits {
+            bytes: path_bytes(1).unwrap(),
+            ..ExpansionLimits::default()
+        });
+        let mut lease = budget
+            .reserve(Storage::Retained, path_bytes(1).unwrap())
+            .unwrap();
+        let mut steps = Vec::new();
+        steps.try_reserve_exact(1 + 7).unwrap();
+        assert!(steps.capacity() >= 8, "spare capacity really allocated");
+        let destroyed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let buffer = Observed {
+            steps,
+            destroyed: destroyed.clone(),
+        };
+        let error = match admit_capacity(&budget, &mut lease, buffer) {
+            Ok(_) => panic!("surplus was not admitted"),
+            Err(error) => error,
+        };
+        // Destroyed while the lease is still held (not yet refunded).
+        assert!(destroyed.get(), "buffer outlived its failed admission");
+        assert_eq!(budget.snapshot().retained_bytes, path_bytes(1).unwrap());
+        assert!(matches!(
+            error,
+            OwnerError::Budget(ref failure) if failure.resource == BudgetResource::Bytes
+        ));
+        drop(lease);
+        assert_eq!(budget.snapshot().retained_bytes, 0, "lease refunds after");
+    }
+
+    #[test]
+    fn surplus_failure_in_issue_commits_no_ordinal_or_tag() {
+        use super::super::expansion_budget::{BudgetResource, ExpansionLimits};
+        let budget = ExpansionBudget::new(ExpansionLimits {
+            bytes: path_bytes(0).unwrap() + path_bytes(1).unwrap(),
+            ..ExpansionLimits::default()
+        });
+        let mut root = OwnerIssuer::new(OwnerRoot::standalone().unwrap(), &budget).unwrap();
+        let before = budget.snapshot().retained_bytes;
+        let mints = crate::engine::THREAD_MINTS.with(|count| count.get());
+        SPARE_CAPACITY.with(|spare| spare.set(7));
+        let result = root.issue(OwnerDomain::TokenSession);
+        SPARE_CAPACITY.with(|spare| spare.set(0));
+        assert!(matches!(
+            result,
+            Err(OwnerError::Budget(ref failure)) if failure.resource == BudgetResource::Bytes
+        ));
+        assert_eq!(root.next[domain_index(OwnerDomain::TokenSession)], 0);
+        assert_eq!(crate::engine::THREAD_MINTS.with(|count| count.get()), mints);
+        assert_eq!(budget.snapshot().retained_bytes, before);
+    }
+
+    #[test]
+    fn paid_surplus_is_frozen_into_an_exact_capacity_receipt() {
+        let budget = budget();
+        let mut root = OwnerIssuer::new(OwnerRoot::standalone().unwrap(), &budget).unwrap();
+        SPARE_CAPACITY.with(|spare| spare.set(5));
+        let child = root.issue(OwnerDomain::TokenSession);
+        SPARE_CAPACITY.with(|spare| spare.set(0));
+        let child = child.unwrap().into_issuer().into_path();
+        assert!(child.steps.capacity() >= 6);
+        let ptr = child.steps.as_ptr();
+        let capacity = child.steps.capacity();
+        assert_eq!(child.lease.bytes(), path_bytes(capacity).unwrap());
+        let held = budget.snapshot().retained_bytes;
+        let published = child.freeze().unwrap();
+        // Same allocation moved, receipt equals the actual capacity, no recharge.
+        assert_eq!(published.inner.steps.as_ptr(), ptr);
+        assert_eq!(published.step_capacity(), capacity);
+        assert_eq!(published.receipt_bytes(), owner_receipt_bytes(capacity));
+        assert_eq!(budget.snapshot().retained_bytes, held);
+        assert_eq!(published.depth(), 1);
+    }
+
+    #[test]
+    fn freeze_after_precheck_returns_typed_latched_failure_and_publishes_nothing() {
+        use super::super::expansion_budget::BudgetResource;
+        let budget = budget();
+        let mut root = OwnerIssuer::new(OwnerRoot::standalone().unwrap(), &budget).unwrap();
+        let child = root.child(OwnerDomain::TokenSession).unwrap().into_path();
+        budget.check().unwrap();
+        // A sibling poisons the shared budget between precheck and freeze.
+        let latched = budget.poison_allocation();
+        let error = child.freeze().unwrap_err();
+        assert_eq!(error, latched);
+        assert_eq!(error.resource, BudgetResource::Allocation);
+        drop(root);
         assert_eq!(
-            issuer.child(OwnerDomain::TokenSlice).unwrap_err(),
-            OwnerError::DepthExceeded
+            budget.snapshot().retained_bytes,
+            0,
+            "failed freeze refunded"
         );
     }
 
@@ -664,7 +926,11 @@ mod tests {
         );
         drop(root);
         let after_issuer = budget.snapshot().retained_bytes;
-        assert_eq!(after_issuer, before + path_bytes(1).unwrap());
+        assert_eq!(
+            after_issuer,
+            before + owner_receipt_bytes(published.step_capacity())
+        );
+        assert_eq!(after_issuer - before, published.receipt_bytes());
         // Receipts never refund, even after the last clone and the budget drop.
         let copy = published.clone();
         drop(published);

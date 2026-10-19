@@ -547,11 +547,9 @@ impl NameStoreBuilder {
     pub fn freeze(self) -> Result<Arc<NameStore>, NameError> {
         self.budget().check()?;
         let Self { mut store, owner } = self;
-        store.owner = Some(
-            owner
-                .freeze()
-                .map_err(|_| TokenError::InvalidInput("owner publication failed"))?,
-        );
+        // The budget can be poisoned by a sibling after the precheck above:
+        // keep its exact typed, latched failure rather than a generic error.
+        store.owner = Some(owner.freeze()?);
         Ok(Arc::new(store))
     }
 
@@ -706,6 +704,17 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    /// The frozen store's owner receipt, checked to pay exactly the step
+    /// capacity actually allocated (not an assumed logical size).
+    fn exact_owner_receipt(store: &NameStore) -> u64 {
+        let path = store.owner_path().expect("frozen store has an owner");
+        assert_eq!(
+            path.receipt_bytes(),
+            super::super::owner_path::owner_receipt_bytes(path.step_capacity())
+        );
+        path.receipt_bytes()
+    }
+
     /// Like `fixture`, also returning the session's one-time store capability.
     fn owned_fixture(
         budget: ExpansionBudget,
@@ -744,15 +753,13 @@ mod tests {
         builder.retain_parser_text(11).unwrap();
         assert_eq!(budget.snapshot().retained_bytes, baseline + 48);
         let owner = builder.freeze().unwrap();
+        let receipt = exact_owner_receipt(&owner);
         let last = owner.clone();
         drop(owner);
         assert_eq!(budget.snapshot().retained_bytes, baseline + 48);
         drop(last);
         // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md).
-        assert_eq!(
-            budget.snapshot().retained_bytes,
-            super::super::owner_path::standalone_session_receipt_bytes()
-        );
+        assert_eq!(budget.snapshot().retained_bytes, receipt);
         assert_eq!(budget.snapshot().temporary_bytes, 0);
     }
 
@@ -788,15 +795,13 @@ mod tests {
         assert_eq!(budget.snapshot().retained_bytes, baseline);
         builder.retain_parser_storage(19).unwrap();
         let owner = builder.freeze().unwrap();
+        let receipt = exact_owner_receipt(&owner);
         let last = owner.clone();
         drop(owner);
         assert_eq!(budget.snapshot().retained_bytes, baseline + 19);
         drop(last);
         // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md).
-        assert_eq!(
-            budget.snapshot().retained_bytes,
-            super::super::owner_path::standalone_session_receipt_bytes()
-        );
+        assert_eq!(budget.snapshot().retained_bytes, receipt);
     }
 
     #[test]
@@ -851,15 +856,13 @@ mod tests {
         assert_eq!(drops.load(Ordering::SeqCst), 1);
         assert_eq!(budget.snapshot().retained_bytes, retained);
         let owner = builder.freeze().unwrap();
+        let receipt = exact_owner_receipt(&owner);
         let last = owner.clone();
         drop(owner);
         assert_eq!(budget.snapshot().retained_bytes, retained);
         drop(last);
         // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md).
-        assert_eq!(
-            budget.snapshot().retained_bytes,
-            super::super::owner_path::standalone_session_receipt_bytes()
-        );
+        assert_eq!(budget.snapshot().retained_bytes, receipt);
     }
 
     #[test]
@@ -1146,6 +1149,41 @@ mod tests {
         ));
     }
 
+    /// A sibling poisons the shared budget after `freeze`'s precheck would
+    /// have passed: the exact typed latched failure surfaces (not a generic
+    /// InvalidInput) and no store is published.
+    #[test]
+    fn owner_freeze_failure_after_precheck_keeps_typed_budget_failure() {
+        let budget = ExpansionBudget::default();
+        let (session, session_cap, _, _) = owned_fixture(budget.clone());
+        let builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
+        budget.check().unwrap();
+        let latched = budget.poison_allocation();
+        // NameStoreBuilder::freeze prechecks first; drive the owner freeze
+        // itself to prove the conversion after the precheck is typed.
+        let NameStoreBuilder { store, owner } = builder;
+        let error: NameError = owner.freeze().map_err(NameError::from).unwrap_err();
+        assert!(
+            matches!(&error, NameError::Token(TokenError::Budget(f)) if *f == latched),
+            "{error:?}"
+        );
+        drop(store);
+        // And through the public entry the same typed failure is reported.
+        let budget = ExpansionBudget::default();
+        let (session, session_cap, _, _) = owned_fixture(budget.clone());
+        let builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
+        let latched = budget.poison_allocation();
+        let error = match builder.freeze() {
+            Ok(_) => panic!("poisoned freeze published a store"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(&error, NameError::Token(TokenError::Budget(f)) if *f == latched),
+            "{error:?}"
+        );
+        assert_eq!(budget.snapshot().retained_bytes, 0, "nothing published");
+    }
+
     #[test]
     fn last_arc_retains_names_session_source_and_all_leases() {
         let budget = ExpansionBudget::default();
@@ -1153,6 +1191,7 @@ mod tests {
         let mut builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let name = builder.from_token(token, Edition::E2024).unwrap();
         let store = builder.freeze().unwrap();
+        let receipt = exact_owner_receipt(&store);
         let retained = budget.snapshot().retained_bytes;
         let other = store.clone();
         drop(store);
@@ -1161,10 +1200,7 @@ mod tests {
         let work = budget.snapshot().counters[Counter::Work as usize];
         drop(other);
         // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md).
-        assert_eq!(
-            budget.snapshot().retained_bytes,
-            super::super::owner_path::standalone_session_receipt_bytes()
-        );
+        assert_eq!(budget.snapshot().retained_bytes, receipt);
         assert_eq!(budget.snapshot().counters[Counter::Work as usize], work);
     }
 

@@ -44,6 +44,17 @@ fn names(text: &str, budget: &ExpansionBudget) -> (Arc<NameStore>, Vec<AstIdent>
     (names.freeze().unwrap(), occurrences)
 }
 
+/// The frozen store's owner receipt, checked to pay exactly the step capacity
+/// actually allocated (not an assumed logical size).
+fn exact_owner_receipt(store: &NameStore) -> u64 {
+    let path = store.owner_path().expect("frozen store has an owner");
+    assert_eq!(
+        path.receipt_bytes(),
+        justrust_engine::compiler::owner_path::owner_receipt_bytes(path.step_capacity())
+    );
+    path.receipt_bytes()
+}
+
 fn rejected<T>(result: Result<T, ScopeError>) -> ScopeError {
     match result {
         Err(error) => error,
@@ -600,6 +611,7 @@ fn recorded_binding_metadata_retains_the_actual_declaration_occurrence() {
 fn transition_limit_rejects_before_allocating_and_latches_exact_failure() {
     let budget = ExpansionBudget::default();
     let (names, ids) = names("x", &budget);
+    let receipt = exact_owner_receipt(&names);
     let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
     let root = scopes.function_root(names.as_ref()).unwrap();
     let used = budget.snapshot().counters[Counter::ScopeTransitions as usize];
@@ -626,10 +638,7 @@ fn transition_limit_rejects_before_allocating_and_latches_exact_failure() {
     drop(names);
     // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md):
     // it is paid once at freeze and never refunded.
-    assert_eq!(
-        budget.snapshot().retained_bytes,
-        justrust_engine::compiler::owner_path::standalone_session_receipt_bytes()
-    );
+    assert_eq!(budget.snapshot().retained_bytes, receipt);
     assert_eq!(budget.snapshot().temporary_bytes, 0);
 }
 
@@ -637,6 +646,7 @@ fn transition_limit_rejects_before_allocating_and_latches_exact_failure() {
 fn constructor_byte_admission_rejects_before_allocating_scope_payload() {
     let budget = ExpansionBudget::default();
     let (names, _) = names("x", &budget);
+    let receipt = exact_owner_receipt(&names);
     let live = budget.snapshot();
     let ballast = budget
         .reserve(
@@ -658,10 +668,7 @@ fn constructor_byte_admission_rejects_before_allocating_scope_payload() {
     drop(names);
     // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md):
     // it is paid once at freeze and never refunded.
-    assert_eq!(
-        budget.snapshot().retained_bytes,
-        justrust_engine::compiler::owner_path::standalone_session_receipt_bytes()
-    );
+    assert_eq!(budget.snapshot().retained_bytes, receipt);
     assert_eq!(budget.snapshot().temporary_bytes, 0);
 }
 
@@ -669,6 +676,7 @@ fn constructor_byte_admission_rejects_before_allocating_scope_payload() {
 fn poisoned_frozen_arena_preserves_failure_but_id_equality_and_hash_are_pure() {
     let budget = ExpansionBudget::default();
     let (names, ids) = names("x x", &budget);
+    let receipt = exact_owner_receipt(&names);
     let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
     let root = scopes.function_root(names.as_ref()).unwrap();
     let function = scopes.function(root).unwrap();
@@ -708,10 +716,7 @@ fn poisoned_frozen_arena_preserves_failure_but_id_equality_and_hash_are_pure() {
     drop(names);
     // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md):
     // it is paid once at freeze and never refunded.
-    assert_eq!(
-        budget.snapshot().retained_bytes,
-        justrust_engine::compiler::owner_path::standalone_session_receipt_bytes()
-    );
+    assert_eq!(budget.snapshot().retained_bytes, receipt);
     assert_eq!(budget.snapshot().temporary_bytes, 0);
 }
 
@@ -719,6 +724,7 @@ fn poisoned_frozen_arena_preserves_failure_but_id_equality_and_hash_are_pure() {
 fn frozen_clone_keeps_flat_scope_storage_alive_until_last_owner_drops() {
     let budget = ExpansionBudget::default();
     let (names, ids) = names("x", &budget);
+    let receipt = exact_owner_receipt(&names);
     let names_only = budget.snapshot().retained_bytes;
     let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
     let mut frontier = scopes.function_root(names.as_ref()).unwrap();
@@ -743,10 +749,7 @@ fn frozen_clone_keeps_flat_scope_storage_alive_until_last_owner_drops() {
     drop(names);
     // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md):
     // it is paid once at freeze and never refunded.
-    assert_eq!(
-        budget.snapshot().retained_bytes,
-        justrust_engine::compiler::owner_path::standalone_session_receipt_bytes()
-    );
+    assert_eq!(budget.snapshot().retained_bytes, receipt);
     assert_eq!(budget.snapshot().temporary_bytes, 0);
     assert!(budget.snapshot().counters[Counter::ScopeTransitions as usize] >= 512);
 }
