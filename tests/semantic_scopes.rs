@@ -623,7 +623,12 @@ fn transition_limit_rejects_before_allocating_and_latches_exact_failure() {
     );
     assert_eq!(budget_failure(rejected(scopes.freeze())), failure);
     drop(names);
-    assert_eq!(budget.snapshot().retained_bytes, 0);
+    // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md):
+    // it is paid once at freeze and never refunded.
+    assert_eq!(
+        budget.snapshot().retained_bytes,
+        justrust_engine::compiler::owner_path::standalone_session_receipt_bytes()
+    );
     assert_eq!(budget.snapshot().temporary_bytes, 0);
 }
 
@@ -650,7 +655,12 @@ fn constructor_byte_admission_rejects_before_allocating_scope_payload() {
     );
     drop(ballast);
     drop(names);
-    assert_eq!(budget.snapshot().retained_bytes, 0);
+    // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md):
+    // it is paid once at freeze and never refunded.
+    assert_eq!(
+        budget.snapshot().retained_bytes,
+        justrust_engine::compiler::owner_path::standalone_session_receipt_bytes()
+    );
     assert_eq!(budget.snapshot().temporary_bytes, 0);
 }
 
@@ -695,7 +705,12 @@ fn poisoned_frozen_arena_preserves_failure_but_id_equality_and_hash_are_pure() {
     );
     drop(scopes);
     drop(names);
-    assert_eq!(budget.snapshot().retained_bytes, 0);
+    // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md):
+    // it is paid once at freeze and never refunded.
+    assert_eq!(
+        budget.snapshot().retained_bytes,
+        justrust_engine::compiler::owner_path::standalone_session_receipt_bytes()
+    );
     assert_eq!(budget.snapshot().temporary_bytes, 0);
 }
 
@@ -725,7 +740,12 @@ fn frozen_clone_keeps_flat_scope_storage_alive_until_last_owner_drops() {
     drop(last);
     assert_eq!(budget.snapshot().retained_bytes, names_only);
     drop(names);
-    assert_eq!(budget.snapshot().retained_bytes, 0);
+    // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md):
+    // it is paid once at freeze and never refunded.
+    assert_eq!(
+        budget.snapshot().retained_bytes,
+        justrust_engine::compiler::owner_path::standalone_session_receipt_bytes()
+    );
     assert_eq!(budget.snapshot().temporary_bytes, 0);
     assert!(budget.snapshot().counters[Counter::ScopeTransitions as usize] >= 512);
 }

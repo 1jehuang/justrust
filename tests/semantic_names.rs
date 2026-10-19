@@ -170,7 +170,12 @@ fn frozen_clone_owns_names_and_storage_until_last_program_owner_drops() {
     assert_eq!(another_program_owner.spelling(ident).unwrap(), "item");
     assert_eq!(another_program_owner.edition(), Edition::E2021);
     drop(another_program_owner);
-    assert_eq!(budget.snapshot().retained_bytes, 0);
+    // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md):
+    // it is paid once at freeze and never refunded.
+    assert_eq!(
+        budget.snapshot().retained_bytes,
+        justrust_engine::compiler::owner_path::standalone_session_receipt_bytes()
+    );
     assert_eq!(budget.snapshot().temporary_bytes, 0);
     assert!(budget.snapshot().counters[Counter::Work as usize] > 0);
 }

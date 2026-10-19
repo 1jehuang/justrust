@@ -527,8 +527,11 @@ impl NameStoreBuilder {
         })
     }
 
-    pub fn freeze(self) -> Result<Arc<NameStore>, NameError> {
+    /// Publish the store. Consumes the builder, and converts the session's
+    /// refundable owner reservation into an immutable receipt exactly once.
+    pub fn freeze(mut self) -> Result<Arc<NameStore>, NameError> {
         self.budget().check()?;
+        self.store.session.publish_owner()?;
         Ok(Arc::new(self.store))
     }
 

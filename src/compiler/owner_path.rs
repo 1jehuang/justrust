@@ -21,7 +21,9 @@
 //! Not yet activated: the process-global counters still issue live owner ids.
 #![allow(dead_code)]
 
-use super::expansion_budget::{BudgetFailure, Counter, ExpansionBudget, RetainedBytes, Storage};
+use super::expansion_budget::{
+    BudgetFailure, ByteLease, Counter, ExpansionBudget, RetainedBytes, Storage,
+};
 use crate::{EngineAuthority, OwnerRoot, OwnerTag, TagMint};
 use std::sync::Arc;
 
@@ -83,71 +85,122 @@ impl From<BudgetFailure> for OwnerError {
 
 /// The producer's identity, shared by every path it issues. Fixed size: an
 /// engine authority and an engine-local node id, never a copied key payload.
-#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct RootId {
     authority: EngineAuthority,
     producer: Option<u64>,
 }
 
-/// Root identity plus the immutable receipt paying for its storage.
-#[derive(Debug)]
-struct RootedId {
-    id: RootId,
-    _receipt: RetainedBytes,
-}
-
-#[derive(Debug)]
-struct Steps {
-    steps: Box<[Step]>,
-    /// Prepaid immutable receipt for this storage. Holds no budget handle,
-    /// so a published path reaches no mutable state.
-    _receipt: RetainedBytes,
-}
-
-/// A complete, immutable owner identity. Clones share root and step storage.
-/// Equality, ordering and hashing compare the full structure.
+/// A complete, immutable, published owner identity. Its storage is paid by
+/// one [`RetainedBytes`] receipt: no lease, budget handle or lock is reachable
+/// from it. Created only by [`BuilderOwnedPath::freeze`]. Clones share the
+/// storage. Equality and hashing compare the full structure.
 #[derive(Clone, Debug)]
 pub struct OwnerPath {
-    root: Arc<RootedId>,
-    steps: Arc<Steps>,
+    inner: Arc<PublishedPath>,
+}
+
+#[derive(Debug)]
+struct PublishedPath {
+    root: RootId,
+    steps: Box<[Step]>,
+    _receipt: RetainedBytes,
+}
+
+/// An owner identity still under construction. Its storage is a refundable
+/// [`ByteLease`]: dropping it before publication returns the bytes. Consumed
+/// exactly once by [`Self::freeze`], which converts the same reservation into
+/// an immutable receipt (no second charge, no refund afterwards). Never
+/// reachable from a published fact.
+#[derive(Debug)]
+pub struct BuilderOwnedPath {
+    root: RootId,
+    steps: Box<[Step]>,
+    lease: ByteLease,
 }
 
 impl PartialEq for OwnerPath {
     fn eq(&self, other: &Self) -> bool {
-        self.root.id == other.root.id && self.steps.steps == other.steps.steps
+        self.inner.root == other.inner.root && self.inner.steps == other.inner.steps
     }
 }
 impl Eq for OwnerPath {}
 impl std::hash::Hash for OwnerPath {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.root.id.hash(state);
-        self.steps.steps.hash(state);
+        self.inner.root.hash(state);
+        self.inner.steps.hash(state);
     }
+}
+
+impl PartialEq for BuilderOwnedPath {
+    fn eq(&self, other: &Self) -> bool {
+        self.same_identity(other)
+    }
+}
+impl Eq for BuilderOwnedPath {}
+
+fn descends(root: &RootId, mine: &[Step], ancestor_root: &RootId, theirs: &[Step]) -> bool {
+    root == ancestor_root && mine.len() >= theirs.len() && mine[..theirs.len()] == theirs[..]
 }
 
 impl OwnerPath {
     pub fn authority(&self) -> EngineAuthority {
-        self.root.id.authority
+        self.inner.root.authority
     }
     pub fn depth(&self) -> usize {
-        self.steps.steps.len()
+        self.inner.steps.len()
     }
     /// Whether `self` was issued (transitively) under `ancestor`.
     pub fn descends_from(&self, ancestor: &OwnerPath) -> bool {
-        let (mine, theirs) = (&self.steps.steps, &ancestor.steps.steps);
-        self.root.id == ancestor.root.id
-            && mine.len() >= theirs.len()
-            && mine[..theirs.len()] == theirs[..]
+        descends(
+            &self.inner.root,
+            &self.inner.steps,
+            &ancestor.inner.root,
+            &ancestor.inner.steps,
+        )
     }
     pub fn domain(&self) -> Option<OwnerDomain> {
-        self.steps.steps.last().map(|step| step.domain)
+        self.inner.steps.last().map(|step| step.domain)
+    }
+}
+
+impl BuilderOwnedPath {
+    pub fn authority(&self) -> EngineAuthority {
+        self.root.authority
+    }
+    pub fn depth(&self) -> usize {
+        self.steps.len()
+    }
+    pub fn domain(&self) -> Option<OwnerDomain> {
+        self.steps.last().map(|step| step.domain)
+    }
+    /// Whether `self` was issued (transitively) under `ancestor`.
+    pub fn descends_from(&self, ancestor: &BuilderOwnedPath) -> bool {
+        descends(&self.root, &self.steps, &ancestor.root, &ancestor.steps)
+    }
+    /// Structural equality with a builder path (not identity of storage).
+    pub fn same_identity(&self, other: &BuilderOwnedPath) -> bool {
+        self.root == other.root && self.steps == other.steps
+    }
+    /// Publish: convert the refundable reservation into an immutable receipt
+    /// for the same bytes, exactly once. Consumes the builder path, so it can
+    /// be neither refunded nor charged again.
+    pub fn freeze(self) -> Result<OwnerPath, OwnerError> {
+        let receipt = self.lease.retain()?;
+        Ok(OwnerPath {
+            inner: Arc::new(PublishedPath {
+                root: self.root,
+                steps: self.steps,
+                _receipt: receipt,
+            }),
+        })
     }
 }
 
 /// Issues child owners from one exclusively held position in the tree.
 #[derive(Debug)]
 pub struct OwnerIssuer {
-    path: OwnerPath,
+    path: BuilderOwnedPath,
     next: [u64; DOMAINS],
     budget: ExpansionBudget,
     mint: TagMint,
@@ -171,33 +224,30 @@ pub struct Issued {
     pub tag: OwnerTag,
 }
 
-/// Retained bytes for one root identity, including its fixed `Arc` header.
-fn root_bytes() -> Result<u64, OwnerError> {
-    u64::try_from(std::mem::size_of::<RootedId>() + 2 * std::mem::size_of::<usize>())
-        .map_err(|_| OwnerError::Allocation)
-}
-
-/// Retained bytes for a path of `depth` steps, including fixed `Arc` headers.
+/// Bytes one owner path of `depth` steps occupies once published, including
+/// the shared `Arc` header. The same bytes are reserved while building.
 fn path_bytes(depth: usize) -> Result<u64, OwnerError> {
     let bytes = depth
         .checked_mul(std::mem::size_of::<Step>())
         .and_then(|n| {
-            n.checked_add(std::mem::size_of::<Steps>() + 2 * std::mem::size_of::<usize>())
+            n.checked_add(std::mem::size_of::<PublishedPath>() + 2 * std::mem::size_of::<usize>())
         })
         .ok_or(OwnerError::Allocation)?;
     u64::try_from(bytes).map_err(|_| OwnerError::Allocation)
 }
 
-fn paid_steps(
+/// One paid, refundable builder path: work and bytes are charged before the
+/// step storage is allocated.
+fn paid_path(
     budget: &ExpansionBudget,
+    root: RootId,
     prefix: &[Step],
     last: Option<Step>,
-) -> Result<Arc<Steps>, OwnerError> {
+) -> Result<BuilderOwnedPath, OwnerError> {
     let depth = prefix.len() + usize::from(last.is_some());
     if depth > MAX_OWNER_DEPTH {
         return Err(OwnerError::DepthExceeded);
     }
-    // Pay for the copy and retained storage before allocating either.
     budget.charge(Counter::Work, depth as u64 + 1)?;
     let lease = budget.reserve(Storage::Retained, path_bytes(depth)?)?;
     let mut steps = Vec::new();
@@ -206,13 +256,11 @@ fn paid_steps(
         .map_err(|_| OwnerError::Allocation)?;
     steps.extend_from_slice(prefix);
     steps.extend(last);
-    // Seal the paid reservation into an immutable receipt before the steps
-    // become shareable. The bytes stay charged for the ledger's lifetime.
-    let receipt = lease.retain()?;
-    Ok(Arc::new(Steps {
+    Ok(BuilderOwnedPath {
+        root,
         steps: steps.into_boxed_slice(),
-        _receipt: receipt,
-    }))
+        lease,
+    })
 }
 
 impl OwnerIssuer {
@@ -221,30 +269,23 @@ impl OwnerIssuer {
     /// computation (`OwnerRoot::standalone`).
     pub fn new(root: OwnerRoot, budget: &ExpansionBudget) -> Result<Self, OwnerError> {
         let (authority, producer, mint) = root.into_parts();
-        // Pay for the fixed-size root (and its Arc header) before allocating
-        // it, and seal that payment into the same immutable receipt form.
-        budget.charge(Counter::Work, 1)?;
-        let root_bytes = root_bytes()?;
-        let receipt = budget.reserve(Storage::Retained, root_bytes)?.retain()?;
-        let root = Arc::new(RootedId {
-            id: RootId {
-                authority,
-                producer,
-            },
-            _receipt: receipt,
-        });
         Ok(Self {
-            path: OwnerPath {
-                root,
-                steps: paid_steps(budget, &[], None)?,
-            },
+            path: paid_path(
+                budget,
+                RootId {
+                    authority,
+                    producer,
+                },
+                &[],
+                None,
+            )?,
             next: [0; DOMAINS],
             budget: budget.clone(),
             mint,
         })
     }
 
-    pub fn path(&self) -> &OwnerPath {
+    pub fn path(&self) -> &BuilderOwnedPath {
         &self.path
     }
 
@@ -257,9 +298,10 @@ impl OwnerIssuer {
         let following = ordinal.checked_add(1).ok_or(OwnerError::OrdinalExhausted)?;
         // The tag is stored in the caller's already-paid container: work only.
         self.budget.charge(Counter::Work, 1)?;
-        let steps = paid_steps(
+        let path = paid_path(
             &self.budget,
-            &self.path.steps.steps,
+            self.path.root,
+            &self.path.steps,
             Some(Step { domain, ordinal }),
         )?;
         let tag = self.mint.mint().map_err(|_| OwnerError::TagExhausted)?;
@@ -267,10 +309,7 @@ impl OwnerIssuer {
         *slot = following;
         Ok(Issued {
             issuer: OwnerIssuer {
-                path: OwnerPath {
-                    root: self.path.root.clone(),
-                    steps,
-                },
+                path,
                 next: [0; DOMAINS],
                 budget: self.budget.clone(),
                 mint: self.mint.derive(),
@@ -279,18 +318,24 @@ impl OwnerIssuer {
         })
     }
 
-    /// The path without the issuing capability, for publication. Dropping
-    /// the issuer drops its budget handle; the path itself never held one.
-    pub fn into_path(self) -> OwnerPath {
+    /// The builder path without the issuing capability. Dropping the issuer
+    /// drops its budget handle and mint; the path keeps only its own lease.
+    pub fn into_path(self) -> BuilderOwnedPath {
         self.path
     }
 }
 
-/// Permanent retained bytes one standalone session owner costs its caller:
-/// the root identity, the root's empty path and the session's child path.
-/// These are immutable receipts: paid once, never refunded.
-pub fn standalone_receipt_bytes() -> u64 {
-    root_bytes().unwrap_or(0) + path_bytes(0).unwrap_or(0) + path_bytes(1).unwrap_or(0)
+/// Peak bytes a standalone session owner reserves while it is issued: the
+/// root issuer's path plus the session's child path. Admitted up front.
+pub fn standalone_admission_bytes() -> u64 {
+    path_bytes(0).unwrap_or(0) + path_bytes(1).unwrap_or(0)
+}
+
+/// Bytes that stay charged after a standalone session's store is frozen:
+/// only the session's own published path receipt. The issuer's root path is
+/// refunded when the issuer drops; the receipt is never refunded.
+pub fn standalone_session_receipt_bytes() -> u64 {
+    path_bytes(1).unwrap_or(0)
 }
 
 /// One session owner under a fresh standalone root, for independent direct
@@ -304,7 +349,7 @@ pub(super) fn standalone_issued(
     // rejects before an engine id is consumed or anything is allocated. The
     // probe is released immediately; the real charges follow below.
     budget.check()?;
-    drop(budget.reserve(Storage::Retained, standalone_receipt_bytes())?);
+    drop(budget.reserve(Storage::Retained, standalone_admission_bytes())?);
     let root =
         OwnerRoot::standalone().map_err(|_| super::token_session::TokenError::IdExhausted)?;
     let mut issuer = OwnerIssuer::new(root, budget).map_err(owner_token_error)?;
@@ -419,7 +464,7 @@ mod tests {
         use super::super::expansion_budget::ExpansionLimits;
         // Room for the root path plus exactly one depth-1 child.
         let small = ExpansionBudget::new(ExpansionLimits {
-            bytes: root_bytes().unwrap() + path_bytes(0).unwrap() + path_bytes(1).unwrap(),
+            bytes: path_bytes(0).unwrap() + path_bytes(1).unwrap(),
             ..ExpansionLimits::default()
         });
         let mut root = OwnerIssuer::new(OwnerRoot::standalone().unwrap(), &small).unwrap();
@@ -547,26 +592,44 @@ mod tests {
     }
 
     #[test]
-    fn published_path_outlives_issuer_and_budget_and_stays_charged() {
+    fn builder_path_refunds_until_frozen_then_receipt_is_permanent() {
         let budget = budget();
         let before = budget.snapshot().retained_bytes;
+        // Unfrozen: dropping refunds everything.
         let mut root = OwnerIssuer::new(OwnerRoot::standalone().unwrap(), &budget).unwrap();
         let child = root.child(OwnerDomain::TokenSession).unwrap().into_path();
-        let charged = budget.snapshot().retained_bytes;
         assert!(
-            charged
-                >= before + root_bytes().unwrap() + path_bytes(0).unwrap() + path_bytes(1).unwrap()
+            budget.snapshot().retained_bytes
+                >= before + path_bytes(0).unwrap() + path_bytes(1).unwrap()
+        );
+        drop(child);
+        drop(root);
+        assert_eq!(
+            budget.snapshot().retained_bytes,
+            before,
+            "unfrozen owner leaked"
+        );
+        // Frozen: the same reservation becomes a receipt, charged exactly once.
+        let mut root = OwnerIssuer::new(OwnerRoot::standalone().unwrap(), &budget).unwrap();
+        let child = root.child(OwnerDomain::TokenSession).unwrap().into_path();
+        let reserved = budget.snapshot().retained_bytes;
+        let published = child.freeze().unwrap();
+        assert_eq!(
+            budget.snapshot().retained_bytes,
+            reserved,
+            "freeze charged twice"
         );
         drop(root);
-        // Receipts never refund: retained storage stays paid after the issuer drops.
-        assert_eq!(budget.snapshot().retained_bytes, charged);
+        let after_issuer = budget.snapshot().retained_bytes;
+        assert_eq!(after_issuer, before + path_bytes(1).unwrap());
+        // Receipts never refund, even after the last clone and the budget drop.
+        let copy = published.clone();
+        drop(published);
+        assert_eq!(budget.snapshot().retained_bytes, after_issuer);
         drop(budget);
-        // The path is still a complete value with no ledger behind it.
-        let copy = child.clone();
-        assert_eq!(copy, child);
-        assert_eq!(child.depth(), 1);
+        assert_eq!(copy.depth(), 1);
         fn assert_send_sync<T: Send + Sync>(_: &T) {}
-        assert_send_sync(&child);
+        assert_send_sync(&copy);
     }
 
     #[test]
@@ -648,7 +711,7 @@ mod tests {
         use super::super::expansion_budget::ExpansionLimits;
         // Budget fits the root only: the first issue fails at admission.
         let tight = ExpansionBudget::new(ExpansionLimits {
-            bytes: root_bytes().unwrap() + path_bytes(0).unwrap(),
+            bytes: path_bytes(0).unwrap(),
             ..ExpansionLimits::default()
         });
         let mut issuer = OwnerIssuer::new(OwnerRoot::standalone().unwrap(), &tight).unwrap();

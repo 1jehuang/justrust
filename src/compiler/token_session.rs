@@ -550,7 +550,7 @@ struct ExpansionEntry {
 pub struct TokenSession {
     pub(super) fragments: BudgetVec<super::macro_fragments::FragmentPayload>,
     id: SessionId,
-    owner_path: super::owner_path::OwnerPath,
+    owner: SessionOwner,
     sources: SourceSnapshot,
     budget: ExpansionBudget,
     symbols: BudgetVec<SymbolEntry>,
@@ -561,6 +561,16 @@ pub struct TokenSession {
     expansions: BudgetVec<ExpansionEntry>,
     crates: BudgetVec<SourceFileHandle>,
     _lease: ByteLease,
+}
+
+/// A session's owner identity: refundable while the session is built,
+/// an immutable receipt once its store is published.
+#[derive(Debug)]
+enum SessionOwner {
+    Building(super::owner_path::BuilderOwnedPath),
+    Published(super::owner_path::OwnerPath),
+    /// Transient during `publish_owner` only.
+    Taken,
 }
 
 impl TokenSession {
@@ -575,7 +585,12 @@ impl TokenSession {
         owner: super::owner_path::Issued,
     ) -> Result<Self, TokenError> {
         let super::owner_path::Issued { issuer, tag } = owner;
-        Self::build(SessionId(tag.bits()), issuer.into_path(), sources, budget)
+        Self::build(
+            SessionId(tag.bits()),
+            SessionOwner::Building(issuer.into_path()),
+            sources,
+            budget,
+        )
     }
 
     /// An independent session for direct, non-graph tooling and tests. Mints
@@ -595,14 +610,40 @@ impl TokenSession {
         Self::standalone(sources, budget)
     }
 
-    /// The immutable owner identity this session was issued under.
-    pub fn owner_path(&self) -> &super::owner_path::OwnerPath {
-        &self.owner_path
+    /// The published owner identity, once the owning store is frozen.
+    /// `None` while the session is still being built.
+    pub fn owner_path(&self) -> Option<&super::owner_path::OwnerPath> {
+        match &self.owner {
+            SessionOwner::Published(path) => Some(path),
+            _ => None,
+        }
+    }
+
+    /// The owner identity while building, for structural checks.
+    pub fn building_owner(&self) -> Option<&super::owner_path::BuilderOwnedPath> {
+        match &self.owner {
+            SessionOwner::Building(path) => Some(path),
+            _ => None,
+        }
+    }
+
+    /// Publish the session's owner: the refundable reservation becomes an
+    /// immutable receipt exactly once. Called only by the consuming freeze of
+    /// the store that owns this session.
+    pub(super) fn publish_owner(&mut self) -> Result<(), TokenError> {
+        self.owner = match std::mem::replace(&mut self.owner, SessionOwner::Taken) {
+            SessionOwner::Building(path) => SessionOwner::Published(
+                path.freeze()
+                    .map_err(|_| TokenError::InvalidInput("owner publication failed"))?,
+            ),
+            other => other,
+        };
+        Ok(())
     }
 
     fn build(
         id: SessionId,
-        owner_path: super::owner_path::OwnerPath,
+        owner: SessionOwner,
         sources: SourceSnapshot,
         budget: ExpansionBudget,
     ) -> Result<Self, TokenError> {
@@ -614,7 +655,7 @@ impl TokenSession {
             fragments: BudgetVec::new(&budget, Storage::Retained)?,
             _lease: lease,
             id,
-            owner_path,
+            owner,
             sources,
             symbols: BudgetVec::new(&budget, Storage::Retained)?,
             symbol_slots: BudgetVec::new(&budget, Storage::Retained)?,
@@ -1014,7 +1055,7 @@ impl Iterator for ExpansionTrace<'_> {
 mod owner_defect_tests {
     use super::*;
     use crate::compiler::expansion_budget::{ExpansionBudget, ExpansionLimits};
-    use crate::compiler::owner_path::{OwnerDomain, OwnerIssuer, standalone_receipt_bytes};
+    use crate::compiler::owner_path::{OwnerDomain, OwnerIssuer, standalone_admission_bytes};
 
     fn snapshot() -> SourceSnapshot {
         let mut map = SourceMap::default();
@@ -1040,8 +1081,11 @@ mod owner_defect_tests {
             b.id(),
             "two sessions share one owner: grafts would pass"
         );
-        assert_ne!(a.owner_path(), b.owner_path());
-        assert!(a.owner_path().descends_from(issuer.path()));
+        let (a_owner, b_owner) = (a.building_owner().unwrap(), b.building_owner().unwrap());
+        assert_ne!(a_owner, b_owner);
+        assert!(a_owner.descends_from(issuer.path()));
+        // Unfrozen sessions publish nothing yet.
+        assert!(a.owner_path().is_none());
     }
 
     /// Defect 2 regression: an exhausted, zero or poisoned caller budget
@@ -1061,7 +1105,7 @@ mod owner_defect_tests {
             "a tag was minted despite a zero caller budget"
         );
         let short = ExpansionBudget::new(ExpansionLimits {
-            bytes: standalone_receipt_bytes() - 1,
+            bytes: standalone_admission_bytes() - 1,
             ..ExpansionLimits::default()
         });
         let before = minted();
@@ -1086,7 +1130,7 @@ mod owner_defect_tests {
         let session = TokenSession::standalone(snapshot(), budget.clone()).unwrap();
         let paid = budget.snapshot().retained_bytes - before;
         assert!(
-            paid >= standalone_receipt_bytes(),
+            paid >= standalone_admission_bytes(),
             "caller paid {paid} bytes, owner receipts cost more"
         );
         drop(session);
