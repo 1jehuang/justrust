@@ -3478,6 +3478,9 @@ pub enum Projection {
     Field(usize),
     Downcast(VariantId),
     ConstantIndex(usize),
+    /// Runtime index read exactly once when a borrow address is materialized.
+    /// Canonical overlap never uses the index value to prove disjointness.
+    DynamicIndex(LocalId),
     Deref,
 }
 
@@ -3501,7 +3504,7 @@ pub fn raw_deref_index(root: &Ty, path: &[Projection]) -> Option<usize> {
                 _ => return None,
             },
             Projection::Field(field) => ty.field_ty(*field)?,
-            Projection::ConstantIndex(_) => match ty {
+            Projection::ConstantIndex(_) | Projection::DynamicIndex(_) => match ty {
                 Ty::Array { element, .. } => element,
                 _ => return None,
             },
@@ -3574,6 +3577,21 @@ fn projected_ty_inner<'a>(
                 };
                 if *len > MAX_ARRAY_LEN || index >= *len {
                     return Err("array index out of bounds".into());
+                }
+                element
+            }
+            Projection::DynamicIndex(_) => {
+                let Ty::Array { element, len } = ty else {
+                    return Err("runtime place index requires array type".into());
+                };
+                if *len > MAX_ARRAY_LEN {
+                    return Err("array length exceeds limit".into());
+                }
+                if !matches!(
+                    element.as_ref(),
+                    Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit
+                ) {
+                    return Err("unsupported: runtime element loans currently require scalar or unit elements".into());
                 }
                 element
             }
@@ -3675,7 +3693,7 @@ pub struct FieldDef {
     pub visibility: Visibility,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LocalId(pub usize);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ExprId(pub usize);
@@ -7028,6 +7046,9 @@ impl CheckedFunction {
         Self::decision_work(work, path.len())?;
         for (index, step) in path.iter().enumerate() {
             match step {
+                Projection::DynamicIndex(_) => {
+                    return Err("runtime index is not a source pattern projection".into());
+                }
                 Projection::Field(_) | Projection::ConstantIndex(_) | Projection::Deref => {}
                 Projection::Downcast(variant) => {
                     let mut authorized = false;
@@ -7442,6 +7463,14 @@ impl CheckedFunction {
                         .get(place.local.0)
                         .ok_or("invalid borrow local")?
                         .ty;
+                    for projection in &place.projection {
+                        if let Projection::DynamicIndex(index) = projection
+                            && self.locals.get(index.0).map(|local| &local.ty)
+                                != Some(&Ty::Int(IntTy::Usize))
+                        {
+                            return Err("runtime borrow index requires a valid usize local".into());
+                        }
+                    }
                     let referent = projected_ty(root, &place.projection)?;
                     let expected = Ty::Ref {
                         kind: *kind,

@@ -379,6 +379,9 @@ impl<'facts> CoverageMatrix<'facts> {
         for (index, step) in path.iter().enumerate() {
             self.work(1)?;
             match step {
+                Projection::DynamicIndex(_) => {
+                    return Err("runtime index is not a source pattern projection".into());
+                }
                 Projection::Field(_) | Projection::ConstantIndex(_) | Projection::Deref => {}
                 Projection::Downcast(variant) => {
                     let mut found = false;

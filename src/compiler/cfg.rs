@@ -1773,6 +1773,13 @@ impl Function {
             .get(place.local.0)
             .ok_or("invalid CFG local")?
             .ty;
+        for projection in &place.projection {
+            if let Projection::DynamicIndex(index) = projection
+                && self.locals.get(index.0).map(|local| &local.ty) != Some(&Ty::Int(IntTy::Usize))
+            {
+                return Err("runtime place index requires a valid usize local".into());
+            }
+        }
         ir::projected_ty(ty, &place.projection)
     }
 
@@ -3315,7 +3322,10 @@ impl Lowerer<'_> {
     ) -> Result<(), String> {
         self.result.place_ty(destination)?;
         for (index, part) in destination.projection.iter().enumerate() {
-            if matches!(part, Projection::ConstantIndex(_)) {
+            if matches!(
+                part,
+                Projection::ConstantIndex(_) | Projection::DynamicIndex(_)
+            ) {
                 self.statement(
                     Statement::Inspect(Place {
                         local: destination.local,
@@ -3323,6 +3333,9 @@ impl Lowerer<'_> {
                     }),
                     origin,
                 );
+                if let Projection::DynamicIndex(local) = part {
+                    self.statement(Statement::Inspect(place(*local)), origin);
+                }
             }
         }
         Ok(())

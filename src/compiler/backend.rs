@@ -566,6 +566,37 @@ impl<'a> Emitter<'a> {
                 }
                 ir::Projection::Field(index) => field_offset(ty, *index)?,
                 ir::Projection::ConstantIndex(index) => array_offset(ty, *index)?,
+                ir::Projection::DynamicIndex(index) => {
+                    let ir::Ty::Array { element, len } = ty else {
+                        return Err("runtime place index requires array storage".into());
+                    };
+                    if indirect_base {
+                        if offset != 0 {
+                            self.bytes(&[0x48, 0x05]);
+                            self.i32(offset);
+                        }
+                    } else {
+                        self.address(offset);
+                    }
+                    self.bytes(&[0x49, 0x89, 0xc1]); // r9 = array base
+                    let index = self.local_offset(*index)?;
+                    self.bytes(&[0x48, 0x8b, 0x85]); // rax = saved usize index
+                    self.i32(index);
+                    self.bytes(&[0x48, 0x3d]);
+                    self.i32(
+                        i32::try_from(*len).map_err(|_| "array length exceeds backend limit")?,
+                    );
+                    self.trap_if(0x83); // jae, before scaling/address formation
+                    self.bytes(&[0x48, 0x69, 0xc0]);
+                    self.i32(value_size(element)?);
+                    self.bytes(&[0x4c, 0x01, 0xc8]); // rax += r9
+                    // The reference stores this address, not a recipe that
+                    // reads the cursor again when the reference is used.
+                    indirect_base = true;
+                    offset = 0;
+                    ty = element;
+                    continue;
+                }
                 ir::Projection::Downcast(variant) => {
                     let ir::Ty::Enum(enum_ty) = ty else {
                         return Err("downcast requires enum storage".into());
@@ -6158,6 +6189,73 @@ mod tests {
         let output = run(&p);
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         assert_eq!(output.stdout, b"reference-sret\n");
+    }
+
+    #[test]
+    fn runtime_element_loans_check_bounds_even_for_unit_and_unused_handles() {
+        for element in ["7i32", "()"] {
+            for (index, expected) in [(0u64, 0), (1, 101), (u64::MAX, 101)] {
+                let source =
+                    format!("fn main(){{let a=[{element}];let index={index}usize;let r=&a[0];}}");
+                let program = frontend::parse(&source).unwrap();
+                let signatures = frontend::signature_table(&program).unwrap();
+                let mut checked =
+                    frontend::type_function_with_signatures(&program, 0, &signatures).unwrap();
+                let index = LocalId(
+                    checked
+                        .locals
+                        .iter()
+                        .position(|local| local.name == "index")
+                        .unwrap(),
+                );
+                for expression in &mut checked.exprs {
+                    if let ir::ExprKind::Borrow { place, .. } = &mut expression.kind
+                        && place.projection == [ir::Projection::ConstantIndex(0)]
+                    {
+                        place.projection = vec![ir::Projection::DynamicIndex(index)];
+                    }
+                }
+                let object = emit_checked_fixture(&checked, &signatures, 0).unwrap();
+                let bytes = link(&[("main".into(), object)]).unwrap();
+                let path = executable_bytes(&bytes);
+                let output = execute(&mut Command::new(&path));
+                std::fs::remove_file(&path).unwrap();
+                std::fs::remove_dir(path.parent().unwrap()).unwrap();
+                assert_eq!(output.status.code(), Some(expected), "{source}: {output:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_element_loan_captures_address_before_index_mutation() {
+        let program = frontend::parse(
+            "fn main(){let a=[7,8];let mut index=0usize;let r=&a[0];index=1usize;if *r!=7 {1/0;}}",
+        )
+        .unwrap();
+        let signatures = frontend::signature_table(&program).unwrap();
+        let mut checked =
+            frontend::type_function_with_signatures(&program, 0, &signatures).unwrap();
+        let index = LocalId(
+            checked
+                .locals
+                .iter()
+                .position(|local| local.name == "index")
+                .unwrap(),
+        );
+        for expression in &mut checked.exprs {
+            if let ir::ExprKind::Borrow { place, .. } = &mut expression.kind
+                && place.projection == [ir::Projection::ConstantIndex(0)]
+            {
+                place.projection = vec![ir::Projection::DynamicIndex(index)];
+            }
+        }
+        let object = emit_checked_fixture(&checked, &signatures, 0).unwrap();
+        let bytes = link(&[("main".into(), object)]).unwrap();
+        let path = executable_bytes(&bytes);
+        let output = execute(&mut Command::new(&path));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
     }
 
     #[test]

@@ -4173,7 +4173,13 @@ fn overlap(a: &CanonicalPlace, b: &CanonicalPlace, budget: &mut Budget) -> Resul
     }
     for (a, b) in a.projection.iter().zip(&b.projection) {
         // Safe Rust's ordinary indexed borrows overlap the entire array in B1.
-        if matches!(a, Projection::ConstantIndex(_)) || matches!(b, Projection::ConstantIndex(_)) {
+        if matches!(
+            a,
+            Projection::ConstantIndex(_) | Projection::DynamicIndex(_)
+        ) || matches!(
+            b,
+            Projection::ConstantIndex(_) | Projection::DynamicIndex(_)
+        ) {
             return Ok(true);
         }
         if a != b {
