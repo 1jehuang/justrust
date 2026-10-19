@@ -207,9 +207,26 @@ impl CarrierEffectTable {
         }
         Ok(None)
     }
+    /// A table of only the universal proofs one closed instance's calls need.
+    /// Identity and world consistency are checked exactly as in
+    /// [`Self::from_verified`]. The program-wide admission rule for
+    /// reference-actual calls is checked once by the CHECK root, not here.
+    pub(super) fn for_callees(
+        templates: &[VerifiedTemplateCfg],
+        budget: &super::ir::PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        Self::validated(templates, budget, false)
+    }
     pub(super) fn from_verified(
         templates: &[VerifiedTemplateCfg],
         budget: &super::ir::PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        Self::validated(templates, budget, true)
+    }
+    fn validated(
+        templates: &[VerifiedTemplateCfg],
+        budget: &super::ir::PlanBudget,
+        admit_reference_calls: bool,
     ) -> Result<Arc<Self>, String> {
         // Both the table and its retained slice have independent Arc control
         // blocks, including the empty-table case. The caller's source slice
@@ -267,7 +284,7 @@ impl CarrierEffectTable {
         // body's summary. Once every universal proof exists, independently
         // check new ordinary reference-actual calls even in unused/dead source
         // metadata. A reference-free-only callee proof is not sufficient.
-        for caller in templates {
+        for caller in templates.iter().filter(|_| admit_reference_calls) {
             for expression in &caller.source().exprs {
                 budget.charge_work(1)?;
                 let super::ir::ExprKind::Call { target, .. } = &expression.kind else {
