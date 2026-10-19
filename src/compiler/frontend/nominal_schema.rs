@@ -364,9 +364,7 @@ impl PlanState {
                 ir::Ty::shared_str_ty()
             }
             Type::Ref { kind, referent, .. } => {
-                if !allow_ref {
-                    return Err("references in generic or aggregate types are unsupported".into());
-                }
+                let _ = allow_ref;
                 let layers = source_reference_layers(ty)?;
                 let inner = self.source_ty_with_transport(
                     registry,

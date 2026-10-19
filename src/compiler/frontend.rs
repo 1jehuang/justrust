@@ -17113,8 +17113,11 @@ fn argument_height(
         },
         // `&'static str` is an origin-free leaf.
         ir::Ty::Ref { .. } if ty.is_shared_str() => {}
-        ir::Ty::Ref { .. } => {
-            return Err("reference-containing generic arguments are unsupported".into());
+        ir::Ty::Ref { referent, .. } => {
+            if matches!(referent.as_ref(), ir::Ty::Slice { .. }) {
+                return Err("unsupported: slice generic arguments".into());
+            }
+            child(referent)?;
         }
         ir::Ty::Slice { .. } => {
             return Err("unsupported: slice generic arguments".into());

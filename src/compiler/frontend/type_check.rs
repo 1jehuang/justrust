@@ -876,17 +876,6 @@ impl<'c, 's> Inference<'c, 's> {
             return Ok(None);
         };
         for ty in &args {
-            if let Some(cap) = self.checker.canonical
-                && contains_source_ref(ty, &plan.budget, 0).map_err(|e| cap.render(e))?
-            {
-                return Err(cap.render(FactsError::unsupported(
-                    &plan.budget,
-                    "new inferred reference is outside direct shared Var replay",
-                )));
-            }
-            if matches!(ty, ir::Ty::Ref { .. }) {
-                return Err("unsupported generic inference: newly inferred structural reference actual; use explicit type arguments".into());
-            }
             validate_argument(ty, self.checker.facts(), &plan.budget, 0)?;
         }
         Ok(Some(args))
