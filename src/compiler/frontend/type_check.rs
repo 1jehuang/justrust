@@ -9332,7 +9332,12 @@ impl<'a> Checker<'a> {
                     .and_then(|bytes| bytes.checked_add(std::mem::size_of::<ir::PanicMessage>()))
                     .ok_or("panic diagnostic storage overflow")?;
                 self.charge_node(bytes)?;
-                let location = format!("{}:{line}:{column}", path.display());
+                // Preformatted: the diagnostic was already written to stderr.
+                let location = if panic.preformatted {
+                    String::new()
+                } else {
+                    format!("{}:{line}:{column}", path.display())
+                };
                 (
                     ir::ExprKind::Panic(Box::new(ir::PanicMessage {
                         message: panic.message.clone(),

@@ -2158,11 +2158,15 @@ fn emit_panic(this: &mut dyn PanicSink, message: &str, location: &str) -> Result
             .and_then(|length| length.checked_add(b"panicked at :\n\n".len()))
             .ok_or("panic diagnostic storage overflow")?;
         let mut diagnostic = this.diagnostic(length)?;
-        diagnostic.extend_from_slice(b"panicked at ");
-        diagnostic.extend_from_slice(panic.location.as_bytes());
-        diagnostic.extend_from_slice(b":\n");
-        diagnostic.extend_from_slice(panic.message.as_bytes());
-        diagnostic.push(b'\n');
+        // An empty location marks a diagnostic already written by a
+        // preceding formatted stderr output (formatted panic! messages).
+        if !panic.location.is_empty() {
+            diagnostic.extend_from_slice(b"panicked at ");
+            diagnostic.extend_from_slice(panic.location.as_bytes());
+            diagnostic.extend_from_slice(b":\n");
+            diagnostic.extend_from_slice(panic.message.as_bytes());
+            diagnostic.push(b'\n');
+        }
 
         // Reserve a zeroed kernel sigaction (handler, flags, restorer, mask).
         this.bytes(&[0x48, 0x83, 0xec, 0x20, 0x31, 0xc0])?;

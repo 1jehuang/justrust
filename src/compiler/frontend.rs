@@ -41,6 +41,7 @@ use source_schemas::{SourceSchemas, SourceSchemasBuilder, StoredSchema};
 mod token_cursor;
 use char_literal::{parse_byte_literal, parse_char_literal};
 mod format_args;
+mod panic_format;
 mod vec_macro;
 mod format_spec;
 mod operators;
@@ -5808,6 +5809,9 @@ pub struct SourceOutput {
 pub struct SourcePanic {
     pub message: String,
     pub site: super::expansion_span::SpanId,
+    /// The diagnostic was already written to stderr by a preceding
+    /// formatted output (`panic!("{}", x)`); the abort writes nothing more.
+    pub preformatted: bool,
 }
 
 fn panic_callsite(
@@ -7788,6 +7792,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else {
             return Err(self.error(delimiter));
         };
+        if !self.is(close) && self.panic_has_format() {
+            return self.formatted_panic(close, spelling, default, site);
+        }
         let message = if self.is(close) {
             self.prefixed_panic_message(default, None)?
         } else {
@@ -7805,7 +7812,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.expect(close)?;
         let payload = self
             .names
-            .try_parser_box(SourcePanic { message, site })
+            .try_parser_box(SourcePanic {
+                message,
+                site,
+                preformatted: false,
+            })
             .map_err(native_adapter::name_error)?;
         Ok(Expr::Panic(payload))
     }
@@ -8026,7 +8037,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             .map_err(native_adapter::name_error)?;
         let panic = self
             .names
-            .try_parser_box(SourcePanic { message, site })
+            .try_parser_box(SourcePanic {
+                message,
+                site,
+                preformatted: false,
+            })
             .map_err(native_adapter::name_error)?;
         let failure = self
             .names
