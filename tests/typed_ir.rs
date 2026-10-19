@@ -1,7 +1,7 @@
 //! Acceptance of the public checked-body boundary, without a stock compiler oracle.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
-use ir::{CheckedFunction, Completion, ExprId, ExprKind, IntTy, LocalId, Stmt, Ty};
+use ir::{CheckedFunction, Completion, ExprId, ExprKind, IntTy, LocalId, Ty, TypedStmt};
 use justrust_engine::compiler::{backend, frontend, ir};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -131,9 +131,9 @@ fn typed(source: &str, name: &str) -> CheckedFunction {
         .expect("checker emitted invalid references");
     function
 }
-fn binding(statement: &Stmt) -> (LocalId, ExprId) {
+fn binding(statement: &TypedStmt) -> (LocalId, ExprId) {
     match statement {
-        Stmt::Let { local, value } => (*local, *value),
+        TypedStmt::Let { local, value } => (*local, *value),
         other => panic!("expected binding: {other:?}"),
     }
 }
@@ -203,21 +203,21 @@ fn checked_ir_assignments_resolve_to_the_correct_mutable_shadow() {
                 "main",
             );
             let (outer, _) = binding(&function.body.statements[0]);
-            let Stmt::Expr(block) = function.body.statements[1] else {
+            let TypedStmt::Expr(block) = function.body.statements[1] else {
                 panic!("missing block")
             };
             let ExprKind::Block(inner) = &function.exprs[block.0].kind else {
                 panic!("missing block expression")
             };
             let (nested, _) = binding(&inner.statements[0]);
-            let Stmt::Assign {
+            let TypedStmt::Assign {
                 local: inner_target,
                 ..
             } = inner.statements[1]
             else {
                 panic!("missing inner assignment")
             };
-            let Stmt::Assign {
+            let TypedStmt::Assign {
                 local: outer_target,
                 ..
             } = function.body.statements[2]

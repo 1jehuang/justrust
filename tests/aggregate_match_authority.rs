@@ -1,9 +1,9 @@
 //! Public checked-IR integrity controls for irrefutable aggregate matches.
 //! These are structural validation tests, not source visibility or ABI claims.
 use justrust_engine::compiler::ir::{
-    Block, BorrowKind, CheckedFunction, Completion, ExprId, ExprKind, IntTy, LocalDecl, LocalId,
-    MAX_PATTERN_BINDINGS, MAX_PATTERN_PROJECTION_DEPTH, MatchArm, MatchPattern, PatternBinding,
-    Projection, Stmt, Ty, TypedExpr,
+    BorrowKind, CheckedFunction, Completion, ExprId, ExprKind, IntTy, LocalDecl, LocalId,
+    MAX_PATTERN_BINDINGS, MAX_PATTERN_PROJECTION_DEPTH, MatchPattern, PatternBinding, Projection,
+    Ty, TypedBlock, TypedExpr, TypedMatchArm, TypedStmt,
 };
 use std::sync::Arc;
 
@@ -65,7 +65,7 @@ fn fixture() -> CheckedFunction {
             TypedExpr {
                 ty: Ty::Unit,
                 completion: Completion::Returns,
-                kind: ExprKind::Block(Block {
+                kind: ExprKind::Block(TypedBlock {
                     statements: vec![],
                     tail: None,
                 }),
@@ -75,7 +75,7 @@ fn fixture() -> CheckedFunction {
                 completion: Completion::Returns,
                 kind: ExprKind::Match {
                     scrutinee: ExprId(0),
-                    arms: vec![MatchArm {
+                    arms: vec![TypedMatchArm {
                         pattern: MatchPattern::Aggregate {
                             ty,
                             bindings: vec![binding(1, 0), binding(2, 1)],
@@ -86,8 +86,8 @@ fn fixture() -> CheckedFunction {
                 },
             },
         ],
-        body: Block {
-            statements: vec![Stmt::Expr(ExprId(2))],
+        body: TypedBlock {
+            statements: vec![TypedStmt::Expr(ExprId(2))],
             tail: None,
         },
     };
@@ -97,7 +97,7 @@ fn fixture() -> CheckedFunction {
     function
 }
 
-fn arms(function: &mut CheckedFunction) -> &mut Vec<MatchArm> {
+fn arms(function: &mut CheckedFunction) -> &mut Vec<TypedMatchArm> {
     match &mut function.exprs[2].kind {
         ExprKind::Match { arms, .. } => arms,
         _ => panic!("fixture lost its match"),
@@ -153,7 +153,7 @@ fn source_binding_order_does_not_require_sorted_field_indices() {
 #[test]
 fn separate_catchall_arms_may_use_distinct_fresh_locals() {
     let mut function = fixture();
-    arms(&mut function).push(MatchArm {
+    arms(&mut function).push(TypedMatchArm {
         pattern: MatchPattern::Aggregate {
             ty: domain(),
             bindings: vec![binding(3, 0), binding(4, 1)],
@@ -170,8 +170,8 @@ fn never_scrutinee_retains_explicit_aggregate_pattern_domain() {
     function.exprs[0] = TypedExpr {
         ty: Ty::Never,
         completion: Completion::Never,
-        kind: ExprKind::Block(Block {
-            statements: vec![Stmt::Return(None)],
+        kind: ExprKind::Block(TypedBlock {
+            statements: vec![TypedStmt::Return(None)],
             tail: None,
         }),
     };
@@ -277,7 +277,7 @@ fn aggregate_binding_locals_must_be_distinct_within_arm() {
 #[test]
 fn aggregate_binding_local_cannot_be_shared_across_arms() {
     let mut function = fixture();
-    arms(&mut function).push(MatchArm {
+    arms(&mut function).push(TypedMatchArm {
         pattern: MatchPattern::Aggregate {
             ty: domain(),
             bindings: vec![binding(1, 0), binding(4, 1)],
@@ -404,7 +404,7 @@ fn unreachable_aggregate_arm_still_requires_valid_binding_metadata() {
     let mut function = fixture();
     arms(&mut function).insert(
         0,
-        MatchArm {
+        TypedMatchArm {
             pattern: MatchPattern::Wildcard,
             guard: None,
             body: ExprId(1),
@@ -424,8 +424,8 @@ fn never_scrutinee_does_not_skip_aggregate_projection_validation() {
     function.exprs[0] = TypedExpr {
         ty: Ty::Never,
         completion: Completion::Never,
-        kind: ExprKind::Block(Block {
-            statements: vec![Stmt::Return(None)],
+        kind: ExprKind::Block(TypedBlock {
+            statements: vec![TypedStmt::Return(None)],
             tail: None,
         }),
     };

@@ -131,7 +131,7 @@ mod tests {
             .statements
             .iter()
             .find_map(|statement| match statement {
-                ir::Stmt::AssignIndex { index, .. } => Some(*index),
+                ir::TypedStmt::AssignIndex { index, .. } => Some(*index),
                 _ => None,
             })
             .unwrap();
@@ -162,7 +162,7 @@ mod tests {
                 }
                 3 => {
                     for statement in &mut forged.body.statements {
-                        if let ir::Stmt::AssignIndex { index, .. } = statement {
+                        if let ir::TypedStmt::AssignIndex { index, .. } = statement {
                             *index = probe_index;
                         }
                     }

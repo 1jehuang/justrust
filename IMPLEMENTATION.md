@@ -617,7 +617,13 @@ cleanup failures.
       (`tests/closure_borrows.rs`, `tests/closure_capture_places.rs`). Inferred
       signature hints do not grant written coercion authority. Reference-bearing
       closure results explicitly reject pending exact carrier-origin contracts.
-      Generic-parent closures, opaque returns and iterator integration remain open.
+      Ordinary callable membership additionally requires a parent-minted source
+      recipe/final-shape seal. Finalized parent correspondence replays every
+      receiver mode's immutable typed payload before child execution, rejecting
+      raw or copied-seal metadata, foreign recipes and changed body payloads.
+      This authority prerequisite does not authorize arbitrary callback-based
+      generic substitution. Generic-parent closures, opaque returns and iterator
+      integration remain open.
       Implementation/default closure syntax now retains canonical owner ordinals
       and selected-body occurrence authority, with final resolver publication
       after all existing body rewrites. Ordinary associated/shared-self/equal-name

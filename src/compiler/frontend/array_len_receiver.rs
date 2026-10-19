@@ -60,8 +60,8 @@ impl type_check::Checker<'_> {
         self.exprs.push(ir::TypedExpr {
             ty: self.exprs[borrowed.0].ty.clone(),
             completion: ir::Completion::Returns,
-            kind: ir::ExprKind::Block(ir::Block {
-                statements: vec![ir::Stmt::Assign { local, value }],
+            kind: ir::ExprKind::Block(ir::TypedBlock {
+                statements: vec![ir::TypedStmt::Assign { local, value }],
                 tail: Some(borrowed),
             }),
         });

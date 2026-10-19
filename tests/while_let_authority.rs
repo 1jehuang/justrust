@@ -1,7 +1,7 @@
 //! Genuine while-let source and exact-world checked loop authority controls.
 //! No nominal factories, synthetic source handles or invented loop IDs are used.
 use frontend::{Block, Expr, Pattern, PlanCtx, Program, Stmt};
-use ir::{CheckedFunction, ExprKind, FactsCtx, MatchArm, MatchPattern, Projection};
+use ir::{CheckedFunction, ExprKind, FactsCtx, MatchPattern, Projection, TypedMatchArm};
 use justrust_engine::compiler::traits::ValidatedFacts;
 use justrust_engine::compiler::{cfg, frontend, ir};
 use std::sync::Arc;
@@ -306,7 +306,7 @@ fn checked_fixture() -> CheckedFixture {
         _program: program,
     }
 }
-fn arms(function: &CheckedFunction) -> &[MatchArm] {
+fn arms(function: &CheckedFunction) -> &[TypedMatchArm] {
     function
         .exprs
         .iter()
@@ -316,7 +316,7 @@ fn arms(function: &CheckedFunction) -> &[MatchArm] {
         })
         .expect("actual checked while-let match")
 }
-fn arms_mut(function: &mut CheckedFunction) -> &mut Vec<MatchArm> {
+fn arms_mut(function: &mut CheckedFunction) -> &mut Vec<TypedMatchArm> {
     function
         .exprs
         .iter_mut()

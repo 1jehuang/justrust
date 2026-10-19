@@ -12,7 +12,7 @@ mod grouped_or;
 mod intrinsics;
 mod runtime_sites;
 pub use drop_normal::ValidatedCleanupCall;
-pub use runtime_sites::RuntimeSites;
+pub use runtime_sites::CfgRuntimeSites;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BlockId(pub usize);
@@ -46,7 +46,7 @@ pub struct Located<T> {
 
 #[derive(Clone, Debug)]
 pub struct Function {
-    pub runtime_sites: RuntimeSites,
+    pub runtime_sites: CfgRuntimeSites,
     pub lowering_proof: Option<std::sync::Arc<GeneratedCfgShape>>,
     pub body_substitution: Option<std::sync::Arc<ir::BodySubstitutionProof>>,
     pub call_evidence: std::sync::Arc<[std::sync::Arc<ir::ValidatedCallEvidence>]>,
@@ -74,7 +74,7 @@ pub struct BasicBlock {
 /// only the original verified template, so these guards have no output backedge.
 #[derive(Clone, Debug)]
 pub struct GeneratedCfgShape {
-    runtime_sites: RuntimeSites,
+    runtime_sites: CfgRuntimeSites,
     name: String,
     params: std::sync::Arc<[LocalId]>,
     locals: std::sync::Arc<[ir::LocalDecl]>,
@@ -2837,7 +2837,7 @@ fn admit_cfg_surplus(
     Ok(())
 }
 
-struct PatternTest {
+struct PatternDecisionBlocks {
     selected: BlockId,
     rejected: BlockId,
     temporaries: Vec<LocalId>,
@@ -2955,7 +2955,7 @@ impl Lowerer<'_> {
         source: &Place,
         pattern: &ir::MatchPattern,
         completes: bool,
-    ) -> Result<PatternTest, String> {
+    ) -> Result<PatternDecisionBlocks, String> {
         if let ir::MatchPattern::Alternatives { rows, .. } = pattern {
             self.divergence_work(rows.len())?;
             let selected = self.block();
@@ -2981,7 +2981,7 @@ impl Lowerer<'_> {
                 }
             }
             self.terminate(Terminator::Goto(rejected), Some(id))?;
-            return Ok(PatternTest {
+            return Ok(PatternDecisionBlocks {
                 selected,
                 rejected,
                 temporaries: Vec::new(),
@@ -3050,7 +3050,7 @@ impl Lowerer<'_> {
                 Some(id),
             )?;
         }
-        Ok(PatternTest {
+        Ok(PatternDecisionBlocks {
             selected,
             rejected,
             temporaries: self.scopes.pop().unwrap(),
@@ -3067,7 +3067,7 @@ impl Lowerer<'_> {
         source: &Place,
         tests: &[ir::PatternTest],
         completes: bool,
-    ) -> Result<PatternTest, String> {
+    ) -> Result<PatternDecisionBlocks, String> {
         self.divergence_work(tests.len())?;
         let selected = self.block();
         self.check_resource()?;
@@ -3179,7 +3179,7 @@ impl Lowerer<'_> {
                 }
             }
         }
-        Ok(PatternTest {
+        Ok(PatternDecisionBlocks {
             selected,
             rejected,
             temporaries: self.scopes.pop().unwrap(),
@@ -3312,7 +3312,7 @@ impl Lowerer<'_> {
         &mut self,
         id: ExprId,
         scrutinee: ExprId,
-        arms: &[ir::MatchArm],
+        arms: &[ir::TypedMatchArm],
         destination: Place,
     ) -> Result<(), String> {
         self.source
@@ -3328,7 +3328,7 @@ impl Lowerer<'_> {
             let pattern = &arm.pattern;
             let guard = arm.guard;
             let body = arm.body;
-            let PatternTest {
+            let PatternDecisionBlocks {
                 selected,
                 rejected: next,
                 temporaries: test_scope,
@@ -3533,7 +3533,7 @@ impl Lowerer<'_> {
         )?;
         let source = self.pattern_source(value)?;
         let completes = self.source.exprs[value.0].completion == ir::Completion::Returns;
-        let PatternTest {
+        let PatternDecisionBlocks {
             selected,
             rejected,
             temporaries,
@@ -3858,21 +3858,25 @@ impl Lowerer<'_> {
         Ok(())
     }
 
-    fn body(&mut self, body: &ir::Block, destination: Option<Place>) -> Result<(), String> {
+    fn body(&mut self, body: &ir::TypedBlock, destination: Option<Place>) -> Result<(), String> {
         self.enter_lowering()?;
         let result = self.body_inner(body, destination);
         self.lowering_depth -= 1;
         result
     }
 
-    fn body_inner(&mut self, body: &ir::Block, destination: Option<Place>) -> Result<(), String> {
+    fn body_inner(
+        &mut self,
+        body: &ir::TypedBlock,
+        destination: Option<Place>,
+    ) -> Result<(), String> {
         self.push_scope()?;
         for statement in &body.statements {
             if self.drop_enabled {
                 self.push_scope()?;
             }
             match statement {
-                ir::Stmt::AssignOp { place, op, value } => {
+                ir::TypedStmt::AssignOp { place, op, value } => {
                     let operand = self.expression(*value)?;
                     self.inspect_index_prefixes(place, Some(*value))?;
                     self.assign(
@@ -3885,7 +3889,7 @@ impl Lowerer<'_> {
                         Some(*value),
                     );
                 }
-                ir::Stmt::AssignIndexOp {
+                ir::TypedStmt::AssignIndexOp {
                     array,
                     index,
                     op,
@@ -3904,7 +3908,7 @@ impl Lowerer<'_> {
                         Some(*index),
                     );
                 }
-                ir::Stmt::AssignIndex {
+                ir::TypedStmt::AssignIndex {
                     array,
                     index,
                     value,
@@ -3922,19 +3926,19 @@ impl Lowerer<'_> {
                         Some(*index),
                     );
                 }
-                ir::Stmt::Declare { local } => {
+                ir::TypedStmt::Declare { local } => {
                     self.result.place_ty(&place(*local))?;
                     if self.parameters.contains(local) {
                         return Err("declaration local aliases parameter".into());
                     }
                     self.live_binding(*local, None);
                 }
-                ir::Stmt::Let { local, value } => {
+                ir::TypedStmt::Let { local, value } => {
                     let operand = self.expression(*value)?;
                     self.live_binding(*local, Some(*value));
                     self.assign(place(*local), Rvalue::Use(operand), Some(*value));
                 }
-                ir::Stmt::LetPattern {
+                ir::TypedStmt::LetPattern {
                     value,
                     ty,
                     bindings,
@@ -3987,7 +3991,7 @@ impl Lowerer<'_> {
                     // markers. A non-place initializer has still run once.
                     // Divergent initializers never produce projection loads.
                 }
-                ir::Stmt::LetElse {
+                ir::TypedStmt::LetElse {
                     value,
                     ty,
                     pattern,
@@ -3998,12 +4002,12 @@ impl Lowerer<'_> {
                     }
                     self.let_else(*value, ty, pattern, *else_branch)?;
                 }
-                ir::Stmt::Assign { local, value } => {
+                ir::TypedStmt::Assign { local, value } => {
                     let operand = self.expression(*value)?;
                     self.drop_value(*local, Some(*value));
                     self.assign(place(*local), Rvalue::Use(operand), Some(*value));
                 }
-                ir::Stmt::AssignPlace { place, value } => {
+                ir::TypedStmt::AssignPlace { place, value } => {
                     let operand = self.expression(*value)?;
                     self.inspect_index_prefixes(place, Some(*value))?;
                     if place.projection.is_empty() {
@@ -4013,10 +4017,10 @@ impl Lowerer<'_> {
                     }
                     self.assign(place.clone(), Rvalue::Use(operand), Some(*value));
                 }
-                ir::Stmt::Expr(value) => {
+                ir::TypedStmt::Expr(value) => {
                     self.expression(*value)?;
                 }
-                ir::Stmt::Return(value) => {
+                ir::TypedStmt::Return(value) => {
                     let operand = match value {
                         Some(id) => self.expression(*id)?,
                         None => Operand::Constant(Constant::Unit),
@@ -4030,7 +4034,7 @@ impl Lowerer<'_> {
                     self.terminate(Terminator::Return, *value)?;
                     self.disconnected();
                 }
-                ir::Stmt::While {
+                ir::TypedStmt::While {
                     id,
                     condition,
                     body,
@@ -4875,8 +4879,8 @@ mod literal_output_tests {
                 completion: ir::Completion::Returns,
                 kind: ir::ExprKind::Output(output),
             }],
-            body: ir::Block {
-                statements: vec![ir::Stmt::Expr(ExprId(0))],
+            body: ir::TypedBlock {
+                statements: vec![ir::TypedStmt::Expr(ExprId(0))],
                 tail: None,
             },
         }
@@ -4930,7 +4934,7 @@ mod literal_output_tests {
                 stream: ir::OutputStream::Stdout,
                 newline: false,
             });
-            source.body.statements.push(ir::Stmt::Expr(ExprId(0)));
+            source.body.statements.push(ir::TypedStmt::Expr(ExprId(0)));
             let budget = ir::PlanBudget::default();
             let cfg = lower_with_budget(&source, &budget).unwrap();
             let snapshot_bytes = cfg.snapshot_storage(&ir::PlanBudget::default()).unwrap();
@@ -5279,7 +5283,7 @@ fn lower_internal_with_source(
             };
         }
     }
-    lowerer.result.runtime_sites = RuntimeSites::from_lowering(lowerer.runtime_sites)?;
+    lowerer.result.runtime_sites = CfgRuntimeSites::from_lowering(lowerer.runtime_sites)?;
     lowerer.result.blocks = lowerer
         .blocks
         .into_iter()
@@ -6091,7 +6095,10 @@ mod tests {
                 expr(inner.clone(), ir::ExprKind::Deref { value: ExprId(0) }),
                 expr(scalar.clone(), ir::ExprKind::Deref { value: ExprId(1) }),
             ],
-            vec![ir::Stmt::Expr(ExprId(1)), ir::Stmt::Expr(ExprId(2))],
+            vec![
+                ir::TypedStmt::Expr(ExprId(1)),
+                ir::TypedStmt::Expr(ExprId(2)),
+            ],
         );
         source.ref_contract = ir::normalize_ref_contract(
             &ir::RefContract {
@@ -6234,7 +6241,7 @@ mod tests {
                 expr(types[1].clone(), ir::ExprKind::Local(LocalId(1))),
                 expr(result, ir::ExprKind::Tuple(vec![ExprId(0), ExprId(1)])),
             ],
-            body: ir::Block {
+            body: ir::TypedBlock {
                 statements: vec![],
                 tail: Some(ExprId(2)),
             },
@@ -6320,7 +6327,7 @@ mod tests {
                 mutable: false,
             }],
             exprs: vec![expr(ty.clone(), ir::ExprKind::Local(LocalId(0)))],
-            body: ir::Block {
+            body: ir::TypedBlock {
                 statements: vec![],
                 tail: Some(ExprId(0)),
             },
@@ -6915,7 +6922,7 @@ mod tests {
                         },
                     ),
                 ],
-                vec![ir::Stmt::Expr(ExprId(1))],
+                vec![ir::TypedStmt::Expr(ExprId(1))],
             );
             let function = nominal_lowered(&source);
             let call_block = function
@@ -7072,11 +7079,11 @@ mod tests {
                 ),
             ],
             vec![
-                ir::Stmt::Let {
+                ir::TypedStmt::Let {
                     local: LocalId(1),
                     value: ExprId(0),
                 },
-                ir::Stmt::Expr(ExprId(2)),
+                ir::TypedStmt::Expr(ExprId(2)),
             ],
         );
         source.locals.push(ir::LocalDecl {
@@ -7095,7 +7102,10 @@ mod tests {
             Statement::Assign { value: Rvalue::Use(Operand::Move(place)), .. } if place.local == LocalId(1)
         )));
         let mut repeated = source.clone();
-        repeated.body.statements.push(ir::Stmt::Expr(ExprId(0)));
+        repeated
+            .body
+            .statements
+            .push(ir::TypedStmt::Expr(ExprId(0)));
         assert!(lower(&repeated).unwrap_err().contains("repeated borrow"));
         let mut invalid = function.clone();
         invalid.loan_sites.push(invalid.loan_sites[0].clone());
@@ -7144,8 +7154,8 @@ mod tests {
                 ),
             ],
             vec![
-                ir::Stmt::Declare { local: LocalId(0) },
-                ir::Stmt::LetPattern {
+                ir::TypedStmt::Declare { local: LocalId(0) },
+                ir::TypedStmt::LetPattern {
                     value: ExprId(1),
                     ty: Ty::Int(IntTy::I32),
                     bindings: vec![],
@@ -7205,7 +7215,7 @@ mod tests {
     fn with_root(
         root: Ty,
         exprs: Vec<ir::TypedExpr>,
-        statements: Vec<ir::Stmt>,
+        statements: Vec<ir::TypedStmt>,
     ) -> ir::CheckedFunction {
         ir::CheckedFunction {
             runtime_sites: Default::default(),
@@ -7221,7 +7231,7 @@ mod tests {
                 mutable: true,
             }],
             exprs,
-            body: ir::Block {
+            body: ir::TypedBlock {
                 statements,
                 tail: None,
             },
@@ -7341,7 +7351,7 @@ mod tests {
                     }),
                 ),
             ];
-            source.body.statements = vec![ir::Stmt::AssignIndexOp {
+            source.body.statements = vec![ir::TypedStmt::AssignIndexOp {
                 array: Place {
                     local: LocalId(0),
                     projection: projection.clone(),
@@ -7377,7 +7387,7 @@ mod tests {
                         }),
                     ),
                 ],
-                vec![ir::Stmt::AssignIndexOp {
+                vec![ir::TypedStmt::AssignIndexOp {
                     array: Place {
                         local: LocalId(0),
                         projection: vec![Projection::Deref],
@@ -7561,7 +7571,7 @@ mod tests {
                     },
                 ),
             ],
-            vec![ir::Stmt::AssignIndexOp {
+            vec![ir::TypedStmt::AssignIndexOp {
                 array: place(LocalId(0)),
                 index: ExprId(1),
                 op: BinaryOp::Add,
@@ -7906,7 +7916,7 @@ mod tests {
                         },
                     ),
                 ],
-                vec![ir::Stmt::Expr(ExprId(2))],
+                vec![ir::TypedStmt::Expr(ExprId(2))],
             );
             let lowered = nominal_lowered(&source);
             let calls: Vec<_> = lowered
@@ -8090,7 +8100,7 @@ mod tests {
                         },
                     ),
                 ],
-                vec![ir::Stmt::Expr(ExprId(2))],
+                vec![ir::TypedStmt::Expr(ExprId(2))],
             );
             let lowered = nominal_lowered(&source);
             let calls: Vec<_> = lowered
@@ -8294,7 +8304,7 @@ mod tests {
                     ),
                     expr(to, cast),
                 ],
-                vec![ir::Stmt::Expr(ExprId(1))],
+                vec![ir::TypedStmt::Expr(ExprId(1))],
             );
             let lowered = nominal_lowered(&source);
             assert_eq!(lowered.blocks.iter().filter(|block| matches!(&block.terminator.value, Terminator::Call { name, .. } if name == "once")).count(), 1);
@@ -8338,7 +8348,7 @@ mod tests {
                 )
             });
         }
-        let mut source = with_root(Ty::Unit, chain, vec![ir::Stmt::Expr(ExprId(120))]);
+        let mut source = with_root(Ty::Unit, chain, vec![ir::TypedStmt::Expr(ExprId(120))]);
         assert!(super::super::ownership::analyze(&nominal_lowered(&source)).passed());
         // A cyclic pair has valid endpoints but cannot evade bounded lowering.
         source.exprs[0].kind = ir::ExprKind::U8ToChar { value: ExprId(1) };
@@ -8489,7 +8499,7 @@ mod tests {
                     ir::ExprKind::LeadingZeros { value: ExprId(0) },
                 ),
             ],
-            vec![ir::Stmt::Expr(ExprId(1))],
+            vec![ir::TypedStmt::Expr(ExprId(1))],
         );
         let function = nominal_lowered(&source);
         assert_eq!(
@@ -8627,7 +8637,7 @@ mod tests {
                     },
                 ),
             ],
-            vec![ir::Stmt::Expr(ExprId(1))],
+            vec![ir::TypedStmt::Expr(ExprId(1))],
         );
         let lowered = nominal_lowered(&source);
         assert_eq!(lowered.blocks.iter().filter(|block| matches!(&block.terminator.value, Terminator::Call {name, ..} if name == "once")).count(), 1);
@@ -8650,7 +8660,10 @@ mod tests {
         assert_storage_paths(&lowered);
         assert!(super::super::ownership::analyze(&lowered).passed());
         let mut repeated = source.clone();
-        repeated.body.statements.push(ir::Stmt::Expr(ExprId(1)));
+        repeated
+            .body
+            .statements
+            .push(ir::TypedStmt::Expr(ExprId(1)));
         let repeated = nominal_lowered(&repeated);
         assert_eq!(repeated.blocks.iter().filter(|block| matches!(&block.terminator.value, Terminator::Call {name, ..} if name == "once")).count(), 2);
         let mut cyclic = source.clone();
@@ -8721,7 +8734,7 @@ mod tests {
                 },
             ));
         }
-        let chain = with_root(Ty::Unit, chain, vec![ir::Stmt::Expr(ExprId(120))]);
+        let chain = with_root(Ty::Unit, chain, vec![ir::TypedStmt::Expr(ExprId(120))]);
         let lowered = nominal_lowered(&chain);
         assert_eq!(
             lowered
@@ -8970,8 +8983,8 @@ mod tests {
                 expr(Ty::Int(IntTy::Usize), ir::ExprKind::Int(IntValue::usize(0))),
                 expr(
                     Ty::Int(IntTy::Usize),
-                    ir::ExprKind::Block(ir::Block {
-                        statements: vec![ir::Stmt::Assign {
+                    ir::ExprKind::Block(ir::TypedBlock {
+                        statements: vec![ir::TypedStmt::Assign {
                             local: LocalId(0),
                             value: ExprId(1),
                         }],
@@ -8988,8 +9001,8 @@ mod tests {
                 ),
             ],
             vec![
-                ir::Stmt::Declare { local: LocalId(0) },
-                ir::Stmt::Expr(ExprId(5)),
+                ir::TypedStmt::Declare { local: LocalId(0) },
+                ir::TypedStmt::Expr(ExprId(5)),
             ],
         );
         source.params.clear();
@@ -9041,8 +9054,8 @@ mod tests {
                 expr(Ty::Int(IntTy::Usize), ir::ExprKind::Int(IntValue::usize(0))),
                 expr(
                     Ty::Int(IntTy::Usize),
-                    ir::ExprKind::Block(ir::Block {
-                        statements: vec![ir::Stmt::Assign {
+                    ir::ExprKind::Block(ir::TypedBlock {
+                        statements: vec![ir::TypedStmt::Assign {
                             local: LocalId(0),
                             value: ExprId(2),
                         }],
@@ -9066,8 +9079,8 @@ mod tests {
                 ),
             ],
             vec![
-                ir::Stmt::Declare { local: LocalId(0) },
-                ir::Stmt::Expr(ExprId(7)),
+                ir::TypedStmt::Declare { local: LocalId(0) },
+                ir::TypedStmt::Expr(ExprId(7)),
             ],
         );
         source.params.clear();
@@ -9103,7 +9116,7 @@ mod tests {
                     },
                 ),
             ],
-            vec![ir::Stmt::LetPattern {
+            vec![ir::TypedStmt::LetPattern {
                 value: ExprId(2),
                 ty: item.clone(),
                 bindings: vec![],
@@ -9145,7 +9158,7 @@ mod tests {
             ty: item,
             mutable: false,
         });
-        source.body.statements = vec![ir::Stmt::Let {
+        source.body.statements = vec![ir::TypedStmt::Let {
             local: LocalId(1),
             value: ExprId(2),
         }];
@@ -9178,7 +9191,7 @@ mod tests {
                     },
                 ),
             ],
-            vec![ir::Stmt::AssignIndex {
+            vec![ir::TypedStmt::AssignIndex {
                 array: place(LocalId(0)),
                 index: ExprId(1),
                 value: ExprId(0),
@@ -9230,7 +9243,7 @@ mod tests {
                     },
                 ),
             ],
-            vec![ir::Stmt::LetPattern {
+            vec![ir::TypedStmt::LetPattern {
                 value: ExprId(1),
                 ty: item,
                 bindings: vec![],
@@ -9250,9 +9263,12 @@ mod tests {
         assert_eq!(inspections, [&place(LocalId(0))]);
         assert!(super::super::ownership::analyze(&function).passed());
         assert_storage_paths(&function);
-        source.body.statements.insert(0, ir::Stmt::Expr(ExprId(0)));
+        source
+            .body
+            .statements
+            .insert(0, ir::TypedStmt::Expr(ExprId(0)));
         assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
-        source.body.statements[0] = ir::Stmt::Declare { local: LocalId(0) };
+        source.body.statements[0] = ir::TypedStmt::Declare { local: LocalId(0) };
         source.params.clear();
         assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
     }
@@ -9291,7 +9307,10 @@ mod tests {
                     },
                 ),
             ],
-            vec![ir::Stmt::Expr(ExprId(2)), ir::Stmt::Expr(ExprId(3))],
+            vec![
+                ir::TypedStmt::Expr(ExprId(2)),
+                ir::TypedStmt::Expr(ExprId(3)),
+            ],
         );
         let function = nominal_lowered(&source);
         let reads = root_reads(&function);
@@ -9339,7 +9358,7 @@ mod tests {
                         },
                     ),
                 ],
-                vec![ir::Stmt::Expr(ExprId(1))],
+                vec![ir::TypedStmt::Expr(ExprId(1))],
             );
             let function = nominal_lowered(&source);
             assert_eq!(root_reads(&function).len(), 1);
@@ -9382,8 +9401,8 @@ mod tests {
                 expr(Ty::Int(IntTy::I32), ir::ExprKind::Int(IntValue::i32(7))),
                 expr(
                     Ty::Int(IntTy::I32),
-                    ir::ExprKind::Block(ir::Block {
-                        statements: vec![ir::Stmt::Assign {
+                    ir::ExprKind::Block(ir::TypedBlock {
+                        statements: vec![ir::TypedStmt::Assign {
                             local: LocalId(0),
                             value: ExprId(1),
                         }],
@@ -9392,8 +9411,8 @@ mod tests {
                 ),
             ],
             vec![
-                ir::Stmt::Declare { local: LocalId(0) },
-                ir::Stmt::AssignPlace {
+                ir::TypedStmt::Declare { local: LocalId(0) },
+                ir::TypedStmt::AssignPlace {
                     place: destination,
                     value: ExprId(3),
                 },
@@ -9415,7 +9434,7 @@ mod tests {
             .unwrap();
         let write = statements.iter().position(|s| matches!(&s.value, Statement::Assign { destination, .. } if destination.local == LocalId(0) && !destination.projection.is_empty())).unwrap();
         assert!(initialize < inspect && inspect < write);
-        let ir::Stmt::AssignPlace { value, .. } = &mut source.body.statements[1] else {
+        let ir::TypedStmt::AssignPlace { value, .. } = &mut source.body.statements[1] else {
             unreachable!()
         };
         *value = ExprId(2);
@@ -9451,7 +9470,7 @@ mod tests {
                     },
                 ),
             ],
-            vec![ir::Stmt::LetPattern {
+            vec![ir::TypedStmt::LetPattern {
                 value: ExprId(2),
                 ty: Ty::Int(IntTy::I32),
                 bindings: vec![],
@@ -9503,14 +9522,14 @@ mod tests {
                     ir::TypedExpr {
                         ty: Ty::Never,
                         completion: ir::Completion::Never,
-                        kind: ir::ExprKind::Block(ir::Block {
-                            statements: vec![ir::Stmt::Return(None)],
+                        kind: ir::ExprKind::Block(ir::TypedBlock {
+                            statements: vec![ir::TypedStmt::Return(None)],
                             tail: None,
                         }),
                     },
                     expr(
                         Ty::Unit,
-                        ir::ExprKind::Block(ir::Block {
+                        ir::ExprKind::Block(ir::TypedBlock {
                             statements: vec![],
                             tail: None,
                         }),
@@ -9520,7 +9539,7 @@ mod tests {
                         completion: ir::Completion::Never,
                         kind: ir::ExprKind::Match {
                             scrutinee: ExprId(0),
-                            arms: vec![ir::MatchArm {
+                            arms: vec![ir::TypedMatchArm {
                                 guard: None,
                                 pattern: ir::MatchPattern::Aggregate {
                                     ty: domain,
@@ -9535,7 +9554,7 @@ mod tests {
                         },
                     },
                 ],
-                vec![ir::Stmt::Expr(ExprId(2))],
+                vec![ir::TypedStmt::Expr(ExprId(2))],
             );
             source.locals.push(ir::LocalDecl {
                 name: "selected".into(),
@@ -9658,7 +9677,7 @@ mod tests {
             .statements
             .iter()
             .find_map(|statement| match statement {
-                ir::Stmt::LetElse { else_branch, .. } => Some(*else_branch),
+                ir::TypedStmt::LetElse { else_branch, .. } => Some(*else_branch),
                 _ => None,
             })
             .unwrap();
@@ -9666,7 +9685,7 @@ mod tests {
         // an actual abrupt edge or loop in the lowered failure branch.
         assert_eq!(source.exprs[otherwise.0].ty, Ty::Never);
         assert_eq!(source.exprs[otherwise.0].completion, ir::Completion::Never);
-        source.exprs[otherwise.0].kind = ir::ExprKind::Block(ir::Block {
+        source.exprs[otherwise.0].kind = ir::ExprKind::Block(ir::TypedBlock {
             statements: Vec::new(),
             tail: None,
         });
@@ -9682,8 +9701,8 @@ mod tests {
         });
         source.exprs[otherwise.0].kind = ir::ExprKind::Loop {
             id: LoopId(0),
-            body: ir::Block {
-                statements: vec![ir::Stmt::Expr(abrupt)],
+            body: ir::TypedBlock {
+                statements: vec![ir::TypedStmt::Expr(abrupt)],
                 tail: None,
             },
         };
@@ -10566,7 +10585,7 @@ mod tests {
                         child.clone(),
                         ir::ExprKind::Match {
                             scrutinee: ExprId(0),
-                            arms: vec![ir::MatchArm {
+                            arms: vec![ir::TypedMatchArm {
                                 guard: None,
                                 pattern: ir::MatchPattern::Aggregate {
                                     ty: ty.clone(),
@@ -10588,7 +10607,10 @@ mod tests {
                         },
                     ),
                 ],
-                vec![ir::Stmt::Expr(ExprId(2)), ir::Stmt::Expr(ExprId(3))],
+                vec![
+                    ir::TypedStmt::Expr(ExprId(2)),
+                    ir::TypedStmt::Expr(ExprId(3)),
+                ],
             );
             source.locals.push(ir::LocalDecl {
                 name: "selected".into(),
@@ -10624,7 +10646,7 @@ mod tests {
                 ))
             );
             assert!(super::super::ownership::analyze(&function).passed());
-            source.body.statements.push(ir::Stmt::Expr(ExprId(0)));
+            source.body.statements.push(ir::TypedStmt::Expr(ExprId(0)));
             assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
         }
     }
@@ -10642,7 +10664,7 @@ mod tests {
                     Ty::Bool,
                     ir::ExprKind::Match {
                         scrutinee: ExprId(0),
-                        arms: vec![ir::MatchArm {
+                        arms: vec![ir::TypedMatchArm {
                             guard: None,
                             pattern: ir::MatchPattern::Aggregate {
                                 ty,
@@ -10653,7 +10675,10 @@ mod tests {
                     },
                 ),
             ],
-            vec![ir::Stmt::Expr(ExprId(2)), ir::Stmt::Expr(ExprId(0))],
+            vec![
+                ir::TypedStmt::Expr(ExprId(2)),
+                ir::TypedStmt::Expr(ExprId(0)),
+            ],
         );
         let function = nominal_lowered(&source);
         assert_eq!(root_reads(&function).len(), 1);
@@ -10682,7 +10707,7 @@ mod tests {
                 expr(child.clone(), ir::ExprKind::Local(LocalId(1))),
             ],
             vec![
-                ir::Stmt::LetPattern {
+                ir::TypedStmt::LetPattern {
                     value: ExprId(0),
                     ty,
                     bindings: vec![ir::PatternBinding {
@@ -10691,8 +10716,8 @@ mod tests {
                         borrow: None,
                     }],
                 },
-                ir::Stmt::Expr(ExprId(1)),
-                ir::Stmt::Expr(ExprId(2)),
+                ir::TypedStmt::Expr(ExprId(1)),
+                ir::TypedStmt::Expr(ExprId(2)),
             ],
         );
         source.locals.push(ir::LocalDecl {
@@ -10710,7 +10735,7 @@ mod tests {
             matches!(reads[1], Operand::Copy(place) if place.projection == [Projection::Field(1)])
         );
         assert!(super::super::ownership::analyze(&function).passed());
-        source.body.statements.push(ir::Stmt::Expr(ExprId(0)));
+        source.body.statements.push(ir::TypedStmt::Expr(ExprId(0)));
         assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
     }
 
@@ -10738,9 +10763,9 @@ mod tests {
                 ),
             ],
             vec![
-                ir::Stmt::Expr(ExprId(1)),
-                ir::Stmt::Expr(ExprId(2)),
-                ir::Stmt::Expr(ExprId(0)),
+                ir::TypedStmt::Expr(ExprId(1)),
+                ir::TypedStmt::Expr(ExprId(2)),
+                ir::TypedStmt::Expr(ExprId(0)),
             ],
         );
         let function = nominal_lowered(&source);
@@ -10776,7 +10801,10 @@ mod tests {
                     },
                 ),
             ],
-            vec![ir::Stmt::Expr(ExprId(1)), ir::Stmt::Expr(ExprId(2))],
+            vec![
+                ir::TypedStmt::Expr(ExprId(1)),
+                ir::TypedStmt::Expr(ExprId(2)),
+            ],
         );
         let function = nominal_lowered(&source);
         let reads = root_reads(&function);
@@ -10784,10 +10812,10 @@ mod tests {
         assert!(matches!(reads[0], Operand::Move(p) if p.projection == [0].map(Projection::Field)));
         assert!(matches!(reads[1], Operand::Move(p) if p.projection == [1].map(Projection::Field)));
         assert!(super::super::ownership::analyze(&function).passed());
-        source.body.statements.push(ir::Stmt::Expr(ExprId(0)));
+        source.body.statements.push(ir::TypedStmt::Expr(ExprId(0)));
         assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
         source.body.statements.pop();
-        source.body.statements.push(ir::Stmt::Expr(ExprId(1)));
+        source.body.statements.push(ir::TypedStmt::Expr(ExprId(1)));
         assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
     }
 
@@ -10802,7 +10830,7 @@ mod tests {
                 expr(root.clone(), ir::ExprKind::Local(LocalId(0))),
                 expr(
                     root,
-                    ir::ExprKind::Block(ir::Block {
+                    ir::ExprKind::Block(ir::TypedBlock {
                         statements: vec![],
                         tail: Some(ExprId(0)),
                     }),
@@ -10822,14 +10850,14 @@ mod tests {
                     },
                 ),
             ],
-            vec![ir::Stmt::Expr(ExprId(2))],
+            vec![ir::TypedStmt::Expr(ExprId(2))],
         );
         let function = nominal_lowered(&source);
         let reads = root_reads(&function);
         assert_eq!(reads.len(), 1);
         assert!(matches!(reads[0], Operand::Move(p) if p.projection.is_empty()));
         assert!(super::super::ownership::analyze(&function).passed());
-        source.body.statements.push(ir::Stmt::Expr(ExprId(3)));
+        source.body.statements.push(ir::TypedStmt::Expr(ExprId(3)));
         assert!(!super::super::ownership::analyze(&nominal_lowered(&source)).passed());
     }
 
@@ -10850,7 +10878,7 @@ mod tests {
                     fields: vec![],
                 },
             )],
-            vec![ir::Stmt::Expr(ExprId(0))],
+            vec![ir::TypedStmt::Expr(ExprId(0))],
         );
         let function = nominal_lowered(&source);
         assert!(
@@ -10881,17 +10909,17 @@ mod tests {
             ty.clone(),
             vec![expr(ty.clone(), ir::ExprKind::Local(LocalId(0)))],
             vec![
-                ir::Stmt::LetPattern {
+                ir::TypedStmt::LetPattern {
                     value: ExprId(0),
                     ty: ty.clone(),
                     bindings: vec![],
                 },
-                ir::Stmt::LetPattern {
+                ir::TypedStmt::LetPattern {
                     value: ExprId(0),
                     ty,
                     bindings: vec![],
                 },
-                ir::Stmt::Expr(ExprId(0)),
+                ir::TypedStmt::Expr(ExprId(0)),
             ],
         );
         let function = nominal_lowered(&source);
@@ -10934,7 +10962,7 @@ mod tests {
                     },
                 ),
             ],
-            vec![ir::Stmt::Expr(ExprId(2))],
+            vec![ir::TypedStmt::Expr(ExprId(2))],
         );
         let function = nominal_lowered(&source);
         let calls: Vec<_> = function
@@ -11037,7 +11065,7 @@ mod tests {
                     },
                 ),
             ],
-            vec![ir::Stmt::Expr(ExprId(2))],
+            vec![ir::TypedStmt::Expr(ExprId(2))],
         );
         source.validate().unwrap();
         let function = nominal_lowered(&source);
@@ -11620,7 +11648,7 @@ mod tests {
             )],
             vec![],
         );
-        source.body.statements.push(ir::Stmt::LetPattern {
+        source.body.statements.push(ir::TypedStmt::LetPattern {
             value: ExprId(0),
             ty: Ty::Int(IntTy::I32),
             bindings: vec![],

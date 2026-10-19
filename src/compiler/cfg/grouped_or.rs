@@ -7,7 +7,7 @@ impl Lowerer<'_> {
         id: ExprId,
         source: &Place,
         rows: &[ir::MatchPattern],
-        arm: &ir::MatchArm,
+        arm: &ir::TypedMatchArm,
         destination: &Place,
         completes: bool,
         join: BlockId,

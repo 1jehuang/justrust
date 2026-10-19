@@ -500,6 +500,10 @@ pub trait SchemaCx {
             "associated constant has no canonical type substitution provider",
         ))
     }
+    fn closure_recipe(&self, provider: DeclId) -> Result<Option<ir::ClosureRecipeId>> {
+        let _ = provider;
+        Ok(None)
+    }
     fn associated_type_bounds(&self, associated: DeclId) -> Result<Arc<[DeclId]>> {
         let _ = associated;
         Ok(Arc::from([]))

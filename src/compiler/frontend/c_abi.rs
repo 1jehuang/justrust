@@ -233,7 +233,7 @@ impl PlanCtx {
     pub(in crate::compiler) fn c_abi_for(
         &self,
         decl: ir::DeclId,
-    ) -> Result<Option<(&FunctionAbi, crate::compiler::c_abi::Signature)>, String> {
+    ) -> Result<Option<(&FunctionAbi, crate::compiler::c_abi::CAbiSignature)>, String> {
         let Some(function) = self.registry.source_callable(decl) else {
             return Ok(None);
         };
@@ -266,7 +266,7 @@ impl PlanCtx {
             crate::compiler::c_abi::layout::of(&signature.signature.result, &repr, &self.budget)?;
         Ok(Some((
             entry,
-            crate::compiler::c_abi::Signature::new(params, result)?,
+            crate::compiler::c_abi::CAbiSignature::new(params, result)?,
         )))
     }
     pub(in crate::compiler) fn c_abi_symbol(&self, decl: ir::DeclId) -> Result<String, String> {

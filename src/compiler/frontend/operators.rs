@@ -202,8 +202,8 @@ impl type_check::Checker<'_> {
     pub(super) fn overloaded_index_assignment(
         &mut self,
         statement: &Stmt,
-        statements: &mut Vec<ir::Stmt>,
-    ) -> Result<Option<(ir::Stmt, bool)>, String> {
+        statements: &mut Vec<ir::TypedStmt>,
+    ) -> Result<Option<(ir::TypedStmt, bool)>, String> {
         let (base, literal, index, op, value) = match statement {
             Stmt::AssignIndex {
                 array,
@@ -269,9 +269,9 @@ impl type_check::Checker<'_> {
             false,
         )?;
         self.charge_node(
-            std::mem::size_of::<ir::Stmt>() * 2 + std::mem::size_of::<ir::TypedExpr>(),
+            std::mem::size_of::<ir::TypedStmt>() * 2 + std::mem::size_of::<ir::TypedExpr>(),
         )?;
-        statements.push(ir::Stmt::Let {
+        statements.push(ir::TypedStmt::Let {
             local: saved,
             value: rhs,
         });
@@ -288,7 +288,7 @@ impl type_check::Checker<'_> {
         self.record_operator(statement as *const Stmt as usize | 1, call)?;
         let completes = rhs_flow.completes && self.flow(call).completes;
         let carrier = self.temporary("$index_carrier", self.exprs[call.0].ty.clone(), false)?;
-        statements.push(ir::Stmt::Let {
+        statements.push(ir::TypedStmt::Let {
             local: carrier,
             value: call,
         });
@@ -303,13 +303,13 @@ impl type_check::Checker<'_> {
             projection: vec![ir::Projection::Deref],
         };
         let result = if let Some(op) = op {
-            ir::Stmt::AssignOp {
+            ir::TypedStmt::AssignOp {
                 place,
                 op,
                 value: loaded,
             }
         } else {
-            ir::Stmt::AssignPlace {
+            ir::TypedStmt::AssignPlace {
                 place,
                 value: loaded,
             }

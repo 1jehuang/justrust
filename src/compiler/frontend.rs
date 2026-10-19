@@ -36,6 +36,7 @@ mod c_abi;
 mod carrier_regions;
 mod char_literal;
 pub(super) mod closures;
+pub use closures::shape_seal::ClosureShapeSeal;
 mod function_qualifiers;
 mod generated_callables;
 mod generated_owners;
@@ -414,7 +415,7 @@ mod canonical_source_replay_tests {
             .iter()
             .position(|l| l.name == "right")
             .unwrap();
-        let ir::Stmt::Let {
+        let ir::TypedStmt::Let {
             value: initializer, ..
         } = source.body.statements[0]
         else {
@@ -2594,6 +2595,12 @@ pub(super) struct OriginalSource {
     narrow: Vec<RawSharedOccurrence>,
     root_positions: Vec<Option<usize>>,
 }
+
+impl OriginalSource {
+    pub(super) fn authored_identity(&self) -> &sr::OriginalBodyId {
+        &self.identity
+    }
+}
 impl CanonicalSourceCapability {
     fn render(&self, error: FactsError) -> String {
         let diagnostic = error.clone().into_legacy_diagnostic(&self.plan.budget);
@@ -3388,8 +3395,12 @@ fn validate_binding_coverage(
             let position = original.root_positions[*index]
                 .ok_or_else(|| FactsError::invalid(budget, "root binding lost checked position"))?;
             let matched = match checked.body.statements.get(position) {
-                Some(ir::Stmt::Let { local: actual, .. }) => !source.is_declare && actual == local,
-                Some(ir::Stmt::Declare { local: actual }) => source.is_declare && actual == local,
+                Some(ir::TypedStmt::Let { local: actual, .. }) => {
+                    !source.is_declare && actual == local
+                }
+                Some(ir::TypedStmt::Declare { local: actual }) => {
+                    source.is_declare && actual == local
+                }
                 _ => false,
             };
             if !matched {
@@ -3492,7 +3503,7 @@ fn source_binding_type(
                 "inferred-local source binding is outside shared replay",
             ));
         }
-        let Some(ir::Stmt::Let { local: actual, .. }) = checked.body.statements.get(statement)
+        let Some(ir::TypedStmt::Let { local: actual, .. }) = checked.body.statements.get(statement)
         else {
             return Err(FactsError::unsupported(
                 budget,
@@ -3650,7 +3661,7 @@ fn source_root_borrow_type(
     if let Some(literal) = origin.literal {
         let position = original.root_positions[index]
             .ok_or_else(|| FactsError::invalid(budget, "borrow literal lost root statement"))?;
-        let Some(ir::Stmt::Let {
+        let Some(ir::TypedStmt::Let {
             local: bound,
             value,
         }) = checked.body.statements.get(position)
@@ -4623,7 +4634,7 @@ pub(super) fn replay_source_body(
                 "shared absent context forged from annotation",
             ));
         }
-        if !matches!(checked.body.statements.get(statement),Some(ir::Stmt::Let{local,value}) if *local==output && *value==id)
+        if !matches!(checked.body.statements.get(statement),Some(ir::TypedStmt::Let{local,value}) if *local==output && *value==id)
         {
             return Err(FactsError::invalid(
                 budget,
@@ -15682,6 +15693,7 @@ pub struct DeclRegistry {
     trait_items: Vec<Vec<ir::DeclId>>,
     trait_default_callables: HashMap<(usize, usize), ir::DeclId>,
     associated_constants: associated_constants::Registry,
+    closure_recipes: HashMap<ir::DeclId, ir::ClosureRecipeId>,
     trait_associated_types: Vec<Vec<ir::DeclId>>,
     associated_type_bounds: HashMap<ir::DeclId, FrozenAssociatedBounds>,
     trait_imports: Vec<(ModuleId, TraitPath)>,
@@ -16584,6 +16596,7 @@ impl PlanCtx {
             trait_items: Vec::new(),
             trait_default_callables: HashMap::new(),
             associated_constants: associated_constants::Registry::default(),
+            closure_recipes: HashMap::new(),
             trait_associated_types: Vec::new(),
             associated_type_bounds: HashMap::new(),
             trait_imports: program.trait_imports.clone(),
@@ -16591,6 +16604,11 @@ impl PlanCtx {
             function_positions_sealed: false,
         };
         reserve_registry_map(&mut registry.functions, program.functions.len(), budget)?;
+        reserve_registry_map(
+            &mut registry.closure_recipes,
+            program.closure_sources.len(),
+            budget,
+        )?;
         reserve_registry_map(&mut registry.constants, program.constants.len(), budget)?;
         budget.retain_bytes(
             program
@@ -16909,6 +16927,18 @@ impl PlanCtx {
                 ir::DeclKind::Function,
                 index,
             )?;
+            let key = name_scope::path_key(program.names.as_ref(), &f.name, Namespace::Type)?;
+            if program
+                .closure_sources
+                .get(&key)
+                .is_some_and(|source| source.stored.is_some())
+            {
+                budget.charge_nodes(1)?;
+                budget.retain_bytes(std::mem::size_of::<ir::ClosureRecipeId>() + 32)?;
+                registry
+                    .closure_recipes
+                    .insert(id, ir::ClosureRecipeId::new());
+            }
             if program.in_prelude(f.module) {
                 prelude_callables.push((id, CallableSource::Free(index)));
             } else {
@@ -19261,6 +19291,13 @@ impl SchemaAdapter {
     }
 }
 impl tr::SchemaCx for SchemaAdapter {
+    fn closure_recipe(
+        &self,
+        provider: ir::DeclId,
+    ) -> Result<Option<ir::ClosureRecipeId>, tr::FactsError> {
+        self.source_closure_owner_site(provider)?;
+        Ok(self.registry.closure_recipes.get(&provider).cloned())
+    }
     fn closure_trait_kind(
         &self,
         declaration: ir::DeclId,

@@ -7016,7 +7016,7 @@ mod tests {
         );
         let mut replaced = false;
         for statement in &mut checked.body.statements {
-            if let ir::Stmt::AssignPlace { place, .. } = statement
+            if let ir::TypedStmt::AssignPlace { place, .. } = statement
                 && place.projection == [ir::Projection::ConstantIndex(0)]
             {
                 place.projection = vec![ir::Projection::DynamicIndex(index)];
@@ -8665,7 +8665,7 @@ mod tests {
                 mutable: false,
             }],
             exprs: vec![],
-            body: ir::Block {
+            body: ir::TypedBlock {
                 statements: vec![],
                 tail: None,
             },

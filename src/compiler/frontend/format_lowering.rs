@@ -301,7 +301,7 @@ impl Checker<'_> {
                 // Temporary value: own it for the statement, lend it out.
                 let ty = self.exprs[value.0].ty.clone();
                 let owner = self.temporary(&format!("$fmt_value{index}"), ty.clone(), false)?;
-                statements.push(ir::Stmt::Let {
+                statements.push(ir::TypedStmt::Let {
                     local: owner,
                     value: *value,
                 });
@@ -315,7 +315,7 @@ impl Checker<'_> {
                 (borrow, self.exprs[borrow.0].ty.clone())
             };
             let local = self.temporary(&format!("$fmt_arg{index}"), ty.clone(), false)?;
-            statements.push(ir::Stmt::Let { local, value: init });
+            statements.push(ir::TypedStmt::Let { local, value: init });
             reads.push((local, ty));
         }
         let mut run_pieces = vec![pieces[0].clone()];
@@ -347,7 +347,7 @@ impl Checker<'_> {
                 let pointer = &arguments[index] as *const Expr as usize | 2;
                 cap.record_call_at(pointer, call, &self.exprs[call.0].kind)?;
             }
-            statements.push(ir::Stmt::Expr(call));
+            statements.push(ir::TypedStmt::Expr(call));
             run_pieces = vec![pieces[index + 1].clone()];
         }
         self.flush_format_run(
@@ -359,7 +359,7 @@ impl Checker<'_> {
             newline,
         )?;
         Ok((
-            ir::ExprKind::Block(ir::Block {
+            ir::ExprKind::Block(ir::TypedBlock {
                 statements,
                 tail: None,
             }),
@@ -369,7 +369,7 @@ impl Checker<'_> {
 
     fn flush_format_run(
         &mut self,
-        statements: &mut Vec<ir::Stmt>,
+        statements: &mut Vec<ir::TypedStmt>,
         pieces: &mut Vec<String>,
         args: &mut Vec<ir::ExprId>,
         modes: &mut Vec<ir::FormatMode>,
@@ -400,7 +400,7 @@ impl Checker<'_> {
         args.clear();
         modes.clear();
         let id = self.format_lit(ir::Ty::Unit, kind)?;
-        statements.push(ir::Stmt::Expr(id));
+        statements.push(ir::TypedStmt::Expr(id));
         Ok(())
     }
 
@@ -434,7 +434,11 @@ pub(super) fn rust_ty_name(ty: &ir::Ty) -> String {
         ir::Ty::Enum(t) => format!("{}{}", strip(&t.def().name), args(&t.def().type_args)),
         ir::Ty::Ref { kind, referent } => format!(
             "&{}{}",
-            if *kind == ir::BorrowKind::Mut { "mut " } else { "" },
+            if *kind == ir::BorrowKind::Mut {
+                "mut "
+            } else {
+                ""
+            },
             rust_ty_name(referent)
         ),
         ir::Ty::Slice { element } => format!("[{}]", rust_ty_name(element)),

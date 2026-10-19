@@ -8,6 +8,8 @@ pub(in crate::compiler) mod check;
 mod fn_sugar;
 mod owner_source;
 mod prepare;
+pub(in crate::compiler) mod publication;
+pub(in crate::compiler) mod shape_seal;
 pub(super) mod stored;
 mod trait_source;
 pub(super) use stored::StoredClosureSyntax;

@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "shape_tests.rs"]
+mod membership_audit;
+
 #[test]
 fn closure_lowering_requires_exact_parent_body_and_mode() {
     let program = parse("fn main(){let n=7i32;let f=move ||n;}").unwrap();

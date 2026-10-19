@@ -2,8 +2,8 @@
 //! Projection classes do not replace per-step type/bounds checks or move analysis.
 use frontend::{Expr, Pattern, PlanCtx, Program, Stmt};
 use ir::{
-    Block, CheckedFunction, Completion, ExprId, ExprKind, IntTy, LocalDecl, LocalId, MatchArm,
-    MatchPattern, PatternBinding, Projection, Ty, TypedExpr,
+    CheckedFunction, Completion, ExprId, ExprKind, IntTy, LocalDecl, LocalId, MatchPattern,
+    PatternBinding, Projection, Ty, TypedBlock, TypedExpr, TypedMatchArm,
 };
 use justrust_engine::compiler::{cfg, frontend, ir};
 use std::sync::Arc;
@@ -66,7 +66,7 @@ fn fixture() -> CheckedFunction {
             TypedExpr {
                 ty: Ty::Unit,
                 completion: Completion::Returns,
-                kind: ExprKind::Block(Block {
+                kind: ExprKind::Block(TypedBlock {
                     statements: vec![],
                     tail: None,
                 }),
@@ -76,7 +76,7 @@ fn fixture() -> CheckedFunction {
                 completion: Completion::Returns,
                 kind: ExprKind::Match {
                     scrutinee: ExprId(0),
-                    arms: vec![MatchArm {
+                    arms: vec![TypedMatchArm {
                         pattern: MatchPattern::Aggregate {
                             ty,
                             bindings: vec![binding(1, 0), binding(2, 2)],
@@ -87,8 +87,8 @@ fn fixture() -> CheckedFunction {
                 },
             },
         ],
-        body: Block {
-            statements: vec![ir::Stmt::Expr(ExprId(2))],
+        body: TypedBlock {
+            statements: vec![ir::TypedStmt::Expr(ExprId(2))],
             tail: None,
         },
     };
@@ -96,7 +96,7 @@ fn fixture() -> CheckedFunction {
     function
 }
 
-fn arms(function: &mut CheckedFunction) -> &mut Vec<MatchArm> {
+fn arms(function: &mut CheckedFunction) -> &mut Vec<TypedMatchArm> {
     let ExprKind::Match { arms, .. } = &mut function.exprs[2].kind else {
         panic!("fixture match required")
     };
@@ -191,8 +191,8 @@ fn never_scrutinee_retains_explicit_nonempty_array_domain() {
     function.exprs[0] = TypedExpr {
         ty: Ty::Never,
         completion: Completion::Never,
-        kind: ExprKind::Block(Block {
-            statements: vec![ir::Stmt::Return(None)],
+        kind: ExprKind::Block(TypedBlock {
+            statements: vec![ir::TypedStmt::Return(None)],
             tail: None,
         }),
     };
@@ -405,7 +405,7 @@ fn unreachable_array_arm_still_validates_physical_indices() {
     };
     bindings[0].projection = vec![Projection::ConstantIndex(usize::MAX)];
     *arms(&mut function) = vec![
-        MatchArm {
+        TypedMatchArm {
             pattern: MatchPattern::Wildcard,
             guard: None,
             body: ExprId(1),
@@ -483,7 +483,7 @@ fn structural_ir_admission_does_not_grant_noncopy_indexed_move_permission() {
         TypedExpr {
             ty: Ty::Unit,
             completion: Completion::Returns,
-            kind: ExprKind::Block(Block {
+            kind: ExprKind::Block(TypedBlock {
                 statements: vec![],
                 tail: None,
             }),
@@ -493,7 +493,7 @@ fn structural_ir_admission_does_not_grant_noncopy_indexed_move_permission() {
             completion: Completion::Returns,
             kind: ExprKind::Match {
                 scrutinee: ExprId(0),
-                arms: vec![MatchArm {
+                arms: vec![TypedMatchArm {
                     pattern: MatchPattern::Aggregate {
                         ty: actual_array,
                         bindings: vec![PatternBinding {
@@ -508,8 +508,8 @@ fn structural_ir_admission_does_not_grant_noncopy_indexed_move_permission() {
             },
         },
     ];
-    function.body = Block {
-        statements: vec![ir::Stmt::Expr(ExprId(2))],
+    function.body = TypedBlock {
+        statements: vec![ir::TypedStmt::Expr(ExprId(2))],
         tail: None,
     };
     // This is well-formed structural IR, not a claim that Value implements Copy.

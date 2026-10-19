@@ -228,7 +228,8 @@ struct TemplateBodyFact {
     publication: Option<Arc<source_replay::CanonicalSourcePublication>>,
 }
 struct ClosureBodiesFact {
-    bodies: Arc<[frontend::closures::check::CheckedClosure]>,
+    bodies: Arc<[frontend::closures::publication::PublishedClosure]>,
+    publication: Option<frontend::closures::publication::ClosurePublicationProof>,
 }
 struct BodyLexicalFact {
     lexical: frontend::closures::graph_facts::LexicalBody,
@@ -721,9 +722,10 @@ impl Provider for CompilerProvider {
                         .map_err(Error::new)?
                     {
                         let owner_index = types.callable_index(owner).map_err(Error::new)?;
-                        let bodies: Arc<ClosureBodiesFact> = cx
-                            .read_fact(cx.request(function(TEMPLATE_BODY, owner_index)).get(1))
-                            .await?;
+                        let parent = cx.request(function(TEMPLATE_BODY, owner_index));
+                        let bodies: Arc<ClosureBodiesFact> = cx.read_fact(parent.get(1)).await?;
+                        let parent_body: Arc<TemplateBodyFact> =
+                            cx.read_fact(parent.get(0)).await?;
                         let declaration = types.callable_decl(index).map_err(Error::new)?;
                         let closure = bodies
                             .bodies
@@ -737,6 +739,19 @@ impl Provider for CompilerProvider {
                                 Error::new("closure body absent from its canonical parent fact")
                             })?
                             .clone();
+                        let publication = parent_body.publication.as_ref().ok_or_else(|| {
+                            Error::new("closure parent omitted finalized source publication")
+                        })?;
+                        let closure = bodies
+                            .publication
+                            .as_ref()
+                            .ok_or_else(|| {
+                                Error::new(
+                                    "closure parent omitted recipe/publication correspondence",
+                                )
+                            })?
+                            .restore_closure(&types, publication, &closure, &this.0.budget)
+                            .map_err(Error::new)?;
                         let mode = requested_mode.unwrap_or(closure.ty.kind());
                         if requested_mode == Some(closure.ty.kind()) {
                             return Err(Error::new("noncanonical primary closure capability key"));
@@ -753,6 +768,7 @@ impl Provider for CompilerProvider {
                             1,
                             ClosureBodiesFact {
                                 bodies: Arc::from([]),
+                                publication: None,
                             },
                         )?;
                         return cx.publish_fact(
@@ -921,10 +937,49 @@ impl Provider for CompilerProvider {
                             }
                         }
                     };
+                    let closure_publication = fact
+                        .publication
+                        .as_ref()
+                        .map(|publication| {
+                            frontend::closures::publication::ClosurePublicationProof::capture(
+                                &types,
+                                publication,
+                                &closures,
+                                &this.0.budget,
+                            )
+                        })
+                        .transpose()
+                        .map_err(Error::new)?;
+                    if !closures.is_empty() && closure_publication.is_none() {
+                        return Err(Error::new("closures require finalized parent publication"));
+                    }
+                    this.0
+                        .budget
+                        .retain_bytes(
+                            closures
+                                .len()
+                                .checked_mul(std::mem::size_of::<
+                                    frontend::closures::publication::PublishedClosure,
+                                >())
+                                .ok_or_else(|| {
+                                    Error::new("closure publication capacity overflow")
+                                })?,
+                        )
+                        .map_err(Error::new)?;
+                    let mut published_closures = Vec::with_capacity(closures.len());
+                    for closure in &closures {
+                        published_closures.push(
+                            frontend::closures::publication::PublishedClosure::capture(
+                                &types, closure,
+                            )
+                            .map_err(Error::new)?,
+                        );
+                    }
                     cx.publish_fact(
                         1,
                         ClosureBodiesFact {
-                            bodies: closures.into(),
+                            bodies: published_closures.into(),
+                            publication: closure_publication,
                         },
                     )?;
                     cx.publish_fact(0, fact)

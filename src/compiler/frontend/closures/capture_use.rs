@@ -151,7 +151,7 @@ fn binding_use(
 
 pub(super) fn analyze(
     exprs: &[ir::TypedExpr],
-    body: &ir::Block,
+    body: &ir::TypedBlock,
     locals: &[ir::LocalDecl],
     candidates: &HashMap<ir::LocalId, usize>,
     facts: ir::FactsCtx<'_>,
@@ -232,21 +232,19 @@ pub(super) fn analyze(
     while let Some(block) = blocks.pop() {
         for statement in &block.statements {
             let place = match statement {
-                ir::Stmt::Assign { local, .. } => Some(ir::Place {
+                ir::TypedStmt::Assign { local, .. } => Some(ir::Place {
                     local: *local,
                     projection: Vec::new(),
                 }),
-                ir::Stmt::AssignPlace { place, .. } | ir::Stmt::AssignOp { place, .. } => {
-                    Some(place.clone())
-                }
-                ir::Stmt::AssignIndex { array, .. } | ir::Stmt::AssignIndexOp { array, .. } => {
-                    Some(array.clone())
-                }
-                ir::Stmt::While { body, .. } => {
+                ir::TypedStmt::AssignPlace { place, .. }
+                | ir::TypedStmt::AssignOp { place, .. } => Some(place.clone()),
+                ir::TypedStmt::AssignIndex { array, .. }
+                | ir::TypedStmt::AssignIndexOp { array, .. } => Some(array.clone()),
+                ir::TypedStmt::While { body, .. } => {
                     blocks.push(body);
                     None
                 }
-                ir::Stmt::LetPattern {
+                ir::TypedStmt::LetPattern {
                     value, bindings, ..
                 } => {
                     projected.insert(*value);
@@ -273,7 +271,7 @@ pub(super) fn analyze(
                     }
                     None
                 }
-                ir::Stmt::LetElse { value, pattern, .. } => {
+                ir::TypedStmt::LetElse { value, pattern, .. } => {
                     projected.insert(*value);
                     if let Some(place) = expression_place(exprs, *value)? {
                         let mut usage = CaptureUse {

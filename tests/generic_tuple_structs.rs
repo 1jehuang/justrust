@@ -464,7 +464,7 @@ fn source_generic_tuple_declarations_keep_real_parameters_and_numeric_fields() {
     }
     assert_eq!(count, 19);
 }
-fn all_blocks(function: &ir::CheckedFunction) -> Vec<&ir::Block> {
+fn all_blocks(function: &ir::CheckedFunction) -> Vec<&ir::TypedBlock> {
     let mut blocks = vec![&function.body];
     for expression in &function.exprs {
         match &expression.kind {
@@ -487,7 +487,7 @@ fn all_blocks(function: &ir::CheckedFunction) -> Vec<&ir::Block> {
         let block = blocks[at];
         at += 1;
         for statement in &block.statements {
-            if let ir::Stmt::While { body, .. } = statement {
+            if let ir::TypedStmt::While { body, .. } = statement {
                 blocks.push(body);
             }
         }
@@ -562,7 +562,7 @@ fn generic_tuple_templates_and_concrete_domains_preserve_application_and_field_p
             for block in all_blocks(&function) {
                 for statement in &block.statements {
                     match statement {
-                        ir::Stmt::LetPattern {
+                        ir::TypedStmt::LetPattern {
                             ty: ir::Ty::Struct(_),
                             bindings,
                             ..
@@ -579,7 +579,7 @@ fn generic_tuple_templates_and_concrete_domains_preserve_application_and_field_p
                                 }
                             }
                         }
-                        ir::Stmt::LetElse { ty, pattern, .. } => {
+                        ir::TypedStmt::LetElse { ty, pattern, .. } => {
                             assert!(matches!(ty, ir::Ty::Struct(_)));
                             inspect_pattern(pattern, &mut sparse);
                         }

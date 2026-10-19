@@ -1,5 +1,27 @@
 # Closure callable foundation
 
+## Parent-minted shape authority
+
+Raw `ClosureTy` construction is not a callable proof. Each retained anonymous
+provider has an immutable source-recipe identity, distinct even between worlds
+with equal numeric declaration/snapshot IDs. Only the exact parent checker can
+seal its finalized owner arguments, site, provider, parameters, result, capture
+types, source places and capability. An arbitrary type-mapping callback preserves
+the original seal and cannot authorize changed metadata. Generic transformation
+needs a separate authenticated substitution protocol and remains unfinished.
+
+The parent also seals pure typed payload receipts for every supported receiver
+mode. These retain raw call traces, not validated trait-world/source capabilities,
+and retain neither a checked-body allocation nor a CFG or budget. Final source
+publication validates every mode and the exact authored-source correspondence,
+then retains only source/final-publication tokens and the exact shape seals.
+Child operations read both outputs of the canonical parent `TEMPLATE_BODY` and
+replay that correspondence before existing body/mode/lowering checks. A cloned
+token cannot authorize a changed operation, local, source site or mode body, and
+a republished parent is a distinct finalized publication. No placeholder or
+parent-to-child proof cycle is introduced. `shape_tests.rs` exercises raw/copy/
+callback/foreign-recipe and finalized-body transplantation controls.
+
 ## Acceptance coverage correction
 
 The general `tests/support/oracle.rs` historically compared stock with one default

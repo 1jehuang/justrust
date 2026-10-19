@@ -5024,7 +5024,7 @@ mod tests {
     #[test]
     fn multi_binder_template_proof_binds_full_environment_source_cfg_and_analysis() {
         let (_module_names, modules) = fixture_modules();
-        use super::super::ir::{Block, Completion, ExprKind, PlanBudget, TypedExpr};
+        use super::super::ir::{Completion, ExprKind, PlanBudget, TypedBlock, TypedExpr};
         let (env, parameters) = symbolic_pair();
         let ty = Ty::Tuple(Vec::from(parameters).into());
         let source = Arc::new(CheckedFunction {
@@ -5041,7 +5041,7 @@ mod tests {
                 completion: Completion::Returns,
                 kind: ExprKind::Local(LocalId(0)),
             }],
-            body: Block {
+            body: TypedBlock {
                 statements: vec![],
                 tail: Some(ExprId(0)),
             },
@@ -5203,7 +5203,7 @@ mod tests {
     #[test]
     fn generic_capabilities_bind_exact_source_and_cfg_and_refuse_failed_or_open_native_input() {
         let (_module_names, modules) = fixture_modules();
-        use super::super::ir::{Block, Completion, ExprKind, PlanBudget, TypedExpr};
+        use super::super::ir::{Completion, ExprKind, PlanBudget, TypedBlock, TypedExpr};
         let (env, parameter) = symbolic_parameter();
         let source = Arc::new(CheckedFunction {
             runtime_sites: Default::default(),
@@ -5219,7 +5219,7 @@ mod tests {
                 completion: Completion::Returns,
                 kind: ExprKind::Local(LocalId(0)),
             }],
-            body: Block {
+            body: TypedBlock {
                 statements: vec![],
                 tail: Some(ExprId(0)),
             },

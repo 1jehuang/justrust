@@ -538,7 +538,7 @@ fn real_iteration_plans_have_owned_downcasts_and_false_breaks_to_the_actual_loop
                 let ir::ExprKind::Loop { id, body } = &expression.kind else {
                     continue;
                 };
-                let [ir::Stmt::Expr(match_id)] = body.statements.as_slice() else {
+                let [ir::TypedStmt::Expr(match_id)] = body.statements.as_slice() else {
                     continue;
                 };
                 let ir::ExprKind::Match { arms, .. } = &function.exprs[match_id.0].kind else {
@@ -806,7 +806,7 @@ fn retained_newly_supported_decision_witnesses_publish_real_checked_predicates()
                 }
             }
             for statement in &function.body.statements {
-                if let ir::Stmt::LetElse {
+                if let ir::TypedStmt::LetElse {
                     pattern: pattern @ ir::MatchPattern::Decision { .. },
                     ..
                 } = statement

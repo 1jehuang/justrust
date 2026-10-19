@@ -27,7 +27,7 @@ fn source() -> ir::CheckedFunction {
                 kind: ir::ExprKind::NativeSyscall(vec![ir::ExprId(0); 7]),
             },
         ],
-        body: ir::Block {
+        body: ir::TypedBlock {
             statements: vec![],
             tail: Some(ir::ExprId(1)),
         },

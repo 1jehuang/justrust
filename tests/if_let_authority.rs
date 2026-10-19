@@ -1,7 +1,7 @@
 //! If-let authority controls use only actual parsed source owners and checked plans.
 //! Source authority errors are distinct from ordinary branch typing/scope errors.
 use frontend::{Block, Expr, Pattern, PlanCtx, Program};
-use ir::{CheckedFunction, ExprKind, FactsCtx, MatchArm, MatchPattern, Projection};
+use ir::{CheckedFunction, ExprKind, FactsCtx, MatchPattern, Projection, TypedMatchArm};
 use justrust_engine::compiler::traits::ValidatedFacts;
 use justrust_engine::compiler::{cfg, frontend, ir};
 use std::sync::Arc;
@@ -266,7 +266,7 @@ fn checked_fixture() -> (
     let (other, _) = typed(&program, &plan, &budget, "other");
     (checked, facts, other, program)
 }
-fn arms(function: &CheckedFunction) -> &[MatchArm] {
+fn arms(function: &CheckedFunction) -> &[TypedMatchArm] {
     function
         .exprs
         .iter()
@@ -276,7 +276,7 @@ fn arms(function: &CheckedFunction) -> &[MatchArm] {
         })
         .expect("actual checked if-let Match IR")
 }
-fn arms_mut(function: &mut CheckedFunction) -> &mut Vec<MatchArm> {
+fn arms_mut(function: &mut CheckedFunction) -> &mut Vec<TypedMatchArm> {
     function
         .exprs
         .iter_mut()

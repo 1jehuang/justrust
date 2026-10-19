@@ -140,8 +140,8 @@ impl type_check::Checker<'_> {
                             usize_ty.clone(),
                             false,
                         )?;
-                        self.charge_node(std::mem::size_of::<ir::Stmt>())?;
-                        statements.push(ir::Stmt::Let {
+                        self.charge_node(std::mem::size_of::<ir::TypedStmt>())?;
+                        statements.push(ir::TypedStmt::Let {
                             local: saved,
                             value,
                         });
@@ -192,8 +192,8 @@ impl type_check::Checker<'_> {
                         usize_ty.clone(),
                         false,
                     )?;
-                    self.charge_node(std::mem::size_of::<ir::Stmt>())?;
-                    statements.push(ir::Stmt::Let {
+                    self.charge_node(std::mem::size_of::<ir::TypedStmt>())?;
+                    statements.push(ir::TypedStmt::Let {
                         local: saved,
                         value: index,
                     });
@@ -237,7 +237,7 @@ impl type_check::Checker<'_> {
             } else {
                 ir::Completion::Never
             },
-            kind: ir::ExprKind::Block(ir::Block {
+            kind: ir::ExprKind::Block(ir::TypedBlock {
                 statements,
                 tail: completes.then_some(borrowed),
             }),

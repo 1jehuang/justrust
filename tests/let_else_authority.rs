@@ -298,36 +298,36 @@ fn fixture() -> Fixture {
         _program: program,
     }
 }
-fn checked_statement(function: &CheckedFunction) -> &ir::Stmt {
+fn checked_statement(function: &CheckedFunction) -> &ir::TypedStmt {
     function
         .body
         .statements
         .iter()
-        .find(|statement| matches!(statement, ir::Stmt::LetElse { .. }))
+        .find(|statement| matches!(statement, ir::TypedStmt::LetElse { .. }))
         .expect("actual checked persistent let-else statement")
 }
-fn checked_statement_mut(function: &mut CheckedFunction) -> &mut ir::Stmt {
+fn checked_statement_mut(function: &mut CheckedFunction) -> &mut ir::TypedStmt {
     function
         .body
         .statements
         .iter_mut()
-        .find(|statement| matches!(statement, ir::Stmt::LetElse { .. }))
+        .find(|statement| matches!(statement, ir::TypedStmt::LetElse { .. }))
         .expect("actual checked persistent let-else statement")
 }
 fn checked_pattern(function: &CheckedFunction) -> &MatchPattern {
-    let ir::Stmt::LetElse { pattern, .. } = checked_statement(function) else {
+    let ir::TypedStmt::LetElse { pattern, .. } = checked_statement(function) else {
         unreachable!()
     };
     pattern
 }
 fn checked_pattern_mut(function: &mut CheckedFunction) -> &mut MatchPattern {
-    let ir::Stmt::LetElse { pattern, .. } = checked_statement_mut(function) else {
+    let ir::TypedStmt::LetElse { pattern, .. } = checked_statement_mut(function) else {
         unreachable!()
     };
     pattern
 }
 fn else_id(function: &CheckedFunction) -> ir::ExprId {
-    let ir::Stmt::LetElse { else_branch, .. } = checked_statement(function) else {
+    let ir::TypedStmt::LetElse { else_branch, .. } = checked_statement(function) else {
         unreachable!()
     };
     *else_branch
@@ -377,11 +377,11 @@ fn genuine_letelse_bindings_persist_for_post_statement_read_and_end_scope_cleanu
 #[test]
 fn checked_letelse_domain_cannot_import_other_actual_enum_owner() {
     let mut fixture = fixture();
-    let ir::Stmt::LetElse { ty, .. } = checked_statement(&fixture.other) else {
+    let ir::TypedStmt::LetElse { ty, .. } = checked_statement(&fixture.other) else {
         unreachable!()
     };
     let donor = ty.clone();
-    let ir::Stmt::LetElse { ty, .. } = checked_statement_mut(&mut fixture.checked) else {
+    let ir::TypedStmt::LetElse { ty, .. } = checked_statement_mut(&mut fixture.checked) else {
         unreachable!()
     };
     *ty = donor;
@@ -465,7 +465,7 @@ fn checked_letelse_requires_actual_never_else_type() {
     fixture.checked.exprs[id.0] = ir::TypedExpr {
         ty: ir::Ty::Unit,
         completion: ir::Completion::Returns,
-        kind: ExprKind::Block(ir::Block {
+        kind: ExprKind::Block(ir::TypedBlock {
             statements: vec![],
             tail: None,
         }),
@@ -488,7 +488,7 @@ fn forged_never_annotation_cannot_make_empty_else_block_diverge() {
     assert_eq!(otherwise.completion, ir::Completion::Never);
     // Preserve the forged claim deliberately. The block has no return, loop,
     // break, continue or call and really reaches its continuation.
-    otherwise.kind = ExprKind::Block(ir::Block {
+    otherwise.kind = ExprKind::Block(ir::TypedBlock {
         statements: vec![],
         tail: None,
     });

@@ -7,9 +7,9 @@ use std::sync::Arc;
 pub(super) type Row = (usize, usize, Arc<ir::RuntimeLocation>);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct RuntimeSites(Arc<[Row]>);
+pub struct CfgRuntimeSites(Arc<[Row]>);
 
-impl RuntimeSites {
+impl CfgRuntimeSites {
     pub(super) fn from_lowering(mut rows: Vec<Row>) -> Result<Self, String> {
         rows.sort_unstable_by_key(|row| (row.0, row.1));
         if rows

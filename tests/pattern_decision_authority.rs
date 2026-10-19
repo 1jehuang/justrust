@@ -218,7 +218,7 @@ fn real_decision_clients_share_match_iflet_whilelet_and_letelse_checked_ingress(
         let statement_decision = checked.body.statements.iter().any(|statement| {
             matches!(
                 statement,
-                ir::Stmt::LetElse {
+                ir::TypedStmt::LetElse {
                     pattern: MatchPattern::Decision { .. },
                     ..
                 }

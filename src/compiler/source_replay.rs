@@ -848,6 +848,10 @@ pub(super) struct CanonicalSourcePublication {
     facts: Arc<tr::ValidatedFacts>,
 }
 impl CanonicalSourcePublication {
+    /// Authored recipe identity is not the finalized publication token.
+    pub(super) fn authored_identity(&self) -> &OriginalBodyId {
+        self.original.source.authored_identity()
+    }
     pub(super) fn identity(&self) -> &OriginalBodyId {
         &self.identity
     }

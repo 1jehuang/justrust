@@ -687,7 +687,7 @@ fn retained_newly_supported_decision_witnesses_publish_real_checked_predicates()
                 }
             }
             for statement in &function.body.statements {
-                if let ir::Stmt::LetElse {
+                if let ir::TypedStmt::LetElse {
                     pattern: pattern @ ir::MatchPattern::Decision { .. },
                     ..
                 } = statement

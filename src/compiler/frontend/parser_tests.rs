@@ -449,7 +449,7 @@ fn tuple_patterns_preserve_old_scope_and_simultaneous_fresh_bindings() {
     let env = type_env(&program).unwrap();
     let checked = type_function_with_env(&program, 1, &env).unwrap();
     checked.validate().unwrap();
-    let ir::Stmt::LetPattern {
+    let ir::TypedStmt::LetPattern {
         value, bindings, ..
     } = &checked.body.statements[1]
     else {
@@ -483,7 +483,7 @@ fn tuple_patterns_preserve_old_scope_and_simultaneous_fresh_bindings() {
             .iter()
             .any(|expr| matches!(expr.kind, ir::ExprKind::Local(ir::LocalId(0))))
     );
-    let ir::Stmt::LetPattern { bindings, .. } = &checked.body.statements[3] else {
+    let ir::TypedStmt::LetPattern { bindings, .. } = &checked.body.statements[3] else {
         panic!("expected wildcard")
     };
     assert!(bindings.is_empty());
@@ -513,7 +513,7 @@ fn struct_patterns_publish_source_order_paths_and_nominal_types() {
     let env = type_env(&program).unwrap();
     let checked = type_function_with_env(&program, 0, &env).unwrap();
     checked.validate().unwrap();
-    let ir::Stmt::LetPattern { ty, bindings, .. } = &checked.body.statements[1] else {
+    let ir::TypedStmt::LetPattern { ty, bindings, .. } = &checked.body.statements[1] else {
         panic!("expected struct pattern")
     };
     assert_eq!(
@@ -672,7 +672,7 @@ fn struct_initializers_retain_source_order_and_checked_field_indices() {
     );
     assert!(
             body.body.statements.iter().any(
-                |stmt| matches!(stmt,ir::Stmt::AssignPlace{place,..} if place.projection==vec![ir::Projection::Field(0)])
+                |stmt| matches!(stmt,ir::TypedStmt::AssignPlace{place,..} if place.projection==vec![ir::Projection::Field(0)])
             )
         );
 }

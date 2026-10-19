@@ -68,7 +68,7 @@ impl type_check::Checker<'_> {
         place: &Place,
         op: Option<BinaryOp>,
         value: &Expr,
-    ) -> Result<Option<(ir::Stmt, bool)>, String> {
+    ) -> Result<Option<(ir::TypedStmt, bool)>, String> {
         let Some((FieldSelector::ConstantIndex(index), prefix)) = place.fields.split_last() else {
             return Ok(None);
         };
@@ -130,7 +130,7 @@ impl type_check::Checker<'_> {
         index: &Expr,
         op: Option<BinaryOp>,
         value: &Expr,
-    ) -> Result<Option<(ir::Stmt, bool)>, String> {
+    ) -> Result<Option<(ir::TypedStmt, bool)>, String> {
         let (mut place, ty, _) = self.checked_place(array)?;
         let Some(element) = ty.mut_slice_element() else {
             if ty.slice_ref_element().is_some() {
@@ -169,13 +169,13 @@ impl type_check::Checker<'_> {
         let completes = flow.completes && index_flow.completes;
         Ok(Some((
             match op {
-                Some(op) => ir::Stmt::AssignIndexOp {
+                Some(op) => ir::TypedStmt::AssignIndexOp {
                     array: place,
                     index,
                     op,
                     value,
                 },
-                None => ir::Stmt::AssignIndex {
+                None => ir::TypedStmt::AssignIndex {
                     array: place,
                     index,
                     value,

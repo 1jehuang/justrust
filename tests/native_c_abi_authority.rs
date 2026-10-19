@@ -89,7 +89,7 @@ fn private_carriers_are_not_c_storage_and_forged_transport_is_rejected() {
     let mut parameters = vec![word.clone(); 5];
     parameters.push(pair);
     parameters.push(word.clone());
-    let mut signature = c_abi::Signature::new(parameters, word).unwrap();
+    let mut signature = c_abi::CAbiSignature::new(parameters, word).unwrap();
     assert!(matches!(
         signature.plan.arguments[5],
         Transport::Memory { offset: 0 }

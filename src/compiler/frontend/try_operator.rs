@@ -101,7 +101,7 @@ impl Checker<'_> {
                 index,
             })
         };
-        let success_arm = ir::MatchArm {
+        let success_arm = ir::TypedMatchArm {
             guard: None,
             pattern: ir::MatchPattern::EnumVariant {
                 ty: input.clone(),
@@ -153,12 +153,12 @@ impl Checker<'_> {
         let exit = self.try_expr(
             ir::Ty::Never,
             ir::Completion::Never,
-            ir::ExprKind::Block(ir::Block {
-                statements: vec![ir::Stmt::Return(Some(residual))],
+            ir::ExprKind::Block(ir::TypedBlock {
+                statements: vec![ir::TypedStmt::Return(Some(residual))],
                 tail: None,
             }),
         )?;
-        let failure_arm = ir::MatchArm {
+        let failure_arm = ir::TypedMatchArm {
             guard: None,
             pattern: ir::MatchPattern::EnumVariant {
                 ty: input.clone(),

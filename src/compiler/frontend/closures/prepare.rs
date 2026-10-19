@@ -70,6 +70,7 @@ impl Checker<'_> {
         );
         child.declaration = Some(provider);
         child.inferred_closure_result = matches!(syntax.result, Type::Infer);
+        child.closure_source_recipe = self.closure_source_recipe.clone();
         child.install_lexical_scope(syntax.lexical_scope)?;
         child.capture_parent_scope = self.lexical_scope;
         let receiver = child.temporary("closure self", ir::Ty::Unit, false)?;
@@ -112,7 +113,7 @@ impl Checker<'_> {
             child.locals[local.0].mutable = syntax.param_mut.get(index).copied().unwrap_or(false);
             let base = child.for_expr(arguments_ty.clone(), ir::ExprKind::Local(arguments))?;
             let value = child.for_expr(ty.clone(), ir::ExprKind::Field { base, index })?;
-            prefix.push(ir::Stmt::Let { local, value });
+            prefix.push(ir::TypedStmt::Let { local, value });
         }
         let expectation = match result_hint.as_ref() {
             Some(ty) if matches!(syntax.result, Type::Infer) => Expectation::Inferred(ty),
@@ -192,17 +193,19 @@ impl Checker<'_> {
             }
         }
         let closure = Arc::new(
-            ir::ClosureTy::new(
-                owner,
-                Arc::from([]),
-                syntax.site,
-                provider,
-                parameter_types.into(),
-                result.clone(),
-                capture_types.into(),
-                kind,
-            )
-            .with_sources(sources.into()),
+            self.seal_closure_shape(
+                ir::ClosureTy::new(
+                    owner,
+                    Arc::from([]),
+                    syntax.site,
+                    provider,
+                    parameter_types.into(),
+                    result.clone(),
+                    capture_types.into(),
+                    kind,
+                )
+                .with_sources(sources.into()),
+            )?,
         );
         let mut modes = Vec::new();
         for mode in [
@@ -256,6 +259,8 @@ impl Checker<'_> {
                 body: Arc::new(checked),
             });
         }
+        let authority =
+            super::publication::CheckedClosureAuthority::capture(plan, &closure, &modes)?;
         let primary = modes
             .iter()
             .find(|checked| checked.mode == kind)
@@ -267,6 +272,7 @@ impl Checker<'_> {
             ty: closure.clone(),
             body: primary,
             modes: modes.into(),
+            authority,
         });
         Ok(Some(closure))
     }

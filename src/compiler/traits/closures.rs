@@ -73,6 +73,27 @@ impl ValidatedTraitWorld {
         closure: &ir::ClosureTy,
         env: &GenericEnv,
     ) -> Result<()> {
+        let recipe = self
+            .schema
+            .closure_recipe(closure.provider())?
+            .ok_or_else(|| {
+                FactsError::invalid(
+                    &self.budget,
+                    "closure metadata has no retained source recipe",
+                )
+            })?;
+        let seal = closure.shape_seal().ok_or_else(|| {
+            FactsError::invalid(
+                &self.budget,
+                "closure metadata lacks its parent-minted final shape seal",
+            )
+        })?;
+        if !seal.validates(&recipe, closure, |left, right| self.eq_ty(left, right, 0))? {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "closure metadata differs from its checked source recipe or final shape",
+            ));
+        }
         if self.schema.closure_owner_site(closure.provider())?
             != Some((closure.owner(), closure.site()))
         {

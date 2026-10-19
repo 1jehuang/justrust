@@ -2,7 +2,8 @@
 //! No synthetic nominal factory, source handle, or resolution certificate is used.
 use frontend::{Expr, Pattern, PlanCtx, Program, Stmt};
 use ir::{
-    CheckedFunction, ExprKind, FactsCtx, MatchArm, MatchPattern, PatternBinding, Projection, Ty,
+    CheckedFunction, ExprKind, FactsCtx, MatchPattern, PatternBinding, Projection, Ty,
+    TypedMatchArm,
 };
 use justrust_engine::compiler::traits::ValidatedFacts;
 use justrust_engine::compiler::{cfg, frontend, ir};
@@ -93,7 +94,7 @@ fn fixture() -> Fixture {
     }
 }
 
-fn arms(function: &CheckedFunction) -> &[MatchArm] {
+fn arms(function: &CheckedFunction) -> &[TypedMatchArm] {
     function
         .exprs
         .iter()
@@ -104,7 +105,7 @@ fn arms(function: &CheckedFunction) -> &[MatchArm] {
         .expect("real checked match")
 }
 
-fn arms_mut(function: &mut CheckedFunction) -> &mut Vec<MatchArm> {
+fn arms_mut(function: &mut CheckedFunction) -> &mut Vec<TypedMatchArm> {
     function
         .exprs
         .iter_mut()
@@ -146,7 +147,7 @@ fn let_bindings(function: &CheckedFunction) -> (&Ty, &[PatternBinding]) {
         .statements
         .iter()
         .find_map(|statement| match statement {
-            ir::Stmt::LetPattern { ty, bindings, .. } => Some((ty, bindings.as_slice())),
+            ir::TypedStmt::LetPattern { ty, bindings, .. } => Some((ty, bindings.as_slice())),
             _ => None,
         })
         .expect("real checked single-variant let")
@@ -158,7 +159,7 @@ fn let_bindings_mut(function: &mut CheckedFunction) -> &mut Vec<PatternBinding> 
         .statements
         .iter_mut()
         .find_map(|statement| match statement {
-            ir::Stmt::LetPattern { bindings, .. } => Some(bindings),
+            ir::TypedStmt::LetPattern { bindings, .. } => Some(bindings),
             _ => None,
         })
         .expect("real checked single-variant let")

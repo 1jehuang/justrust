@@ -15,6 +15,7 @@ pub(in crate::compiler) struct CheckedClosure {
     pub ty: Arc<ir::ClosureTy>,
     pub body: Arc<ir::CheckedFunction>,
     pub modes: Arc<[CheckedClosureBody]>,
+    pub(super) authority: Arc<super::publication::CheckedClosureAuthority>,
 }
 impl CheckedClosure {
     pub(in crate::compiler) fn body_for(
@@ -163,6 +164,7 @@ impl PlanCtx {
         original: &CheckedClosure,
         target: &ir::CallTarget,
     ) -> Result<(), String> {
+        original.authority.validate(self, original)?;
         if target.declaration != original.ty.provider() {
             return Err("closure provider changed from its parent-body fact".into());
         }

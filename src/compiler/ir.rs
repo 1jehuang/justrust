@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 mod call_value_types;
 #[path = "ir/closure.rs"]
 mod closure;
-pub use closure::{CaptureKind, CaptureSource, ClosureKind, ClosureTy};
+pub use closure::{CaptureKind, CaptureSource, ClosureKind, ClosureRecipeId, ClosureTy};
 #[path = "ir/type_alignment.rs"]
 mod type_alignment;
 pub use type_alignment::TypeAlignmentQuery;
@@ -1220,9 +1220,79 @@ struct GeneratedBodyShape {
     params: Arc<[LocalId]>,
     locals: Arc<[LocalDecl]>,
     exprs: Arc<[TypedExpr]>,
-    body: Block,
+    body: TypedBlock,
     evidence: Arc<[CallEvidence]>,
     contract: Arc<RefContract>,
+}
+
+/// Pure typed payload receipt. It retains neither a trait world, a CFG proof,
+/// a budget, nor the enclosing checked-body allocation.
+#[derive(Clone, Debug)]
+pub(in crate::compiler) struct ClosureBodyShape(GeneratedBodyShape, Ty);
+impl ClosureBodyShape {
+    pub(in crate::compiler) fn capture(
+        body: &CheckedFunction,
+        facts: &super::traits::ValidatedFacts,
+        budget: &PlanBudget,
+    ) -> Result<Self, String> {
+        if body.body_substitution.is_some() {
+            return Err("closure source receipt cannot seal an instantiated body".into());
+        }
+        GeneratedBodyShape::capture(body, facts, budget)
+            .map(|shape| Self(shape, body.result.clone()))
+    }
+    pub(in crate::compiler) fn validate(
+        &self,
+        body: &CheckedFunction,
+        facts: &super::traits::ValidatedFacts,
+        budget: &PlanBudget,
+    ) -> Result<(), String> {
+        if body.body_substitution.is_some() {
+            return Err("closure source receipt was replaced with an instantiated body".into());
+        }
+        if !identical_type(&self.1, &body.result, budget)? {
+            return Err("closure source receipt changed its result type".into());
+        }
+        self.0.validate(body, facts, budget)
+    }
+    /// Rebuild task-local checked storage from a pure immutable graph payload.
+    /// No substitution proof or enclosing publication is retained in the payload.
+    pub(in crate::compiler) fn restore(
+        &self,
+        facts: &super::traits::ValidatedFacts,
+        budget: &PlanBudget,
+    ) -> Result<CheckedFunction, String> {
+        budget.charge_work(self.0.locals.len().saturating_add(self.0.exprs.len()))?;
+        budget.retain_bytes(
+            self.0
+                .locals
+                .len()
+                .checked_mul(std::mem::size_of::<LocalDecl>())
+                .and_then(|bytes| {
+                    self.0
+                        .exprs
+                        .len()
+                        .checked_mul(std::mem::size_of::<TypedExpr>())
+                        .and_then(|exprs| bytes.checked_add(exprs))
+                })
+                .ok_or("closure body reconstruction capacity overflow")?,
+        )?;
+        let body = CheckedFunction {
+            runtime_sites: self.0.runtime_sites.clone(),
+            call_evidence: self.0.evidence.clone(),
+            body_substitution: None,
+            ref_contract: self.0.contract.clone(),
+            name: self.0.name.clone(),
+            params: self.0.params.to_vec(),
+            result: self.1.clone(),
+            locals: self.0.locals.to_vec(),
+            exprs: self.0.exprs.to_vec(),
+            body: self.0.body.clone(),
+        };
+        self.validate(&body, facts, budget)?;
+        body.validate_with_facts(FactsCtx::from_validated(facts))?;
+        Ok(body)
+    }
 }
 
 /// Guard derived metadata equality against expanding independently shared type
@@ -1318,8 +1388,8 @@ pub(super) fn identical_call_types(
     Ok(true)
 }
 fn identical_block_types(
-    a: &Block,
-    b: &Block,
+    a: &TypedBlock,
+    b: &TypedBlock,
     budget: &PlanBudget,
     depth: usize,
 ) -> Result<bool, String> {
@@ -1330,16 +1400,16 @@ fn identical_block_types(
     }
     for (a, b) in a.statements.iter().zip(&b.statements) {
         match (a, b) {
-            (Stmt::LetPattern { ty: a, .. }, Stmt::LetPattern { ty: b, .. })
+            (TypedStmt::LetPattern { ty: a, .. }, TypedStmt::LetPattern { ty: b, .. })
                 if !identical_type(a, b, budget)? =>
             {
                 return Ok(false);
             }
             (
-                Stmt::LetElse {
+                TypedStmt::LetElse {
                     ty: a, pattern: pa, ..
                 },
-                Stmt::LetElse {
+                TypedStmt::LetElse {
                     ty: b, pattern: pb, ..
                 },
             ) => {
@@ -1347,7 +1417,7 @@ fn identical_block_types(
                     return Ok(false);
                 }
             }
-            (Stmt::While { body: a, .. }, Stmt::While { body: b, .. })
+            (TypedStmt::While { body: a, .. }, TypedStmt::While { body: b, .. })
                 if !identical_block_types(a, b, budget, depth + 1)? =>
             {
                 return Ok(false);
@@ -3489,31 +3559,31 @@ impl<C: SubstitutionCx> Instantiate<'_, C> {
         }
         Ok(())
     }
-    fn block(&mut self, block: &mut Block, depth: usize) -> Result<(), String> {
+    fn block(&mut self, block: &mut TypedBlock, depth: usize) -> Result<(), String> {
         self.budget.check_depth(depth)?;
         self.budget.charge_work(block.statements.len())?;
         for statement in &mut block.statements {
             match statement {
-                Stmt::AssignOp { place, .. } | Stmt::AssignPlace { place, .. } => {
+                TypedStmt::AssignOp { place, .. } | TypedStmt::AssignPlace { place, .. } => {
                     self.path(&mut place.projection)?
                 }
-                Stmt::AssignIndexOp { array, .. } | Stmt::AssignIndex { array, .. } => {
+                TypedStmt::AssignIndexOp { array, .. } | TypedStmt::AssignIndex { array, .. } => {
                     self.path(&mut array.projection)?
                 }
-                Stmt::LetPattern { ty, bindings, .. } => {
+                TypedStmt::LetPattern { ty, bindings, .. } => {
                     *ty = self.ty(ty)?;
                     self.bindings(bindings)?;
                 }
-                Stmt::LetElse { ty, pattern, .. } => {
+                TypedStmt::LetElse { ty, pattern, .. } => {
                     *ty = self.ty(ty)?;
                     self.pattern(pattern)?;
                 }
-                Stmt::While { body, .. } => self.block(body, depth + 1)?,
-                Stmt::Declare { .. }
-                | Stmt::Let { .. }
-                | Stmt::Assign { .. }
-                | Stmt::Expr(_)
-                | Stmt::Return(_) => {}
+                TypedStmt::While { body, .. } => self.block(body, depth + 1)?,
+                TypedStmt::Declare { .. }
+                | TypedStmt::Let { .. }
+                | TypedStmt::Assign { .. }
+                | TypedStmt::Expr(_)
+                | TypedStmt::Return(_) => {}
             }
         }
         Ok(())
@@ -5386,7 +5456,7 @@ pub struct CheckedFunction {
     pub result: Ty,
     pub locals: Vec<LocalDecl>,
     pub exprs: Vec<TypedExpr>,
-    pub body: Block,
+    pub body: TypedBlock,
 }
 
 pub const MAX_REGION_PARAMS: usize = 64;
@@ -6508,8 +6578,8 @@ impl TypedExpr {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Block {
-    pub statements: Vec<Stmt>,
+pub struct TypedBlock {
+    pub statements: Vec<TypedStmt>,
     pub tail: Option<ExprId>,
 }
 
@@ -6686,7 +6756,7 @@ fn pattern_types_equal_with_facts(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Stmt {
+pub enum TypedStmt {
     AssignOp {
         place: Place,
         op: BinaryOp,
@@ -6737,7 +6807,7 @@ pub enum Stmt {
     While {
         id: LoopId,
         condition: ExprId,
-        body: Block,
+        body: TypedBlock,
     },
 }
 
@@ -6880,7 +6950,7 @@ pub enum MatchPattern {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MatchArm {
+pub struct TypedMatchArm {
     pub pattern: MatchPattern,
     /// Bool guard evaluated after bindings; false falls through to later arms.
     pub guard: Option<ExprId>,
@@ -7221,7 +7291,7 @@ pub enum ExprKind {
     },
     Match {
         scrutinee: ExprId,
-        arms: Vec<MatchArm>,
+        arms: Vec<TypedMatchArm>,
     },
     Int(IntValue),
     Bool(bool),
@@ -7258,19 +7328,19 @@ pub enum ExprKind {
     },
     If {
         condition: ExprId,
-        then_block: Block,
-        else_block: Block,
+        then_block: TypedBlock,
+        else_block: TypedBlock,
     },
-    Block(Block),
+    Block(TypedBlock),
     /// A single-evaluation block with a value-producing labeled break target.
     LabeledBlock {
         id: LoopId,
-        body: Block,
+        body: TypedBlock,
     },
     /// Repeats the body until an associated break produces a value.
     Loop {
         id: LoopId,
-        body: Block,
+        body: TypedBlock,
     },
     /// Evaluates the operand before transferring to the resolved target's exit.
     /// This expression itself never completes normally, even for a unit break.
@@ -7321,7 +7391,7 @@ impl CheckedFunction {
     /// Keep that uncertainty explicit, without expanding expression graphs.
     fn conditional_block_flow<'a>(
         &'a self,
-        block: &Block,
+        block: &TypedBlock,
         budget: &PlanBudget,
     ) -> Result<([Option<&'a Ty>; 2], bool, bool), String> {
         if budget.has_resource_failure() {
@@ -7340,20 +7410,20 @@ impl CheckedFunction {
             budget.charge_work(1)?;
             let mut ambiguous = false;
             let returns = match statement {
-                Stmt::Declare { .. } => true,
-                Stmt::Return(value) => {
+                TypedStmt::Declare { .. } => true,
+                TypedStmt::Return(value) => {
                     if let Some(value) = value {
                         expression(*value)?;
                     }
                     false
                 }
-                Stmt::AssignIndex { index, value, .. }
-                | Stmt::AssignIndexOp { index, value, .. } => {
+                TypedStmt::AssignIndex { index, value, .. }
+                | TypedStmt::AssignIndexOp { index, value, .. } => {
                     let value = expression(*value)?.completion == Completion::Returns;
                     let index = expression(*index)?.completion == Completion::Returns;
                     value && index
                 }
-                Stmt::Expr(id) => {
+                TypedStmt::Expr(id) => {
                     let value = expression(*id)?;
                     // This is a possible erased source obligation, not proof
                     // that the expression originated as a while-let.
@@ -7361,18 +7431,18 @@ impl CheckedFunction {
                     erased_obligation |= ambiguous;
                     value.completion == Completion::Returns
                 }
-                Stmt::Let { value, .. }
-                | Stmt::LetPattern { value, .. }
+                TypedStmt::Let { value, .. }
+                | TypedStmt::LetPattern { value, .. }
                 // The else arm is separately required to diverge by
                 // validate_let_else. Only initializer completion propagates.
-                | Stmt::LetElse { value, .. }
-                | Stmt::Assign { value, .. }
-                | Stmt::AssignPlace { value, .. }
-                | Stmt::AssignOp { value, .. } => {
+                | TypedStmt::LetElse { value, .. }
+                | TypedStmt::Assign { value, .. }
+                | TypedStmt::AssignPlace { value, .. }
+                | TypedStmt::AssignOp { value, .. } => {
                     expression(*value)?.completion == Completion::Returns
                 }
                 // A while body need not execute. Its condition must complete.
-                Stmt::While { condition, .. } => {
+                TypedStmt::While { condition, .. } => {
                     expression(*condition)?.completion == Completion::Returns
                 }
             };
@@ -7572,7 +7642,7 @@ impl CheckedFunction {
             Ok(())
         }
         fn block(
-            value: &Block,
+            value: &TypedBlock,
             visit: &mut impl FnMut(&Ty) -> Result<(), String>,
             budget: Option<&PlanBudget>,
             depth: usize,
@@ -7593,14 +7663,14 @@ impl CheckedFunction {
                     budget.charge_work(1)?;
                 }
                 match statement {
-                    Stmt::LetPattern { ty, .. } => visit(ty)?,
-                    Stmt::LetElse {
+                    TypedStmt::LetPattern { ty, .. } => visit(ty)?,
+                    TypedStmt::LetElse {
                         ty, pattern: row, ..
                     } => {
                         visit(ty)?;
                         pattern(row, visit, budget, work)?;
                     }
-                    Stmt::While { body, .. } => block(body, visit, budget, depth + 1, work)?,
+                    TypedStmt::While { body, .. } => block(body, visit, budget, depth + 1, work)?,
                     _ => {}
                 }
             }
@@ -7786,23 +7856,26 @@ impl CheckedFunction {
             Ok(())
         }
         fn block(
-            value: &Block,
+            value: &TypedBlock,
             facts: FactsCtx<'_>,
             budget: &PlanBudget,
             depth: usize,
         ) -> Result<(), String> {
             budget.check_depth(depth)?;
             budget.charge_nodes(value.statements.len())?;
-            storage(budget, value.statements.len(), std::mem::size_of::<Stmt>())?;
+            storage(
+                budget,
+                value.statements.len(),
+                std::mem::size_of::<TypedStmt>(),
+            )?;
             for statement in &value.statements {
                 match statement {
-                    Stmt::AssignOp { place, .. } | Stmt::AssignPlace { place, .. } => {
+                    TypedStmt::AssignOp { place, .. } | TypedStmt::AssignPlace { place, .. } => {
                         path(&place.projection, budget)?
                     }
-                    Stmt::AssignIndexOp { array, .. } | Stmt::AssignIndex { array, .. } => {
-                        path(&array.projection, budget)?
-                    }
-                    Stmt::LetPattern {
+                    TypedStmt::AssignIndexOp { array, .. }
+                    | TypedStmt::AssignIndex { array, .. } => path(&array.projection, budget)?,
+                    TypedStmt::LetPattern {
                         ty,
                         bindings: values,
                         ..
@@ -7810,16 +7883,16 @@ impl CheckedFunction {
                         facts.validate_ty_with_budget(ty, budget)?;
                         bindings(values, budget)?;
                     }
-                    Stmt::LetElse { ty, pattern, .. } => {
+                    TypedStmt::LetElse { ty, pattern, .. } => {
                         facts.validate_value_ty_with_budget(ty, budget)?;
                         pattern_storage(pattern, facts, budget)?;
                     }
-                    Stmt::While { body, .. } => block(body, facts, budget, depth + 1)?,
-                    Stmt::Declare { .. }
-                    | Stmt::Let { .. }
-                    | Stmt::Assign { .. }
-                    | Stmt::Expr(_)
-                    | Stmt::Return(_) => {}
+                    TypedStmt::While { body, .. } => block(body, facts, budget, depth + 1)?,
+                    TypedStmt::Declare { .. }
+                    | TypedStmt::Let { .. }
+                    | TypedStmt::Assign { .. }
+                    | TypedStmt::Expr(_)
+                    | TypedStmt::Return(_) => {}
                 }
             }
             Ok(())
@@ -7879,7 +7952,7 @@ impl CheckedFunction {
                     storage(budget, fields.len(), std::mem::size_of::<(usize, ExprId)>())?;
                 }
                 ExprKind::Match { arms, .. } => {
-                    storage(budget, arms.len(), std::mem::size_of::<MatchArm>())?;
+                    storage(budget, arms.len(), std::mem::size_of::<TypedMatchArm>())?;
                     for arm in arms {
                         pattern_storage(&arm.pattern, facts, budget)?;
                     }
@@ -7978,7 +8051,7 @@ impl CheckedFunction {
     pub(super) fn validate_match(
         &self,
         scrutinee: ExprId,
-        arms: &[MatchArm],
+        arms: &[TypedMatchArm],
         parameters: &std::collections::HashSet<LocalId>,
     ) -> Result<(), String> {
         self.validate_match_with_facts(scrutinee, arms, parameters, FactsCtx::Concrete)
@@ -7987,7 +8060,7 @@ impl CheckedFunction {
     pub(super) fn validate_match_with_facts(
         &self,
         scrutinee: ExprId,
-        arms: &[MatchArm],
+        arms: &[TypedMatchArm],
         parameters: &std::collections::HashSet<LocalId>,
         facts: FactsCtx<'_>,
     ) -> Result<(), String> {
@@ -9482,14 +9555,14 @@ impl CheckedFunction {
             }
             for statement in &block.statements {
                 match statement {
-                    Stmt::AssignOp { place, op, value } => {
+                    TypedStmt::AssignOp { place, op, value } => {
                         local(place.local)?;
                         expr(*value)?;
                         let target =
                             projected_ty(&self.locals[place.local.0].ty, &place.projection)?;
                         validate_compound_types(*op, target, &self.exprs[value.0])?;
                     }
-                    Stmt::AssignIndexOp {
+                    TypedStmt::AssignIndexOp {
                         array,
                         index,
                         op,
@@ -9521,7 +9594,7 @@ impl CheckedFunction {
                         }
                         validate_compound_types(*op, element, &self.exprs[value.0])?;
                     }
-                    Stmt::AssignIndex {
+                    TypedStmt::AssignIndex {
                         array,
                         index,
                         value,
@@ -9557,17 +9630,18 @@ impl CheckedFunction {
                             return Err("dynamic array index requires usize".into());
                         }
                     }
-                    Stmt::Declare { local: id } => {
+                    TypedStmt::Declare { local: id } => {
                         local(*id)?;
                         if parameters.contains(id) {
                             return Err("declaration local aliases parameter".into());
                         }
                     }
-                    Stmt::Let { local: id, value } | Stmt::Assign { local: id, value } => {
+                    TypedStmt::Let { local: id, value }
+                    | TypedStmt::Assign { local: id, value } => {
                         local(*id)?;
                         expr(*value)?;
                     }
-                    Stmt::LetPattern {
+                    TypedStmt::LetPattern {
                         value,
                         ty,
                         bindings,
@@ -9580,7 +9654,7 @@ impl CheckedFunction {
                             facts,
                         )?;
                     }
-                    Stmt::LetElse {
+                    TypedStmt::LetElse {
                         value,
                         ty,
                         pattern,
@@ -9616,13 +9690,13 @@ impl CheckedFunction {
                             facts,
                         )?;
                     }
-                    Stmt::AssignPlace { place, value } => {
+                    TypedStmt::AssignPlace { place, value } => {
                         local(place.local)?;
                         expr(*value)?;
                     }
-                    Stmt::Expr(id) | Stmt::Return(Some(id)) => expr(*id)?,
-                    Stmt::Return(None) => {}
-                    Stmt::While {
+                    TypedStmt::Expr(id) | TypedStmt::Return(Some(id)) => expr(*id)?,
+                    TypedStmt::Return(None) => {}
+                    TypedStmt::While {
                         condition, body, ..
                     } => {
                         expr(*condition)?;
@@ -9643,8 +9717,8 @@ mod typed_slice_tests;
 mod conditional_validation_tests {
     use super::*;
 
-    fn block(statements: Vec<Stmt>, tail: Option<ExprId>) -> Block {
-        Block { statements, tail }
+    fn block(statements: Vec<TypedStmt>, tail: Option<ExprId>) -> TypedBlock {
+        TypedBlock { statements, tail }
     }
 
     fn fixture() -> CheckedFunction {
@@ -9677,7 +9751,7 @@ mod conditional_validation_tests {
                     kind: ExprKind::If {
                         condition: ExprId(0),
                         then_block: block(vec![], None),
-                        else_block: block(vec![Stmt::Expr(ExprId(1))], None),
+                        else_block: block(vec![TypedStmt::Expr(ExprId(1))], None),
                     },
                 },
             ],
@@ -9828,7 +9902,7 @@ mod conditional_validation_tests {
         let ExprKind::If { then_block, .. } = &mut function.exprs[2].kind else {
             unreachable!()
         };
-        *then_block = block(vec![Stmt::Return(None)], Some(ExprId(0)));
+        *then_block = block(vec![TypedStmt::Return(None)], Some(ExprId(0)));
         function.exprs[2].ty = Ty::Bool;
         function.exprs[2].completion = Completion::Never;
         function.validate().unwrap();
@@ -9853,7 +9927,7 @@ mod conditional_validation_tests {
         let ExprKind::If { then_block, .. } = &mut function.exprs[2].kind else {
             unreachable!()
         };
-        *then_block = block(vec![Stmt::Expr(ExprId(3))], None);
+        *then_block = block(vec![TypedStmt::Expr(ExprId(3))], None);
         // An erased irrefutable while-let can retain source Returns.
         function.validate().unwrap();
         function.exprs[2].completion = Completion::Never;
@@ -11866,7 +11940,7 @@ mod tests {
                 completion: Completion::Returns,
                 kind: ExprKind::Int(IntValue::i32(1)),
             });
-            function.body.statements.push(Stmt::AssignOp {
+            function.body.statements.push(TypedStmt::AssignOp {
                 place: Place {
                     local: LocalId(0),
                     projection: vec![],
@@ -11900,8 +11974,8 @@ mod tests {
         }
         let mut function = fixture();
         function.body.statements = vec![
-            Stmt::Return(None),
-            Stmt::AssignOp {
+            TypedStmt::Return(None),
+            TypedStmt::AssignOp {
                 place: Place {
                     local: LocalId(0),
                     projection: vec![],
@@ -11920,7 +11994,7 @@ mod tests {
             BinaryOp::And,
             BinaryOp::Or,
         ] {
-            let Stmt::AssignOp { op: actual, .. } = &mut function.body.statements[1] else {
+            let TypedStmt::AssignOp { op: actual, .. } = &mut function.body.statements[1] else {
                 unreachable!()
             };
             *actual = op;
@@ -11941,7 +12015,7 @@ mod tests {
             completion: Completion::Returns,
             kind: ExprKind::Int(IntValue::usize(0)),
         });
-        function.body.statements[1] = Stmt::AssignIndexOp {
+        function.body.statements[1] = TypedStmt::AssignIndexOp {
             array: Place {
                 local: LocalId(0),
                 projection: vec![],
@@ -11978,13 +12052,13 @@ mod tests {
                 location: "fixture".into(),
             })),
         });
-        function.exprs[0].kind = ExprKind::Block(Block {
-            statements: vec![Stmt::Expr(panic)],
+        function.exprs[0].kind = ExprKind::Block(TypedBlock {
+            statements: vec![TypedStmt::Expr(panic)],
             tail: Some(tail),
         });
         function.exprs[0].completion = Completion::Never;
         function.validate().unwrap();
-        let Stmt::AssignIndexOp { index, .. } = &mut function.body.statements[1] else {
+        let TypedStmt::AssignIndexOp { index, .. } = &mut function.body.statements[1] else {
             unreachable!()
         };
         *index = ExprId(usize::MAX);
@@ -12025,7 +12099,7 @@ mod tests {
             },
         ];
         // None of these rows is reachable from the body.
-        function.body = Block {
+        function.body = TypedBlock {
             statements: vec![],
             tail: None,
         };
@@ -12205,8 +12279,8 @@ mod tests {
                                 location: "fixture".into(),
                             })),
                         });
-                        function.exprs[endpoint].kind = ExprKind::Block(Block {
-                            statements: vec![Stmt::Expr(panic)],
+                        function.exprs[endpoint].kind = ExprKind::Block(TypedBlock {
+                            statements: vec![TypedStmt::Expr(panic)],
                             tail: Some(tail),
                         });
                         function.exprs[endpoint].completion = Completion::Never;
@@ -12449,8 +12523,8 @@ mod tests {
                     .unwrap_err()
                     .contains("invalid expression 99")
             );
-            function.exprs[0].kind = ExprKind::Block(Block {
-                statements: vec![Stmt::Return(None)],
+            function.exprs[0].kind = ExprKind::Block(TypedBlock {
+                statements: vec![TypedStmt::Return(None)],
                 tail: None,
             });
             function.exprs[0].completion = Completion::Never;
@@ -12525,8 +12599,8 @@ mod tests {
                 .unwrap_err()
                 .contains("invalid expression 99")
         );
-        function.exprs[0].kind = ExprKind::Block(Block {
-            statements: vec![Stmt::Return(None)],
+        function.exprs[0].kind = ExprKind::Block(TypedBlock {
+            statements: vec![TypedStmt::Return(None)],
             tail: None,
         });
         function.exprs[0].completion = Completion::Never;
@@ -12587,8 +12661,8 @@ mod tests {
                 .unwrap_err()
                 .contains("completion mismatch")
         );
-        function.exprs[0].kind = ExprKind::Block(Block {
-            statements: vec![Stmt::Return(None)],
+        function.exprs[0].kind = ExprKind::Block(TypedBlock {
+            statements: vec![TypedStmt::Return(None)],
             tail: None,
         });
         function.exprs[0].completion = Completion::Never;
@@ -12667,8 +12741,8 @@ mod tests {
             completion: Completion::Returns,
             kind: ExprKind::Int(IntValue::i32(7)),
         });
-        function.exprs[0].kind = ExprKind::Block(Block {
-            statements: vec![Stmt::Return(None)],
+        function.exprs[0].kind = ExprKind::Block(TypedBlock {
+            statements: vec![TypedStmt::Return(None)],
             tail: Some(ExprId(2)),
         });
         function.exprs[0].completion = Completion::Never;
@@ -12708,7 +12782,7 @@ mod tests {
             function
                 .validate_match(
                     ExprId(0),
-                    &[MatchArm {
+                    &[TypedMatchArm {
                         guard: None,
                         pattern: MatchPattern::Int(high),
                         body: ExprId(0),
@@ -12741,7 +12815,7 @@ mod tests {
             };
             function.validate().unwrap();
             let arms = [
-                MatchArm {
+                TypedMatchArm {
                     guard: None,
                     pattern: MatchPattern::Decision {
                         ty: domain,
@@ -12753,7 +12827,7 @@ mod tests {
                     },
                     body: ExprId(0),
                 },
-                MatchArm {
+                TypedMatchArm {
                     guard: None,
                     pattern: MatchPattern::Wildcard,
                     body: ExprId(0),
@@ -12866,7 +12940,7 @@ mod tests {
                 function.exprs[0].ty = Ty::Int(ty);
                 function.exprs[0].kind = ExprKind::Int(integer);
                 function.validate().unwrap();
-                let arms = [MatchArm {
+                let arms = [TypedMatchArm {
                     guard: None,
                     pattern: MatchPattern::Int(integer),
                     body: ExprId(0),
@@ -12901,7 +12975,7 @@ mod tests {
                     kind: ExprKind::Int(invalid),
                 });
                 assert!(function.validate().unwrap_err().contains("noncanonical"));
-                let arms = [MatchArm {
+                let arms = [TypedMatchArm {
                     guard: None,
                     pattern: MatchPattern::Int(invalid),
                     body: ExprId(0),
@@ -13804,15 +13878,15 @@ mod tests {
         function
             .body
             .statements
-            .push(Stmt::Declare { local: LocalId(1) });
+            .push(TypedStmt::Declare { local: LocalId(1) });
         function.validate().unwrap();
         function
             .body
             .statements
-            .push(Stmt::Declare { local: LocalId(0) });
+            .push(TypedStmt::Declare { local: LocalId(0) });
         assert!(function.validate().unwrap_err().contains("parameter"));
         function.body.statements.pop();
-        function.body.statements.push(Stmt::Declare {
+        function.body.statements.push(TypedStmt::Declare {
             local: LocalId(usize::MAX),
         });
         assert!(function.validate().unwrap_err().contains("invalid local"));
@@ -13882,7 +13956,7 @@ mod tests {
     fn match_validation_bounds_and_checks_dead_patterns() {
         let function = fixture();
         let parameters = function.params.iter().copied().collect();
-        let arm = MatchArm {
+        let arm = TypedMatchArm {
             guard: None,
             pattern: MatchPattern::Wildcard,
             body: ExprId(0),
@@ -13901,7 +13975,7 @@ mod tests {
                 )
                 .is_err()
         );
-        let invalid = MatchArm {
+        let invalid = TypedMatchArm {
             guard: None,
             pattern: MatchPattern::Binding(LocalId(usize::MAX)),
             body: ExprId(0),
@@ -13911,7 +13985,7 @@ mod tests {
                 .validate_match(ExprId(0), &[arm.clone(), invalid], &parameters)
                 .is_err()
         );
-        let invalid = MatchArm {
+        let invalid = TypedMatchArm {
             guard: None,
             pattern: MatchPattern::Wildcard,
             body: ExprId(usize::MAX),
@@ -13946,7 +14020,7 @@ mod tests {
                 borrow: None,
             },
         ];
-        function.body.statements = vec![Stmt::LetPattern {
+        function.body.statements = vec![TypedStmt::LetPattern {
             value: ExprId(0),
             ty: ty.clone(),
             bindings: bindings.clone(),
@@ -14268,7 +14342,7 @@ mod tests {
                 index: 0,
             },
         });
-        value.body.statements.push(Stmt::AssignPlace {
+        value.body.statements.push(TypedStmt::AssignPlace {
             place: Place {
                 local: LocalId(0),
                 projection: vec![0, 1].into_iter().map(Projection::Field).collect(),
@@ -14295,7 +14369,7 @@ mod tests {
                 .contains("invalid expression 99")
         );
         value.exprs[2].kind = ExprKind::Int(IntValue::i32(0));
-        value.body.statements.push(Stmt::AssignPlace {
+        value.body.statements.push(TypedStmt::AssignPlace {
             place: Place {
                 local: LocalId(99),
                 projection: vec![0].into_iter().map(Projection::Field).collect(),
@@ -14327,7 +14401,7 @@ mod tests {
         function.exprs.push(TypedExpr {
             ty: Ty::Unit,
             completion: Completion::Returns,
-            kind: ExprKind::Block(Block {
+            kind: ExprKind::Block(TypedBlock {
                 statements: vec![],
                 tail: None,
             }),
@@ -14337,7 +14411,7 @@ mod tests {
             completion: Completion::Returns,
             kind: ExprKind::Match {
                 scrutinee: ExprId(0),
-                arms: vec![MatchArm {
+                arms: vec![TypedMatchArm {
                     guard: None,
                     pattern: MatchPattern::Aggregate {
                         ty: domain,
@@ -14351,7 +14425,7 @@ mod tests {
                 }],
             },
         });
-        function.body.statements = vec![Stmt::Expr(ExprId(2))];
+        function.body.statements = vec![TypedStmt::Expr(ExprId(2))];
         function.validate().unwrap();
         let mut wrong_domain = function.clone();
         let ExprKind::Match { arms, .. } = &mut wrong_domain.exprs[2].kind else {
@@ -14410,8 +14484,8 @@ mod tests {
                 completion: Completion::Returns,
                 kind: ExprKind::Local(LocalId(0)),
             }],
-            body: Block {
-                statements: vec![Stmt::Expr(ExprId(0))],
+            body: TypedBlock {
+                statements: vec![TypedStmt::Expr(ExprId(0))],
                 tail: None,
             },
         }
@@ -14422,8 +14496,8 @@ mod tests {
         let value = TypedExpr {
             ty: Ty::Never,
             completion: Completion::Never,
-            kind: ExprKind::Block(Block {
-                statements: vec![Stmt::Return(None)],
+            kind: ExprKind::Block(TypedBlock {
+                statements: vec![TypedStmt::Return(None)],
                 tail: None,
             }),
         };
@@ -14443,8 +14517,8 @@ mod tests {
         value.exprs.push(TypedExpr {
             ty: Ty::Int(IntTy::I32),
             completion: Completion::Never,
-            kind: ExprKind::Block(Block {
-                statements: vec![Stmt::Return(None)],
+            kind: ExprKind::Block(TypedBlock {
+                statements: vec![TypedStmt::Return(None)],
                 tail: Some(ExprId(0)),
             }),
         });
@@ -14468,8 +14542,8 @@ mod tests {
             completion: Completion::Never,
             kind: ExprKind::Loop {
                 id: LoopId(0),
-                body: Block {
-                    statements: vec![Stmt::Expr(ExprId(2))],
+                body: TypedBlock {
+                    statements: vec![TypedStmt::Expr(ExprId(2))],
                     tail: None,
                 },
             },
@@ -14532,7 +14606,7 @@ mod tests {
             completion: Completion::Never,
             kind: ExprKind::Loop {
                 id: LoopId(0),
-                body: Block {
+                body: TypedBlock {
                     statements: vec![],
                     tail: Some(ExprId(99)),
                 },
@@ -14610,7 +14684,7 @@ mod tests {
             !identical_expr_types(
                 &ExprKind::Match {
                     scrutinee: ExprId(0),
-                    arms: vec![MatchArm {
+                    arms: vec![TypedMatchArm {
                         guard: None,
                         pattern,
                         body: ExprId(1)
@@ -14618,7 +14692,7 @@ mod tests {
                 },
                 &ExprKind::Match {
                     scrutinee: ExprId(0),
-                    arms: vec![MatchArm {
+                    arms: vec![TypedMatchArm {
                         guard: None,
                         pattern: replaced,
                         body: ExprId(1)
@@ -14636,8 +14710,8 @@ mod tests {
         function.exprs[0] = TypedExpr {
             ty: Ty::Never,
             completion: Completion::Never,
-            kind: ExprKind::Block(Block {
-                statements: vec![Stmt::Return(None)],
+            kind: ExprKind::Block(TypedBlock {
+                statements: vec![TypedStmt::Return(None)],
                 tail: None,
             }),
         };
@@ -14646,7 +14720,7 @@ mod tests {
             completion: Completion::Never,
             kind: ExprKind::Match {
                 scrutinee: ExprId(0),
-                arms: vec![MatchArm {
+                arms: vec![TypedMatchArm {
                     guard: None,
                     pattern: MatchPattern::Decision {
                         ty: Ty::Bool,
@@ -14832,11 +14906,11 @@ mod tests {
     #[test]
     fn while_body_references_are_checked() {
         let mut value = fixture();
-        value.body.statements.push(Stmt::While {
+        value.body.statements.push(TypedStmt::While {
             id: LoopId(0),
             condition: ExprId(0),
-            body: Block {
-                statements: vec![Stmt::Expr(ExprId(99))],
+            body: TypedBlock {
+                statements: vec![TypedStmt::Expr(ExprId(99))],
                 tail: None,
             },
         });

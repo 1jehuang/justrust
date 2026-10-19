@@ -41,10 +41,10 @@ impl Checker<'_> {
     }
     pub(super) fn group_or_arms(
         &self,
-        arms: Vec<ir::MatchArm>,
+        arms: Vec<ir::TypedMatchArm>,
         groups: &[usize],
         domain: &ir::Ty,
-    ) -> Result<Vec<ir::MatchArm>, String> {
+    ) -> Result<Vec<ir::TypedMatchArm>, String> {
         let mut output = Vec::with_capacity(arms.len());
         let mut pending = arms.into_iter().zip(groups.iter().copied()).peekable();
         while let Some((first, group)) = pending.next() {
@@ -60,7 +60,7 @@ impl Checker<'_> {
                 }
                 rows.push(row.pattern);
             }
-            output.push(ir::MatchArm {
+            output.push(ir::TypedMatchArm {
                 pattern: ir::MatchPattern::Or {
                     ty: domain.clone(),
                     rows,

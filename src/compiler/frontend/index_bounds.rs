@@ -5,17 +5,17 @@ use super::*;
 impl type_check::Checker<'_> {
     pub(super) fn assignment_bounds_probe(
         &mut self,
-        statement: ir::Stmt,
+        statement: ir::TypedStmt,
         site: super::super::expansion_span::SpanId,
-        statements: &mut Vec<ir::Stmt>,
-    ) -> Result<ir::Stmt, String> {
+        statements: &mut Vec<ir::TypedStmt>,
+    ) -> Result<ir::TypedStmt, String> {
         let (array, index, value, op) = match statement {
-            ir::Stmt::AssignIndex {
+            ir::TypedStmt::AssignIndex {
                 array,
                 index,
                 value,
             } => (array, index, value, None),
-            ir::Stmt::AssignIndexOp {
+            ir::TypedStmt::AssignIndexOp {
                 array,
                 index,
                 value,
@@ -37,12 +37,12 @@ impl type_check::Checker<'_> {
             ir::Ty::Int(ir::IntTy::Usize),
             false,
         )?;
-        self.charge_node(2 * std::mem::size_of::<ir::Stmt>())?;
-        statements.push(ir::Stmt::Let {
+        self.charge_node(2 * std::mem::size_of::<ir::TypedStmt>())?;
+        statements.push(ir::TypedStmt::Let {
             local: saved_value,
             value,
         });
-        statements.push(ir::Stmt::Let {
+        statements.push(ir::TypedStmt::Let {
             local: saved_index,
             value: index,
         });
@@ -64,16 +64,16 @@ impl type_check::Checker<'_> {
             },
         )?;
         self.record_runtime_span(site, probe)?;
-        self.charge_node(std::mem::size_of::<ir::Stmt>())?;
-        statements.push(ir::Stmt::Expr(probe));
+        self.charge_node(std::mem::size_of::<ir::TypedStmt>())?;
+        statements.push(ir::TypedStmt::Expr(probe));
         Ok(match op {
-            Some(op) => ir::Stmt::AssignIndexOp {
+            Some(op) => ir::TypedStmt::AssignIndexOp {
                 array,
                 index,
                 value,
                 op,
             },
-            None => ir::Stmt::AssignIndex {
+            None => ir::TypedStmt::AssignIndex {
                 array,
                 index,
                 value,
@@ -86,7 +86,7 @@ impl type_check::Checker<'_> {
         array: &ir::Place,
         index: ir::ExprId,
         original: &Expr,
-        statements: &mut Vec<ir::Stmt>,
+        statements: &mut Vec<ir::TypedStmt>,
     ) -> Result<(), String> {
         let id = self.for_expr(
             ir::Ty::Unit,
@@ -100,8 +100,8 @@ impl type_check::Checker<'_> {
             self.exprs[id.0].ty = ir::Ty::Never;
         }
         self.record_runtime_site(original, id)?;
-        self.charge_node(std::mem::size_of::<ir::Stmt>())?;
-        statements.push(ir::Stmt::Expr(id));
+        self.charge_node(std::mem::size_of::<ir::TypedStmt>())?;
+        statements.push(ir::TypedStmt::Expr(id));
         Ok(())
     }
 }

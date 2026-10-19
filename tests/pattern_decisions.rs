@@ -411,7 +411,7 @@ fn stock_all() {
 fn stock_nested_pattern_decisions_oracle_edition2024_actual_toolchain() {
     stock_all();
 }
-fn all_blocks(function: &ir::CheckedFunction) -> Vec<&ir::Block> {
+fn all_blocks(function: &ir::CheckedFunction) -> Vec<&ir::TypedBlock> {
     let mut blocks = vec![&function.body];
     for expression in &function.exprs {
         match &expression.kind {
@@ -434,7 +434,7 @@ fn all_blocks(function: &ir::CheckedFunction) -> Vec<&ir::Block> {
         let block = blocks[at];
         at += 1;
         for statement in &block.statements {
-            if let ir::Stmt::While { body, .. } = statement {
+            if let ir::TypedStmt::While { body, .. } = statement {
                 blocks.push(body);
             }
         }
@@ -604,7 +604,7 @@ fn checked_decision_domains_scalar_atoms_tag_dominance_and_real_success_bindings
             }
             for block in all_blocks(&function) {
                 for statement in &block.statements {
-                    if let ir::Stmt::LetElse {
+                    if let ir::TypedStmt::LetElse {
                         ty,
                         pattern,
                         else_branch,

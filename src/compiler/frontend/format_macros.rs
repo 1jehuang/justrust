@@ -274,7 +274,7 @@ impl Checker<'_> {
                 completes &= self.flow(value).completes;
                 let ty = self.exprs[value.0].ty.clone();
                 let owner = self.temporary(&format!("$fmt_into{index}"), ty, false)?;
-                statements.push(ir::Stmt::Let {
+                statements.push(ir::TypedStmt::Let {
                     local: owner,
                     value,
                 });
@@ -288,7 +288,7 @@ impl Checker<'_> {
             };
             let ty = self.exprs[borrow.0].ty.clone();
             let local = self.temporary(&format!("$fmt_into_ref{index}"), ty.clone(), false)?;
-            statements.push(ir::Stmt::Let {
+            statements.push(ir::TypedStmt::Let {
                 local,
                 value: borrow,
             });
@@ -300,7 +300,10 @@ impl Checker<'_> {
                 return Err("contract: format operand is not a shared borrow".into());
             };
             let mut referent = referent.as_ref().clone();
-            while let ir::Ty::Ref { referent: inner, .. } = &referent {
+            while let ir::Ty::Ref {
+                referent: inner, ..
+            } = &referent
+            {
                 let inner = inner.as_ref().clone();
                 borrow = self.into_lit(referent.clone(), ir::ExprKind::Deref { value: borrow })?;
                 referent = inner;
@@ -342,10 +345,10 @@ impl Checker<'_> {
                 let pointer = &source.arguments[index] as *const Expr as usize | 2;
                 cap.record_call_at(pointer, call, &self.exprs[call.0].kind)?;
             }
-            statements.push(ir::Stmt::Expr(call));
+            statements.push(ir::TypedStmt::Expr(call));
         }
         Ok((
-            ir::ExprKind::Block(ir::Block {
+            ir::ExprKind::Block(ir::TypedBlock {
                 statements,
                 tail: None,
             }),
@@ -389,7 +392,10 @@ pub(super) fn spec_arguments(spec: &FormatSpec) -> [Expr; 5] {
     ]
 }
 
-pub(super) fn into_trait(spec: &FormatSpec, unsized_str: bool) -> Result<(&'static str, &'static str), String> {
+pub(super) fn into_trait(
+    spec: &FormatSpec,
+    unsized_str: bool,
+) -> Result<(&'static str, &'static str), String> {
     Ok(match (spec.format, unsized_str) {
         (FormatTrait::Display, false) => ("DisplayInto", "__jr_fmt_into"),
         (FormatTrait::Debug, false) => ("DebugInto", "__jr_fmt_into"),

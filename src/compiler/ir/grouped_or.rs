@@ -18,7 +18,7 @@ pub(super) fn validate_or_rows(rows: &[MatchPattern]) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    fn fixture() -> (CheckedFunction, ExprId, Vec<MatchArm>) {
+    fn fixture() -> (CheckedFunction, ExprId, Vec<TypedMatchArm>) {
         let program = crate::compiler::frontend::parse(
             "fn main(){let _v=match (true,false){(true,x)|(x,false) if x=>1,_=>0};}",
         )

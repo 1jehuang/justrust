@@ -39,12 +39,12 @@ pub(crate) fn attach_export(
 
 /// Immutable, validated transport description for one closed C declaration.
 #[derive(Clone, Debug)]
-pub struct Signature {
+pub struct CAbiSignature {
     pub params: Vec<layout::Layout>,
     pub result: layout::Layout,
     pub plan: classify::CallPlan,
 }
-impl Signature {
+impl CAbiSignature {
     pub fn new(params: Vec<layout::Layout>, result: layout::Layout) -> Result<Self, String> {
         let plan = classify::plan(&params, &result)?;
         Ok(Self {

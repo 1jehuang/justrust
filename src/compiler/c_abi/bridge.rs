@@ -1,7 +1,7 @@
 //! Native machine-code bridges between private snapshot carriers and SysV.
 //! Both directions marshal bytes, not pointers to private aggregate storage.
 use super::{
-    Signature,
+    CAbiSignature,
     classify::{Location, Transport},
     layout::{Layout, Scalar},
 };
@@ -201,7 +201,7 @@ impl Frame {
 /// `import=true`: private callers enter this thunk, which calls a native symbol.
 /// `import=false`: C callers enter it, which calls a checked private body.
 fn generate(
-    signature: &Signature,
+    signature: &CAbiSignature,
     target: &str,
     import: bool,
     budget: &ir::PlanBudget,
@@ -371,14 +371,14 @@ fn generate(
     Ok(code.object)
 }
 pub fn import(
-    signature: &Signature,
+    signature: &CAbiSignature,
     symbol: &str,
     budget: &ir::PlanBudget,
 ) -> Result<Object, String> {
     generate(signature, symbol, true, budget)
 }
 pub fn export(
-    signature: &Signature,
+    signature: &CAbiSignature,
     private_symbol: &str,
     budget: &ir::PlanBudget,
 ) -> Result<Object, String> {

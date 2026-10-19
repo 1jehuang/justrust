@@ -502,7 +502,7 @@ fn source_let_else_retains_real_boxed_pattern_initializer_and_failure_block() {
         }
     }
 }
-fn all_blocks(function: &ir::CheckedFunction) -> Vec<&ir::Block> {
+fn all_blocks(function: &ir::CheckedFunction) -> Vec<&ir::TypedBlock> {
     let mut blocks = vec![&function.body];
     for expression in &function.exprs {
         match &expression.kind {
@@ -525,7 +525,7 @@ fn all_blocks(function: &ir::CheckedFunction) -> Vec<&ir::Block> {
         let block = blocks[at];
         at += 1;
         for statement in &block.statements {
-            if let ir::Stmt::While { body, .. } = statement {
+            if let ir::TypedStmt::While { body, .. } = statement {
                 blocks.push(body);
             }
         }
@@ -553,7 +553,7 @@ fn checked_let_else_has_persistent_success_locals_and_never_typed_failure() {
             function.validate().unwrap();
             for block in all_blocks(&function) {
                 for statement in &block.statements {
-                    let ir::Stmt::LetElse {
+                    let ir::TypedStmt::LetElse {
                         value,
                         ty,
                         pattern,
@@ -840,7 +840,7 @@ fn retained_newly_supported_decision_witnesses_publish_real_checked_predicates()
                 }
             }
             for statement in &function.body.statements {
-                if let ir::Stmt::LetElse {
+                if let ir::TypedStmt::LetElse {
                     pattern: pattern @ ir::MatchPattern::Decision { .. },
                     ..
                 } = statement

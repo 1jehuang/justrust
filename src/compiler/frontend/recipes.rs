@@ -770,7 +770,7 @@ pub(super) fn checked_body(
         exprs: Vec::new(),
         call_evidence: Arc::from([]),
         body_substitution: None,
-        body: ir::Block {
+        body: ir::TypedBlock {
             statements: Vec::new(),
             tail: None,
         },

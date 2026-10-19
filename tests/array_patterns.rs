@@ -456,7 +456,7 @@ fn source_array_patterns_publish_exact_constant_indexes_without_omitted_bindings
                 }
             }
             for statement in &function.body.statements {
-                if let ir::Stmt::LetPattern { ty, bindings, .. } = statement {
+                if let ir::TypedStmt::LetPattern { ty, bindings, .. } = statement {
                     assert!(matches!(ty,ir::Ty::Array{len,..}if *len>0));
                     for binding in bindings {
                         actual.push(checked_binding_path(binding, &function));
@@ -673,7 +673,7 @@ fn retained_newly_supported_decision_witnesses_publish_real_checked_predicates()
                 }
             }
             for statement in &function.body.statements {
-                if let ir::Stmt::LetElse {
+                if let ir::TypedStmt::LetElse {
                     pattern: pattern @ ir::MatchPattern::Decision { .. },
                     ..
                 } = statement

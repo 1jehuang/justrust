@@ -1,6 +1,7 @@
 //! Immutable closure types. The source owner and ordered owner arguments are
 //! part of the identity, not just the anonymous declaration's display name.
 use super::*;
+use crate::compiler::frontend::ClosureShapeSeal;
 #[cfg(test)]
 #[path = "closure_tests.rs"]
 mod tests;
@@ -27,6 +28,31 @@ pub struct CaptureSource {
     pub kind: CaptureKind,
 }
 
+/// Identity of one anonymous provider's retained source recipe. Unlike a
+/// declaration number this cannot be transplanted between independent worlds.
+#[derive(Clone, Debug)]
+pub struct ClosureRecipeId(Arc<ClosureRecipeIdentity>);
+#[derive(Debug)]
+struct ClosureRecipeIdentity;
+impl ClosureRecipeId {
+    pub(in crate::compiler) fn new() -> Self {
+        Self(Arc::new(ClosureRecipeIdentity))
+    }
+}
+impl PartialEq for ClosureRecipeId {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for ClosureRecipeId {}
+impl std::hash::Hash for ClosureRecipeId {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Identity equality is stronger than this intentionally colliding hash.
+        // No raw address is persisted or used as an identity representation.
+        std::hash::Hash::hash(&0u8, state);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ClosureTy {
     owner: DeclId,
@@ -38,6 +64,7 @@ pub struct ClosureTy {
     captures: Arc<[Ty]>,
     sources: Arc<[CaptureSource]>,
     kind: ClosureKind,
+    seal: Option<Arc<ClosureShapeSeal>>,
 }
 
 impl ClosureTy {
@@ -62,6 +89,7 @@ impl ClosureTy {
             captures,
             sources: Arc::from([]),
             kind,
+            seal: None,
         }
     }
     pub(in crate::compiler) fn with_sources(mut self, sources: Arc<[CaptureSource]>) -> Self {
@@ -70,6 +98,16 @@ impl ClosureTy {
     }
     pub fn sources(&self) -> &[CaptureSource] {
         &self.sources
+    }
+    pub(in crate::compiler) fn with_shape_seal(
+        mut self,
+        seal: Option<Arc<ClosureShapeSeal>>,
+    ) -> Self {
+        self.seal = seal;
+        self
+    }
+    pub(in crate::compiler) fn shape_seal(&self) -> Option<&Arc<ClosureShapeSeal>> {
+        self.seal.as_ref()
     }
     pub(in crate::compiler) fn try_map<E>(
         &self,
@@ -97,7 +135,8 @@ impl ClosureTy {
                 .into(),
             self.kind,
         )
-        .with_sources(self.sources.clone()))
+        .with_sources(self.sources.clone())
+        .with_shape_seal(self.seal.clone()))
     }
     pub(in crate::compiler) fn try_eq<'a, E>(
         &'a self,
@@ -109,6 +148,7 @@ impl ClosureTy {
             || self.provider != other.provider
             || self.kind != other.kind
             || self.sources != other.sources
+            || self.seal != other.seal
             || self.owner_args.len() != other.owner_args.len()
             || self.params.len() != other.params.len()
             || self.captures.len() != other.captures.len()

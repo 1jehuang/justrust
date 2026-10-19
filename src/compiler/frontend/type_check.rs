@@ -286,7 +286,7 @@ impl PatternCoverage {
             || matches!((self, domain), (Self::Variant(_), ir::Ty::Enum(ty)) if ty.def().variants.len() == 1)
     }
 }
-enum PatternTest {
+enum SourcePatternTest {
     Wildcard,
     Binding,
     Bool(bool),
@@ -304,7 +304,7 @@ enum PatternTest {
     },
 }
 struct PendingPatternPlan {
-    test: PatternTest,
+    test: SourcePatternTest,
     bindings: PendingPatternBindings,
 }
 impl PendingPatternPlan {
@@ -314,28 +314,28 @@ impl PendingPatternPlan {
     ) -> Result<bool, String> {
         use super::pattern_usefulness::TestRef;
         match &self.test {
-            PatternTest::Decision { tests, .. } => matrix.insert_row(tests.len(), |index| {
+            SourcePatternTest::Decision { tests, .. } => matrix.insert_row(tests.len(), |index| {
                 let test = &tests.as_slice()[index];
                 TestRef {
                     projection: &test.projection,
                     kind: &test.kind,
                 }
             }),
-            PatternTest::Bool(value) => {
+            SourcePatternTest::Bool(value) => {
                 let kind = ir::PatternTestKind::Bool(*value);
                 matrix.insert_row(1, |_| TestRef {
                     projection: &[],
                     kind: &kind,
                 })
             }
-            PatternTest::Int(value) => {
+            SourcePatternTest::Int(value) => {
                 let kind = ir::PatternTestKind::Int(*value);
                 matrix.insert_row(1, |_| TestRef {
                     projection: &[],
                     kind: &kind,
                 })
             }
-            PatternTest::EnumVariant { ty, variant } => {
+            SourcePatternTest::EnumVariant { ty, variant } => {
                 let kind = ir::PatternTestKind::EnumVariant {
                     ty: ty.clone(),
                     variant: *variant,
@@ -350,11 +350,11 @@ impl PendingPatternPlan {
     }
     fn coverage(&self) -> PatternCoverage {
         match &self.test {
-            PatternTest::Bool(value) => PatternCoverage::Scalar(u128::from(*value)),
-            PatternTest::Int(value) => PatternCoverage::Scalar(value.bits),
-            PatternTest::Unit => PatternCoverage::Scalar(0),
-            PatternTest::EnumVariant { variant, .. } => PatternCoverage::Variant(*variant),
-            PatternTest::Decision { coverage, .. } => *coverage,
+            SourcePatternTest::Bool(value) => PatternCoverage::Scalar(u128::from(*value)),
+            SourcePatternTest::Int(value) => PatternCoverage::Scalar(value.bits),
+            SourcePatternTest::Unit => PatternCoverage::Scalar(0),
+            SourcePatternTest::EnumVariant { variant, .. } => PatternCoverage::Variant(*variant),
+            SourcePatternTest::Decision { coverage, .. } => *coverage,
             _ => PatternCoverage::CatchAll,
         }
     }
@@ -1673,6 +1673,7 @@ pub(super) struct Checker<'a> {
     pub(super) scopes: Vec<HashMap<LocalKey, ir::LocalId>>,
     pub(super) lexical_scope: Option<super::super::semantic_scope::ScopeId>,
     pub(super) checked_closures: Vec<closures::check::CheckedClosure>,
+    pub(super) closure_source_recipe: Option<sr::OriginalBodyId>,
     closure_signature_hints: HashMap<PathKey, ir::Signature>,
     pub(super) capture_bindings: std::collections::HashSet<LocalKey>,
     pub(super) capture_parent_scope: Option<super::super::semantic_scope::ScopeId>,
@@ -3298,12 +3299,12 @@ impl<'a> Checker<'a> {
             PatternCoverage::CatchAll
         };
         let test = if pending.tests.as_slice().is_empty() {
-            PatternTest::Aggregate(ty.clone())
+            SourcePatternTest::Aggregate(ty.clone())
         } else if pending.tests.len() == 1 && !pending.refutable_payload && root.is_some() {
             let (ty, variant) = root.ok_or("missing root variant proof")?;
-            PatternTest::EnumVariant { ty, variant }
+            SourcePatternTest::EnumVariant { ty, variant }
         } else {
-            PatternTest::Decision {
+            SourcePatternTest::Decision {
                 ty: ty.clone(),
                 tests: pending.tests,
                 coverage,
@@ -3329,7 +3330,7 @@ impl<'a> Checker<'a> {
         let pattern = self.pattern_source(pattern, domain)?;
         let mut bindings = self.pending_pattern_bindings()?;
         let test = match pattern {
-            Pattern::Wildcard => PatternTest::Wildcard,
+            Pattern::Wildcard => SourcePatternTest::Wildcard,
             Pattern::Binding {
                 by_ref: Some(_), ..
             }
@@ -3343,25 +3344,25 @@ impl<'a> Checker<'a> {
                     &mut bindings,
                     &mut 0usize,
                 )?;
-                PatternTest::Binding
+                SourcePatternTest::Binding
             }
             Pattern::Bool(value) => {
                 if *domain != ir::Ty::Bool {
                     return Err(format!("bool match pattern does not match {domain:?}"));
                 }
-                PatternTest::Bool(*value)
+                SourcePatternTest::Bool(*value)
             }
             Pattern::Int { literal, negative } => {
                 if !matches!(domain, ir::Ty::Int(_)) {
                     return Err(format!("integer match pattern does not match {domain:?}"));
                 }
-                PatternTest::Int(resolve_integer(literal, *negative, Some(domain))?)
+                SourcePatternTest::Int(resolve_integer(literal, *negative, Some(domain))?)
             }
             Pattern::Tuple(fields) if fields.is_empty() => {
                 if *domain != ir::Ty::Unit {
                     return Err(format!("unit match pattern does not match {domain:?}"));
                 }
-                PatternTest::Unit
+                SourcePatternTest::Unit
             }
             Pattern::TupleRest(_) if *domain == ir::Ty::Unit => {
                 return Err(Self::empty_tuple_rest_unsupported());
@@ -3382,7 +3383,7 @@ impl<'a> Checker<'a> {
         plan: PendingPatternPlan,
         previous: Option<&HashMap<NameKey, ir::LocalId>>,
     ) -> Result<ir::MatchPattern, String> {
-        if matches!(plan.test, PatternTest::Binding) {
+        if matches!(plan.test, SourcePatternTest::Binding) {
             let [binding] = plan.bindings.rows.as_slice() else {
                 return Err("contract: whole binding plan cardinality".into());
             };
@@ -3391,7 +3392,7 @@ impl<'a> Checker<'a> {
                 .pattern_local(binding.name, binding.ty.clone(), binding.mutable, previous)
                 .map(ir::MatchPattern::Binding);
         }
-        let decision_tests = if let PatternTest::Decision { tests, .. } = &plan.test {
+        let decision_tests = if let SourcePatternTest::Decision { tests, .. } = &plan.test {
             let mut output = self.retained_pattern_vec(tests.len())?;
             for test in tests.as_slice() {
                 self.signatures
@@ -3427,27 +3428,27 @@ impl<'a> Checker<'a> {
             });
         }
         Ok(match plan.test {
-            PatternTest::Wildcard => ir::MatchPattern::Wildcard,
-            PatternTest::Bool(value) => ir::MatchPattern::Bool(value),
-            PatternTest::Int(value) => ir::MatchPattern::Int(value),
-            PatternTest::Unit => ir::MatchPattern::Unit,
+            SourcePatternTest::Wildcard => ir::MatchPattern::Wildcard,
+            SourcePatternTest::Bool(value) => ir::MatchPattern::Bool(value),
+            SourcePatternTest::Int(value) => ir::MatchPattern::Int(value),
+            SourcePatternTest::Unit => ir::MatchPattern::Unit,
             // Selecting through a reference without binding anything reads
             // nothing: it is exactly an irrefutable wildcard.
-            PatternTest::Aggregate(ir::Ty::Ref { .. }) if bindings.is_empty() => {
+            SourcePatternTest::Aggregate(ir::Ty::Ref { .. }) if bindings.is_empty() => {
                 ir::MatchPattern::Wildcard
             }
-            PatternTest::Aggregate(ty) => ir::MatchPattern::Aggregate { ty, bindings },
-            PatternTest::EnumVariant { ty, variant } => ir::MatchPattern::EnumVariant {
+            SourcePatternTest::Aggregate(ty) => ir::MatchPattern::Aggregate { ty, bindings },
+            SourcePatternTest::EnumVariant { ty, variant } => ir::MatchPattern::EnumVariant {
                 ty,
                 variant,
                 bindings,
             },
-            PatternTest::Decision { ty, .. } => ir::MatchPattern::Decision {
+            SourcePatternTest::Decision { ty, .. } => ir::MatchPattern::Decision {
                 ty,
                 tests: decision_tests.ok_or("missing published decision tests")?,
                 bindings,
             },
-            PatternTest::Binding => return Err("contract: whole binding publication".into()),
+            SourcePatternTest::Binding => return Err("contract: whole binding publication".into()),
         })
     }
     fn or_rows_need_expansion(
@@ -3620,6 +3621,7 @@ impl<'a> Checker<'a> {
             scopes: vec![HashMap::new()],
             lexical_scope: None,
             checked_closures: Vec::new(),
+            closure_source_recipe: None,
             closure_signature_hints: HashMap::new(),
             capture_bindings: std::collections::HashSet::new(),
             capture_parent_scope: None,
@@ -5003,8 +5005,8 @@ impl<'a> Checker<'a> {
         self.exprs.push(ir::TypedExpr {
             ty,
             completion: ir::Completion::Returns,
-            kind: ir::ExprKind::Block(ir::Block {
-                statements: vec![ir::Stmt::Assign { local, value }],
+            kind: ir::ExprKind::Block(ir::TypedBlock {
+                statements: vec![ir::TypedStmt::Assign { local, value }],
                 tail: Some(borrowed),
             }),
         });
@@ -5051,19 +5053,19 @@ impl<'a> Checker<'a> {
     fn scope_borrow_temporaries(
         &mut self,
         start: usize,
-        statement: ir::Stmt,
+        statement: ir::TypedStmt,
         completes: bool,
-        statements: &mut Vec<ir::Stmt>,
-    ) -> Result<ir::Stmt, String> {
+        statements: &mut Vec<ir::TypedStmt>,
+    ) -> Result<ir::TypedStmt, String> {
         if self.borrow_temporaries.len() == start {
             return Ok(statement);
         }
         let mut local_scope = Vec::new();
         for (local, extended) in self.borrow_temporaries.drain(start..) {
             if extended {
-                statements.push(ir::Stmt::Declare { local });
+                statements.push(ir::TypedStmt::Declare { local });
             } else {
-                local_scope.push(ir::Stmt::Declare { local });
+                local_scope.push(ir::TypedStmt::Declare { local });
             }
         }
         if local_scope.is_empty() {
@@ -5076,33 +5078,33 @@ impl<'a> Checker<'a> {
             ir::Completion::Never
         };
         Ok(match statement {
-            ir::Stmt::Let { local, value } => {
+            ir::TypedStmt::Let { local, value } => {
                 let wrapped = self.temporary_block(local_scope, Some(value))?;
-                ir::Stmt::Let {
+                ir::TypedStmt::Let {
                     local,
                     value: wrapped,
                 }
             }
-            ir::Stmt::LetPattern {
+            ir::TypedStmt::LetPattern {
                 value,
                 ty,
                 bindings,
             } => {
                 let wrapped = self.temporary_block(local_scope, Some(value))?;
-                ir::Stmt::LetPattern {
+                ir::TypedStmt::LetPattern {
                     value: wrapped,
                     ty,
                     bindings,
                 }
             }
-            ir::Stmt::Assign { local, value } => {
+            ir::TypedStmt::Assign { local, value } => {
                 let wrapped = self.temporary_block(local_scope, Some(value))?;
-                ir::Stmt::Assign {
+                ir::TypedStmt::Assign {
                     local,
                     value: wrapped,
                 }
             }
-            ir::Stmt::LetElse { .. } => {
+            ir::TypedStmt::LetElse { .. } => {
                 return Err("unsupported: borrowed temporaries in let-else initializers".into());
             }
             other => {
@@ -5115,18 +5117,18 @@ impl<'a> Checker<'a> {
                         ir::Ty::Never
                     },
                     completion,
-                    kind: ir::ExprKind::Block(ir::Block {
+                    kind: ir::ExprKind::Block(ir::TypedBlock {
                         statements: local_scope,
                         tail: None,
                     }),
                 });
-                ir::Stmt::Expr(id)
+                ir::TypedStmt::Expr(id)
             }
         })
     }
     fn temporary_block(
         &mut self,
-        statements: Vec<ir::Stmt>,
+        statements: Vec<ir::TypedStmt>,
         tail: Option<ir::ExprId>,
     ) -> Result<ir::ExprId, String> {
         self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 64)?;
@@ -5138,7 +5140,7 @@ impl<'a> Checker<'a> {
         self.exprs.push(ir::TypedExpr {
             ty,
             completion,
-            kind: ir::ExprKind::Block(ir::Block { statements, tail }),
+            kind: ir::ExprKind::Block(ir::TypedBlock { statements, tail }),
         });
         Ok(id)
     }
@@ -5747,8 +5749,8 @@ impl<'a> Checker<'a> {
         index: Option<&Expr>,
         op: Option<BinaryOp>,
         value: &Expr,
-        statements: &mut Vec<ir::Stmt>,
-    ) -> Result<(ir::Stmt, bool), String> {
+        statements: &mut Vec<ir::TypedStmt>,
+    ) -> Result<(ir::TypedStmt, bool), String> {
         let carrier_ty = self
             .scalar_hint(carrier)?
             .ok_or("unresolved reference call assignment carrier")?;
@@ -5813,9 +5815,9 @@ impl<'a> Checker<'a> {
             saved_ty.clone(),
             false,
         )?;
-        self.charge_node(std::mem::size_of::<ir::Stmt>() * 3)?;
+        self.charge_node(std::mem::size_of::<ir::TypedStmt>() * 3)?;
         self.plan_budget_guard()?;
-        statements.push(ir::Stmt::Let {
+        statements.push(ir::TypedStmt::Let {
             local: saved,
             value: rhs,
         });
@@ -5829,7 +5831,7 @@ impl<'a> Checker<'a> {
             false,
         )?;
         self.plan_budget_guard()?;
-        statements.push(ir::Stmt::Let {
+        statements.push(ir::TypedStmt::Let {
             local: handle,
             value: pointer,
         });
@@ -5847,14 +5849,14 @@ impl<'a> Checker<'a> {
         let completes = rhs_flow.completes && pf.completes;
         let result = match (index, op) {
             (None, None) => (
-                ir::Stmt::AssignPlace {
+                ir::TypedStmt::AssignPlace {
                     place,
                     value: loaded,
                 },
                 completes,
             ),
             (None, Some(op)) => (
-                ir::Stmt::AssignOp {
+                ir::TypedStmt::AssignOp {
                     place,
                     op,
                     value: loaded,
@@ -5870,7 +5872,7 @@ impl<'a> Checker<'a> {
                 let index_flow = self.flow(index);
                 self.require_index(&index_flow)?;
                 (
-                    ir::Stmt::AssignIndexOp {
+                    ir::TypedStmt::AssignIndexOp {
                         array: place,
                         index,
                         op,
@@ -5895,8 +5897,8 @@ impl<'a> Checker<'a> {
         target: &Expr,
         op: Option<BinaryOp>,
         value: &Expr,
-        statements: &mut Vec<ir::Stmt>,
-    ) -> Result<(ir::Stmt, bool), String> {
+        statements: &mut Vec<ir::TypedStmt>,
+    ) -> Result<(ir::TypedStmt, bool), String> {
         // Written path from the root local outward, including the final step.
         enum NestedStep<'e> {
             Static(&'e FieldSelector),
@@ -6002,8 +6004,8 @@ impl<'a> Checker<'a> {
             saved_ty.clone(),
             false,
         )?;
-        self.charge_node(std::mem::size_of::<ir::Stmt>())?;
-        statements.push(ir::Stmt::Let {
+        self.charge_node(std::mem::size_of::<ir::TypedStmt>())?;
+        statements.push(ir::TypedStmt::Let {
             local: saved,
             value: rhs,
         });
@@ -6042,8 +6044,8 @@ impl<'a> Checker<'a> {
                         usize_ty.clone(),
                         false,
                     )?;
-                    self.charge_node(std::mem::size_of::<ir::Stmt>() * 2)?;
-                    statements.push(ir::Stmt::Let {
+                    self.charge_node(std::mem::size_of::<ir::TypedStmt>() * 2)?;
+                    statements.push(ir::TypedStmt::Let {
                         local: saved_index,
                         value: index,
                     });
@@ -6071,26 +6073,26 @@ impl<'a> Checker<'a> {
             }
         }
         let loaded = self.for_expr(saved_ty, ir::ExprKind::Local(saved))?;
-        self.charge_node(std::mem::size_of::<ir::Stmt>())?;
+        self.charge_node(std::mem::size_of::<ir::TypedStmt>())?;
         Ok((
             match (final_index, op) {
-                (Some(index), Some(op)) => ir::Stmt::AssignIndexOp {
+                (Some(index), Some(op)) => ir::TypedStmt::AssignIndexOp {
                     array: place,
                     index,
                     op,
                     value: loaded,
                 },
-                (Some(index), None) => ir::Stmt::AssignIndex {
+                (Some(index), None) => ir::TypedStmt::AssignIndex {
                     array: place,
                     index,
                     value: loaded,
                 },
-                (None, Some(op)) => ir::Stmt::AssignOp {
+                (None, Some(op)) => ir::TypedStmt::AssignOp {
                     place,
                     op,
                     value: loaded,
                 },
-                (None, None) => ir::Stmt::AssignPlace {
+                (None, None) => ir::TypedStmt::AssignPlace {
                     place,
                     value: loaded,
                 },
@@ -6272,7 +6274,7 @@ impl<'a> Checker<'a> {
         &mut self,
         b: &Block,
         reachable: bool,
-    ) -> Result<(ir::Block, Flow), String> {
+    ) -> Result<(ir::TypedBlock, Flow), String> {
         self.block_expected_when(b, reachable, None)
     }
     pub(super) fn block_expected_when(
@@ -6280,7 +6282,7 @@ impl<'a> Checker<'a> {
         b: &Block,
         reachable: bool,
         expected: Option<&ir::Ty>,
-    ) -> Result<(ir::Block, Flow), String> {
+    ) -> Result<(ir::TypedBlock, Flow), String> {
         self.block_with_expectation_when(b, reachable, expected.into())
     }
     fn block_with_expectation_when(
@@ -6288,28 +6290,28 @@ impl<'a> Checker<'a> {
         b: &Block,
         reachable: bool,
         expectation: Expectation<'_>,
-    ) -> Result<(ir::Block, Flow), String> {
+    ) -> Result<(ir::TypedBlock, Flow), String> {
         let previous = self.reachable;
         self.reachable = reachable;
         let result = self.block_with_expectation(b, expectation);
         self.reachable = previous;
         result
     }
-    pub(super) fn block(&mut self, b: &Block) -> Result<(ir::Block, Flow), String> {
+    pub(super) fn block(&mut self, b: &Block) -> Result<(ir::TypedBlock, Flow), String> {
         self.block_expected(b, None)
     }
     pub(super) fn block_expected(
         &mut self,
         b: &Block,
         expected: Option<&ir::Ty>,
-    ) -> Result<(ir::Block, Flow), String> {
+    ) -> Result<(ir::TypedBlock, Flow), String> {
         self.block_with_expectation(b, expected.into())
     }
     pub(super) fn block_with_expectation(
         &mut self,
         b: &Block,
         expectation: Expectation<'_>,
-    ) -> Result<(ir::Block, Flow), String> {
+    ) -> Result<(ir::TypedBlock, Flow), String> {
         let hints = local_literals::hints(self, b, expectation.hard())?;
         self.closure_signature_hints.extend(hints.closures);
         let literal_hints = hints.locals;
@@ -6365,7 +6367,7 @@ impl<'a> Checker<'a> {
                     if let Some(cap) = self.canonical {
                         cap.record_binding(s, local)?;
                     }
-                    (ir::Stmt::Declare { local }, true)
+                    (ir::TypedStmt::Declare { local }, true)
                 }
                 Stmt::Let {
                     name,
@@ -6409,7 +6411,7 @@ impl<'a> Checker<'a> {
                     if let Some(cap) = self.canonical {
                         cap.record_binding(s, local)?;
                     }
-                    (ir::Stmt::Let { local, value }, f.completes)
+                    (ir::TypedStmt::Let { local, value }, f.completes)
                 }
                 Stmt::LetElse {
                     pattern,
@@ -6472,7 +6474,7 @@ impl<'a> Checker<'a> {
                         });
                     }
                     (
-                        ir::Stmt::LetPattern {
+                        ir::TypedStmt::LetPattern {
                             value,
                             ty,
                             bindings,
@@ -6545,7 +6547,7 @@ impl<'a> Checker<'a> {
                         self.scopes[declaration.scope].insert(key, local);
                         let statement = self.scope_borrow_temporaries(
                             temporaries_start,
-                            ir::Stmt::Assign { local, value },
+                            ir::TypedStmt::Assign { local, value },
                             flow.completes,
                             &mut statements,
                         )?;
@@ -6559,7 +6561,7 @@ impl<'a> Checker<'a> {
                     let value = self.expr_expected(value, Some(&t))?;
                     let f = self.flow(value);
                     self.require(&f, &t)?;
-                    (ir::Stmt::Assign { local, value }, f.completes)
+                    (ir::TypedStmt::Assign { local, value }, f.completes)
                 }
                 Stmt::AssignIndex {
                     array,
@@ -6598,7 +6600,7 @@ impl<'a> Checker<'a> {
                     let index_flow = self.flow(index);
                     self.require_index(&index_flow)?;
                     (
-                        ir::Stmt::AssignIndex {
+                        ir::TypedStmt::AssignIndex {
                             array,
                             index,
                             value,
@@ -6616,7 +6618,7 @@ impl<'a> Checker<'a> {
                 Stmt::AssignOp {
                     place, op, value, ..
                 } if let Some(id) = self.overloaded_assign(s, place, *op, value)? => {
-                    (ir::Stmt::Expr(id), self.flow(id).completes)
+                    (ir::TypedStmt::Expr(id), self.flow(id).completes)
                 }
                 Stmt::AssignOp {
                     place, op, value, ..
@@ -6624,7 +6626,7 @@ impl<'a> Checker<'a> {
                     let (place, ty, _) = self.checked_place(place)?;
                     let (value, flow) = self.compound_value(*op, &ty, value)?;
                     (
-                        ir::Stmt::AssignOp {
+                        ir::TypedStmt::AssignOp {
                             place,
                             op: *op,
                             value,
@@ -6679,7 +6681,7 @@ impl<'a> Checker<'a> {
                     let index_flow = self.flow(index);
                     self.require_index(&index_flow)?;
                     (
-                        ir::Stmt::AssignIndexOp {
+                        ir::TypedStmt::AssignIndexOp {
                             array,
                             index,
                             op: *op,
@@ -6708,7 +6710,7 @@ impl<'a> Checker<'a> {
                     let value = self.expr_expected(value, Some(&ty))?;
                     let flow = self.flow(value);
                     self.require(&flow, &ty)?;
-                    (ir::Stmt::AssignPlace { place, value }, flow.completes)
+                    (ir::TypedStmt::AssignPlace { place, value }, flow.completes)
                 }
                 Stmt::Expr(e) | Stmt::ImplicitExpr(e) => {
                     let value = self.expr(e)?;
@@ -6716,7 +6718,7 @@ impl<'a> Checker<'a> {
                     if matches!(s, Stmt::ImplicitExpr(_)) {
                         self.require(&f, &ir::Ty::Unit)?;
                     }
-                    (ir::Stmt::Expr(value), f.completes)
+                    (ir::TypedStmt::Expr(value), f.completes)
                 }
                 Stmt::Return(e) => {
                     let result_ty = self.result.clone();
@@ -6733,7 +6735,7 @@ impl<'a> Checker<'a> {
                         .transpose()?;
                     let f = value.map_or(Flow::value(ir::Ty::Unit), |e| self.flow(e));
                     self.require(&f, &self.result)?;
-                    (ir::Stmt::Return(value), false)
+                    (ir::TypedStmt::Return(value), false)
                 }
                 Stmt::While {
                     label,
@@ -6752,7 +6754,7 @@ impl<'a> Checker<'a> {
                     self.require(&bf, &ir::Ty::Unit)?;
                     self.loops.pop();
                     (
-                        ir::Stmt::While {
+                        ir::TypedStmt::While {
                             id,
                             condition,
                             body,
@@ -6823,7 +6825,7 @@ impl<'a> Checker<'a> {
         self.reachable = entered_reachable;
         // Tail temporaries live until the end of this block.
         for (local, _) in self.borrow_temporaries.drain(temporaries_start..) {
-            statements.push(ir::Stmt::Declare { local });
+            statements.push(ir::TypedStmt::Declare { local });
         }
         let mut flow = tail.map_or_else(
             || {
@@ -6859,7 +6861,7 @@ impl<'a> Checker<'a> {
                     .ok_or("pending declaration insertion work overflow")?,
             )?;
         }
-        self.charge_node(count.saturating_mul(std::mem::size_of::<ir::Stmt>() * 4))?;
+        self.charge_node(count.saturating_mul(std::mem::size_of::<ir::TypedStmt>() * 4))?;
         for (offset, pending) in self.pending_references.drain(pending_start..).enumerate() {
             let local = pending
                 .local
@@ -6871,10 +6873,10 @@ impl<'a> Checker<'a> {
             if let Some(cap) = self.canonical {
                 cap.shift_root_emissions(b, position)?;
             }
-            statements.insert(position, ir::Stmt::Declare { local });
+            statements.insert(position, ir::TypedStmt::Declare { local });
         }
         self.scopes.pop();
-        Ok((ir::Block { statements, tail }, flow))
+        Ok((ir::TypedBlock { statements, tail }, flow))
     }
     pub(super) fn expr(&mut self, e: &Expr) -> Result<ir::ExprId, String> {
         self.expr_expected(e, None)
@@ -8001,8 +8003,8 @@ impl<'a> Checker<'a> {
             self.exprs.push(ir::TypedExpr {
                 ty: result,
                 completion,
-                kind: ir::ExprKind::Block(ir::Block {
-                    statements: vec![ir::Stmt::Let { local, value }],
+                kind: ir::ExprKind::Block(ir::TypedBlock {
+                    statements: vec![ir::TypedStmt::Let { local, value }],
                     tail: Some(call),
                 }),
             });
@@ -8448,7 +8450,7 @@ impl<'a> Checker<'a> {
         source: &ForSource,
         body: &Block,
         item_hint: Option<&ir::Ty>,
-    ) -> Result<(ir::Stmt, bool), String> {
+    ) -> Result<(ir::TypedStmt, bool), String> {
         if source
             .adapters
             .iter()
@@ -8519,7 +8521,7 @@ impl<'a> Checker<'a> {
             let ir::Ty::Int(int_ty) = *bound_ty else {
                 return Err("for range bounds must have an integer type".into());
             };
-            self.charge_node(std::mem::size_of::<ir::Stmt>() * 10)?;
+            self.charge_node(std::mem::size_of::<ir::TypedStmt>() * 10)?;
             let ty = ir::Ty::Int(int_ty);
             let cursor = self.temporary("$for_cursor", ty.clone(), true)?;
             let limit = self.temporary("$for_end", ty.clone(), false)?;
@@ -8589,15 +8591,15 @@ impl<'a> Checker<'a> {
                 ir::Ty::Unit,
                 ir::ExprKind::If {
                     condition: at_end,
-                    then_block: ir::Block {
-                        statements: vec![ir::Stmt::Assign {
+                    then_block: ir::TypedBlock {
+                        statements: vec![ir::TypedStmt::Assign {
                             local: done,
                             value: yes,
                         }],
                         tail: None,
                     },
-                    else_block: ir::Block {
-                        statements: vec![ir::Stmt::Assign {
+                    else_block: ir::TypedBlock {
+                        statements: vec![ir::TypedStmt::Assign {
                             local: cursor,
                             value: next,
                         }],
@@ -8632,17 +8634,17 @@ impl<'a> Checker<'a> {
                 ir::Ty::Bool,
                 ir::ExprKind::If {
                     condition: in_range,
-                    then_block: ir::Block {
+                    then_block: ir::TypedBlock {
                         statements: vec![
-                            ir::Stmt::Assign {
+                            ir::TypedStmt::Assign {
                                 local: current,
                                 value: snapshot_cursor,
                             },
-                            ir::Stmt::Expr(advance),
+                            ir::TypedStmt::Expr(advance),
                         ],
                         tail: Some(available_yes),
                     },
-                    else_block: ir::Block {
+                    else_block: ir::TypedBlock {
                         statements: vec![],
                         tail: Some(no),
                     },
@@ -8652,11 +8654,11 @@ impl<'a> Checker<'a> {
                 ir::Ty::Bool,
                 ir::ExprKind::If {
                     condition: read_done,
-                    then_block: ir::Block {
+                    then_block: ir::TypedBlock {
                         statements: vec![],
                         tail: Some(exhausted_no),
                     },
-                    else_block: ir::Block {
+                    else_block: ir::TypedBlock {
                         statements: vec![],
                         tail: Some(available),
                     },
@@ -8691,46 +8693,46 @@ impl<'a> Checker<'a> {
             let mut initialization = if reverse {
                 // Source bounds still evaluate exactly once, left to right.
                 vec![
-                    ir::Stmt::Let {
+                    ir::TypedStmt::Let {
                         local: limit,
                         value: start,
                     },
-                    ir::Stmt::Let {
+                    ir::TypedStmt::Let {
                         local: cursor,
                         value: end,
                     },
                 ]
             } else {
                 vec![
-                    ir::Stmt::Let {
+                    ir::TypedStmt::Let {
                         local: cursor,
                         value: start,
                     },
-                    ir::Stmt::Let {
+                    ir::TypedStmt::Let {
                         local: limit,
                         value: end,
                     },
                 ]
             };
             initialization.extend([
-                ir::Stmt::Let {
+                ir::TypedStmt::Let {
                     local: current,
                     value: initialize_cursor,
                 },
-                ir::Stmt::Let {
+                ir::TypedStmt::Let {
                     local: done,
                     value: initial_no,
                 },
-                ir::Stmt::While {
+                ir::TypedStmt::While {
                     id,
                     condition,
-                    body: ir::Block {
-                        statements: vec![ir::Stmt::Expr(matched)],
+                    body: ir::TypedBlock {
+                        statements: vec![ir::TypedStmt::Expr(matched)],
                         tail: None,
                     },
                 },
             ]);
-            let block = ir::Block {
+            let block = ir::TypedBlock {
                 statements: initialization,
                 tail: None,
             };
@@ -8741,7 +8743,7 @@ impl<'a> Checker<'a> {
             } else {
                 ir::Completion::Never
             };
-            Ok((ir::Stmt::Expr(block), completes))
+            Ok((ir::TypedStmt::Expr(block), completes))
         })();
         self.loops.truncate(loop_depth);
         self.scopes.truncate(scope_depth);
@@ -8757,7 +8759,7 @@ impl<'a> Checker<'a> {
         source: &Expr,
         body: &Block,
         item_hint: Option<&ir::Ty>,
-    ) -> Result<(ir::Stmt, bool), String> {
+    ) -> Result<(ir::TypedStmt, bool), String> {
         let loop_depth = self.loops.len();
         let scope_depth = self.scopes.len();
         let outer_reachable = self.reachable;
@@ -8796,7 +8798,7 @@ impl<'a> Checker<'a> {
                 }
                 _ => return Err("for currently requires an integer range or an array".into()),
             };
-            self.charge_node(std::mem::size_of::<ir::Stmt>() * 7)?;
+            self.charge_node(std::mem::size_of::<ir::TypedStmt>() * 7)?;
             let array = self.temporary("$for_array", flow.ty.clone(), false)?;
             let index_ty = ir::Ty::Int(ir::IntTy::Usize);
             let index = self.temporary("$for_index", index_ty.clone(), true)?;
@@ -8842,20 +8844,20 @@ impl<'a> Checker<'a> {
                 ir::Ty::Bool,
                 ir::ExprKind::If {
                     condition: in_range,
-                    then_block: ir::Block {
+                    then_block: ir::TypedBlock {
                         statements: vec![
-                            ir::Stmt::Assign {
+                            ir::TypedStmt::Assign {
                                 local: saved_index,
                                 value: snapshot_index,
                             },
-                            ir::Stmt::Assign {
+                            ir::TypedStmt::Assign {
                                 local: index,
                                 value: next,
                             },
                         ],
                         tail: Some(yes),
                     },
-                    else_block: ir::Block {
+                    else_block: ir::TypedBlock {
                         statements: vec![],
                         tail: Some(no),
                     },
@@ -8907,25 +8909,25 @@ impl<'a> Checker<'a> {
             } else {
                 ir::Completion::Never
             };
-            let block = ir::Block {
+            let block = ir::TypedBlock {
                 statements: vec![
-                    ir::Stmt::Let {
+                    ir::TypedStmt::Let {
                         local: array,
                         value,
                     },
-                    ir::Stmt::Let {
+                    ir::TypedStmt::Let {
                         local: index,
                         value: zero,
                     },
-                    ir::Stmt::Let {
+                    ir::TypedStmt::Let {
                         local: saved_index,
                         value: saved_zero,
                     },
-                    ir::Stmt::While {
+                    ir::TypedStmt::While {
                         id,
                         condition,
-                        body: ir::Block {
-                            statements: vec![ir::Stmt::Expr(matched)],
+                        body: ir::TypedBlock {
+                            statements: vec![ir::TypedStmt::Expr(matched)],
                             tail: None,
                         },
                     },
@@ -8938,7 +8940,7 @@ impl<'a> Checker<'a> {
             } else {
                 ir::Completion::Never
             };
-            Ok((ir::Stmt::Expr(block), flow.completes))
+            Ok((ir::TypedStmt::Expr(block), flow.completes))
         })();
         self.loops.truncate(loop_depth);
         self.scopes.truncate(scope_depth);
@@ -8952,7 +8954,7 @@ impl<'a> Checker<'a> {
         pattern: &Pattern,
         scrutinee: &Expr,
         body: &Block,
-    ) -> Result<(ir::Stmt, bool), String> {
+    ) -> Result<(ir::TypedStmt, bool), String> {
         let loop_depth = self.loops.len();
         let scope_depth = self.scopes.len();
         let outer_reachable = self.reachable;
@@ -9004,7 +9006,7 @@ impl<'a> Checker<'a> {
                 .ok_or("contract: missing while-let frame")?;
             let can_exit = frame.can_exit;
             // This is checked IR storage, not a fabricated source block.
-            self.charge_node(std::mem::size_of::<ir::Stmt>())?;
+            self.charge_node(std::mem::size_of::<ir::TypedStmt>())?;
             let mut statements = Vec::new();
             let allocation_budget = self.names()?.budget().clone();
             statements.try_reserve_exact(1).map_err(|_| {
@@ -9018,11 +9020,11 @@ impl<'a> Checker<'a> {
             if statements.capacity() > 1 {
                 self.charge_node(
                     (statements.capacity() - 1)
-                        .checked_mul(std::mem::size_of::<ir::Stmt>())
+                        .checked_mul(std::mem::size_of::<ir::TypedStmt>())
                         .ok_or("while-let body capacity overflow")?,
                 )?;
             }
-            statements.push(ir::Stmt::Expr(match_id));
+            statements.push(ir::TypedStmt::Expr(match_id));
             let loop_id = ir::ExprId(self.exprs.len());
             self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
             self.exprs.push(ir::TypedExpr {
@@ -9034,7 +9036,7 @@ impl<'a> Checker<'a> {
                 },
                 kind: ir::ExprKind::Loop {
                     id,
-                    body: ir::Block {
+                    body: ir::TypedBlock {
                         statements,
                         tail: None,
                     },
@@ -9043,7 +9045,7 @@ impl<'a> Checker<'a> {
             // Runtime completion remains the genuine condition's completion.
             // The enclosing block separately retains this statement's source
             // Unit obligation rather than inventing runtime reachability.
-            Ok((ir::Stmt::Expr(loop_id), condition_flow.completes))
+            Ok((ir::TypedStmt::Expr(loop_id), condition_flow.completes))
         })();
         self.loops.truncate(loop_depth);
         self.scopes.truncate(scope_depth);
@@ -9075,7 +9077,7 @@ impl<'a> Checker<'a> {
                 (ir::ExprKind::Block(block), flow)
             }
             MatchBody::ImplicitUnit => (
-                ir::ExprKind::Block(ir::Block {
+                ir::ExprKind::Block(ir::TypedBlock {
                     statements: Vec::new(),
                     tail: None,
                 }),
@@ -9163,7 +9165,7 @@ impl<'a> Checker<'a> {
         annotation: &Type,
         source: &Expr,
         else_block: &Block,
-    ) -> Result<(ir::Stmt, bool), String> {
+    ) -> Result<(ir::TypedStmt, bool), String> {
         let annotation = if matches!(annotation, Type::Infer) {
             None
         } else {
@@ -9207,7 +9209,7 @@ impl<'a> Checker<'a> {
         }
         let pattern = self.publish_pattern(plan)?;
         Ok((
-            ir::Stmt::LetElse {
+            ir::TypedStmt::LetElse {
                 value,
                 ty,
                 pattern,
@@ -9535,7 +9537,7 @@ impl<'a> Checker<'a> {
                     PatternCoverage::Scalar(_) => {}
                 }
             }
-            checked.push(ir::MatchArm {
+            checked.push(ir::TypedMatchArm {
                 pattern,
                 guard,
                 body,
@@ -11012,6 +11014,7 @@ pub(super) fn type_callable_source_and_closures(
     c.install_lexical_scope(f.lexical_scope)?;
     c.declaration = Some(declaration);
     c.canonical = canonical;
+    c.closure_source_recipe = canonical.map(|cap| cap.inventory.owner.clone());
     c.unsafe_depth = usize::from(f.unsafety);
     let mut params = Vec::new();
     let offset = if context.receiver != ReceiverKind::None {
@@ -11934,7 +11937,7 @@ mod checked_identity_tests {
         let plan = checker
             .collect_pattern(pattern, &ir::Ty::Enum(enumeration))
             .unwrap();
-        let PatternTest::Decision { tests, .. } = &plan.test else {
+        let SourcePatternTest::Decision { tests, .. } = &plan.test else {
             panic!("expected decision plan");
         };
         assert_eq!(tests.len(), 2);

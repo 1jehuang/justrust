@@ -42,7 +42,7 @@ fn captured_place(
 }
 
 fn rewrite_block(
-    block: &mut ir::Block,
+    block: &mut ir::TypedBlock,
     receiver: ir::LocalId,
     borrowed_receiver: bool,
     captures: &[CaptureProjection],
@@ -50,7 +50,7 @@ fn rewrite_block(
     let mut pending = vec![block];
     while let Some(block) = pending.pop() {
         for statement in &mut block.statements {
-            if let ir::Stmt::Assign { local, value } = statement
+            if let ir::TypedStmt::Assign { local, value } = statement
                 && captures
                     .iter()
                     .any(|capture| capture.local == *local && capture.prefix.is_empty())
@@ -60,26 +60,28 @@ fn rewrite_block(
                     projection: Vec::new(),
                 };
                 captured_place(&mut place, receiver, borrowed_receiver, captures)?;
-                *statement = ir::Stmt::AssignPlace {
+                *statement = ir::TypedStmt::AssignPlace {
                     place,
                     value: *value,
                 };
             }
             match statement {
-                ir::Stmt::AssignPlace { place, .. } | ir::Stmt::AssignOp { place, .. } => {
+                ir::TypedStmt::AssignPlace { place, .. }
+                | ir::TypedStmt::AssignOp { place, .. } => {
                     captured_place(place, receiver, borrowed_receiver, captures)?;
                 }
-                ir::Stmt::AssignIndex { array, .. } | ir::Stmt::AssignIndexOp { array, .. } => {
+                ir::TypedStmt::AssignIndex { array, .. }
+                | ir::TypedStmt::AssignIndexOp { array, .. } => {
                     captured_place(array, receiver, borrowed_receiver, captures)?;
                 }
-                ir::Stmt::While { body, .. } => pending.push(body),
-                ir::Stmt::Assign { .. }
-                | ir::Stmt::Declare { .. }
-                | ir::Stmt::Let { .. }
-                | ir::Stmt::LetPattern { .. }
-                | ir::Stmt::LetElse { .. }
-                | ir::Stmt::Expr(_)
-                | ir::Stmt::Return(_) => {}
+                ir::TypedStmt::While { body, .. } => pending.push(body),
+                ir::TypedStmt::Assign { .. }
+                | ir::TypedStmt::Declare { .. }
+                | ir::TypedStmt::Let { .. }
+                | ir::TypedStmt::LetPattern { .. }
+                | ir::TypedStmt::LetElse { .. }
+                | ir::TypedStmt::Expr(_)
+                | ir::TypedStmt::Return(_) => {}
             }
         }
     }
@@ -92,7 +94,7 @@ fn rewrite_block(
 /// contain no calls and cannot manufacture dispatch or borrow authority.
 pub(super) fn rewrite(
     exprs: &mut Vec<ir::TypedExpr>,
-    body: &mut ir::Block,
+    body: &mut ir::TypedBlock,
     receiver: ir::LocalId,
     receiver_ty: ir::Ty,
     environment: Arc<ir::ClosureTy>,

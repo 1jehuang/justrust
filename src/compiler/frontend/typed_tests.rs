@@ -55,7 +55,7 @@ fn canonical_clone_receiver_order_and_primitive_temporaries_use_real_borrows() {
     let p = parse("struct S{v:i32}impl Clone for S{fn clone(&self)->Self{S{v:self.v+1}}}impl S{fn set(&mut self,n:i32){self.v=n;}}fn carrier(x:&mut S)->&mut S{x}struct Opaque{v:i32}fn main(){let s=S{v:12};let r=&s;let value=r.clone();let owner=Opaque{v:13};let shared=&owner;let handle=shared.clone();let n=10i32.clone();let yes=true.clone();let unit=().clone();let used=n+value.v+handle.v;let mut temporary=S{v:1};carrier(&mut temporary).set(2);}").unwrap();
     let signatures = signature_table(&p).unwrap();
     let checked = type_function_with_signatures(&p, 1, &signatures).unwrap();
-    assert!(checked.exprs.iter().any(|e| matches!(&e.kind, ir::ExprKind::Block(block) if block.statements.iter().any(|s| matches!(s,ir::Stmt::Let{local,..} if checked.locals[local.0].name=="$primitive_receiver")))));
+    assert!(checked.exprs.iter().any(|e| matches!(&e.kind, ir::ExprKind::Block(block) if block.statements.iter().any(|s| matches!(s,ir::TypedStmt::Let{local,..} if checked.locals[local.0].name=="$primitive_receiver")))));
     assert!(checked.exprs.iter().any(|e|matches!(&e.ty,ir::Ty::Ref{referent,..} if matches!(referent.as_ref(),ir::Ty::Struct(t) if t.def().name=="crate::Opaque"))));
     check(&p).unwrap();
 }
@@ -975,7 +975,7 @@ fn compound_statement_tokens_types_and_expression_boundaries() {
             f.body
                 .statements
                 .iter()
-                .filter(|s| matches!(s, ir::Stmt::AssignOp { .. }))
+                .filter(|s| matches!(s, ir::TypedStmt::AssignOp { .. }))
                 .count(),
             10
         );
@@ -1039,7 +1039,7 @@ fn compound_current_place_rhs_initialization_and_permission_checks() {
         f.body
             .statements
             .iter()
-            .any(|s| matches!(s, ir::Stmt::AssignIndexOp { .. }))
+            .any(|s| matches!(s, ir::TypedStmt::AssignIndexOp { .. }))
     );
 }
 
@@ -1068,7 +1068,7 @@ fn indexed_compound_autodereferences_mutable_array_carriers() {
     )
     .unwrap();
     let f = type_function_with_signatures(&p, 2, &signature_table(&p).unwrap()).unwrap();
-    let ir::Stmt::AssignIndexOp {
+    let ir::TypedStmt::AssignIndexOp {
         array,
         index,
         value,
@@ -1105,7 +1105,7 @@ fn compound_shift_queries_share_count_memo_and_check_dead_statements() {
         parse("fn main(){let mut x=1u8;let n=8u64;x<<=n;x>>={x=3;1u32};let y=1u8<<1u64;}").unwrap();
     check(&p).unwrap();
     let f = type_function_with_signatures(&p, 0, &signature_table(&p).unwrap()).unwrap();
-    let ir::Stmt::AssignOp { value, .. } = f.body.statements[2] else {
+    let ir::TypedStmt::AssignOp { value, .. } = f.body.statements[2] else {
         panic!("compound shift")
     };
     assert_eq!(f.exprs[value.0].ty, ir::Ty::Int(ir::IntTy::U64));
@@ -2062,7 +2062,7 @@ fn e2_implicit_and_explicit_fields_have_identical_ir_and_current_carrier_places(
         format!("{:?}", implicit.body),
         format!("{:?}", explicit.body)
     );
-    assert!(implicit.body.statements.iter().any(|s|matches!(s,ir::Stmt::AssignPlace{place,..} if place.projection==vec![ir::Projection::Deref,ir::Projection::Field(0)])));
+    assert!(implicit.body.statements.iter().any(|s|matches!(s,ir::TypedStmt::AssignPlace{place,..} if place.projection==vec![ir::Projection::Deref,ir::Projection::Field(0)])));
 }
 
 #[test]
@@ -2358,7 +2358,7 @@ fn b3b_mutable_contracts_keep_complete_original_indices_and_return_reborrows() {
         2
     );
     let moved = type_function_with_signatures(&p, 1, &env).unwrap();
-    let ir::Stmt::Let { local, value } = moved.body.statements[0] else {
+    let ir::TypedStmt::Let { local, value } = moved.body.statements[0] else {
         panic!("expected genuine untyped handle let")
     };
     assert!(matches!(moved.exprs[value.0].kind,ir::ExprKind::Local(id) if id==moved.params[0]));
@@ -2562,7 +2562,7 @@ fn b2_expected_reference_sites_reborrow_the_carrier_without_a_prior_move() {
         .statements
         .iter()
         .find_map(|s| {
-            if let ir::Stmt::Let { local, value } = s
+            if let ir::TypedStmt::Let { local, value } = s
                 && typed.locals[local.0].name == "moved"
             {
                 Some(*value)
@@ -2628,8 +2628,8 @@ fn b1_types_explicit_borrows_reborrows_and_static_deref_projections() {
     let program=parse("struct S{x:i32,y:i32}fn main(){let mut s=S{x:1,y:2};let r:&mut S=&mut s;(*r).x=3;let c=(*r).x;let p=&mut (*r).y;*p=4;let q=&*r;let z=(*q).x;let mut a=[1,2];let ar=&mut a;(*ar)[0]=3;let n=(*ar)[0];let owner=1;let sh=&owner;let copied=sh;let shared_s=S{x:7,y:8};let shared_r=&shared_s;let shared_n=(*shared_r).x;let moved=r;}").unwrap();
     let env = signature_table(&program).unwrap();
     let typed = type_function_with_signatures(&program, 0, &env).unwrap();
-    assert!(typed.body.statements.iter().any(|s|matches!(s,ir::Stmt::AssignPlace{place,..} if place.projection==vec![ir::Projection::Deref,ir::Projection::Field(0)])));
-    assert!(typed.body.statements.iter().any(|s|matches!(s,ir::Stmt::AssignPlace{place,..} if place.projection==vec![ir::Projection::Deref,ir::Projection::ConstantIndex(0)])));
+    assert!(typed.body.statements.iter().any(|s|matches!(s,ir::TypedStmt::AssignPlace{place,..} if place.projection==vec![ir::Projection::Deref,ir::Projection::Field(0)])));
+    assert!(typed.body.statements.iter().any(|s|matches!(s,ir::TypedStmt::AssignPlace{place,..} if place.projection==vec![ir::Projection::Deref,ir::Projection::ConstantIndex(0)])));
     assert!(typed.exprs.iter().any(|e|matches!(&e.kind,ir::ExprKind::Borrow{kind:ir::BorrowKind::Shared,place,..} if place.projection==vec![ir::Projection::Deref])));
     for source in [
         "fn main(){let mut x=1;let r=&mut x;let moved=r;let _=*r;match *r{_=>()};}",
@@ -2707,7 +2707,7 @@ fn usize_retains_full_width_and_uses_forward_and_binary_peer_contexts() {
             .body
             .statements
             .iter()
-            .any(|s| matches!(s, ir::Stmt::AssignIndex { .. }))
+            .any(|s| matches!(s, ir::TypedStmt::AssignIndex { .. }))
     );
     assert_eq!(
         type_function_with_signatures(&p, 1, &env).unwrap().result,
@@ -2752,7 +2752,7 @@ fn arrays_contextualize_empty_literals_and_keep_constant_index_projection() {
         &signature_table(&program).unwrap(),
     )
     .unwrap();
-    assert!(function.body.statements.iter().any(|s|matches!(s,ir::Stmt::AssignPlace{place,..} if place.projection==vec![ir::Projection::ConstantIndex(0)])));
+    assert!(function.body.statements.iter().any(|s|matches!(s,ir::TypedStmt::AssignPlace{place,..} if place.projection==vec![ir::Projection::ConstantIndex(0)])));
 }
 
 #[test]
@@ -2881,7 +2881,7 @@ fn typed_deferred_declarations_publish_fresh_uninitialized_locals() {
     assert!(checked.locals[2].mutable);
     assert!(matches!(
         checked.body.statements[1],
-        ir::Stmt::Declare {
+        ir::TypedStmt::Declare {
             local: ir::LocalId(1)
         }
     ));
@@ -3034,7 +3034,7 @@ fn tuple_places_resolve_parenthesized_local_roots_and_shadowing() {
         .statements
         .iter()
         .filter_map(|s| match s {
-            ir::Stmt::AssignPlace { place, .. } => Some(place),
+            ir::TypedStmt::AssignPlace { place, .. } => Some(place),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -3282,7 +3282,7 @@ fn while_conditions_are_control_target_barriers() {
         assert!(error.contains("E0590"), "{error}");
     }
     let f = typed("fn main(){ while {loop {break true;}} {break;} }", 0);
-    let ir::Stmt::While { id, .. } = f.body.statements[0] else {
+    let ir::TypedStmt::While { id, .. } = f.body.statements[0] else {
         panic!("expected while")
     };
     assert_eq!(id, ir::LoopId(0));
@@ -3357,7 +3357,7 @@ fn assignment_and_initializer_resolve_before_shadowing() {
     assert_eq!(f.locals[1].ty, ir::Ty::Bool);
     assert!(matches!(
         f.body.statements[1],
-        ir::Stmt::Assign {
+        ir::TypedStmt::Assign {
             local: ir::LocalId(0),
             ..
         }

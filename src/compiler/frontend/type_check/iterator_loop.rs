@@ -14,7 +14,7 @@ impl Checker<'_> {
         source: &ForSource,
         value: &Expr,
         body: &Block,
-    ) -> Result<(ir::Stmt, bool), String> {
+    ) -> Result<(ir::TypedStmt, bool), String> {
         let loop_depth = self.loops.len();
         let scope_depth = self.scopes.len();
         let outer_reachable = self.reachable;
@@ -107,7 +107,9 @@ impl Checker<'_> {
                     }
                     ("None", ir::VariantShape::Unit, 0) => none = Some(index),
                     _ => {
-                        return Err("canonical Iterator::next result changed Option variants".into());
+                        return Err(
+                            "canonical Iterator::next result changed Option variants".into()
+                        );
                     }
                 }
             }
@@ -171,7 +173,7 @@ impl Checker<'_> {
                 ir::ExprKind::Match {
                     scrutinee: next,
                     arms: vec![
-                        ir::MatchArm {
+                        ir::TypedMatchArm {
                             pattern: ir::MatchPattern::EnumVariant {
                                 ty: option.clone(),
                                 variant: some,
@@ -190,7 +192,7 @@ impl Checker<'_> {
                             guard: None,
                             body: matched_body,
                         },
-                        ir::MatchArm {
+                        ir::TypedMatchArm {
                             pattern: ir::MatchPattern::EnumVariant {
                                 ty: option,
                                 variant: none,
@@ -206,21 +208,21 @@ impl Checker<'_> {
                 ir::Ty::Unit,
                 ir::ExprKind::Loop {
                     id,
-                    body: ir::Block {
-                        statements: vec![ir::Stmt::Expr(matched)],
+                    body: ir::TypedBlock {
+                        statements: vec![ir::TypedStmt::Expr(matched)],
                         tail: None,
                     },
                 },
             )?;
             let block = self.for_expr(
                 ir::Ty::Unit,
-                ir::ExprKind::Block(ir::Block {
+                ir::ExprKind::Block(ir::TypedBlock {
                     statements: vec![
-                        ir::Stmt::Let {
+                        ir::TypedStmt::Let {
                             local: iterator,
                             value: iterator_value,
                         },
-                        ir::Stmt::Expr(loop_value),
+                        ir::TypedStmt::Expr(loop_value),
                     ],
                     tail: None,
                 }),
@@ -230,7 +232,7 @@ impl Checker<'_> {
             } else {
                 ir::Completion::Never
             };
-            Ok((ir::Stmt::Expr(block), flow.completes))
+            Ok((ir::TypedStmt::Expr(block), flow.completes))
         })();
         self.loops.truncate(loop_depth);
         self.scopes.truncate(scope_depth);
