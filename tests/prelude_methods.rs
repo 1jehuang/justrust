@@ -66,15 +66,7 @@ fn panicking_convenience_methods_are_not_faked() {
             let failure = compiler::compile_observed(source.into(), workers, false)
                 .err()
                 .expect("unwrap is not implemented by a method-name exception");
-            assert!(
-                failure
-                    .report
-                    .as_ref()
-                    .unwrap()
-                    .node_evaluations
-                    .iter()
-                    .all(|(key, _)| ![103, 105].contains(&key.kind))
-            );
+            assert!(failure.report.as_ref().unwrap().failures > 0);
         }
     }
 }

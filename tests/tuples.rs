@@ -608,6 +608,7 @@ fn tuple_checked_bodies_are_shared_once_and_check_does_not_demand_codegen() {
                         }
                     }
                 }
+                expected.extend(native_prelude::library_source_keys());
                 assert_eq!(report.node_evaluations.len(), expected.len());
                 for key in expected {
                     let entries: Vec<_> = report

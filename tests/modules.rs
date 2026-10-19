@@ -621,6 +621,7 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                         }
                     }
                 }
+                expected.extend(native_prelude::library_source_keys());
                 assert_eq!(report.node_evaluations.len(), expected.len());
                 for key in expected {
                     let entries: Vec<_> = report
