@@ -838,7 +838,16 @@ fn compile_work_scales_linearly_ratchet() {
 #[test]
 fn program_size_ceiling_ratchet() {
     compiler::compile_observed(flat_source(REQUIRED_FUNCTIONS), 1, true).unwrap_or_else(
-        |failure| panic!("{REQUIRED_FUNCTIONS} generated functions must compile: {failure}"),
+        |failure| {
+            if let (Some(resource), Some(report)) = (&failure.resource_usage.first_failure, &failure.report)
+                && let Some(task) = resource.task_id
+                && let Some(node) = report.events.iter().find(|event| event.task == Some(task) && event.node.is_some()).and_then(|event| event.node)
+                && let Some(index) = report.node_ids.iter().position(|id| *id == node)
+            {
+                eprintln!("resource task key: {:?}", report.node_evaluations[index].0);
+            }
+            panic!("{REQUIRED_FUNCTIONS} generated functions must compile: {failure}; first resource failure: {:?}", failure.resource_usage.first_failure)
+        },
     );
     if let Some(count) = KNOWN_FAILING_FUNCTIONS {
         match compiler::compile_observed(flat_source(count), 1, true) {

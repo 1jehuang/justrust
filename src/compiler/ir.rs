@@ -1918,6 +1918,7 @@ impl PlanBudget {
     /// remain sticky through the ledger.
     #[track_caller]
     fn charge_task(&self, amount: usize, kind: ResourceBudgetKind) -> Option<Result<(), String>> {
+        let caller = std::panic::Location::caller();
         let limit = match kind {
             ResourceBudgetKind::Work => self.limits.work,
             _ => self.limits.nodes,
@@ -1938,7 +1939,11 @@ impl PlanBudget {
                         match self.usage.lock() {
                             Ok(mut usage) => {
                                 usage.resource_failed = true;
-                                let failure = ResourceBudgetFailure::new(kind, amount, used, limit);
+                                let mut failure =
+                                    ResourceBudgetFailure::new(kind, amount, used, limit);
+                                failure.file = caller.file();
+                                failure.line = caller.line();
+                                failure.column = caller.column();
                                 usage.first_failure.get_or_insert(failure);
                                 Err("generic planning resource limit exceeded".into())
                             }
@@ -8835,6 +8840,42 @@ mod tests {
         assert!(budget.clone().charge_diagnostic_bytes(usize::MAX).is_err());
         assert!(budget.check_depth(usize::MAX).is_err());
         assert_eq!(budget.first_resource_failure(), Some(first));
+    }
+
+    #[test]
+    fn budget_telemetry_graph_task_preserves_external_callsite() {
+        struct Probe(PlanBudget);
+        impl crate::Provider for Probe {
+            fn outputs(&self, _: &crate::Key) -> usize {
+                1
+            }
+            fn start(&self, cx: crate::Context, _: crate::Key) -> crate::TaskFuture {
+                let budget = self.0.clone();
+                Box::pin(async move {
+                    budget.charge_work(1).map_err(crate::Error::new)?;
+                    let line = line!() + 1;
+                    assert!(budget.charge_work(2).is_err());
+                    cx.publish(0, u64::from(line))
+                })
+            }
+        }
+        for workers in [1, 8] {
+            let budget = PlanBudget::new(PlanLimits {
+                work: 2,
+                ..PlanLimits::default()
+            });
+            let engine = crate::Engine::new(Probe(budget.clone()));
+            let demand = engine.request(crate::Key::new(42, vec![7]));
+            let report = engine.run(workers).unwrap();
+            assert_eq!(report.failures, 0);
+            let failure = budget.first_resource_failure().unwrap();
+            assert_eq!(
+                (failure.file, u64::from(failure.line)),
+                (file!(), demand.result(0).unwrap())
+            );
+            assert_eq!((failure.requested, failure.used, failure.limit), (2, 1, 2));
+            assert!(failure.graph_id.is_some() && failure.task_id.is_some());
+        }
     }
 
     #[test]
