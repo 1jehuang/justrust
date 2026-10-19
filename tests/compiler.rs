@@ -528,7 +528,10 @@ fn invalid_programs_fail_without_publishing_an_executable() {
         ),
         ("main arguments", "fn main(x: i32) {}"),
         ("main return", "fn main() -> i32 { 0 }"),
-        ("formatted println", "fn main() { println!(\"{}\", 1); }"),
+        (
+            "missing format argument",
+            "fn main() { println!(\"{} {}\", 1); }",
+        ),
         ("nonliteral println", "fn main() { println!(1); }"),
         ("noniterable for loop", "fn main() { for x in 2 {} }"),
         ("struct", "struct X {} fn main() {}"),
