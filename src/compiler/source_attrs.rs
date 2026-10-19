@@ -715,7 +715,7 @@ impl Filter<'_> {
                 "fn" => Owner::Function,
                 "mod" => Owner::Module,
                 "struct" | "enum" | "impl" | "trait" | "union" | "extern" | "use" | "const"
-                | "static" | "type" => Owner::FreeItem,
+                | "static" | "type" | "macro_rules" => Owner::FreeItem,
                 _ => Owner::Unsupported,
             };
             if !self.attributes(
@@ -1650,6 +1650,35 @@ mod tests {
             AttributeErrorKind::Syntax
         );
     }
+    #[test]
+    fn macro_rules_item_docs_are_inert_and_preserve_macro_body() {
+        let text = "/// conversions\n#[doc(hidden)] macro_rules! impl_per { ($from:ident => $to:ident) => { const _: () = (); }; }";
+        let out = prep(text).unwrap();
+        assert_eq!(out.text.len(), text.len());
+        assert_eq!(out.attributes.len(), 2);
+        assert!(out.attributes.iter().all(|a| a.name == "doc" && a.effective));
+        assert!(out.text.contains("macro_rules! impl_per"));
+        assert!(out.text.contains("const _: () = ();"));
+        assert!(!out.text.contains("/// conversions"));
+        assert!(!out.text.contains("#[doc(hidden)]"));
+    }
+
+    #[test]
+    fn macro_rules_item_docs_keep_invalid_attachment_boundaries() {
+        assert_eq!(
+            prep("#[inline] macro_rules! helper { () => {}; }")
+                .unwrap_err()
+                .kind,
+            AttributeErrorKind::Syntax
+        );
+        assert_eq!(
+            prep("fn outer() { #[doc=\"stmt\"] let x = 1; }")
+                .unwrap_err()
+                .kind,
+            AttributeErrorKind::Unsupported
+        );
+    }
+
     #[test]
     fn associated_function_docs_mask_only_prefix_and_keep_original_offsets() {
         let text = "trait T { /// required\n fn f(); /** default */ fn g(){} } impl S { #[doc=\"inherent\"] fn h(){} } impl T for S { #[doc(hidden)] fn f(){} }";
