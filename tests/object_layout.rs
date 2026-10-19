@@ -148,10 +148,10 @@ fn pointer_calculation_never_calculates_its_validated_pointee() {
     let key = ClosedTypeKey::decode(&pointer(2, &unit()), &budget).unwrap();
     let before = budget.usage_snapshot().work;
     ObjectLayout::calculate(key, TARGET, &budget).unwrap();
-    // Admission rechecks all grammar nodes (three versus two here). The
+    // Admission rechecks all words and grammar nodes (three versus two here). The
     // actual pointer-layout walk is still one leaf and never visits pointee
     // layout, whose overflowing array would otherwise fail.
-    assert_eq!(complex_work, budget.usage_snapshot().work - before + 1);
+    assert_eq!(complex_work, budget.usage_snapshot().work - before + 5);
     // No pointee-layout demand is NOT permission to skip grammar validation.
     let mut malformed = pointer_words;
     *malformed.last_mut().unwrap() = 999;
@@ -207,7 +207,7 @@ fn malformed_noncanonical_and_unsupported_type_keys_reject() {
     );
     assert_eq!(
         ClosedTypeKey::decode(&vec![1; 1024], &budget).unwrap_err(),
-        LayoutError::KeyCapacity
+        LayoutError::InvalidEncoding
     );
     // All proper truncations and length mutations of this nested key reject.
     let words = array(2, &pointer(3, &array(7, &scalar(Scalar::Char))));
@@ -287,18 +287,37 @@ fn arithmetic_overflow_and_target_object_bound_are_distinct() {
 }
 
 #[test]
-fn full_inline_storage_is_paid_once_and_receipts_never_refund() {
+fn actual_owned_capacity_is_paid_once_and_receipts_never_refund() {
     let budget = PlanBudget::default();
     let words = scalar(Scalar::U8);
     let key = ClosedTypeKey::decode(&words, &budget).unwrap();
-    assert_eq!(key.storage().bytes(), size_of::<ClosedTypeKey>());
-    assert_eq!(budget.usage_snapshot().bytes, size_of::<ClosedTypeKey>());
+    let capacity_bytes = key.capacity_words() * size_of::<u64>();
+    let base_bytes = size_of::<ClosedTypeKey>() + words.len() * size_of::<u64>();
+    assert_eq!(key.storage().bytes(), base_bytes);
+    let surplus = key.surplus_storage().map_or(0, |receipt| receipt.bytes());
+    assert_eq!(
+        base_bytes + surplus,
+        size_of::<ClosedTypeKey>() + capacity_bytes
+    );
+    assert_eq!(
+        budget.usage_snapshot().bytes,
+        size_of::<ClosedTypeKey>() + capacity_bytes
+    );
+    let address = key.words().as_ptr();
     let layout = ObjectLayout::calculate(key, TARGET, &budget).unwrap();
     assert_eq!(
-        layout.key().storage().bytes() + layout.storage().bytes(),
-        size_of::<ObjectLayout>()
+        layout.key().storage().bytes() + surplus + layout.storage().bytes(),
+        size_of::<ObjectLayout>() + capacity_bytes
     );
-    assert_eq!(budget.usage_snapshot().bytes, size_of::<ObjectLayout>());
+    assert_eq!(
+        layout.key().words().as_ptr(),
+        address,
+        "calculate moves, never copies the allocation"
+    );
+    assert_eq!(
+        budget.usage_snapshot().bytes,
+        size_of::<ObjectLayout>() + capacity_bytes
+    );
     let before = budget.usage_snapshot();
     let receipt = layout.storage().clone();
     drop(receipt);
@@ -390,10 +409,10 @@ fn work_bytes_and_depth_exhaustion_remain_sticky() {
 }
 
 #[test]
-fn complete_pointer_suffix_depth_and_fixed_key_capacity_are_bounded() {
+fn complete_pointer_suffix_depth_uses_only_caller_admission() {
     let budget = PlanBudget::default();
     let mut words = unit();
-    for _ in 0..127 {
+    for _ in 1..budget.limits().depth {
         words = pointer(2, &words);
     }
     let key = ClosedTypeKey::decode(&words, &budget).unwrap();
@@ -413,6 +432,47 @@ fn complete_pointer_suffix_depth_and_fixed_key_capacity_are_bounded() {
         ClosedTypeKey::decode(&unit(), &budget).unwrap_err(),
         LayoutError::Resource
     );
+}
+
+#[test]
+fn array_frontiers_scale_with_actual_input_under_caller_depth() {
+    for depth in [1, 2, 17, PlanLimits::default().depth] {
+        let budget = PlanBudget::new(PlanLimits {
+            depth,
+            ..PlanLimits::default()
+        });
+        let mut words = unit();
+        for _ in 1..depth {
+            words = array(0, &words);
+        }
+        let layout = calculate(&words, &budget).unwrap();
+        assert_eq!(layout.shape().size, 0);
+        layout.validate_for(&words, TARGET, &budget).unwrap();
+        assert_eq!(
+            budget.usage_snapshot().bytes,
+            size_of::<ObjectLayout>() + layout.key().capacity_words() * size_of::<u64>()
+        );
+        let over = array(0, &words);
+        assert_eq!(
+            ClosedTypeKey::decode(&over, &budget).unwrap_err(),
+            LayoutError::Resource
+        );
+        assert!(budget.first_resource_failure().is_some());
+    }
+}
+
+#[test]
+fn owned_input_is_not_a_borrowed_backreference() {
+    let budget = PlanBudget::default();
+    let mut input = scalar(Scalar::Char);
+    let key = ClosedTypeKey::decode(&input, &budget).unwrap();
+    input[3] = Scalar::U8 as u64;
+    drop(input);
+    let layout = ObjectLayout::calculate(key, TARGET, &budget).unwrap();
+    assert_eq!(layout.shape().size, 4);
+    layout
+        .validate_for(&scalar(Scalar::Char), TARGET, &budget)
+        .unwrap();
 }
 
 #[test]
