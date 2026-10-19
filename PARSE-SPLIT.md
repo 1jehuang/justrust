@@ -205,3 +205,9 @@ recorded in FINDINGS.md.
   `parse_syntax_unit`, `ProgramDeclarations` and `SourceItemMacroDriver` are
   announced before landing.
 - `PlanCtx`, `instances.rs` and MONO_PLAN are not touched.
+- Const items (dromedary, kinds 118-120) add `DeclKind::Const` and new
+  `ProgramDeclarations` collections. Proposed order: Const lands first, then
+  this lane rebases its signature-only owner threading onto it.
+  `MODULE_INDEX` lists Const as a value-namespace declaration with no
+  callable index. This lane never edits `DeclKind`, `ProgramDeclarations`
+  fields or `Expr`.
