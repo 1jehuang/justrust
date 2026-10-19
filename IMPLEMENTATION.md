@@ -967,10 +967,22 @@ each mount), features with `dep:`/`pkg/feat`/optional deps unified across the
 build, `dev`/`release`/custom profile `debug-assertions`, `#[test]`/`#[ignore]`/
 `#[should_panic(expected)]` discovery under `cfg(test)` with a native fork-per-
 test harness (`libraries/prelude/test.rs`) matching libtest output and exit 101.
-`tests/projects.rs` compares a two-crate workspace with stock Cargo. Open:
-registry/git sources, lockfiles, build scripts, proc macros, doc tests, test
-filters/harness flags, parallel units, per-crate graph identity (dependency
-crates are currently re-checked inside each dependent unit).
+`tests/projects.rs` compares a two-crate workspace with stock Cargo. Native
+offline locked registry packages now parse from `Cargo.lock`, resolve only from
+the local Cargo cache with pinned source/checksum identity, and fail explicitly
+for cache misses or checksum mismatches instead of path-rewriting or stock
+fallback. Archive checksums now authenticate every extracted regular file;
+foreign registries, forged cache IDs, modified/extra source files, symlinks,
+escaping targets, ambiguous lock identities and incompatible manifest requirements
+reject explicitly. Tests seed unchanged licensed archives into isolated cache
+homes, without depending on hosted HOME cache contents. On private parent
+`d98eb5aea`, the unchanged `utf8-width 0.1.8` positive currently stops at the
+unsupported `no_std` crate attribute. CHECK/BUILD/run stdout `3` remains a pending
+acceptance gate, not a result of this registry-only patch. `nix-base32 0.2.0` and
+`time-core 0.1.2` are diagnostic probes, never rewritten to clear boundaries. Open: git
+sources, build scripts, proc macros, doc tests, test filters/harness flags,
+parallel units, per-crate graph identity (dependency crates are currently
+re-checked inside each dependent unit).
 
 **Independent no_std prerequisite (2026-10-19):** `NO-STD.md` freezes source-owned
 crate policy, canonical core-prelude selection, defining-crate inheritance and

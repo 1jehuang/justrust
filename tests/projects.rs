@@ -6,6 +6,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+const CRATES_IO_CACHE_ID: &str = "index.crates.io-1949cf8c6b5b557f";
+
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/projects")
@@ -20,10 +22,19 @@ fn target_dir(name: &str) -> PathBuf {
 }
 
 fn jr(project: &str, args: &[&str]) -> Output {
+    jr_with(project, args, [])
+}
+
+fn jr_with(
+    project: &str,
+    args: &[&str],
+    env: impl IntoIterator<Item = (&'static str, PathBuf)>,
+) -> Output {
     Command::new(env!("CARGO_BIN_EXE_jr-rust"))
         .args(args)
         .current_dir(fixture(project))
         .env("CARGO_TARGET_DIR", target_dir(project))
+        .envs(env.into_iter().map(|(k, v)| (k, v)))
         .output()
         .unwrap()
 }
@@ -35,6 +46,37 @@ fn stock(project: &str, args: &[&str]) -> Option<Output> {
         .env("CARGO_TARGET_DIR", target_dir(&format!("{project}-stock")))
         .output()
         .ok()
+}
+
+fn seed_registry_cache(crate_stem: &str) -> PathBuf {
+    let scratch = target_dir(&format!(
+        "cache-{crate_stem}-{}",
+        std::thread::current().name().unwrap_or("main")
+    ));
+    let cargo_home = scratch.join("cargo-home");
+    let src_root = cargo_home.join("registry/src").join(CRATES_IO_CACHE_ID);
+    let src_dir = src_root.join(crate_stem);
+    let cache_dir = cargo_home.join("registry/cache").join(CRATES_IO_CACHE_ID);
+    std::fs::create_dir_all(&src_root).unwrap();
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    let archive = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/registry-cache")
+        .join(format!("{crate_stem}.crate"));
+    std::fs::copy(&archive, cache_dir.join(format!("{crate_stem}.crate"))).unwrap();
+    let status = Command::new("tar")
+        .args(["-xzf"])
+        .arg(&archive)
+        .args(["-C"])
+        .arg(&src_root)
+        .status()
+        .unwrap();
+    assert!(status.success(), "failed to unpack {}", archive.display());
+    assert!(
+        src_dir.join("Cargo.toml").is_file(),
+        "missing cached source manifest at {}",
+        src_dir.display()
+    );
+    cargo_home
 }
 
 /// libtest prints per-test durations in some configurations.
@@ -130,6 +172,315 @@ fn failing_tests_report_like_libtest_and_exit_101() {
 }
 
 #[test]
+fn locked_registry_dependency_runs_from_local_cache() {
+    let cargo_home = seed_registry_cache("utf8-width-0.1.8");
+    for workers in ["1", "8"] {
+        let check = jr_with(
+            "registry",
+            &["check", "-j", workers],
+            [("CARGO_HOME", cargo_home.clone())],
+        );
+        assert!(
+            check.status.success(),
+            "{}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+        let build = jr_with(
+            "registry",
+            &["build", "-j", workers],
+            [("CARGO_HOME", cargo_home.clone())],
+        );
+        assert!(
+            build.status.success(),
+            "{}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+        let run = jr_with(
+            "registry",
+            &["run", "-j", workers],
+            [("CARGO_HOME", cargo_home.clone())],
+        );
+        assert!(
+            run.status.success(),
+            "{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "3\n");
+    }
+}
+
+#[test]
+fn locked_registry_dependency_reports_missing_cache_explicitly() {
+    let scratch = target_dir("registry-missing-cache");
+    let project = scratch.join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(
+        project.join("Cargo.toml"),
+        std::fs::read_to_string(fixture("registry").join("Cargo.toml")).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("Cargo.lock"),
+        std::fs::read_to_string(fixture("registry").join("Cargo.lock")).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("src/main.rs"),
+        std::fs::read_to_string(fixture("registry").join("src/main.rs")).unwrap(),
+    )
+    .unwrap();
+    let cargo_home = scratch.join("empty-cargo-home");
+    std::fs::create_dir_all(cargo_home.join("registry/src")).unwrap();
+    std::fs::create_dir_all(cargo_home.join("registry/cache")).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+        .args(["check"])
+        .current_dir(&project)
+        .env("CARGO_TARGET_DIR", scratch.join("target"))
+        .env("CARGO_HOME", &cargo_home)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(101));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("locked registry package `utf8-width` 0.1.8"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("not cached") || stderr.contains("local Cargo cache"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn locked_registry_dependency_reports_checksum_mismatch_explicitly() {
+    let scratch = target_dir("registry-checksum-mismatch");
+    let project = scratch.join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(
+        project.join("Cargo.toml"),
+        std::fs::read_to_string(fixture("registry").join("Cargo.toml")).unwrap(),
+    )
+    .unwrap();
+    let lock = std::fs::read_to_string(fixture("registry").join("Cargo.lock")).unwrap();
+    std::fs::write(
+        project.join("Cargo.lock"),
+        lock.replace(
+            "1292c0d970b54115d14f2492fe0170adf21d68a1de108eebc51c1df4f346a091",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("src/main.rs"),
+        std::fs::read_to_string(fixture("registry").join("src/main.rs")).unwrap(),
+    )
+    .unwrap();
+    let cargo_home = seed_registry_cache("utf8-width-0.1.8");
+    let out = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+        .args(["check"])
+        .current_dir(&project)
+        .env("CARGO_TARGET_DIR", scratch.join("target"))
+        .env("CARGO_HOME", cargo_home)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(101));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("failed checksum validation"), "{stderr}");
+    assert!(stderr.contains("utf8-width"), "{stderr}");
+}
+
+#[test]
+fn locked_registry_dependency_rejects_mismatched_lock_entries() {
+    let scratch = target_dir("registry-lock-mismatch");
+    let project = scratch.join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(
+        project.join("Cargo.toml"),
+        std::fs::read_to_string(fixture("registry").join("Cargo.toml")).unwrap(),
+    )
+    .unwrap();
+    let lock = std::fs::read_to_string(fixture("registry").join("Cargo.lock")).unwrap();
+    std::fs::write(
+        project.join("Cargo.lock"),
+        lock.replace(" \"utf8-width\",\n", " \"utf8-width 0.1.9\",\n")
+            .replace("version = \"0.1.8\"", "version = \"0.1.9\""),
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("src/main.rs"),
+        std::fs::read_to_string(fixture("registry").join("src/main.rs")).unwrap(),
+    )
+    .unwrap();
+    let cargo_home = seed_registry_cache("utf8-width-0.1.8");
+    let out = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+        .args(["check"])
+        .current_dir(&project)
+        .env("CARGO_TARGET_DIR", scratch.join("target"))
+        .env("CARGO_HOME", cargo_home)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(101));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("locked registry package `utf8-width` 0.1.9"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("not cached"), "{stderr}");
+}
+
+#[test]
+fn locked_registry_authority_rejects_forged_sources_and_locks() {
+    let original_lock = std::fs::read_to_string(fixture("registry").join("Cargo.lock")).unwrap();
+    let original_manifest =
+        std::fs::read_to_string(fixture("registry").join("Cargo.toml")).unwrap();
+    for (case, message) in [
+        ("source", "unsupported locked registry source"),
+        ("requirement", "does not satisfy manifest requirement"),
+        ("missing-checksum", "missing a checksum"),
+        ("ambiguous", "ambiguous"),
+        (
+            "modified-source",
+            "registry source checksum validation failed",
+        ),
+        ("extra-source", "unauthenticated file"),
+        ("wrong-cache", "not cached"),
+    ] {
+        let scratch = target_dir(&format!("registry-authority-{case}"));
+        let project = scratch.join("project");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        let mut lock = original_lock.clone();
+        let mut manifest = original_manifest.clone();
+        match case {
+            "source" => {
+                lock = lock.replace(
+                    "github.com/rust-lang/crates.io-index",
+                    "example.invalid/index",
+                )
+            }
+            "requirement" => manifest = manifest.replace("0.1.8", "=0.1.9"),
+            "missing-checksum" => {
+                lock = lock
+                    .lines()
+                    .filter(|line| !line.starts_with("checksum"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+            "ambiguous" => lock.push_str(
+                original_lock
+                    .split_once("[[package]]\nname = \"utf8-width\"")
+                    .map(|(_, tail)| format!("\n[[package]]\nname = \"utf8-width\"{tail}"))
+                    .unwrap()
+                    .as_str(),
+            ),
+            _ => {}
+        }
+        std::fs::write(project.join("Cargo.toml"), manifest).unwrap();
+        std::fs::write(project.join("Cargo.lock"), lock).unwrap();
+        std::fs::copy(
+            fixture("registry").join("src/main.rs"),
+            project.join("src/main.rs"),
+        )
+        .unwrap();
+        // Every mutation is isolated from the user's licensed cache and other tests.
+        let cargo_home = seed_registry_cache("utf8-width-0.1.8");
+        let isolated = scratch.join("cargo-home");
+        let status = Command::new("cp")
+            .args(["-a"])
+            .arg(&cargo_home)
+            .arg(&isolated)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let sources = isolated
+            .join("registry/src")
+            .join(CRATES_IO_CACHE_ID)
+            .join("utf8-width-0.1.8");
+        match case {
+            "modified-source" => std::fs::write(
+                sources.join("src/lib.rs"),
+                "pub fn get_width(_: u8) -> usize { 9 }\n",
+            )
+            .unwrap(),
+            "extra-source" => std::fs::write(sources.join("src/forged.rs"), "").unwrap(),
+            "wrong-cache" => {
+                std::fs::rename(
+                    isolated.join("registry/src").join(CRATES_IO_CACHE_ID),
+                    isolated.join("registry/src/index.crates.io-forged"),
+                )
+                .unwrap();
+            }
+            _ => {}
+        }
+        for command in ["check", "build"] {
+            let out = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+                .args([command])
+                .current_dir(&project)
+                .env("CARGO_HOME", &isolated)
+                .env("CARGO_TARGET_DIR", scratch.join("target"))
+                .output()
+                .unwrap();
+            assert_eq!(
+                out.status.code(),
+                Some(101),
+                "{case}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&out.stderr).contains(message),
+                "{case}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(
+                !scratch.join("target/debug/registry").exists(),
+                "{case} published an executable"
+            );
+        }
+    }
+}
+
+#[test]
+fn locked_registry_unchanged_probe_boundaries() {
+    for (name, version) in [("nix-base32", "0.2.0"), ("time-core", "0.1.2")] {
+        let scratch = target_dir(&format!("registry-probe-{name}"));
+        let project = scratch.join("project");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        let stem = format!("{name}-{version}");
+        let cargo_home = seed_registry_cache(&stem);
+        let archive = cargo_home
+            .join("registry/cache")
+            .join(CRATES_IO_CACHE_ID)
+            .join(format!("{stem}.crate"));
+        let checksum = Command::new("sha256sum").arg(&archive).output().unwrap();
+        assert!(checksum.status.success());
+        let checksum = String::from_utf8(checksum.stdout).unwrap();
+        let checksum = checksum.split_whitespace().next().unwrap();
+        std::fs::write(project.join("Cargo.toml"), format!("[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[dependencies]\n{name} = \"={version}\"\n")).unwrap();
+        std::fs::write(project.join("Cargo.lock"), format!("version = 4\n[[package]]\nname = \"probe\"\nversion = \"0.1.0\"\ndependencies = [\"{name}\"]\n[[package]]\nname = \"{name}\"\nversion = \"{version}\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"{checksum}\"\n")).unwrap();
+        let client = if name == "nix-base32" {
+            "fn main() { let _ = nix_base32::to_nix_base32(&[1u8, 2u8]); }\n"
+        } else {
+            "fn main() { println!(\"{}\", time_core::convert::Day::per(time_core::convert::Week)); }\n"
+        };
+        std::fs::write(project.join("src/main.rs"), client).unwrap();
+        for workers in ["1", "8"] {
+            let out = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+                .args(["check", "-j", workers])
+                .current_dir(&project)
+                .env("CARGO_HOME", &cargo_home)
+                .env("CARGO_TARGET_DIR", scratch.join("target"))
+                .output()
+                .unwrap();
+            assert!(matches!(out.status.code(), Some(0 | 101)));
+            eprintln!(
+                "unchanged registry probe {name} {version} workers={workers} exit={:?}: {}",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
+#[test]
 fn invalid_projects_are_rejected_explicitly() {
     let scratch = target_dir("invalid");
     std::fs::create_dir_all(scratch.join("src")).unwrap();
@@ -137,7 +488,7 @@ fn invalid_projects_are_rejected_explicitly() {
     for (manifest, message) in [
         (
             "[package]\nname = \"x\"\nversion = \"0.1.0\"\n[dependencies]\nserde = \"1\"\n",
-            "registry dependencies are unsupported",
+            "Cargo.lock does not pin",
         ),
         (
             "[package]\nversion = \"0.1.0\"\n",

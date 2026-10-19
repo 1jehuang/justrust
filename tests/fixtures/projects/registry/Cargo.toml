@@ -1,0 +1,7 @@
+[package]
+name = "registry"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+utf8-width = "0.1.8"

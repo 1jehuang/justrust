@@ -35,11 +35,27 @@ pub struct Dependency {
     /// Name used in source (`package` renames apply).
     pub name: String,
     pub package: String,
-    pub path: Option<PathBuf>,
+    pub source: DependencySource,
     pub dev: bool,
     pub optional: bool,
     pub features: Vec<String>,
     pub default_features: bool,
+}
+
+#[derive(Clone, Debug)]
+pub enum DependencySource {
+    Path(PathBuf),
+    Registry(LockedRegistryPackage),
+    UnresolvedRegistry,
+    Git,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LockedRegistryPackage {
+    pub name: String,
+    pub version: String,
+    pub source: String,
+    pub checksum: String,
 }
 
 #[derive(Clone, Debug)]
@@ -51,6 +67,7 @@ pub struct Package {
     pub targets: Vec<Target>,
     pub dependencies: Vec<Dependency>,
     pub features: BTreeMap<String, Vec<String>>,
+    pub locked: Option<usize>,
 }
 
 impl Package {
@@ -80,6 +97,28 @@ pub struct Workspace {
     pub members: Vec<usize>,
     pub default_members: Vec<usize>,
     pub profiles: BTreeMap<String, Profile>,
+    pub lockfile: Lockfile,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Lockfile {
+    pub packages: Vec<LockedPackage>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LockedPackage {
+    pub name: String,
+    pub version: String,
+    pub source: Option<String>,
+    pub checksum: Option<String>,
+    pub dependencies: Vec<LockedDependencyRef>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LockedDependencyRef {
+    pub name: String,
+    pub version: Option<String>,
+    pub source: Option<String>,
 }
 
 #[derive(Debug)]
@@ -103,6 +142,104 @@ fn read_manifest(path: &Path) -> Result<Table, ManifestError> {
             "failed to parse manifest at `{}`\n\n{e}",
             path.display()
         ))
+    })
+}
+
+fn read_toml(path: &Path, kind: &str) -> Result<Table, ManifestError> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| ManifestError(format!("failed to read `{}`: {e}", path.display())))?;
+    toml::parse(&text).map_err(|e| {
+        ManifestError(format!(
+            "failed to parse {kind} at `{}`\n\n{e}",
+            path.display()
+        ))
+    })
+}
+
+fn read_lockfile(path: &Path) -> Result<Lockfile, ManifestError> {
+    if !path.is_file() {
+        return Ok(Lockfile::default());
+    }
+    let table = read_toml(path, "lockfile")?;
+    if !matches!(get(&table, "version"), Some(Value::Integer(3 | 4))) {
+        return err("unsupported Cargo.lock format version (expected 3 or 4)");
+    }
+    let Some(Value::Array(packages)) = get(&table, "package") else {
+        return Ok(Lockfile::default());
+    };
+    let mut out = Vec::new();
+    for entry in packages {
+        let Value::Table(pkg) = &entry.value else {
+            return err(format!("{}: [[package]] must be a table", path.display()));
+        };
+        let name = get_str(pkg, "name", "package")?.ok_or_else(|| {
+            ManifestError(format!("{}: lock package.name is required", path.display()))
+        })?;
+        let version = get_str(pkg, "version", "package")?.ok_or_else(|| {
+            ManifestError(format!(
+                "{}: lock package.version is required",
+                path.display()
+            ))
+        })?;
+        let source = get_str(pkg, "source", "package")?;
+        let checksum = get_str(pkg, "checksum", "package")?;
+        let dependencies = match get(pkg, "dependencies") {
+            Some(Value::Array(list)) => list
+                .iter()
+                .map(|dep| match &dep.value {
+                    Value::String(s) => parse_lock_dependency_ref(s),
+                    v => err(format!(
+                        "{}: lock package.dependencies entry expected a string, found {}",
+                        path.display(),
+                        v.type_name()
+                    )),
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            None => Vec::new(),
+            Some(v) => {
+                return err(format!(
+                    "{}: lock package.dependencies expected an array, found {}",
+                    path.display(),
+                    v.type_name()
+                ));
+            }
+        };
+        out.push(LockedPackage {
+            name,
+            version,
+            source,
+            checksum,
+            dependencies,
+        });
+    }
+    Ok(Lockfile { packages: out })
+}
+
+fn parse_lock_dependency_ref(spec: &str) -> Result<LockedDependencyRef, ManifestError> {
+    let (left, source) = if let Some(open) = spec.rfind(" (") {
+        if spec.ends_with(')') {
+            (
+                &spec[..open],
+                Some(spec[open + 2..spec.len() - 1].to_string()),
+            )
+        } else {
+            (spec, None)
+        }
+    } else {
+        (spec, None)
+    };
+    let mut parts = left.split_whitespace();
+    let Some(name) = parts.next() else {
+        return err("lock dependency reference must not be empty");
+    };
+    let version = parts.next().map(str::to_string);
+    if parts.next().is_some() || name.contains(['(', ')']) {
+        return err("malformed Cargo.lock dependency reference");
+    }
+    Ok(LockedDependencyRef {
+        name: name.to_string(),
+        version,
+        source,
     })
 }
 
@@ -190,11 +327,16 @@ pub fn load(manifest: &Path) -> Result<Workspace, ManifestError> {
     }
     let root_dir = root_manifest.parent().unwrap().to_path_buf();
     let root_table = read_manifest(&root_manifest)?;
+    if get(&root_table, "patch").is_some() || get(&root_table, "replace").is_some() {
+        return err("manifest patch/replace source overrides are unsupported");
+    }
+    let lockfile = read_lockfile(&root_dir.join("Cargo.lock"))?;
     let mut loader = Loader {
         packages: Vec::new(),
         by_dir: BTreeMap::new(),
         workspace_deps: Table::new(),
         workspace_package: Table::new(),
+        lockfile: lockfile.clone(),
     };
     let mut members = Vec::new();
     let mut default_members = Vec::new();
@@ -243,16 +385,28 @@ pub fn load(manifest: &Path) -> Result<Workspace, ManifestError> {
     while i < loader.packages.len() {
         let deps: Vec<_> = loader.packages[i].dependencies.clone();
         for dep in deps {
-            if let Some(path) = &dep.path {
-                let index = loader.package(path)?;
-                if loader.packages[index].name != dep.package {
-                    return err(format!(
-                        "no matching package named `{}` found at `{}` (found `{}`)",
-                        dep.package,
-                        path.display(),
-                        loader.packages[index].name
-                    ));
+            match &dep.source {
+                DependencySource::Path(path) => {
+                    let index = loader.package(path)?;
+                    if loader.packages[index].name != dep.package {
+                        return err(format!(
+                            "no matching package named `{}` found at `{}` (found `{}`)",
+                            dep.package,
+                            path.display(),
+                            loader.packages[index].name
+                        ));
+                    }
                 }
+                DependencySource::Registry(registry) => {
+                    let index = loader.registry_package(registry)?;
+                    if loader.packages[index].name != dep.package {
+                        return err(format!(
+                            "locked registry package `{}` resolved to `{}`",
+                            dep.package, loader.packages[index].name
+                        ));
+                    }
+                }
+                DependencySource::UnresolvedRegistry | DependencySource::Git => {}
             }
         }
         i += 1;
@@ -299,6 +453,7 @@ pub fn load(manifest: &Path) -> Result<Workspace, ManifestError> {
         members,
         default_members,
         profiles,
+        lockfile,
     })
 }
 
@@ -353,10 +508,19 @@ struct Loader {
     by_dir: BTreeMap<PathBuf, usize>,
     workspace_deps: Table,
     workspace_package: Table,
+    lockfile: Lockfile,
 }
 
 impl Loader {
     fn package(&mut self, dir: &Path) -> Result<usize, ManifestError> {
+        self.package_with_lock(dir, None)
+    }
+
+    fn package_with_lock(
+        &mut self,
+        dir: &Path,
+        locked: Option<usize>,
+    ) -> Result<usize, ManifestError> {
         let dir = dir
             .canonicalize()
             .map_err(|e| ManifestError(format!("{}: {e}", dir.display())))?;
@@ -384,6 +548,10 @@ impl Loader {
         };
         let version = inherited("version")?.unwrap_or_else(|| "0.0.0".into());
         let edition = inherited("edition")?.unwrap_or_else(|| "2015".into());
+        let locked = match locked {
+            Some(index) => Some(index),
+            None => self.find_package_lock(&name, &version, None),
+        };
         let mut dependencies = Vec::new();
         for (section, dev) in [
             ("dependencies", false),
@@ -398,7 +566,14 @@ impl Loader {
                     ));
                 }
                 for (key, spec) in deps {
-                    dependencies.push(self.dependency(&dir, key, &spec.value, dev, section)?);
+                    dependencies.push(self.dependency(
+                        &dir,
+                        locked,
+                        key,
+                        &spec.value,
+                        dev,
+                        section,
+                    )?);
                 }
             }
         }
@@ -410,16 +585,18 @@ impl Loader {
                 ));
             }
         }
-        if get_str(package, "build", "package")?.is_some() || dir.join("build.rs").is_file() {
-            match get(package, "build") {
-                Some(Value::Boolean(false)) => {}
-                _ => {
-                    return err(format!(
-                        "`{}`: build scripts are unsupported",
-                        path.display()
-                    ));
-                }
-            }
+        let build_script = match get(package, "build") {
+            Some(Value::Boolean(false)) => false,
+            Some(Value::Boolean(true)) => true,
+            Some(Value::String(_)) => true,
+            Some(v) => return err(format!("package.build: unexpected {}", v.type_name())),
+            None => dir.join("build.rs").is_file(),
+        };
+        if build_script {
+            return err(format!(
+                "`{}`: build scripts are unsupported",
+                path.display()
+            ));
         }
         let mut features = BTreeMap::new();
         if let Some(Value::Table(table)) = get(&table, "features") {
@@ -441,13 +618,75 @@ impl Loader {
             targets,
             dependencies,
             features,
+            locked,
         });
         Ok(index)
+    }
+
+    fn registry_package(
+        &mut self,
+        package: &LockedRegistryPackage,
+    ) -> Result<usize, ManifestError> {
+        let root = registry_source_root(package)?;
+        let index = self
+            .find_lock_package(&package.name, &package.version, Some(&package.source))
+            .ok_or_else(|| {
+                ManifestError(format!(
+                    "Cargo.lock does not contain locked registry package `{} {}` from {}",
+                    package.name, package.version, package.source
+                ))
+            })?;
+        let loaded = self.package_with_lock(&root, Some(index))?;
+        let cached = &self.packages[loaded];
+        if cached
+            .dependencies
+            .iter()
+            .any(|dep| matches!(dep.source, DependencySource::Path(_)))
+        {
+            return err("registry package path dependencies are unsupported");
+        }
+        for target in &cached.targets {
+            let target_path = target
+                .path
+                .canonicalize()
+                .map_err(|e| ManifestError(e.to_string()))?;
+            if !target_path.starts_with(&cached.root) {
+                return err("registry target escapes authenticated package source");
+            }
+        }
+        if self.packages[loaded].name != package.name
+            || self.packages[loaded].version != package.version
+        {
+            return err("cached registry manifest does not match locked package identity");
+        }
+        Ok(loaded)
+    }
+
+    fn find_package_lock(&self, name: &str, version: &str, source: Option<&str>) -> Option<usize> {
+        let mut matches = self
+            .lockfile
+            .packages
+            .iter()
+            .enumerate()
+            .filter(|(_, pkg)| {
+                pkg.name == name && pkg.version == version && pkg.source.as_deref() == source
+            });
+        let found = matches.next().map(|(index, _)| index);
+        if matches.next().is_some() {
+            None
+        } else {
+            found
+        }
+    }
+
+    fn find_lock_package(&self, name: &str, version: &str, source: Option<&str>) -> Option<usize> {
+        self.find_package_lock(name, version, source)
     }
 
     fn dependency(
         &self,
         dir: &Path,
+        locked: Option<usize>,
         key: &str,
         spec: &Value,
         dev: bool,
@@ -455,11 +694,13 @@ impl Loader {
     ) -> Result<Dependency, ManifestError> {
         let what = format!("{section}.{key}");
         let mut table = match spec {
-            Value::String(_) => {
-                return err(format!(
-                    "{what}: registry dependencies are unsupported (no native registry source); use a path dependency"
-                ));
-            }
+            Value::String(version) => Table::from([(
+                "version".into(),
+                toml::Spanned {
+                    value: Value::String(version.clone()),
+                    offset: 0,
+                },
+            )]),
             Value::Table(t) => t.clone(),
             v => {
                 return err(format!(
@@ -475,9 +716,13 @@ impl Loader {
             };
             let mut merged = match &inherited.value {
                 Value::Table(t) => t.clone(),
-                Value::String(_) => {
-                    return err(format!("{what}: registry dependencies are unsupported"));
-                }
+                Value::String(version) => Table::from([(
+                    "version".into(),
+                    toml::Spanned {
+                        value: Value::String(version.clone()),
+                        offset: 0,
+                    },
+                )]),
                 _ => return err(format!("workspace.dependencies.{key}: expected a table")),
             };
             for (k, v) in table {
@@ -501,24 +746,43 @@ impl Loader {
             }
             base = root;
         }
-        if get(&table, "git").is_some() {
-            return err(format!("{what}: git dependencies are unsupported"));
-        }
-        let path = get_str(&table, "path", &what)?;
-        let Some(path) = path else {
-            return err(format!(
-                "{what}: registry dependencies are unsupported (no native registry source); use a path dependency"
-            ));
+        // Registry and git sources have no native fetcher. They are kept
+        // unresolved and rejected only when a build actually activates them.
+        let package = get_str(&table, "package", &what)?.unwrap_or_else(|| key.to_string());
+        let path = if get(&table, "git").is_some() {
+            None
+        } else {
+            get_str(&table, "path", &what)?
         };
         let features = match get(&table, "features") {
             Some(Value::Array(a)) => strings(a, &what)?,
             None => Vec::new(),
             Some(_) => return err(format!("{what}.features: expected an array")),
         };
+        let source = if let Some(path) = path {
+            DependencySource::Path(base.join(path))
+        } else if get(&table, "git").is_some() {
+            DependencySource::Git
+        } else if let Some(locked) = locked {
+            match self.locked_registry_dependency(locked, &package)? {
+                Some(pkg) => DependencySource::Registry(pkg),
+                None => DependencySource::UnresolvedRegistry,
+            }
+        } else {
+            DependencySource::UnresolvedRegistry
+        };
+        if let DependencySource::Registry(registry) = &source {
+            if get(&table, "registry").is_some() || get(&table, "registry-index").is_some() {
+                return err(format!("{what}: alternate registries are unsupported"));
+            }
+            if let Some(requirement) = get_str(&table, "version", &what)? {
+                validate_locked_version(&requirement, &registry.version)?;
+            }
+        }
         Ok(Dependency {
             name: key.replace('-', "_"),
-            package: get_str(&table, "package", &what)?.unwrap_or_else(|| key.to_string()),
-            path: Some(base.join(path)),
+            package,
+            source,
             dev,
             optional: get_bool(&table, "optional", &what)?.unwrap_or(false),
             features,
@@ -526,6 +790,71 @@ impl Loader {
                 .or(get_bool(&table, "default_features", &what)?)
                 .unwrap_or(true),
         })
+    }
+
+    fn locked_registry_dependency(
+        &self,
+        locked: usize,
+        package: &str,
+    ) -> Result<Option<LockedRegistryPackage>, ManifestError> {
+        let locked_package = &self.lockfile.packages[locked];
+        let mut dependencies = locked_package
+            .dependencies
+            .iter()
+            .filter(|dep| dep.name == package);
+        let dep = dependencies.next();
+        if dependencies.next().is_some() {
+            return err(format!("Cargo.lock dependency `{package}` is ambiguous"));
+        }
+        let Some(dep) = dep else {
+            return Ok(None);
+        };
+        let candidates: Vec<_> = self
+            .lockfile
+            .packages
+            .iter()
+            .filter(|candidate| {
+                candidate.name == dep.name
+                    && dep
+                        .version
+                        .as_ref()
+                        .is_none_or(|version| &candidate.version == version)
+                    && dep
+                        .source
+                        .as_ref()
+                        .is_none_or(|source| candidate.source.as_ref() == Some(source))
+            })
+            .collect();
+        if candidates.len() > 1 {
+            return err(format!(
+                "Cargo.lock dependency `{}` from package `{}` is ambiguous; include an exact package entry",
+                dep.name, locked_package.name
+            ));
+        }
+        let Some(target) = candidates.into_iter().next() else {
+            return err(format!(
+                "Cargo.lock dependency `{}` referenced by `{}` was not found",
+                dep.name, locked_package.name
+            ));
+        };
+        let Some(source) = &target.source else {
+            return Ok(None);
+        };
+        if !source.starts_with("registry+") {
+            return Ok(None);
+        }
+        let Some(checksum) = &target.checksum else {
+            return err(format!(
+                "Cargo.lock package `{} {}` is missing a checksum",
+                target.name, target.version
+            ));
+        };
+        Ok(Some(LockedRegistryPackage {
+            name: target.name.clone(),
+            version: target.version.clone(),
+            source: source.clone(),
+            checksum: checksum.clone(),
+        }))
     }
 }
 
@@ -549,7 +878,7 @@ fn discover_targets(
         Some(_) => return err("lib: expected a table"),
     };
     let lib_default = dir.join("src/lib.rs");
-    if lib_table.is_some() || lib_default.is_file() {
+    if lib_table.is_some() || (auto("autolib") && lib_default.is_file()) {
         let t = lib_table.unwrap_or_default();
         if let Some(Value::Boolean(true)) = get(&t, "proc-macro") {
             return err("proc-macro crates are unsupported");
@@ -669,7 +998,11 @@ pub fn resolve_features(
         queue.push((*index, include_dev));
     }
     let dep_index = |ws: &Workspace, dep: &Dependency| -> Option<usize> {
-        let path = dep.path.as_ref()?.canonicalize().ok()?;
+        let path = match &dep.source {
+            DependencySource::Path(path) => path.canonicalize().ok()?,
+            DependencySource::Registry(registry) => registry_source_root(registry).ok()?,
+            DependencySource::UnresolvedRegistry | DependencySource::Git => return None,
+        };
         ws.packages.iter().position(|p| p.root == path)
     };
     loop {
@@ -800,6 +1133,7 @@ pub fn visible_dependencies(
     package: usize,
     dev: bool,
     active_deps: &BTreeSet<String>,
+    unresolved: &mut Vec<String>,
 ) -> Vec<(String, usize)> {
     let mut out = Vec::new();
     for d in &ws.packages[package].dependencies {
@@ -809,7 +1143,25 @@ pub fn visible_dependencies(
         if d.optional && !active_deps.contains(&d.name) {
             continue;
         }
-        let Some(path) = d.path.as_ref().and_then(|p| p.canonicalize().ok()) else {
+        let Some(path) = dependency_root(d).and_then(|p| p.canonicalize().ok()) else {
+            unresolved.push(match &d.source {
+                DependencySource::Registry(registry) => format!(
+                    "package `{}`: locked registry dependency `{}` {} from {} is not available in the local Cargo cache or failed checksum validation",
+                    ws.packages[package].name, registry.name, registry.version, registry.source
+                ),
+                DependencySource::UnresolvedRegistry => format!(
+                    "package `{}`: dependency `{}` is a registry dependency but Cargo.lock does not pin it to a cached package the native driver can use offline",
+                    ws.packages[package].name, d.package
+                ),
+                DependencySource::Git => format!(
+                    "package `{}`: dependency `{}` is a git dependency, which the native driver cannot fetch",
+                    ws.packages[package].name, d.package
+                ),
+                DependencySource::Path(path) => format!(
+                    "package `{}`: dependency path `{}` is missing",
+                    ws.packages[package].name, path.display()
+                ),
+            });
             continue;
         };
         if let Some(index) = ws.packages.iter().position(|p| p.root == path) {
@@ -817,4 +1169,329 @@ pub fn visible_dependencies(
         }
     }
     out
+}
+
+fn dependency_root(dep: &Dependency) -> Option<PathBuf> {
+    match &dep.source {
+        DependencySource::Path(path) => Some(path.clone()),
+        DependencySource::Registry(registry) => registry_source_root(registry).ok(),
+        DependencySource::UnresolvedRegistry | DependencySource::Git => None,
+    }
+}
+
+fn registry_source_root(package: &LockedRegistryPackage) -> Result<PathBuf, ManifestError> {
+    let cargo_home = cargo_home();
+    let registry = cargo_home.join("registry");
+    if package.source != "registry+https://github.com/rust-lang/crates.io-index" {
+        return err(format!(
+            "unsupported locked registry source `{}`",
+            package.source
+        ));
+    }
+    if !package
+        .name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        || package.name.is_empty()
+        || !package
+            .version
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'+')
+        || package.version.is_empty()
+        || package.checksum.len() != 64
+        || !package
+            .checksum
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        return err("invalid locked registry package identity or checksum");
+    }
+    let stem = format!("{}-{}", package.name, package.version);
+    let src_root = registry.join("src");
+    let cache_root = registry.join("cache");
+    let mut candidates = Vec::new();
+    let entries = std::fs::read_dir(&src_root)
+        .map_err(|e| ManifestError(format!("{}: {e}", src_root.display())))?;
+    for entry in entries.flatten() {
+        let registry_dir = entry.path();
+        let Some(name) = registry_dir.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !matches!(
+            name,
+            "index.crates.io-1949cf8c6b5b557f" | "github.com-1ecc6299db9ec823"
+        ) {
+            continue;
+        }
+        let source_dir = registry_dir.join(&stem);
+        let archive = cache_root.join(name).join(format!("{stem}.crate"));
+        if source_dir.join("Cargo.toml").is_file() && archive.is_file() {
+            candidates.push((source_dir, archive));
+        }
+    }
+    if candidates.is_empty() {
+        return err(format!(
+            "locked registry package `{}` {} from {} is not cached under `{}`",
+            package.name,
+            package.version,
+            package.source,
+            registry.display()
+        ));
+    }
+    let mut matched = Vec::new();
+    for (source_dir, archive) in candidates {
+        let bytes = std::fs::read(&archive)
+            .map_err(|e| ManifestError(format!("{}: {e}", archive.display())))?;
+        if sha256(&bytes) == package.checksum {
+            verify_registry_sources(&source_dir, &archive, &stem)?;
+            matched.push(source_dir);
+        }
+    }
+    match matched.len() {
+        1 => matched
+            .pop()
+            .unwrap()
+            .canonicalize()
+            .map_err(|e| ManifestError(e.to_string())),
+        0 => err(format!(
+            "locked registry package `{}` {} from {} failed checksum validation against every cached archive",
+            package.name, package.version, package.source
+        )),
+        _ => err(format!(
+            "locked registry package `{}` {} from {} matched multiple local registries",
+            package.name, package.version, package.source
+        )),
+    }
+}
+
+fn validate_locked_version(requirement: &str, locked: &str) -> Result<(), ManifestError> {
+    // Explicitly bounded Cargo requirement slice. Never guess at unsupported ranges.
+    let requirement = requirement.trim();
+    let (exact, text) = if let Some(text) = requirement.strip_prefix('=') {
+        (true, text.trim())
+    } else {
+        (false, requirement.strip_prefix('^').unwrap_or(requirement))
+    };
+    let parse = |text: &str| -> Option<Vec<u64>> {
+        text.split('.')
+            .map(|part| {
+                if part.is_empty()
+                    || !part.bytes().all(|b| b.is_ascii_digit())
+                    || (part.len() > 1 && part.starts_with('0'))
+                {
+                    None
+                } else {
+                    part.parse().ok()
+                }
+            })
+            .collect()
+    };
+    let wanted = parse(text).filter(|v| !v.is_empty() && v.len() <= 3);
+    let actual = parse(locked).filter(|v| v.len() == 3);
+    let (Some(wanted), Some(actual)) = (wanted, actual) else {
+        return err(format!(
+            "unsupported locked registry version requirement `{requirement}` or version `{locked}`"
+        ));
+    };
+    let mut lower = [0; 3];
+    lower[..wanted.len()].copy_from_slice(&wanted);
+    let actual = [actual[0], actual[1], actual[2]];
+    let matches = if exact {
+        actual[..wanted.len()] == wanted
+    } else {
+        let pivot = wanted
+            .iter()
+            .position(|n| *n != 0)
+            .unwrap_or(wanted.len() - 1);
+        actual >= lower && actual[..=pivot] == lower[..=pivot]
+    };
+    if !matches {
+        return err(format!(
+            "Cargo.lock version `{locked}` does not satisfy manifest requirement `{requirement}`"
+        ));
+    }
+    Ok(())
+}
+
+/// Compare every extracted file against the checksum-authenticated archive.
+/// Cargo's extraction marker and checksum JSON are not source authority.
+/// This read-only bootstrap uses system tar, never Cargo, rustc, or a fetcher.
+fn verify_registry_sources(root: &Path, archive: &Path, stem: &str) -> Result<(), ManifestError> {
+    use std::collections::BTreeSet;
+    use std::process::Command;
+    let listing = Command::new("tar")
+        .env_remove("TAR_OPTIONS")
+        .env_remove("GZIP")
+        .arg("-tzf")
+        .arg(archive)
+        .output()
+        .map_err(|e| ManifestError(format!("registry archive inspection failed: {e}")))?;
+    if !listing.status.success() {
+        return err("registry archive inspection failed");
+    }
+    let listing = std::str::from_utf8(&listing.stdout)
+        .map_err(|_| ManifestError("registry archive has non-UTF-8 paths".into()))?;
+    let mut expected = BTreeSet::new();
+    for entry in listing.lines() {
+        let path = Path::new(entry);
+        if !path
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+        {
+            return err("registry archive has unsafe paths");
+        }
+        let relative = path
+            .strip_prefix(stem)
+            .map_err(|_| ManifestError("registry archive package identity mismatch".into()))?;
+        if relative.as_os_str().is_empty() || entry.ends_with('/') {
+            continue;
+        }
+        if !expected.insert(relative.to_path_buf()) {
+            return err("registry archive has duplicate file paths");
+        }
+        let local = root.join(relative);
+        if !std::fs::symlink_metadata(&local).is_ok_and(|m| m.file_type().is_file()) {
+            return err(format!(
+                "registry source checksum validation failed at `{}`",
+                local.display()
+            ));
+        }
+        let original = Command::new("tar")
+            .env_remove("TAR_OPTIONS")
+            .env_remove("GZIP")
+            .arg("-xOzf")
+            .arg(archive)
+            .arg("--")
+            .arg(entry)
+            .output()
+            .map_err(|e| ManifestError(format!("registry archive inspection failed: {e}")))?;
+        let bytes = std::fs::read(&local)
+            .map_err(|e| ManifestError(format!("{}: {e}", local.display())))?;
+        if !original.status.success() || original.stdout != bytes {
+            return err(format!(
+                "registry source checksum validation failed at `{}`",
+                local.display()
+            ));
+        }
+    }
+    let mut dirs = vec![root.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_dir()) {
+            return err("registry source contains a symlink or non-directory");
+        }
+        for entry in std::fs::read_dir(&dir).map_err(|e| ManifestError(e.to_string()))? {
+            let entry = entry.map_err(|e| ManifestError(e.to_string()))?;
+            let path = entry.path();
+            let kind = entry
+                .file_type()
+                .map_err(|e| ManifestError(e.to_string()))?;
+            if kind.is_dir() {
+                dirs.push(path);
+            } else if !kind.is_file()
+                || (!expected.contains(path.strip_prefix(root).unwrap())
+                    && path != root.join(".cargo-ok")
+                    && path != root.join(".cargo-checksum.json"))
+            {
+                return err(format!(
+                    "registry source has unauthenticated file `{}`",
+                    path.display()
+                ));
+            }
+        }
+    }
+    if !expected.contains(Path::new("Cargo.toml")) {
+        return err("registry archive lacks Cargo.toml");
+    }
+    Ok(())
+}
+
+fn cargo_home() -> PathBuf {
+    std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
+        .unwrap_or_else(|| PathBuf::from(".cargo"))
+}
+
+fn sha256(input: &[u8]) -> String {
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+    let mut state = [
+        0x6a09e667u32,
+        0xbb67ae85,
+        0x3c6ef372,
+        0xa54ff53a,
+        0x510e527f,
+        0x9b05688c,
+        0x1f83d9ab,
+        0x5be0cd19,
+    ];
+    let bit_len = (input.len() as u64) * 8;
+    let blocks = (input.len() + 9).div_ceil(64);
+    for block in 0..blocks {
+        let mut bytes = [0u8; 64];
+        for (offset, byte) in bytes.iter_mut().enumerate() {
+            let pos = block * 64 + offset;
+            *byte = if pos < input.len() {
+                input[pos]
+            } else if pos == input.len() {
+                0x80
+            } else if pos >= blocks * 64 - 8 {
+                bit_len.to_be_bytes()[pos - (blocks * 64 - 8)]
+            } else {
+                0
+            };
+        }
+        let mut w = [0u32; 64];
+        for (i, word) in w[..16].iter_mut().enumerate() {
+            *word = u32::from_be_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap());
+        }
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = state;
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ (!e & g);
+            let t1 = h
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let t2 = s0.wrapping_add(maj);
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(t1);
+            d = c;
+            c = b;
+            b = a;
+            a = t1.wrapping_add(t2);
+        }
+        for (value, add) in state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
+            *value = value.wrapping_add(add);
+        }
+    }
+    use std::fmt::Write;
+    let mut output = String::with_capacity(64);
+    for word in state {
+        write!(&mut output, "{word:08x}").unwrap();
+    }
+    output
 }
