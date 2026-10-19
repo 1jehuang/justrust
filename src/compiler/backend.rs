@@ -1423,6 +1423,15 @@ impl<'a> Emitter<'a> {
         self.object.strings.push((at, bytes));
         self.bytes(&[0x48, 0xba]);
         self.bytes(&length.to_le_bytes());
+        self.write_output(stream)?;
+        self.immediate(0);
+        Ok(())
+    }
+    /// Write the complete (rsi, rdx) byte range. Empty descriptors are valid.
+    /// Linux may interrupt or partially satisfy a write, including pipe writes.
+    fn write_output(&mut self, stream: ir::OutputStream) -> Result<(), String> {
+        self.bytes(&[0x48, 0x85, 0xd2]);
+        let empty = self.jump(&[0x0f, 0x84]);
         let retry = self.position();
         let descriptor = match stream {
             ir::OutputStream::Stdout => 1,
@@ -1437,7 +1446,137 @@ impl<'a> Emitter<'a> {
         self.bytes(&[0x48, 0x01, 0xc6, 0x48, 0x29, 0xc2]);
         let more = self.jump(&[0x0f, 0x85]);
         self.patch(more, retry)?;
-        self.immediate(0);
+        self.patch(empty, self.position())?;
+        Ok(())
+    }
+    fn format_integer(&mut self, ty: ir::IntTy, stream: ir::OutputStream) -> Result<(), String> {
+        // Two-limb unsigned magnitude, including the magnitude of i128::MIN.
+        if ty.bits() == 128 {
+            self.bytes(&[0x48, 0x8b, 0x50, 8, 0x48, 0x8b, 0x00]);
+        } else {
+            self.bytes(&[0x31, 0xd2]);
+            if ty.is_signed() {
+                self.bytes(&[0x48, 0x99]); // cqo
+            }
+        }
+        self.bytes(&[0x45, 0x31, 0xd2]); // sign flag r10
+        if ty.is_signed() {
+            self.bytes(&[0x48, 0x85, 0xd2]);
+            let positive = self.jump(&[0x0f, 0x89]);
+            self.bytes(&[0x41, 0xba, 1, 0, 0, 0]);
+            self.bytes(&[0x48, 0xf7, 0xd8, 0x48, 0x83, 0xd2, 0, 0x48, 0xf7, 0xda]);
+            self.patch(positive, self.position())?;
+        }
+        self.bytes(&[0x49, 0x89, 0xd0, 0x49, 0x89, 0xc1]); // r8 high, r9 low
+        self.bytes(&[0x48, 0x83, 0xec, 64, 0x48, 0x8d, 0x74, 0x24, 64]);
+        self.bytes(&[0x31, 0xc9, 0xbf, 10, 0, 0, 0]);
+        let digit = self.position();
+        self.bytes(&[0x4c, 0x89, 0xc0, 0x31, 0xd2, 0x48, 0xf7, 0xf7]);
+        self.bytes(&[0x49, 0x89, 0xc0, 0x4c, 0x89, 0xc8, 0x48, 0xf7, 0xf7]);
+        self.bytes(&[0x49, 0x89, 0xc1, 0x80, 0xc2, b'0', 0x48, 0xff, 0xce]);
+        self.bytes(&[0x88, 0x16, 0x48, 0xff, 0xc1, 0x4c, 0x09, 0xc0]);
+        let more = self.jump(&[0x0f, 0x85]);
+        self.patch(more, digit)?;
+        self.bytes(&[0x45, 0x85, 0xd2]);
+        let unsigned = self.jump(&[0x0f, 0x84]);
+        self.bytes(&[0x48, 0xff, 0xce, 0xc6, 0x06, b'-', 0x48, 0xff, 0xc1]);
+        self.patch(unsigned, self.position())?;
+        self.bytes(&[0x48, 0x89, 0xca]);
+        self.write_output(stream)?;
+        self.bytes(&[0x48, 0x83, 0xc4, 64]);
+        Ok(())
+    }
+    fn format_char(&mut self, stream: ir::OutputStream) -> Result<(), String> {
+        self.bytes(&[0x48, 0x83, 0xec, 16]);
+        let mut done = Vec::new();
+        for width in 1..=4_u8 {
+            let next = if width < 4 {
+                self.bytes(&[0x3d]);
+                self.i32(match width {
+                    1 => 0x80,
+                    2 => 0x800,
+                    _ => 0x10000,
+                });
+                Some(self.jump(&[0x0f, 0x83]))
+            } else {
+                None
+            };
+            for index in 0..width {
+                self.bytes(&[0x89, 0xc2]); // edx = scalar
+                let shift = 6 * (width - index - 1);
+                if shift != 0 {
+                    self.bytes(&[0xc1, 0xea, shift]);
+                }
+                if width != 1 {
+                    self.bytes(&[0x83, 0xe2, if index == 0 { 0x7f >> width } else { 0x3f }]);
+                    self.bytes(&[
+                        0x80,
+                        0xca,
+                        if index == 0 {
+                            match width {
+                                2 => 0xc0,
+                                3 => 0xe0,
+                                _ => 0xf0,
+                            }
+                        } else {
+                            0x80
+                        },
+                    ]);
+                }
+                self.bytes(&[0x88, 0x54, 0x24, index]);
+            }
+            self.bytes(&[0xba, width, 0, 0, 0]);
+            done.push(self.jump(&[0xe9]));
+            if let Some(next) = next {
+                self.patch(next, self.position())?;
+            }
+        }
+        for jump in done {
+            self.patch(jump, self.position())?;
+        }
+        self.bytes(&[0x48, 0x89, 0xe6]);
+        self.write_output(stream)?;
+        self.bytes(&[0x48, 0x83, 0xc4, 16]);
+        Ok(())
+    }
+    fn format_output(
+        &mut self,
+        pieces: &[String],
+        arguments: &[cfg::Operand],
+        stream: ir::OutputStream,
+        newline: bool,
+    ) -> Result<(), String> {
+        if pieces.len() != arguments.len() + 1 {
+            return Err("invalid format piece count".into());
+        }
+        for (piece, argument) in pieces.iter().zip(arguments) {
+            self.literal_output(piece, stream, false)?;
+            let ty = self.function().operand_ty(argument)?;
+            self.operand(argument)?;
+            match ty {
+                ir::Ty::Int(integer) => self.format_integer(integer, stream)?,
+                ir::Ty::Bool => {
+                    self.bytes(&[0x48, 0x85, 0xc0]);
+                    let false_value = self.jump(&[0x0f, 0x84]);
+                    self.literal_output("true", stream, false)?;
+                    let done = self.jump(&[0xe9]);
+                    self.patch(false_value, self.position())?;
+                    self.literal_output("false", stream, false)?;
+                    self.patch(done, self.position())?;
+                }
+                ir::Ty::Char => self.format_char(stream)?,
+                ty if ty.is_shared_str() => {
+                    self.bytes(&[0x48, 0x8b, 0x70, 0, 0x48, 0x8b, 0x50, 8]);
+                    self.write_output(stream)?;
+                }
+                _ => return Err("unsupported native format argument".into()),
+            }
+        }
+        self.literal_output(
+            pieces.last().ok_or("missing format piece")?,
+            stream,
+            newline,
+        )?;
         Ok(())
     }
     /// A panic is terminal, not a value-producing print followed by a trap.
@@ -1741,6 +1880,14 @@ impl<'a> Emitter<'a> {
                 self.address(self.aggregate_scratch);
             }
             cfg::Rvalue::Println(text) => self.println(text)?,
+            cfg::Rvalue::Format {
+                pieces,
+                arguments,
+                stream,
+                newline,
+            } => {
+                self.format_output(pieces, arguments, *stream, *newline)?;
+            }
             cfg::Rvalue::Output(output) => {
                 self.literal_output(&output.text, output.stream, output.newline)?;
             }
@@ -3164,6 +3311,167 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(path.parent().unwrap()).unwrap();
         assert!(output.status.success(), "{output:?}; cases: {cases:?}");
+    }
+
+    #[test]
+    fn format_native_integer_boundaries_and_utf8() {
+        let concrete = unit_concrete_fixture();
+        let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
+        let mut e = Emitter {
+            object: Object {
+                code: Vec::new(),
+                calls: Vec::new(),
+                strings: Vec::new(),
+            },
+            concrete: &concrete,
+            resolve: &resolve,
+            drop_flags: Vec::new(),
+            locals: Vec::new(),
+            aggregate_scratch: -16,
+            wide_scratch: -64,
+            returns: Vec::new(),
+            traps: Vec::new(),
+            edges: Vec::new(),
+        };
+        e.bytes(&[0x55, 0x48, 0x89, 0xe5, 0x48, 0x83, 0xec, 96]);
+        let mut expected = String::new();
+        for ty in [
+            ir::IntTy::I8,
+            ir::IntTy::U8,
+            ir::IntTy::I16,
+            ir::IntTy::U16,
+            ir::IntTy::I32,
+            ir::IntTy::U32,
+            ir::IntTy::I64,
+            ir::IntTy::U64,
+            ir::IntTy::Isize,
+            ir::IntTy::Usize,
+            ir::IntTy::I128,
+            ir::IntTy::U128,
+        ] {
+            let width = ty.bits();
+            let mask = u128::MAX >> (128 - width);
+            for bits in [0, 1, mask >> 1, mask, 1_u128 << (width - 1)] {
+                let signed = if width == 128 {
+                    bits as i128
+                } else {
+                    ((bits << (128 - width)) as i128) >> (128 - width)
+                };
+                if ty.bits() == 128 {
+                    e.wide_constant(ir::IntValue { ty, bits });
+                } else {
+                    e.word(if ty.is_signed() {
+                        signed as u64
+                    } else {
+                        bits as u64
+                    });
+                }
+                e.format_integer(ty, ir::OutputStream::Stdout).unwrap();
+                e.literal_output("|", ir::OutputStream::Stdout, false)
+                    .unwrap();
+                expected.push_str(&if ty.is_signed() {
+                    signed.to_string()
+                } else {
+                    bits.to_string()
+                });
+                expected.push('|');
+            }
+        }
+        for ch in [
+            '\0',
+            '\u{7f}',
+            '\u{80}',
+            '\u{7ff}',
+            '\u{800}',
+            '\u{d7ff}',
+            '\u{e000}',
+            '\u{ffff}',
+            '\u{10000}',
+            '\u{10ffff}',
+        ] {
+            e.word(ch as u64);
+            e.format_char(ir::OutputStream::Stdout).unwrap();
+            expected.push(ch);
+        }
+        e.bytes(&[0x31, 0xff, 0xb8, 60, 0, 0, 0, 0x0f, 0x05]);
+        // Writes in this fixture are expected to succeed. Still resolve every
+        // emitted failure edge so malformed branches cannot silently pass.
+        let trap = e.position();
+        e.bytes(&[0x0f, 0x0b]);
+        for at in e.traps.clone() {
+            e.patch(at, trap).unwrap();
+        }
+        let path = executable_bytes(&link(&[("main".into(), e.object)]).unwrap());
+        let output = execute(Command::new(&path).stdout(Stdio::piped()));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, expected.as_bytes());
+    }
+
+    #[test]
+    fn format_native_full_pipeline_streams_and_evaluation_order() {
+        let program = frontend::parse(
+            r#"
+            fn next(calls: &mut u32) -> u32 {
+                *calls += 1u32;
+                print!("eval");
+                *calls
+            }
+            fn main() {
+                println!("Hello, world!");
+                let name = "justrust";
+                let version = 1u32;
+                println!("{} v{}", name, version);
+                let mut calls = 0u32;
+                println!("{}:{}", next(&mut calls), next(&mut calls));
+                println!("{} {} {} {} {}", true, false, 'é', '🦀', "");
+                eprint!("{}", "");
+                eprintln!("{}:{}", -170141183460469231731687303715884105728i128,
+                    340282366920938463463374607431768211455u128);
+                println!("{}", calls);
+            }
+        "#,
+        )
+        .unwrap();
+        let output = run(&program);
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            output.stdout,
+            "Hello, world!\njustrust v1\nevaleval1:2\ntrue false é 🦀 \n2\n".as_bytes()
+        );
+        assert_eq!(
+            output.stderr,
+            b"-170141183460469231731687303715884105728:340282366920938463463374607431768211455\n"
+        );
+    }
+
+    #[test]
+    fn format_native_empty_failed_and_large_descriptor_writes() {
+        for (source, expected) in [
+            ("fn main(){print!(\"{}\",\"\");}", 0),
+            ("fn main(){print!(\"{}\",1u8);}", 101),
+            ("fn main(){print!(\"{}\",false);}", 101),
+            ("fn main(){print!(\"{}\",'🦀');}", 101),
+            ("fn main(){print!(\"{}\",\"x\");}", 101),
+        ] {
+            let program = frontend::parse(source).unwrap();
+            let path = executable(&program);
+            let full = std::fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/full")
+                .unwrap();
+            let output = execute(Command::new(&path).stdout(Stdio::from(full)));
+            std::fs::remove_file(&path).unwrap();
+            std::fs::remove_dir(path.parent().unwrap()).unwrap();
+            assert_eq!(output.status.code(), Some(expected), "{source}: {output:?}");
+        }
+        let text = "世界🦀".repeat(16_384);
+        let source = format!("fn main(){{let text=\"{text}\";eprintln!(\"[{{}}]\",text);}}");
+        let output = run(&frontend::parse(&source).unwrap());
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stdout.is_empty());
+        assert_eq!(output.stderr, format!("[{text}]\n").as_bytes());
     }
 
     #[test]

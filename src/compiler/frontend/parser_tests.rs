@@ -329,10 +329,10 @@ fn literal_output_empty_and_unsupported_arguments_are_explicit() {
         }
         for (args, label) in [
             ("42", "nonliteral arguments"),
-            ("\"{}\"", "formatting placeholders"),
-            ("\"{name}\"", "formatting placeholders"),
-            ("\"literal\", 42", "formatting arguments"),
-            ("\"literal\",,", "formatting arguments"),
+            ("\"{}\"", "argument count mismatch"),
+            ("\"{name}\"", "only bare {}"),
+            ("\"literal\", 42", "argument count mismatch"),
+            ("\"literal\",,", "expected"),
         ] {
             let source = format!("fn main(){{{name}!({args})}}");
             let error = parse(&source).unwrap_err();

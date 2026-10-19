@@ -2732,7 +2732,12 @@ impl Resolver<'_> {
                     self.expr(arg, module, locals)?;
                 }
             }
-            Expr::Array(elements) | Expr::Tuple(elements) => {
+            Expr::Array(elements)
+            | Expr::Tuple(elements)
+            | Expr::Format {
+                arguments: elements,
+                ..
+            } => {
                 for value in elements {
                     self.expr(value, module, locals)?;
                 }

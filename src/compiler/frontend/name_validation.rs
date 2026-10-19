@@ -933,6 +933,11 @@ impl<'a> Validator<'a> {
                     }
                 }
                 Expr::Output(output) => validate_output_site(output, &self.program.names)?,
+                Expr::Format { arguments, .. } => {
+                    for argument in arguments {
+                        self.push(Visit::Expr(argument))?;
+                    }
+                }
                 Expr::Panic(panic) => validate_panic_site(panic, &self.program.names)?,
                 Expr::Integer(_)
                 | Expr::Float(_)

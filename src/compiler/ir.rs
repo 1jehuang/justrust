@@ -2547,6 +2547,7 @@ pub fn instantiate_checked(
             | ExprKind::Break { .. }
             | ExprKind::Continue { .. }
             | ExprKind::Output(_)
+            | ExprKind::Format { .. }
             | ExprKind::Println(_)
             | ExprKind::Panic(_) => {}
         }
@@ -6124,6 +6125,12 @@ pub enum ExprKind {
     },
     Output(LiteralOutput),
     Println(String),
+    Format {
+        pieces: Vec<String>,
+        arguments: Vec<ExprId>,
+        stream: OutputStream,
+        newline: bool,
+    },
     Panic(Box<PanicMessage>),
 }
 
@@ -6676,6 +6683,15 @@ impl CheckedFunction {
                     storage(budget, values.len(), std::mem::size_of::<ExprId>())?
                 }
                 ExprKind::Output(output) => storage(budget, output.text.len(), 1)?,
+                ExprKind::Format {
+                    pieces, arguments, ..
+                } => {
+                    storage(budget, pieces.len(), std::mem::size_of::<String>())?;
+                    for piece in pieces {
+                        storage(budget, piece.len(), 1)?;
+                    }
+                    storage(budget, arguments.len(), std::mem::size_of::<ExprId>())?;
+                }
                 ExprKind::Str(text) => storage(budget, text.len(), 1)?,
                 ExprKind::Println(text) => storage(budget, text.len(), 1)?,
                 ExprKind::Panic(payload) => {
@@ -7860,6 +7876,46 @@ impl CheckedFunction {
                     }
                 }
                 ExprKind::Bool(_) | ExprKind::Println(_) => {}
+                ExprKind::Format {
+                    pieces, arguments, ..
+                } => {
+                    if pieces.len() != arguments.len() + 1 {
+                        return Err("format argument count mismatch".into());
+                    }
+                    let mut completion = Completion::Returns;
+                    for &id in arguments {
+                        expr(id)?;
+                        let argument = &self.exprs[id.0];
+                        let ty = if matches!(
+                            argument.kind,
+                            ExprKind::Borrow {
+                                kind: BorrowKind::Shared,
+                                ..
+                            }
+                        ) {
+                            let Ty::Ref { referent, .. } = &argument.ty else {
+                                return Err("format borrow requires reference type".into());
+                            };
+                            referent.as_ref()
+                        } else {
+                            &argument.ty
+                        };
+                        if !matches!(ty, Ty::Int(_) | Ty::Bool | Ty::Char | Ty::Never)
+                            && !ty.is_shared_str()
+                        {
+                            return Err(
+                                "format argument requires integer, bool, char or &str Display"
+                                    .into(),
+                            );
+                        }
+                        if argument.completion == Completion::Never {
+                            completion = Completion::Never;
+                        }
+                    }
+                    if value.ty != Ty::Unit || value.completion != completion {
+                        return Err("format output type or completion mismatch".into());
+                    }
+                }
             }
         }
         while let Some(block) = blocks.pop() {
