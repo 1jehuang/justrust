@@ -1,13 +1,30 @@
 //! Structural, type and dominance checks. Every optimizer node must produce a
 //! function that passes `verify`; tests run it after every pass.
+use super::meter::{Meter, Table};
 use super::{
     BinOp, CmpOp, FuncRef, InstKind, Overflow, SsaBlock, SsaFunction, SsaSignature, SsaTerminator,
     SsaTy, SsaValue, UnOp,
 };
 use std::fmt;
 
+/// Invalid IR, or (`resource`) a budget/allocation failure while verifying.
+/// Resource failures are never reported as invalid IR.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerifyError(pub String);
+
+impl VerifyError {
+    pub fn resource(error: String) -> Self {
+        VerifyError(format!("resource: {error}"))
+    }
+
+    pub fn is_resource(&self) -> bool {
+        self.0.starts_with("resource: ")
+    }
+}
+
+fn paid<T>(result: Result<T, String>) -> Result<T, VerifyError> {
+    result.map_err(VerifyError::resource)
+}
 
 impl fmt::Display for VerifyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -32,51 +49,94 @@ struct Def {
 
 /// Immediate dominators over the reachable blocks (Cooper, Harvey, Kennedy).
 /// `None` for unreachable blocks. The entry is its own dominator.
+/// Unmetered convenience for tests and the interpreter.
 pub fn dominators(function: &SsaFunction) -> Vec<Option<usize>> {
+    let budget = super::meter::unlimited();
+    let meter = Meter::new(&budget);
+    dominators_metered(function, &meter)
+        .expect("unlimited dominators")
+        .to_vec()
+}
+
+/// Metered dominators: RPO index, flattened predecessor (CSR) and idom
+/// tables are admitted before allocation; every fixed-point round,
+/// predecessor visit and intersection hop is charged.
+pub fn dominators_metered(
+    function: &SsaFunction,
+    meter: &Meter<'_>,
+) -> Result<Table<Option<usize>>, String> {
     let count = function.blocks.len();
-    let order = function.reverse_postorder();
-    let mut rpo_index = vec![usize::MAX; count];
+    let order = function.reverse_postorder_metered(meter)?;
+    let mut rpo_index = meter.table(count, usize::MAX)?;
     for (index, block) in order.iter().enumerate() {
         rpo_index[block.0 as usize] = index;
     }
-    let mut predecessors = vec![Vec::new(); count];
-    for block in &order {
+    meter.work(order.len())?;
+    // Predecessors in CSR form: one count pass, one fill pass.
+    let mut start = meter.table(count + 1, 0usize)?;
+    let mut edges = 0usize;
+    for block in order.iter() {
+        let term = &function.blocks[block.0 as usize].term;
+        meter.work(term.target_count())?;
+        for target in term.targets() {
+            let successor = target.block.0 as usize;
+            if successor < count {
+                start[successor + 1] += 1;
+                edges += 1;
+            }
+        }
+    }
+    for index in 0..count {
+        start[index + 1] += start[index];
+    }
+    meter.work(count)?;
+    let mut fill = meter.table(count, 0usize)?;
+    let mut predecessors = meter.table(edges, 0usize)?;
+    for block in order.iter() {
         for target in function.blocks[block.0 as usize].term.targets() {
             let successor = target.block.0 as usize;
             if successor < count {
-                predecessors[successor].push(block.0 as usize);
+                predecessors[start[successor] + fill[successor]] = block.0 as usize;
+                fill[successor] += 1;
             }
         }
     }
-    let mut idom: Vec<Option<usize>> = vec![None; count];
+    meter.work(edges)?;
+    drop(fill);
+    let mut idom = meter.table(count, None)?;
     if count == 0 {
-        return idom;
+        return Ok(idom);
     }
     idom[0] = Some(0);
-    let intersect = |idom: &[Option<usize>], mut a: usize, mut b: usize| {
+    let intersect = |idom: &[Option<usize>], mut a: usize, mut b: usize| -> Result<usize, String> {
         while a != b {
             while rpo_index[a] > rpo_index[b] {
-                a = idom[a].expect("processed");
+                meter.work(1)?;
+                a = idom[a].ok_or("dominator chain left the processed region")?;
             }
             while rpo_index[b] > rpo_index[a] {
-                b = idom[b].expect("processed");
+                meter.work(1)?;
+                b = idom[b].ok_or("dominator chain left the processed region")?;
             }
         }
-        a
+        Ok(a)
     };
     let mut changed = true;
     while changed {
         changed = false;
+        meter.work(order.len())?;
         for block in order.iter().skip(1) {
             let block = block.0 as usize;
             let mut new = None;
-            for &predecessor in &predecessors[block] {
+            let preds = &predecessors[start[block]..start[block + 1]];
+            meter.work(preds.len())?;
+            for &predecessor in preds {
                 if idom[predecessor].is_none() {
                     continue;
                 }
                 new = Some(match new {
                     None => predecessor,
-                    Some(current) => intersect(&idom, predecessor, current),
+                    Some(current) => intersect(&idom, predecessor, current)?,
                 });
             }
             if new.is_some() && idom[block] != new {
@@ -85,29 +145,65 @@ pub fn dominators(function: &SsaFunction) -> Vec<Option<usize>> {
             }
         }
     }
-    idom
+    Ok(idom)
 }
 
-fn dominates(idom: &[Option<usize>], a: usize, mut b: usize) -> bool {
+fn dominates(
+    idom: &[Option<usize>],
+    a: usize,
+    mut b: usize,
+    meter: &Meter<'_>,
+) -> Result<bool, String> {
     loop {
+        meter.work(1)?;
         if a == b {
-            return true;
+            return Ok(true);
         }
         match idom[b] {
             Some(parent) if parent != b => b = parent,
-            _ => return false,
+            _ => return Ok(false),
         }
     }
 }
 
-/// SsaValue types indexed by `SsaValue`, produced by a successful `verify`.
-pub type Types = Vec<Option<SsaTy>>;
+/// Value types indexed by `SsaValue`, produced by a successful `verify`.
+/// Holds the lease for its own storage: dropping it refunds, so the type
+/// table is paid for exactly as long as its consumer keeps it.
+pub type Types = Table<Option<SsaTy>>;
 
-/// Verify `function` and return the type of every defined value. `callee`
-/// resolves call signatures.
+/// Call signature lookup, borrowed: verification never clones signatures.
+pub type Signatures<'a> = dyn Fn(FuncRef) -> Option<&'a SsaSignature> + 'a;
+
+/// Unmetered verification for tests and the interpreter.
 pub fn verify(
     function: &SsaFunction,
     callee: &dyn Fn(FuncRef) -> Option<SsaSignature>,
+) -> Result<Vec<Option<SsaTy>>, VerifyError> {
+    let budget = super::meter::unlimited();
+    let meter = Meter::new(&budget);
+    // Materialize owned signatures once so the borrowed form can be used.
+    let mut owned: Vec<(FuncRef, SsaSignature)> = Vec::new();
+    for data in &function.blocks {
+        for inst in &data.insts {
+            if let InstKind::Call { callee: target, .. } = inst.kind
+                && !owned.iter().any(|(f, _)| *f == target)
+                && let Some(signature) = callee(target)
+            {
+                owned.push((target, signature));
+            }
+        }
+    }
+    let lookup = |target: FuncRef| owned.iter().find(|(f, _)| *f == target).map(|(_, s)| s);
+    Ok(verify_metered(function, &lookup, &meter)?.to_vec())
+}
+
+/// Metered verification. Every table is admitted before allocation and every
+/// definition, operand, dominance hop, propagation round and edge argument is
+/// charged. Budget failures return `VerifyError::resource`, never invalid IR.
+pub fn verify_metered<'a>(
+    function: &SsaFunction,
+    callee: &Signatures<'a>,
+    meter: &Meter<'_>,
 ) -> Result<Types, VerifyError> {
     let count = function.blocks.len();
     if count == 0 {
@@ -116,17 +212,18 @@ pub fn verify(
     if u32::try_from(count).is_err() {
         fail!("too many blocks");
     }
-    let entry_types: Vec<SsaTy> = function.blocks[0]
-        .params
-        .iter()
-        .map(|(_, ty)| *ty)
-        .collect();
-    if entry_types != function.params {
+    let entry = &function.blocks[0].params;
+    paid(meter.work(entry.len()))?;
+    if entry.len() != function.params.len()
+        || entry.iter().zip(&function.params).any(|((_, a), b)| a != b)
+    {
         fail!("entry block parameters do not match the signature");
     }
 
     // Definitions.
-    let mut defs: Vec<Option<Def>> = vec![None; function.value_bound()];
+    paid(meter.work(count))?;
+    let bound = function.value_bound();
+    let mut defs: Table<Option<Def>> = paid(meter.table(bound, None))?;
     let mut define = |value: SsaValue, def: Def| -> Result<(), VerifyError> {
         let slot = &mut defs[value.0 as usize];
         if slot.is_some() {
@@ -136,6 +233,7 @@ pub fn verify(
         Ok(())
     };
     for (block, data) in function.blocks.iter().enumerate() {
+        paid(super::meter::add(data.params.len(), data.insts.len()).and_then(|n| meter.work(n)))?;
         for (value, ty) in &data.params {
             define(
                 *value,
@@ -159,7 +257,7 @@ pub fn verify(
         }
     }
 
-    let idom = dominators(function);
+    let idom = paid(dominators_metered(function, meter))?;
     let check_use = |defs: &[Option<Def>],
                      value: SsaValue,
                      block: usize,
@@ -175,7 +273,7 @@ pub fn verify(
         let ok = if def.block == block {
             def.position < position
         } else {
-            dominates(&idom, def.block, block)
+            paid(dominates(&idom, def.block, block, meter))?
         };
         if !ok {
             fail!(
@@ -188,16 +286,14 @@ pub fn verify(
 
     // Reachable blocks in RPO: every operand's definition dominates its use,
     // so its type is already known and any error is final.
-    let reachable: Vec<usize> = function
-        .reverse_postorder()
-        .iter()
-        .map(|b| b.0 as usize)
-        .collect();
-    let mut seen = vec![false; count];
-    for &block in &reachable {
+    let reachable = paid(function.reverse_postorder_metered(meter))?;
+    let mut seen = paid(meter.table(count, false))?;
+    for block in reachable.iter() {
+        let block = block.0 as usize;
         seen[block] = true;
         let data = &function.blocks[block];
         for (index, inst) in data.insts.iter().enumerate() {
+            paid(meter.work(inst.kind.operand_count() + 1))?;
             for operand in inst.kind.operands() {
                 check_use(&defs, operand, block, index + 1)?;
             }
@@ -210,19 +306,40 @@ pub fn verify(
     // Unreachable blocks never execute but must still be well typed. They may
     // use values in any order, so type them to a fixpoint. The result does
     // not depend on block numbering.
-    let unreachable: Vec<usize> = (0..count).filter(|block| !seen[*block]).collect();
-    let mut pending: Vec<(usize, usize)> = Vec::new();
-    for &block in &unreachable {
+    let unreachable_count = seen.iter().filter(|s| !**s).count();
+    paid(meter.work(count))?;
+    let mut unreachable = paid(meter.list::<usize>(unreachable_count))?;
+    let mut pending_count = 0usize;
+    for block in 0..count {
+        if !seen[block] {
+            paid(unreachable.push(block))?;
+            pending_count += function.blocks[block].insts.len();
+        }
+    }
+    let mut pending = paid(meter.list::<(usize, usize)>(pending_count))?;
+    for &block in unreachable.iter() {
         for (index, inst) in function.blocks[block].insts.iter().enumerate() {
+            paid(meter.work(inst.kind.operand_count() + 1))?;
             for operand in inst.kind.operands() {
                 check_use(&defs, operand, block, index + 1)?;
             }
-            pending.push((block, index));
+            paid(pending.push((block, index)))?;
         }
     }
     loop {
         let mut last_error = None;
         let before = pending.len();
+        // One round re-types every pending instruction, visiting all of its
+        // operands (a call rescans every argument on every retry), so charge
+        // the actual operand visits of this round, not a one-time count.
+        let mut visits = before;
+        for &(block, index) in pending.iter() {
+            visits = paid(super::meter::add(
+                visits,
+                function.blocks[block].insts[index].kind.operand_count(),
+            ))?;
+        }
+        paid(meter.work(visits))?;
         pending.retain(|&(block, index)| {
             let inst = &function.blocks[block].insts[index];
             match inst_type(&inst.kind, &defs, callee) {
@@ -245,11 +362,16 @@ pub fn verify(
             return Err(last_error.expect("pending instruction failed"));
         }
     }
-    let order: Vec<usize> = reachable.into_iter().chain(unreachable).collect();
+    drop(pending);
 
-    for &block in &order {
+    for block in reachable
+        .iter()
+        .map(|b| b.0 as usize)
+        .chain(unreachable.iter().copied())
+    {
         let data = &function.blocks[block];
         let position = data.insts.len() + 1;
+        paid(meter.work(data.term.operand_count() + data.term.target_count() + 1))?;
         for operand in data.term.operands() {
             check_use(&defs, operand, block, position)?;
         }
@@ -291,7 +413,15 @@ pub fn verify(
             }
         }
     }
-    Ok(defs.iter().map(|def| def.and_then(|def| def.ty)).collect())
+    drop(seen);
+    drop(unreachable);
+    drop(reachable);
+    drop(idom);
+    let mut types = paid(meter.table(bound, None))?;
+    for (slot, def) in types.iter_mut().zip(defs.iter()) {
+        *slot = def.and_then(|def| def.ty);
+    }
+    Ok(types)
 }
 
 fn ty_of(defs: &[Option<Def>], value: SsaValue) -> Result<SsaTy, VerifyError> {
@@ -302,10 +432,10 @@ fn ty_of(defs: &[Option<Def>], value: SsaValue) -> Result<SsaTy, VerifyError> {
     }
 }
 
-fn inst_type(
+fn inst_type<'a>(
     kind: &InstKind,
     defs: &[Option<Def>],
-    callee: &dyn Fn(FuncRef) -> Option<SsaSignature>,
+    callee: &Signatures<'a>,
 ) -> Result<SsaTy, VerifyError> {
     let ty = |value| ty_of(defs, value);
     Ok(match kind {

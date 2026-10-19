@@ -1827,6 +1827,34 @@ pub struct PlanReservation {
     meter: Option<crate::engine::MeterHandle>,
 }
 impl PlanReservation {
+    /// Release part of this reservation in place: decrease-only, never
+    /// admits, never raises any charge or limit. `bytes` must not exceed the
+    /// current reservation.
+    pub fn shrink(&mut self, bytes: usize) -> Result<(), String> {
+        if bytes > self.bytes {
+            return Err("reservation shrink larger than the reservation".into());
+        }
+        if bytes == 0 {
+            return Ok(());
+        }
+        if let Some(meter) = &self.meter {
+            meter.meter().bytes.fetch_sub(
+                u64::try_from(bytes).unwrap_or(u64::MAX),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        } else {
+            let mut usage = self
+                .usage
+                .lock()
+                .map_err(|_| "generic planning budget poisoned".to_string())?;
+            usage.bytes -= bytes;
+            usage
+                .reservations
+                .resize_bytes(self.bytes, self.bytes - bytes);
+        }
+        self.bytes -= bytes;
+        Ok(())
+    }
     /// Consume a paid lease without releasing or admitting its bytes again.
     pub fn retain(mut self) -> Result<RetainedStorage, String> {
         if self.meter.is_none() {
@@ -1861,6 +1889,17 @@ impl Drop for PlanReservation {
             usage.bytes -= self.bytes;
             usage.reservations.release(self.bytes);
         }
+    }
+}
+#[cfg(test)]
+impl PlanBudget {
+    pub(crate) fn poison_ledger_for_tests(&self) {
+        let usage = self.usage.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = usage.lock().unwrap();
+            panic!("intentional ledger poison (test)");
+        })
+        .join();
     }
 }
 impl Default for PlanBudget {

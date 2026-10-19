@@ -9,86 +9,114 @@
 //! not `std::hash`, so it is stable across processes, machines and toolchain
 //! versions and can serve as a cache key component. Bump `ENCODING_VERSION`
 //! whenever the encoding or IR semantics change.
+use super::meter::{self, Meter};
+use super::store::{self, Owned};
 use super::{
-    BinOp, BlockData, CmpOp, Inst, InstKind, Overflow, PanicKind, SsaBlock, SsaFunction,
-    SsaTerminator, SsaTy, SsaValue, UnOp,
+    BinOp, CmpOp, InstKind, Overflow, PanicKind, SsaBlock, SsaFunction, SsaTerminator, SsaTy,
+    SsaValue, UnOp,
 };
 
 pub const ENCODING_VERSION: u32 = 2;
 
+/// Unmetered canonical form, for the interpreter and tests.
 pub fn canonical(function: &SsaFunction) -> SsaFunction {
-    let order = function.reverse_postorder();
-    let mut block_map = vec![u32::MAX; function.blocks.len()];
+    let budget = super::meter::unlimited();
+    canonical_metered(function, &Meter::new(&budget))
+        .expect("unlimited canonicalization")
+        .value
+}
+
+/// Canonical form with paid storage: the block/value maps are leased
+/// scratch, the output is admitted from the input's shape before building and
+/// reconciled to its real capacities, and every block, parameter,
+/// instruction and operand rewrite is charged.
+pub fn canonical_metered(
+    function: &SsaFunction,
+    meter: &Meter<'_>,
+) -> Result<Owned<SsaFunction>, String> {
+    let order = function.reverse_postorder_metered(meter)?;
+    let mut block_map = meter.table(function.blocks.len(), u32::MAX)?;
     for (index, block) in order.iter().enumerate() {
         block_map[block.0 as usize] = index as u32;
     }
-    let mut value_map = vec![u32::MAX; function.value_bound()];
+    let mut value_map = meter.table(function.value_bound(), u32::MAX)?;
     let mut next = 0u32;
-    for block in &order {
+    for block in order.iter() {
         let data = &function.blocks[block.0 as usize];
-        for (value, _) in &data.params {
+        meter.work(meter::add(data.params.len(), data.insts.len())?)?;
+        for value in data
+            .params
+            .iter()
+            .map(|(value, _)| *value)
+            .chain(data.insts.iter().map(|inst| inst.result))
+        {
             value_map[value.0 as usize] = next;
-            next += 1;
-        }
-        for inst in &data.insts {
-            value_map[inst.result.0 as usize] = next;
-            next += 1;
+            next = next.checked_add(1).ok_or("SSA value IDs exhausted")?;
         }
     }
     let value =
         |value: SsaValue| SsaValue(value_map.get(value.0 as usize).copied().unwrap_or(u32::MAX));
-    let blocks = order
-        .iter()
-        .map(|block| {
-            let data = &function.blocks[block.0 as usize];
-            let mut term = data.term.clone();
-            for target in term.targets_mut() {
-                target.block = SsaBlock(block_map[target.block.0 as usize]);
+    // Output shape: reachable blocks only, so the input shape is an upper bound.
+    let preflight = store::shape_bytes(function)?;
+    Owned::build(
+        meter,
+        preflight,
+        || -> Result<SsaFunction, String> {
+            let mut blocks = Vec::new();
+            blocks
+                .try_reserve_exact(order.len())
+                .map_err(|_| "optimizer allocation failed".to_string())?;
+            for block in order.iter() {
+                let data = &function.blocks[block.0 as usize];
+                let mut out = store::try_clone_block(data)?;
+                meter.work(meter::add(
+                    meter::add(out.params.len(), out.insts.len())?,
+                    out.term.operand_count(),
+                )?)?;
+                for (param, _) in out.params.iter_mut() {
+                    *param = value(*param);
+                }
+                for inst in out.insts.iter_mut() {
+                    meter.work(inst.kind.operand_count())?;
+                    inst.result = value(inst.result);
+                    for operand in inst.kind.operands_mut() {
+                        *operand = value(*operand);
+                    }
+                }
+                for target in out.term.targets_mut() {
+                    target.block = SsaBlock(block_map[target.block.0 as usize]);
+                }
+                for operand in out.term.operands_mut() {
+                    *operand = value(*operand);
+                }
+                blocks.push(out);
             }
-            for operand in term.operands_mut() {
-                *operand = value(*operand);
-            }
-            BlockData {
-                params: data
-                    .params
-                    .iter()
-                    .map(|(param, ty)| (value(*param), *ty))
-                    .collect(),
-                insts: data
-                    .insts
-                    .iter()
-                    .map(|inst| {
-                        let mut kind = inst.kind.clone();
-                        for operand in kind.operands_mut() {
-                            *operand = value(*operand);
-                        }
-                        Inst {
-                            result: value(inst.result),
-                            kind,
-                        }
-                    })
-                    .collect(),
-                term,
-            }
-        })
-        .collect();
-    SsaFunction {
-        params: function.params.clone(),
-        ret: function.ret,
-        blocks,
-        panics: function.panics.clone(),
-    }
+            let mut params = Vec::new();
+            params
+                .try_reserve_exact(function.params.len())
+                .map_err(|_| "optimizer allocation failed".to_string())?;
+            params.extend_from_slice(&function.params);
+            Ok(SsaFunction {
+                params,
+                ret: function.ret,
+                blocks,
+                panics: store::copy_panics(&function.panics, meter)?,
+            })
+        },
+        store::capacity_bytes,
+    )
 }
 
 /// 128-bit FNV-1a. Not cryptographic: cache keys that cross trust boundaries
 /// need a cryptographic digest (ARCHITECTURE.md section 14).
-struct Fnv(u128);
+struct Fnv(u128, usize);
 
 impl Fnv {
     const OFFSET: u128 = 0x6c62272e07bb014262b821756295c58d;
     const PRIME: u128 = 0x0000000001000000000000000000013b;
 
     fn bytes(&mut self, bytes: &[u8]) {
+        self.1 += bytes.len();
         for byte in bytes {
             self.0 ^= u128::from(*byte);
             self.0 = self.0.wrapping_mul(Self::PRIME);
@@ -185,7 +213,11 @@ fn panic(h: &mut Fnv, kind: PanicKind) {
     });
 }
 
-fn encode(h: &mut Fnv, function: &SsaFunction) {
+fn encode(
+    h: &mut Fnv,
+    function: &SsaFunction,
+    charge: &mut dyn FnMut(usize) -> Result<(), String>,
+) -> Result<(), String> {
     h.bytes(b"jr-ssa");
     h.u32(ENCODING_VERSION);
     h.len(function.params.len());
@@ -201,7 +233,9 @@ fn encode(h: &mut Fnv, function: &SsaFunction) {
         h.len(text.location.len());
         h.bytes(text.location.as_bytes());
     }
+    charge(std::mem::take(&mut h.1))?;
     for data in &function.blocks {
+        charge(std::mem::take(&mut h.1))?;
         h.len(data.params.len());
         for (value, param) in &data.params {
             h.u32(value.0);
@@ -293,12 +327,22 @@ fn encode(h: &mut Fnv, function: &SsaFunction) {
             }
         }
     }
+    charge(std::mem::take(&mut h.1))
 }
 
 /// Stable content hash of the canonical form. SsaCallee references are hashed
 /// as given; inside the graph they become canonical item identities.
 pub fn content_hash(function: &SsaFunction) -> u128 {
-    let mut h = Fnv(Fnv::OFFSET);
-    encode(&mut h, &canonical(function));
-    h.0
+    let budget = super::meter::unlimited();
+    content_hash_metered(function, &Meter::new(&budget)).expect("unlimited hash")
+}
+
+/// Metered content hash: canonicalization is paid (and its storage refunded
+/// when this returns), and work is charged per encoded byte, flushed once per
+/// block so the charge tracks the bytes actually hashed.
+pub fn content_hash_metered(function: &SsaFunction, meter: &Meter<'_>) -> Result<u128, String> {
+    let canonical = canonical_metered(function, meter)?;
+    let mut h = Fnv(Fnv::OFFSET, 0);
+    encode(&mut h, &canonical.value, &mut |bytes| meter.work(bytes))?;
+    Ok(h.0)
 }

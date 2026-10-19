@@ -347,6 +347,10 @@ pub struct Object {
     /// Absolute u64 immediate fields that receive the address of a linked
     /// read-only trait object vtable.
     pub vtables: Vec<(usize, Vtable)>,
+    /// Immutable evidence that this object's storage was paid, set by the
+    /// SSA backend (OPTIMIZATION.md 13). The stack emitter accounts through
+    /// its own retained-byte path and leaves this `None`. Holds no ledger.
+    pub receipt: Option<std::sync::Arc<super::ssa::meter::Receipt>>,
 }
 
 /// Private trait object vtable: `[drop_in_place, size, align, methods...]`,
@@ -1862,66 +1866,110 @@ impl<'a> Emitter<'a> {
                     calls: Vec::new(),
                     strings: Vec::new(),
                     vtables: Vec::new(),
+                    receipt: None,
                 },
             ),
+            budget: &budget,
         };
-        let result = emit_panic(&mut code, &panic.message, &panic.location, &budget);
+        let result = emit_panic(&mut code, &panic.message, &panic.location);
         self.object = code.object;
         result
     }
 }
 
-/// Code buffer for the self-contained abort sequence shared by the stack
-/// emitter and the SSA machine backend.
-struct PanicAsm {
-    object: Object,
-}
-impl PanicAsm {
-    fn bytes(&mut self, bytes: &[u8]) {
-        self.object.code.extend_from_slice(bytes);
-    }
-    fn position(&self) -> usize {
-        self.object.code.len()
-    }
-    fn jump(&mut self, opcode: &[u8]) -> usize {
-        self.bytes(opcode);
+/// Destination for the self-contained abort sequence. Implementations
+/// decide how code bytes, the diagnostic payload, and its relocation are
+/// paid for; the emitted sequence is identical for every sink.
+pub(crate) trait PanicSink {
+    fn bytes(&mut self, bytes: &[u8]) -> Result<(), String>;
+    fn position(&self) -> usize;
+    fn patch_rel32(&mut self, at: usize, displacement: [u8; 4]) -> Result<(), String>;
+    /// Charge the copy work, then return an empty buffer with paid capacity
+    /// for `length` diagnostic bytes.
+    fn diagnostic(&mut self, length: usize) -> Result<Vec<u8>, String>;
+    /// Record the diagnostic payload (moved, never copied) relocated at `at`.
+    fn string(&mut self, at: usize, payload: Vec<u8>) -> Result<(), String>;
+
+    fn jump(&mut self, opcode: &[u8]) -> Result<usize, String> {
+        self.bytes(opcode)?;
         let at = self.position();
-        self.bytes(&[0; 4]);
-        at
+        self.bytes(&[0; 4])?;
+        Ok(at)
     }
     fn patch(&mut self, at: usize, target: usize) -> Result<(), String> {
         let displacement = i32::try_from(target as i128 - at as i128 - 4)
             .map_err(|_| "function exceeds rel32 range".to_string())?;
-        self.object.code[at..at + 4].copy_from_slice(&displacement.to_le_bytes());
+        self.patch_rel32(at, displacement.to_le_bytes())
+    }
+}
+
+/// LEGACY stack-emitter sink. Separate, explicitly tracked accounting debt:
+/// code bytes grow the stack emitter's object without per-append admission
+/// (like the rest of the stack emitter); only the diagnostic payload and its
+/// relocation slot are charged. Never used by the optimizer.
+struct PanicAsm<'a> {
+    object: Object,
+    budget: &'a ir::PlanBudget,
+}
+impl PanicSink for PanicAsm<'_> {
+    fn bytes(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.object.code.extend_from_slice(bytes);
+        Ok(())
+    }
+    fn position(&self) -> usize {
+        self.object.code.len()
+    }
+    fn patch_rel32(&mut self, at: usize, displacement: [u8; 4]) -> Result<(), String> {
+        self.object
+            .code
+            .get_mut(at..at + 4)
+            .ok_or("patch outside emitted code")?
+            .copy_from_slice(&displacement);
+        Ok(())
+    }
+    fn diagnostic(&mut self, length: usize) -> Result<Vec<u8>, String> {
+        let budget = self.budget.clone();
+        budget.charge_work(length)?;
+        budget.retain_bytes(length)?;
+        let mut diagnostic = Vec::new();
+        diagnostic
+            .try_reserve_exact(length)
+            .map_err(|_| "panic diagnostic allocation failed")?;
+        budget.retain_bytes(diagnostic.capacity().saturating_sub(length))?;
+        Ok(diagnostic)
+    }
+    fn string(&mut self, at: usize, payload: Vec<u8>) -> Result<(), String> {
+        if self.object.strings.len() == self.object.strings.capacity() {
+            let old = self.object.strings.capacity();
+            let entry = std::mem::size_of::<(usize, Vec<u8>)>();
+            self.budget.retain_bytes(entry)?;
+            self.object
+                .strings
+                .try_reserve_exact(1)
+                .map_err(|_| "panic relocation allocation failed")?;
+            let added = self.object.strings.capacity() - old;
+            let extra = added
+                .checked_sub(1)
+                .and_then(|count| count.checked_mul(entry))
+                .ok_or("panic relocation storage overflow")?;
+            self.budget.retain_bytes(extra)?;
+        }
+        self.object.strings.push((at, payload));
         Ok(())
     }
 }
 
-/// Standalone explicit-panic sequence (diagnostic to stderr, then abort), as
-/// a relocatable object with only string relocations.
-pub fn panic_object(
+/// Emit the explicit-panic sequence (diagnostic to stderr, then abort) into
+/// any sink. The optimizer passes a paid sink bound to its exact meter.
+pub(crate) fn emit_panic_into(
+    sink: &mut dyn PanicSink,
     message: &str,
     location: &str,
-    budget: &ir::PlanBudget,
-) -> Result<Object, String> {
-    let mut code = PanicAsm {
-        object: Object {
-            code: Vec::new(),
-            calls: Vec::new(),
-            strings: Vec::new(),
-            vtables: Vec::new(),
-        },
-    };
-    emit_panic(&mut code, message, location, budget)?;
-    Ok(code.object)
+) -> Result<(), String> {
+    emit_panic(sink, message, location)
 }
 
-fn emit_panic(
-    this: &mut PanicAsm,
-    message: &str,
-    location: &str,
-    budget: &ir::PlanBudget,
-) -> Result<(), String> {
+fn emit_panic(this: &mut dyn PanicSink, message: &str, location: &str) -> Result<(), String> {
     let panic = PanicText { message, location };
     {
         let length = panic
@@ -1930,14 +1978,7 @@ fn emit_panic(
             .checked_add(panic.message.len())
             .and_then(|length| length.checked_add(b"panicked at :\n\n".len()))
             .ok_or("panic diagnostic storage overflow")?;
-        let budget = budget.clone();
-        budget.charge_work(length)?;
-        budget.retain_bytes(length)?;
-        let mut diagnostic = Vec::new();
-        diagnostic
-            .try_reserve_exact(length)
-            .map_err(|_| "panic diagnostic allocation failed")?;
-        budget.retain_bytes(diagnostic.capacity().saturating_sub(length))?;
+        let mut diagnostic = this.diagnostic(length)?;
         diagnostic.extend_from_slice(b"panicked at ");
         diagnostic.extend_from_slice(panic.location.as_bytes());
         diagnostic.extend_from_slice(b":\n");
@@ -1945,58 +1986,43 @@ fn emit_panic(
         diagnostic.push(b'\n');
 
         // Reserve a zeroed kernel sigaction (handler, flags, restorer, mask).
-        this.bytes(&[0x48, 0x83, 0xec, 0x20, 0x31, 0xc0]);
-        this.bytes(&[0x48, 0x89, 0x04, 0x24]);
+        this.bytes(&[0x48, 0x83, 0xec, 0x20, 0x31, 0xc0])?;
+        this.bytes(&[0x48, 0x89, 0x04, 0x24])?;
         for offset in [8, 16, 24] {
-            this.bytes(&[0x48, 0x89, 0x44, 0x24, offset]);
+            this.bytes(&[0x48, 0x89, 0x44, 0x24, offset])?;
         }
         // Restore SIGABRT's default disposition, even when inherited ignored.
-        this.bytes(&[0xb8, 13, 0, 0, 0, 0xbf, 6, 0, 0, 0]);
+        this.bytes(&[0xb8, 13, 0, 0, 0, 0xbf, 6, 0, 0, 0])?;
         this.bytes(&[
             0x48, 0x89, 0xe6, 0x31, 0xd2, 0x41, 0xba, 8, 0, 0, 0, 0x0f, 0x05,
-        ]);
-        this.bytes(&[0x48, 0x85, 0xc0]);
-        let failed_sigabrt = this.jump(&[0x0f, 0x85]);
+        ])?;
+        this.bytes(&[0x48, 0x85, 0xc0])?;
+        let failed_sigabrt = this.jump(&[0x0f, 0x85])?;
         // Ignore SIGPIPE so a closed stderr still reaches the abort operation.
-        this.bytes(&[0x48, 0xc7, 0x04, 0x24, 1, 0, 0, 0]);
-        this.bytes(&[0xb8, 13, 0, 0, 0, 0xbf, 13, 0, 0, 0]);
+        this.bytes(&[0x48, 0xc7, 0x04, 0x24, 1, 0, 0, 0])?;
+        this.bytes(&[0xb8, 13, 0, 0, 0, 0xbf, 13, 0, 0, 0])?;
         this.bytes(&[
             0x48, 0x89, 0xe6, 0x31, 0xd2, 0x41, 0xba, 8, 0, 0, 0, 0x0f, 0x05,
-        ]);
-        this.bytes(&[0x48, 0x85, 0xc0]);
-        let failed_sigpipe = this.jump(&[0x0f, 0x85]);
+        ])?;
+        this.bytes(&[0x48, 0x85, 0xc0])?;
+        let failed_sigpipe = this.jump(&[0x0f, 0x85])?;
 
-        this.bytes(&[0x48, 0xbe]);
+        this.bytes(&[0x48, 0xbe])?;
         let relocation = this.position();
-        this.bytes(&[0; 8]);
+        this.bytes(&[0; 8])?;
         let length = u64::try_from(diagnostic.len()).map_err(|_| "panic diagnostic too large")?;
-        if this.object.strings.len() == this.object.strings.capacity() {
-            let old = this.object.strings.capacity();
-            let entry = std::mem::size_of::<(usize, Vec<u8>)>();
-            budget.retain_bytes(entry)?;
-            this.object
-                .strings
-                .try_reserve_exact(1)
-                .map_err(|_| "panic relocation allocation failed")?;
-            let added = this.object.strings.capacity() - old;
-            let extra = added
-                .checked_sub(1)
-                .and_then(|count| count.checked_mul(entry))
-                .ok_or("panic relocation storage overflow")?;
-            budget.retain_bytes(extra)?;
-        }
-        this.object.strings.push((relocation, diagnostic));
-        this.bytes(&[0x48, 0xba]);
-        this.bytes(&length.to_le_bytes());
+        this.string(relocation, diagnostic)?;
+        this.bytes(&[0x48, 0xba])?;
+        this.bytes(&length.to_le_bytes())?;
         let retry = this.position();
-        this.bytes(&[0xb8, 1, 0, 0, 0, 0xbf, 2, 0, 0, 0, 0x0f, 0x05]);
-        this.bytes(&[0x48, 0x83, 0xf8, 0xfc]);
-        let interrupted = this.jump(&[0x0f, 0x84]);
+        this.bytes(&[0xb8, 1, 0, 0, 0, 0xbf, 2, 0, 0, 0, 0x0f, 0x05])?;
+        this.bytes(&[0x48, 0x83, 0xf8, 0xfc])?;
+        let interrupted = this.jump(&[0x0f, 0x84])?;
         this.patch(interrupted, retry)?;
-        this.bytes(&[0x48, 0x85, 0xc0]);
-        let failed_write = this.jump(&[0x0f, 0x8e]);
-        this.bytes(&[0x48, 0x01, 0xc6, 0x48, 0x29, 0xc2]);
-        let more = this.jump(&[0x0f, 0x85]);
+        this.bytes(&[0x48, 0x85, 0xc0])?;
+        let failed_write = this.jump(&[0x0f, 0x8e])?;
+        this.bytes(&[0x48, 0x01, 0xc6, 0x48, 0x29, 0xc2])?;
+        let more = this.jump(&[0x0f, 0x85])?;
         this.patch(more, retry)?;
         let abort = this.position();
         this.patch(failed_write, abort)?;
@@ -2004,25 +2030,25 @@ fn emit_panic(
         // This abort-only runtime does not produce core files. In particular a
         // piped core_pattern must not delay termination in an external service.
         // PR_SET_DUMPABLE must run after exec, which resets the inherited flag.
-        this.bytes(&[0xb8, 157, 0, 0, 0, 0xbf, 4, 0, 0, 0, 0x31, 0xf6]);
-        this.bytes(&[0x31, 0xd2, 0x45, 0x31, 0xd2, 0x45, 0x31, 0xc0, 0x0f, 0x05]);
-        this.bytes(&[0x48, 0x85, 0xc0]);
-        let failed_dumpable = this.jump(&[0x0f, 0x85]);
+        this.bytes(&[0xb8, 157, 0, 0, 0, 0xbf, 4, 0, 0, 0, 0x31, 0xf6])?;
+        this.bytes(&[0x31, 0xd2, 0x45, 0x31, 0xd2, 0x45, 0x31, 0xc0, 0x0f, 0x05])?;
+        this.bytes(&[0x48, 0x85, 0xc0])?;
+        let failed_dumpable = this.jump(&[0x0f, 0x85])?;
         // Unblock SIGABRT, then raise it in this process. This remains fatal
         // even with an inherited ignored disposition or blocked signal mask.
-        this.bytes(&[0x48, 0xc7, 0x04, 0x24, 32, 0, 0, 0]);
-        this.bytes(&[0xb8, 14, 0, 0, 0, 0xbf, 1, 0, 0, 0]);
+        this.bytes(&[0x48, 0xc7, 0x04, 0x24, 32, 0, 0, 0])?;
+        this.bytes(&[0xb8, 14, 0, 0, 0, 0xbf, 1, 0, 0, 0])?;
         this.bytes(&[
             0x48, 0x89, 0xe6, 0x31, 0xd2, 0x41, 0xba, 8, 0, 0, 0, 0x0f, 0x05,
-        ]);
-        this.bytes(&[0x48, 0x85, 0xc0]);
-        let failed_sigprocmask = this.jump(&[0x0f, 0x85]);
-        this.bytes(&[0xb8, 39, 0, 0, 0, 0x0f, 0x05]);
+        ])?;
+        this.bytes(&[0x48, 0x85, 0xc0])?;
+        let failed_sigprocmask = this.jump(&[0x0f, 0x85])?;
+        this.bytes(&[0xb8, 39, 0, 0, 0, 0x0f, 0x05])?;
         // A sandbox may reject getpid. Never reinterpret its negative errno
         // as kill(-1, ...), which would target unrelated permitted processes.
-        this.bytes(&[0x48, 0x85, 0xc0]);
-        let invalid_pid = this.jump(&[0x0f, 0x8e]);
-        this.bytes(&[0x89, 0xc7, 0xbe, 6, 0, 0, 0, 0xb8, 62, 0, 0, 0, 0x0f, 0x05]);
+        this.bytes(&[0x48, 0x85, 0xc0])?;
+        let invalid_pid = this.jump(&[0x0f, 0x8e])?;
+        this.bytes(&[0x89, 0xc7, 0xbe, 6, 0, 0, 0, 0xb8, 62, 0, 0, 0, 0x0f, 0x05])?;
         // A denied signal syscall must still never return to Rust code.
         let fallback = this.position();
         for failed in [
@@ -2036,7 +2062,7 @@ fn emit_panic(
         }
         this.bytes(&[
             0xbf, 101, 0, 0, 0, 0xb8, 231, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
-        ]);
+        ])?;
         Ok(())
     }
 }
@@ -2861,6 +2887,7 @@ pub fn emit_cfg_function(
             calls: Vec::new(),
             strings: Vec::new(),
             vtables: Vec::new(),
+            receipt: None,
         },
         concrete,
         resolve,
@@ -3789,6 +3816,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 vtables: Vec::new(),
+                receipt: None,
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -3853,6 +3881,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 vtables: Vec::new(),
+                receipt: None,
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -3901,6 +3930,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 vtables: Vec::new(),
+                receipt: None,
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -4367,6 +4397,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 vtables: Vec::new(),
+                receipt: None,
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -4507,6 +4538,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 vtables: Vec::new(),
+                receipt: None,
             },
             concrete: &concrete,
             resolve: &resolve,
@@ -6829,6 +6861,7 @@ mod tests {
                 calls: vec![],
                 strings: vec![],
                 vtables: vec![],
+                receipt: None,
             },
             concrete: &concrete,
             resolve: &|_| Err("physical fixture has no instance calls".into()),
@@ -7083,6 +7116,7 @@ mod tests {
                     calls: vec![],
                     strings: vec![],
                     vtables: vec![],
+                    receipt: None,
                 },
                 concrete: &concrete,
                 resolve: &|_| Err("physical fixture has no instance calls".into()),
@@ -7168,6 +7202,7 @@ mod tests {
                 calls: vec![],
                 strings: vec![],
                 vtables: vec![],
+                receipt: None,
             },
             concrete: &concrete,
             resolve: &|_| Err("physical fixture has no instance calls".into()),

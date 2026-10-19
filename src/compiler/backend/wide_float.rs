@@ -234,6 +234,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 vtables: Vec::new(),
+                receipt: None,
             },
             concrete: &concrete,
             resolve: &resolve,
