@@ -217,3 +217,16 @@ generated compile/runtime exit checks. The actual 96-worker example executes
 with complete capture. Raw receipts are retained under
 `experiments/results/20261016-m8a-generic-inference-*`.
 No full Rust completion or compile-speed improvement is claimed.
+
+## Later local-inference composition correction
+
+The exact frozen `opaque_effect_argument_no_context` source now passes after
+body-local literal inference. Its source bytes are unchanged: `same(1,{let
+x=2u8;x})` is constrained by the later `v==2u8` use. Stock rustc 1.98.1 and
+native check/build/run accept it with exit 0, exact `inference oracle ok\n`
+stdout and empty runtime stderr. The test is promoted only after that observed
+parity, and now requires a real stock compilation/execution before native
+workers 1/8 acceptance. The frozen inventory remains 28 sources, now 17 native
+positives, eight invalid sources and three legal excluded sources. This does
+not promote general opaque/generic argument evidence or unresolved nested
+omission. The historical checkpoint and artifact hash above remain historical.

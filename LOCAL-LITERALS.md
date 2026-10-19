@@ -110,6 +110,20 @@ inference and generic/method-call evidence remain separate work.
 
 ## Boundaries
 
+### Source-constraint error provenance
+
+Contradictory scalar equalities reject with a typed `Unproved` cause carrying
+both conflicting domains and `does not match`, transported through the existing
+canonical source capability. A source type error is not `InvalidMetadata`.
+No classifier string matching, new side slot or relaxed validation is added.
+Five stock-negative unused-body controls cover fixed widths, annotations,
+float/integer arithmetic, assignments and return types. Each must reject in
+check and build with workers 1/8, complete graph capture and no CLI executable.
+The existing wide-integer unused-value gate continues validating overflow,
+unsigned negation, suffix conflicts and invalid shifts before code generation.
+The local solver has no individual expression span inventory, so this change
+does not invent source spans or metadata authority.
+
 This does not add general structured inference, future-use reference inference,
 method/generic-call constraint solving, match-pattern inference, loop-break
 inference, or new iterator forms. Unsupported expression forms contribute no

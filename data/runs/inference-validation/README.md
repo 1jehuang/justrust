@@ -44,3 +44,22 @@ lookup was separately verified as `/usr/bin/rustc`, Rust 1.98.1
 `x86_64-unknown-linux-gnu`, LLVM 22.1.8. Both real corpus sources remain unchanged.
 These are correctness receipts, not controlled performance measurements and not
 evidence of full Rust support.
+
+## Typed source-conflict follow-up
+
+The exact former opaque-block rejection fixture is promoted only after stock
+and native runtime stdout/stderr/exit parity. Local stock `/usr/bin/rustc`
+1.98.1 was observed directly, and the promoted test requires PATH `rustc`
+without skipping when unavailable. Five unused-body stock-negative cases retain
+typed `Unproved` diagnostics with both conflicting numeric domains. The original
+wide-integer semantic checks and all graph ratchets remain unchanged.
+
+- `20261018-195313085-1396282`: hosted check passed.
+- `20261018-195315469-1396110`: hosted generic inference, wide-integer graph,
+  local literals, iterable literals and graph integrity, all 40 tests passed.
+- `20261018-195348051-1400861`: the same suites plus library, compiler, loops
+  and full programs, all 1,440 tests passed.
+- `20261018-195357783-1400755`: hosted strict all-target clippy passed.
+
+Formatting and diff checks passed. These four scoped records are retained
+alongside the earlier eleven, not unrelated runs from the shared database.

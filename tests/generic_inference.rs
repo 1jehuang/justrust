@@ -445,11 +445,29 @@ fn main(){if run()==7{println!("inference oracle ok");}}
 }
 
 #[test]
-fn rejects_opaque_effect_argument_no_context() {
-    rejects(
-        "legalunsupported: opaque_effect_argument_no_context",
-        r###"fn same<T>(a:T,b:T)->T{b}fn run()->i32{let v=same(1,{let x=2u8;x});if v==2u8{7}else{0}}
+fn accepts_opaque_effect_argument_no_context() {
+    let source = r###"fn same<T>(a:T,b:T)->T{b}fn run()->i32{let v=same(1,{let x=2u8;x});if v==2u8{7}else{0}}
 fn main(){if run()==7{println!("inference oracle ok");}}
-"###,
+"###;
+    // Preserve the exact former legal-unsupported source. Require a real stock
+    // witness before checking native check/build/run with both worker counts.
+    let scratch = Scratch::new();
+    let input = scratch.source(source);
+    let output = scratch.path("stock");
+    let compiled = capture(
+        Command::new("rustc")
+            .arg("--edition=2024")
+            .arg("-Cpanic=abort")
+            .arg(input)
+            .arg("-o")
+            .arg(&output),
+        &scratch,
+        20,
     );
+    assert!(compiled.status.success(), "stock: {compiled:?}");
+    let result = capture(&mut Command::new(output), &scratch, 5);
+    assert_eq!(result.status.code(), Some(0), "stock: {result:?}");
+    assert_eq!(result.stdout, b"inference oracle ok\n");
+    assert!(result.stderr.is_empty(), "stock: {result:?}");
+    runs(source, "inference oracle ok\n");
 }
