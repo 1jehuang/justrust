@@ -2564,6 +2564,9 @@ fn admit_cfg_push<T>(values: &mut Vec<T>, budget: Option<&ir::PlanBudget>) -> Re
     if budget.is_some_and(ir::PlanBudget::has_resource_failure) {
         return Err("planning resource budget already exhausted".into());
     }
+    if let Some(budget) = budget {
+        budget.charge_work(1)?;
+    }
     if values.len() < values.capacity() {
         return Ok(());
     }
@@ -5105,8 +5108,6 @@ mod panic_terminal_tests {
             + payload.message.len()
             + payload.location.len();
         let statement_bytes = std::mem::size_of::<Located<Statement>>();
-        let materialization_bytes =
-            statement_bytes + payload_bytes + std::mem::size_of::<PendingBlock>();
         let mut lowerer = Lowerer {
             facts: ir::FactsCtx::from_validated(publication.facts()),
             budget: Some(&budget),
@@ -5134,19 +5135,31 @@ mod panic_terminal_tests {
         };
         assert!(publication.facts().budget().same_authority(&budget));
         assert!(lowerer.budget.unwrap().same_authority(&budget));
-        // Tighten the original publication ledger, not a fresh replacement.
-        // Two complete copies fit. The third falls one byte short of the full
-        // boxed payload, after its StorageLive but before any payload clone.
-        let remaining = 2 * materialization_bytes + statement_bytes + payload_bytes - 1;
-        budget
-            .retain_bytes(budget.limits().bytes - budget.usage_snapshot().bytes - remaining)
-            .unwrap();
+        // Independently reconcile every actual backing grown by each real
+        // occurrence. Full new backings remain paid alongside old admission.
         for index in 0..2 {
             let before = budget.usage_snapshot().bytes;
+            let old_blocks = lowerer.blocks.capacity();
+            let old_scope = lowerer.scopes[0].capacity();
+            let old_statements = lowerer.blocks[index].statements.capacity();
             lowerer.materialize_expression(id).unwrap();
+            let growth = |old, actual, size| if actual > old { actual * size } else { 0 };
+            let container_bytes = growth(
+                old_blocks,
+                lowerer.blocks.capacity(),
+                std::mem::size_of::<PendingBlock>(),
+            ) + growth(
+                old_scope,
+                lowerer.scopes[0].capacity(),
+                std::mem::size_of::<LocalId>(),
+            ) + growth(
+                old_statements,
+                lowerer.blocks[index].statements.capacity(),
+                statement_bytes,
+            );
             assert_eq!(
                 budget.usage_snapshot().bytes - before,
-                materialization_bytes
+                payload_bytes + container_bytes
             );
             let terminator = lowerer.blocks[index].terminator.as_ref().unwrap();
             assert_eq!(terminator.origin, Some(id));
@@ -5164,6 +5177,38 @@ mod panic_terminal_tests {
             unreachable!()
         };
         assert!(!std::ptr::eq(first.as_ref(), second.as_ref()));
+        // Admit the real third occurrence's backing before tightening the
+        // same publication ledger. No element or statement is inserted here.
+        let statements_before = lowerer.blocks[2].statements.len();
+        let locals_before = lowerer.scopes[0].len();
+        let old_scope_capacity = lowerer.scopes[0].capacity();
+        let old_statement_capacity = lowerer.blocks[2].statements.capacity();
+        let before_admission = budget.usage_snapshot().bytes;
+        admit_cfg_push(&mut lowerer.scopes[0], Some(&budget)).unwrap();
+        admit_cfg_push(&mut lowerer.blocks[2].statements, Some(&budget)).unwrap();
+        let expected_scope = if lowerer.scopes[0].capacity() > old_scope_capacity {
+            lowerer.scopes[0].capacity() * std::mem::size_of::<LocalId>()
+        } else {
+            0
+        };
+        let expected_statements =
+            if lowerer.blocks[2].statements.capacity() > old_statement_capacity {
+                lowerer.blocks[2].statements.capacity() * statement_bytes
+            } else {
+                0
+            };
+        assert_eq!(
+            budget.usage_snapshot().bytes - before_admission,
+            expected_scope + expected_statements
+        );
+        assert_eq!(lowerer.scopes[0].len(), locals_before);
+        assert_eq!(lowerer.blocks[2].statements.len(), statements_before);
+        let remaining = payload_bytes - 1;
+        budget
+            .retain_bytes(budget.limits().bytes - budget.usage_snapshot().bytes - remaining)
+            .unwrap();
+        // StorageLive fits paid spare capacity, but the full payload clone
+        // fails exactly one byte short. Two independent copies remain intact.
         let error = lowerer.materialize_expression(id).unwrap_err();
         let failure = budget.first_resource_failure().unwrap();
         assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
@@ -9197,6 +9242,34 @@ mod tests {
             value: Statement::StorageLive(LocalId(0)),
             origin: None,
         });
+    }
+
+    #[test]
+    fn cfg_helper_spare_capacity_insertion_work_denial_prevents_push() {
+        let source = with_root(Ty::Unit, Vec::new(), Vec::new());
+        for scope_header in [true, false] {
+            let budget = ir::PlanBudget::new(ir::PlanLimits {
+                work: 0,
+                ..Default::default()
+            });
+            let mut lowerer = divergence_probe(&source, &budget, vec![None]);
+            lowerer.current = BlockId(0);
+            lowerer.scopes = Vec::with_capacity(2);
+            if scope_header {
+                assert!(lowerer.push_scope().is_err());
+                assert!(lowerer.scopes.is_empty());
+            } else {
+                lowerer.scopes.push(Vec::with_capacity(2));
+                lowerer.live(LocalId(0), None);
+                assert!(lowerer.scopes[0].is_empty());
+            }
+            let first = budget.first_resource_failure().unwrap();
+            assert_eq!(first.kind, ir::ResourceBudgetKind::Work);
+            assert_eq!((first.requested, first.used, first.limit), (1, 0, 0));
+            assert!(lowerer.resource_error.is_some());
+            assert!(lowerer.blocks[0].statements.is_empty());
+            assert_eq!(budget.usage_snapshot().bytes, 0);
+        }
     }
 
     #[test]
