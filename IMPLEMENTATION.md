@@ -361,6 +361,9 @@ missing-file changes invalidate only justified consumers without stale lookup.
       item-signature holes get E0121. Named generic arguments coexist with inferred
       anonymous argument-position `impl Trait` parameters. Source never types
       retain their distinct semantic representation under the pinned stock oracle.
+      Deferred written annotation holes reuse solved declaration facts; anonymous
+      `impl Trait` parameter identities cannot collide with source-spellable names.
+      Partial method inference substitutes canonical enclosing impl bindings.
       Delivered body-local structural union-find constraints: later inherent
       receiver uses, assignments and call parameters solve nested generic local
       bindings before lowering, with i32/f64 defaults and E0282 for unresolved

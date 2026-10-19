@@ -11,6 +11,8 @@ mod generic_placeholders;
 mod inferred_owner;
 #[path = "local_literals.rs"]
 mod local_literals;
+#[path = "type_check/method_owner.rs"]
+mod method_owner;
 #[path = "type_check/partial_annotation.rs"]
 pub(super) mod partial_annotation;
 #[path = "try_operator.rs"]
@@ -6314,7 +6316,16 @@ impl<'a> Checker<'a> {
                             "deferred declarations require a concrete supported source type".into(),
                         );
                     }
-                    let ty = checked_local_ty(ty, self.signatures)?;
+                    let ty = if partial_annotation::has_nested_infer(ty) {
+                        let inferred = literal_hints
+                            .get(&(s as *const Stmt as usize))
+                            .cloned()
+                            .ok_or("E0282: deferred type annotation remains unresolved")?;
+                        partial_annotation::matches_partial(ty, &inferred, self.signatures)?;
+                        inferred
+                    } else {
+                        checked_local_ty(ty, self.signatures)?
+                    };
                     self.accessible(&ty)?;
                     let local = self.local(name, ty, *mutable)?;
                     if let Some(cap) = self.canonical {

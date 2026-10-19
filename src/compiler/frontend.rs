@@ -9218,10 +9218,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         // Its spelling cannot be written by source as an identifier.
         let site = panic_callsite(self.names.session(), token.span)
             .map_err(native_adapter::transport_error)?;
-        let spelling = format!("impl_{}", minted.len());
         let name = self
             .names
-            .intern_root(&spelling, site)
+            .anonymous_impl_parameter(site, minted.len())
             .map_err(native_adapter::name_error)?;
         self.cursor.bump();
         let mut traits = Vec::new();

@@ -931,6 +931,7 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 Stmt::Declare { name, ty, .. } => {
                     let term = self.source_ty(ty)?;
+                    self.sites.push((stmt as *const Stmt as usize, term));
                     self.bind(name, term)?;
                 }
                 Stmt::LetPattern { pattern, ty, value } => {

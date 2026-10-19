@@ -156,11 +156,23 @@ impl Checker<'_> {
             {
                 continue;
             }
-            if candidate.replace(*id).is_some() {
+            let impl_env = plan.param_env(associated.impl_decl)?;
+            let mut bindings = HashMap::new();
+            if !match_impl_type(
+                &associated.self_pattern,
+                root,
+                &impl_env,
+                &mut bindings,
+                &plan.budget,
+                0,
+            )? {
+                continue;
+            }
+            if candidate.replace((*id, bindings)).is_some() {
                 return Ok(None);
             }
         }
-        let Some(id) = candidate else {
+        let Some((id, owner_bindings)) = candidate else {
             return Ok(None);
         };
         let info = plan.declaration(id)?;
@@ -190,7 +202,11 @@ impl Checker<'_> {
             }
         }
         if let Some(expected) = expected {
-            let formal = solver.schema(&schema.signature.result, 0)?;
+            let formal = self.method_owner_term(
+                &solver.schema(&schema.signature.result, 0)?,
+                &owner_bindings,
+                0,
+            )?;
             let actual = self.infer_type_term(expected, None, 0)?;
             solver.constrain(&formal, &actual, 0)?;
         }
@@ -203,7 +219,10 @@ impl Checker<'_> {
             let Ok(evidence) = self.inference_evidence(expr, 0) else {
                 return Ok(None);
             };
-            let Ok(formal) = solver.schema(formal, 0) else {
+            let Ok(formal) = solver
+                .schema(formal, 0)
+                .and_then(|term| self.method_owner_term(&term, &owner_bindings, 0))
+            else {
                 return Ok(None);
             };
             if solver.constrain(&formal, &evidence, 0).is_err() {

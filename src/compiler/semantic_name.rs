@@ -496,6 +496,29 @@ impl NameStoreBuilder {
         })
     }
 
+    /// A source cannot name the anonymous generic introduced by argument
+    /// `impl Trait`, even when it declares an ordinary parameter `impl_0`.
+    pub(crate) fn anonymous_impl_parameter(
+        &mut self,
+        origin: SpanId,
+        ordinal: usize,
+    ) -> Result<AstIdent, NameError> {
+        self.check_origin(origin)?;
+        let spelling = self
+            .store
+            .session
+            .intern_symbol(&format!("$impl_trait${ordinal}"))?;
+        self.append(NameData {
+            atom: NameAtomId(spelling),
+            spelling,
+            context: self.session().root_context(),
+            span: origin,
+            raw: false,
+            edition: self.edition(),
+            anonymous_closure: false,
+        })
+    }
+
     fn check_ascii(text: &str, budget: &ExpansionBudget) -> Result<(), NameError> {
         let work = (text.len() as u64)
             .checked_mul(2)
