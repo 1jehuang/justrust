@@ -270,3 +270,10 @@ pub fn __jr_vec_seed<T>(first: T, capacity: usize) -> Vec<T> {
     v.push(first);
     v
 }
+
+impl<T> super::ops::Index<usize> for Vec<T> {
+    type Output = T;
+    fn index(&self, index: usize) -> &T {
+        self.get_ref(index)
+    }
+}

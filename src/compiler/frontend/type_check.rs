@@ -1016,6 +1016,10 @@ impl<'s> Checker<'s> {
             Expr::Borrow { kind, place } => {
                 plan.budget.charge_work(place.fields.len() + 1)?;
                 self.infer_storage(place.fields.len() + 1)?;
+                if let Some(ir::Ty::Ref { referent, .. }) = self.static_index_borrow_hint(place)? {
+                    let inner = self.infer_type_term(&referent, None, depth + 1)?;
+                    return self.infer_node(InferKind::Ref(*kind, inner));
+                }
                 let (_, referent, _) = self.checked_place(place)?;
                 self.validate_borrow_referent(*kind, &referent)?;
                 let inner = self.infer_type_term(&referent, None, depth + 1)?;
@@ -4267,6 +4271,16 @@ impl<'a> Checker<'a> {
                     referent: Arc::new(referent),
                 })
             }
+            Expr::Borrow { kind, place } => {
+                if let Some(ir::Ty::Ref { referent, .. }) = self.static_index_borrow_hint(place)? {
+                    Some(ir::Ty::Ref {
+                        kind: *kind,
+                        referent,
+                    })
+                } else {
+                    None
+                }
+            }
             Expr::Integer(literal) => literal.suffix.map(ir::Ty::Int),
             Expr::Float(literal) => literal.suffix.map(ir::Ty::Float),
             Expr::Bool(_) => Some(ir::Ty::Bool),
@@ -4388,7 +4402,24 @@ impl<'a> Checker<'a> {
                             )?;
                             Some(element.clone())
                         } else {
-                            None
+                            let literal;
+                            let index = match e {
+                                Expr::DynamicIndex { index, .. } => index.as_ref(),
+                                Expr::Index { index, .. } => {
+                                    literal = Expr::Integer(IntegerLiteral {
+                                        magnitude: *index as u128,
+                                        suffix: None,
+                                    });
+                                    &literal
+                                }
+                                _ => unreachable!(),
+                            };
+                            match self.index_reference_hint(&ty, index)? {
+                                Some(ir::Ty::Ref { referent, .. }) => {
+                                    Some(referent.as_ref().clone())
+                                }
+                                _ => None,
+                            }
                         }
                     }
                     _ => None,
@@ -5998,6 +6029,9 @@ impl<'a> Checker<'a> {
         for s in &b.statements {
             self.reachable = entered_reachable && live;
             let (statement, completes) = match s {
+                _ if let Some(result) = self.overloaded_index_assignment(s, &mut statements)? => {
+                    result
+                }
                 Stmt::Declare { name, ty, mutable } => {
                     if matches!(ty, Type::Infer) {
                         let BindingName::Named(name) = name else {
@@ -7053,6 +7087,9 @@ impl<'a> Checker<'a> {
             Expr::TraitCall { .. } | Expr::MethodCall { .. } | Expr::AssociatedCall { .. }
         ) {
             return self.associated_expression(e, expectation.hard());
+        }
+        if let Some(id) = self.overloaded_index_borrow(e)? {
+            return Ok(id);
         }
         if matches!(
             e,
