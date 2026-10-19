@@ -57,3 +57,11 @@ fn missing_deref_is_rejected() {
         "struct W { v: i32 } fn main() { let w = W { v: 1 }; let x = *w; println!(\"{}\", x); }";
     assert!(compiler::compile(source.into(), 1, true).is_err());
 }
+
+#[test]
+fn box_deref() {
+    run(
+        "fn main() { let b = Box::new(5); let x = *b + 1; println!(\"{}\", x); }",
+        "6\n",
+    );
+}

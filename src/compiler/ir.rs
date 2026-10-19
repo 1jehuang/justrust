@@ -5355,7 +5355,12 @@ fn ref_type_walk(
         // element domain. Neither can be enumerated as fixed input paths.
         // Their original lifetime/kind-qualified input envelope remains the
         // authority for returned references, checked against actual body loans.
-        let mut opaque = matches!(ty, Ty::Param(_) | Ty::Dyn(_) | Ty::Slice { .. });
+        // Raw pointees (Box, Vec storage) are likewise reachable only through
+        // the pointer, never as a field path of the input.
+        let mut opaque = matches!(
+            ty,
+            Ty::Param(_) | Ty::Dyn(_) | Ty::Slice { .. } | Ty::RawPtr { .. }
+        );
         let mut height = 0;
         let mut child = |value: &Ty| -> Result<(), String> {
             let (is_opaque, child_height) = walk(value, false, budget, depth + 1, visits, memo)?;

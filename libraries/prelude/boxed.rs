@@ -50,3 +50,10 @@ impl<T> Drop for Box<T> {
         raw_free(p as usize, if bytes == 0usize { 8usize } else { bytes });
     }
 }
+
+impl<T> super::ops::Deref for Box<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        unsafe { &*self.ptr }
+    }
+}
