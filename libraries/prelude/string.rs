@@ -339,7 +339,19 @@ impl Clone for String {
 pub trait ToString {
     fn to_string(&self) -> String;
 }
-impl<T: super::fmt::Display + ?Sized> ToString for T {
+// `T: Sized` here plus a direct `str` impl: the compiler does not yet
+// instantiate generic impls with unsized actuals.
+// Stopgap until unsized blanket instantiation: `str::to_string` comes from
+// this separate prelude trait (same method name, disjoint Self types).
+pub trait StrToString {
+    fn to_string(&self) -> String;
+}
+impl StrToString for str {
+    fn to_string(&self) -> String {
+        String::from(self)
+    }
+}
+impl<T: super::fmt::Display> ToString for T {
     fn to_string(&self) -> String {
         let mut f = super::fmt::Formatter::new();
         let _ = self.fmt(&mut f);

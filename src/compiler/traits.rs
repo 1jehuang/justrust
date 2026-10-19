@@ -5954,6 +5954,17 @@ impl ValidatedTraitWorld {
             if !matches {
                 continue;
             }
+            // Generic impl parameters are instantiated only with sized
+            // actuals (unsized generic instantiation is not supported). An
+            // implicitly-Sized parameter cannot bind `str`/`[T]`/`dyn` anyway,
+            // so such a candidate does not apply rather than erroring.
+            if slots
+                .iter()
+                .flatten()
+                .any(|actual| matches!(actual, Ty::Str | Ty::Slice { .. } | Ty::Dyn(_)))
+            {
+                continue;
+            }
             let mut args = Vec::new();
             for slot in slots {
                 push(
