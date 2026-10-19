@@ -205,6 +205,55 @@ fits GRAPH-INTEGRITY.md (engine internals are allowed). It needs coordinator
 approval because it reinterprets "structural derivation" as "engine-issued,
 recorded alongside the structural path".
 
+#### Option 2 exact API and accounting (for approval)
+
+Engine (`src/engine.rs`):
+
+- `Shared` gains one field, `next_owner_tag: AtomicU64`, starting at 1. This
+  is engine-internal state; GRAPH-INTEGRITY.md allows engine internals, and
+  the compiler-code scan does not cover `src/engine.rs`.
+- The tag space is shared by every engine and by standalone work, so it stays
+  globally unique across live roots. One process-wide engine-module counter
+  replaces the eight compiler statics. A per-`Shared` counter alone would let
+  two engines collide.
+- `pub struct OwnerTag(NonZeroU64)`: `Copy`, 8 bytes, no public constructor,
+  no conversion from `OwnerPath` or from integers. Only the engine mints one.
+- Minting is reachable only through `OwnerIssuer::issue`. The issuer holds a
+  private engine `TagMint` capability, taken from the `OwnerRoot` it consumed
+  (`Context::owner_root` or `OwnerRoot::standalone`). `TagMint` is neither
+  `Clone` nor public.
+- Allocation goes through `allocate_graph_id`: checked CAS, fails closed at
+  exhaustion, never wraps.
+
+Compiler (`src/compiler/owner_path.rs`):
+
+- `OwnerIssuer::issue(domain) -> Result<Issued, OwnerError>`, where
+  `Issued { issuer: OwnerIssuer, tag: OwnerTag }`. The child path and its tag
+  are created together, in one paid step.
+- Containers (`TokenSession`, `NameStore` via session, `ModuleArena`,
+  `ScopeArena`, both macro drivers, `TokenSlice`, `PreparedView`) store
+  `(tag, OwnerPath)`. Handles keep 8 bytes and compare `tag`; layouts are
+  unchanged (`AstIdent` stays 16 bytes).
+- Published facts carry `OwnerPath` as the authority of record. The tag is a
+  lookup accelerator that is never published alone.
+
+Accounting:
+
+- The tag is 8 bytes stored inside an already paid container, so no new
+  retained storage. Issuing charges `Work(1)` for the tag plus the existing
+  path charge, both before allocation.
+- No new budget handle: `TagMint` holds no budget, and published paths still
+  carry only `RetainedBytes`.
+
+Removal in the activating commit: the eight `static NEXT`/`allocate_identity`
+sites listed above, then `GRAPH_INTEGRITY_SHRINK=1` to record the smaller
+baseline. Gates before the commit: `tests/owner_authority.rs` (identical
+direct parses with grafted handles reject, swapped stores reject, concurrent
+roots distinct), new cases where two engines and two sibling sessions issue
+the same domain sequence and a cross-graft rejects, and
+`owner_path_reaches_no_mutable_state`, plus workers 1/8 targeted suites only
+while the main CPU window is reserved.
+
 ## Coordination
 
 - Kind ids reserved by cricket: 121 `PARSE_FILE`, 122 `MODULE_INDEX`,
