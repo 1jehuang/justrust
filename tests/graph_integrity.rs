@@ -651,10 +651,10 @@ const WORK_GROWTH_CEILING: f64 = 1.81;
 
 /// The largest generated program that must compile. Raise as fixed; the
 /// architectural target is no fixed program-size ceiling at all.
-const REQUIRED_FUNCTIONS: usize = 540;
+const REQUIRED_FUNCTIONS: usize = 996;
 /// Known to fail today because whole-compilation budgets cap total program
 /// size. When it compiles, this test fails until the constant is raised.
-const KNOWN_FAILING_FUNCTIONS: Option<usize> = Some(570);
+const KNOWN_FAILING_FUNCTIONS: Option<usize> = Some(997);
 
 struct Graph {
     keys: HashMap<u64, (String, Vec<u64>)>,
@@ -847,10 +847,16 @@ fn program_size_ceiling_ratchet() {
                  KNOWN_FAILING_FUNCTIONS to the next failing size (or None) in \
                  tests/graph_integrity.rs."
             ),
-            Err(failure) => assert!(
-                failure.resource_usage.first_failure.is_some(),
-                "{count} functions failed for a reason other than resource limits: {failure}"
-            ),
+            Err(failure) => {
+                eprintln!(
+                    "size probe {count}: {:?}",
+                    failure.resource_usage.first_failure
+                );
+                assert!(
+                    failure.resource_usage.first_failure.is_some(),
+                    "{count} functions failed for a reason other than resource limits: {failure}"
+                );
+            }
         }
     }
 }
