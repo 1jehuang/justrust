@@ -157,10 +157,10 @@ impl Checker<'_> {
             return Ok(None);
         };
         let info = plan.declaration(id)?;
+        let schema = plan.function_schema(id)?;
         if info.param_env.arity() == 0 {
             return Ok(None);
         }
-        let schema = plan.function_schema(id)?;
         let params = &schema.signature.params;
         let formals = match params.len().checked_sub(args.len()) {
             Some(0) => &params[..],
@@ -169,7 +169,14 @@ impl Checker<'_> {
         };
         let mut solver = Inference::new(self, info.param_env.clone())?;
         for (formal, expr) in formals.iter().zip(args) {
-            let evidence = self.inference_evidence(expr, 0)?;
+            // Arguments that do not mention a method parameter carry no
+            // evidence; skip them (they are checked normally afterwards).
+            if !mentions_param(formal) {
+                continue;
+            }
+            let Ok(evidence) = self.inference_evidence(expr, 0) else {
+                return Ok(None);
+            };
             let Ok(formal) = solver.schema(formal, 0) else {
                 return Ok(None);
             };
@@ -178,5 +185,19 @@ impl Checker<'_> {
             }
         }
         Ok(solver.finish(true).ok().flatten())
+    }
+}
+
+fn mentions_param(ty: &ir::Ty) -> bool {
+    match ty {
+        ir::Ty::Param(_) => true,
+        ir::Ty::Ref { referent, .. } => mentions_param(referent),
+        ir::Ty::RawPtr { pointee, .. } => mentions_param(pointee),
+        ir::Ty::Array { element, .. } | ir::Ty::Slice { element } => mentions_param(element),
+        ir::Ty::Tuple(fields) => fields.iter().any(mentions_param),
+        ir::Ty::Struct(t) => t.def().type_args.iter().any(mentions_param),
+        ir::Ty::Enum(t) => t.def().type_args.iter().any(mentions_param),
+        ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool | ir::Ty::Char | ir::Ty::Str | ir::Ty::Unit | ir::Ty::Never => false,
+        _ => true,
     }
 }

@@ -1791,6 +1791,9 @@ impl CarrierBuilder<'_, '_> {
             if !matched_cell && failure.is_none() {
                 failure = Some(ResolutionFailure::EmptyOrigins);
             }
+            if matches!(channel, CellChannel::ParamFamily(_)) {
+                failure = None;
+            }
             if let Some(failure) = failure.filter(|_| self.diagnosing) {
                 self.problem(
                     self.f.entry,
@@ -2280,6 +2283,12 @@ impl CarrierBuilder<'_, '_> {
         }
         if !matched_cell && failure.is_none() {
             failure = Some(ResolutionFailure::EmptyOrigins);
+        }
+        // Generic actuals are never references (ir validate_argument), so a
+        // type-parameter family carries no loan origins; a missing family
+        // cell behind a borrowed or returned reference is simply empty.
+        if matches!(channel, CellChannel::ParamFamily(_)) {
+            failure = None;
         }
         if let Some(failure) = failure.filter(|_| self.diagnosing) {
             self.problem(

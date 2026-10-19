@@ -2766,6 +2766,10 @@ impl Transfer<'_> {
                         &source.projection,
                     )
                     .is_none()
+                    // A reborrow through a reference whose provenance is
+                    // unbounded (derived from a raw pointer) has no tracked
+                    // canonical target; borrow resolution admits it.
+                    && !source.projection.contains(&Projection::Deref)
                 {
                     self.problem(
                         Problem::Invalid("borrow issuance has no canonical provenance".into()),

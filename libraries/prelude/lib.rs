@@ -16,3 +16,4 @@ pub mod ops;
 //pub mod default;
 //pub mod hash;
 pub mod string;
+//pub mod fmt; // gated until per-task Work budget lands

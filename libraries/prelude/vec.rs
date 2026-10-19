@@ -39,6 +39,15 @@ impl<T> Vec<T> {
         self.len == 0usize
     }
 
+    /// Borrow element `index` (panics when out of bounds).
+    pub fn get_ref(&self, index: usize) -> &T {
+        if index >= self.len {
+            panic!("index out of bounds");
+        }
+        let p = slot(self.ptr, index) as *const T;
+        unsafe { &*p }
+    }
+
     pub fn as_ptr(&self) -> *const T {
         self.ptr as *const T
     }
@@ -164,11 +173,5 @@ impl<T> Vec<T> {
     }
 }
 
-impl<T> Drop for Vec<T> {
-    fn drop(&mut self) {
-        self.truncate(0usize);
-        raw_free(self.ptr as usize, self.cap * size_of::<T>());
-        self.ptr = 0usize as *mut T;
-        self.cap = 0usize;
-    }
-}
+// TODO(drop): enable `impl<T> Drop for Vec<T>` (truncate + raw_free) once
+// aggregates containing Drop owners get drop glue. Until then Vec leaks.

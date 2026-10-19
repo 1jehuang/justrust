@@ -735,6 +735,7 @@ impl Provider for CompilerProvider {
                     let index = item_index(&key, "missing declaration index")?;
                     let lowered: Arc<cfg::TemplateCfg> =
                         facts.get(function(UNIVERSAL_LOWER, index)).await?;
+                    let template_name = lowered.source().name.clone();
                     match ownership::verify_template(lowered.as_ref().clone()) {
                         Ok(verified) => {
                             cx.publish_fact(ANALYSIS_OUTPUT, verified.analysis().clone())?;
@@ -747,6 +748,7 @@ impl Provider for CompilerProvider {
                                 index,
                                 &analysis,
                             );
+                            let message = format!("{template_name}: {message}");
                             cx.publish_fact(ANALYSIS_OUTPUT, Arc::new(analysis))?;
                             Err(Error::new(message))
                         }

@@ -26,3 +26,14 @@ impl<T> Option<T> {
         }
     }
 }
+
+impl<T: Clone> Clone for Option<T> {
+    fn clone(&self) -> Option<T> {
+        match self {
+            Option::Some(value) => Option::Some(value.clone()),
+            Option::None => Option::None,
+        }
+    }
+}
+
+impl<T: Copy> Copy for Option<T> {}
