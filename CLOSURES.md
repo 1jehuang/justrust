@@ -15,6 +15,25 @@ programs with 124 explicit native CHECK/BUILD cells. Its first successful
 worker-1/8 execution is new evidence, not a retroactive description of the old
 oracle runs.
 
+## Canonical method source owners
+
+Stored closures in implementation bodies retain their exact implementation/item
+ordinal, and trait default bodies retain their trait/item ordinal. These resolve
+to the registered callable declaration, not a free function with the same method
+spelling. The resolver publishes immutable closure syntax only after all existing
+free/default/implementation body rewrites finish. Placeholder adapter bodies cannot
+overwrite already resolved default syntax. Ownership replay checks the original
+publication, canonical ordinal and occurrence in that selected body's retained
+syntax, including nested stored syntax. Foreign publications and wrong owner
+ordinals reject.
+
+`tests/closure_method_parents.rs` exercises ordinary associated functions, shared
+self captures, equal-spelling methods in distinct implementations and unused bad
+closure bodies with explicit worker-1/8 CHECK/BUILD/run. Generic implementation
+and trait-default source ownership have metadata controls, but their executable
+closure bodies still require the unfinished inherited provider environment.
+This source ownership fix does not complete generic-parent closure support.
+
 ## Stored closure support
 
 Stored closures can borrow shared and mutable scalar locals and owned aggregate

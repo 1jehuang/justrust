@@ -80,6 +80,7 @@ struct Resolver<'a> {
     resolved_closures: HashMap<PathKey, closures::ClosureSource>,
     resolved_closure_owners: HashMap<PathKey, Vec<PathKey>>,
     current_function_name: Option<AstPath>,
+    current_callable: Option<CallableSource>,
     /// Keys of `static mut` accessor functions (see static_mut.rs).
     static_muts: std::collections::HashSet<PathKey>,
     /// `use prefix::*;` declarations, consulted after explicit bindings.
@@ -3856,6 +3857,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         resolved_closures: HashMap::new(),
         resolved_closure_owners: HashMap::new(),
         current_function_name: None,
+        current_callable: None,
     };
     for (bucket, items) in &parsed.items {
         for item in items {
@@ -4115,6 +4117,10 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                     resolver.ty(ty, declaration.module)?;
                 }
                 if let Some(function) = &mut item.default {
+                    resolver.current_callable = Some(CallableSource::TraitDefault {
+                        trait_index: source_index,
+                        item: item_index,
+                    });
                     clone_vector(&declaration.type_params, &resolver.alias_budget)?;
                     resolver.type_params = declaration.type_params.clone();
                     resolver.charge_entries::<AstIdent>(function.type_params.len())?;
@@ -4173,6 +4179,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         }
     }
     for index in function_order {
+        resolver.current_callable = Some(CallableSource::Free(index));
         let function = &mut program.functions[index];
         // Local/free declarations are collected separately by the frontend.
         // None may inherit a preceding trait/default/impl Self owner.
@@ -4208,14 +4215,6 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
             Ok(())
         })?;
     }
-    program.closure_sources = Arc::new(resolver.resolved_closures.clone());
-    program.closure_owners = Arc::new(
-        resolver
-            .resolved_closure_owners
-            .iter()
-            .map(|(key, children)| (key.clone(), children.clone().into()))
-            .collect(),
-    );
     for (source_index, block) in program.impls.iter_mut().enumerate() {
         let owner = if block.trait_path.is_some() {
             SourceOwnerContext::TraitImpl { source_index }
@@ -4245,7 +4244,11 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                 validate_depth(DepthNode::Type(&associated.value))?;
                 resolver.ty(&mut associated.value, block.module)?;
             }
-            for item in &mut block.items {
+            for (item_index, item) in block.items.iter_mut().enumerate() {
+                resolver.current_callable = Some(CallableSource::Associated {
+                    implementation: source_index,
+                    item: item_index,
+                });
                 let function = &mut item.function;
                 resolver.type_params = block.type_params.clone();
                 for name in &function.type_params {
@@ -4266,6 +4269,16 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
             Ok(())
         })?;
     }
+    // Closure syntax is final only after free, default and implementation bodies
+    // have all been resolved by this producer. No child can observe a partial map.
+    program.closure_sources = Arc::new(resolver.resolved_closures.clone());
+    program.closure_owners = Arc::new(
+        resolver
+            .resolved_closure_owners
+            .iter()
+            .map(|(key, children)| (key.clone(), children.clone().into()))
+            .collect(),
+    );
     // The input program was checked against parser-issued source certificates
     // before resolution. Only this canonical rewrite can publish resolved heads.
     program.generated_owners = generated_owners::capture(&program)?;
@@ -4376,6 +4389,7 @@ mod associated_projection_tests {
             resolved_closures: HashMap::new(),
             resolved_closure_owners: HashMap::new(),
             current_function_name: None,
+            current_callable: None,
             static_muts: Default::default(),
             globs: &[],
             active_globs: Default::default(),

@@ -58,18 +58,10 @@ impl SchemaAdapter {
         let Some(stored) = &source.stored else {
             return Ok(None);
         };
-        let parent = source
-            .parent
-            .as_ref()
-            .ok_or_else(|| self.error("stored closure lacks its original parent".to_owned()))?;
-        let key =
-            name_scope::path_key(self.registry.names.as_ref(), &parent.name, Namespace::Value)
-                .map_err(|e| self.error(e))?;
-        let owner = *self
+        let owner = self
             .registry
-            .functions
-            .get(&key)
-            .ok_or_else(|| self.error("stored closure parent is not a callable".to_owned()))?;
+            .closure_source_owner(source)
+            .map_err(|e| self.error(e))?;
         Ok(Some((owner, stored.site)))
     }
 }

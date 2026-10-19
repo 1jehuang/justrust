@@ -15436,6 +15436,7 @@ pub struct DeclRegistry {
     /// Canonical embedded iter module declarations, indexed during registration.
     native_iterator_traits: [Option<ir::DeclId>; 2],
     trait_items: Vec<Vec<ir::DeclId>>,
+    trait_default_callables: HashMap<(usize, usize), ir::DeclId>,
     trait_associated_types: Vec<Vec<ir::DeclId>>,
     associated_type_bounds: HashMap<ir::DeclId, FrozenAssociatedBounds>,
     trait_imports: Vec<(ModuleId, TraitPath)>,
@@ -15460,7 +15461,7 @@ enum GenericBindingKey {
     Param(NameKey),
     SelfType,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CallableSource {
     Free(usize),
     Associated { implementation: usize, item: usize },
@@ -16331,6 +16332,7 @@ impl PlanCtx {
             trait_ids: Vec::new(),
             native_iterator_traits: [None; 2],
             trait_items: Vec::new(),
+            trait_default_callables: HashMap::new(),
             trait_associated_types: Vec::new(),
             associated_type_bounds: HashMap::new(),
             trait_imports: program.trait_imports.clone(),
@@ -16421,6 +16423,7 @@ impl PlanCtx {
                     .insert(TraitLookupKey::Builtin(canonical), entry.declaration);
             }
         }
+        let mut default_callable_count = 0usize;
         let declarations = program
             .functions
             .len()
@@ -16429,11 +16432,9 @@ impl PlanCtx {
             .and_then(|n| n.checked_add(program.enums.len()))
             .and_then(|n| {
                 program.traits.iter().try_fold(n, |n, t| {
-                    n.checked_add(
-                        1 + t.items.len()
-                            + t.associated_types.len()
-                            + t.items.iter().filter(|i| i.default.is_some()).count(),
-                    )
+                    let defaults = t.items.iter().filter(|i| i.default.is_some()).count();
+                    default_callable_count = default_callable_count.checked_add(defaults)?;
+                    n.checked_add(1 + t.items.len() + t.associated_types.len() + defaults)
                 })
             })
             .and_then(|n| {
@@ -16443,6 +16444,11 @@ impl PlanCtx {
                     .try_fold(n, |n, b| n.checked_add(1 + b.items.len()))
             })
             .ok_or("generic declaration resource overflow")?;
+        reserve_registry_map(
+            &mut registry.trait_default_callables,
+            default_callable_count,
+            budget,
+        )?;
         budget.charge_nodes(declarations)?;
         state.reservations.push(
             budget.reserve_bytes(
@@ -16706,6 +16712,13 @@ impl PlanCtx {
                         trait_index: index,
                         item,
                     };
+                    if registry
+                        .trait_default_callables
+                        .insert((index, item), id)
+                        .is_some()
+                    {
+                        return Err("duplicate canonical trait default callable".into());
+                    }
                     if program.in_prelude(declaration.module) {
                         prelude_callables.push((id, source));
                     } else {

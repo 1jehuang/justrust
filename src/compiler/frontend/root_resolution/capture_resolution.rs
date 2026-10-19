@@ -42,6 +42,12 @@ impl Resolver<'_> {
         let Some(source) = self.active_closure.take() else {
             return Ok(());
         };
+        // A stored adapter's placeholder body is not its closure syntax. The
+        // actual parent resolver publishes that syntax, including exact method
+        // ownership, and may already have done so for an earlier trait default.
+        if source.stored.is_some() {
+            return Ok(());
+        }
         if !source.captures.is_empty() {
             self.charge_entries::<(BindingName, Type)>(source.captures.len())?;
             function

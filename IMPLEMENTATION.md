@@ -599,6 +599,12 @@ cleanup failures.
       signature hints do not grant written coercion authority. Reference-bearing
       closure results explicitly reject pending exact carrier-origin contracts.
       Generic-parent closures, opaque returns and iterator integration remain open.
+      Implementation/default closure syntax now retains canonical owner ordinals
+      and selected-body occurrence authority, with final resolver publication
+      after all existing body rewrites. Ordinary associated/shared-self/equal-name
+      method closures and unused invalid bodies have worker-1/8 acceptance
+      (`tests/closure_method_parents.rs`). Generic/default owner metadata is
+      covered separately, not executable generic-parent support.
 - [ ] Extend monomorphization/recursive instance planning to the new forms while
       retaining universal checks, binder-qualified substitution and sealed native
       instances. Optimization must not bypass unused-body validation. Shared

@@ -287,17 +287,7 @@ impl PlanCtx {
         let Some(syntax) = &source.stored else {
             return Ok(None);
         };
-        let parent = source
-            .parent
-            .as_ref()
-            .ok_or("stored closure lacks parent")?;
-        let key =
-            name_scope::path_key(self.program.names.as_ref(), &parent.name, Namespace::Value)?;
-        let owner = *self
-            .registry
-            .functions
-            .get(&key)
-            .ok_or("stored closure owner unavailable")?;
+        let owner = self.registry.closure_source_owner(source)?;
         Ok(Some((owner, syntax.site)))
     }
 }

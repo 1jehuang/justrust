@@ -148,6 +148,7 @@ impl Parser<'_, '_> {
             name: name.clone(),
             environments: Vec::new(),
             parent,
+            owner_source: None,
             by_move,
             captures: Vec::new(),
             stored: Some(StoredClosureSyntax {

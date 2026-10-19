@@ -15,11 +15,15 @@ impl Resolver<'_> {
         let Some(mut source) = self.program.closure_sources.get(&key).cloned() else {
             return Ok(false);
         };
+        if source.parent.is_none() {
+            source.owner_source = self.current_callable;
+        }
         let Some(syntax) = &mut source.stored else {
             return Ok(false);
         };
         let previous_scope = self.lexical_function;
         let previous_anonymous = self.anonymous_closure_body;
+        let previous_callable = self.current_callable.take();
         self.lexical_function = syntax.lexical_scope;
         self.anonymous_closure_body = false;
         let previous_depth = locals.len();
@@ -42,6 +46,7 @@ impl Resolver<'_> {
         locals.truncate(previous_depth);
         self.lexical_function = previous_scope;
         self.anonymous_closure_body = previous_anonymous;
+        self.current_callable = previous_callable;
         result?;
         self.resolved_closures.insert(key, source);
         Ok(true)

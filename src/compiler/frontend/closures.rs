@@ -6,6 +6,7 @@ mod capture_rewrite;
 mod capture_use;
 pub(in crate::compiler) mod check;
 mod fn_sugar;
+mod owner_source;
 mod prepare;
 pub(super) mod stored;
 mod trait_source;
@@ -32,6 +33,7 @@ pub(super) struct ClosureSource {
     pub name: AstPath,
     pub environments: Vec<AstIdent>,
     pub parent: Option<ClosureParent>,
+    pub owner_source: Option<CallableSource>,
     pub by_move: bool,
     pub captures: Vec<SourceCapture>,
     pub stored: Option<StoredClosureSyntax>,
@@ -195,6 +197,7 @@ impl Parser<'_, '_> {
             name: name.clone(),
             environments,
             parent,
+            owner_source: None,
             by_move,
             captures: Vec::new(),
             stored: None,
