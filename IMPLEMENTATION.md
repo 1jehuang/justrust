@@ -288,6 +288,10 @@ missing-file changes invalidate only justified consumers without stale lookup.
 
 ### G2. Typed values, patterns, inference and control flow
 
+- [x] Cast/repeat source-inventory chains traverse without recursive large
+      dispatch frames, retaining original occurrence authority and unchanged
+      nesting/resource checks (INTEGER-CASTS.md).
+
 - [x] Native i128/u128 scalar arithmetic, numeric casts, transport and exact
       typed constants under INTEGER128.md (not platform ABI or full Rust).
 - [x] Bounded Unicode `char` literals, scalar transport, Copy/Clone/Sized and comparisons (CHARS.md). Character casts `char as int`/`u8 as char` are implemented (CHAR-CASTS.md).

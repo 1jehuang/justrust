@@ -38,6 +38,7 @@ mod name_scope;
 mod name_validation;
 mod pattern_usefulness;
 mod program_symbols;
+mod source_inventory_walk;
 mod source_schemas;
 use source_schemas::{SourceSchemas, SourceSchemasBuilder, StoredSchema};
 mod token_cursor;
@@ -1823,7 +1824,7 @@ impl SourceInventory {
         self.scopes.pop();
         Ok(())
     }
-    fn expr(
+    fn expr_branch(
         &mut self,
         expr: &Expr,
         node: &sr::SourceNode,
@@ -1832,21 +1833,6 @@ impl SourceInventory {
         budget: &ir::PlanBudget,
         depth: usize,
     ) -> Result<(), FactsError> {
-        sr::depth(budget, depth)?;
-        sr::work(budget, 1)?;
-        if deref_coercion::candidate(expr)
-            && !self
-                .call_pointers
-                .contains_key(&deref_coercion::site(expr as *const Expr as usize, 1))
-        {
-            for step in 1..=deref_coercion::MAX_DEREF_STEPS {
-                self.operator_site(
-                    deref_coercion::site(expr as *const Expr as usize, step),
-                    node,
-                    budget,
-                )?;
-            }
-        }
         match expr {
             Expr::UnexpandedMacro(_) => {
                 return Err(source_error(

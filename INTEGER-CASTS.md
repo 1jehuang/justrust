@@ -13,6 +13,14 @@ foundation source 4957a0e7d and evidence
 5004e9bdd delivered 1,021 hosted tests and 784 tracked native differential cases.
 Full Rust remains the requested goal, not a claim made by these bounded gates.
 
+## Normal-stack regression repair (2026-10-19)
+
+Source inventory walks cast/repeat operand chains iteratively, preserving each
+original occurrence path and depth/work check without retaining the large
+branch-dispatch frame. The existing 120-cast acceptance and 140-cast nesting
+rejection remain unchanged. A nested repeat/cast call regression also checks
+canonical source validation and rejects a forged cast target.
+
 ## Scope and exact shared API
 
 Support `as` between all ten existing IntTy primitives, all 100 type pairs.
