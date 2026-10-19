@@ -63,3 +63,9 @@ wide-integer semantic checks and all graph ratchets remain unchanged.
 
 Formatting and diff checks passed. These four scoped records are retained
 alongside the earlier eleven, not unrelated runs from the shared database.
+
+Repair commit `3ea914ac0` was composed with concurrent stack/engine/canonical
+fixes through `f9f902099` and pushed as merge `caec45370`. Final composed hosted
+engine/canonical-copy/graph/inference/wide/corpus validation passed all 63 tests
+(`20261018-195552250-1435084`), then strict all-target clippy passed
+(`20261018-195602800-1437939`). Both final receipts are retained here as well.
