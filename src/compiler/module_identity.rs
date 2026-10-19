@@ -516,10 +516,10 @@ mod tests {
     fn names(budget: ExpansionBudget) -> (NameStoreBuilder, SpanId) {
         let source = SourceSnapshot::from_text(Path::new("modules.rs"), "", &budget).unwrap();
         let original = source.span(source.file(0).unwrap(), 0, 0).unwrap();
-        let mut session = TokenSession::new(source, budget).unwrap();
+        let (mut session, session_cap) = TokenSession::standalone(source, budget).unwrap();
         let origin = session.original_span(original).unwrap();
         (
-            NameStoreBuilder::new(session, Edition::E2024).unwrap(),
+            NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap(),
             origin,
         )
     }

@@ -200,8 +200,9 @@ fn builtin_matches_guard_source_separators_and_invalid_syntax() {
 #[test]
 fn builtin_matches_guard_storage_failure_is_poisoned_and_released() {
     use super::super::expansion_budget::{BudgetResource, Storage};
-    let (tokens, session) = lex("matches!(1,1 if true)").unwrap().into_parts();
-    let mut names = NameStoreBuilder::new(session, super::super::token::Edition::E2024).unwrap();
+    let (tokens, session, session_cap) = lex("matches!(1,1 if true)").unwrap().into_parts();
+    let mut names =
+        NameStoreBuilder::new(session, session_cap, super::super::token::Edition::E2024).unwrap();
     let budget = names.budget().clone();
     let mut parser = Parser::new(&tokens, &mut names).unwrap();
     let snapshot = budget.snapshot();
@@ -1855,8 +1856,9 @@ fn builtin_assert_foreign_failure_site_is_rejected() {
 #[test]
 fn builtin_assert_storage_failure_is_poisoned_and_released() {
     use super::super::expansion_budget::{BudgetResource, Storage};
-    let (tokens, session) = lex("assert!(true)").unwrap().into_parts();
-    let mut names = NameStoreBuilder::new(session, super::super::token::Edition::E2024).unwrap();
+    let (tokens, session, session_cap) = lex("assert!(true)").unwrap().into_parts();
+    let mut names =
+        NameStoreBuilder::new(session, session_cap, super::super::token::Edition::E2024).unwrap();
     let budget = names.budget().clone();
     let mut parser = Parser::new(&tokens, &mut names).unwrap();
     let snapshot = budget.snapshot();
@@ -2160,8 +2162,9 @@ fn debug_assertions_preserve_expansion_profile_shadowing_and_message_bounds() {
 #[test]
 fn disabled_debug_assertion_storage_denial_releases_all_parser_storage() {
     use super::super::expansion_budget::{BudgetResource, Storage};
-    let (tokens, session) = lex("debug_assert!(true)").unwrap().into_parts();
-    let mut names = NameStoreBuilder::new(session, super::super::token::Edition::E2024).unwrap();
+    let (tokens, session, session_cap) = lex("debug_assert!(true)").unwrap().into_parts();
+    let mut names =
+        NameStoreBuilder::new(session, session_cap, super::super::token::Edition::E2024).unwrap();
     let budget = names.budget().clone();
     let mut parser = Parser::new(&tokens, &mut names).unwrap();
     parser.debug_assertions = false;

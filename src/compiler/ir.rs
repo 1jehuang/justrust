@@ -8838,9 +8838,9 @@ mod tests {
         let source =
             SourceSnapshot::from_text(std::path::Path::new("visibility.rs"), "", &budget).unwrap();
         let origin = source.span(source.file(0).unwrap(), 0, 0).unwrap();
-        let mut session = TokenSession::new(source, budget).unwrap();
+        let (mut session, session_cap) = TokenSession::standalone(source, budget).unwrap();
         let origin = session.original_span(origin).unwrap();
-        let mut names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let mut names = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let mut builder = ModuleArenaBuilder::for_source(&names).unwrap();
         let root = builder.source_root().unwrap();
         let mut child = |parent, text| {

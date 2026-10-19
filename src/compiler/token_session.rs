@@ -94,6 +94,12 @@ struct SourceSnapshotId(NonZeroU64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct SessionId(NonZeroU64);
+impl SessionId {
+    #[cfg(test)]
+    pub(super) fn bits(self) -> NonZeroU64 {
+        self.0
+    }
+}
 
 macro_rules! session_handle {
     ($($name:ident),+ $(,)?) => {$(
@@ -556,10 +562,91 @@ pub struct TokenSession {
     _lease: ByteLease,
 }
 
+/// The one-time capability to publish a name store over one session. Holds
+/// the session's refundable owner path and the id it is bound to. Not
+/// `Clone`/`Copy` and not constructible outside this module: only
+/// `TokenSession::with_owner`/`standalone` create one, together with its
+/// session. `NameStoreBuilder::new` consumes it and rejects a cap bound to a
+/// different session. `TokenSession` itself never holds owner state.
+///
+/// ```compile_fail
+/// fn reuse(cap: justrust_engine::compiler::token_primitives::SessionOwnerCap) {
+///     let first = cap;
+///     let _second = (cap, first);
+/// }
+/// ```
+#[derive(Debug)]
+pub struct SessionOwnerCap {
+    session: SessionId,
+    path: super::owner_path::BuilderOwnedPath,
+}
+impl SessionOwnerCap {
+    /// Consume the cap for exactly the session it was issued with.
+    pub(super) fn bind(
+        self,
+        session: &TokenSession,
+    ) -> Result<super::owner_path::BuilderOwnedPath, TokenError> {
+        if self.session != session.id {
+            return Err(TokenError::ForeignHandle);
+        }
+        Ok(self.path)
+    }
+    /// The builder owner path, for structural checks only.
+    pub fn path(&self) -> &super::owner_path::BuilderOwnedPath {
+        &self.path
+    }
+}
+
 impl TokenSession {
+    /// A session owned by one issued owner, plus the one-time capability to
+    /// publish a store over it. Consumes the `Issued` pair, so one issuance
+    /// builds exactly one session. The only production constructor: graph
+    /// routes pass the `Issued` from their producer's `OwnerIssuer`.
+    pub fn with_owner(
+        sources: SourceSnapshot,
+        budget: ExpansionBudget,
+        owner: super::owner_path::Issued,
+    ) -> Result<(Self, SessionOwnerCap), TokenError> {
+        // The owner must have been paid by exactly this session's ledger
+        // (identity, not equal limits) before any session is built.
+        if !owner.path().paid_by(&budget) {
+            return Err(TokenError::ForeignHandle);
+        }
+        let (issuer, tag) = owner.into_parts();
+        let id = SessionId(tag.bits());
+        let session = Self::build(id, sources, budget)?;
+        Ok((
+            session,
+            SessionOwnerCap {
+                session: id,
+                path: issuer.into_path(),
+            },
+        ))
+    }
+
+    /// An independent session for direct, non-graph tooling and tests. Mints
+    /// a fresh standalone owner root per call, paid by `budget` and admitted
+    /// before anything is minted. Graph code must use `with_owner`.
+    pub fn standalone(
+        sources: SourceSnapshot,
+        budget: ExpansionBudget,
+    ) -> Result<(Self, SessionOwnerCap), TokenError> {
+        let owner = super::owner_path::standalone_issued(&budget)?;
+        Self::with_owner(sources, budget, owner)
+    }
+
+    /// Test shorthand: a standalone session whose publish capability is
+    /// dropped (refunding it). Such a session cannot back a name store.
+    #[cfg(test)]
     pub fn new(sources: SourceSnapshot, budget: ExpansionBudget) -> Result<Self, TokenError> {
-        static NEXT: AtomicU64 = AtomicU64::new(1);
-        let id = SessionId(allocate_identity(&NEXT)?);
+        Self::standalone(sources, budget).map(|(session, _)| session)
+    }
+
+    fn build(
+        id: SessionId,
+        sources: SourceSnapshot,
+        budget: ExpansionBudget,
+    ) -> Result<Self, TokenError> {
         let lease = budget.reserve(Storage::Retained, size_of::<Self>() as u64)?;
         let mut contexts = BudgetVec::new(&budget, Storage::Retained)?;
         budget.charge(Counter::HygieneContexts, 1)?;
@@ -960,6 +1047,164 @@ impl Iterator for ExpansionTrace<'_> {
                 Some(Err(error))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod owner_defect_tests {
+    use super::*;
+    use crate::compiler::expansion_budget::{ExpansionBudget, ExpansionLimits};
+    use crate::compiler::owner_path::{OwnerDomain, OwnerIssuer, standalone_admission_bytes};
+
+    fn snapshot() -> SourceSnapshot {
+        let mut map = SourceMap::default();
+        map.add("owner.rs".into(), Arc::from("x"));
+        SourceSnapshot::new(map).unwrap()
+    }
+
+    /// An owner paid under one budget cannot back a session charged to
+    /// another, even when both budgets have equal limits (foreign payer).
+    #[test]
+    fn owner_paid_by_another_budget_with_equal_policy_rejects() {
+        let payer = ExpansionBudget::default();
+        let other = ExpansionBudget::default();
+        assert_eq!(payer.limits(), other.limits(), "fixture needs equal policy");
+        let mut issuer = OwnerIssuer::new(crate::OwnerRoot::standalone().unwrap(), &payer).unwrap();
+        let owner = issuer.issue(OwnerDomain::TokenSession).unwrap();
+        let minted_before = crate::engine::THREAD_MINTS.with(std::cell::Cell::get);
+        assert!(matches!(
+            TokenSession::with_owner(snapshot(), other, owner),
+            Err(TokenError::ForeignHandle)
+        ));
+        assert_eq!(
+            crate::engine::THREAD_MINTS.with(std::cell::Cell::get),
+            minted_before
+        );
+        // The same issuance under its own payer is accepted.
+        let owner = issuer.issue(OwnerDomain::TokenSession).unwrap();
+        assert!(TokenSession::with_owner(snapshot(), payer, owner).is_ok());
+    }
+
+    /// Defect 1 regression (review of 76eef8201): a bare `Copy` tag let one
+    /// issuance build two sessions. `with_owner` now consumes the non-`Clone`
+    /// `Issued`, so that replay no longer compiles (compile_fail doc on
+    /// `Issued`). Each issuance yields one session with its own path.
+    #[test]
+    fn one_issuance_cannot_build_two_sessions() {
+        let budget = ExpansionBudget::default();
+        let mut issuer =
+            OwnerIssuer::new(crate::OwnerRoot::standalone().unwrap(), &budget).unwrap();
+        let first = issuer.issue(OwnerDomain::TokenSession).unwrap();
+        let second = issuer.issue(OwnerDomain::TokenSession).unwrap();
+        let (a, a_cap) = TokenSession::with_owner(snapshot(), budget.clone(), first).unwrap();
+        let (b, b_cap) = TokenSession::with_owner(snapshot(), budget.clone(), second).unwrap();
+        assert_ne!(
+            a.id(),
+            b.id(),
+            "two sessions share one owner: grafts would pass"
+        );
+        assert_ne!(a_cap.path(), b_cap.path());
+        assert!(a_cap.path().descends_from(issuer.path()));
+    }
+
+    /// Crossed caps over the same snapshot and the same payer are rejected:
+    /// a cap publishes only the session it was issued with.
+    #[test]
+    fn crossed_caps_with_same_snapshot_and_payer_reject() {
+        use crate::compiler::semantic_name::{NameError, NameStoreBuilder};
+        let budget = ExpansionBudget::default();
+        let shared = snapshot();
+        let (a, a_cap) = TokenSession::standalone(shared.clone(), budget.clone()).unwrap();
+        let (b, b_cap) = TokenSession::standalone(shared, budget.clone()).unwrap();
+        assert!(matches!(
+            NameStoreBuilder::new(a, b_cap, super::super::token::Edition::E2024),
+            Err(NameError::Token(TokenError::ForeignHandle))
+        ));
+        assert!(matches!(
+            NameStoreBuilder::new(b, a_cap, super::super::token::Edition::E2024),
+            Err(NameError::Token(TokenError::ForeignHandle))
+        ));
+    }
+
+    /// A dropped cap refunds its owner lease; a session without its cap cannot
+    /// publish a store, so no published owner receipt exists for it.
+    #[test]
+    fn dropped_cap_refunds_and_never_publishes() {
+        let budget = ExpansionBudget::default();
+        let before = budget.snapshot().retained_bytes;
+        let (session, cap) = TokenSession::standalone(snapshot(), budget.clone()).unwrap();
+        let with_cap = budget.snapshot().retained_bytes;
+        drop(cap);
+        let without_cap = budget.snapshot().retained_bytes;
+        assert!(without_cap < with_cap, "dropping the cap refunded nothing");
+        drop(session);
+        assert_eq!(budget.snapshot().retained_bytes, before);
+    }
+
+    /// The published store holds the immutable owner; the builder's lease is
+    /// converted exactly once and the session itself holds no owner state.
+    #[test]
+    fn frozen_store_holds_published_owner_only() {
+        use crate::compiler::semantic_name::NameStoreBuilder;
+        let budget = ExpansionBudget::default();
+        let (session, cap) = TokenSession::standalone(snapshot(), budget.clone()).unwrap();
+        let builder =
+            NameStoreBuilder::new(session, cap, super::super::token::Edition::E2024).unwrap();
+        let reserved = budget.snapshot().retained_bytes;
+        let store = builder.freeze().unwrap();
+        assert!(store.owner_path().is_some());
+        assert!(
+            budget.snapshot().retained_bytes <= reserved,
+            "freeze charged the owner twice"
+        );
+    }
+
+    /// Defect 2 regression: an exhausted, zero or poisoned caller budget
+    /// rejects before any root, tag or session is created.
+    #[test]
+    fn exhausted_caller_budget_rejects_standalone_session() {
+        let minted = || crate::engine::THREAD_MINTS.with(std::cell::Cell::get);
+        let zero = ExpansionBudget::new(ExpansionLimits {
+            bytes: 0,
+            ..ExpansionLimits::default()
+        });
+        let before = minted();
+        assert!(TokenSession::standalone(snapshot(), zero).is_err());
+        assert_eq!(
+            minted(),
+            before,
+            "a tag was minted despite a zero caller budget"
+        );
+        let short = ExpansionBudget::new(ExpansionLimits {
+            bytes: standalone_admission_bytes() - 1,
+            ..ExpansionLimits::default()
+        });
+        let before = minted();
+        assert!(TokenSession::standalone(snapshot(), short).is_err());
+        assert_eq!(
+            minted(),
+            before,
+            "a tag was minted despite a short caller budget"
+        );
+        let poisoned = ExpansionBudget::default();
+        poisoned.poison_allocation();
+        let before = minted();
+        assert!(TokenSession::standalone(snapshot(), poisoned).is_err());
+        assert_eq!(minted(), before);
+    }
+
+    /// Owner storage is charged to the caller's ledger, not a private one.
+    #[test]
+    fn standalone_owner_is_paid_by_the_caller() {
+        let budget = ExpansionBudget::default();
+        let before = budget.snapshot().retained_bytes;
+        let session = TokenSession::standalone(snapshot(), budget.clone()).unwrap();
+        let paid = budget.snapshot().retained_bytes - before;
+        assert!(
+            paid >= standalone_admission_bytes(),
+            "caller paid {paid} bytes, owner receipts cost more"
+        );
+        drop(session);
     }
 }
 

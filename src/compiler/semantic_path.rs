@@ -510,10 +510,10 @@ mod tests {
         let file = source.file(0).unwrap();
         let first = source.span(file, 0, 1).unwrap();
         let eof = source.span(file, 3, 3).unwrap();
-        let mut session = TokenSession::new(source, budget).unwrap();
+        let (mut session, session_cap) = TokenSession::standalone(source, budget).unwrap();
         let first = session.original_span(first).unwrap();
         let eof = session.original_span(eof).unwrap();
-        let mut names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let mut names = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let a = names.intern_root("alpha", first).unwrap();
         let other_a = names.intern_root("alpha", eof).unwrap();
         let b = names.intern_root("beta", eof).unwrap();

@@ -14,6 +14,9 @@ use std::ops::{Deref, Range};
 pub(super) struct NativeParserInput {
     tokens: BudgetVec<Token>,
     session: TokenSession,
+    /// Local parser admission only: consumed by `NameStoreBuilder::new`,
+    /// never retained in a published fact.
+    owner: crate::compiler::token_session::SessionOwnerCap,
     text_leases: BudgetVec<crate::compiler::expansion_budget::ByteLease>,
     names: BudgetVec<AdmittedRootName>,
     macro_source: Option<crate::compiler::token_tree::TokenStream>,
@@ -467,7 +470,13 @@ impl Deref for NativeParserInput {
     }
 }
 impl NativeParserInput {
-    pub(super) fn into_parts(self) -> (NativeTokenBuffer, TokenSession) {
+    pub(super) fn into_parts(
+        self,
+    ) -> (
+        NativeTokenBuffer,
+        TokenSession,
+        crate::compiler::token_session::SessionOwnerCap,
+    ) {
         (
             NativeTokenBuffer {
                 tokens: self.tokens,
@@ -476,27 +485,31 @@ impl NativeParserInput {
                 macro_source: self.macro_source,
             },
             self.session,
+            self.owner,
         )
     }
     pub(super) fn new(
         lexed: LexedTokens,
         session: TokenSession,
+        owner: crate::compiler::token_session::SessionOwnerCap,
         projection: &PreparedLexInput<'_>,
     ) -> Result<Self, ParseError> {
-        Self::new_with_purpose(lexed, session, projection, false)
+        Self::new_with_purpose(lexed, session, owner, projection, false)
     }
 
     pub(super) fn new_inactive(
         lexed: LexedTokens,
         session: TokenSession,
+        owner: crate::compiler::token_session::SessionOwnerCap,
         projection: &PreparedLexInput<'_>,
     ) -> Result<Self, ParseError> {
-        Self::new_with_purpose(lexed, session, projection, true)
+        Self::new_with_purpose(lexed, session, owner, projection, true)
     }
 
     fn new_with_purpose(
         lexed: LexedTokens,
         session: TokenSession,
+        owner: crate::compiler::token_session::SessionOwnerCap,
         projection: &PreparedLexInput<'_>,
         inactive: bool,
     ) -> Result<Self, ParseError> {
@@ -585,6 +598,7 @@ impl NativeParserInput {
             tokens: BudgetVec::new(&budget, Storage::Retained).map_err(transport_error)?,
             text_leases: BudgetVec::new(&budget, Storage::Retained).map_err(transport_error)?,
             session,
+            owner,
             names: BudgetVec::new(&budget, Storage::Retained).map_err(transport_error)?,
             macro_source,
         };
@@ -1499,15 +1513,16 @@ mod tests {
         let budget = ExpansionBudget::default();
         let projection = PreparedLexInput::identity(Path::new("inactive.rs"), text, &budget)
             .map_err(source_error)?;
-        let mut session =
-            TokenSession::new(projection.snapshot().clone(), budget).map_err(transport_error)?;
+        let (mut session, session_cap) =
+            TokenSession::standalone(projection.snapshot().clone(), budget)
+                .map_err(transport_error)?;
         let lexed = crate::compiler::lexer::lex_prepared(
             &projection,
             crate::compiler::token::Edition::E2024,
             &mut session,
         )
         .map_err(lex_error)?;
-        NativeParserInput::new_inactive(lexed, session, &projection)
+        NativeParserInput::new_inactive(lexed, session, session_cap, &projection)
     }
 
     #[test]
@@ -1520,7 +1535,7 @@ mod tests {
         );
         let input = inactive_input(text).unwrap();
         assert!(input.macro_source.is_some());
-        let (buffer, session) = input.into_parts();
+        let (buffer, session, _session_cap) = input.into_parts();
         assert!(buffer.current_macro_slice().is_none());
         let stream = buffer.macro_source().unwrap();
         let roots = stream.roots(&session).unwrap();
@@ -1575,7 +1590,7 @@ mod tests {
         let text = "fn unused() { let value = 'x'; }";
         let start = text.find("'x'").unwrap();
         let input = inactive_input(text).unwrap();
-        let (buffer, session) = input.into_parts();
+        let (buffer, session, _session_cap) = input.into_parts();
         let mut cursor = super::super::TokenCursor::new(&buffer);
         while !cursor.current().is_char() {
             assert!(!cursor.current().matches(""));
@@ -1720,7 +1735,8 @@ mod tests {
             let source = split_source(text, boundary);
             let budget = ExpansionBudget::default();
             let projection = PreparedLexInput::prepared(&source, &budget).unwrap();
-            let mut session = TokenSession::new(projection.snapshot().clone(), budget).unwrap();
+            let (mut session, session_cap) =
+                TokenSession::standalone(projection.snapshot().clone(), budget).unwrap();
             let lexed = crate::compiler::lexer::lex_prepared(
                 &projection,
                 crate::compiler::token::Edition::E2024,
@@ -1733,7 +1749,8 @@ mod tests {
                     .iter()
                     .all(|event| projection.project(event.prepared.clone()).is_ok())
             );
-            let error = NativeParserInput::new(lexed, session, &projection).unwrap_err();
+            let error =
+                NativeParserInput::new(lexed, session, session_cap, &projection).unwrap_err();
             assert_eq!(error.kind, SourceErrorKind::Contract, "{text}: {error}");
             assert!(error.message.contains("segment boundary"));
         }
@@ -1744,7 +1761,12 @@ mod tests {
         let source = split_source("t.0.1", 3);
         let budget = ExpansionBudget::default();
         let projection = PreparedLexInput::prepared(&source, &budget).unwrap();
-        let error = super::super::native_input(&projection, budget).unwrap_err();
+        let error = super::super::native_input(
+            &projection,
+            budget.clone(),
+            super::super::super::owner_path::standalone_issued(&budget).unwrap(),
+        )
+        .unwrap_err();
         assert_eq!(error.kind, SourceErrorKind::Contract);
         for text in ["t.0.1", "t. 0.1", "t./* comment */0.1"] {
             let input = super::super::lex(text).unwrap();
@@ -1762,16 +1784,18 @@ mod tests {
     fn native_input_rejects_foreign_session_and_view_without_adoption() {
         let budget = ExpansionBudget::default();
         let projection = PreparedLexInput::identity(Path::new("a.rs"), "name", &budget).unwrap();
-        let mut session = TokenSession::new(projection.snapshot().clone(), budget.clone()).unwrap();
+        let (mut session, session_cap) =
+            TokenSession::standalone(projection.snapshot().clone(), budget.clone()).unwrap();
         let lexed = crate::compiler::lexer::lex_prepared(
             &projection,
             crate::compiler::token::Edition::E2024,
             &mut session,
         )
         .unwrap();
-        let wrong = TokenSession::new(projection.snapshot().clone(), budget.clone()).unwrap();
+        let (wrong, wrong_cap) =
+            TokenSession::standalone(projection.snapshot().clone(), budget.clone()).unwrap();
         assert_eq!(
-            NativeParserInput::new(lexed, wrong, &projection)
+            NativeParserInput::new(lexed, wrong, wrong_cap, &projection)
                 .unwrap_err()
                 .kind,
             SourceErrorKind::Contract
@@ -1784,7 +1808,7 @@ mod tests {
         .unwrap();
         let other = PreparedLexInput::identity(Path::new("a.rs"), "name", &budget).unwrap();
         assert_eq!(
-            NativeParserInput::new(lexed, session, &other)
+            NativeParserInput::new(lexed, session, session_cap, &other)
                 .unwrap_err()
                 .kind,
             SourceErrorKind::Contract
@@ -1831,7 +1855,8 @@ mod tests {
         let budget = ExpansionBudget::default();
         let projection =
             PreparedLexInput::identity(Path::new("single.rs"), "name", &budget).unwrap();
-        let mut session = TokenSession::new(projection.snapshot().clone(), budget).unwrap();
+        let (mut session, session_cap) =
+            TokenSession::standalone(projection.snapshot().clone(), budget).unwrap();
         let lexed = crate::compiler::lexer::lex_prepared(
             &projection,
             crate::compiler::token::Edition::E2024,
@@ -1840,7 +1865,7 @@ mod tests {
         .unwrap();
         let span = lexed.events()[0].token.span();
         let eof = lexed.eof().span;
-        let input = NativeParserInput::new(lexed, session, &projection).unwrap();
+        let input = NativeParserInput::new(lexed, session, session_cap, &projection).unwrap();
         assert_eq!(input[0].whole.span, span);
         assert_eq!(input[0].constituents[0].unwrap(), span);
         assert_eq!(input.last().unwrap().whole.span, eof);
@@ -1966,7 +1991,7 @@ mod tests {
         let input = super::super::lex("macro_rules! m { ($x:ident)=>{$x}; }").unwrap();
         assert!(input.macro_source.is_some());
         assert!(input.iter().any(|token| token.text == "$"));
-        let (buffer, session) = input.into_parts();
+        let (buffer, session, _session_cap) = input.into_parts();
         let stream = buffer.macro_source().unwrap();
         let roots = stream.roots(&session).unwrap();
         assert!(!stream.children(&session, &roots).unwrap().is_empty());

@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet, VecDeque, hash_map::DefaultHasher};
 use std::fmt;
 use std::future::{Future, poll_fn};
 use std::hash::{Hash, Hasher};
+use std::num::NonZeroU64;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -241,6 +242,150 @@ impl Report {
     }
 }
 
+/// Engine identity for compiler-issued owners (PARSE-SPLIT.md, OwnerPath).
+///
+/// The value is the engine's own graph id. Ids come only from
+/// [`allocate_graph_id`], which fails closed instead of wrapping, so two live
+/// engines never share one. Not constructible outside this module.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct EngineAuthority(NonZeroU64);
+impl EngineAuthority {
+    fn of(shared: &Shared) -> Self {
+        // `configured` only stores ids issued by `allocate_graph_id`.
+        Self(NonZeroU64::new(shared.id).expect("graph ids are nonzero"))
+    }
+    /// Opaque value for structural encoding only. Not a constructor input.
+    pub fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+/// Issue the next graph id. Fails closed at exhaustion; never wraps or reuses.
+fn allocate_graph_id(counter: &AtomicU64) -> Option<NonZeroU64> {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let issued = NonZeroU64::new(current)?;
+        let next = current.checked_add(1)?;
+        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return Some(issued),
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+/// The single owner root of one producer: an engine authority plus the
+/// engine-issued id of the node that minted it. Not `Copy`/`Clone`, so issuing
+/// starts from exactly one value. Fixed size: it copies no key payload and
+/// holds no `Arc<Node>`, `Context` or engine state. Node ids are unique within
+/// one engine (the node interner never reuses them), and each node evaluates
+/// once, so `(authority, node)` names exactly one producer execution.
+/// Standalone (non-graph) computations get a root under a fresh engine id.
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct OwnerRoot {
+    authority: EngineAuthority,
+    /// `None` only for standalone roots, which have no producing node.
+    node: Option<u64>,
+}
+
+/// Opaque foreign-owner discriminator carried by `Copy` handles. Globally
+/// unique among issued tags, but never a semantic identity, cache key, order
+/// or graph key: the structural `OwnerPath` is the authority. No public
+/// constructor and no conversion from integers or paths.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct OwnerTag(NonZeroU64);
+
+/// Test-only provenance: which engine authority minted each tag, so route
+/// tests can prove a graph tag came from its producer, not a standalone root.
+#[cfg(test)]
+pub(crate) static TAG_PROVENANCE: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
+
+#[cfg(test)]
+thread_local! {
+    /// Tags minted on this thread, for race-free admission tests.
+    pub(crate) static THREAD_MINTS: Cell<usize> = const { Cell::new(0) };
+}
+impl OwnerTag {
+    /// Raw bits for equality checks inside existing 8-byte handle owners.
+    pub fn bits(self) -> NonZeroU64 {
+        self.0
+    }
+}
+
+/// The one capability that can mint owner tags. Obtained only by consuming
+/// an `OwnerRoot`; neither `Clone` nor constructible outside this module.
+#[derive(Debug)]
+pub struct TagMint {
+    authority: EngineAuthority,
+}
+
+/// Process-wide tag space, shared by every engine and standalone root so tags
+/// never collide across live roots. Engine-internal identity bookkeeping.
+static NEXT_OWNER_TAG: AtomicU64 = AtomicU64::new(1);
+
+impl TagMint {
+    /// Mint the next tag. Fails closed at exhaustion; never wraps or reuses.
+    pub fn mint(&mut self) -> Result<OwnerTag, Error> {
+        let tag = allocate_graph_id(&NEXT_OWNER_TAG)
+            .map(OwnerTag)
+            .ok_or_else(|| Error::new("owner tag space exhausted"))?;
+        #[cfg(test)]
+        {
+            TAG_PROVENANCE
+                .lock()
+                .unwrap()
+                .push((tag.0.get(), self.authority.get()));
+            THREAD_MINTS.with(|count| count.set(count.get() + 1));
+        }
+        Ok(tag)
+    }
+    /// The capability for an issuer created by this one. Only an existing
+    /// capability (ultimately a consumed `OwnerRoot`) can derive another.
+    pub fn derive(&self) -> TagMint {
+        TagMint {
+            authority: self.authority,
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn mint_from_counter_for_test(counter: &AtomicU64) -> Option<OwnerTag> {
+    allocate_graph_id(counter).map(OwnerTag)
+}
+impl OwnerRoot {
+    pub fn authority(&self) -> EngineAuthority {
+        self.authority
+    }
+    /// The engine-local id of the producing node, absent for standalone roots.
+    pub fn producer(&self) -> Option<u64> {
+        self.node
+    }
+    /// Consume the root into its identity and the single tag-mint capability.
+    pub fn into_parts(self) -> (EngineAuthority, Option<u64>, TagMint) {
+        (
+            self.authority,
+            self.node,
+            TagMint {
+                authority: self.authority,
+            },
+        )
+    }
+    /// A fresh root for one standalone, non-graph computation (direct parsing
+    /// in library calls and tests). Fails closed if graph ids are exhausted.
+    pub fn standalone() -> Result<Self, Error> {
+        let id = allocate_graph_id(&NEXT_GRAPH)
+            .ok_or_else(|| Error::new("engine identity space exhausted"))?;
+        Ok(Self {
+            authority: EngineAuthority(id),
+            node: None,
+        })
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn allocate_graph_id_for_test(counter: &AtomicU64) -> Option<NonZeroU64> {
+    allocate_graph_id(counter)
+}
+
 #[derive(Clone)]
 pub struct Context {
     shared: Arc<Shared>,
@@ -311,6 +456,8 @@ struct Node {
     slots: Vec<Mutex<Slot>>,
     state: Mutex<NodeState>,
     meter: Meter,
+    /// Set when the node mints its one owner root (see `Context::owner_root`).
+    owner_root_minted: AtomicBool,
 }
 
 struct NodeState {
@@ -424,6 +571,11 @@ fn panic_error(where_: &str, payload: Box<dyn Any + Send>) -> Error {
 }
 
 impl Engine {
+    /// The authority every owner issued for this engine's snapshot descends from.
+    pub fn authority(&self) -> EngineAuthority {
+        EngineAuthority::of(&self.shared)
+    }
+
     pub fn new(provider: impl Provider) -> Self {
         Self::configured(provider, 64, EVENT_CAPACITY)
     }
@@ -441,7 +593,11 @@ impl Engine {
     fn configured(provider: impl Provider, bits: u8, capacity: usize) -> Self {
         Self {
             shared: Arc::new(Shared {
-                id: NEXT_GRAPH.fetch_add(1, Ordering::Relaxed),
+                // Fail closed: an exhausted id space panics rather than wrap
+                // and reissue an id that a live engine may still hold.
+                id: allocate_graph_id(&NEXT_GRAPH)
+                    .expect("engine identity space exhausted")
+                    .get(),
                 provider: Arc::new(provider),
                 bits,
                 index: (0..SHARDS).map(|_| Mutex::new(HashMap::new())).collect(),
@@ -764,6 +920,23 @@ impl Node {
 }
 
 impl Context {
+    /// The authority of the engine running this node.
+    pub fn authority(&self) -> EngineAuthority {
+        EngineAuthority::of(&self.shared)
+    }
+
+    /// Mint this node's single owner root. Succeeds once per node execution;
+    /// a second call fails, so a producer cannot restart its owner sequence.
+    pub fn owner_root(&self) -> Result<OwnerRoot, Error> {
+        if self.node.owner_root_minted.swap(true, Ordering::AcqRel) {
+            return Err(Error::new("owner root already minted by this node"));
+        }
+        Ok(OwnerRoot {
+            authority: self.authority(),
+            node: Some(self.node.id),
+        })
+    }
+
     pub fn request(&self, key: Key) -> Outputs {
         Outputs {
             node: self.shared.intern(key),
@@ -1002,7 +1175,10 @@ impl Shared {
             return node;
         }
         let node = Arc::new(Node {
-            id: self.next_node.fetch_add(1, Ordering::Relaxed),
+            // Owner roots name producers by node id, so ids must never wrap.
+            id: allocate_graph_id(&self.next_node)
+                .expect("engine node identity space exhausted")
+                .get(),
             key: key.clone(),
             slots: (0..count).map(|_| Mutex::new(Slot::default())).collect(),
             state: Mutex::new(NodeState {
@@ -1011,6 +1187,7 @@ impl Shared {
                 error: None,
             }),
             meter: Meter::default(),
+            owner_root_minted: AtomicBool::new(false),
         });
         bucket.push(node.clone());
         lock(&self.nodes).push(node.clone());

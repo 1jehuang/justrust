@@ -4519,13 +4519,19 @@ impl ProgramBuilder {
     ) -> Result<Self, String> {
         let input = super::source::PreparedLexInput::identity(name, source, budget)
             .map_err(|error| error.to_string())?;
-        let mut session =
-            super::token_session::TokenSession::new(input.snapshot().clone(), budget.clone())
-                .map_err(|error| error.to_string())?;
+        // Direct fixture builder, never reached from a graph node.
+        let owner =
+            super::owner_path::standalone_issued(budget).map_err(|error| error.to_string())?;
+        let (mut session, cap) = super::token_session::TokenSession::with_owner(
+            input.snapshot().clone(),
+            budget.clone(),
+            owner,
+        )
+        .map_err(|error| error.to_string())?;
         let fixture_anchor = session
             .original_span(input.eof().map_err(|error| error.to_string())?)
             .map_err(|error| error.to_string())?;
-        let mut names = NameStoreBuilder::new(session, super::token::Edition::E2024)
+        let mut names = NameStoreBuilder::new(session, cap, super::token::Edition::E2024)
             .map_err(|error| error.to_string())?;
         let symbols = ProgramSymbols::new(&mut names).map_err(native_adapter::name_diagnostic)?;
         let modules = ModuleArenaBuilder::for_source(&names).map_err(module_diagnostic)?;
@@ -5897,18 +5903,24 @@ fn lex(source: &str) -> Result<NativeParserInput, ParseError> {
         &budget,
     )
     .map_err(native_adapter::source_error)?;
-    native_input(&projection, budget)
+    let owner =
+        super::owner_path::standalone_issued(&budget).map_err(native_adapter::transport_error)?;
+    native_input(&projection, budget, owner)
 }
 fn native_input(
     projection: &super::source::PreparedLexInput<'_>,
     budget: super::expansion_budget::ExpansionBudget,
+    owner: super::owner_path::Issued,
 ) -> Result<NativeParserInput, ParseError> {
-    let mut session =
-        super::token_session::TokenSession::new(projection.snapshot().clone(), budget)
-            .map_err(native_adapter::transport_error)?;
+    let (mut session, cap) = super::token_session::TokenSession::with_owner(
+        projection.snapshot().clone(),
+        budget,
+        owner,
+    )
+    .map_err(native_adapter::transport_error)?;
     let lexed = super::lexer::lex_prepared(projection, super::token::Edition::E2024, &mut session)
         .map_err(native_adapter::lex_error)?;
-    NativeParserInput::new(lexed, session, projection)
+    NativeParserInput::new(lexed, session, cap, projection)
 }
 fn path_text_len(
     names: &impl NameAccess,
@@ -5957,7 +5969,11 @@ mod local_macro_parser_tests {
             budget,
         )
         .map_err(native_adapter::source_error)?;
-        parse_syntax_tokens(native_input(&input, budget.clone())?)
+        parse_syntax_tokens(native_input(
+            &input,
+            budget.clone(),
+            super::super::owner_path::standalone_issued(budget).unwrap(),
+        )?)
     }
     #[test]
     fn nested_source_depth_is_live_through_parse_and_restored_for_siblings() {
@@ -6211,7 +6227,7 @@ mod local_macro_parser_tests {
     }
     #[test]
     fn compact_provenance_tags_never_alias_prepared_coordinates() {
-        let (buffer, _session) = lex("x").unwrap().into_parts();
+        let (buffer, _session, _session_cap) = lex("x").unwrap().into_parts();
         let token = TokenCursor::new(&buffer).current();
         let prepared = TokenPart::new(token.span, 1..7).unwrap();
         assert_eq!(prepared.provenance(), TokenProvenance::Prepared);
@@ -12153,8 +12169,8 @@ fn parse_syntax_unit(
     purpose: ParserPurpose,
     debug_assertions: bool,
 ) -> Result<ParsedSyntaxUnit, ParseError> {
-    let (tokens, session) = tokens.into_parts();
-    let mut names = NameStoreBuilder::new(session, super::token::Edition::E2024)
+    let (tokens, session, cap) = tokens.into_parts();
+    let mut names = NameStoreBuilder::new(session, cap, super::token::Edition::E2024)
         .map_err(native_adapter::name_error)?;
     let symbols = ProgramSymbols::new(&mut names).map_err(native_adapter::name_error)?;
     let mut parser = match purpose {
@@ -12279,12 +12295,17 @@ pub(super) fn validate_inactive_syntax(
         &budget,
     )
     .map_err(native_adapter::source_error)?;
-    let mut session =
-        super::token_session::TokenSession::new(projection.snapshot().clone(), budget)
-            .map_err(native_adapter::transport_error)?;
+    let owner =
+        super::owner_path::standalone_issued(&budget).map_err(native_adapter::transport_error)?;
+    let (mut session, cap) = super::token_session::TokenSession::with_owner(
+        projection.snapshot().clone(),
+        budget,
+        owner,
+    )
+    .map_err(native_adapter::transport_error)?;
     let lexed = super::lexer::lex_prepared(&projection, super::token::Edition::E2024, &mut session)
         .map_err(native_adapter::lex_error)?;
-    let input = NativeParserInput::new_inactive(lexed, session, &projection)?;
+    let input = NativeParserInput::new_inactive(lexed, session, cap, &projection)?;
     Ok(InactiveSyntaxCertificate {
         _unit: parse_syntax_unit(
             input,
@@ -13026,9 +13047,10 @@ mod inactive_item_syntax_tests {
     #[test]
     fn item_publication_denies_before_container_allocation_and_releases() {
         use super::super::expansion_budget::{BudgetResource, Storage};
-        let (tokens, session) = lex("fn main(){}").unwrap().into_parts();
+        let (tokens, session, session_cap) = lex("fn main(){}").unwrap().into_parts();
         let mut names =
-            NameStoreBuilder::new(session, super::super::token::Edition::E2024).unwrap();
+            NameStoreBuilder::new(session, session_cap, super::super::token::Edition::E2024)
+                .unwrap();
         let budget = names.budget().clone();
         let mut parser = Parser::new(&tokens, &mut names).unwrap();
         let mut parsed = ParsedDeclarations {
@@ -13102,8 +13124,22 @@ mod inactive_item_syntax_tests {
 }
 
 /// Parse mapped preparation output without reprocessing attributes or configuration.
+/// Direct, non-graph entry: mints a fresh standalone owner root per call.
 pub fn parse_prepared(
     source: &super::source::PreparedSource,
+) -> Result<ParsedProgram, super::source::SourceError> {
+    let budget = super::expansion_budget::ExpansionBudget::default();
+    let owner = super::owner_path::standalone_issued(&budget)
+        .map_err(super::source::SourceError::from_token)?;
+    parse_prepared_owned(source, budget, owner)
+}
+
+/// Graph entry: the session owner is a tag issued by the calling producer.
+/// Never mints a root, so a graph PARSE cannot fall back to standalone.
+pub fn parse_prepared_owned(
+    source: &super::source::PreparedSource,
+    budget: super::expansion_budget::ExpansionBudget,
+    owner: super::owner_path::Issued,
 ) -> Result<ParsedProgram, super::source::SourceError> {
     let mapped = |error: ParseError| {
         let mut diagnostic = super::source::SourceError::syntax(
@@ -13120,9 +13156,8 @@ pub fn parse_prepared(
         diagnostic._diagnostic_lease = error._diagnostic_lease;
         diagnostic.with_sources(&source.sources)
     };
-    let budget = super::expansion_budget::ExpansionBudget::default();
     let projection = super::source::PreparedLexInput::prepared(source, &budget)?;
-    let tokens = native_input(&projection, budget).map_err(mapped)?;
+    let tokens = native_input(&projection, budget, owner).map_err(mapped)?;
     parse_syntax_tokens_configured(tokens, source.debug_assertions()).map_err(mapped)
 }
 
@@ -13346,9 +13381,10 @@ mod generic_trait_source_tests {
     #[test]
     fn generic_parameter_predeclaration_checks_work_before_scanning_and_releases() {
         use super::super::expansion_budget::{BudgetResource, Counter};
-        let (tokens, session) = lex("<T:Bound<U>,U>").unwrap().into_parts();
+        let (tokens, session, session_cap) = lex("<T:Bound<U>,U>").unwrap().into_parts();
         let mut names =
-            NameStoreBuilder::new(session, super::super::token::Edition::E2024).unwrap();
+            NameStoreBuilder::new(session, session_cap, super::super::token::Edition::E2024)
+                .unwrap();
         let budget = names.budget().clone();
         let mut parser = Parser::new(&tokens, &mut names).unwrap();
         let remaining = budget.limits().counters[Counter::Work as usize]
@@ -19340,8 +19376,10 @@ mod prepared_location_tests {
     use super::*;
 
     fn parser_parts(tokens: NativeParserInput) -> (NativeTokenBuffer, NameStoreBuilder) {
-        let (tokens, session) = tokens.into_parts();
-        let names = NameStoreBuilder::new(session, super::super::token::Edition::E2024).unwrap();
+        let (tokens, session, session_cap) = tokens.into_parts();
+        let names =
+            NameStoreBuilder::new(session, session_cap, super::super::token::Edition::E2024)
+                .unwrap();
         (tokens, names)
     }
 

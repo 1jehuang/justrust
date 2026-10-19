@@ -1405,6 +1405,191 @@ fn graph_facts_reach_no_new_mutable_state() {
     }
 }
 
+/// Builder-only owner types: refundable leases and minting capabilities.
+/// No published fact may reach them by type, regardless of runtime variant.
+const BUILDER_ONLY_OWNER_TYPES: &[&str] = &[
+    "BuilderOwnedPath",
+    "OwnerIssuer",
+    "Issued",
+    "TagMint",
+    "SessionOwner",
+];
+
+/// Every builder-only owner type reachable by type from `root`, with a path.
+fn reachable_builder_types(decls: &BTreeMap<String, TypeDecl>, root: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut parent: HashMap<String, String> = HashMap::new();
+    let mut seen: HashSet<String> = HashSet::from([root.to_string()]);
+    let mut queue = std::collections::VecDeque::from([root.to_string()]);
+    while let Some(name) = queue.pop_front() {
+        for next in decls.get(&name).map(|d| d.refs.clone()).unwrap_or_default() {
+            if !seen.insert(next.clone()) {
+                continue;
+            }
+            parent.insert(next.clone(), name.clone());
+            if BUILDER_ONLY_OWNER_TYPES.contains(&next.as_str()) {
+                let mut path = vec![next.clone()];
+                let mut at = next.clone();
+                while let Some(p) = parent.get(&at) {
+                    path.push(p.clone());
+                    at = p.clone();
+                }
+                path.reverse();
+                found.push(path.join(" -> "));
+            } else if decls.contains_key(&next) {
+                queue.push_back(next);
+            }
+        }
+    }
+    found
+}
+
+/// Published name stores and parsed programs must not reach a builder-only
+/// owner type at all (PARSE-SPLIT.md). A runtime "published" enum variant is
+/// not enough: the builder variant would still be reachable by type.
+#[test]
+fn published_stores_reach_no_builder_owner_types() {
+    let (decls, _) = scanned_type_decls();
+    for root in ["NameStore", "ParsedProgram", "Program", "OwnerPath"] {
+        assert!(decls.contains_key(root), "{root} declaration not scanned");
+        let found = reachable_builder_types(&decls, root);
+        assert!(
+            found.is_empty(),
+            "published {root} reaches builder-only owner types:\n  {}",
+            found.join("\n  ")
+        );
+    }
+}
+
+/// Owner paths will be carried inside published facts (PARSE-SPLIT.md), so
+/// they must reach no mutable state at all, before any fact names them.
+#[test]
+fn owner_path_reaches_no_mutable_state() {
+    let (decls, _) = scanned_type_decls();
+    assert!(
+        decls.contains_key("OwnerPath"),
+        "OwnerPath declaration not scanned"
+    );
+    let roots = BTreeSet::from(["OwnerPath".to_string()]);
+    let found = reachable_mutable_state(&decls, &roots);
+    assert!(
+        found.is_empty(),
+        "OwnerPath reaches mutable state:\n{}",
+        found
+            .iter()
+            .map(|((_, c, p), path)| format!("  {p} in {c}: {}", path.join(" -> ")))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Standalone owner roots: allowed only in exact direct (non-graph) entries.
+// ---------------------------------------------------------------------------
+
+/// The only production functions that may mint a fresh standalone owner root
+/// (PARSE-SPLIT.md). Graph routes receive tags from their producer's issuer.
+/// Each entry is (file, enclosing function). May only shrink.
+const STANDALONE_OWNER_ENTRIES: &[(&str, &str)] = &[
+    ("src/compiler/owner_path.rs", "standalone_issued"),
+    ("src/compiler/token_session.rs", "standalone"),
+    ("src/compiler/frontend.rs", "new"),
+    ("src/compiler/frontend.rs", "lex"),
+    ("src/compiler/frontend.rs", "validate_inactive_syntax"),
+    ("src/compiler/frontend.rs", "parse_prepared"),
+];
+const STANDALONE_MARKERS: &[&str] = &[
+    "standalone_issued(",
+    "TokenSession::standalone(",
+    "OwnerRoot::standalone(",
+];
+
+/// (enclosing fn, byte offset) of every standalone-mint call in non-test code.
+fn standalone_calls(original: &str) -> Vec<String> {
+    let scanned = scan(original);
+    let code = String::from_utf8_lossy(&scanned.code).to_string();
+    let mut found = Vec::new();
+    for marker in STANDALONE_MARKERS {
+        let mut from = 0;
+        while let Some(at) = code[from..].find(marker) {
+            let at = from + at;
+            from = at + marker.len();
+            // The definition itself is not a call.
+            let line_start = code[..at].rfind('\n').map_or(0, |i| i + 1);
+            if code[line_start..at].trim_end().ends_with("fn") {
+                continue;
+            }
+            let before = &code[..at];
+            let name = before
+                .rmatch_indices("fn ")
+                .find_map(|(i, _)| {
+                    let rest = &before[i + 3..];
+                    let end = rest.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;
+                    (end > 0).then(|| rest[..end].to_string())
+                })
+                .unwrap_or_default();
+            found.push(name);
+        }
+    }
+    found
+}
+
+#[test]
+fn standalone_owner_roots_only_in_allowed_direct_entries() {
+    let mut files = Vec::new();
+    for dir in SCANNED {
+        rust_files(&root().join(dir), &mut files);
+    }
+    let mut violations = Vec::new();
+    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
+    for file in files {
+        let rel = file
+            .strip_prefix(root())
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let text = fs::read_to_string(&file).unwrap();
+        for function in standalone_calls(&text) {
+            let entry = (rel.clone(), function.clone());
+            if !STANDALONE_OWNER_ENTRIES
+                .iter()
+                .any(|(f, n)| *f == rel && *n == function)
+            {
+                violations.push(format!("  {rel}: fn {function}"));
+            }
+            seen.insert(entry);
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "standalone owner roots minted outside the allowed direct entries:\n{}\n\
+         Graph code must receive an issued tag from its producer (TokenSession::with_owner).",
+        violations.join("\n")
+    );
+    let stale: Vec<_> = STANDALONE_OWNER_ENTRIES
+        .iter()
+        .filter(|(f, n)| !seen.contains(&(f.to_string(), n.to_string())))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "allowed standalone entries no longer mint: {stale:?}. Remove them from \
+         STANDALONE_OWNER_ENTRIES to lock in the progress."
+    );
+}
+
+#[test]
+fn standalone_owner_scan_rejects_injected_graph_fallback() {
+    // A graph-route function that falls back to a standalone mint is caught;
+    // comments, strings and test code are not calls.
+    let source = r#"
+fn graph_parse(cx: &Context) { let owner = standalone_issued(&budget); }
+fn direct() { /* standalone_issued( */ let s = "TokenSession::standalone("; }
+#[cfg(test)]
+mod tests { fn t() { let _ = TokenSession::standalone(a, b); } }
+"#;
+    assert_eq!(standalone_calls(source), vec!["graph_parse".to_string()]);
+}
+
 #[test]
 fn reachable_fact_gate_follows_aliases_wrappers_and_generics() {
     let source = r#"

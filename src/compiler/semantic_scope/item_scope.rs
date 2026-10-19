@@ -880,7 +880,7 @@ mod tests {
         let source = SourceSnapshot::from_text(Path::new("item.rs"), "x", &budget).unwrap();
         let file = source.file(0).unwrap();
         let physical = source.span(file, 0, 1).unwrap();
-        let mut session = TokenSession::new(source, budget).unwrap();
+        let (mut session, session_cap) = TokenSession::standalone(source, budget).unwrap();
         let original = session.original_span(physical).unwrap();
         let defining_crate = session.register_crate_root(file).unwrap();
         let expansion = session
@@ -907,7 +907,7 @@ mod tests {
         };
         let marked = token(marked_context);
         let captured = token(root);
-        let names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let names = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let modules = ModuleArenaBuilder::for_source(&names).unwrap();
         Fixture {
             names,

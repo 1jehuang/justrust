@@ -159,12 +159,17 @@ impl std::error::Error for NameError {
 #[derive(Debug)]
 pub struct NameStoreBuilder {
     store: NameStore,
+    /// The session owner while building: a refundable lease. Lives only in
+    /// the builder, never in the published `NameStore`. Consumed by `freeze`.
+    owner: super::owner_path::BuilderOwnedPath,
 }
 
 /// Shared lifetime owner for every name used by the AST, resolver and replay.
 /// Records contain only flat checked handles, so destruction is nonrecursive.
 pub struct NameStore {
     session: TokenSession,
+    /// Immutable published owner identity, set by the consuming freeze.
+    owner: Option<super::owner_path::OwnerPath>,
     unit_edition: Edition,
     records: BudgetVec<NameData>,
     // Last field releases fixed wrapper/Arc accounting after owned payloads.
@@ -368,7 +373,15 @@ impl NameStoreBuilder {
         })
     }
 
-    pub fn new(session: TokenSession, unit_edition: Edition) -> Result<Self, NameError> {
+    /// A builder over a session and the one-time capability issued with it.
+    /// A cap issued for any other session is rejected, even if budgets and
+    /// snapshots are equal.
+    pub fn new(
+        session: TokenSession,
+        owner: super::token_session::SessionOwnerCap,
+        unit_edition: Edition,
+    ) -> Result<Self, NameError> {
+        let owner = owner.bind(&session)?;
         let budget = session.budget().clone();
         budget.check()?;
         // TokenSession already accounts its own inline size. Stable std cannot
@@ -382,10 +395,12 @@ impl NameStoreBuilder {
         Ok(Self {
             store: NameStore {
                 session,
+                owner: None,
                 unit_edition,
                 records,
                 _lease: lease,
             },
+            owner,
         })
     }
 
@@ -527,9 +542,15 @@ impl NameStoreBuilder {
         })
     }
 
+    /// Publish the store. Consumes the builder, and converts the session's
+    /// refundable owner reservation into an immutable receipt exactly once.
     pub fn freeze(self) -> Result<Arc<NameStore>, NameError> {
         self.budget().check()?;
-        Ok(Arc::new(self.store))
+        let Self { mut store, owner } = self;
+        // The budget can be poisoned by a sibling after the precheck above:
+        // keep its exact typed, latched failure rather than a generic error.
+        store.owner = Some(owner.freeze()?);
+        Ok(Arc::new(store))
     }
 
     pub fn check(&self, ident: AstIdent) -> Result<(), NameError> {
@@ -562,6 +583,10 @@ impl NameStoreBuilder {
 }
 
 impl NameStore {
+    /// The immutable published owner identity of this store.
+    pub fn owner_path(&self) -> Option<&super::owner_path::OwnerPath> {
+        self.owner.as_ref()
+    }
     pub(crate) fn is_anonymous_closure(&self, ident: AstIdent) -> Result<bool, NameError> {
         Ok(self.record(ident)?.anonymous_closure)
     }
@@ -679,12 +704,31 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    fn fixture(budget: ExpansionBudget) -> (TokenSession, Token, SpanId) {
+    /// The frozen store's owner receipt, checked to pay exactly the step
+    /// capacity actually allocated (not an assumed logical size).
+    fn exact_owner_receipt(store: &NameStore) -> u64 {
+        let path = store.owner_path().expect("frozen store has an owner");
+        assert_eq!(
+            path.receipt_bytes(),
+            super::super::owner_path::owner_receipt_bytes(path.step_capacity())
+        );
+        path.receipt_bytes()
+    }
+
+    /// Like `fixture`, also returning the session's one-time store capability.
+    fn owned_fixture(
+        budget: ExpansionBudget,
+    ) -> (
+        TokenSession,
+        super::super::token_session::SessionOwnerCap,
+        Token,
+        SpanId,
+    ) {
         let source = SourceSnapshot::from_text(Path::new("fixture.rs"), "x\n", &budget).unwrap();
         let file = source.file(0).unwrap();
         let first = source.span(file, 0, 1).unwrap();
         let eof = source.span(file, 2, 2).unwrap();
-        let mut session = TokenSession::new(source, budget).unwrap();
+        let (mut session, cap) = TokenSession::standalone(source, budget).unwrap();
         let span = session.original_span(first).unwrap();
         let eof = session.original_span(eof).unwrap();
         let symbol = session.intern_symbol("x").unwrap();
@@ -696,32 +740,34 @@ mod tests {
                 context: session.root_context(),
             }),
         };
-        (session, token, eof)
+        (session, cap, token, eof)
     }
 
     #[test]
     fn retained_parser_text_stays_charged_until_final_name_owner() {
         let budget = ExpansionBudget::default();
-        let (session, _, _) = fixture(budget.clone());
-        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let (session, session_cap, _, _) = owned_fixture(budget.clone());
+        let mut builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let baseline = budget.snapshot().retained_bytes;
         builder.retain_parser_text(37).unwrap();
         builder.retain_parser_text(11).unwrap();
         assert_eq!(budget.snapshot().retained_bytes, baseline + 48);
         let owner = builder.freeze().unwrap();
+        let receipt = exact_owner_receipt(&owner);
         let last = owner.clone();
         drop(owner);
         assert_eq!(budget.snapshot().retained_bytes, baseline + 48);
         drop(last);
-        assert_eq!(budget.snapshot().retained_bytes, 0);
+        // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md).
+        assert_eq!(budget.snapshot().retained_bytes, receipt);
         assert_eq!(budget.snapshot().temporary_bytes, 0);
     }
 
     #[test]
     fn retained_parser_text_rejects_before_capacity_admission_and_latches_budget() {
         let budget = ExpansionBudget::default();
-        let (session, _, _) = fixture(budget.clone());
-        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let (session, session_cap, _, _) = owned_fixture(budget.clone());
+        let mut builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let snapshot = budget.snapshot();
         let available = budget.limits().bytes - snapshot.retained_bytes - snapshot.temporary_bytes;
         let occupied = budget.reserve(Storage::Temporary, available).unwrap();
@@ -742,25 +788,27 @@ mod tests {
     #[test]
     fn parser_storage_zero_capacity_and_final_owner_follow_same_conservative_lease() {
         let budget = ExpansionBudget::default();
-        let (session, _, _) = fixture(budget.clone());
-        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let (session, session_cap, _, _) = owned_fixture(budget.clone());
+        let mut builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let baseline = budget.snapshot().retained_bytes;
         builder.retain_parser_storage(0).unwrap();
         assert_eq!(budget.snapshot().retained_bytes, baseline);
         builder.retain_parser_storage(19).unwrap();
         let owner = builder.freeze().unwrap();
+        let receipt = exact_owner_receipt(&owner);
         let last = owner.clone();
         drop(owner);
         assert_eq!(budget.snapshot().retained_bytes, baseline + 19);
         drop(last);
-        assert_eq!(budget.snapshot().retained_bytes, 0);
+        // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md).
+        assert_eq!(budget.snapshot().retained_bytes, receipt);
     }
 
     #[test]
     fn parser_storage_low_bytes_preserves_first_failure_including_zero_request() {
         let budget = ExpansionBudget::default();
-        let (session, _, _) = fixture(budget.clone());
-        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let (session, session_cap, _, _) = owned_fixture(budget.clone());
+        let mut builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let snapshot = budget.snapshot();
         let available = budget.limits().bytes - snapshot.retained_bytes - snapshot.temporary_bytes;
         let occupied = budget.reserve(Storage::Temporary, available).unwrap();
@@ -790,8 +838,8 @@ mod tests {
             }
         }
         let budget = ExpansionBudget::default();
-        let (session, _, _) = fixture(budget.clone());
-        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let (session, session_cap, _, _) = owned_fixture(budget.clone());
+        let mut builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let baseline = budget.snapshot().retained_bytes;
         let drops = Arc::new(AtomicUsize::new(0));
         let value = builder
@@ -808,11 +856,13 @@ mod tests {
         assert_eq!(drops.load(Ordering::SeqCst), 1);
         assert_eq!(budget.snapshot().retained_bytes, retained);
         let owner = builder.freeze().unwrap();
+        let receipt = exact_owner_receipt(&owner);
         let last = owner.clone();
         drop(owner);
         assert_eq!(budget.snapshot().retained_bytes, retained);
         drop(last);
-        assert_eq!(budget.snapshot().retained_bytes, 0);
+        // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md).
+        assert_eq!(budget.snapshot().retained_bytes, receipt);
     }
 
     #[test]
@@ -825,8 +875,8 @@ mod tests {
             }
         }
         let budget = ExpansionBudget::default();
-        let (session, _, _) = fixture(budget.clone());
-        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let (session, session_cap, _, _) = owned_fixture(budget.clone());
+        let mut builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let snapshot = budget.snapshot();
         let lease_before = builder.store._lease.bytes();
         let available = budget.limits().bytes - snapshot.retained_bytes - snapshot.temporary_bytes;
@@ -852,8 +902,8 @@ mod tests {
     #[test]
     fn parser_box_zero_size_has_no_allocation_charge() {
         let budget = ExpansionBudget::default();
-        let (session, _, _) = fixture(budget.clone());
-        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let (session, session_cap, _, _) = owned_fixture(budget.clone());
+        let mut builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let baseline = budget.snapshot().retained_bytes;
         let value = builder.try_parser_box(()).unwrap();
         assert_eq!(std::mem::size_of_val(&*value), 0);
@@ -865,8 +915,8 @@ mod tests {
 
     #[test]
     fn catalog_descriptor_keys_are_owned_names_not_source_occurrences() {
-        let (session, _, origin) = fixture(ExpansionBudget::default());
-        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let (session, session_cap, _, origin) = owned_fixture(ExpansionBudget::default());
+        let mut builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let count = builder.store.records.len();
         let catalog = builder
             .catalog_key(BuiltinAtom::Copy, Namespace::Type)
@@ -885,8 +935,8 @@ mod tests {
                 .catalog_key(BuiltinAtom::Copy, Namespace::Value)
                 .unwrap()
         );
-        let (foreign, _, _) = fixture(ExpansionBudget::default());
-        let mut foreign = NameStoreBuilder::new(foreign, Edition::E2024).unwrap();
+        let (foreign, foreign_cap, _, _) = owned_fixture(ExpansionBudget::default());
+        let mut foreign = NameStoreBuilder::new(foreign, foreign_cap, Edition::E2024).unwrap();
         assert_ne!(
             catalog,
             foreign
@@ -915,8 +965,8 @@ mod tests {
 
     #[test]
     fn occurrence_spans_and_editions_do_not_change_semantic_keys() {
-        let (session, token, eof) = fixture(ExpansionBudget::default());
-        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let (session, session_cap, token, eof) = owned_fixture(ExpansionBudget::default());
+        let mut builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let first = builder.from_token(token, Edition::E2018).unwrap();
         let second = builder.intern_root("x", eof).unwrap();
         assert_eq!(builder.spelling(first).unwrap(), "x");
@@ -952,10 +1002,10 @@ mod tests {
 
     #[test]
     fn foreign_occurrences_atoms_origins_and_tokens_are_rejected() {
-        let (session_a, token_a, _) = fixture(ExpansionBudget::default());
-        let (session_b, token_b, eof_b) = fixture(ExpansionBudget::default());
-        let mut a = NameStoreBuilder::new(session_a, Edition::E2024).unwrap();
-        let mut b = NameStoreBuilder::new(session_b, Edition::E2024).unwrap();
+        let (session_a, session_a_cap, token_a, _) = owned_fixture(ExpansionBudget::default());
+        let (session_b, session_b_cap, token_b, eof_b) = owned_fixture(ExpansionBudget::default());
+        let mut a = NameStoreBuilder::new(session_a, session_a_cap, Edition::E2024).unwrap();
+        let mut b = NameStoreBuilder::new(session_b, session_b_cap, Edition::E2024).unwrap();
         let a_name = a.from_token(token_a, Edition::E2024).unwrap();
         let b_name = b.from_token(token_b, Edition::E2024).unwrap();
         assert!(matches!(
@@ -990,9 +1040,9 @@ mod tests {
 
     #[test]
     fn unsupported_names_remain_distinct_from_malformed_or_nonidentifier_tokens() {
-        let (mut session, token, eof) = fixture(ExpansionBudget::default());
+        let (mut session, session_cap, token, eof) = owned_fixture(ExpansionBudget::default());
         let unicode = session.intern_symbol("α").unwrap();
-        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let mut builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let TokenKind::Ident(mut ident) = token.kind else {
             unreachable!()
         };
@@ -1046,7 +1096,7 @@ mod tests {
 
     #[test]
     fn root_context_does_not_admit_expansion_occurrences_or_nonroot_marks() {
-        let (mut session, token, _) = fixture(ExpansionBudget::default());
+        let (mut session, session_cap, token, _) = owned_fixture(ExpansionBudget::default());
         let krate = session
             .register_crate_root(session.sources().file(0).unwrap())
             .unwrap();
@@ -1076,7 +1126,7 @@ mod tests {
             unreachable!()
         };
         ident.context = context;
-        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let mut builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         assert!(matches!(
             builder.from_token(
                 Token {
@@ -1099,13 +1149,49 @@ mod tests {
         ));
     }
 
+    /// A sibling poisons the shared budget after `freeze`'s precheck would
+    /// have passed: the exact typed latched failure surfaces (not a generic
+    /// InvalidInput) and no store is published.
+    #[test]
+    fn owner_freeze_failure_after_precheck_keeps_typed_budget_failure() {
+        let budget = ExpansionBudget::default();
+        let (session, session_cap, _, _) = owned_fixture(budget.clone());
+        let builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
+        budget.check().unwrap();
+        let latched = budget.poison_allocation();
+        // NameStoreBuilder::freeze prechecks first; drive the owner freeze
+        // itself to prove the conversion after the precheck is typed.
+        let NameStoreBuilder { store, owner } = builder;
+        let error: NameError = owner.freeze().map_err(NameError::from).unwrap_err();
+        assert!(
+            matches!(&error, NameError::Token(TokenError::Budget(f)) if *f == latched),
+            "{error:?}"
+        );
+        drop(store);
+        // And through the public entry the same typed failure is reported.
+        let budget = ExpansionBudget::default();
+        let (session, session_cap, _, _) = owned_fixture(budget.clone());
+        let builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
+        let latched = budget.poison_allocation();
+        let error = match builder.freeze() {
+            Ok(_) => panic!("poisoned freeze published a store"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(&error, NameError::Token(TokenError::Budget(f)) if *f == latched),
+            "{error:?}"
+        );
+        assert_eq!(budget.snapshot().retained_bytes, 0, "nothing published");
+    }
+
     #[test]
     fn last_arc_retains_names_session_source_and_all_leases() {
         let budget = ExpansionBudget::default();
-        let (session, token, _) = fixture(budget.clone());
-        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let (session, session_cap, token, _) = owned_fixture(budget.clone());
+        let mut builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let name = builder.from_token(token, Edition::E2024).unwrap();
         let store = builder.freeze().unwrap();
+        let receipt = exact_owner_receipt(&store);
         let retained = budget.snapshot().retained_bytes;
         let other = store.clone();
         drop(store);
@@ -1113,16 +1199,17 @@ mod tests {
         assert_eq!(other.spelling(name).unwrap(), "x");
         let work = budget.snapshot().counters[Counter::Work as usize];
         drop(other);
-        assert_eq!(budget.snapshot().retained_bytes, 0);
+        // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md).
+        assert_eq!(budget.snapshot().retained_bytes, receipt);
         assert_eq!(budget.snapshot().counters[Counter::Work as usize], work);
     }
 
     #[test]
     fn constructor_and_record_capacity_failures_release_all_payloads() {
         let healthy = ExpansionBudget::default();
-        let (session, _, _) = fixture(healthy.clone());
+        let (session, session_cap, _, _) = owned_fixture(healthy.clone());
         let session_bytes = healthy.snapshot().retained_bytes;
-        let builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let builder_bytes = healthy.snapshot().retained_bytes;
         drop(builder);
         assert_eq!(healthy.snapshot().retained_bytes, 0);
@@ -1130,9 +1217,9 @@ mod tests {
             bytes: session_bytes,
             ..ExpansionLimits::default()
         });
-        let (session, _, _) = fixture(budget.clone());
+        let (session, session_cap, _, _) = owned_fixture(budget.clone());
         assert!(matches!(
-            NameStoreBuilder::new(session, Edition::E2024),
+            NameStoreBuilder::new(session, session_cap, Edition::E2024),
             Err(NameError::Token(TokenError::Budget(_)))
         ));
         assert_eq!(budget.snapshot().retained_bytes, 0);
@@ -1140,8 +1227,8 @@ mod tests {
             bytes: builder_bytes + 1,
             ..ExpansionLimits::default()
         });
-        let (session, token, _) = fixture(budget.clone());
-        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let (session, session_cap, token, _) = owned_fixture(budget.clone());
+        let mut builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let Err(NameError::Token(TokenError::Budget(first))) =
             builder.from_token(token, Edition::E2024)
         else {
@@ -1160,8 +1247,8 @@ mod tests {
     #[test]
     fn reads_and_freeze_preserve_latched_work_failure_kind() {
         let budget = ExpansionBudget::default();
-        let (session, token, _) = fixture(budget.clone());
-        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let (session, session_cap, token, _) = owned_fixture(budget.clone());
+        let mut builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let name = builder.from_token(token, Edition::E2024).unwrap();
         let remaining = budget.limits().counters[Counter::Work as usize]
             - budget.snapshot().counters[Counter::Work as usize];

@@ -5267,8 +5267,8 @@ mod tests {
         let sources =
             SourceSnapshot::from_text(std::path::Path::new("module-fixture.rs"), "", &budget)
                 .unwrap();
-        let session = TokenSession::new(sources, budget).unwrap();
-        let names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let (session, session_cap) = TokenSession::standalone(sources, budget).unwrap();
+        let names = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let modules = ModuleArenaBuilder::for_source(&names)
             .unwrap()
             .freeze()

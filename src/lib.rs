@@ -9,5 +9,6 @@ pub mod fixtures;
 pub mod project;
 
 pub use engine::{
-    Context, Demand, Engine, Error, Event, Handle, Key, Outputs, Provider, Report, TaskFuture,
+    Context, Demand, Engine, EngineAuthority, Error, Event, Handle, Key, Outputs, OwnerRoot,
+    OwnerTag, Provider, Report, TagMint, TaskFuture,
 };

@@ -18,7 +18,8 @@ use justrust_engine::compiler::token_primitives::{
 
 fn scanned(text: &str, budget: &ExpansionBudget) -> (NameStoreBuilder, Vec<Token>) {
     let input = PreparedLexInput::identity(Path::new("scope-control.rs"), text, budget).unwrap();
-    let mut session = TokenSession::new(input.snapshot().clone(), budget.clone()).unwrap();
+    let (mut session, cap) =
+        TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
     let lexed = lex_prepared(&input, Edition::E2024, &mut session).unwrap();
     let tokens = lexed
         .events()
@@ -29,7 +30,7 @@ fn scanned(text: &str, budget: &ExpansionBudget) -> (NameStoreBuilder, Vec<Token
         })
         .collect();
     (
-        NameStoreBuilder::new(session, Edition::E2024).unwrap(),
+        NameStoreBuilder::new(session, cap, Edition::E2024).unwrap(),
         tokens,
     )
 }
@@ -41,6 +42,17 @@ fn names(text: &str, budget: &ExpansionBudget) -> (Arc<NameStore>, Vec<AstIdent>
         .map(|token| names.from_token(token, Edition::E2024).unwrap())
         .collect();
     (names.freeze().unwrap(), occurrences)
+}
+
+/// The frozen store's owner receipt, checked to pay exactly the step capacity
+/// actually allocated (not an assumed logical size).
+fn exact_owner_receipt(store: &NameStore) -> u64 {
+    let path = store.owner_path().expect("frozen store has an owner");
+    assert_eq!(
+        path.receipt_bytes(),
+        justrust_engine::compiler::owner_path::owner_receipt_bytes(path.step_capacity())
+    );
+    path.receipt_bytes()
 }
 
 fn rejected<T>(result: Result<T, ScopeError>) -> ScopeError {
@@ -599,6 +611,7 @@ fn recorded_binding_metadata_retains_the_actual_declaration_occurrence() {
 fn transition_limit_rejects_before_allocating_and_latches_exact_failure() {
     let budget = ExpansionBudget::default();
     let (names, ids) = names("x", &budget);
+    let receipt = exact_owner_receipt(&names);
     let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
     let root = scopes.function_root(names.as_ref()).unwrap();
     let used = budget.snapshot().counters[Counter::ScopeTransitions as usize];
@@ -623,7 +636,9 @@ fn transition_limit_rejects_before_allocating_and_latches_exact_failure() {
     );
     assert_eq!(budget_failure(rejected(scopes.freeze())), failure);
     drop(names);
-    assert_eq!(budget.snapshot().retained_bytes, 0);
+    // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md):
+    // it is paid once at freeze and never refunded.
+    assert_eq!(budget.snapshot().retained_bytes, receipt);
     assert_eq!(budget.snapshot().temporary_bytes, 0);
 }
 
@@ -631,6 +646,7 @@ fn transition_limit_rejects_before_allocating_and_latches_exact_failure() {
 fn constructor_byte_admission_rejects_before_allocating_scope_payload() {
     let budget = ExpansionBudget::default();
     let (names, _) = names("x", &budget);
+    let receipt = exact_owner_receipt(&names);
     let live = budget.snapshot();
     let ballast = budget
         .reserve(
@@ -650,7 +666,9 @@ fn constructor_byte_admission_rejects_before_allocating_scope_payload() {
     );
     drop(ballast);
     drop(names);
-    assert_eq!(budget.snapshot().retained_bytes, 0);
+    // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md):
+    // it is paid once at freeze and never refunded.
+    assert_eq!(budget.snapshot().retained_bytes, receipt);
     assert_eq!(budget.snapshot().temporary_bytes, 0);
 }
 
@@ -658,6 +676,7 @@ fn constructor_byte_admission_rejects_before_allocating_scope_payload() {
 fn poisoned_frozen_arena_preserves_failure_but_id_equality_and_hash_are_pure() {
     let budget = ExpansionBudget::default();
     let (names, ids) = names("x x", &budget);
+    let receipt = exact_owner_receipt(&names);
     let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
     let root = scopes.function_root(names.as_ref()).unwrap();
     let function = scopes.function(root).unwrap();
@@ -695,7 +714,9 @@ fn poisoned_frozen_arena_preserves_failure_but_id_equality_and_hash_are_pure() {
     );
     drop(scopes);
     drop(names);
-    assert_eq!(budget.snapshot().retained_bytes, 0);
+    // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md):
+    // it is paid once at freeze and never refunded.
+    assert_eq!(budget.snapshot().retained_bytes, receipt);
     assert_eq!(budget.snapshot().temporary_bytes, 0);
 }
 
@@ -703,6 +724,7 @@ fn poisoned_frozen_arena_preserves_failure_but_id_equality_and_hash_are_pure() {
 fn frozen_clone_keeps_flat_scope_storage_alive_until_last_owner_drops() {
     let budget = ExpansionBudget::default();
     let (names, ids) = names("x", &budget);
+    let receipt = exact_owner_receipt(&names);
     let names_only = budget.snapshot().retained_bytes;
     let mut scopes = ScopeArenaBuilder::for_names(names.as_ref()).unwrap();
     let mut frontier = scopes.function_root(names.as_ref()).unwrap();
@@ -725,7 +747,9 @@ fn frozen_clone_keeps_flat_scope_storage_alive_until_last_owner_drops() {
     drop(last);
     assert_eq!(budget.snapshot().retained_bytes, names_only);
     drop(names);
-    assert_eq!(budget.snapshot().retained_bytes, 0);
+    // One frozen session owner receipt is permanent by design (PARSE-SPLIT.md):
+    // it is paid once at freeze and never refunded.
+    assert_eq!(budget.snapshot().retained_bytes, receipt);
     assert_eq!(budget.snapshot().temporary_bytes, 0);
     assert!(budget.snapshot().counters[Counter::ScopeTransitions as usize] >= 512);
 }
@@ -735,7 +759,8 @@ fn public_name_gate_cannot_mint_unproved_marked_or_expanded_scope_occurrences() 
     let budget = ExpansionBudget::default();
     let input =
         PreparedLexInput::identity(Path::new("scope-mark-control.rs"), "x", &budget).unwrap();
-    let mut session = TokenSession::new(input.snapshot().clone(), budget.clone()).unwrap();
+    let (mut session, cap) =
+        TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
     let lexed = lex_prepared(&input, Edition::E2024, &mut session).unwrap();
     let original = lexed
         .events()
@@ -779,7 +804,7 @@ fn public_name_gate_cannot_mint_unproved_marked_or_expanded_scope_occurrences() 
         span: captured_span,
         kind: original.kind,
     };
-    let mut names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+    let mut names = NameStoreBuilder::new(session, cap, Edition::E2024).unwrap();
     for token in marked_tokens {
         assert!(matches!(
             names.from_token(token, Edition::E2024),
