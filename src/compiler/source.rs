@@ -18,6 +18,8 @@ pub use source_cfg::CfgSet;
 pub use source_lex::{PreparedLexInput, PreparedMode, PreparedViewId, ProjectedSpan};
 pub use source_map::{FileId, OriginSegment, SourceMap, SourceSpan};
 pub use source_probe::{SourceProbeRecord, SourceProbeRequest, attach_probe, prepare_probe_file};
+#[path = "source_prelude.rs"]
+pub mod source_prelude;
 const MAX_FILE_DEPTH: usize = 64;
 const MAX_MODULE_DEPTH: usize = 128;
 pub(super) const MAX_BYTES: usize = 8 * 1024 * 1024;
@@ -28,11 +30,15 @@ const MAX_ORIGINS: usize = 1024 * 1024;
 /// The default pins abort and enables debug assertions, not complete Rust panic semantics.
 pub struct SourceOptions {
     pub cfg: CfgSet,
+    /// Attach the embedded native prelude library (`libraries/prelude`) after
+    /// the user crate in graph compilation. See PRELUDE.md.
+    pub prelude: bool,
 }
 impl Default for SourceOptions {
     fn default() -> Self {
         Self {
             cfg: CfgSet::native_x86_64_linux(),
+            prelude: true,
         }
     }
 }
@@ -240,7 +246,15 @@ fn prepare_with_reader_budget(
         match step {
             AssemblyStep::Done(prepared) => return Ok(*prepared),
             AssemblyStep::Need(need) => {
-                let unit = child_unit_with(&need.parent, need.index, options, &mut *reader, budget);
+                let unit = match need.parent.as_deref() {
+                    None => prepare_prelude_unit(options, budget),
+                    Some(parent) if parent.path.starts_with(source_prelude::PRELUDE_DIR) => {
+                        prepare_child_unit(parent, need.index, options, budget)
+                    }
+                    Some(parent) => {
+                        child_unit_with(parent, need.index, options, &mut *reader, budget)
+                    }
+                };
                 step = assembler.provide(Arc::new(unit))?;
             }
         }
@@ -253,13 +267,29 @@ pub fn prepare_text(
     options: &SourceOptions,
 ) -> Result<PreparedSource, SourceError> {
     let unit = Arc::new(prepare_text_unit(name, text, options));
-    match SourceAssembler::new(options).provide(unit)? {
-        AssemblyStep::Done(prepared) => Ok(*prepared),
-        AssemblyStep::Need(_) => Err(Loader::error(
-            SourceErrorKind::Contract,
-            None,
-            "text preparation requested an external module",
-        )),
+    let budget = super::expansion_budget::ExpansionBudget::default();
+    let mut assembler = SourceAssembler::new(options);
+    let mut step = assembler.provide(unit)?;
+    loop {
+        match step {
+            AssemblyStep::Done(prepared) => return Ok(*prepared),
+            AssemblyStep::Need(need) => {
+                let unit = match need.parent.as_deref() {
+                    None => prepare_prelude_unit(options, &budget),
+                    Some(parent) if parent.path.starts_with(source_prelude::PRELUDE_DIR) => {
+                        prepare_child_unit(parent, need.index, options, &budget)
+                    }
+                    Some(_) => {
+                        return Err(Loader::error(
+                            SourceErrorKind::Contract,
+                            None,
+                            "text preparation requested an external module",
+                        ));
+                    }
+                };
+                step = assembler.provide(Arc::new(unit))?;
+            }
+        }
     }
 }
 
@@ -343,7 +373,34 @@ pub fn prepare_child_unit(
     options: &SourceOptions,
     budget: &super::expansion_budget::ExpansionBudget,
 ) -> UnitResult {
+    if parent.path.starts_with(source_prelude::PRELUDE_DIR) {
+        return child_unit_with(
+            parent,
+            index,
+            options,
+            &mut source_prelude::PreludeReader,
+            budget,
+        );
+    }
     child_unit_with(parent, index, options, &mut FsReader, budget)
+}
+/// Attachment unit of the embedded native prelude library, graph ordinal
+/// `[1]`. Its children are the library's own files, read only from the
+/// embedded table.
+pub fn prepare_prelude_unit(
+    options: &SourceOptions,
+    budget: &super::expansion_budget::ExpansionBudget,
+) -> UnitResult {
+    let path = Path::new(source_prelude::PRELUDE_ROOT);
+    file_unit(
+        path,
+        Path::new(source_prelude::PRELUDE_DIR),
+        0,
+        &[],
+        options,
+        Some(&mut source_prelude::PreludeReader),
+        budget,
+    )
 }
 fn child_unit_with(
     parent: &FileUnit,
@@ -505,7 +562,8 @@ fn snapshot_unit<'a>(
 pub struct NeedUnit {
     /// Graph identity of the child file: `[0, i, j, ...]` child ordinals.
     pub ordinal: Vec<u64>,
-    pub parent: Arc<FileUnit>,
+    /// `None` for the prelude attachment unit (ordinal `[1]`).
+    pub parent: Option<Arc<FileUnit>>,
     pub index: usize,
 }
 pub enum AssemblyStep {
@@ -521,6 +579,10 @@ pub struct SourceAssembler {
     frames: Vec<Frame>,
     awaiting: Option<(Vec<u64>, SourceSpan)>,
     started: bool,
+    /// Attach the prelude library after the user crate (pending until asked).
+    prelude: bool,
+    /// Prelude units are library inputs, not user source telemetry.
+    in_prelude: bool,
 }
 struct Frame {
     unit: Arc<FileUnit>,
@@ -558,6 +620,15 @@ impl SourceAssembler {
             frames: Vec::new(),
             awaiting: None,
             started: false,
+            prelude: options.prelude,
+            in_prelude: false,
+        }
+    }
+    /// Assemble only the user crate, without the prelude library.
+    pub fn user_only(options: &SourceOptions) -> Self {
+        Self {
+            prelude: false,
+            ..Self::new(options)
         }
     }
     fn fail(&self, error: SourceError) -> SourceError {
@@ -566,6 +637,7 @@ impl SourceAssembler {
     /// Supply the unit for the root (first call) or the last requested child.
     pub fn provide(&mut self, unit: Arc<UnitResult>) -> Result<AssemblyStep, SourceError> {
         let (ordinal, anchor) = match self.awaiting.take() {
+            Some((ordinal, _)) if ordinal == [1] => (ordinal, None),
             Some((ordinal, anchor)) => (ordinal, Some(anchor)),
             None if !self.started => (vec![0], None),
             None => {
@@ -595,8 +667,10 @@ impl SourceAssembler {
                 format!("source size limit ({MAX_BYTES} bytes) exceeded"),
             )));
         }
-        self.prepared.source_bytes += unit.contents.len();
-        self.prepared.files += 1;
+        if !self.in_prelude {
+            self.prepared.source_bytes += unit.contents.len();
+            self.prepared.files += 1;
+        }
         let id = self
             .prepared
             .sources
@@ -642,6 +716,17 @@ impl SourceAssembler {
     fn run(&mut self) -> Result<AssemblyStep, SourceError> {
         loop {
             let Some(frame) = self.frames.last_mut() else {
+                if self.prelude {
+                    self.prelude = false;
+                    self.in_prelude = true;
+                    let ordinal = vec![1];
+                    self.awaiting = Some((ordinal.clone(), Loader::span(LOCAL_FILE, 0..0)));
+                    return Ok(AssemblyStep::Need(NeedUnit {
+                        ordinal,
+                        parent: None,
+                        index: 0,
+                    }));
+                }
                 return Ok(AssemblyStep::Done(Box::new(std::mem::take(
                     &mut self.prepared,
                 ))));
@@ -689,7 +774,7 @@ impl SourceAssembler {
                 self.awaiting = Some((ordinal.clone(), anchor));
                 return Ok(AssemblyStep::Need(NeedUnit {
                     ordinal,
-                    parent: unit,
+                    parent: Some(unit),
                     index,
                 }));
             }
@@ -2073,7 +2158,7 @@ mod tests {
                 }
             }
         }
-        let mut assembler = SourceAssembler::new(&options);
+        let mut assembler = SourceAssembler::user_only(&options);
         let mut step = assembler.provide(units[&vec![0]].clone())?;
         loop {
             match step {
@@ -2280,7 +2365,7 @@ fn main(){println!("mod absent; }"); let x = r##"mod raw; {"##; let c = '}';}
         assert!(error.message.contains("size limit"));
         let options = SourceOptions::default();
         tree.put("main.rs", "mod a;");
-        let mut assembler = SourceAssembler::new(&options);
+        let mut assembler = SourceAssembler::user_only(&options);
         assembler.prepared.files = MAX_FILES - 1;
         let root = prepare_root_unit(
             &tree.0.join("main.rs"),
