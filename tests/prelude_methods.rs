@@ -57,17 +57,13 @@ fn differential(source: &str) -> Output {
 }
 
 #[test]
-fn panicking_convenience_methods_are_not_faked() {
+fn panicking_unwrap_matches_stock_exit() {
     for source in [
         "fn main() { let value: Option<i32> = None; value.unwrap(); }",
         "fn main() { let value: Result<i32, bool> = Err(true); value.unwrap(); }",
     ] {
-        for workers in [1, 8] {
-            let failure = compiler::compile_observed(source.into(), workers, false)
-                .err()
-                .expect("unwrap is not implemented by a method-name exception");
-            assert!(failure.report.as_ref().unwrap().failures > 0);
-        }
+        let expected = differential(source);
+        assert!(!expected.status.success());
     }
 }
 

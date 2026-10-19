@@ -168,6 +168,46 @@ impl<T> Vec<T> {
         }
     }
 
+    pub fn swap(&mut self, a: usize, b: usize) {
+        if a >= self.len || b >= self.len {
+            panic!("swap index out of bounds");
+        }
+        if a == b {
+            return;
+        }
+        let pa = slot(self.ptr, a);
+        let pb = slot(self.ptr, b);
+        unsafe {
+            let tmp = *pa;
+            *pa = *pb;
+            *pb = tmp;
+        }
+    }
+
+    pub fn reverse(&mut self) {
+        let mut i = 0usize;
+        while i < self.len / 2usize {
+            let j = self.len - 1usize - i;
+            self.swap(i, j);
+            i += 1usize;
+        }
+    }
+
+    pub fn append(&mut self, other: &mut Vec<T>) {
+        self.reserve(other.len);
+        let mut i = 0usize;
+        while i < other.len {
+            let src = slot(other.ptr, i);
+            let dst = slot(self.ptr, self.len);
+            unsafe {
+                *dst = *src;
+            }
+            self.len += 1usize;
+            i += 1usize;
+        }
+        other.len = 0usize;
+    }
+
     pub fn clear(&mut self) {
         self.truncate(0usize);
     }
