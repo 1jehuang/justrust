@@ -4815,10 +4815,10 @@ impl Plan {
                         if !row.sources.iter().any(|input| {
                             f.params.get(input.param) == Some(local) && input.location == *location
                         }) {
-                            return Ok(Some(Problem::Invalid(
-                                "returned carrier violates its declaration-owned input occurrence"
-                                    .into(),
-                            )));
+                            return Ok(Some(Problem::Invalid(format!(
+                                "returned carrier violates its declaration-owned input occurrence: parameter {local:?}, location {location:?}, expected {:?}",
+                                row.sources
+                            ))));
                         }
                     }
                 }

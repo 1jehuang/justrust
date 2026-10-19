@@ -3581,12 +3581,11 @@ fn projected_ty_inner<'a>(
                 element
             }
             Projection::DynamicIndex(_) => {
-                let Ty::Array { element, len } = ty else {
-                    return Err("runtime place index requires array type".into());
+                let element = match ty {
+                    Ty::Array { element, len } if *len <= MAX_ARRAY_LEN => element,
+                    Ty::Slice { element } => element,
+                    _ => return Err("runtime place index requires array or slice type".into()),
                 };
-                if *len > MAX_ARRAY_LEN {
-                    return Err("array length exceeds limit".into());
-                }
                 if !matches!(
                     element.as_ref(),
                     Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit
@@ -5150,9 +5149,11 @@ fn ref_type_walk(
             )?;
             return Ok((opaque, height));
         }
-        // A trait object erases its concrete type: like a parameter, any input
-        // referent may be the source of a returned `&dyn` (input envelope).
-        let mut opaque = matches!(ty, Ty::Param(_) | Ty::Dyn(_));
+        // Trait objects erase their concrete type and slices have a runtime
+        // element domain. Neither can be enumerated as fixed input paths.
+        // Their original lifetime/kind-qualified input envelope remains the
+        // authority for returned references, checked against actual body loans.
+        let mut opaque = matches!(ty, Ty::Param(_) | Ty::Dyn(_) | Ty::Slice { .. });
         let mut height = 0;
         let mut child = |value: &Ty| -> Result<(), String> {
             let (is_opaque, child_height) = walk(value, false, budget, depth + 1, visits, memo)?;

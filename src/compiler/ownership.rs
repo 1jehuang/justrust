@@ -1393,8 +1393,9 @@ fn preflight_with_plan(
                     element
                 }
                 Projection::DynamicIndex(_) => {
-                    let Ty::Array { element, .. } = ty else {
-                        return Ok(());
+                    let element = match ty {
+                        Ty::Array { element, .. } | Ty::Slice { element } => element,
+                        _ => return Ok(()),
                     };
                     element
                 }

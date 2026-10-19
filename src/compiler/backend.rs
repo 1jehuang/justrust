@@ -532,11 +532,13 @@ impl<'a> Emitter<'a> {
     }
     // Materialize the current address, never substitute a loan's original
     // referent for a carrier that may have been reassigned at runtime.
-    // Only rax is clobbered, allowing stores to preserve their RHS in r9.
+    // Runtime index projections also use r10/r11 for descriptor metadata/base,
+    // preserving the store RHS in r9 and the caller's index scratch in r8.
     fn place_address(&mut self, place: &ir::Place) -> Result<&'a ir::Ty, String> {
         let mut offset = self.local_offset(place.local)?;
         let mut ty: &'a ir::Ty = &self.function().locals[place.local.0].ty;
         let mut indirect_base = false;
+        let mut slice_metadata = false;
         let mut projections = place.projection.iter();
         while let Some(projection) = projections.next() {
             let (field, next) = match projection {
@@ -556,6 +558,14 @@ impl<'a> Emitter<'a> {
                     } else {
                         self.address(offset);
                     }
+                    // Slice metadata is captured with the genuine data
+                    // pointer before any runtime element address is formed.
+                    if matches!(referent.as_ref(), ir::Ty::Slice { .. }) {
+                        self.bytes(&[0x4c, 0x8b, 0x50, 0x08]); // r10 = descriptor len
+                        slice_metadata = true;
+                    } else {
+                        slice_metadata = false;
+                    }
                     // Physical capability transport, not a semantic Copy of
                     // the potentially non-Copy mutable-reference carrier.
                     self.bytes(&[0x48, 0x8b, 0x00]);
@@ -567,8 +577,14 @@ impl<'a> Emitter<'a> {
                 ir::Projection::Field(index) => field_offset(ty, *index)?,
                 ir::Projection::ConstantIndex(index) => array_offset(ty, *index)?,
                 ir::Projection::DynamicIndex(index) => {
-                    let ir::Ty::Array { element, len } = ty else {
-                        return Err("runtime place index requires array storage".into());
+                    let (element, len) = match ty {
+                        ir::Ty::Array { element, len } => (element, Some(*len)),
+                        ir::Ty::Slice { element } if slice_metadata => (element, None),
+                        _ => {
+                            return Err(
+                                "runtime place index requires array or slice storage".into()
+                            );
+                        }
                     };
                     if indirect_base {
                         if offset != 0 {
@@ -578,18 +594,22 @@ impl<'a> Emitter<'a> {
                     } else {
                         self.address(offset);
                     }
-                    self.bytes(&[0x49, 0x89, 0xc1]); // r9 = array base
+                    self.bytes(&[0x49, 0x89, 0xc3]); // r11 = array/slice data base
                     let index = self.local_offset(*index)?;
                     self.bytes(&[0x48, 0x8b, 0x85]); // rax = saved usize index
                     self.i32(index);
-                    self.bytes(&[0x48, 0x3d]);
-                    self.i32(
-                        i32::try_from(*len).map_err(|_| "array length exceeds backend limit")?,
-                    );
+                    if let Some(len) = len {
+                        self.bytes(&[0x48, 0x3d]);
+                        self.i32(
+                            i32::try_from(len).map_err(|_| "array length exceeds backend limit")?,
+                        );
+                    } else {
+                        self.bytes(&[0x4c, 0x39, 0xd0]); // cmp rax, captured slice len r10
+                    }
                     self.trap_if(0x83); // jae, before scaling/address formation
                     self.bytes(&[0x48, 0x69, 0xc0]);
                     self.i32(value_size(element)?);
-                    self.bytes(&[0x4c, 0x01, 0xc8]); // rax += r9
+                    self.bytes(&[0x4c, 0x01, 0xd8]); // rax += r11
                     // The reference stores this address, not a recipe that
                     // reads the cursor again when the reference is used.
                     indirect_base = true;
@@ -6215,6 +6235,99 @@ mod tests {
                         place.projection = vec![ir::Projection::DynamicIndex(index)];
                     }
                 }
+                let object = emit_checked_fixture(&checked, &signatures, 0).unwrap();
+                let bytes = link(&[("main".into(), object)]).unwrap();
+                let path = executable_bytes(&bytes);
+                let output = execute(&mut Command::new(&path));
+                std::fs::remove_file(&path).unwrap();
+                std::fs::remove_dir(path.parent().unwrap()).unwrap();
+                assert_eq!(output.status.code(), Some(expected), "{source}: {output:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_element_store_preserves_rhs_during_address_formation() {
+        let program = frontend::parse(
+            "fn main(){let mut a=[7,8];let index=1usize;a[0]=99;if a[0]!=7 || a[1]!=99 {1/0;}}",
+        )
+        .unwrap();
+        let signatures = frontend::signature_table(&program).unwrap();
+        let mut checked =
+            frontend::type_function_with_signatures(&program, 0, &signatures).unwrap();
+        let index = LocalId(
+            checked
+                .locals
+                .iter()
+                .position(|local| local.name == "index")
+                .unwrap(),
+        );
+        let mut replaced = false;
+        for statement in &mut checked.body.statements {
+            if let ir::Stmt::AssignPlace { place, .. } = statement
+                && place.projection == [ir::Projection::ConstantIndex(0)]
+            {
+                place.projection = vec![ir::Projection::DynamicIndex(index)];
+                replaced = true;
+            }
+        }
+        assert!(replaced);
+        let object = emit_checked_fixture(&checked, &signatures, 0).unwrap();
+        let bytes = link(&[("main".into(), object)]).unwrap();
+        let path = executable_bytes(&bytes);
+        let output = execute(&mut Command::new(&path));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+    }
+
+    #[test]
+    fn runtime_slice_element_loans_check_descriptor_bounds_and_capture_index() {
+        for (element, ty) in [("7i32", "i32"), ("()", "()")] {
+            for (len, index, expected) in
+                [(1, 0u64, 0), (1, 1, 101), (1, u64::MAX, 101), (0, 0, 101)]
+            {
+                let observed = if ty == "i32" {
+                    "if *r!=7i32 {1/0;}"
+                } else {
+                    "let observed=*r;"
+                };
+                let source = format!(
+                    "fn main(){{let a:[{ty};{len}]=[{element};{len}];let s:&[{ty}]=&a;let mut index={index}usize;let seed={element};let r=&seed;index=1usize;{observed}}}"
+                );
+                let program = frontend::parse(&source).unwrap();
+                let signatures = frontend::signature_table(&program).unwrap();
+                let mut checked =
+                    frontend::type_function_with_signatures(&program, 0, &signatures).unwrap();
+                let find = |name: &str| {
+                    LocalId(
+                        checked
+                            .locals
+                            .iter()
+                            .position(|local| local.name == name)
+                            .unwrap(),
+                    )
+                };
+                let slice = find("s");
+                let index = find("index");
+                let seed = find("seed");
+                let mut replaced = false;
+                for expression in &mut checked.exprs {
+                    if let ir::ExprKind::Borrow { place, .. } = &mut expression.kind
+                        && place.local == seed
+                        && place.projection.is_empty()
+                    {
+                        *place = ir::Place {
+                            local: slice,
+                            projection: vec![
+                                ir::Projection::Deref,
+                                ir::Projection::DynamicIndex(index),
+                            ],
+                        };
+                        replaced = true;
+                    }
+                }
+                assert!(replaced);
                 let object = emit_checked_fixture(&checked, &signatures, 0).unwrap();
                 let bytes = link(&[("main".into(), object)]).unwrap();
                 let path = executable_bytes(&bytes);
