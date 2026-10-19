@@ -438,6 +438,10 @@ cleanup failures.
       dependency-ordered fixed point, then canonical closed normalization to
       infer missing output actuals. Unused and cyclic unconstrained impls are
       rejected even when never called (`iterator_associated`).
+- [x] Generic trait method calls retain separate owner and method binders,
+      alpha-rename provider signatures and predicates exactly, and select
+      overrides or provided defaults with ordered method actuals
+      (`generic_trait_methods`). Universal projected signatures remain open.
 - [x] Catalog Copy/Sized associated declaration bounds under ASSOCIATED-BOUNDS.md,
       with exact retained source occurrences and header/callback identity, all unused
       assignment checks under real impl predicates, and closed normalization replay.

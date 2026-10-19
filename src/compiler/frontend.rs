@@ -10212,9 +10212,6 @@ impl<'input, 'names> Parser<'input, 'names> {
                 if !item_names.insert(self.name_key(signature.name, LookupClass::Member)?) {
                     return Err(self.error("duplicate required trait item"));
                 }
-                if !signature.type_params.is_empty() {
-                    return Err(self.unsupported("generic trait methods are unsupported"));
-                }
                 let default = if self.is("{") {
                     let (body, lexical_scope) = self.function_body(&signature.params)?;
                     Some(Function {
@@ -16467,7 +16464,7 @@ impl PlanCtx {
                     None,
                     declaration.module,
                     DeclItemName::Source(method.signature.name),
-                    &[],
+                    &method.signature.type_params,
                     ir::DeclKind::TraitItem,
                     item,
                 )?);
@@ -16476,7 +16473,7 @@ impl PlanCtx {
                         None,
                         declaration.module,
                         DeclItemName::Source(method.signature.name),
-                        &[],
+                        &method.signature.type_params,
                         ir::DeclKind::AssociatedFunction,
                         item,
                     )?;

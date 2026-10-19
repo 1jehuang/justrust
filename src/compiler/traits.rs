@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 mod associated_types;
 mod catalog;
 mod equality;
+mod generic_methods;
 mod impl_constraints;
 mod nominal_normalization;
 mod normal_drop;
@@ -2655,7 +2656,11 @@ impl ValidatedTraitWorld {
                 || info.owner != Some(item.trait_decl)
                 || info.receiver != item.receiver
                 || !trait_header.items.contains(&item.declaration)
-                || !self.same_parameters(&item.schema.env, &trait_header.env)?
+                || !self.method_environment_matches(
+                    &item.schema.env,
+                    &trait_header.env,
+                    &info.own_env,
+                )?
                 || !self.same_env(&info.env, &item.schema.env)?
             {
                 return Err(FactsError::invalid(
@@ -2851,12 +2856,40 @@ impl ValidatedTraitWorld {
     fn validate_source_default(&self, item: &TraitItemHeader, default: DeclId) -> Result<()> {
         let info = self.info(default)?;
         let callable = self.callable_header(default)?;
+        let required_schema = if info.own_env.arity() == 0 {
+            item.schema.clone()
+        } else {
+            let owner = self.trait_header(item.trait_decl)?;
+            if self.info(item.declaration)?.own_env.arity() != info.own_env.arity()
+                || !self.method_environment_matches(
+                    &callable.schema.env,
+                    &owner.env,
+                    &info.own_env,
+                )?
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "generic default provider binder mismatch",
+                ));
+            }
+            let substituted = self.alpha_rename_method_schema(
+                item,
+                &self.symbolic_trait_ref(item.trait_decl)?,
+                &self.method_arguments(default)?,
+                &callable.schema.env,
+            )?;
+            GenericSchema {
+                env: callable.schema.env.clone(),
+                signature: substituted.signature,
+                predicates: substituted.predicates,
+            }
+        };
         if self.catalog.declaration(default).is_some()
             || info.kind != DeclKind::AssociatedFunction
             || info.owner != Some(item.trait_decl)
             || info.receiver != item.receiver
-            || !self.same_parameters(&callable.schema.env, &item.schema.env)?
-            || !self.eq_signature(&callable.schema.signature, &item.schema.signature)?
+            || !self.same_parameters(&callable.schema.env, &required_schema.env)?
+            || !self.eq_signature(&callable.schema.signature, &required_schema.signature)?
             || self.source_default_item(default)?.map(|h| h.declaration) != Some(item.declaration)
         {
             return Err(FactsError::invalid(
@@ -2867,15 +2900,15 @@ impl ValidatedTraitWorld {
         // Both schemas may explicitly spell implicit bounds. Compare their
         // closed obligation sets, adding only the owning trait and Sized rules.
         let mut required = Vec::new();
-        for predicate in item.schema.predicates.iter() {
+        for predicate in required_schema.predicates.iter() {
             self.append_predicate(&mut required, predicate)?;
         }
-        self.implicit_sized(&item.schema.env, &mut required)?;
+        self.implicit_sized(&required_schema.env, &mut required)?;
         self.append_predicate(
             &mut required,
             &Predicate::Implements(self.symbolic_trait_ref(item.trait_decl)?),
         )?;
-        self.close_predicates(&mut required, &item.schema.env)?;
+        self.close_predicates(&mut required, &required_schema.env)?;
         let mut provided = Vec::new();
         for predicate in callable.schema.predicates.iter() {
             self.append_predicate(&mut provided, predicate)?;
@@ -3042,10 +3075,17 @@ impl ValidatedTraitWorld {
                     "trait implementation item owner/receiver/visibility mismatch",
                 ));
             }
-            if !self.same_parameters(&target.schema.env, &h.schema_env)? {
-                return Err(FactsError::unsupported(
+            let method_arguments = self.method_arguments(*callable_id)?;
+            if self.info(item.declaration)?.own_env.arity() != method_arguments.len()
+                || !self.method_environment_matches(
+                    &target.schema.env,
+                    &h.schema_env,
+                    &target_info.own_env,
+                )?
+            {
+                return Err(FactsError::invalid(
                     &self.budget,
-                    "unsupported: generic trait method implementation",
+                    "trait implementation method binder mismatch",
                 ));
             }
             let env = self.predicate_env(h.declaration)?;
@@ -3053,13 +3093,20 @@ impl ValidatedTraitWorld {
                 predicates: &env,
                 phase: FactsPhase::Universal,
             };
-            let expected = if self.schema_contains_projection(&item.schema)? {
+            let expected = if !method_arguments.is_empty() {
+                self.alpha_rename_method_schema(
+                    item,
+                    &h.trait_ref,
+                    &method_arguments,
+                    &target.schema.env,
+                )?
+            } else if self.schema_contains_projection(&item.schema)? {
                 self.instantiate_owner_item(item, h, context)?
             } else {
                 self.instantiate_item(item, &h.trait_ref, context)?.0
             };
-            self.validate_signature_shape(&expected.signature, &h.schema_env, None)?;
-            self.validate_predicates(&expected.predicates, &h.schema_env, None)?;
+            self.validate_signature_shape(&expected.signature, &target.schema.env, None)?;
+            self.validate_predicates(&expected.predicates, &target.schema.env, None)?;
             if !self.eq_types(
                 &expected.signature.params,
                 &target.schema.signature.params,
@@ -6122,10 +6169,11 @@ impl ValidatedTraitWorld {
                 "trait call item belongs to another trait",
             ));
         }
-        if !call.method_args.is_empty() {
-            return Err(FactsError::unsupported(
+        let method_arity = self.info(item.declaration)?.own_env.arity();
+        if call.method_args.len() != method_arity {
+            return Err(FactsError::invalid(
                 &self.budget,
-                "unsupported: generic trait method arguments",
+                "trait method argument arity mismatch",
             ));
         }
         self.require_in(
@@ -6133,7 +6181,14 @@ impl ValidatedTraitWorld {
             context,
             &mut Vec::new(),
         )?;
-        let (instantiated, topology) = self.instantiate_item(item, &call.trait_ref, context)?;
+        let (instantiated, topology) = if method_arity == 0 {
+            self.instantiate_item(item, &call.trait_ref, context)?
+        } else {
+            (
+                self.instantiate_generic_method(item, &call.trait_ref, &call.method_args, context)?,
+                None,
+            )
+        };
         for predicate in instantiated.predicates.iter() {
             self.require_in(predicate, context, &mut Vec::new())?;
         }
@@ -6420,9 +6475,13 @@ impl TraitCx for ValidatedTraitWorld {
                     for (item, body) in h.items.iter() {
                         charged(&self.budget, self.budget.charge_work(1))?;
                         if *item == call.item {
+                            let mut type_args = arguments.to_vec();
+                            for argument in call.method_args.iter() {
+                                push(&self.budget, &mut type_args, argument.clone())?;
+                            }
                             target = Some(CallTarget {
                                 declaration: *body,
-                                type_args: arguments.clone(),
+                                type_args: type_args.into(),
                             });
                             break;
                         }
@@ -6431,9 +6490,13 @@ impl TraitCx for ValidatedTraitWorld {
                         && let Some(default) = self.item_header(call.item)?.default
                     {
                         self.ensure_provider(default)?;
+                        let mut type_args = self.trait_arguments(&call.trait_ref)?;
+                        for argument in call.method_args.iter() {
+                            push(&self.budget, &mut type_args, argument.clone())?;
+                        }
                         target = Some(CallTarget {
                             declaration: default,
-                            type_args: self.trait_arguments(&call.trait_ref)?.into(),
+                            type_args: type_args.into(),
                         });
                     }
                     break;

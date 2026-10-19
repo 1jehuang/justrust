@@ -252,10 +252,16 @@ impl ValidatedTraitWorld {
                         "projected owner has duplicate, foreign or rebound method mapping",
                     ));
                 }
-                if !self.same_parameters(&provided.schema.env, &implementation.schema_env)? {
-                    return Err(FactsError::unsupported(
+                if self.info(required.declaration)?.own_env.arity() != info.own_env.arity()
+                    || !self.method_environment_matches(
+                        &provided.schema.env,
+                        &implementation.schema_env,
+                        &info.own_env,
+                    )?
+                {
+                    return Err(FactsError::invalid(
                         &self.budget,
-                        "unsupported: generic trait method implementation",
+                        "trait implementation method binder mismatch",
                     ));
                 }
                 let private = match info.visibility {

@@ -498,9 +498,6 @@ impl PlanCtx {
         {
             return Err("trait argument arity mismatch".into());
         }
-        if !method_args.is_empty() {
-            return Err("unsupported: trait method type arguments".into());
-        }
         let Some(item) = self.trait_item(trait_ref.declaration, name, budget)? else {
             return Ok(None);
         };
@@ -511,7 +508,7 @@ impl PlanCtx {
         let call = ir::TraitCall {
             trait_ref: trait_ref.clone(),
             item,
-            method_args: Arc::from([]),
+            method_args: Arc::from(method_args),
         };
         match facts
             .service()

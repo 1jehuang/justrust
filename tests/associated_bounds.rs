@@ -8,7 +8,7 @@
 //! Native phases frozen from the full graph/CLI workers1/8 CHECK/BUILD output in
 //! 942230mfnq.output. Original29: Runtime2, Invalid10, Unsupported17.
 //! Append14: Runtime6, Invalid7, Unsupported1 (nominal-self-pattern boundary).
-//! Total43: Runtime8, Invalid14, Unsupported21. Earlier syntax, resolution and
+//! Total43: Runtime8, Invalid15, Unsupported20. Earlier syntax, resolution and
 //! inference failures do not demonstrate associated-bound proof coverage.
 //! The frozen user trait named Copy hits its scalar impl self-pattern boundary,
 //! not associated user-trait validation. No source was rewritten to bypass it.
@@ -35,6 +35,7 @@ enum Outcome {
 enum Boundary {
     None,
     MoveAnalysis,
+    MethodMoveAnalysis,
     TraitObligation,
     TypeResolution,
     Syntax(&'static str),
@@ -236,10 +237,8 @@ fn main() { println!("ok"); }
             source_bytes: 164,
             source_fingerprint: 14887849515335975279,
             stock_errors: &["E0382"],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::Syntax(
-                ":2:62: unsupported: generic trait methods are unsupported, found \"{\"",
-            ),
+            outcome: Outcome::Invalid,
+            boundary: Boundary::MethodMoveAnalysis,
         },
         // Source SHA256 1c288953a7d5f3fbe889bf65bd215bc40873d2871f6e3c621dac54981dd24342
         Case {
@@ -1039,7 +1038,7 @@ fn frozen_source_partitions_and_payloads() {
         );
     }
     assert_eq!(groups, [18, 8, 3, 14]);
-    assert_eq!(outcomes, [8, 14, 21]);
+    assert_eq!(outcomes, [8, 15, 20]);
     assert_eq!(accepted, 18);
     let originals: String = cases[..29].iter().map(|c| c.source).collect();
     assert_eq!(fingerprint(&originals), 2831013440210668996);
@@ -1055,6 +1054,10 @@ fn diagnostic(case: &Case, text: &str) {
         Boundary::MoveAnalysis => (
             Outcome::Invalid,
             "universal generic declaration 0: initialization/move analysis (complete=true): [Diagnostic { kind: ReadNotDefinitelyInitialized, block: BlockId(1), statement: Some(6), origin: Some(ExprId(3)), place: Some(Place { local: LocalId(1), projection: [] }) }]",
+        ),
+        Boundary::MethodMoveAnalysis => (
+            Outcome::Invalid,
+            "dup_local: universal generic declaration 1: initialization/move analysis (complete=true): [Diagnostic { kind: ReadNotDefinitelyInitialized, block: BlockId(0), statement: Some(5), origin: Some(ExprId(1)), place: Some(Place { local: LocalId(1), projection: [] }) }]",
         ),
         Boundary::TraitObligation => (
             Outcome::Invalid,
