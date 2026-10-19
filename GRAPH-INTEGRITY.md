@@ -110,7 +110,8 @@ declaration in `src/compiler` and `src/project`, excluding test code. A
 breadth-first search from each root records every carrier type that directly
 holds a mutable primitive, with one shortest witness path.
 
-Recorded 2026-10-19: all 11 fact roots reach 7 carriers, 77 entries:
+Recorded 2026-10-19: 11 fact roots reach 7 carriers, 72 entries (77 before the
+name-versus-type parser fix below):
 
 | Carrier | Mutable field | Owner of removal |
 |---|---|---|
@@ -126,6 +127,15 @@ The budget carriers are reached because facts retain the shared `PlanBudget`
 or expansion budget handle (for example `Plan`, `ClosedCfg`, `ModuleArena`).
 Removing them means facts stop holding the ledger: charge budgets to the
 producing node and drop the handle before publication.
+
+Only type positions are references: field types, tuple and variant payload
+types and alias right-hand sides. Field names, enum variant names,
+discriminants, attributes, visibility, generic parameters and bounds are not.
+An earlier version read every identifier in a body, so the enum variant
+`TokenError::Budget(BudgetFailure)` was mistaken for `struct Budget` and the
+variant `SourceErrorKind::Module` for `struct Module`. Fixing the parser removed
+5 false `UnitResult` entries and corrected two `ParsedProgram` witnesses; their
+carriers are still reached through real `Program` fields.
 
 Limits, stated rather than claimed away:
 
