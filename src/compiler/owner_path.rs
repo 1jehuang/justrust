@@ -22,7 +22,7 @@
 #![allow(dead_code)]
 
 use super::expansion_budget::{BudgetFailure, Counter, ExpansionBudget, RetainedBytes, Storage};
-use crate::{EngineAuthority, OwnerRoot};
+use crate::{EngineAuthority, OwnerRoot, OwnerTag, TagMint};
 use std::sync::Arc;
 
 /// Closed set of owner domains. A step's domain is part of its identity, so a
@@ -70,6 +70,7 @@ pub const MAX_OWNER_DEPTH: usize = 256;
 pub enum OwnerError {
     DepthExceeded,
     OrdinalExhausted,
+    TagExhausted,
     Budget(BudgetFailure),
     Allocation,
 }
@@ -149,6 +150,15 @@ pub struct OwnerIssuer {
     path: OwnerPath,
     next: [u64; DOMAINS],
     budget: ExpansionBudget,
+    mint: TagMint,
+}
+
+/// A newly issued owner: its child issuer plus the tag bound to that exact
+/// path. The pair is created once in `issue` and cannot be reassembled.
+#[derive(Debug)]
+pub struct Issued {
+    pub issuer: OwnerIssuer,
+    pub tag: OwnerTag,
 }
 
 /// Retained bytes for one root identity, including its fixed `Arc` header.
@@ -200,6 +210,7 @@ impl OwnerIssuer {
     /// minted once per node (`Context::owner_root`) or once per standalone
     /// computation (`OwnerRoot::standalone`).
     pub fn new(root: OwnerRoot, budget: &ExpansionBudget) -> Result<Self, OwnerError> {
+        let (authority, producer, mint) = root.into_parts();
         // Pay for the fixed-size root (and its Arc header) before allocating
         // it, and seal that payment into the same immutable receipt form.
         budget.charge(Counter::Work, 1)?;
@@ -207,8 +218,8 @@ impl OwnerIssuer {
         let receipt = budget.reserve(Storage::Retained, root_bytes)?.retain()?;
         let root = Arc::new(RootedId {
             id: RootId {
-                authority: root.authority(),
-                producer: root.producer(),
+                authority,
+                producer,
             },
             _receipt: receipt,
         });
@@ -219,6 +230,7 @@ impl OwnerIssuer {
             },
             next: [0; DOMAINS],
             budget: budget.clone(),
+            mint,
         })
     }
 
@@ -226,26 +238,34 @@ impl OwnerIssuer {
         &self.path
     }
 
-    /// Issue the next child of `domain`. The only way to create a child.
-    pub fn issue(&mut self, domain: OwnerDomain) -> Result<OwnerIssuer, OwnerError> {
+    /// Issue the next child of `domain` with its bound tag. The only way to
+    /// create a child or a tag. All checks and payments happen before the
+    /// ordinal or tag is consumed, so a failure reuses nothing.
+    pub fn issue(&mut self, domain: OwnerDomain) -> Result<Issued, OwnerError> {
         let slot = &mut self.next[domain_index(domain)];
         let ordinal = *slot;
         let following = ordinal.checked_add(1).ok_or(OwnerError::OrdinalExhausted)?;
+        // The tag is stored in the caller's already-paid container: work only.
+        self.budget.charge(Counter::Work, 1)?;
         let steps = paid_steps(
             &self.budget,
             &self.path.steps.steps,
             Some(Step { domain, ordinal }),
         )?;
-        // Commit the ordinal only after the child exists, so a failed issue
-        // never skips or reuses a position.
+        let tag = self.mint.mint().map_err(|_| OwnerError::TagExhausted)?;
+        // Commit the ordinal only after the child and tag exist.
         *slot = following;
-        Ok(OwnerIssuer {
-            path: OwnerPath {
-                root: self.path.root.clone(),
-                steps,
+        Ok(Issued {
+            issuer: OwnerIssuer {
+                path: OwnerPath {
+                    root: self.path.root.clone(),
+                    steps,
+                },
+                next: [0; DOMAINS],
+                budget: self.budget.clone(),
+                mint: self.mint.derive(),
             },
-            next: [0; DOMAINS],
-            budget: self.budget.clone(),
+            tag,
         })
     }
 
@@ -260,6 +280,16 @@ impl OwnerIssuer {
 mod tests {
     use super::*;
 
+    /// Test helper: issue a child and keep only its issuer.
+    trait Child {
+        fn child(&mut self, domain: OwnerDomain) -> Result<OwnerIssuer, OwnerError>;
+    }
+    impl Child for OwnerIssuer {
+        fn child(&mut self, domain: OwnerDomain) -> Result<OwnerIssuer, OwnerError> {
+            self.issue(domain).map(|issued| issued.issuer)
+        }
+    }
+
     fn budget() -> ExpansionBudget {
         ExpansionBudget::default()
     }
@@ -271,9 +301,9 @@ mod tests {
     #[test]
     fn siblings_are_distinct_and_domains_are_separated() {
         let mut root = standalone();
-        let a = root.issue(OwnerDomain::TokenSession).unwrap();
-        let b = root.issue(OwnerDomain::TokenSession).unwrap();
-        let m = root.issue(OwnerDomain::ModuleArena).unwrap();
+        let a = root.child(OwnerDomain::TokenSession).unwrap();
+        let b = root.child(OwnerDomain::TokenSession).unwrap();
+        let m = root.child(OwnerDomain::ModuleArena).unwrap();
         assert_ne!(a.path(), b.path());
         assert_ne!(a.path(), m.path());
         assert_eq!(a.path().domain(), Some(OwnerDomain::TokenSession));
@@ -285,14 +315,14 @@ mod tests {
         let mut first = standalone();
         let mut second = standalone();
         let x = first
-            .issue(OwnerDomain::File)
+            .child(OwnerDomain::File)
             .unwrap()
-            .issue(OwnerDomain::TokenSession)
+            .child(OwnerDomain::TokenSession)
             .unwrap();
         let y = second
-            .issue(OwnerDomain::File)
+            .child(OwnerDomain::File)
             .unwrap()
-            .issue(OwnerDomain::TokenSession)
+            .child(OwnerDomain::TokenSession)
             .unwrap();
         assert_ne!(first.path(), second.path());
         assert_ne!(x.path(), y.path());
@@ -302,10 +332,10 @@ mod tests {
     fn files_are_issued_not_positional() {
         // Two files of one parent are distinct; re-issuing never repeats a file.
         let mut root = standalone();
-        let mut file0 = root.issue(OwnerDomain::File).unwrap();
-        let mut file1 = root.issue(OwnerDomain::File).unwrap();
-        let s0 = file0.issue(OwnerDomain::TokenSession).unwrap();
-        let s1 = file1.issue(OwnerDomain::TokenSession).unwrap();
+        let mut file0 = root.child(OwnerDomain::File).unwrap();
+        let mut file1 = root.child(OwnerDomain::File).unwrap();
+        let s0 = file0.child(OwnerDomain::TokenSession).unwrap();
+        let s1 = file1.child(OwnerDomain::TokenSession).unwrap();
         assert_ne!(file0.path(), file1.path());
         assert_ne!(s0.path(), s1.path());
         assert!(s0.path().descends_from(file0.path()));
@@ -332,10 +362,10 @@ mod tests {
     fn depth_is_bounded_before_allocation() {
         let mut issuer = standalone();
         for _ in 0..MAX_OWNER_DEPTH {
-            issuer = issuer.issue(OwnerDomain::TokenSlice).unwrap();
+            issuer = issuer.child(OwnerDomain::TokenSlice).unwrap();
         }
         assert_eq!(
-            issuer.issue(OwnerDomain::TokenSlice).unwrap_err(),
+            issuer.child(OwnerDomain::TokenSlice).unwrap_err(),
             OwnerError::DepthExceeded
         );
     }
@@ -350,7 +380,7 @@ mod tests {
         });
         let mut root = OwnerIssuer::new(OwnerRoot::standalone().unwrap(), &small).unwrap();
         let before = small.snapshot();
-        let _first = root.issue(OwnerDomain::TokenSession).unwrap();
+        let _first = root.child(OwnerDomain::TokenSession).unwrap();
         assert!(
             small.snapshot().retained_bytes > before.retained_bytes,
             "issue reserved retained bytes"
@@ -358,11 +388,11 @@ mod tests {
         // The next child does not fit: rejected by admission, not by an
         // allocation that already happened.
         assert!(matches!(
-            root.issue(OwnerDomain::TokenSession),
+            root.child(OwnerDomain::TokenSession),
             Err(OwnerError::Budget(_))
         ));
         // Expansion budgets latch the first failure: no later issue succeeds.
-        assert!(root.issue(OwnerDomain::ModuleArena).is_err());
+        assert!(root.child(OwnerDomain::ModuleArena).is_err());
     }
 
     #[test]
@@ -432,7 +462,7 @@ mod tests {
                     // Suspends: the root is moved into the future and owned
                     // across polls; no re-mint happens on resume.
                     let value = cx.read(cx.request(Key::new(2, vec![])).get(0)).await;
-                    let child = issuer.issue(OwnerDomain::TokenSession).expect("child");
+                    let child = issuer.child(OwnerDomain::TokenSession).expect("child");
                     assert!(child.path().descends_from(issuer.path()));
                     log.lock()
                         .unwrap()
@@ -477,7 +507,7 @@ mod tests {
         let budget = budget();
         let before = budget.snapshot().retained_bytes;
         let mut root = OwnerIssuer::new(OwnerRoot::standalone().unwrap(), &budget).unwrap();
-        let child = root.issue(OwnerDomain::TokenSession).unwrap().into_path();
+        let child = root.child(OwnerDomain::TokenSession).unwrap().into_path();
         let charged = budget.snapshot().retained_bytes;
         assert!(
             charged
@@ -493,6 +523,106 @@ mod tests {
         assert_eq!(child.depth(), 1);
         fn assert_send_sync<T: Send + Sync>(_: &T) {}
         assert_send_sync(&child);
+    }
+
+    #[test]
+    fn tags_are_distinct_across_siblings_roots_and_threads() {
+        // Siblings of one parent, and identical structure under two roots.
+        let mut a = standalone();
+        let mut b = standalone();
+        let a0 = a.issue(OwnerDomain::TokenSession).unwrap();
+        let a1 = a.issue(OwnerDomain::TokenSession).unwrap();
+        let b0 = b.issue(OwnerDomain::TokenSession).unwrap();
+        assert_ne!(a0.tag, a1.tag, "sibling sessions share a tag");
+        assert_ne!(
+            a0.tag, b0.tag,
+            "identical structure under two roots shares a tag"
+        );
+        // The path is the authority; equal structure under distinct roots
+        // still differs, and tags never stand in for paths.
+        assert_ne!(a0.issuer.path(), b0.issuer.path());
+        // Concurrent issuance from independent roots on many threads.
+        let tags: Vec<OwnerTag> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..16)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let mut root = standalone();
+                        (0..8)
+                            .map(|_| root.issue(OwnerDomain::TokenSlice).unwrap().tag)
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|h| h.join().unwrap())
+                .collect()
+        });
+        let unique: std::collections::HashSet<_> = tags.iter().collect();
+        assert_eq!(unique.len(), tags.len(), "concurrent tags collided");
+    }
+
+    #[test]
+    fn engine_and_standalone_tags_never_collide() {
+        use crate::{Context, Engine, Key, Provider, TaskFuture};
+        use std::sync::Mutex;
+        type Seen = Arc<Mutex<Vec<OwnerTag>>>;
+        struct Issue(Seen);
+        impl Provider for Issue {
+            fn outputs(&self, _: &Key) -> usize {
+                1
+            }
+            fn start(&self, cx: Context, _: Key) -> TaskFuture {
+                let seen = self.0.clone();
+                Box::pin(async move {
+                    let mut issuer =
+                        OwnerIssuer::new(cx.owner_root()?, &ExpansionBudget::default())
+                            .map_err(|e| crate::Error::new(format!("{e:?}")))?;
+                    let tag = issuer.issue(OwnerDomain::TokenSession).unwrap().tag;
+                    seen.lock().unwrap().push(tag);
+                    cx.publish(0, 1)
+                })
+            }
+        }
+        let seen: Seen = Arc::default();
+        for _ in 0..3 {
+            let engine = Engine::new(Issue(seen.clone()));
+            let demand = engine.request(Key::new(1, vec![]));
+            engine.run(2).unwrap();
+            demand.completion().unwrap();
+        }
+        let mut tags = seen.lock().unwrap().clone();
+        tags.push(standalone().issue(OwnerDomain::TokenSession).unwrap().tag);
+        let unique: std::collections::HashSet<_> = tags.iter().collect();
+        assert_eq!(unique.len(), 4, "engine/standalone tags collided: {tags:?}");
+    }
+
+    #[test]
+    fn failed_issue_consumes_no_ordinal_and_mints_no_tag() {
+        // Payment precedes minting in `issue`, so an admission failure
+        // returns before the tag mint and before the ordinal commit.
+        use super::super::expansion_budget::ExpansionLimits;
+        // Budget fits the root only: the first issue fails at admission.
+        let tight = ExpansionBudget::new(ExpansionLimits {
+            bytes: root_bytes().unwrap() + path_bytes(0).unwrap(),
+            ..ExpansionLimits::default()
+        });
+        let mut issuer = OwnerIssuer::new(OwnerRoot::standalone().unwrap(), &tight).unwrap();
+        assert!(matches!(
+            issuer.issue(OwnerDomain::TokenSession),
+            Err(OwnerError::Budget(_))
+        ));
+        // The ordinal was not consumed: still 0 for this domain.
+        assert_eq!(issuer.next[domain_index(OwnerDomain::TokenSession)], 0);
+    }
+
+    #[test]
+    fn tag_exhaustion_fails_closed() {
+        use std::sync::atomic::AtomicU64;
+        let counter = AtomicU64::new(u64::MAX - 1);
+        assert!(crate::engine::mint_from_counter_for_test(&counter).is_some());
+        assert!(crate::engine::mint_from_counter_for_test(&counter).is_none());
+        assert!(crate::engine::mint_from_counter_for_test(&counter).is_none());
     }
 
     #[test]

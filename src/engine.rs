@@ -286,6 +286,49 @@ pub struct OwnerRoot {
     /// `None` only for standalone roots, which have no producing node.
     node: Option<u64>,
 }
+
+/// Opaque foreign-owner discriminator carried by `Copy` handles. Globally
+/// unique among issued tags, but never a semantic identity, cache key, order
+/// or graph key: the structural `OwnerPath` is the authority. No public
+/// constructor and no conversion from integers or paths.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct OwnerTag(NonZeroU64);
+impl OwnerTag {
+    /// Raw bits for equality checks inside existing 8-byte handle owners.
+    pub fn bits(self) -> NonZeroU64 {
+        self.0
+    }
+}
+
+/// The one capability that can mint owner tags. Obtained only by consuming
+/// an `OwnerRoot`; neither `Clone` nor constructible outside this module.
+#[derive(Debug)]
+pub struct TagMint {
+    _sealed: (),
+}
+
+/// Process-wide tag space, shared by every engine and standalone root so tags
+/// never collide across live roots. Engine-internal identity bookkeeping.
+static NEXT_OWNER_TAG: AtomicU64 = AtomicU64::new(1);
+
+impl TagMint {
+    /// Mint the next tag. Fails closed at exhaustion; never wraps or reuses.
+    pub fn mint(&mut self) -> Result<OwnerTag, Error> {
+        allocate_graph_id(&NEXT_OWNER_TAG)
+            .map(OwnerTag)
+            .ok_or_else(|| Error::new("owner tag space exhausted"))
+    }
+    /// The capability for an issuer created by this one. Only an existing
+    /// capability (ultimately a consumed `OwnerRoot`) can derive another.
+    pub fn derive(&self) -> TagMint {
+        TagMint { _sealed: () }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn mint_from_counter_for_test(counter: &AtomicU64) -> Option<OwnerTag> {
+    allocate_graph_id(counter).map(OwnerTag)
+}
 impl OwnerRoot {
     pub fn authority(&self) -> EngineAuthority {
         self.authority
@@ -293,6 +336,10 @@ impl OwnerRoot {
     /// The engine-local id of the producing node, absent for standalone roots.
     pub fn producer(&self) -> Option<u64> {
         self.node
+    }
+    /// Consume the root into its identity and the single tag-mint capability.
+    pub fn into_parts(self) -> (EngineAuthority, Option<u64>, TagMint) {
+        (self.authority, self.node, TagMint { _sealed: () })
     }
     /// A fresh root for one standalone, non-graph computation (direct parsing
     /// in library calls and tests). Fails closed if graph ids are exhausted.

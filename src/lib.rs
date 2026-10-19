@@ -10,5 +10,5 @@ pub mod project;
 
 pub use engine::{
     Context, Demand, Engine, EngineAuthority, Error, Event, Handle, Key, Outputs, OwnerRoot,
-    Provider, Report, TaskFuture,
+    OwnerTag, Provider, Report, TagMint, TaskFuture,
 };
