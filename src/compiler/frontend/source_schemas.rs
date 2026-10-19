@@ -5,6 +5,8 @@
 #[cfg(test)]
 mod tests;
 
+#[path = "provider_inherited_predicates.rs"]
+mod provider_inherited_predicates;
 use super::{ir, tr};
 use std::mem::size_of;
 use std::sync::Arc;

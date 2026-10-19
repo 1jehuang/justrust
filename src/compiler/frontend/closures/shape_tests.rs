@@ -2,6 +2,139 @@
 use super::*;
 
 #[test]
+fn generic_owner_membership_replays_ordered_substitution() {
+    use crate::compiler::source;
+    use ir::TraitCx;
+    let options = source::SourceOptions::default();
+    let expansion = crate::compiler::expansion_budget::ExpansionBudget::default();
+    let mut assembler = source::SourceAssembler::new(&options);
+    let mut step = assembler
+        .provide(Arc::new(source::prepare_text_unit(
+            "generic-closure-membership.rs",
+            "fn outer<A,B>(a:A,b:B){let f=move||{let first=a;let second=b;7i32};}fn main(){}",
+            &options,
+        )))
+        .unwrap();
+    let prepared = loop {
+        match step {
+            source::AssemblyStep::Done(prepared) => break prepared,
+            source::AssemblyStep::Need(need) => {
+                let unit = match need.parent.as_deref() {
+                    None => source::prepare_prelude_unit(&options, &expansion),
+                    Some(parent) => {
+                        source::prepare_child_unit(parent, need.index, &options, &expansion)
+                    }
+                };
+                step = assembler.provide(Arc::new(unit)).unwrap();
+            }
+        }
+    };
+    let program = resolve(&parse_prepared(&prepared).unwrap()).unwrap();
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&program, &budget).unwrap();
+    let (provider, owner) = (0..plan.callable_count())
+        .find_map(|index| {
+            let provider = plan.callable_decl(index).ok()?;
+            plan.stored_closure_owner(provider)
+                .ok()
+                .flatten()
+                .map(|(owner, _)| (provider, owner))
+        })
+        .unwrap();
+    let (_, bodies) =
+        type_check::type_callable_source_and_closures(&program, owner, &plan, &budget, None)
+            .unwrap();
+    let template = &bodies
+        .iter()
+        .find(|body| body.ty.provider() == provider)
+        .unwrap()
+        .ty;
+    assert_eq!(template.owner_args().len(), 2);
+    let concrete = Arc::new(
+        template
+            .try_map::<String>(|ty| {
+                Ok(if ty == &template.owner_args()[0] {
+                    ir::Ty::Bool
+                } else if ty == &template.owner_args()[1] {
+                    ir::Ty::Unit
+                } else {
+                    ty.clone()
+                })
+            })
+            .unwrap(),
+    );
+    let world = plan.trait_world().unwrap();
+    let declaration = plan
+        .registry
+        .trait_ids
+        .iter()
+        .copied()
+        .find(|id| world.closure_trait_kind(*id).unwrap() == Some(ir::ClosureKind::FnOnce))
+        .unwrap();
+    let facts = plan.callable_facts(owner).unwrap();
+    let goal = |closure: Arc<ir::ClosureTy>| {
+        ir::Predicate::Implements(ir::TraitRef {
+            declaration,
+            args: Arc::from([if closure.params().is_empty() {
+                ir::Ty::Unit
+            } else {
+                ir::Ty::Tuple(closure.params().into())
+            }]),
+            self_ty: ir::Ty::Closure(closure),
+        })
+    };
+    assert!(matches!(
+        world.prove_goal(&goal(concrete.clone()), &facts).unwrap(),
+        crate::compiler::traits::ProofOutcome::Proved(_)
+    ));
+    let changed = |owner_args: Arc<[ir::Ty]>, result: ir::Ty| {
+        Arc::new(
+            ir::ClosureTy::new(
+                owner,
+                owner_args,
+                concrete.site(),
+                provider,
+                concrete.params().into(),
+                result,
+                concrete.captures().into(),
+                concrete.kind(),
+            )
+            .with_sources(concrete.sources().into())
+            .with_shape_seal(concrete.shape_seal().cloned()),
+        )
+    };
+    for (label, forged) in [
+        (
+            "reordered owner prefix",
+            changed(
+                Arc::from([ir::Ty::Unit, ir::Ty::Bool]),
+                concrete.result().clone(),
+            ),
+        ),
+        (
+            "truncated owner prefix",
+            changed(Arc::from([ir::Ty::Bool]), concrete.result().clone()),
+        ),
+        (
+            "copied seal changed result",
+            changed(concrete.owner_args().into(), ir::Ty::Bool),
+        ),
+        (
+            "callback remapped shape",
+            Arc::new(concrete.try_map::<String>(|_| Ok(ir::Ty::Bool)).unwrap()),
+        ),
+    ] {
+        assert!(
+            !matches!(
+                world.prove_goal(&goal(forged), &facts),
+                Ok(crate::compiler::traits::ProofOutcome::Proved(_))
+            ),
+            "{label} admitted"
+        );
+    }
+}
+
+#[test]
 fn raw_fn_membership_rejects_forged_final_shape() {
     use crate::compiler::source;
     use ir::TraitCx;
@@ -60,7 +193,11 @@ fn raw_fn_membership_rejects_forged_final_shape() {
     let goal = |closure: Arc<ir::ClosureTy>| {
         ir::Predicate::Implements(ir::TraitRef {
             declaration,
-            args: Arc::from([ir::Ty::Tuple(closure.params().into())]),
+            args: Arc::from([if closure.params().is_empty() {
+                ir::Ty::Unit
+            } else {
+                ir::Ty::Tuple(closure.params().into())
+            }]),
             self_ty: ir::Ty::Closure(closure),
         })
     };

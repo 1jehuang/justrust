@@ -635,7 +635,16 @@ cleanup failures.
       receiver mode's immutable typed payload before child execution, rejecting
       raw or copied-seal metadata, foreign recipes and changed body payloads.
       This authority prerequisite does not authorize arbitrary callback-based
-      generic substitution. Unqualified closure calls now resolve genuine lexical
+      generic substitution. Generic parent providers now retain the exact ordered
+      owner prefix plus their own receiver/tuple/result binders. Canonical template
+      substitution replays the original shape seal and discharges inherited owner
+      predicates in the caller's real environment; symbolic closure Output retains
+      sealed normalization evidence rather than pretending an open goal is closed.
+      Five stock/native owner cases cover CHECK/BUILD/run workers 1/8, including
+      unused move/bound rejection (`closure_generic_owners`), with ordered-prefix,
+      copied-shape and foreign-recipe authority controls. Reference results,
+      closure-backed opaque returns and the parent-solved layout frontier remain
+      open. Unqualified closure calls now resolve genuine lexical
       bindings before item/import lookup, preserving local/parameter shadowing
       and rejecting unused non-callable or invalid item calls
       (`tests/closure_lexical_calls.rs`, explicit worker-1/8 CHECK/BUILD/run).

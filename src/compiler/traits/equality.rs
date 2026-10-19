@@ -806,7 +806,9 @@ impl ValidatedTraitWorld {
         projection: &ir::AssociatedTypeProjection,
         facts: &ValidatedFacts,
     ) -> Result<ProjectionReduction> {
-        if self.goal_is_closed(&projection.trait_ref, facts.env())? {
+        if self.checked_closure_projection(projection, facts.env())?
+            || self.goal_is_closed(&projection.trait_ref, facts.env())?
+        {
             Ok(ProjectionReduction::Implementation(
                 self.normalize_associated_type(projection, facts)?,
             ))
@@ -1106,7 +1108,8 @@ impl ValidatedTraitWorld {
             {
                 return Ok(normal);
             }
-            if !self.goal_is_closed(&projection.trait_ref, facts.env())?
+            if !self.checked_closure_projection(projection, facts.env())?
+                && !self.goal_is_closed(&projection.trait_ref, facts.env())?
                 && self
                     .declared_equality_rhs(projection, &facts.predicates.predicates, facts.env())?
                     .is_none()

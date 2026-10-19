@@ -3,7 +3,7 @@
 use super::*;
 
 impl DeclRegistry {
-    pub(super) fn closure_source_owner(
+    pub(in crate::compiler::frontend) fn closure_source_owner(
         &self,
         source: &ClosureSource,
     ) -> Result<ir::DeclId, String> {

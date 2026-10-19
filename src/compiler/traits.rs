@@ -18,6 +18,9 @@ mod carrier_regions;
 mod catalog;
 #[path = "traits/closure_dispatch.rs"]
 mod closure_dispatch;
+mod closure_owner_substitution;
+mod closure_projections;
+mod closure_provider_domain;
 mod closures;
 mod constant_members;
 mod dynamic_objects;
@@ -6551,7 +6554,7 @@ impl ValidatedTraitWorld {
         let Predicate::Implements(goal) = predicate else {
             return Ok(None);
         };
-        if let Some(proof) = self.prove_closure(predicate, context)? {
+        if let Some(proof) = self.prove_closure(predicate, context, active)? {
             return Ok(Some(proof));
         }
         let item = if goal.declaration == self.catalog.id(CatalogItem::Sized) {

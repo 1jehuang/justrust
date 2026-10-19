@@ -142,22 +142,12 @@ impl PlanCtx {
         &self,
         target: &ir::CallTarget,
     ) -> Result<ir::ClosureKind, String> {
-        match target
-            .type_args
-            .first()
-            .ok_or("closure instance has no receiver actual")?
-        {
-            ir::Ty::Ref {
-                kind: ir::BorrowKind::Shared,
-                referent,
-            } if matches!(referent.as_ref(), ir::Ty::Closure(_)) => Ok(ir::ClosureKind::Fn),
-            ir::Ty::Ref {
-                kind: ir::BorrowKind::Mut,
-                referent,
-            } if matches!(referent.as_ref(), ir::Ty::Closure(_)) => Ok(ir::ClosureKind::FnMut),
-            ir::Ty::Closure(_) => Ok(ir::ClosureKind::FnOnce),
-            _ => Err("closure instance receiver is not a checked environment".into()),
-        }
+        let caller = self.callable_env(target.declaration)?;
+        let (_, mode) = self
+            .trait_world()?
+            .closure_adapter_environment(target, &caller)
+            .map_err(|e| e.into_legacy_diagnostic(&self.budget))?;
+        Ok(mode)
     }
     pub(in crate::compiler) fn validate_closure_instance(
         &self,
@@ -168,27 +158,12 @@ impl PlanCtx {
         if target.declaration != original.ty.provider() {
             return Err("closure provider changed from its parent-body fact".into());
         }
-        let receiver = target
-            .type_args
-            .first()
-            .ok_or("closure instance has no receiver actual")?;
-        let environment = match receiver {
-            ir::Ty::Ref { referent, .. } => referent.as_ref(),
-            other => other,
-        };
-        if !self
+        let caller = self.callable_env(target.declaration)?;
+        let mode = self
             .trait_world()?
-            .types_equal(
-                std::slice::from_ref(environment),
-                &[ir::Ty::Closure(original.ty.clone())],
-            )
-            .map_err(|e| e.into_legacy_diagnostic(&self.budget))?
-        {
-            return Err(
-                "closure instance metadata differs from its original parent-body fact".into(),
-            );
-        }
-        original.body_for(self.closure_instance_mode(target)?)?;
+            .validate_closure_instance_substitution(&original.ty, target, &caller)
+            .map_err(|e| e.into_legacy_diagnostic(&self.budget))?;
+        original.body_for(mode)?;
         self.instance_facts(target)?;
         Ok(())
     }

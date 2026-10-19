@@ -36,9 +36,11 @@ impl Checker<'_> {
             return Ok(Some(previous.ty.clone()));
         }
         let owner_env = plan.callable_env(owner)?;
-        if owner_env.is_generic() {
-            return Err("unsupported: stored closure in generic parent body".into());
-        }
+        let owner_args: Arc<[ir::Ty]> = owner_env
+            .ordered_params()
+            .map(ir::Ty::Param)
+            .collect::<Vec<_>>()
+            .into();
         let source_key = name_scope::path_key(plan.program.names.as_ref(), path, Namespace::Type)?;
         let by_move = plan
             .program
@@ -196,7 +198,7 @@ impl Checker<'_> {
             self.seal_closure_shape(
                 ir::ClosureTy::new(
                     owner,
-                    Arc::from([]),
+                    owner_args,
                     syntax.site,
                     provider,
                     parameter_types.into(),

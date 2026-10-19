@@ -73,27 +73,7 @@ impl ValidatedTraitWorld {
         closure: &ir::ClosureTy,
         env: &GenericEnv,
     ) -> Result<()> {
-        let recipe = self
-            .schema
-            .closure_recipe(closure.provider())?
-            .ok_or_else(|| {
-                FactsError::invalid(
-                    &self.budget,
-                    "closure metadata has no retained source recipe",
-                )
-            })?;
-        let seal = closure.shape_seal().ok_or_else(|| {
-            FactsError::invalid(
-                &self.budget,
-                "closure metadata lacks its parent-minted final shape seal",
-            )
-        })?;
-        if !seal.validates(&recipe, closure, |left, right| self.eq_ty(left, right, 0))? {
-            return Err(FactsError::invalid(
-                &self.budget,
-                "closure metadata differs from its checked source recipe or final shape",
-            ));
-        }
+        self.replay_closure_owner_substitution(closure, env)?;
         if self.schema.closure_owner_site(closure.provider())?
             != Some((closure.owner(), closure.site()))
         {
@@ -109,18 +89,7 @@ impl ValidatedTraitWorld {
                 "closure owner instantiation arity mismatch",
             ));
         }
-        if self
-            .callable_header(closure.provider())?
-            .schema
-            .env
-            .total_arity()
-            != 3
-        {
-            return Err(FactsError::invalid(
-                &self.budget,
-                "closure adapter binder arity mismatch",
-            ));
-        }
+        self.closure_provider_prefix(closure.provider())?;
         if closure.sources().len() != closure.captures().len() {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -177,6 +146,7 @@ impl ValidatedTraitWorld {
         &self,
         predicate: &Predicate,
         context: ProofContext<'_>,
+        active: &mut Vec<GoalKey>,
     ) -> Result<Option<ProofOutcome>> {
         let Predicate::Implements(goal) = predicate else {
             return Ok(None);
@@ -194,6 +164,7 @@ impl ValidatedTraitWorld {
         {
             return Ok(Some(ProofOutcome::NotProven));
         }
+        self.require_closure_owner_predicates(closure, context, active)?;
         Ok(Some(self.evidence(
             predicate,
             context,
@@ -206,25 +177,7 @@ impl ValidatedTraitWorld {
         closure: &Arc<ir::ClosureTy>,
         kind: ir::ClosureKind,
     ) -> Result<CallTarget> {
-        let receiver = match kind {
-            ir::ClosureKind::Fn => Ty::Ref {
-                kind: ir::BorrowKind::Shared,
-                referent: Arc::new(Ty::Closure(closure.clone())),
-            },
-            ir::ClosureKind::FnMut => Ty::Ref {
-                kind: ir::BorrowKind::Mut,
-                referent: Arc::new(Ty::Closure(closure.clone())),
-            },
-            ir::ClosureKind::FnOnce => Ty::Closure(closure.clone()),
-        };
-        Ok(CallTarget {
-            declaration: closure.provider(),
-            type_args: Arc::from([
-                receiver,
-                self.closure_arguments(closure)?,
-                closure.result().clone(),
-            ]),
-        })
+        self.closure_target_in_owner_domain(closure, kind)
     }
 
     pub(super) fn validate_closure_direct(
@@ -232,45 +185,17 @@ impl ValidatedTraitWorld {
         target: &CallTarget,
         context: ProofContext<'_>,
     ) -> Result<()> {
-        let Some((owner, site)) = self.schema.closure_owner_site(target.declaration)? else {
-            return Ok(());
-        };
-        let [receiver, arguments, result] = target.type_args.as_ref() else {
-            return Err(FactsError::invalid(
-                &self.budget,
-                "closure adapter actual arity mismatch",
-            ));
-        };
-        let (ty, kind) = match receiver {
-            Ty::Ref { kind, referent } => (
-                referent.as_ref(),
-                if *kind == ir::BorrowKind::Shared {
-                    ir::ClosureKind::Fn
-                } else {
-                    ir::ClosureKind::FnMut
-                },
-            ),
-            other => (other, ir::ClosureKind::FnOnce),
-        };
-        let Ty::Closure(closure) = ty else {
-            return Err(FactsError::invalid(
-                &self.budget,
-                "closure adapter receiver is not its checked environment",
-            ));
-        };
-        self.validate_closure_metadata(closure, context.env())?;
-        if closure.provider() != target.declaration
-            || closure.owner() != owner
-            || closure.site() != site
-            || !closure.supports(kind)
-            || !self.eq_ty(arguments, &self.closure_arguments(closure)?, 0)?
-            || !self.eq_ty(result, closure.result(), 0)?
+        if self
+            .schema
+            .closure_owner_site(target.declaration)?
+            .is_none()
         {
-            return Err(FactsError::invalid(
-                &self.budget,
-                "closure adapter actuals differ from its checked signature or capability",
-            ));
+            return Ok(());
         }
+        let adapter = self.decode_closure_adapter(target)?;
+        self.validate_closure_metadata(adapter.closure, context.env())?;
+        // discharge_in separately instantiates this provider's full inherited
+        // schema and requires every predicate, including the parent's bounds.
         Ok(())
     }
 

@@ -16,17 +16,15 @@ impl ValidatedTraitWorld {
         {
             return Ok(None);
         }
-        let receiver = match target.type_args.first() {
-            Some(Ty::Ref { kind, referent }) if matches!(referent.as_ref(), Ty::Closure(_)) => {
-                ReceiverMode::Borrowed { kind: *kind }
-            }
-            Some(Ty::Closure(_)) => ReceiverMode::Value,
-            _ => {
-                return Err(FactsError::invalid(
-                    &self.budget,
-                    "closure adapter has no canonical receiver",
-                ));
-            }
+        let adapter = self.decode_closure_adapter(target)?;
+        let receiver = match adapter.mode {
+            ir::ClosureKind::Fn => ReceiverMode::Borrowed {
+                kind: ir::BorrowKind::Shared,
+            },
+            ir::ClosureKind::FnMut => ReceiverMode::Borrowed {
+                kind: ir::BorrowKind::Mut,
+            },
+            ir::ClosureKind::FnOnce => ReceiverMode::Value,
         };
         Ok(Some(receiver))
     }
@@ -70,8 +68,25 @@ impl ValidatedFacts {
                 "closure body proof has no receiver capability",
             ));
         };
-        let original = self.world.closure_target(closure, mode)?;
+        let adapter = self.world.decode_closure_adapter(target)?;
+        if adapter.mode != mode {
+            return Ok(false);
+        }
         self.world
-            .types_equal(&original.type_args, &target.type_args)
+            .validate_closure_metadata(adapter.closure, self.env())?;
+        let original = self.world.closure_target(closure, mode)?;
+        if original.type_args.len() != target.type_args.len()
+            || target.type_args.len() != self.env().total_arity()
+        {
+            return Err(FactsError::invalid(
+                self.budget(),
+                "closure effect lookup changed provider domain arity",
+            ));
+        }
+        for (raw, actual) in original.type_args.iter().zip(target.type_args.iter()) {
+            self.world
+                .validate_rhs_substitution(raw, actual, self.env(), &target.type_args, 0)?;
+        }
+        Ok(true)
     }
 }

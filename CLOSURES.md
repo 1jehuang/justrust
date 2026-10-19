@@ -7,8 +7,10 @@ provider has an immutable source-recipe identity, distinct even between worlds
 with equal numeric declaration/snapshot IDs. Only the exact parent checker can
 seal its finalized owner arguments, site, provider, parameters, result, capture
 types, source places and capability. An arbitrary type-mapping callback preserves
-the original seal and cannot authorize changed metadata. Generic transformation
-needs a separate authenticated substitution protocol and remains unfinished.
+the original seal and cannot itself authorize changed metadata. Generic
+transformation replays the retained template through the exact ordered owner's
+canonical substitution, then discharges that owner's predicates in the genuine
+caller environment and proof phase.
 
 The parent also seals pure typed payload receipts for every supported receiver
 mode. These retain raw call traces, not validated trait-world/source capabilities,
@@ -54,6 +56,31 @@ unchanged error-handling and sorting corpus programs advance past the former
 parser guard but still reject at their subsequent slice-carrier and unresolved
 method boundaries respectively.
 
+## Generic owner domains
+
+Anonymous providers retain the complete ordered lexical owner prefix followed by
+their own receiver, argument-tuple and result binders. Source contexts and
+predicates come from the exact retained callable owner, including associated and
+default-body ownership, not matching names. Every decoder authenticates the same
+provider domain, site, receiver capability and checked adapter ABI.
+
+A transformed closure keeps its parent-minted seal. Membership replays all owner
+arguments, parameter/result and capture types against that seal's original
+template using canonical substitution, and discharges inherited owner predicates.
+Symbolic closure Output normalization carries ordinary normalization evidence in
+the actual caller environment and phase. It does not label an open goal closed,
+borrow a private empty environment, or mint authority from a mapping callback.
+Child execution still independently reads and replays the finalized parent body.
+
+`tests/closure_generic_owners.rs` compares noncapturing and value/move-capturing
+generic parents, distinct ordered owner instantiations, unused move reuse and
+missing bounds against stock CHECK/BUILD/run at workers 1 and 8. Membership
+controls reject truncated/reordered prefixes with unchanged captures, copied
+seals with changed results, arbitrary callbacks and foreign source recipes.
+This bounded milestone does not admit reference-bearing results, generic
+closure-backed opaque returns, or closure layout before the parent-solved graph
+frontier. Full Iterator adapter execution and all closure modes remain open.
+
 ## Canonical method source owners
 
 Stored closures in implementation bodies retain their exact implementation/item
@@ -70,8 +97,9 @@ ordinals reject.
 self captures, equal-spelling methods in distinct implementations and unused bad
 closure bodies with explicit worker-1/8 CHECK/BUILD/run. Generic implementation
 and trait-default source ownership have metadata controls, but their executable
-closure bodies still require the unfinished inherited provider environment.
-This source ownership fix does not complete generic-parent closure support.
+closure bodies remain separate acceptance work beyond the generic free-function
+owner controls above. This source ownership fix alone does not establish their
+executable admission.
 
 ## Stored closure support
 
@@ -89,7 +117,7 @@ Inferred closure result hints do not create source-written coercion sites.
 Reference-bearing closure results, including nested tuple/array carriers, remain
 explicitly unsupported until their exact checked input-origin contracts can be
 replayed through callable projection. This is not a successful reference-return
-or opaque-return milestone. Generic parent bodies and opaque returns remain open.
+or opaque-return milestone. Closure-backed opaque returns remain open.
 Reference-rooted dereference precision, unique-immutable capture capability, and
 raw/owning-pointer mutation classification are separate unfinished work. This
 increment does not claim all reference-containing environment forms.
@@ -107,8 +135,9 @@ mode-specific concrete receiver bodies and ordinary move/drop checking. Capture
 source places, owner instantiation, site, provider and receiver capability are
 part of executable authorization. `tests/closure_captures.rs` compares valid
 execution and invalid move reuse against stock Rust at workers 1 and 8.
-Closures in generic parents and opaque returns remain unsupported by this
-increment. This is not complete closure support.
+Closure-backed opaque returns remain unsupported by this increment. Generic
+parent support is bounded by the authenticated owner-domain milestone above.
+This is not complete closure support.
 
 This is not full closure support or full Rust compatibility.
 The mutable scalar increment below is a private checkpoint with scoped replay

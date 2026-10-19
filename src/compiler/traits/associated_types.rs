@@ -671,6 +671,7 @@ impl ValidatedTraitWorld {
                 }
                 if !self.raw_associated_ty_is_closed(ty, depth + 1)?
                     && !matches!(&projection.trait_ref.self_ty, Ty::Dyn(_))
+                    && !self.checked_closure_projection(projection, env)?
                 {
                     self.validate_universal_projection(projection, env)?;
                 }
@@ -708,6 +709,13 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_work(1))?;
         match ty {
             Ty::Param(_) => return Ok(false),
+            Ty::Closure(closure) => {
+                for value in closure.types() {
+                    if !self.raw_associated_ty_is_closed(value, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+            }
             Ty::Dyn(object) => {
                 for value in object.types() {
                     if !self.raw_associated_ty_is_closed(value, depth + 1)? {
@@ -1260,21 +1268,35 @@ impl ValidatedTraitWorld {
             self.validate_normalization_evidence(&evidence, context)?;
             return Ok(evidence);
         }
-        if !self.goal_is_closed(&selected_goal, context.proof.env())? {
+        let closed_goal = self.goal_is_closed(&selected_goal, context.proof.env())?;
+        let builtin_closure = self.checked_closure_projection(
+            &ir::AssociatedTypeProjection {
+                trait_ref: selected_goal.clone(),
+                item: projection.item,
+            },
+            context.proof.env(),
+        )?;
+        if !closed_goal && !builtin_closure {
             return Err(FactsError::unsupported(
                 &self.budget,
                 "unsupported: nonclosed associated projection application",
             ));
         }
-        // Unlike prove_in, this bypasses assumption-only membership and demands an impl witness.
-        // This selector validates logical head predicates/WF, never method signatures or bodies.
-        let selection_context = ProofContext {
-            predicates: &self.empty,
-            phase: FactsPhase::Closed,
+        // Concrete implementation selection remains assumption-free. A symbolic
+        // builtin closure instead proves its exact owner predicates in the
+        // genuine caller environment, retaining that context in its evidence.
+        let selection_context = if closed_goal {
+            ProofContext {
+                predicates: &self.empty,
+                phase: FactsPhase::Closed,
+            }
+        } else {
+            context.proof
         };
         if let Some(ProofOutcome::Proved(membership)) = self.prove_closure(
             &Predicate::Implements(selected_goal.clone()),
             selection_context,
+            &mut stack.obligations,
         )? {
             let Ty::Closure(closure) = &selected_goal.self_ty else {
                 unreachable!()
@@ -1494,6 +1516,15 @@ impl ValidatedTraitWorld {
                     ));
                 }
             }
+            (Ty::Closure(left), Ty::Closure(right)) => {
+                return self.validate_closure_rhs_substitution(
+                    left,
+                    right,
+                    env,
+                    arguments,
+                    depth + 1,
+                );
+            }
             (Ty::AssociatedType(left), Ty::AssociatedType(right))
                 if left.item == right.item
                     && left.trait_ref.declaration == right.trait_ref.declaration
@@ -1638,6 +1669,9 @@ impl ValidatedTraitWorld {
     ) -> Result<()> {
         self.check_normalization_budget()?;
         charged(&self.budget, self.budget.charge_work(1))?;
+        let caller_membership = matches!(&evidence.implementation, NormalizationOrigin::Dynamic(_))
+            || (matches!(&evidence.membership.0.origin, ProofOrigin::Closure { .. })
+                && !self.goal_is_closed(&evidence.selected_goal, context.proof.env())?);
         if evidence.world != self.id
             || evidence.key.environment != context.proof.predicates.index
             || evidence.key.phase != context.proof.phase
@@ -1645,13 +1679,13 @@ impl ValidatedTraitWorld {
             || evidence.key.finalized != self.owner_normalization_finalized
             || evidence.membership.0.world != self.id
             || evidence.membership.0.environment
-                != if matches!(&evidence.implementation, NormalizationOrigin::Dynamic(_)) {
+                != if caller_membership {
                     context.proof.predicates.index
                 } else {
                     self.empty.index
                 }
             || evidence.membership.0.phase
-                != if matches!(&evidence.implementation, NormalizationOrigin::Dynamic(_)) {
+                != if caller_membership {
                     context.proof.phase
                 } else {
                     FactsPhase::Closed
@@ -1868,6 +1902,115 @@ mod tests {
         }
         fn validate_nominal(&self, ty: &Ty, env: &GenericEnv, budget: &PlanBudget) -> Result<()> {
             self.inner.validate_nominal(ty, env, budget)
+        }
+    }
+
+    #[test]
+    fn generic_closure_normalization_replays_caller_authority() {
+        use crate::compiler::source;
+        let options = source::SourceOptions::default();
+        let expansion = crate::compiler::expansion_budget::ExpansionBudget::default();
+        let mut assembler = source::SourceAssembler::new(&options);
+        let mut step = assembler
+            .provide(Arc::new(source::prepare_text_unit(
+                "generic-closure-normalization.rs",
+                "fn outer<T>(value:T){let f=move||{let taken=value;7i32};}fn main(){}",
+                &options,
+            )))
+            .unwrap();
+        let prepared = loop {
+            match step {
+                source::AssemblyStep::Done(prepared) => break prepared,
+                source::AssemblyStep::Need(need) => {
+                    let unit = match need.parent.as_deref() {
+                        None => source::prepare_prelude_unit(&options, &expansion),
+                        Some(parent) => {
+                            source::prepare_child_unit(parent, need.index, &options, &expansion)
+                        }
+                    };
+                    step = assembler.provide(Arc::new(unit)).unwrap();
+                }
+            }
+        };
+        let program = frontend::resolve(&frontend::parse_prepared(&prepared).unwrap()).unwrap();
+        let budget = PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let (provider, owner) = (0..plan.callable_count())
+            .find_map(|index| {
+                let provider = plan.callable_decl(index).ok()?;
+                plan.stored_closure_owner(provider)
+                    .ok()
+                    .flatten()
+                    .map(|(owner, _)| (provider, owner))
+            })
+            .unwrap();
+        let prepared = plan.prepare_body_constants(owner, &budget).unwrap();
+        assert!(prepared.direct().is_empty());
+        let constants = plan
+            .seal_body_constants(prepared, Vec::new(), &budget)
+            .unwrap();
+        let (_, closures) = plan
+            .publish_callable_body_with_closures(owner, constants, &budget)
+            .unwrap();
+        let closure = closures
+            .iter()
+            .find(|closure| closure.ty.provider() == provider)
+            .unwrap();
+        let world = plan.trait_world().unwrap();
+        let declaration = world
+            .headers
+            .traits
+            .iter()
+            .find(|header| {
+                world.closure_trait_kind(header.declaration).unwrap()
+                    == Some(ir::ClosureKind::FnOnce)
+            })
+            .unwrap()
+            .declaration;
+        let item = world
+            .headers
+            .associated_types
+            .iter()
+            .find(|header| header.trait_decl == declaration)
+            .unwrap()
+            .declaration;
+        let projection = ir::AssociatedTypeProjection {
+            trait_ref: ir::TraitRef {
+                declaration,
+                self_ty: Ty::Closure(closure.ty.clone()),
+                args: Arc::from([Ty::Unit]),
+            },
+            item,
+        };
+        let facts = world.callable_facts(owner).unwrap();
+        let normalized = world
+            .normalize_associated_type(&projection, &facts)
+            .unwrap();
+        normalized.validate_for(&projection, &facts).unwrap();
+        assert_eq!(
+            normalized.0.membership.0.environment,
+            normalized.0.key.environment
+        );
+        assert_eq!(normalized.0.membership.0.phase, normalized.0.key.phase);
+        assert_ne!(normalized.0.key.phase, FactsPhase::Closed);
+        let mut wrong_phase = (*normalized.0).clone();
+        wrong_phase.key.phase = FactsPhase::Closed;
+        let mut wrong_environment = (*normalized.0).clone();
+        wrong_environment.membership = ProofEvidence(Arc::new({
+            let mut proof = (*wrong_environment.membership.0).clone();
+            proof.environment = world.empty.index;
+            proof
+        }));
+        let mut wrong_result = (*normalized.0).clone();
+        wrong_result.normal = Ty::Bool;
+        let mut wrong_world = (*normalized.0).clone();
+        wrong_world.world = fixture().id;
+        for forged in [wrong_phase, wrong_environment, wrong_result, wrong_world] {
+            assert!(
+                NormalizedAssociatedType(Arc::new(forged))
+                    .validate_for(&projection, &facts)
+                    .is_err()
+            );
         }
     }
 

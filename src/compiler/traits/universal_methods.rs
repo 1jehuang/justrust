@@ -316,7 +316,9 @@ impl ValidatedTraitWorld {
         }
         let mut normalize = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
             let raw = Ty::AssociatedType(Arc::new(projection.clone()));
-            if !self.raw_associated_ty_is_closed(&raw, 0)? {
+            if !self.raw_associated_ty_is_closed(&raw, 0)?
+                && !self.checked_closure_projection(projection, context.env())?
+            {
                 return Ok(raw);
             }
             let (normal, dependencies) =
@@ -347,7 +349,9 @@ impl ValidatedTraitWorld {
         self.check_context(context)?;
         let mut normalize = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
             let raw = Ty::AssociatedType(Arc::new(projection.clone()));
-            if !self.raw_associated_ty_is_closed(&raw, 0)? {
+            if !self.raw_associated_ty_is_closed(&raw, 0)?
+                && !self.checked_closure_projection(projection, context.env())?
+            {
                 return Ok(raw);
             }
             let (normal, dependencies) =
@@ -469,7 +473,8 @@ impl ValidatedTraitWorld {
             self.substitute_projected_schema(&item.schema, &arguments, facts.env())?;
         let mut dependencies = Vec::new();
         let mut reduce = |projection: &ir::AssociatedTypeProjection| -> Result<Ty> {
-            if self.goal_is_closed(&projection.trait_ref, facts.env())?
+            if self.checked_closure_projection(projection, facts.env())?
+                || self.goal_is_closed(&projection.trait_ref, facts.env())?
                 || self
                     .declared_equality_rhs(projection, &facts.predicates.predicates, facts.env())?
                     .is_some()
@@ -658,6 +663,9 @@ impl ValidatedTraitWorld {
             (ProofOrigin::Assumption, ProofOrigin::Assumption)
             | (ProofOrigin::TraitObject, ProofOrigin::TraitObject) => true,
             (ProofOrigin::Builtin { item: a }, ProofOrigin::Builtin { item: b }) => a == b,
+            (ProofOrigin::Closure { kind: a }, ProofOrigin::Closure { kind: b }) => {
+                a == b && self.eq_predicate(&left.0.goal, &right.0.goal)?
+            }
             (
                 ProofOrigin::Implementation {
                     declaration: a,

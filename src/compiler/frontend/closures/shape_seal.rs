@@ -17,6 +17,14 @@ impl std::hash::Hash for ClosureShapeSeal {
     }
 }
 impl ClosureShapeSeal {
+    pub(in crate::compiler) fn template_for(
+        &self,
+        recipe: &ir::ClosureRecipeId,
+    ) -> Option<&ir::ClosureTy> {
+        (&self.recipe == recipe).then_some(&self.shape)
+    }
+
+    #[cfg(test)]
     pub(in crate::compiler) fn validates<E>(
         &self,
         recipe: &ir::ClosureRecipeId,
@@ -44,6 +52,14 @@ impl Checker<'_> {
             || shape.shape_seal().is_some()
         {
             return Err("closure shape mint has no exact checked source owner".into());
+        }
+        let owner_env = plan.callable_env(shape.owner())?;
+        if shape.owner_args().len() != owner_env.total_arity()
+            || !owner_env.ordered_params().zip(shape.owner_args()).all(
+                |(parameter, argument)| matches!(argument, ir::Ty::Param(actual) if *actual == parameter),
+            )
+        {
+            return Err("closure shape mint changed its ordered source owner domain".into());
         }
         let recipe = plan
             .registry

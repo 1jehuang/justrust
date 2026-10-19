@@ -14668,6 +14668,8 @@ pub fn parse(source: &str) -> Result<Program, String> {
     resolve(&parse_unresolved(source)?)
 }
 
+mod provider_source_context;
+mod provider_source_domain;
 mod root_resolution;
 pub use root_resolution::resolve;
 #[cfg(test)]
@@ -17592,6 +17594,10 @@ impl PlanCtx {
                 );
             }
         }
+        Arc::get_mut(&mut registry)
+            .ok_or("closure provider domains shared before source schema completion")?
+            .install_closure_provider_domains(budget)?;
+        state.install_closure_source_contexts(&registry, budget)?;
         for (index, id) in registry.function_ids.iter().copied().enumerate() {
             let f = match registry.callable_sources[index] {
                 CallableSource::Free(i) => &program.functions[i],
@@ -17977,6 +17983,7 @@ impl PlanCtx {
         registry_mut.function_positions = positions;
         registry_mut.function_positions_sealed = true;
         // Consume construction authority once before graph-facing adapters.
+        source_schemas.complete_closure_predicates(&registry, budget)?;
         let source_schemas = source_schemas.seal_from_registry(&registry, budget)?;
         let mut plan = Self {
             program: shared.clone(),
