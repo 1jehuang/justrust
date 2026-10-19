@@ -1,6 +1,10 @@
-# Isolated ROOT_CLEANUP_DEMAND 125 prototype
+# ROOT_CLEANUP_DEMAND 125
 
-Base: a4776b447df249ccd4ffd4e590a6fad173ec3ad7. Not integrated or published.
+The historical isolated prototype below was integrated as `ea45cd17f`. Central full acceptance passed 3,424/3,424 tests, formatting, and strict hosted lint. See `data/runs/root-cleanup/README.md` for exact receipts and scope.
+
+## Historical isolated prototype
+
+Base: a4776b447df249ccd4ffd4e590a6fad173ec3ad7. The following notes describe its pre-integration state.
 
 ## Scope and contract
 
