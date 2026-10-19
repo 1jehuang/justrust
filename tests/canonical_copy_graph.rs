@@ -51,10 +51,35 @@ fn canonical_recipe_universal_proofs_and_inner_origins_precede_every_object() {
         assert!(compiled.report.capture_complete);
         assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
         for index in recipes.iter().chain(&library) {
+            let declaration = context.callable_decl(*index).unwrap();
+            let universal = match context.callable_provider(declaration).unwrap() {
+                CallableProvider::Source { .. } => {
+                    context.callable_env(declaration).unwrap().is_generic()
+                }
+                CallableProvider::Recipe { .. } => true,
+                CallableProvider::UnavailableProvided { .. } => {
+                    panic!("unavailable provider entered proof enumeration")
+                }
+            };
+            // Every library declaration has a schema. Only generic source
+            // bodies and recipes have universal proofs; nongeneric library
+            // bodies are checked through their instances when demanded.
             for kind in [110, 111, 112] {
-                assert!(compiled.report.node_evaluations.iter().any(|(key, count)| {
-                    key.kind == kind && key.params == [*index as u64] && *count == 1
-                }));
+                let evaluations: Vec<_> = compiled
+                    .report
+                    .node_evaluations
+                    .iter()
+                    .filter(|(key, _)| key.kind == kind && key.params == [*index as u64])
+                    .collect();
+                if kind == 110 || universal {
+                    assert_eq!(evaluations.len(), 1, "missing or duplicated {kind}:{index}");
+                    assert_eq!(evaluations[0].1, 1, "repeated {kind}:{index}");
+                } else {
+                    assert!(
+                        evaluations.is_empty(),
+                        "unexpected universal {kind}:{index}"
+                    );
+                }
             }
         }
         assert!(compiled.control_flow.len() < context.callable_count());

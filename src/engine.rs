@@ -680,6 +680,7 @@ impl Demand {
     /// Nonblocking producer status, separate from independently valid facts.
     /// Every branch and required output must finish before this returns `Ok`.
     pub fn completion(&self) -> Result<(), Error> {
+        reject_provider_inspection()?;
         if self.cancelled.load(Ordering::Acquire) {
             return Err(Error::new("demand cancelled"));
         }
@@ -694,7 +695,9 @@ impl Demand {
     }
 
     /// Nonblocking, including before `run`. Early valid facts survive failure.
+    /// Providers must await output handles instead of inspecting demand results.
     pub fn result(&self, index: usize) -> Result<u64, Error> {
+        reject_provider_inspection()?;
         if self.cancelled.load(Ordering::Acquire) {
             return Err(Error::new("demand cancelled"));
         }
@@ -706,6 +709,15 @@ impl Demand {
         self.result(index)?;
         self.outputs.node.fact(index)
     }
+}
+
+fn reject_provider_inspection() -> Result<(), Error> {
+    if CURRENT_TASK.with(Cell::get).is_some() {
+        return Err(Error::new(
+            "synchronous demand inspection is unavailable to providers; await output handles through Context",
+        ));
+    }
+    Ok(())
 }
 
 impl Node {
