@@ -9245,8 +9245,14 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return Err(self.limit("path depth resource limit 128"));
             }
             count += 1;
+            let sugar_site = self.token().span;
+            let callable_sugar = type_context
+                && matches!(&*self.token().text, "Fn" | "FnMut" | "FnOnce")
+                && self.cursor.peek(1).is_some_and(|token| token.matches("("));
             let name = self.ident()?;
-            let (args, associated_types) = if type_context && self.is("<") {
+            let (args, associated_types) = if callable_sugar {
+                self.callable_sugar_arguments(sugar_site)?
+            } else if type_context && self.is("<") {
                 self.path_arguments()?
             } else {
                 (Vec::new(), Vec::new())

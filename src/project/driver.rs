@@ -181,16 +181,10 @@ fn externs_for(
     resolved: &manifest::Features,
 ) -> Result<Vec<ExternCrate>, ManifestError> {
     let mut out: Vec<ExternCrate> = Vec::new();
-    let mut unresolved = Vec::new();
     let mut seen = BTreeSet::new();
     let dev = unit.test || matches!(unit.kind, TargetKind::Test | TargetKind::Example);
-    let mut stack: Vec<(String, usize)> = manifest::visible_dependencies(
-        ws,
-        unit.package,
-        dev,
-        &resolved.active_deps[unit.package],
-        &mut unresolved,
-    );
+    let mut stack: Vec<(String, usize)> =
+        manifest::visible_dependencies(ws, unit.package, dev, &resolved.active_deps[unit.package]);
     if unit.kind != TargetKind::Lib
         && let Some(lib) = ws.packages[unit.package].lib()
     {
@@ -220,18 +214,9 @@ fn externs_for(
             root: lib.path.clone(),
             cfg: cfg_for(package, &resolved.enabled[index])?,
         });
-        for dep in manifest::visible_dependencies(
-            ws,
-            index,
-            false,
-            &resolved.active_deps[index],
-            &mut unresolved,
-        ) {
+        for dep in manifest::visible_dependencies(ws, index, false, &resolved.active_deps[index]) {
             stack.push(dep);
         }
-    }
-    if let Some(first) = unresolved.into_iter().next() {
-        return Err(err(first));
     }
     Ok(out)
 }

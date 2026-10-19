@@ -87,3 +87,18 @@ pub trait Deref {
     type Target;
     fn deref(&self) -> &Self::Target;
 }
+// Callable traits. `Fn(A, B) -> R` sugar parses to `Fn<(A, B), Output = R>`
+// and `f(a, b)` on a callable value lowers to `Fn::call(&f, (a, b))`.
+// Each trait carries its own `Output` (no supertrait projection yet).
+pub trait FnOnce<Args> {
+    type Output;
+    fn call_once(self, args: Args) -> Self::Output;
+}
+pub trait FnMut<Args> {
+    type Output;
+    fn call_mut(&mut self, args: Args) -> Self::Output;
+}
+pub trait Fn<Args> {
+    type Output;
+    fn call(&self, args: Args) -> Self::Output;
+}

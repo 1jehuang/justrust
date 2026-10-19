@@ -2960,8 +2960,18 @@ impl Resolver<'_> {
         if let Expr::Var(path) | Expr::Call { name: path, .. } = expr
             && self.local_contains(path, locals)?
         {
-            return if matches!(expr, Expr::Call { .. }) {
-                Err("local binding is not callable".into())
+            return if let Expr::Call { name, args } = expr {
+                // `f(a, b)` on a local callable value: `f.call((a, b))`.
+                let method = self.callable_call_ident()?;
+                let receiver = Expr::Var(name.clone());
+                let args = std::mem::take(args);
+                *expr = Expr::MethodCall {
+                    receiver: Box::new(receiver),
+                    name: method,
+                    type_args: Vec::new(),
+                    args: vec![Expr::Tuple(args)],
+                };
+                self.expr(expr, module, locals)
             } else {
                 Ok(())
             };
@@ -5142,5 +5152,39 @@ mod tests {
             let parsed = parse_unresolved(source).unwrap();
             resolve(&parsed).unwrap_or_else(|error| panic!("{source}: {error}"));
         }
+    }
+}
+
+impl Resolver<'_> {
+    /// The `call` member occurrence of the prelude `std::ops::Fn` trait,
+    /// used to lower `f(args)` on a local callable value to `f.call((args,))`.
+    fn callable_call_ident(&self) -> Result<AstIdent, String> {
+        let program = self.program;
+        let names = program.names.as_ref();
+        for decl in &program.traits {
+            if !program.in_prelude(decl.module) {
+                continue;
+            }
+            let Some(last) = decl.name.segments().last() else {
+                continue;
+            };
+            if names
+                .spelling(*last)
+                .map_err(native_adapter::name_diagnostic)?
+                != "Fn"
+            {
+                continue;
+            }
+            for item in &decl.items {
+                if names
+                    .spelling(item.signature.name)
+                    .map_err(native_adapter::name_diagnostic)?
+                    == "call"
+                {
+                    return Ok(item.signature.name);
+                }
+            }
+        }
+        Err("unsupported: calling a local value requires the prelude Fn trait".into())
     }
 }

@@ -1,5 +1,6 @@
 //! Immediate closures are separate callable declarations, never substituted bodies.
 use super::*;
+mod fn_sugar;
 pub(in crate::compiler) mod graph_facts;
 
 #[derive(Clone, Debug)]

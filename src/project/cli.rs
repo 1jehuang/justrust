@@ -44,7 +44,7 @@ fn run(command: &str, args: &[String]) -> Result<i32, Box<dyn std::error::Error>
             Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
             _ => (arg, None),
         };
-        let take = |i: &mut usize| -> Result<String, String> {
+        let mut take = |i: &mut usize| -> Result<String, String> {
             match &inline {
                 Some(v) => Ok(v.clone()),
                 None => value(i, flag),

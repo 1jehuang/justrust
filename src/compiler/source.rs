@@ -978,74 +978,6 @@ impl SourceAssembler {
         }
     }
 }
-/// `extern crate name;` declarations: crates are already in the extern
-/// prelude (dependencies are mounted, `std`/`core`/`alloc` map to the
-/// native library), so the declaration is blanked. `extern crate name as
-/// alias;` becomes `use name as alias;` (inserted as synthetic text) and
-/// `extern crate self as alias;` becomes `use crate as alias;`.
-fn rewrite_extern_crates(text: &mut String, imports: &mut Vec<(usize, String)>) {
-    let Ok(list) = tokens(text) else {
-        return;
-    };
-    let mut edits = Vec::new();
-    for (i, token) in list.iter().enumerate() {
-        match token.text(text) {
-            "extern" => {
-                if list.get(i + 1).map(|t| t.text(text)) != Some("crate") {
-                    continue;
-                }
-                let Some(name) = list.get(i + 2) else {
-                    continue;
-                };
-                let (alias, end) = match list.get(i + 3).map(|t| t.text(text)) {
-                    Some(";") => (None, i + 3),
-                    Some("as") => match (list.get(i + 4), list.get(i + 5)) {
-                        (Some(alias), Some(semi)) if semi.text(text) == ";" => {
-                            (Some(alias.text(text).to_string()), i + 5)
-                        }
-                        _ => continue,
-                    },
-                    _ => continue,
-                };
-                // Keep a preceding `pub` / `pub(...)` with the rewritten import.
-                let mut start = token.start;
-                let mut visibility = String::new();
-                if i >= 1 && list[i - 1].text(text) == "pub" {
-                    start = list[i - 1].start;
-                    visibility = "pub ".into();
-                } else if i >= 2 && list[i - 1].text(text) == ")" {
-                    let mut j = i - 1;
-                    while j > 0 && list[j].text(text) != "(" {
-                        j -= 1;
-                    }
-                    if j >= 1 && list[j - 1].text(text) == "pub" {
-                        start = list[j - 1].start;
-                        visibility = text[start..list[i - 1].end].to_string() + " ";
-                    }
-                }
-                let target = match name.text(text) {
-                    "self" => "crate".to_string(),
-                    other => other.to_string(),
-                };
-                edits.push((
-                    start..list[end].end,
-                    alias.map(|alias| format!("{visibility}use {target} as {alias};")),
-                ));
-            }
-            _ => {}
-        }
-    }
-    for (range, import) in edits.into_iter().rev() {
-        let blank: String = text[range.clone()]
-            .chars()
-            .map(|c| if c == '\n' || c == '\r' { c } else { ' ' })
-            .collect();
-        text.replace_range(range.clone(), &blank);
-        if let Some(import) = import {
-            imports.push((range.end, import));
-        }
-    }
-}
 /// The `cfg(test)` entry point: run every `#[test]` in name order through
 /// the native harness (`libraries/prelude/test.rs`), like libtest.
 fn test_harness(mut tests: Vec<source_attrs::TestItem>, filter: &TestFilter) -> String {
@@ -1248,8 +1180,7 @@ impl<'a> Loader<'a> {
         // Disabled syntax is checked without name resolution, typing or child IO.
         // Legal Rust outside this parser's bounded grammar remains Unsupported,
         // not a claim that the disabled program is invalid or full cfg is supported.
-        for mut inactive in filtered.inactive_items {
-            rewrite_extern_crates(&mut inactive.text, &mut Vec::new());
+        for inactive in filtered.inactive_items {
             let syntax = inactive_syntax(&inactive.text).map_err(|message| {
                 Self::error(
                     SourceErrorKind::Syntax,
@@ -1281,12 +1212,6 @@ impl<'a> Loader<'a> {
         self.derives = filtered.derives;
         self.tests = filtered.tests;
         let mut text = filtered.text;
-        let mut imports = Vec::new();
-        rewrite_extern_crates(&mut text, &mut imports);
-        for (at, import) in imports {
-            self.derives.push((at, import));
-        }
-        self.derives.sort_by_key(|(at, _)| *at);
         if self.root
             && let Some(name) = filtered.test_main
         {
