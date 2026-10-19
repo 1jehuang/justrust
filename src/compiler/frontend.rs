@@ -6021,9 +6021,13 @@ mod local_macro_parser_tests {
                 &budget,
             )
             .unwrap();
-            let (tokens, session, owner) = native_input(&projection, budget.clone())
-                .unwrap()
-                .into_parts();
+            let (tokens, session, owner) = native_input(
+                &projection,
+                budget.clone(),
+                super::super::owner_path::standalone_issued(&budget).unwrap(),
+            )
+            .unwrap()
+            .into_parts();
             let mut names =
                 NameStoreBuilder::new(session, owner, super::super::token::Edition::E2024).unwrap();
             let mut parser = Parser::new(&tokens, &mut names).unwrap();
