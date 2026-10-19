@@ -169,7 +169,15 @@ pub fn render(s: &Summary, dir: &std::path::Path) -> String {
     } else if let Some(why) = &s.route {
         let _ = writeln!(o, "where    local ({why})");
     }
-    let status = if s.diagnostics.compile_failed {
+    let status = if let (true, Some(fault)) = (
+        s.diagnostics.compile_failed,
+        s.diagnostics.environment_fault.as_ref(),
+    ) {
+        format!(
+            "exit {} (build environment fault: {fault}, not a code error)",
+            s.exit
+        )
+    } else if s.diagnostics.compile_failed {
         format!(
             "exit {} (compile failed, {} errors)",
             s.exit, s.diagnostics.compile_errors

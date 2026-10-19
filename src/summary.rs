@@ -1547,6 +1547,46 @@ mod tests {
     }
 
     #[test]
+    fn recorded_hosted_disk_full_run_reports_environment_fault() {
+        // Real run 20261018-211850794-3835289 (hosted builder ran out of disk).
+        // Output lines and units are the recorded files, paths redacted.
+        let lines: Vec<OutputLine> = include_str!("../tests/data/disk-full-output.jsonl")
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let units: Vec<Unit> = include_str!("../tests/data/disk-full-units.jsonl")
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        assert!(!units.is_empty());
+        let s = build(
+            &Meta::default(),
+            GitInfo::default(),
+            0.0,
+            17.9,
+            101,
+            0.0,
+            &lines,
+            &[],
+            &[],
+            &units,
+        );
+        assert!(s.diagnostics.compile_failed);
+        assert_eq!(
+            s.diagnostics.environment_fault.as_deref(),
+            Some("disk full")
+        );
+        let footer = s.agent_footer(&crate::agent_output::Hidden::default());
+        assert!(footer.contains("build environment fault"), "{footer}");
+        let shown = crate::runs::render(&s, std::path::Path::new("/nonexistent"));
+        assert!(
+            shown.contains("build environment fault: disk full"),
+            "{shown}"
+        );
+        assert!(!shown.contains("0 errors"), "{shown}");
+    }
+
+    #[test]
     fn disk_full_compiler_crash_is_an_environment_fault_not_zero_errors() {
         let units = vec![Unit {
             crate_name: "justrust_engine".into(),
