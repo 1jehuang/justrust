@@ -6682,6 +6682,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         };
         Ok((name, body, site))
     }
+    #[inline(never)]
     fn local_macro_expression(&mut self) -> Result<Expr, ParseError> {
         if self.purpose == ParserPurpose::InactiveSyntax {
             let span = self.token().span;
@@ -6690,26 +6691,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Ok(Expr::UnexpandedMacro(self.inactive_invocation(path, span)?));
         }
         if self.builtin_macro_ahead("__justrust_linux_syscall6")? {
-            self.ident()?;
-            self.expect("!")?;
-            self.expect("(")?;
-            let mut arguments = Vec::new();
-            for index in 0..7 {
-                if index != 0 {
-                    self.expect(",")?;
-                }
-                let argument = self.expr(0)?;
-                self.names
-                    .retain_parser_text(std::mem::size_of::<Expr>())
-                    .map_err(native_adapter::name_error)?;
-                arguments.try_reserve_exact(1).map_err(|_| {
-                    native_adapter::transport_error(self.names.budget().poison_allocation().into())
-                })?;
-                arguments.push(argument);
-            }
-            self.eat(",");
-            self.expect(")")?;
-            return Ok(Expr::NativeSyscall(arguments));
+            return self.native_syscall_expression();
         }
         for spelling in ["print", "eprint", "eprintln"] {
             if self.builtin_macro_ahead(spelling)? {
@@ -6749,6 +6731,31 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         let (buffer, admission, depth) = self.prepare_local_macro()?;
         self.isolated_expression_at(&buffer, Some(admission), depth)
+    }
+    // Syscall operands are unrelated to recursive user-macro expansion. Keep
+    // their Expr/Result and allocation scratch out of each expansion frame.
+    #[inline(never)]
+    fn native_syscall_expression(&mut self) -> Result<Expr, ParseError> {
+        self.ident()?;
+        self.expect("!")?;
+        self.expect("(")?;
+        let mut arguments = Vec::new();
+        for index in 0..7 {
+            if index != 0 {
+                self.expect(",")?;
+            }
+            let argument = self.expr(0)?;
+            self.names
+                .retain_parser_text(std::mem::size_of::<Expr>())
+                .map_err(native_adapter::name_error)?;
+            arguments.try_reserve_exact(1).map_err(|_| {
+                native_adapter::transport_error(self.names.budget().poison_allocation().into())
+            })?;
+            arguments.push(argument);
+        }
+        self.eat(",");
+        self.expect(")")?;
+        Ok(Expr::NativeSyscall(arguments))
     }
     /// Select the builtin only after checked lexical and module lookup miss.
     fn builtin_macro_ahead(&mut self, spelling: &str) -> Result<bool, ParseError> {
