@@ -6914,8 +6914,14 @@ impl<'a> Checker<'a> {
         ) {
             return self.associated_expression(e, expectation.hard());
         }
-        if matches!(e, Expr::Binary { .. } | Expr::Unary { .. })
-            && let Some(id) = self.overloaded_operator(e)?
+        if matches!(
+            e,
+            Expr::Binary { .. }
+                | Expr::Unary { .. }
+                | Expr::Deref { .. }
+                | Expr::DynamicIndex { .. }
+                | Expr::Index { .. }
+        ) && let Some(id) = self.overloaded_operator(e)?
         {
             return Ok(id);
         }

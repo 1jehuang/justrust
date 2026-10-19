@@ -826,7 +826,10 @@ impl ScopeArena {
             && self.item_anchor(e)?.is_some()
         {
             return match role {
-                OccurrenceRole::OriginalModule(_) => Err(ScopeError::FunctionMismatch),
+                // Non-function generated items (structs, enums, impls, traits,
+                // consts): their names come from a checked, anchored item
+                // expansion and resolve with ordinary module scoping.
+                OccurrenceRole::OriginalModule(_) => Ok(()),
                 OccurrenceRole::GeneratedDeclaration {
                     function,
                     declaration,

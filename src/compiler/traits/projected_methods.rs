@@ -85,6 +85,14 @@ impl ValidatedTraitWorld {
             self.validate_projected_parameter_references(ty, index, receiver)?;
         }
         self.validate_ty_metadata_in(&schema.signature.result, &schema.env, 0)?;
+        // `&Self::Target` / `&mut Self::Output` (Deref, Index): one outer
+        // reference to a bare projection, borrowed from a borrowed receiver.
+        if let Ty::Ref { kind, referent } = &schema.signature.result
+            && matches!(referent.as_ref(), Ty::AssociatedType(_))
+            && matches!(receiver, ReceiverMode::Borrowed { kind: receiver_kind } if receiver_kind == *kind)
+        {
+            return Ok(());
+        }
         self.reject_projected_references(&schema.signature.result, 0)
     }
 
@@ -115,6 +123,46 @@ impl ValidatedTraitWorld {
 
     // This is a value-oriented stage, including references hidden in nominals.
     // Do not ask the IR carrier walker to interpret an unreduced projection.
+    /// After normalizing a projected declaration (`&Self::Target`), derive the
+    /// return origins the raw schema deliberately left unresolved.
+    fn complete_projected_contract(&self, signature: &mut Signature) -> Result<()> {
+        if !signature
+            .ref_contract
+            .results
+            .iter()
+            .any(|r| matches!(r.returns, ir::ReturnContract::NoReference))
+        {
+            return Ok(());
+        }
+        for ty in signature
+            .params
+            .iter()
+            .chain(std::iter::once(&signature.result))
+        {
+            if charged(
+                &self.budget,
+                ir::contains_associated_types(ty, &self.budget),
+            )? {
+                return Ok(());
+            }
+        }
+        let results = charged(
+            &self.budget,
+            ir::derive_return_contracts(
+                &signature.params,
+                &signature.result,
+                &signature.ref_contract,
+                &self.budget,
+            ),
+        )?;
+        retain::<ir::RefContract>(&self.budget, 1)?;
+        signature.ref_contract = Arc::new(ir::RefContract {
+            results,
+            ..(*signature.ref_contract).clone()
+        });
+        Ok(())
+    }
+
     pub(super) fn reject_projected_references(&self, ty: &Ty, depth: usize) -> Result<()> {
         self.projected_reference_walk(ty, depth, &mut TypeWalk::default())
             .map(|_| ())
@@ -559,6 +607,7 @@ impl ValidatedTraitWorld {
             }
             normalized.signature.result =
                 self.normalize_owner_type(&schema.signature.result, &owner, &mut Vec::new(), 0)?;
+            self.complete_projected_contract(&mut normalized.signature)?;
             self.validate_schema_signature(
                 declaration,
                 &normalized.signature,
@@ -823,6 +872,7 @@ impl ValidatedTraitWorld {
         }
         value.signature.result =
             self.normalize_owner_type(&value.signature.result, &owner, &mut Vec::new(), 0)?;
+        self.complete_projected_contract(&mut value.signature)?;
         // Independently establish the required declaration's contract in the real
         // implementation environment. Never copy the provided target's topology.
         self.validate_schema_signature(
@@ -917,6 +967,7 @@ impl ValidatedTraitWorld {
         for proof in proofs {
             push(&self.budget, &mut dependencies, proof)?;
         }
+        self.complete_projected_contract(&mut instantiated.signature)?;
         self.validate_schema_signature(
             item.declaration,
             &instantiated.signature,
@@ -926,7 +977,10 @@ impl ValidatedTraitWorld {
         for (index, ty) in instantiated.signature.params.iter().enumerate() {
             self.validate_projected_parameter_references(ty, index, item.receiver)?;
         }
-        self.reject_projected_references(&instantiated.signature.result, 0)?;
+        if !matches!(&item.schema.signature.result, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::AssociatedType(_)))
+        {
+            self.reject_projected_references(&instantiated.signature.result, 0)?;
+        }
         let source_regions =
             self.validate_source_regions(item.declaration, &instantiated.signature)?;
         retain::<ProjectedMethodEvidence>(&self.budget, 1)?;

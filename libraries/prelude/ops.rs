@@ -79,5 +79,11 @@ pub trait ShlAssign<Rhs = Self> {
 pub trait ShrAssign<Rhs = Self> {
     fn shr_assign(&mut self, rhs: Rhs);
 }
-// TODO(traits): Index/IndexMut need reference-bearing projected signatures
-// (`fn index(&self, i: Idx) -> &Self::Output`).
+pub trait Index<Idx> {
+    type Output;
+    fn index(&self, index: Idx) -> &Self::Output;
+}
+pub trait Deref {
+    type Target;
+    fn deref(&self) -> &Self::Target;
+}

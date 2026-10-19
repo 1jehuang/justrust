@@ -116,6 +116,11 @@ impl type_check::Checker<'_> {
         // literal's fallback type, like stock inference with one candidate.
         let candidates: Vec<Vec<ir::Ty>> = match (arity, rhs_ty) {
             (1, _) => vec![Vec::new()],
+            // An unsuffixed integer index variable infers from the selected
+            // impl (usually `usize`); its hint is only the i32 fallback.
+            (2, Some(rhs)) if name == "Index" && rhs == ir::Ty::Int(ir::IntTy::I32) => {
+                vec![vec![rhs], vec![ir::Ty::Int(ir::IntTy::Usize)]]
+            }
             (2, Some(rhs)) => vec![vec![rhs]],
             (2, None) => {
                 let fallback = match rest.last() {
@@ -210,8 +215,76 @@ impl type_check::Checker<'_> {
                 self.record_operator(e as *const Expr as usize, id)?;
                 Ok(Some(id))
             }
+            Expr::Deref { value } => {
+                let Some(ty) = self.method_receiver_hint(value)? else {
+                    return Ok(None);
+                };
+                if !overloadable(&ty) {
+                    return Ok(None);
+                }
+                let first = First::Borrow(ir::BorrowKind::Shared, value);
+                let call = self.operator_call(("ops", "Deref", "deref"), ty, None, first, &[])?;
+                self.record_operator(e as *const Expr as usize, call)?;
+                self.deref_overloaded_result(call).map(Some)
+            }
+            Expr::DynamicIndex { base, index } => {
+                let Some(ty) = self.method_receiver_hint(base)? else {
+                    return Ok(None);
+                };
+                if !overloadable(&ty) {
+                    return Ok(None);
+                }
+                let idx = self
+                    .method_receiver_hint(index)?
+                    .unwrap_or(ir::Ty::Int(ir::IntTy::Usize));
+                let first = First::Borrow(ir::BorrowKind::Shared, base);
+                let rest = std::slice::from_ref(index.as_ref());
+                let call =
+                    self.operator_call(("ops", "Index", "index"), ty, Some(idx), first, rest)?;
+                self.record_operator(e as *const Expr as usize, call)?;
+                self.deref_overloaded_result(call).map(Some)
+            }
+            Expr::Index { base, index } => {
+                let Some(ty) = self.method_receiver_hint(base)? else {
+                    return Ok(None);
+                };
+                if !overloadable(&ty) || matches!(ty, ir::Ty::Tuple(_)) {
+                    return Ok(None);
+                }
+                let literal = Expr::Integer(IntegerLiteral {
+                    magnitude: *index as u128,
+                    suffix: None,
+                });
+                let first = First::Borrow(ir::BorrowKind::Shared, base);
+                let call = self.operator_call(
+                    ("ops", "Index", "index"),
+                    ty,
+                    Some(ir::Ty::Int(ir::IntTy::Usize)),
+                    first,
+                    std::slice::from_ref(&literal),
+                )?;
+                self.record_operator(e as *const Expr as usize, call)?;
+                self.deref_overloaded_result(call).map(Some)
+            }
             _ => Ok(None),
         }
+    }
+
+    /// `*call` for an overloaded place operator returning `&Target`.
+    fn deref_overloaded_result(&mut self, call: ir::ExprId) -> Result<ir::ExprId, String> {
+        let ir::Ty::Ref { referent, .. } = &self.exprs[call.0].ty else {
+            return Err("overloaded place operator must return a reference".into());
+        };
+        let ty = referent.as_ref().clone();
+        let completion = self.exprs[call.0].completion;
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty,
+            kind: ir::ExprKind::Deref { value: call },
+            completion,
+        });
+        Ok(id)
     }
 
     /// `place OP= value` on a non-primitive place: `OpAssign::op_assign(&mut place, value)`.

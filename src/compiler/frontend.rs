@@ -1945,8 +1945,19 @@ impl SourceInventory {
                     )?;
                 }
             }
+            Expr::Deref { value } => {
+                // May become an overloaded `*Deref::deref(&value)`.
+                self.operator_site(expr as *const Expr as usize, node, budget)?;
+                self.expr(
+                    value,
+                    &node.child(11, 0, budget)?,
+                    None,
+                    None,
+                    budget,
+                    depth + 1,
+                )?
+            }
             Expr::Cast { value, .. }
-            | Expr::Deref { value }
             | Expr::BorrowValue { value, .. }
             | Expr::Repeat { value, .. } => self.expr(
                 value,
@@ -2018,6 +2029,10 @@ impl SourceInventory {
                 right: index,
                 ..
             } => {
+                if matches!(expr, Expr::DynamicIndex { .. }) {
+                    // May become an overloaded `*Index::index(&base, index)`.
+                    self.operator_site(expr as *const Expr as usize, node, budget)?;
+                }
                 self.expr(
                     base,
                     &node.child(13, 0, budget)?,
@@ -2035,14 +2050,20 @@ impl SourceInventory {
                     depth + 1,
                 )?;
             }
-            Expr::Index { base, .. } | Expr::Field { base, .. } => self.expr(
-                base,
-                &node.child(13, 0, budget)?,
-                None,
-                None,
-                budget,
-                depth + 1,
-            )?,
+            Expr::Index { base, .. } | Expr::Field { base, .. } => {
+                if matches!(expr, Expr::Index { .. }) {
+                    // May become an overloaded `*Index::index(&base, N)`.
+                    self.operator_site(expr as *const Expr as usize, node, budget)?;
+                }
+                self.expr(
+                    base,
+                    &node.child(13, 0, budget)?,
+                    None,
+                    None,
+                    budget,
+                    depth + 1,
+                )?
+            }
             Expr::EnumVariant { fields, .. } => {
                 for (i, (_, e)) in fields.iter().enumerate() {
                     self.expr(
@@ -4605,7 +4626,6 @@ impl PlanCtx {
 }
 
 mod array_len;
-mod static_mut;
 #[cfg(test)]
 mod associated_bounds;
 mod const_inputs;
@@ -4620,6 +4640,7 @@ mod or_patterns;
 mod recipes;
 #[cfg(test)]
 mod slice_tests;
+mod static_mut;
 pub use tr::CallableProvider;
 
 #[derive(Clone, Debug)]
@@ -10226,7 +10247,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Ok(());
         } else if self.is("static") && self.cursor.peek(1).is_some_and(|t| t.text == "mut") {
             let function = self.static_mut_item(module)?;
-            let name = *function.name.segments().last().ok_or_else(|| self.error("empty static name"))?;
+            let name = *function
+                .name
+                .segments()
+                .last()
+                .ok_or_else(|| self.error("empty static name"))?;
             let mut function = function;
             function.visibility = visibility.clone();
             function.name = module_path

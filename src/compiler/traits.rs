@@ -2253,6 +2253,12 @@ impl ValidatedTraitWorld {
         }
         charged(&self.budget, self.budget.charge_work(3))?;
         let results = charged(&self.budget, ir::root_reference_layers(&signature.result))?;
+        // Raw declaration schemas over a projection (`&Self::Target`) keep
+        // unresolved return origins until the exact application normalizes.
+        let projected = charged(
+            &self.budget,
+            ir::contains_associated_types(&signature.result, &self.budget),
+        )?;
         if row != contract.input_regions.len() || results != contract.results.len() {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -2262,7 +2268,7 @@ impl ValidatedTraitWorld {
         for (depth, result) in contract.results.iter().enumerate() {
             charged(&self.budget, self.budget.charge_work(1))?;
             if usize::from(result.position.depth) != depth
-                || matches!(result.returns, ir::ReturnContract::NoReference)
+                || (!projected && matches!(result.returns, ir::ReturnContract::NoReference))
             {
                 return Err(FactsError::invalid(
                     &self.budget,
