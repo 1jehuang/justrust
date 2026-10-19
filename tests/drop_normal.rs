@@ -276,7 +276,13 @@ fn attribute_blocked(case: &Case) -> bool {
     )
 }
 fn native_accepted(case: &Case) -> bool {
-    (case.category == "positive" || case.path == "unsupported/borrow.rs")
+    (case.category == "positive"
+        || matches!(
+            case.path.as_str(),
+            "unsupported/borrow.rs"
+                | "unsupported/generic_function.rs"
+                | "unsupported/dead_generic.rs"
+        ))
         && !attribute_blocked(case)
         && !path_blocked(case)
 }
@@ -497,7 +503,7 @@ fn frozen_stock_before_native_normal_drop() {
     );
     assert_eq!(
         cases.iter().filter(|case| native_accepted(case)).count(),
-        27
+        29
     );
     assert_eq!(
         cases.iter().filter(|case| attribute_blocked(case)).count(),
