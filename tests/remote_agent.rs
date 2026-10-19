@@ -589,6 +589,112 @@ fn invalid_caller_umask_rejects_run_before_execution() {
 }
 
 #[test]
+fn disk_full_other_root_requires_exact_repair_before_unchanged_run() {
+    let mut a = Agent::start("disk-recovery-other-root");
+    for (path, data) in [
+        ("/idle/lib.rs", &b"old idle source"[..]),
+        (
+            "/build/Cargo.toml",
+            &b"[package]\nname=\"disk-recovery-check\"\nversion=\"0.0.0\"\nedition=\"2024\"\n"[..],
+        ),
+        ("/build/src/lib.rs", &b"pub fn answer() -> u32 { 42 }\n"[..]),
+    ] {
+        a.send(
+            Msg::Write {
+                path: path.into(),
+                mode: 0o644,
+            },
+            data,
+        );
+    }
+    assert!(a.barrier(1).is_empty());
+    // The atomic writer's scratch file follows this test-owned symlink.
+    // /dev/full produces genuine ENOSPC without filling any filesystem.
+    std::os::unix::fs::symlink("/dev/full", a.at("/idle/.lib.rs.jr-tmp")).unwrap();
+    a.send(
+        Msg::Write {
+            path: "/idle/lib.rs".into(),
+            mode: 0o644,
+        },
+        b"latest idle source",
+    );
+    a.send(Msg::Barrier { id: 2 }, &[]);
+    assert_eq!(
+        a.recv().0,
+        Msg::BarrierAck {
+            id: 2,
+            failed: vec!["/idle/lib.rs".into()],
+            disk_full: true
+        }
+    );
+    assert_eq!(read(&a.at("/idle/lib.rs")), "old idle source");
+    // The failing scratch file was removed: capacity is healthy again,
+    // but that alone cannot clear the receipt or authorize another root.
+    assert!(!a.at("/idle/.lib.rs.jr-tmp").exists());
+    let request = |a: &Agent, id| Msg::RunSync {
+        id,
+        cwd: "/build".into(),
+        args: vec!["check".into(), "--offline".into()],
+        env: vec![
+            ("JUSTRUST_TOOLCHAIN".into(), "system".into()),
+            ("JUSTRUST_DISABLE".into(), "0".into()),
+            (
+                "CARGO_TARGET_DIR".into(),
+                a.at("/build/target").to_string_lossy().into_owned(),
+            ),
+        ],
+        roots: vec![],
+        start: false,
+        run_id: format!("disk-recovery-{}-{id}", std::process::id()),
+    };
+    for id in [3, 4] {
+        let msg = request(&a, id);
+        a.send(msg, &[]);
+        assert_eq!(
+            a.recv().0,
+            Msg::BarrierAck {
+                id,
+                failed: vec!["/idle/lib.rs".into()],
+                disk_full: true
+            }
+        );
+        assert!(matches!(a.recv().0, Msg::Error { id: got, .. } if got == id));
+        assert!(!a.at("/build/target").exists());
+    }
+    // This is the exact frame the daemon's cross-root retry now sends.
+    // No changes to /build, no Synced frame, no restart or failure reset.
+    a.send(
+        Msg::Write {
+            path: "/idle/lib.rs".into(),
+            mode: 0o644,
+        },
+        b"latest idle source",
+    );
+    let msg = request(&a, 5);
+    a.send(msg, &[]);
+    assert_eq!(
+        a.recv().0,
+        Msg::BarrierAck {
+            id: 5,
+            failed: vec![],
+            disk_full: false
+        }
+    );
+    loop {
+        match a.recv() {
+            (Msg::Out { id: 5, .. } | Msg::RunFiles { id: 5 }, _) => {}
+            (Msg::Exit { id: 5, code }, _) => {
+                assert_eq!(code, 0);
+                break;
+            }
+            other => panic!("unexpected recovery run frame: {other:?}"),
+        }
+    }
+    assert_eq!(read(&a.at("/idle/lib.rs")), "latest idle source");
+    assert!(a.at("/build/target").is_dir());
+}
+
+#[test]
 fn sync_run_rejects_failed_writes_then_checks_latest_source_and_reuses_artifacts() {
     let mut a = Agent::start("pipeline-check");
     for (path, data) in [

@@ -259,6 +259,17 @@ struct Sync {
 }
 
 impl Sync {
+    /// Agent barriers cover the whole connection, not just a run's roots.
+    /// A rejected write in an idle workspace must therefore be resent even
+    /// when the next build asks for a different workspace.
+    fn repair_roots(&self) -> Vec<PathBuf> {
+        self.roots
+            .iter()
+            .filter(|(_, r)| r.manifest.values().any(|stamp| *stamp == UNKNOWN))
+            .map(|(root, _)| root.clone())
+            .collect()
+    }
+
     fn needs_mirror(&self, root: &Path) -> bool {
         self.roots.get(root).is_none_or(|r| r.needs_full_sync)
     }
@@ -994,6 +1005,49 @@ fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
     Ok(n)
 }
 
+/// Retry rejected source operations using the current local source, never by
+/// clearing the agent's failure receipt. Its next barrier remains authoritative.
+/// In particular an unavailable workspace is not an empty tree to delete.
+fn repair_sources(d: &Daemon, st: &mut Sync, link: &Link) -> Result<usize> {
+    let mut files = 0;
+    for root in st.repair_roots() {
+        log(&format!(
+            "retrying rejected source operations under {}",
+            root.display()
+        ));
+        std::fs::read_dir(&root)
+            .with_context(|| format!("cannot repair failed source sync for {}", root.display()))?;
+        for (rel, stamp) in &st.roots[&root].manifest {
+            if *stamp != UNKNOWN {
+                continue;
+            }
+            let path = root.join(rel);
+            match std::fs::symlink_metadata(&path) {
+                Ok(md) if md.is_file() => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(_) => bail!("cannot repair changed source type at {}", path.display()),
+                Err(e) => {
+                    return Err(e).with_context(|| {
+                        format!("cannot inspect failed source {}", path.display())
+                    });
+                }
+            }
+        }
+        if st.needs_mirror(&root) {
+            add_root(d, st, link, &root)?;
+        } else {
+            files += push_root(d, st, &root)?;
+        }
+        if st.roots[&root].manifest.values().any(|s| *s == UNKNOWN) {
+            bail!(
+                "cannot read source files needed to repair {}",
+                root.display()
+            );
+        }
+    }
+    Ok(files)
+}
+
 /// Wait until the agent has applied everything sent so far. Paths the agent
 /// failed to write or delete fail the barrier, and are marked so the next
 /// push sends them again.
@@ -1040,9 +1094,15 @@ fn check_sync_failures(st: &mut Sync, ack: &SyncAck) -> Result<()> {
     }
     if ack.disk_full {
         bail!(
-            "hosted build machine disk full: could not apply {} file{} (No space left on device)",
+            "hosted build machine disk full: could not apply {} file{} (No space left on device): {}",
             failed.len(),
             if failed.len() == 1 { "" } else { "s" },
+            failed
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", "),
         );
     }
     bail!(
@@ -1125,7 +1185,7 @@ fn run(
         let res = (|| -> Result<_> {
             let link = ensure_link(d, &mut st, start)?;
             let linked = t.elapsed();
-            let mut files = 0;
+            let mut files = repair_sources(d, &mut st, &link)?;
             for root in &roots {
                 let result = if st.needs_mirror(root) {
                     add_root(d, &mut st, &link, root).map(|()| 0)
@@ -1362,6 +1422,111 @@ fn peer_sync_loop(d: &Daemon) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disk_recovery_resends_other_roots_exact_failed_writes_and_deletes() {
+        let base = std::env::temp_dir().join(format!("jr-disk-repair-{}", std::process::id()));
+        let a = base.join("a");
+        let b = base.join("b");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("lib.rs"), b"current A source").unwrap();
+        std::fs::write(a.join("unchanged.rs"), b"unchanged A").unwrap();
+        std::fs::write(b.join("lib.rs"), b"current B source").unwrap();
+        let make_root = |path: &Path| Root {
+            manifest: remote_sync::scan(path).unwrap().files,
+            oversized: Vec::new(),
+            needs_full_sync: false,
+        };
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut frames = BufReader::new(child.stdout.take().unwrap());
+        let link = Arc::new(Link {
+            stdin: Arc::new(Mutex::new(BufWriter::new(child.stdin.take().unwrap()))),
+            child: Mutex::new(child),
+            routes: Mutex::default(),
+            peer: peercache::Relay::new(false, |_, _| true),
+            mirror: Mirror {
+                target: None,
+                prefix: String::new(),
+            },
+        });
+        let d = Daemon {
+            sync: Mutex::new(Sync {
+                backend: Backend::Hosted,
+                link: Some(link.clone()),
+                roots: BTreeMap::from([(a.clone(), make_root(&a)), (b.clone(), make_root(&b))]),
+            }),
+            info: Mutex::default(),
+            next_id: AtomicU64::new(1),
+            watcher: Watcher::new(channel().0).unwrap(),
+            sock: (base.join("unused.sock"), (0, 0)),
+            lock: Mutex::new(None),
+            draining: AtomicBool::new(false),
+            peer: Arc::default(),
+            peer_sock: Mutex::default(),
+        };
+        let mut st = d.sync.lock().unwrap();
+        let failed_write = a.join("lib.rs").display().to_string();
+        let failed_delete = a.join("gone.rs").display().to_string();
+        let full = SyncAck {
+            failed: vec![failed_write.clone(), failed_delete.clone()],
+            disk_full: true,
+        };
+        assert!(check_sync_failures(&mut st, &full).is_err());
+        assert_eq!(st.repair_roots(), vec![a.clone()]);
+        // B is the next requested workspace. Repair A first, even though A
+        // has no new local changes, and do not resend unrelated source.
+        assert_eq!(repair_sources(&d, &mut st, &link).unwrap(), 2);
+        assert_eq!(push_root(&d, &mut st, &b).unwrap(), 0);
+        assert_eq!(
+            read_frame(&mut frames).unwrap().unwrap(),
+            (
+                Msg::Write {
+                    path: failed_write.clone(),
+                    mode: st.roots[&a].manifest[Path::new("lib.rs")].mode
+                },
+                b"current A source".to_vec()
+            )
+        );
+        assert_eq!(
+            read_frame(&mut frames).unwrap().unwrap(),
+            (
+                Msg::Delete {
+                    path: failed_delete
+                },
+                Vec::new()
+            )
+        );
+        assert!(st.repair_roots().is_empty());
+        // Sending retries is not proof of remote success. An outstanding
+        // ENOSPC receipt still rejects the build and schedules them again.
+        assert!(check_sync_failures(&mut st, &full).is_err());
+        assert_eq!(repair_sources(&d, &mut st, &link).unwrap(), 2);
+        assert!(check_sync_failures(&mut st, &SyncAck::default()).is_ok());
+        assert!(st.repair_roots().is_empty());
+        assert_eq!(repair_sources(&d, &mut st, &link).unwrap(), 0);
+        // A unavailable or changed into a non-regular source must not be
+        // interpreted as a successful repair, or authorize B on stale A.
+        let receipt = SyncAck {
+            failed: vec![failed_write],
+            disk_full: false,
+        };
+        assert!(check_sync_failures(&mut st, &receipt).is_err());
+        std::fs::remove_file(a.join("lib.rs")).unwrap();
+        std::fs::create_dir(a.join("lib.rs")).unwrap();
+        assert!(repair_sources(&d, &mut st, &link).is_err());
+        assert_eq!(st.repair_roots(), vec![a.clone()]);
+        std::fs::rename(&a, base.join("unavailable-a")).unwrap();
+        assert!(repair_sources(&d, &mut st, &link).is_err());
+        assert_eq!(st.repair_roots(), vec![a]);
+        link.kill();
+        drop(st);
+        std::fs::remove_dir_all(base).unwrap();
+    }
 
     #[test]
     fn source_sync_error_preserves_shared_link_and_unrelated_run_route() {

@@ -7898,3 +7898,46 @@ verification export, and get owner confirmation before retiring generated
 outputs. Additional owner-cleared staged-rev output was deliberately left alone
 once capacity was sufficient. This is incident recovery, not an automatic GC
 promotion or a compiler correctness/performance claim.
+
+## Hosted ENOSPC receipts must trigger cross-workspace source retries (2026-10-19)
+
+After hosted disk capacity recovered, the long-lived agent could still reject
+healthy builds with three outstanding source-write failures. The agent correctly
+retains failed paths across barriers until those operations actually succeed.
+The daemon marked each reported path `UNKNOWN`, but a subsequent run only pushed
+its requested workspaces. Failed paths in an idle workspace were never resent,
+so the connection-wide barrier continued rejecting unrelated builds indefinitely.
+Freeing disk capacity alone could not repair that source mismatch.
+
+Before a run, the daemon now retries roots containing `UNKNOWN` entries through
+the ordinary source diff/write/delete path, including failed deletes. Unchanged
+roots have no additional source transfers. An unavailable local root, changed
+non-regular failed source, or unreadable retry remains an error. The agent's
+global barrier and launch rejection are unchanged: sending a retry is not proof
+of success. Disk-full diagnostics now include up to three actual failed paths,
+and the daemon logs the root whose rejected operations it retries. No lease,
+tenant isolation, billing, cache deletion or source-authentication rule changes.
+
+Validation used the existing stable target and explicit local mode because the
+hosted source-sync outage was the defect under repair:
+
+- Check: `20261019-135357559-419858`, passed in 12.4 s.
+- Daemon regression: `20261019-135411129-421191`, passed. Captures the exact
+  current write payload and failed delete for workspace A while unchanged B
+  emits no writes, preserves rejection on a repeated failure receipt, and
+  rejects unavailable/type-changed A rather than authorizing stale source.
+- Final full suite: `20261019-135653052-448660`, **745 passed, 3 ignored**,
+  24.4 s. Includes a real-agent protocol regression that induces genuine
+  ENOSPC through a test-owned atomic scratch symlink to `/dev/full`, without
+  filling any filesystem. A's old source stays intact, unchanged B is rejected
+  twice even after capacity is healthy, and only the exact A rewrite permits
+  B's real Cargo check on that same agent. No restart, `Synced` reset or ignored
+  failure is involved.
+- `justrust clippy --local --all-targets -- -D warnings`:
+  `20261019-135718494-454986`, passed in 22.0 s. `cargo fmt --all` passed.
+
+These four slim summaries are in
+`data/runs/xps14-hosted-sync-recovery-20261019/2026-10.jsonl`. This is a
+correctness/recovery change, not a measured build-speed claim. Production
+installation and a single frozen authenticated hosted canary are coordinated
+with the root agent after the fleet is paused and the agent is idle.
