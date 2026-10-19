@@ -50,6 +50,11 @@ oracle stdout) and by feature tags disappearing from it, not by slice docs.
    a pre-existing `target/debug/jr-rust`. Cargo-provided binary paths are
    preferred but do not by themselves prove artifact freshness. Preserve
    source contents and reuse one target rather than multiplying build trees.
+   Keep the export ROOT path stable too: distinct mirrored workspaces can
+   accumulate separate hosted targets even when local CARGO_TARGET_DIR is
+   shared. Replace source contents within your owned export, refresh input
+   timestamps, and verify recompilation. Never rotate numbered roots per
+   parent revision. Coordinate explicit handoff before sharing an export.
 
 ## Streams
 
