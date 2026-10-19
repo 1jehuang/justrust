@@ -815,7 +815,7 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Expr(base))?;
                     self.push(Visit::Expr(index))?;
                 }
-                Expr::Array(elements) | Expr::Tuple(elements) => {
+                Expr::NativeSyscall(elements) | Expr::Array(elements) | Expr::Tuple(elements) => {
                     self.many(elements, Visit::Expr)?
                 }
                 Expr::EnumVariant { name, fields, .. } => {

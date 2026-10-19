@@ -265,6 +265,15 @@ fn value_size(ty: &ir::Ty) -> Result<i32, String> {
     }
 }
 
+fn raw_scalar_bytes(ty: &ir::Ty) -> u32 {
+    match ty {
+        ir::Ty::Int(integer) => integer.bits() / 8,
+        ir::Ty::Bool => 1,
+        ir::Ty::Char | ir::Ty::Float(ir::FloatTy::F32) => 4,
+        _ => 8,
+    }
+}
+
 fn field_offset(ty: &ir::Ty, index: usize) -> Result<(i32, &ir::Ty), String> {
     let field = ty
         .field_ty(index)
@@ -785,7 +794,21 @@ impl<'a> Emitter<'a> {
         self.bytes(&[0x49, 0x89, 0xc1]); // r9 = RHS
         let ty = self.place_address(place)?;
         self.bytes(&[0x48, 0x89, 0xc7, 0x4c, 0x89, 0xc8]);
-        self.store_address_value(ty)?;
+        if ir::raw_deref_index(&self.function().locals[place.local.0].ty, &place.projection)
+            .is_some()
+            && !indirect(ty)?
+        {
+            // Heap storage is byte-addressed, unlike private eight-byte local
+            // carriers. Never overwrite adjacent bytes or a mapping boundary.
+            match raw_scalar_bytes(ty) {
+                1 => self.bytes(&[0x88, 0x07]),
+                2 => self.bytes(&[0x66, 0x89, 0x07]),
+                4 => self.bytes(&[0x89, 0x07]),
+                _ => self.bytes(&[0x48, 0x89, 0x07]),
+            }
+        } else {
+            self.store_address_value(ty)?;
+        }
         if place.projection.is_empty() {
             self.set_drop_flag(place.local, true);
         }
@@ -838,7 +861,15 @@ impl<'a> Emitter<'a> {
     fn load_place(&mut self, place: &ir::Place) -> Result<(), String> {
         let ty = self.place_address(place)?;
         if !indirect(ty)? {
-            self.bytes(&[0x48, 0x8b, 0x00]);
+            let raw =
+                ir::raw_deref_index(&self.function().locals[place.local.0].ty, &place.projection)
+                    .is_some();
+            match if raw { raw_scalar_bytes(ty) } else { 8 } {
+                1 => self.bytes(&[0x0f, 0xb6, 0x00]),
+                2 => self.bytes(&[0x0f, 0xb7, 0x00]),
+                4 => self.bytes(&[0x8b, 0x00]),
+                _ => self.bytes(&[0x48, 0x8b, 0x00]),
+            }
             if let ir::Ty::Int(integer) = ty {
                 self.normalize_integer(*integer);
             }
@@ -1560,6 +1591,33 @@ impl<'a> Emitter<'a> {
     }
     fn rvalue(&mut self, value: &cfg::Rvalue) -> Result<(), String> {
         match value {
+            cfg::Rvalue::NativeSyscall(arguments) => {
+                if arguments.len() != 7 {
+                    return Err("native syscall requires number and six arguments".into());
+                }
+                // Every operand was evaluated in source order by CFG lowering.
+                // Stage words before loading ABI registers: operand addressing
+                // uses rbp and may clobber any caller-saved scratch register.
+                for argument in arguments {
+                    if self.function().operand_ty(argument)? != ir::Ty::Int(ir::IntTy::Usize) {
+                        return Err("native syscall arguments must be usize".into());
+                    }
+                    self.operand(argument)?;
+                    self.bytes(&[0x50]); // push rax
+                }
+                self.bytes(&[
+                    0x41, 0x59, // pop r9: argument 6
+                    0x41, 0x58, // pop r8: argument 5
+                    0x41, 0x5a, // pop r10: argument 4 (not rcx)
+                    0x5a, // pop rdx: argument 3
+                    0x5e, // pop rsi: argument 2
+                    0x5f, // pop rdi: argument 1
+                    0x58, // pop rax: syscall number
+                    0x0f, 0x05, // syscall, clobbers rcx and r11
+                ]);
+                // Preserve the exact kernel return word, including -errno.
+                // Allocation policy and error interpretation live in Rust.
+            }
             cfg::Rvalue::Use(operand) => self.operand(operand)?,
             cfg::Rvalue::CharToInt { value, to } => {
                 if self.function().operand_ty(value)? != ir::Ty::Char {

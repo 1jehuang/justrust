@@ -448,6 +448,11 @@ pub(super) fn inventory(
         b.check_depth(d)?;
         b.charge_work(1)?;
         match e {
+            Expr::NativeSyscall(arguments) => {
+                for argument in arguments {
+                    expr(argument, ds, b, d + 1)?;
+                }
+            }
             Expr::Tuple(es) => {
                 add(
                     ds,

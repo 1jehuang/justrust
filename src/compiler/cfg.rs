@@ -448,6 +448,7 @@ pub enum Operand {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rvalue {
+    NativeSyscall(Vec<Operand>),
     CharToInt {
         value: Operand,
         to: IntTy,
@@ -587,7 +588,9 @@ impl Rvalue {
                 visit(left)?;
                 visit(right)?;
             }
-            Self::Aggregate { fields, .. } | Self::EnumVariant { fields, .. } => {
+            Self::NativeSyscall(fields)
+            | Self::Aggregate { fields, .. }
+            | Self::EnumVariant { fields, .. } => {
                 for value in fields {
                     visit(value)?;
                 }
@@ -1023,7 +1026,8 @@ impl Function {
                     Statement::Assign { destination, value } => {
                         path(&mut bytes, destination, budget)?;
                         match value {
-                            Rvalue::Aggregate { fields, .. }
+                            Rvalue::NativeSyscall(fields)
+                            | Rvalue::Aggregate { fields, .. }
                             | Rvalue::EnumVariant { fields, .. } => add(
                                 &mut bytes,
                                 fields.len(),
@@ -1628,6 +1632,11 @@ impl Function {
                                     operand(value, budget, facts)?;
                                 }
                             }
+                            Rvalue::NativeSyscall(fields) => {
+                                for value in fields {
+                                    operand(value, budget, facts)?;
+                                }
+                            }
                             Rvalue::EnumVariant { ty, fields, .. } => {
                                 facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?;
                                 for value in fields {
@@ -2066,6 +2075,15 @@ impl Function {
                     return Err("CFG slice index cannot copy a non-Copy element".into());
                 }
                 Ok(element.clone())
+            }
+            Rvalue::NativeSyscall(arguments) => {
+                if arguments.len() != 7 {
+                    return Err("CFG native syscall arity mismatch".into());
+                }
+                for argument in arguments {
+                    self.require_operand_with_facts(argument, &Ty::Int(IntTy::Usize), facts)?;
+                }
+                Ok(Ty::Int(IntTy::Usize))
             }
             Rvalue::Println(_) | Rvalue::Output(_) => Ok(Ty::Unit),
             Rvalue::Str(_) => Ok(Ty::shared_str_ty()),
@@ -3707,6 +3725,16 @@ impl Lowerer<'_> {
             ir::ExprKind::Field { .. } | ir::ExprKind::Index { .. } => {
                 let p = self.pattern_source(id)?;
                 self.assign(destination.clone(), Rvalue::Use(self.consume(p)?), origin);
+            }
+            ir::ExprKind::NativeSyscall(arguments) => {
+                if !self.allocate(0, arguments.len() * std::mem::size_of::<Operand>()) {
+                    return Err(self.resource_error.clone().unwrap());
+                }
+                let operands = arguments
+                    .iter()
+                    .map(|id| self.expression(*id))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.assign(destination.clone(), Rvalue::NativeSyscall(operands), origin);
             }
             ir::ExprKind::Tuple(fields) => {
                 let operands = fields
@@ -10599,7 +10627,8 @@ mod tests {
                                 live_operand(left, &live);
                                 live_operand(right, &live);
                             }
-                            Rvalue::Aggregate { fields, .. }
+                            Rvalue::NativeSyscall(fields)
+                            | Rvalue::Aggregate { fields, .. }
                             | Rvalue::EnumVariant { fields, .. } => {
                                 for value in fields {
                                     live_operand(value, &live);

@@ -2694,7 +2694,7 @@ impl Resolver<'_> {
                     self.expr(arg, module, locals)?;
                 }
             }
-            Expr::Array(elements) | Expr::Tuple(elements) => {
+            Expr::NativeSyscall(elements) | Expr::Array(elements) | Expr::Tuple(elements) => {
                 for value in elements {
                     self.expr(value, module, locals)?;
                 }

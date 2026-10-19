@@ -1545,6 +1545,11 @@ fn preflight_with_plan(
                             operand(field, &mut budget)?;
                         }
                     }
+                    Rvalue::NativeSyscall(fields) => {
+                        for field in fields {
+                            operand(field, &mut budget)?;
+                        }
+                    }
                     Rvalue::EnumVariant { ty, fields, .. } => {
                         preflight_ty(&Ty::Enum(ty.clone()), 0, &mut budget)?;
                         for field in fields {
@@ -2733,7 +2738,9 @@ impl Transfer<'_> {
                 self.operand(state, left)?;
                 self.operand(state, right)?;
             }
-            Rvalue::Aggregate { fields, .. } | Rvalue::EnumVariant { fields, .. } => {
+            Rvalue::NativeSyscall(fields)
+            | Rvalue::Aggregate { fields, .. }
+            | Rvalue::EnumVariant { fields, .. } => {
                 for field in fields {
                     self.operand(state, field)?;
                 }
