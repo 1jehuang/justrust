@@ -17,13 +17,10 @@ A faster, vertically integrated Rust build toolchain optimized for agents.
 
 ---
 
-> **Clean-room rewrite branch:** the installed service described below is the
-> stable implementation. This branch now includes `jr-rust`, an experimental
-> compiler for a small Rust subset that emits native Linux x86-64 executables
-> directly, plus the `jr-prototype` graph-runtime fixtures. See
-> [COMPILER.md](COMPILER.md) for supported syntax, commands and limitations, and
-> [ENGINE.md](ENGINE.md) for the graph runtime. It cannot compile general Rust
-> projects yet. Do not install it over the stable client.
+> **Note:** `main` is the clean-room compiler rewrite (`jr-rust`), which supports
+> only a small Rust subset so far ([COMPILER.md](COMPILER.md)). The client and
+> service described below are released from the
+> [`stable`](https://github.com/1jehuang/justrust/tree/stable) branch.
 
 justrust vertically integrates and optimizes the Rust build toolchain to make
 the entire edit, check, and test loop faster. Use it locally or with our remote
