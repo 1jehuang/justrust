@@ -16065,6 +16065,9 @@ impl PlanCtx {
             let nominal = match &self_ty {
                 ir::Ty::Struct(t) => t.def().source_decl,
                 ir::Ty::Enum(t) => t.def().source_decl,
+                // Trait impls on structural/primitive types: the impl itself is
+                // the owning identity. Selection goes through trait headers.
+                _ if block.trait_path.is_some() => impl_id,
                 _ => return Err("inherent impl requires a local nominal self type".into()),
             };
             let mut used = std::collections::HashSet::new();

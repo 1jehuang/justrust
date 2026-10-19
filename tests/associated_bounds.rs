@@ -1074,9 +1074,10 @@ fn diagnostic(case: &Case, text: &str) {
             Outcome::Unsupported,
             "unsupported generic inference: insufficient evidence; explicit type arguments required",
         ),
-        Boundary::NominalSelfPattern => {
-            (Outcome::Unsupported, "impl requires a nominal self pattern")
-        }
+        Boundary::NominalSelfPattern => (
+            Outcome::Unsupported,
+            "associated declaration bounds require catalog Copy or Sized",
+        ),
         Boundary::None => panic!("positive rejected {}:{text}", case.name),
     };
     assert_eq!(case.outcome, outcome, "{}", case.name);

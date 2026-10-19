@@ -2068,7 +2068,10 @@ impl ValidatedTraitWorld {
             }
             Ty::Str => {
                 // Unsized: only meaningful directly behind a shared reference.
-                if !matches!(usage, TypeUse::Referent { shared: true, .. }) {
+                if !matches!(
+                    usage,
+                    TypeUse::Referent { shared: true, .. } | TypeUse::Root
+                ) {
                     return Err(FactsError::unsupported(
                         &self.budget,
                         "unsupported: str type outside a shared reference",
@@ -2971,20 +2974,15 @@ impl ValidatedTraitWorld {
                 "trait impl schema disagrees with registry",
             ));
         }
-        if !matches!(h.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_)) {
-            return Err(
-                if self.catalog.declaration(h.trait_ref.declaration).is_some() {
-                    FactsError::invalid(
-                        &self.budget,
-                        "canonical foreign trait implementation requires local nominal Self",
-                    )
-                } else {
-                    FactsError::unsupported(
-                        &self.budget,
-                        "unsupported: nonnominal trait implementation head",
-                    )
-                },
-            );
+        // Local source traits may be implemented for any type (orphan rule:
+        // the trait is local). Canonical foreign traits need a local nominal.
+        if !matches!(h.trait_ref.self_ty, Ty::Struct(_) | Ty::Enum(_))
+            && self.catalog.declaration(h.trait_ref.declaration).is_some()
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "canonical foreign trait implementation requires local nominal Self",
+            ));
         }
         if h.trait_ref.declaration == self.catalog.id(CatalogItem::Sized) {
             return Err(FactsError::invalid(

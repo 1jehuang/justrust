@@ -3646,11 +3646,14 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
             if resolver.contains_projection(&block.self_ty, 0)? {
                 return Err("unsupported: projection-bearing impl heads are unsupported".into());
             }
-            resolver.self_nominal = Some(match &block.self_ty {
-                Type::Named(path) => path.clone(),
-                Type::Apply(path) => path.path(resolver.names())?,
+            resolver.self_nominal = match &block.self_ty {
+                Type::Named(path) => Some(path.clone()),
+                Type::Apply(path) => Some(path.path(resolver.names())?),
+                // Trait impls may target any type (primitives, references,
+                // tuples, slices); `Self` then has no nominal namespace.
+                _ if block.trait_path.is_some() => None,
                 _ => return Err("impl requires a nominal self pattern".into()),
-            });
+            };
             resolver.self_allowed = true;
             for associated in &mut block.associated_types {
                 validate_depth(DepthNode::Type(&associated.value))?;

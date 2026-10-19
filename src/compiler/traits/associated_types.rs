@@ -763,15 +763,6 @@ impl ValidatedTraitWorld {
                     "associated assignment implementation environment mismatch",
                 ));
             }
-            if !matches!(
-                implementation.trait_ref.self_ty,
-                Ty::Struct(_) | Ty::Enum(_)
-            ) {
-                return Err(FactsError::unsupported(
-                    &self.budget,
-                    "unsupported: nonnominal trait implementation head",
-                ));
-            }
             self.validate_ref_in(&implementation.trait_ref, &implementation.schema_env, None)?;
             self.validate_predicates(&implementation.predicates, &implementation.schema_env, None)?;
             for parameter in implementation.schema_env.ordered_params() {
