@@ -1,8 +1,13 @@
 # Agent Instructions for justrust
 
-## Clean-room rewrite worktree policy (2026-10-15)
+## Clean-room rewrite policy (2026-10-15; became `main` on 2026-10-19)
 
-This checkout is the explicitly requested `clean-room-rewrite` branch/worktree.
+This checkout (`~/justrust-clean-room`) is the `main` branch: the clean-room
+compiler rewrite. The previous `main` (shipping justrust client, `server/`,
+`toolchain/`, release pipeline) is now the `stable` branch in `~/justrust`;
+releases are tagged from `stable`, never from `main`. The old `main` tip is
+tagged `pre-cleanroom-main-2026-10-19`. `clean-room-rewrite` is a retired
+alias kept equal to `main` for agents with old instructions; push to `main`.
 For this rewrite, this section supersedes conflicting legacy instructions below.
 `ARCHITECTURE.md` and `PROTOTYPE.md` define the graph design and first milestone.
 `RUST-COMPATIBILITY.md` defines the full Rust goal and compatibility contract.
@@ -17,7 +22,9 @@ the deleted implementation or its dependency graph.
 Use the installed stable justrust client for checks/tests/lints and `cargo fmt`
 for formatting. Do not install this experimental package over the stable client.
 Keep experimental hosted workspaces, binaries and caches separate. Work and
-commit/push on `clean-room-rewrite`, not main. Preserve the stable checkout.
+commit/push on `main` in this checkout. Client fixes go to `stable` in
+`~/justrust`, never here; do not merge `stable` and `main` into each other.
+Do not tag releases from `main`.
 Legacy toolchain paths, reinstall requirements, benchmark commands and component
 ownership descriptions below describe the old implementation, not requirements
 to recreate it. Retained `bench/`, `docs/`, `data/`, CHANGELOG.md and FINDINGS.md
@@ -250,8 +257,8 @@ billing, private caches) and never weaken the security invariants in
 
 ## Git workflow
 
-- In this clean-room worktree, work on `clean-room-rewrite` (see the top
-  section). Elsewhere, work directly on `main`. No other feature branches.
+- Work directly on `main` in this checkout (see the top section). No feature
+  branches and no git worktrees (global rule in ~/AGENTS.md).
 - **Commit and push as you go.** Each working improvement gets its own commit,
   pushed right away. Do not batch up a session of changes into one push.
 - Commit only your own changes.

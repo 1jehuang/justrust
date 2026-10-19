@@ -4,11 +4,11 @@ Goal: full Rust support in the native graph-engine compiler. First priority is
 compiling complete, realistic single-file programs end to end (stock rustc
 output == native output).
 
-Repository: /home/jeremy/justrust-clean-room, branch `clean-room-rewrite`
+Repository: /home/jeremy/justrust-clean-room, branch `main`
 (remote origin). Read AGENTS.md (top clean-room section), GRAPH-INTEGRITY.md,
 RUST-COMPATIBILITY.md, IMPLEMENTATION.md and COMPILER.md first.
 
-Shared checkout: work in /home/jeremy/justrust-clean-room on `clean-room-rewrite`.
+Shared checkout: work in /home/jeremy/justrust-clean-room on `main`.
 Do NOT create git worktrees (global rule in ~/AGENTS.md: each one costs 10-17 GB
 of target/ locally and is mirrored onto the hosted build machine, which filled its
 disk on 2026-10-19). Many agents edit the big shared files (frontend.rs, ir.rs,
@@ -16,9 +16,9 @@ cfg.rs, ownership.rs, borrow.rs, backend.rs), so:
   - Claim the files or functions you will edit with cricket before editing, and
     keep edits small and focused.
   - Commit only your own hunks (`git add -p`), never `git add -A`.
-  - Integrate often: `git fetch && git rebase origin/clean-room-rewrite` (with
+  - Integrate often: `git fetch && git rebase origin/main` (with
     `--autostash` if needed), re-run the relevant tests, then
-    `git push origin HEAD:clean-room-rewrite`.
+    `git push origin HEAD:main`.
   - Never reset, stash-drop or checkout over files you did not change.
 Resolve conflicts by preserving other agents' work. Never force-push. Never rewrite others' commits.
 Use the user's git identity (already configured). Push every working increment.
