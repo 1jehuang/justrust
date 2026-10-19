@@ -109,7 +109,6 @@ a hash or a file-name sort.
 ## Increments, each independently mergeable
 
 ### Increment 1 owner derivation (for review, not activated)
-
 Today eight process-global counters issue owner ids through `allocate_identity`:
 
 | Domain | Site | Issued per |
@@ -170,21 +169,41 @@ it. It failed before the swap and passes after. Remaining before activation:
 coordinator review of mint semantics, the hog constructor hunk, and the main
 freeze.
 
-1. Deterministic owner ids derived from file ordinals. No behavior change.
-   Shrinks the static/atomic baseline.
-2. `PARSE_FILE` per file with per-file sessions. During this step `PARSE` still
-   exists and assembles a `ParsedProgram` from the file facts. Gate: identical
-   `Program` on the existing corpus at workers 1 and 8.
-3. Textual macro scope as per-site outputs. Remove the splice in
-   `SourceAssembler` for parsing. Diagnostics remain spliced-source compatible
-   through `SourceMap`.
-4. `MODULE_INDEX` plus `RESOLVE_IMPORT`/`RESOLVE_ITEM`. `RESOLVE` turns into
-   the SIGNATURES-side assembly and leaves `WHOLE_PROGRAM_DEBT`.
-5. Delete the `PARSE` root key and remove `parse` from `WHOLE_PROGRAM_DEBT`.
+### Activation representation (found while scoping the 8 constructors)
 
-Acceptance per increment: the full test suite, `graph_integrity` with no raised
-number, and before/after `graph_integrity` leaf-closure and work-growth numbers
-recorded in FINDINGS.md.
+Handles are `Copy` and carry an 8-byte owner: `AstIdent {owner: SessionId,
+index: u32}` (size pinned at 16 bytes), `ModuleId`, scope handles, `SpanId`
+and others. About 65 sites read or compare these owners. An `OwnerPath` (two
+`Arc`s, variable depth) cannot live inside a `Copy` handle without breaking
+the pinned layouts, adding refcount traffic to every identifier comparison,
+and making hot handles non-`Copy`.
+
+Constraint: a handle is validated against the container that checks it
+(`ident.owner == names.session.id()`), and the handle itself carries no root.
+So the 8-byte owner tag must be unique across every live root, not only within
+one. Per-root tags are unsound: two identical direct parses would issue equal
+tags, and a grafted identifier would pass. `tests/owner_authority.rs`
+(`identical_direct_parses_issue_distinct_owners`) catches exactly this.
+
+Options under review (no code yet):
+
+1. Split the handle owner into `EngineAuthority` plus a per-engine local tag.
+   `AstIdent` is 8 + 4 bytes padded to 16, so `{authority: NonZeroU64,
+   local: u32, index: u32}` keeps the pinned 16-byte layout. Engine authority
+   separates roots. The local tag must be unique within one engine across all
+   of its producer nodes, which needs an engine-issued per-producer range.
+   That is the remaining design question.
+2. Keep the 8-byte owner, but allocate it from engine-owned state (the engine
+   already issues fail-closed node ids) instead of per-module statics. This is
+   the smallest change and stays globally unique. It moves the counters into
+   the engine, which is allowed engine state, rather than deriving them
+   structurally from `OwnerPath`. `OwnerPath` remains the published authority
+   of record next to it.
+
+Option 2 removes the eight compiler statics with no handle layout change, and
+fits GRAPH-INTEGRITY.md (engine internals are allowed). It needs coordinator
+approval because it reinterprets "structural derivation" as "engine-issued,
+recorded alongside the structural path".
 
 ## Coordination
 
