@@ -30,6 +30,12 @@ through a raw pointer carry no reference origins.
 
 ## Not yet supported
 
+The later NATIVE-HEAP.md foundation adds ordinary Rust-source `null<T>`,
+`is_null<T>` and checked byte-address arithmetic helpers under the explicit
+`std::native_heap` bootstrap module, plus actual scalar-width dereferenced
+memory transport. These are not raw-pointer inherent methods or public
+aggregate-layout support. The method/API exclusions below remain open.
+
 Raw pointer methods (`add`, `offset`, `is_null`, `read`, `write`,
 `std::ptr::null`), `&raw const`/`&raw mut`, unsafe functions/traits, fat raw
 pointers (`*const [T]`, `*const str`, `*const dyn T`), pointer ordering and
