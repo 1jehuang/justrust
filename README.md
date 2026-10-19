@@ -102,6 +102,27 @@ the compatibility contract: Rust semantics,
 existing projects, build scripts, proc macros, platform ABIs, and trustworthy
 build and test results.
 
+## Design
+
+The new compiler is one demand-driven graph, not a pipeline of phases. File
+discovery, parsing, name resolution, type and borrow checking, lowering, code
+generation, linking and tests are all designed as nodes that produce and consume immutable,
+typed facts. A node runs as soon as the facts it reads exist, not when a global
+phase ends, so code generation for one function can overlap checking of an
+unrelated one. A node that is missing an input suspends only the branch that
+needs it, never a worker thread. Success is released only after every required
+check passes.
+
+Nodes are keyed per file, per item, or per generic instance, so equivalent work
+shares one node and is computed once within a build. Because every compiler
+fact lives in the graph, with no side tables or global state (enforced by
+[GRAPH-INTEGRITY.md](GRAPH-INTEGRITY.md)), the same identities are meant to
+become the units for incremental rebuilds, persistent and remote caching,
+and scheduling across cores and machines. Today reuse is within a single build
+only, a few stages (parsing, resolution) are still whole-program nodes being
+split, and cross-build persistence and shared caches are planned, not built.
+See [ARCHITECTURE.md](ARCHITECTURE.md) and [ENGINE.md](ENGINE.md) for details.
+
 ## Contributing and license
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). The client is MIT, and the self-hostable
