@@ -2370,6 +2370,7 @@ impl Resolver<'_> {
                 | Stmt::ImplicitExpr(value)
                 | Stmt::Return(Some(value)) => self.expr(value, module, locals)?,
                 Stmt::WhileLet { .. } => self.while_let(stmt, module, locals)?,
+                Stmt::For { .. } => self.for_loop(stmt, module, locals)?,
                 Stmt::While {
                     condition, body, ..
                 } => {
@@ -2459,6 +2460,43 @@ impl Resolver<'_> {
         let result = self.block(body, module, locals);
         // Nested failures can retain more than one scope, so restore depth
         // rather than popping only the most recently entered block.
+        locals.truncate(previous_depth);
+        result
+    }
+
+    #[inline(never)]
+    fn for_loop(
+        &mut self,
+        statement: &mut Stmt,
+        module: ModuleId,
+        locals: &mut Vec<std::collections::HashSet<LocalKey>>,
+    ) -> Result<(), String> {
+        let Stmt::For {
+            pattern,
+            source,
+            body,
+            ..
+        } = statement
+        else {
+            return Err("for loop bypassed resolver statement dispatcher".into());
+        };
+        let previous_depth = locals.len();
+        let result = match &mut source.iterable {
+            ForIterable::Range { start, end, .. } => self
+                .expr(start, module, locals)
+                .and_then(|()| self.expr(end, module, locals)),
+            ForIterable::Value(value) => self.expr(value, module, locals),
+        };
+        locals.truncate(previous_depth);
+        result?;
+        let mut names = std::collections::HashSet::new();
+        self.pattern(pattern, module, &mut names)?;
+        self.charge_entries::<std::collections::HashSet<LocalKey>>(1)?;
+        locals
+            .try_reserve(1)
+            .map_err(|_| "for scope stack allocation failed")?;
+        locals.push(names);
+        let result = self.block(body, module, locals);
         locals.truncate(previous_depth);
         result
     }

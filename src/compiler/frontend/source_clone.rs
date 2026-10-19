@@ -258,6 +258,14 @@ pub(super) fn preflight_clone_node(
                                 .ok_or("while-let source box bytes overflow")?,
                         )?;
                     }
+                    Stmt::For { source, .. } => {
+                        clone_vector(&source.adapters, budget)?;
+                        budget.retain_bytes(
+                            std::mem::size_of::<Pattern>()
+                                .checked_add(std::mem::size_of::<ForSource>())
+                                .ok_or("for source box bytes overflow")?,
+                        )?;
+                    }
                     Stmt::AssignPlace { place, .. } | Stmt::AssignOp { place, .. } => {
                         clone_place(place, budget)?
                     }

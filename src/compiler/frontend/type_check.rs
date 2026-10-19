@@ -5595,6 +5595,13 @@ impl<'a> Checker<'a> {
                         f.completes,
                     )
                 }
+                Stmt::For {
+                    label,
+                    pattern,
+                    source,
+                    body,
+                    ..
+                } => self.for_range_statement(*label, pattern, source, body)?,
                 Stmt::WhileLet {
                     label,
                     pattern,
@@ -5614,7 +5621,7 @@ impl<'a> Checker<'a> {
             }
             statements.push(statement);
             live &= completes;
-            if !matches!(s, Stmt::WhileLet { .. }) {
+            if !matches!(s, Stmt::WhileLet { .. } | Stmt::For { .. }) {
                 source_live &= completes;
             }
         }
@@ -5636,10 +5643,15 @@ impl<'a> Checker<'a> {
                 if source_live
                     || matches!(
                         b.statements.last(),
-                        Some(Stmt::WhileLet {
-                            has_semicolon: false,
-                            ..
-                        })
+                        Some(
+                            Stmt::WhileLet {
+                                has_semicolon: false,
+                                ..
+                            } | Stmt::For {
+                                has_semicolon: false,
+                                ..
+                            }
+                        )
                     )
                 {
                     Flow::value(ir::Ty::Unit)
@@ -6820,6 +6832,251 @@ impl<'a> Checker<'a> {
                 completes,
             },
         ))
+    }
+    #[inline(never)]
+    /// Construct only checked storage, never synthetic source occurrences.
+    fn for_expr(&mut self, ty: ir::Ty, kind: ir::ExprKind) -> Result<ir::ExprId, String> {
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty,
+            completion: ir::Completion::Returns,
+            kind,
+        });
+        Ok(id)
+    }
+    #[inline(never)]
+    fn for_range_statement(
+        &mut self,
+        label: Option<AstIdent>,
+        pattern: &Pattern,
+        source: &ForSource,
+        body: &Block,
+    ) -> Result<(ir::Stmt, bool), String> {
+        if !source.adapters.is_empty() {
+            return Err("for iterator adapters are not supported yet".into());
+        }
+        let ForIterable::Range {
+            start,
+            end,
+            inclusive,
+        } = &source.iterable
+        else {
+            return Err("for currently requires an integer range".into());
+        };
+        let loop_depth = self.loops.len();
+        let scope_depth = self.scopes.len();
+        let outer_reachable = self.reachable;
+        let result = (|| {
+            // Bounds are ordinary expressions evaluated before entering the loop.
+            // They can target an enclosing loop but cannot see this loop's binder.
+            let hint = self
+                .scalar_hint(start)?
+                .filter(|ty| matches!(ty, ir::Ty::Int(_)))
+                .or(self
+                    .scalar_hint(end)?
+                    .filter(|ty| matches!(ty, ir::Ty::Int(_))));
+            let start = self.expr_expected(start, hint.as_ref())?;
+            let sf = self.flow(start);
+            let end = self.expr_expected_when(
+                end,
+                outer_reachable && sf.completes,
+                if sf.ty == ir::Ty::Never {
+                    hint.as_ref()
+                } else {
+                    Some(&sf.ty)
+                },
+            )?;
+            let ef = self.flow(end);
+            let bound_ty = if sf.ty == ir::Ty::Never {
+                &ef.ty
+            } else {
+                &sf.ty
+            };
+            self.require(&sf, bound_ty)?;
+            self.require(&ef, bound_ty)?;
+            let ir::Ty::Int(int_ty) = *bound_ty else {
+                return Err("for range bounds must have an integer type".into());
+            };
+            self.charge_node(std::mem::size_of::<ir::Stmt>() * 10)?;
+            let ty = ir::Ty::Int(int_ty);
+            let cursor = self.temporary("$for_cursor", ty.clone(), true)?;
+            let limit = self.temporary("$for_end", ty.clone(), false)?;
+            let current = self.temporary("$for_current", ty.clone(), true)?;
+            let done = self.temporary("$for_done", ir::Ty::Bool, true)?;
+            let read_cursor = self.for_expr(ty.clone(), ir::ExprKind::Local(cursor))?;
+            let read_limit = self.for_expr(ty.clone(), ir::ExprKind::Local(limit))?;
+            let read_current = self.for_expr(ty.clone(), ir::ExprKind::Local(current))?;
+            let read_done = self.for_expr(ir::Ty::Bool, ir::ExprKind::Local(done))?;
+            let yes = self.for_expr(ir::Ty::Bool, ir::ExprKind::Bool(true))?;
+            let no = self.for_expr(ir::Ty::Bool, ir::ExprKind::Bool(false))?;
+            let one = self.for_expr(
+                ty.clone(),
+                ir::ExprKind::Int(ir::IntValue {
+                    ty: int_ty,
+                    bits: 1,
+                }),
+            )?;
+            let increment_cursor = self.for_expr(ty.clone(), ir::ExprKind::Local(cursor))?;
+            let compare_cursor = self.for_expr(ty.clone(), ir::ExprKind::Local(cursor))?;
+            let compare_limit = self.for_expr(ty.clone(), ir::ExprKind::Local(limit))?;
+            let snapshot_cursor = self.for_expr(ty.clone(), ir::ExprKind::Local(cursor))?;
+            let initialize_cursor = self.for_expr(ty.clone(), ir::ExprKind::Local(cursor))?;
+            let available_yes = self.for_expr(ir::Ty::Bool, ir::ExprKind::Bool(true))?;
+            let exhausted_no = self.for_expr(ir::Ty::Bool, ir::ExprKind::Bool(false))?;
+            let initial_no = self.for_expr(ir::Ty::Bool, ir::ExprKind::Bool(false))?;
+            let next = self.for_expr(
+                ty.clone(),
+                ir::ExprKind::Binary {
+                    op: BinaryOp::Add,
+                    left: increment_cursor,
+                    right: one,
+                },
+            )?;
+            let at_end = self.for_expr(
+                ir::Ty::Bool,
+                ir::ExprKind::Binary {
+                    op: BinaryOp::Eq,
+                    left: read_cursor,
+                    right: read_limit,
+                },
+            )?;
+            let in_range = self.for_expr(
+                ir::Ty::Bool,
+                ir::ExprKind::Binary {
+                    op: if *inclusive {
+                        BinaryOp::Le
+                    } else {
+                        BinaryOp::Lt
+                    },
+                    left: compare_cursor,
+                    right: compare_limit,
+                },
+            )?;
+            // Advance before the source body, so every continue (including a
+            // labeled continue from a nested loop) takes the next item. Never
+            // add one to the inclusive maximum: mark exhaustion instead.
+            let advance = self.for_expr(
+                ir::Ty::Unit,
+                ir::ExprKind::If {
+                    condition: at_end,
+                    then_block: ir::Block {
+                        statements: vec![ir::Stmt::Assign {
+                            local: done,
+                            value: yes,
+                        }],
+                        tail: None,
+                    },
+                    else_block: ir::Block {
+                        statements: vec![ir::Stmt::Assign {
+                            local: cursor,
+                            value: next,
+                        }],
+                        tail: None,
+                    },
+                },
+            )?;
+            let available = self.for_expr(
+                ir::Ty::Bool,
+                ir::ExprKind::If {
+                    condition: in_range,
+                    then_block: ir::Block {
+                        statements: vec![
+                            ir::Stmt::Assign {
+                                local: current,
+                                value: snapshot_cursor,
+                            },
+                            ir::Stmt::Expr(advance),
+                        ],
+                        tail: Some(available_yes),
+                    },
+                    else_block: ir::Block {
+                        statements: vec![],
+                        tail: Some(no),
+                    },
+                },
+            )?;
+            let condition = self.for_expr(
+                ir::Ty::Bool,
+                ir::ExprKind::If {
+                    condition: read_done,
+                    then_block: ir::Block {
+                        statements: vec![],
+                        tail: Some(exhausted_no),
+                    },
+                    else_block: ir::Block {
+                        statements: vec![],
+                        tail: Some(available),
+                    },
+                },
+            )?;
+            let id = self.enter_loop(false);
+            let key = self.label_key(label)?;
+            let frame = self.loops.last_mut().unwrap();
+            frame.label = key;
+            frame.checking_condition = false;
+            self.reachable = true;
+            // One exhaustive arm gives the source pattern its genuine body-only
+            // scope and rejects refutable patterns without fabricating binders.
+            let (kind, flow) = self.lower_match_value(
+                read_current,
+                [BorrowedMatchArm {
+                    pattern: Some(pattern),
+                    guarded: false,
+                    body: MatchBody::Block(body),
+                }]
+                .into_iter(),
+                Some(&ir::Ty::Unit),
+            )?;
+            self.require(&flow, &ir::Ty::Unit)?;
+            let matched = self.for_expr(flow.ty, kind)?;
+            self.exprs[matched.0].completion = if flow.completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            };
+            let block = ir::Block {
+                statements: vec![
+                    ir::Stmt::Let {
+                        local: cursor,
+                        value: start,
+                    },
+                    ir::Stmt::Let {
+                        local: limit,
+                        value: end,
+                    },
+                    ir::Stmt::Let {
+                        local: current,
+                        value: initialize_cursor,
+                    },
+                    ir::Stmt::Let {
+                        local: done,
+                        value: initial_no,
+                    },
+                    ir::Stmt::While {
+                        id,
+                        condition,
+                        body: ir::Block {
+                            statements: vec![ir::Stmt::Expr(matched)],
+                            tail: None,
+                        },
+                    },
+                ],
+                tail: None,
+            };
+            let completes = sf.completes && ef.completes;
+            let block = self.for_expr(ir::Ty::Unit, ir::ExprKind::Block(block))?;
+            self.exprs[block.0].completion = if completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            };
+            Ok((ir::Stmt::Expr(block), completes))
+        })();
+        self.loops.truncate(loop_depth);
+        self.scopes.truncate(scope_depth);
+        self.reachable = outer_reachable;
+        result
     }
     #[inline(never)]
     fn while_let_statement(

@@ -431,6 +431,22 @@ pub(super) fn inventory(
                     expr(scrutinee, ds, b, d + 1)?;
                     block(body, ds, b, d + 1)?;
                 }
+                Stmt::For {
+                    pattern: child,
+                    source,
+                    body,
+                    ..
+                } => {
+                    pattern(child, ds, b, d + 1)?;
+                    match &source.iterable {
+                        ForIterable::Range { start, end, .. } => {
+                            expr(start, ds, b, d + 1)?;
+                            expr(end, ds, b, d + 1)?;
+                        }
+                        ForIterable::Value(value) => expr(value, ds, b, d + 1)?,
+                    }
+                    block(body, ds, b, d + 1)?;
+                }
                 Stmt::Return(None) => {}
             }
         }

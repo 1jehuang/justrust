@@ -1532,6 +1532,53 @@ impl SourceInventory {
                     self.scopes.pop();
                     body_result?;
                 }
+                Stmt::For {
+                    pattern,
+                    source,
+                    body,
+                    ..
+                } => {
+                    // Inventory tag 24: iterable start/value 0, range end 1,
+                    // pattern 2 and body 3. Bindings are body-only.
+                    let (first, end) = match &source.iterable {
+                        ForIterable::Range { start, end, .. } => (start, Some(end)),
+                        ForIterable::Value(value) => (value, None),
+                    };
+                    self.expr(
+                        first,
+                        &here.child(24, 0, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                    if let Some(end) = end {
+                        self.expr(
+                            end,
+                            &here.child(24, 1, budget)?,
+                            None,
+                            None,
+                            budget,
+                            depth + 1,
+                        )?;
+                    }
+                    sr::retain(budget, 128)?;
+                    self.scopes
+                        .try_reserve(1)
+                        .map_err(|_| FactsError::resource(budget, "source for scope allocation"))?;
+                    self.scopes.push(HashMap::new());
+                    let body_result = (|| {
+                        self.shadow_pattern(
+                            pattern,
+                            &here.child(24, 2, budget)?,
+                            budget,
+                            depth + 1,
+                        )?;
+                        self.block(body, &here.child(24, 3, budget)?, false, budget, depth + 1)
+                    })();
+                    self.scopes.pop();
+                    body_result?;
+                }
                 Stmt::While {
                     condition, body, ..
                 } => {
@@ -4780,12 +4827,47 @@ pub enum Stmt {
         /// The actual optional token following the body, not inferred liveness.
         has_semicolon: bool,
     },
+    /// Genuine `for PAT in ITER BODY`. Range syntax and zero-argument
+    /// iterator adapters are retained as written structure, never as
+    /// fabricated method calls.
+    For {
+        label: Option<AstIdent>,
+        pattern: Box<Pattern>,
+        source: Box<ForSource>,
+        body: Block,
+        has_semicolon: bool,
+    },
     LetElse {
         pattern: Box<Pattern>,
         ty: Type,
         value: Box<Expr>,
         else_block: Block,
     },
+}
+/// The written iterable of a for loop.
+#[derive(Clone, Debug)]
+pub enum ForIterable {
+    /// `start..end` or `start..=end`, evaluated once, start first.
+    Range {
+        start: Expr,
+        end: Expr,
+        inclusive: bool,
+    },
+    /// Any other expression; its type selects the iteration plan.
+    Value(Expr),
+}
+/// Zero-argument adapters written after the iterable, in source order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForAdapter {
+    Iter,
+    IntoIter,
+    Rev,
+    Enumerate,
+}
+#[derive(Clone, Debug)]
+pub struct ForSource {
+    pub iterable: ForIterable,
+    pub adapters: Vec<ForAdapter>,
 }
 /// Source literal magnitude, before contextual signedness and range checking.
 #[derive(Clone, Debug)]
@@ -10082,6 +10164,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             if self.is("mod") || self.is("use") || self.is("fn") || self.is("pub") {
                 return Err(self.unsupported("block-local items are unsupported"));
             }
+            if self.try_for_statement(&mut statements)? {
+                continue;
+            }
             if self.eat("let") {
                 let pattern = self.pattern()?;
                 // Local inference is performed by each independent function checker.
@@ -10208,10 +10293,6 @@ impl<'input, 'names> Parser<'input, 'names> {
                     condition,
                     body,
                 });
-            } else if self.is("for") {
-                return Err(self.error(
-                    "unsupported: for loops and iterators (including slice iteration); use while with an index",
-                ));
             } else {
                 // Statement eligibility comes from written syntax, not a
                 // lowered macro's AST shape (assert! lowers to Expr::If).
@@ -10857,6 +10938,173 @@ impl<'input, 'names> Parser<'input, 'names> {
             then_block,
             else_branch,
         })
+    }
+    /// Keep the new statement's large parse temporaries off recursive block frames.
+    #[inline(never)]
+    fn try_for_statement(&mut self, statements: &mut Vec<Stmt>) -> Result<bool, ParseError> {
+        if !self.is("for")
+            && !(self.token().is_lifetime()
+                && self.cursor.peek(1).is_some_and(|t| t.text == ":")
+                && self.cursor.peek(2).is_some_and(|t| t.text == "for"))
+        {
+            return Ok(false);
+        }
+        let label = if self.is("for") {
+            None
+        } else {
+            let label = self.input.mint_name(&self.token(), self.names)?;
+            self.cursor.bump();
+            self.expect(":")?;
+            Some(label)
+        };
+        self.expect("for")?;
+        statements.push(self.for_statement(label)?);
+        Ok(true)
+    }
+    #[inline(never)]
+    fn for_statement(&mut self, label: Option<AstIdent>) -> Result<Stmt, ParseError> {
+        let pattern = self.pattern()?;
+        self.expect("in")?;
+        let mut adapters = Vec::new();
+        let iterable = if self.is("(") {
+            let mark = self.cursor.checkpoint();
+            self.cursor.bump();
+            let start = self.nested_expr()?;
+            if self.is("..") || self.is("..=") {
+                let inclusive = self.eat("..=");
+                if !inclusive {
+                    self.expect("..")?;
+                }
+                let end = self.nested_expr()?;
+                self.expect(")")?;
+                while self.eat(".") {
+                    let name = self.token().text;
+                    let adapter = match name {
+                        "rev" => ForAdapter::Rev,
+                        "enumerate" => ForAdapter::Enumerate,
+                        "into_iter" => ForAdapter::IntoIter,
+                        "iter" => ForAdapter::Iter,
+                        _ => {
+                            return Err(self.unsupported(
+                                "unsupported: for-loop range adapter (supported: rev, enumerate, into_iter)",
+                            ));
+                        }
+                    };
+                    self.cursor.bump();
+                    self.expect("(")?;
+                    self.expect(")")?;
+                    if adapters.len() >= 16 {
+                        return Err(self.limit("for-loop adapter count exceeds limit 16"));
+                    }
+                    adapters.push(adapter);
+                }
+                ForIterable::Range {
+                    start,
+                    end,
+                    inclusive,
+                }
+            } else {
+                if !self.cursor.restore(mark) {
+                    return Err(self.error("for-loop iterable checkpoint lost"));
+                }
+                self.for_value_iterable(&mut adapters)?
+            }
+        } else if self.is("..") || self.is("..=") {
+            return Err(
+                self.unsupported("unsupported: unbounded or half-open-start for-loop ranges")
+            );
+        } else {
+            let start = self.condition()?;
+            if self.is("..") || self.is("..=") {
+                let inclusive = self.eat("..=");
+                if !inclusive {
+                    self.expect("..")?;
+                }
+                if self.is("{") {
+                    return Err(self.unsupported("unsupported: unbounded for-loop ranges"));
+                }
+                let end = self.condition()?;
+                ForIterable::Range {
+                    start,
+                    end,
+                    inclusive,
+                }
+            } else {
+                self.peel_for_adapters(start, &mut adapters)?
+            }
+        };
+        let pattern = self
+            .names
+            .try_parser_box(pattern)
+            .map_err(native_adapter::name_error)?;
+        let source = self
+            .names
+            .try_parser_box(ForSource { iterable, adapters })
+            .map_err(native_adapter::name_error)?;
+        let frontier = self.enter_lexical()?;
+        let body_result = (|| {
+            self.bind_pattern_lexical(&pattern)?;
+            self.block()
+        })();
+        self.restore_frontier(frontier);
+        let body = body_result?;
+        let has_semicolon = self.eat(";");
+        Ok(Stmt::For {
+            label,
+            pattern,
+            source,
+            body,
+            has_semicolon,
+        })
+    }
+    fn for_value_iterable(
+        &mut self,
+        adapters: &mut Vec<ForAdapter>,
+    ) -> Result<ForIterable, ParseError> {
+        let value = self.condition()?;
+        if self.is("..") || self.is("..=") {
+            return Err(self.unsupported("unsupported: parenthesized range start in for loop"));
+        }
+        self.peel_for_adapters(value, adapters)
+    }
+    /// Retain trailing zero-argument iterator adapters as written structure.
+    fn peel_for_adapters(
+        &mut self,
+        mut value: Expr,
+        adapters: &mut Vec<ForAdapter>,
+    ) -> Result<ForIterable, ParseError> {
+        while let Expr::MethodCall {
+            name,
+            type_args,
+            args,
+            ..
+        } = &value
+        {
+            if !type_args.is_empty() || !args.is_empty() {
+                break;
+            }
+            let adapter = match self
+                .names
+                .spelling(*name)
+                .map_err(native_adapter::name_error)?
+            {
+                "iter" => ForAdapter::Iter,
+                "into_iter" => ForAdapter::IntoIter,
+                "rev" => ForAdapter::Rev,
+                "enumerate" => ForAdapter::Enumerate,
+                _ => break,
+            };
+            if adapters.len() >= 16 {
+                return Err(self.limit("for-loop adapter count exceeds limit 16"));
+            }
+            adapters.push(adapter);
+            let Expr::MethodCall { receiver, .. } = value else {
+                unreachable!()
+            };
+            value = *receiver;
+        }
+        adapters.reverse();
+        Ok(ForIterable::Value(value))
     }
     #[inline(never)]
     fn while_let_statement(&mut self, label: Option<AstIdent>) -> Result<Stmt, ParseError> {
@@ -12782,6 +13030,9 @@ fn walk_depth_inspecting(
                         }
                         | Stmt::WhileLet {
                             label: Some(label), ..
+                        }
+                        | Stmt::For {
+                            label: Some(label), ..
                         },
                     ) = (names, stmt)
                     {
@@ -12834,6 +13085,22 @@ fn walk_depth_inspecting(
                         } => {
                             push(DepthNode::Pattern(pattern))?;
                             push(DepthNode::Expr(scrutinee))?;
+                            push(DepthNode::Block(body))?;
+                        }
+                        Stmt::For {
+                            pattern,
+                            source,
+                            body,
+                            ..
+                        } => {
+                            push(DepthNode::Pattern(pattern))?;
+                            match &source.iterable {
+                                ForIterable::Range { start, end, .. } => {
+                                    push(DepthNode::Expr(start))?;
+                                    push(DepthNode::Expr(end))?;
+                                }
+                                ForIterable::Value(value) => push(DepthNode::Expr(value))?,
+                            }
                             push(DepthNode::Block(body))?;
                         }
                         Stmt::While {
