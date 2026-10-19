@@ -283,6 +283,20 @@ constructors and `for_catalog`, and the other sites change only internally.
 This plan still needs a coordinated merge order with the owners of
 `frontend.rs`, `traits.rs`, `ir.rs` and `cfg.rs` before any edit.
 
+Exact map (checked 2026-10-19 on 677ea96ab): every production constructor
+site is in `frontend.rs`. The sites in `backend.rs`, `cfg.rs`, `ir.rs`,
+`traits.rs`, `traits/catalog.rs` and `type_check.rs` are all test fixtures.
+
+- `TokenSession::new`: `ProgramBuilder::new`, `native_input`,
+  `validate_inactive_syntax`. This needs an explicit issuer argument.
+  `SourceSnapshot` is an `Arc` cloned at about 30 sites, so deriving a tag
+  from it would put a mutable issuer inside a shared immutable value.
+- `ModuleArenaBuilder::for_source`, `ScopeArenaBuilder::for_names`, and both
+  macro drivers derive their tag from the session they already hold
+  exclusively, with no signature change.
+- Owner map from the coordinator: dromedary owns the frontend.rs production
+  hunks (ACK pending). Dragon's `associated_types.rs` is not touched.
+
 ## Coordination
 
 - Kind ids reserved by cricket: 121 `PARSE_FILE`, 122 `MODULE_INDEX`,
