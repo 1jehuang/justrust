@@ -298,6 +298,12 @@ pub struct OwnerTag(NonZeroU64);
 /// tests can prove a graph tag came from its producer, not a standalone root.
 #[cfg(test)]
 pub(crate) static TAG_PROVENANCE: Mutex<Vec<(u64, u64)>> = Mutex::new(Vec::new());
+
+#[cfg(test)]
+thread_local! {
+    /// Tags minted on this thread, for race-free admission tests.
+    pub(crate) static THREAD_MINTS: Cell<usize> = const { Cell::new(0) };
+}
 impl OwnerTag {
     /// Raw bits for equality checks inside existing 8-byte handle owners.
     pub fn bits(self) -> NonZeroU64 {
@@ -323,10 +329,13 @@ impl TagMint {
             .map(OwnerTag)
             .ok_or_else(|| Error::new("owner tag space exhausted"))?;
         #[cfg(test)]
-        TAG_PROVENANCE
-            .lock()
-            .unwrap()
-            .push((tag.0.get(), self.authority.get()));
+        {
+            TAG_PROVENANCE
+                .lock()
+                .unwrap()
+                .push((tag.0.get(), self.authority.get()));
+            THREAD_MINTS.with(|count| count.set(count.get() + 1));
+        }
         Ok(tag)
     }
     /// The capability for an issuer created by this one. Only an existing

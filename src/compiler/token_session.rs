@@ -550,6 +550,7 @@ struct ExpansionEntry {
 pub struct TokenSession {
     pub(super) fragments: BudgetVec<super::macro_fragments::FragmentPayload>,
     id: SessionId,
+    owner_path: super::owner_path::OwnerPath,
     sources: SourceSnapshot,
     budget: ExpansionBudget,
     symbols: BudgetVec<SymbolEntry>,
@@ -563,26 +564,29 @@ pub struct TokenSession {
 }
 
 impl TokenSession {
-    /// A session whose owner is the issued tag of an existing parent issuer.
-    /// The only production constructor: callers on the graph route pass the
-    /// tag their producer's `OwnerIssuer` issued, so no fresh root is minted.
+    /// A session owned by one issued owner. Consumes the `Issued` pair, so one
+    /// issuance builds exactly one session; the session keeps the immutable
+    /// `OwnerPath` as its authority of record next to the 8-byte tag.
+    /// The only production constructor: graph routes pass the `Issued` from
+    /// their producer's `OwnerIssuer`, so no fresh root is minted.
     pub fn with_owner(
         sources: SourceSnapshot,
         budget: ExpansionBudget,
-        owner: crate::OwnerTag,
+        owner: super::owner_path::Issued,
     ) -> Result<Self, TokenError> {
-        Self::build(SessionId(owner.bits()), sources, budget)
+        let super::owner_path::Issued { issuer, tag } = owner;
+        Self::build(SessionId(tag.bits()), issuer.into_path(), sources, budget)
     }
 
     /// An independent session for direct, non-graph tooling and tests. Mints
-    /// a fresh standalone owner root per call, so two standalone sessions
-    /// never accept each other's handles. Graph code must use `with_owner`.
+    /// a fresh standalone owner root per call, paid by `budget` and admitted
+    /// before anything is minted. Graph code must use `with_owner`.
     pub fn standalone(
         sources: SourceSnapshot,
         budget: ExpansionBudget,
     ) -> Result<Self, TokenError> {
-        let tag = super::owner_path::standalone_tag(&budget)?;
-        Self::with_owner(sources, budget, tag)
+        let owner = super::owner_path::standalone_issued(&budget)?;
+        Self::with_owner(sources, budget, owner)
     }
 
     /// Test shorthand for [`Self::standalone`].
@@ -591,8 +595,14 @@ impl TokenSession {
         Self::standalone(sources, budget)
     }
 
+    /// The immutable owner identity this session was issued under.
+    pub fn owner_path(&self) -> &super::owner_path::OwnerPath {
+        &self.owner_path
+    }
+
     fn build(
         id: SessionId,
+        owner_path: super::owner_path::OwnerPath,
         sources: SourceSnapshot,
         budget: ExpansionBudget,
     ) -> Result<Self, TokenError> {
@@ -604,6 +614,7 @@ impl TokenSession {
             fragments: BudgetVec::new(&budget, Storage::Retained)?,
             _lease: lease,
             id,
+            owner_path,
             sources,
             symbols: BudgetVec::new(&budget, Storage::Retained)?,
             symbol_slots: BudgetVec::new(&budget, Storage::Retained)?,
@@ -1003,6 +1014,7 @@ impl Iterator for ExpansionTrace<'_> {
 mod owner_defect_tests {
     use super::*;
     use crate::compiler::expansion_budget::{ExpansionBudget, ExpansionLimits};
+    use crate::compiler::owner_path::{OwnerDomain, OwnerIssuer, standalone_receipt_bytes};
 
     fn snapshot() -> SourceSnapshot {
         let mut map = SourceMap::default();
@@ -1010,45 +1022,74 @@ mod owner_defect_tests {
         SourceSnapshot::new(map).unwrap()
     }
 
-    /// Defect 1 (review of 76eef8201): one issued tag can build two sessions.
+    /// Defect 1 regression (review of 76eef8201): a bare `Copy` tag let one
+    /// issuance build two sessions. `with_owner` now consumes the non-`Clone`
+    /// `Issued`, so that replay no longer compiles (compile_fail doc on
+    /// `Issued`). Each issuance yields one session with its own path.
     #[test]
-    #[ignore = "known defect: bare OwnerTag replay, fixed by with_owner(Issued)"]
     fn one_issuance_cannot_build_two_sessions() {
         let budget = ExpansionBudget::default();
-        let mut issuer = super::super::owner_path::OwnerIssuer::new(
-            crate::OwnerRoot::standalone().unwrap(),
-            &budget,
-        )
-        .unwrap();
-        let tag = issuer
-            .issue(super::super::owner_path::OwnerDomain::TokenSession)
-            .unwrap()
-            .tag;
-        let a = TokenSession::with_owner(snapshot(), budget.clone(), tag).unwrap();
-        let b = TokenSession::with_owner(snapshot(), budget.clone(), tag).unwrap();
+        let mut issuer =
+            OwnerIssuer::new(crate::OwnerRoot::standalone().unwrap(), &budget).unwrap();
+        let first = issuer.issue(OwnerDomain::TokenSession).unwrap();
+        let second = issuer.issue(OwnerDomain::TokenSession).unwrap();
+        let a = TokenSession::with_owner(snapshot(), budget.clone(), first).unwrap();
+        let b = TokenSession::with_owner(snapshot(), budget.clone(), second).unwrap();
         assert_ne!(
             a.id(),
             b.id(),
             "two sessions share one owner: grafts would pass"
         );
+        assert_ne!(a.owner_path(), b.owner_path());
+        assert!(a.owner_path().descends_from(issuer.path()));
     }
 
-    /// Defect 2: an exhausted caller budget must reject before minting.
+    /// Defect 2 regression: an exhausted, zero or poisoned caller budget
+    /// rejects before any root, tag or session is created.
     #[test]
-    #[ignore = "known defect: standalone root paid to a private ledger"]
     fn exhausted_caller_budget_rejects_standalone_session() {
+        let minted = || crate::engine::THREAD_MINTS.with(std::cell::Cell::get);
         let zero = ExpansionBudget::new(ExpansionLimits {
             bytes: 0,
             ..ExpansionLimits::default()
         });
-        let before = crate::engine::TAG_PROVENANCE.lock().unwrap().len();
-        let result = TokenSession::standalone(snapshot(), zero);
-        let after = crate::engine::TAG_PROVENANCE.lock().unwrap().len();
-        assert!(result.is_err());
+        let before = minted();
+        assert!(TokenSession::standalone(snapshot(), zero).is_err());
         assert_eq!(
-            after, before,
+            minted(),
+            before,
             "a tag was minted despite a zero caller budget"
         );
+        let short = ExpansionBudget::new(ExpansionLimits {
+            bytes: standalone_receipt_bytes() - 1,
+            ..ExpansionLimits::default()
+        });
+        let before = minted();
+        assert!(TokenSession::standalone(snapshot(), short).is_err());
+        assert_eq!(
+            minted(),
+            before,
+            "a tag was minted despite a short caller budget"
+        );
+        let poisoned = ExpansionBudget::default();
+        poisoned.poison_allocation();
+        let before = minted();
+        assert!(TokenSession::standalone(snapshot(), poisoned).is_err());
+        assert_eq!(minted(), before);
+    }
+
+    /// Owner storage is charged to the caller's ledger, not a private one.
+    #[test]
+    fn standalone_owner_is_paid_by_the_caller() {
+        let budget = ExpansionBudget::default();
+        let before = budget.snapshot().retained_bytes;
+        let session = TokenSession::standalone(snapshot(), budget.clone()).unwrap();
+        let paid = budget.snapshot().retained_bytes - before;
+        assert!(
+            paid >= standalone_receipt_bytes(),
+            "caller paid {paid} bytes, owner receipts cost more"
+        );
+        drop(session);
     }
 }
 

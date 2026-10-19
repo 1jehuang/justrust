@@ -1747,7 +1747,7 @@ mod tests {
         let error = super::super::native_input(
             &projection,
             budget.clone(),
-            super::super::super::owner_path::standalone_tag(&budget).unwrap(),
+            super::super::super::owner_path::standalone_issued(&budget).unwrap(),
         )
         .unwrap_err();
         assert_eq!(error.kind, SourceErrorKind::Contract);

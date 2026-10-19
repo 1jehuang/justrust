@@ -434,8 +434,7 @@ impl Provider for CompilerProvider {
                         .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
                     let owner = issuer
                         .issue(owner_path::OwnerDomain::TokenSession)
-                        .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?
-                        .tag;
+                        .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
                     let parsed = frontend::parse_prepared_owned(&prepared, parse_budget, owner)
                         .map_err(|error| Error::new(error.to_string()));
                     cx.publish_fact(1, prepared)?;

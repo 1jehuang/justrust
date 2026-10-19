@@ -1435,7 +1435,7 @@ fn owner_path_reaches_no_mutable_state() {
 /// (PARSE-SPLIT.md). Graph routes receive tags from their producer's issuer.
 /// Each entry is (file, enclosing function). May only shrink.
 const STANDALONE_OWNER_ENTRIES: &[(&str, &str)] = &[
-    ("src/compiler/owner_path.rs", "standalone_tag"),
+    ("src/compiler/owner_path.rs", "standalone_issued"),
     ("src/compiler/token_session.rs", "standalone"),
     ("src/compiler/frontend.rs", "new"),
     ("src/compiler/frontend.rs", "lex"),
@@ -1443,7 +1443,7 @@ const STANDALONE_OWNER_ENTRIES: &[(&str, &str)] = &[
     ("src/compiler/frontend.rs", "parse_prepared"),
 ];
 const STANDALONE_MARKERS: &[&str] = &[
-    "standalone_tag(",
+    "standalone_issued(",
     "TokenSession::standalone(",
     "OwnerRoot::standalone(",
 ];
@@ -1526,8 +1526,8 @@ fn standalone_owner_scan_rejects_injected_graph_fallback() {
     // A graph-route function that falls back to a standalone mint is caught;
     // comments, strings and test code are not calls.
     let source = r#"
-fn graph_parse(cx: &Context) { let owner = standalone_tag(&budget); }
-fn direct() { /* standalone_tag( */ let s = "TokenSession::standalone("; }
+fn graph_parse(cx: &Context) { let owner = standalone_issued(&budget); }
+fn direct() { /* standalone_issued( */ let s = "TokenSession::standalone("; }
 #[cfg(test)]
 mod tests { fn t() { let _ = TokenSession::standalone(a, b); } }
 "#;

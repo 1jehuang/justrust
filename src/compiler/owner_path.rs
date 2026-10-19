@@ -155,6 +155,16 @@ pub struct OwnerIssuer {
 
 /// A newly issued owner: its child issuer plus the tag bound to that exact
 /// path. The pair is created once in `issue` and cannot be reassembled.
+///
+/// `Issued` is neither `Copy` nor `Clone`, so one issuance cannot build two
+/// owners (regression for the bare-tag replay found in review):
+///
+/// ```compile_fail
+/// fn replay(issued: justrust_engine::compiler::owner_path::Issued) {
+///     let again = issued;
+///     let _twice = (issued, again);
+/// }
+/// ```
 #[derive(Debug)]
 pub struct Issued {
     pub issuer: OwnerIssuer,
@@ -276,23 +286,30 @@ impl OwnerIssuer {
     }
 }
 
-/// One owner tag under a fresh standalone root, for independent direct
+/// Permanent retained bytes one standalone session owner costs its caller:
+/// the root identity, the root's empty path and the session's child path.
+/// These are immutable receipts: paid once, never refunded.
+pub fn standalone_receipt_bytes() -> u64 {
+    root_bytes().unwrap_or(0) + path_bytes(0).unwrap_or(0) + path_bytes(1).unwrap_or(0)
+}
+
+/// One session owner under a fresh standalone root, for independent direct
 /// tooling (`TokenSession::standalone`). Graph code never calls this; it
-/// receives tags from its producer's issuer.
-pub(super) fn standalone_tag(
+/// receives an `Issued` from its producer's issuer. Everything is paid by the
+/// caller's budget, and admission is checked before any root is minted.
+pub(super) fn standalone_issued(
     budget: &ExpansionBudget,
-) -> Result<OwnerTag, super::token_session::TokenError> {
-    // Respect the caller's failure state, but pay the standalone root's
-    // fixed, never-refunded receipts to its own ledger, so the caller's
-    // retained bytes still return to zero when its session drops.
+) -> Result<Issued, super::token_session::TokenError> {
+    // Admit the whole owner cost first, so an exhausted or zero caller budget
+    // rejects before an engine id is consumed or anything is allocated. The
+    // probe is released immediately; the real charges follow below.
     budget.check()?;
-    let own = ExpansionBudget::default();
+    drop(budget.reserve(Storage::Retained, standalone_receipt_bytes())?);
     let root =
         OwnerRoot::standalone().map_err(|_| super::token_session::TokenError::IdExhausted)?;
-    let mut issuer = OwnerIssuer::new(root, &own).map_err(owner_token_error)?;
+    let mut issuer = OwnerIssuer::new(root, budget).map_err(owner_token_error)?;
     issuer
         .issue(OwnerDomain::TokenSession)
-        .map(|issued| issued.tag)
         .map_err(owner_token_error)
 }
 

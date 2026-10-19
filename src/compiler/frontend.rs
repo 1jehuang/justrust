@@ -4520,7 +4520,8 @@ impl ProgramBuilder {
         let input = super::source::PreparedLexInput::identity(name, source, budget)
             .map_err(|error| error.to_string())?;
         // Direct fixture builder, never reached from a graph node.
-        let owner = super::owner_path::standalone_tag(budget).map_err(|error| error.to_string())?;
+        let owner =
+            super::owner_path::standalone_issued(budget).map_err(|error| error.to_string())?;
         let mut session = super::token_session::TokenSession::with_owner(
             input.snapshot().clone(),
             budget.clone(),
@@ -5903,13 +5904,13 @@ fn lex(source: &str) -> Result<NativeParserInput, ParseError> {
     )
     .map_err(native_adapter::source_error)?;
     let owner =
-        super::owner_path::standalone_tag(&budget).map_err(native_adapter::transport_error)?;
+        super::owner_path::standalone_issued(&budget).map_err(native_adapter::transport_error)?;
     native_input(&projection, budget, owner)
 }
 fn native_input(
     projection: &super::source::PreparedLexInput<'_>,
     budget: super::expansion_budget::ExpansionBudget,
-    owner: crate::OwnerTag,
+    owner: super::owner_path::Issued,
 ) -> Result<NativeParserInput, ParseError> {
     let mut session = super::token_session::TokenSession::with_owner(
         projection.snapshot().clone(),
@@ -5971,7 +5972,7 @@ mod local_macro_parser_tests {
         parse_syntax_tokens(native_input(
             &input,
             budget.clone(),
-            super::super::owner_path::standalone_tag(budget).unwrap(),
+            super::super::owner_path::standalone_issued(budget).unwrap(),
         )?)
     }
     #[test]
@@ -12295,7 +12296,7 @@ pub(super) fn validate_inactive_syntax(
     )
     .map_err(native_adapter::source_error)?;
     let owner =
-        super::owner_path::standalone_tag(&budget).map_err(native_adapter::transport_error)?;
+        super::owner_path::standalone_issued(&budget).map_err(native_adapter::transport_error)?;
     let mut session = super::token_session::TokenSession::with_owner(
         projection.snapshot().clone(),
         budget,
@@ -13127,7 +13128,7 @@ pub fn parse_prepared(
     source: &super::source::PreparedSource,
 ) -> Result<ParsedProgram, super::source::SourceError> {
     let budget = super::expansion_budget::ExpansionBudget::default();
-    let owner = super::owner_path::standalone_tag(&budget)
+    let owner = super::owner_path::standalone_issued(&budget)
         .map_err(super::source::SourceError::from_token)?;
     parse_prepared_owned(source, budget, owner)
 }
@@ -13137,7 +13138,7 @@ pub fn parse_prepared(
 pub fn parse_prepared_owned(
     source: &super::source::PreparedSource,
     budget: super::expansion_budget::ExpansionBudget,
-    owner: crate::OwnerTag,
+    owner: super::owner_path::Issued,
 ) -> Result<ParsedProgram, super::source::SourceError> {
     let mapped = |error: ParseError| {
         let mut diagnostic = super::source::SourceError::syntax(
