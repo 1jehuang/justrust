@@ -40,6 +40,7 @@ mod source_schemas;
 use source_schemas::{SourceSchemas, SourceSchemasBuilder, StoredSchema};
 mod token_cursor;
 use char_literal::{parse_byte_literal, parse_char_literal};
+mod operators;
 mod trait_selection;
 pub use program_symbols::ProgramSymbols;
 mod persistent_path;
@@ -666,6 +667,9 @@ struct SourceCallSite {
     leading_zeros_candidate: bool,
     /// Syntactic `receiver.name(args)` with an admitted primitive method name.
     intrinsic_candidate: bool,
+    /// Operator expression or compound assignment that may lower to an
+    /// overloaded operator trait call; primitive operands map to no call.
+    operator_candidate: bool,
     ordinary: Option<AstPath>,
     application: Option<GenericPath>,
     argument_binding: Option<sr::SourceNode>,
@@ -1408,6 +1412,34 @@ impl SourceInventory {
         }
         Ok(())
     }
+    /// Inventory an operator occurrence that may become an overloaded call.
+    fn operator_site(
+        &mut self,
+        pointer: usize,
+        node: &sr::SourceNode,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), FactsError> {
+        let index = self.calls.len();
+        sr::push(
+            &mut self.calls,
+            SourceCallSite {
+                node: node.clone(),
+                len_candidate: false,
+                for_iterable: false,
+                leading_zeros_candidate: false,
+                intrinsic_candidate: false,
+                operator_candidate: true,
+                ordinary: None,
+                application: None,
+                argument_binding: None,
+                argument_borrow: None,
+                direct_let: None,
+                args_pointer: 0,
+            },
+            budget,
+        )?;
+        insert_source_pointer(&mut self.call_pointers, pointer, index, budget)
+    }
     fn block(
         &mut self,
         block: &Block,
@@ -1572,8 +1604,24 @@ impl SourceInventory {
                         depth + 1,
                     )?;
                 }
+                Stmt::AssignOp { value, .. } => {
+                    // A statement may share its address with its inline
+                    // value expression; tag statement keys with bit 0.
+                    self.operator_site(
+                        statement as *const Stmt as usize | 1,
+                        &here.child(41, 0, budget)?,
+                        budget,
+                    )?;
+                    self.expr(
+                        value,
+                        &here.child(4, 0, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?
+                }
                 Stmt::Assign { value, .. }
-                | Stmt::AssignOp { value, .. }
                 | Stmt::AssignPlace { value, .. }
                 | Stmt::Expr(value)
                 | Stmt::ImplicitExpr(value)
@@ -1656,6 +1704,7 @@ impl SourceInventory {
                                 for_iterable: true,
                                 leading_zeros_candidate: false,
                                 intrinsic_candidate: false,
+                                operator_candidate: false,
                                 ordinary: None,
                                 application: None,
                                 argument_binding: None,
@@ -1797,6 +1846,7 @@ impl SourceInventory {
                         for_iterable: false,
                         leading_zeros_candidate: false,
                         intrinsic_candidate: false,
+                        operator_candidate: false,
                         ordinary: Some(name.clone()),
                         application: application
                             .map(|path| copy_source_path(path, budget, 0))
@@ -1840,6 +1890,7 @@ impl SourceInventory {
                         for_iterable: false,
                         intrinsic_candidate: intrinsic_candidate(expr, &self.names)
                             .map_err(|e| source_error(budget, &e))?,
+                        operator_candidate: false,
                         ordinary: None,
                         application: None,
                         argument_binding: None,
@@ -1879,8 +1930,7 @@ impl SourceInventory {
             Expr::Cast { value, .. }
             | Expr::Deref { value }
             | Expr::BorrowValue { value, .. }
-            | Expr::Repeat { value, .. }
-            | Expr::Unary { value, .. } => self.expr(
+            | Expr::Repeat { value, .. } => self.expr(
                 value,
                 &node.child(11, 0, budget)?,
                 None,
@@ -1909,6 +1959,40 @@ impl SourceInventory {
                         depth + 1,
                     )?;
                 }
+            }
+            Expr::Binary {
+                left: base,
+                right: index,
+                op,
+            } if !matches!(op, BinaryOp::And | BinaryOp::Or) => {
+                self.operator_site(expr as *const Expr as usize, node, budget)?;
+                self.expr(
+                    base,
+                    &node.child(13, 0, budget)?,
+                    None,
+                    None,
+                    budget,
+                    depth + 1,
+                )?;
+                self.expr(
+                    index,
+                    &node.child(13, 1, budget)?,
+                    None,
+                    None,
+                    budget,
+                    depth + 1,
+                )?;
+            }
+            Expr::Unary { value, .. } => {
+                self.operator_site(expr as *const Expr as usize, node, budget)?;
+                self.expr(
+                    value,
+                    &node.child(11, 0, budget)?,
+                    None,
+                    None,
+                    budget,
+                    depth + 1,
+                )?;
             }
             Expr::DynamicIndex { base, index }
             | Expr::Binary {
@@ -2291,12 +2375,22 @@ impl CanonicalSourceCapability {
         Ok(())
     }
     fn record_call(&self, expr: &Expr, id: ir::ExprId, kind: &ir::ExprKind) -> Result<(), String> {
+        self.record_call_at(expr as *const Expr as usize, id, kind)
+    }
+    /// Record a call at an inventoried source pointer (an expression, or the
+    /// statement of an overloaded compound assignment).
+    pub(super) fn record_call_at(
+        &self,
+        pointer: usize,
+        id: ir::ExprId,
+        kind: &ir::ExprKind,
+    ) -> Result<(), String> {
         let budget = &self.plan.budget;
         sr::work(budget, 1).map_err(|e| self.render(e))?;
         let index = self
             .inventory
             .call_pointers
-            .get(&(expr as *const Expr as usize))
+            .get(&pointer)
             .copied()
             .ok_or_else(|| {
                 self.render(FactsError::invalid(
@@ -3795,6 +3889,7 @@ pub(super) fn replay_source_body(
             || fresh.len_candidate != retained.len_candidate
             || fresh.for_iterable != retained.for_iterable
             || fresh.intrinsic_candidate != retained.intrinsic_candidate
+            || fresh.operator_candidate != retained.operator_candidate
             || !optional_source_path_equal(
                 &fresh.ordinary,
                 &retained.ordinary,
@@ -3930,6 +4025,10 @@ pub(super) fn replay_source_body(
     for (index, site) in original.calls.iter().enumerate() {
         sr::work(budget, 1)?;
         if builtin_sources[index] || leading_zero_sources[index] || intrinsic_sources[index] {
+            continue;
+        }
+        if site.operator_candidate && positions[index].is_none() {
+            // A primitive operator: no overloaded call was emitted.
             continue;
         }
         let position = positions[index].ok_or_else(|| {
@@ -4288,12 +4387,26 @@ pub(super) fn replay_source_body(
             "unused or missing original shared frontier",
         ));
     }
+    // Operator sites that stayed primitive have no call correspondence.
+    let mut mapped = vec![false; original.calls.len()];
+    for (index, _, _) in &original.call_mapping {
+        if let Some(slot) = mapped.get_mut(*index) {
+            *slot = true;
+        }
+    }
+    let primitive_operators = original
+        .calls
+        .iter()
+        .zip(&mapped)
+        .filter(|(site, mapped)| site.operator_candidate && !**mapped)
+        .count();
     if original
         .call_mapping
         .len()
         .checked_add(original.builtin_len_mapping.len())
         .and_then(|n| n.checked_add(original.builtin_intrinsic_mapping.len()))
         .and_then(|n| n.checked_add(original.builtin_leading_zeros_mapping.len()))
+        .and_then(|n| n.checked_add(primitive_operators))
         != Some(original.calls.len())
     {
         return Err(FactsError::invalid(budget, "orphan original call mapping"));
@@ -4720,7 +4833,7 @@ impl ProgramBuilder {
     }
 }
 impl Program {
-    fn in_prelude(&self, module: ModuleId) -> bool {
+    pub(super) fn in_prelude(&self, module: ModuleId) -> bool {
         self.prelude_module
             .is_some_and(|prelude| self.modules.is_descendant(module, prelude).unwrap_or(false))
     }
@@ -9552,8 +9665,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         if !self.token().string
             && matches!(
                 self.token().text,
-                "async" | "unsafe" | "extern" | "static" | "union" | "macro_rules"
+                "async" | "unsafe" | "extern" | "union" | "macro_rules"
             )
+            || (self.is("static") && self.cursor.peek(1).is_some_and(|t| t.text == "mut"))
         {
             return Err(self.unsupported("item syntax is unsupported"));
         }
@@ -9980,11 +10094,17 @@ impl<'input, 'names> Parser<'input, 'names> {
             });
             self.type_params.clear();
             return Ok(());
-        } else if self.is("const") && !self.cursor.peek(1).is_some_and(|t| t.text == "fn") {
+        } else if self.is("static")
+            || (self.is("const") && !self.cursor.peek(1).is_some_and(|t| t.text == "fn"))
+        {
             if self.item_expansion.is_some() {
                 return Err(self.unsupported("generated const item authority is unsupported"));
             }
-            self.expect("const")?;
+            // Immutable statics share constant semantics in this draft: every
+            // admitted initializer is pure, so each use observes the same value.
+            if !self.eat("static") {
+                self.expect("const")?;
+            }
             let name = self.ident()?;
             self.expect(":")?;
             let ty = self.ty()?;
@@ -10379,10 +10499,12 @@ impl<'input, 'names> Parser<'input, 'names> {
         inherited: &[AstIdent],
         associated: bool,
     ) -> Result<(FunctionHead, ReceiverKind), ParseError> {
-        let constness = if self.eat("const") {
-            if associated {
-                return Err(self.unsupported("const associated functions are unsupported"));
-            }
+        // `const fn` is callable at runtime with identical semantics; constant
+        // initializers that call one are inlined at their uses (const_inline),
+        // so the qualifier carries no further obligation in this draft.
+        // Associated `const fn`s are ordinary methods here: their qualifier
+        // only matters inside constant initializers, which are inlined.
+        let constness = if self.eat("const") && !associated {
             Constness::Const
         } else {
             Constness::Runtime
@@ -11697,6 +11819,10 @@ impl<'input, 'names> Parser<'input, 'names> {
                 .is_some_and(|token| token.matches("let"))
         {
             return Err(self.unsupported("while let expressions are unsupported"));
+        }
+        if self.is("const") && self.cursor.peek(1).is_some_and(|t| t.text == "{") {
+            self.expect("const")?;
+            return Ok(Expr::Block(self.block()?));
         }
         if self.is("const") {
             return Err(
@@ -15227,7 +15353,8 @@ fn validate_const_forwarding(
     budget: &ir::PlanBudget,
 ) -> Result<(), String> {
     budget.charge_work(1)?;
-    if function.constness == Constness::Runtime {
+    // const fn bodies are now ordinary checked bodies (see const_inline).
+    if function.constness == Constness::Runtime || function.constness == Constness::Const {
         return Ok(());
     }
     let [(parameter, ty)] = function.params.as_slice() else {
@@ -19533,44 +19660,25 @@ mod const_declaration_tests {
     }
 
     #[test]
-    fn unused_const_bodies_cannot_launder_effects_calls_shadowing_or_destruction() {
+    fn const_fn_bodies_are_ordinary_checked_bodies() {
         for declaration in [
-            "const fn f<T>(x:T){}",
-            "const fn f<T>(x:T)->(T,T){(x,x)}",
-            "const fn f(x:u8)->u8{other(x)}",
-            "const fn f(x:u8)->u8{let x=other(x);x}",
+            "const fn f(x:u8)->u8{let y=x;y}",
             "const fn f(x:u8)->u8{{x}}",
-            "const fn f(x:u8)->u8{return x;}",
-            "const fn f(x:u8)->u8{println!(\"effect\");x}",
-            "const fn f(x:u8,y:u8)->u8{x}",
-            "const fn f(x:u8)->u64{x}",
+            "const fn f(x:u8,y:u8)->u8{x+y}",
         ] {
-            let source = format!("fn other(x:u8)->u8{{x}}{declaration}fn main(){{}}");
-            let program = parse(&source).unwrap();
-            let error = PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap_err();
-            assert!(
-                error.starts_with("unsupported: const fn"),
-                "{declaration}: {error}"
-            );
-            for workers in [1, 8] {
-                for check_only in [true, false] {
-                    assert!(super::super::compile(source.clone(), workers, check_only).is_err());
-                }
-            }
+            let source = format!("{declaration}fn main(){{}}");
+            check(&parse(&source).unwrap()).unwrap();
         }
-        // The const gate must not narrow ordinary runtime function bodies.
-        check(&parse("fn f(x:u8)->u8{let y=x;y}fn main(){}").unwrap()).unwrap();
+        // Type errors in unused const fn bodies still reject.
+        assert!(super::super::compile("const fn f(x:u8)->u64{x}fn main(){}".into(), 1, true).is_err());
     }
 
     #[test]
     fn const_execution_contexts_and_associated_qualifiers_remain_unsupported() {
         for source in [
-            "fn main(){let x=const {1};}",
             "const fn id(x:u8)->u8{x}fn main(){let x=[0u8;id(1u8)];}",
             "const fn id(x:u8)->u8{x}fn main(){let x:[u8;id(1u8)]=[0u8];}",
             "fn f<const N:usize>(){}fn main(){}",
-            "struct S{x:u8}impl S{const fn f(x:u8)->u8{x}}fn main(){}",
-            "trait T{const fn f(x:u8)->u8;}fn main(){}",
         ] {
             let error = parse(source).unwrap_err();
             assert!(error.contains("unsupported"), "{source}: {error}");
@@ -19703,13 +19811,8 @@ mod const_declaration_tests {
         assert_eq!(syntax.program.functions[0].constness, Constness::Const);
         let effectful = "fn runtime(value:i32)->i32{value}const fn unused(value:i32)->i32{runtime(value)}fn main(){}";
         // Raw syntax checking must not acquire semantic obligations: inactive
-        // items use this seam too. Active universal checking remains separate.
+        // items use this seam too.
         assert!(parse_syntax_unprepared(effectful).is_ok());
-        assert!(
-            PlanCtx::from_program(&parse(effectful).unwrap(), &ir::PlanBudget::default())
-                .unwrap_err()
-                .starts_with("unsupported: const fn")
-        );
         for source in [
             format!("#[cfg(any())] {forwarding}fn main(){{}}"),
             "#[cfg(any())] const fn unused(value:i32)->i32{unknown(value)}fn main(){}".into(),

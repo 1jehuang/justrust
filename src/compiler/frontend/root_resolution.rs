@@ -5,6 +5,7 @@ use super::super::semantic_name::BuiltinAtom;
 use super::super::semantic_scope::{BindingId, ScopeId, scope_diagnostic};
 use super::*;
 mod capture_resolution;
+mod const_inline;
 
 #[derive(Clone, Debug)]
 enum ResolvedPath {
@@ -3041,7 +3042,12 @@ impl Resolver<'_> {
                 if let Some(item) = &value_item
                     && item.kind == ResolvedKind::Const
                 {
-                    *expr = Expr::ConstItem(self.resolved_use(item.source()?, name)?);
+                    let target = item.source()?.clone();
+                    let resolved = self.resolved_use(&target, name)?;
+                    if self.inline_constant(expr, &target, locals)? {
+                        return Ok(());
+                    }
+                    *expr = Expr::ConstItem(resolved);
                     return Ok(());
                 }
                 if value_item
@@ -3503,6 +3509,22 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         }
     }
     let mut program = parsed.program.clone();
+    // Inlined constants have no CONST_VALUE fact; their uses carry the value.
+    // Each is still resolved and qualified once so unused bad items reject.
+    for declaration in &parsed.program.constants {
+        if const_inline::needs_inline(declaration) {
+            let mut probe = Expr::Var(declaration.name.clone());
+            resolver.inline_constant(&mut probe, &declaration.name, &mut vec![])?;
+        }
+    }
+    program.constants.retain(|declaration| !const_inline::needs_inline(declaration));
+    // The value-namespace slot freed above holds a checked zero-argument
+    // `const fn` computing the initializer, so unused constants still type check.
+    for declaration in &parsed.program.constants {
+        if const_inline::needs_inline(declaration) {
+            program.functions.push(const_inline::checked_body(declaration));
+        }
+    }
     for declaration in &mut program.constants {
         resolver.type_params.clear();
         resolver.ty(&mut declaration.ty, declaration.module)?;

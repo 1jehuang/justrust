@@ -4013,7 +4013,7 @@ impl<'a> Checker<'a> {
             "unsupported: cannot infer Self type of trait path call; use `<T as Trait>::`".into()
         })
     }
-    fn method_receiver_hint(&self, receiver: &Expr) -> Result<Option<ir::Ty>, String> {
+    pub(super) fn method_receiver_hint(&self, receiver: &Expr) -> Result<Option<ir::Ty>, String> {
         if let Some(ty) = self.scalar_hint(receiver)? {
             return Ok(Some(ty));
         }
@@ -5852,6 +5852,11 @@ impl<'a> Checker<'a> {
                         flow.completes && index_flow.completes,
                     )
                 }
+                Stmt::AssignOp { place, op, value }
+                    if let Some(id) = self.overloaded_assign(s, place, *op, value)? =>
+                {
+                    (ir::Stmt::Expr(id), self.flow(id).completes)
+                }
                 Stmt::AssignOp { place, op, value } => {
                     let (place, ty, _) = self.checked_place(place)?;
                     let (value, flow) = self.compound_value(*op, &ty, value)?;
@@ -6562,6 +6567,11 @@ impl<'a> Checker<'a> {
             Expr::TraitCall { .. } | Expr::MethodCall { .. } | Expr::AssociatedCall { .. }
         ) {
             return self.associated_expression(e, expectation.hard());
+        }
+        if matches!(e, Expr::Binary { .. } | Expr::Unary { .. })
+            && let Some(id) = self.overloaded_operator(e)?
+        {
+            return Ok(id);
         }
         self.expr_without_cast(e, expectation)
     }
@@ -9891,11 +9901,6 @@ pub fn type_function_with_env(
         .functions
         .get(index)
         .ok_or_else(|| format!("invalid function index {index}"))?;
-    if f.constness == Constness::Const {
-        return Err(
-            "unsupported: const fn checking requires its authoritative planning context".into(),
-        );
-    }
     if !f.type_params.is_empty() && signatures.param_env.is_none() {
         let plan = signatures
             .plan
