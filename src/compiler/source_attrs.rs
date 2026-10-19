@@ -1,4 +1,5 @@
-//! Bounded source configuration. Only explicit module/free-item attachment is supported.
+//! Bounded source configuration with explicit module/free-item and narrow
+//! original associated-function documentation/inline attachment policies.
 //! This is a structural filter, not a Rust parser or a macro expander.
 use super::source_cfg::{
     CfgSet, Meta, MetaError, MetaValue, evaluate, parse_meta, validate_string_literal,
@@ -76,14 +77,20 @@ struct Attr {
     content: Range<usize>,
     inner: bool,
     doc: bool,
-    literal_doc_name: bool,
+    path: AttributePath,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AttributePath {
+    Doc,
+    Inline,
+    Other,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Owner {
     Crate,
     Module,
     Function,
-    AssociatedFunctionDocs,
+    AssociatedFunction,
     FreeItem,
     Unsupported,
 }
@@ -188,7 +195,7 @@ impl Filter<'_> {
                     content: t.range.clone(),
                     inner,
                     doc: true,
-                    literal_doc_name: true,
+                    path: AttributePath::Doc,
                 },
                 i + 1,
             )));
@@ -206,7 +213,7 @@ impl Filter<'_> {
             ));
         }
         let close = self.tokens[bracket].close.unwrap();
-        let literal_doc_name = outer_shape(
+        let path = outer_shape(
             self.text,
             self.tokens[bracket].range.end..self.tokens[close].range.start,
         )?;
@@ -216,7 +223,7 @@ impl Filter<'_> {
                 content: self.tokens[bracket].range.end..self.tokens[close].range.start,
                 inner,
                 doc: false,
-                literal_doc_name,
+                path,
             },
             close + 1,
         )))
@@ -381,15 +388,15 @@ impl Filter<'_> {
         owner: Owner,
         item: Option<Range<usize>>,
     ) -> Result<bool, AttributeError> {
-        // This owner extension is documentation-only. In particular do not let
-        // expand() activate the free-item cfg/cfg_attr/inline policy here.
-        if owner == Owner::AssociatedFunctionDocs {
+        // Only literal docs and a preflighted single inline hint are admitted.
+        // Never activate cfg/cfg_attr or semantic attributes at this position.
+        if owner == Owner::AssociatedFunction {
             for attr in attrs {
-                if !attr.literal_doc_name {
+                if attr.path == AttributePath::Other {
                     return Err(error(
                         AttributeErrorKind::Unsupported,
                         attr.range.clone(),
-                        "only literal documentation on associated functions is supported",
+                        "only literal documentation and one inline hint on associated function bodies are supported",
                     ));
                 }
             }
@@ -506,7 +513,7 @@ impl Filter<'_> {
                     }
                 },
                 "inline" => {
-                    if owner != Owner::Function {
+                    if !matches!(owner, Owner::Function | Owner::AssociatedFunction) {
                         return Err(error(
                             AttributeErrorKind::Syntax,
                             meta.range,
@@ -681,7 +688,7 @@ impl Filter<'_> {
                             depth + 1,
                         )?;
                     } else if matches!(kind, "impl" | "trait") {
-                        self.associated_function_docs(open + 1, close)?;
+                        self.associated_function_attributes(open + 1, close)?;
                     } else if kind != "macro_rules" {
                         self.reject_nested(open + 1, close)?;
                     }
@@ -751,7 +758,11 @@ impl Filter<'_> {
     /// This recognizes documentation attachment envelopes, not Rust syntax or
     /// callable authority. The ordinary parser still validates every owner and
     /// unused body after masking. Never recurse into a member body or macro.
-    fn associated_function_docs(&mut self, start: usize, end: usize) -> Result<(), AttributeError> {
+    fn associated_function_attributes(
+        &mut self,
+        start: usize,
+        end: usize,
+    ) -> Result<(), AttributeError> {
         let mut i = start;
         while i < end {
             self.tick(self.tokens[i].range.clone(), 0)?;
@@ -793,8 +804,21 @@ impl Filter<'_> {
             }
             let mut body = None;
             let mut stop = end;
+            let mut ambiguous_inline_header = false;
             while cursor < end {
                 self.tick(self.tokens[cursor].range.clone(), 0)?;
+                let token = self.tokens[cursor].text(self.text);
+                // A const-generic or type-macro header group is not a body.
+                // Keep A1 docs unchanged, but fail closed for inline until an
+                // unambiguous body envelope can be proven without a parser.
+                if token == "<"
+                    || token == "where"
+                    || token == "!"
+                    || (token == ">"
+                        && (cursor == member || self.tokens[cursor - 1].text(self.text) != "-"))
+                {
+                    ambiguous_inline_header = true;
+                }
                 match self.tokens[cursor].text(self.text) {
                     ";" => {
                         stop = cursor + 1;
@@ -821,10 +845,24 @@ impl Filter<'_> {
             if let Some((open, close)) = body {
                 self.reject_nested(open + 1, close)?;
             }
+            let mut inline = None;
+            for attr in &attrs {
+                self.tick(attr.range.clone(), 0)?;
+                if attr.path == AttributePath::Inline {
+                    if inline.is_some() || body.is_none() || ambiguous_inline_header {
+                        return Err(error(
+                            AttributeErrorKind::Unsupported,
+                            attr.range.clone(),
+                            "inline requires one hint on an unambiguous associated function body",
+                        ));
+                    }
+                    inline = Some(attr);
+                }
+            }
             if !attrs.is_empty() {
                 self.attributes(
                     &attrs,
-                    Owner::AssociatedFunctionDocs,
+                    Owner::AssociatedFunction,
                     Some(self.tokens[member].range.start..self.tokens[stop - 1].range.end),
                 )?;
             }
@@ -961,9 +999,8 @@ fn reserved_attribute_ident(name: &str) -> bool {
     )
 }
 
-// Return whether the already validated path is exactly `doc`, avoiding a
-// second token-vector scan merely to classify the associated-doc policy.
-fn outer_shape(text: &str, range: Range<usize>) -> Result<bool, AttributeError> {
+// Classify the already validated exact path without a second token-vector scan.
+fn outer_shape(text: &str, range: Range<usize>) -> Result<AttributePath, AttributeError> {
     let source = &text[range.clone()];
     let ts = scan(source).map_err(|mut e| {
         e.range = range.start + e.range.start..range.start + e.range.end;
@@ -1044,9 +1081,13 @@ fn outer_shape(text: &str, range: Range<usize>) -> Result<bool, AttributeError> 
     {
         i += 3;
     }
-    let literal_doc_name = i == 1 && ts[0].text(source) == "doc";
+    let path = match (i, ts[0].text(source)) {
+        (1, "doc") => AttributePath::Doc,
+        (1, "inline") => AttributePath::Inline,
+        _ => AttributePath::Other,
+    };
     if i == ts.len() {
-        return Ok(literal_doc_name);
+        return Ok(path);
     }
     if ts[i].text(source) == "=" {
         if i + 1 == ts.len() {
@@ -1066,7 +1107,7 @@ fn outer_shape(text: &str, range: Range<usize>) -> Result<bool, AttributeError> 
                         ));
                     }
                 }
-                Ok(literal_doc_name)
+                Ok(path)
             }
             Err(e) => {
                 let rhs = &ts[i + 1..];
@@ -1092,7 +1133,7 @@ fn outer_shape(text: &str, range: Range<usize>) -> Result<bool, AttributeError> 
         };
     }
     if ts[i].text(source) == "(" && ts[i].close == Some(ts.len() - 1) {
-        return Ok(literal_doc_name);
+        return Ok(path);
     }
     Err(invalid())
 }
@@ -1477,7 +1518,6 @@ mod tests {
             );
         }
         for attr in [
-            "inline",
             "cfg(any())",
             "cfg_attr(any(),doc=\"hidden\")",
             "derive(Copy)",
@@ -1553,12 +1593,101 @@ mod tests {
         assert_eq!(prep(literal).unwrap().text, literal);
     }
     #[test]
+    fn associated_inline_hints_require_one_unambiguous_body_and_keep_docs() {
+        for inline in ["inline", "inline(always)", "inline(never)"] {
+            for owner in [
+                "impl S { ATTR fn f()->i32{7} }",
+                "trait T { ATTR fn f()->i32{7} }",
+                "impl T for S { ATTR fn f()->i32{7} }",
+                "impl<T> S<T> { ATTR fn f(x:(i32,i32))->[u8;2]{[1,2]} }",
+            ] {
+                let text = owner.replace("ATTR", &format!("/// docs\n#[{inline}]"));
+                let out = prep(&text).unwrap();
+                assert_eq!(out.text.len(), text.len());
+                assert_eq!(out.attributes.len(), 2);
+                assert_eq!(out.attributes[1].name, "inline");
+                assert!(out.text.contains("fn f"));
+                assert!(!out.text.contains("#[inline"));
+            }
+        }
+        for text in [
+            "trait T{#[inline]fn f();}",
+            "trait T{#[inline(always)]fn f();}",
+            "trait T{#[inline(never)]fn f();}",
+            "impl S{#[inline]#[inline]fn f(){}}",
+            "impl S{#[inline]#[inline(never)]fn f(){}}",
+            "impl S{#[inline]const N:u8=1;}",
+            "trait T{#[inline]type A;}",
+            "impl S{#![inline]fn f(){}}",
+            "impl S{#[inline]extern \"C\" fn f(){}}",
+            "trait T{#[inline]fn f()->Foo<{1}>;}",
+            "trait T{#[inline]fn f()->ty!{u8};}",
+            "impl S{#[inline]fn f<T>(x:T)->T{x}}",
+            "impl S{#[inline]fn f()where Self:Sized{}}",
+        ] {
+            assert_eq!(
+                prep(text).unwrap_err().kind,
+                AttributeErrorKind::Unsupported,
+                "{text}"
+            );
+        }
+        // The new body proof must not narrow the already admitted A1 docs.
+        assert!(prep("trait T{#[doc=\"required\"]fn f()->Foo<{1}>;}").is_ok());
+    }
+    #[test]
+    fn associated_inline_never_activates_semantic_attributes_or_nested_owners() {
+        for semantic in [
+            "target_feature(enable=\"sse2\")",
+            "deny(unused_attributes)",
+            "allow(unused_attributes)",
+            "cfg(any())",
+            "cfg_attr(any(),inline)",
+            "unsafe(no_mangle)",
+            "export_name=\"external\"",
+            "track_caller",
+        ] {
+            for attrs in [
+                format!("#[inline]#[{semantic}]"),
+                format!("#[{semantic}]#[inline]"),
+            ] {
+                let text = format!("impl S{{{attrs}fn f(){{}}}}");
+                assert_eq!(
+                    prep(&text).unwrap_err().kind,
+                    AttributeErrorKind::Unsupported,
+                    "{text}"
+                );
+            }
+        }
+        for text in [
+            "impl S{fn #[inline]f(){}}",
+            "impl S{fn f(#[inline]x:i32){}}",
+            "impl S{fn f(){#[inline]let x=1;}}",
+            "impl S{m!{#[inline]fn f(){}}}",
+        ] {
+            assert_eq!(
+                prep(text).unwrap_err().kind,
+                AttributeErrorKind::Unsupported,
+                "{text}"
+            );
+        }
+        for attr in ["inline()", "inline(sometimes)", "inline=\"x\""] {
+            let text = format!("impl S{{#[{attr}]fn f(){{}}}}");
+            assert_eq!(
+                prep(&text).unwrap_err().kind,
+                AttributeErrorKind::Syntax,
+                "{text}"
+            );
+        }
+        assert!(prep("#[cfg(any())]impl S{#[inline(sometimes)]fn f(){}}").is_ok());
+        assert!(prep("#[cfg(any())]impl S{#[inline=]fn f(){}}").is_err());
+    }
+    #[test]
     fn explicit_attachment_positions_fail_closed() {
         for s in [
             "struct S { #[cfg(any())] x:i32 }",
             "fn f(#[doc=\"x\"] x:i32) {}",
             "fn f() { #[cfg(any())] let x=1; }",
-            "impl S { #[inline] fn f() {} }",
+            "trait T { #[inline] fn f(); }",
             "fn f(){} #![doc=\"x\"]",
         ] {
             assert_eq!(

@@ -60,6 +60,18 @@ fn docs_cannot_hide_unused_associated_type_name_or_move_errors() {
             "struct V{v:i32} struct S{v:i32} impl S { #[doc=\"unused\"] fn f(){let a=V{v:1};let b=a;let c=a;} } fn main(){}",
             "move",
         ),
+        (
+            "trait T { #[doc=\"unused\"] #[inline] fn f()->u8{true} } fn main(){}",
+            "bool",
+        ),
+        (
+            "struct S{v:i32} impl S { #[inline(always)] fn f()->i32{missing} } fn main(){}",
+            "missing",
+        ),
+        (
+            "struct V{v:i32} struct S{v:i32} impl S { #[inline(never)] fn f(){let a=V{v:1};let b=a;let c=a;} } fn main(){}",
+            "move",
+        ),
     ];
     for workers in [1, 8] {
         for (text, expected) in cases {
@@ -134,13 +146,56 @@ fn stock_valid_forms_outside_docs_only_a1_remain_explicitly_unsupported() {
         "trait T { #[doc=\"const\"] const N:u8=1; }",
         "trait T { #[doc=\"type\"] type A; }",
         "struct S{v:i32} impl S { fn f(){ #[doc=\"statement\"] let x=1; } }",
-        "struct S{v:i32} impl S { #[doc=\"prefix\"] #[inline] fn f(){} }",
+        "trait T { #[doc=\"prefix\"] #[inline] fn f(); }",
         "struct S{v:i32} impl S { #[cfg(any())] #[doc=\"prefix\"] fn f(){} }",
         "trait T { #[cfg_attr(any(),doc=42)] fn f(); }",
         "trait T { #[doc=\"x\"] #[allow(dead_code)] fn f(); }",
+        "trait T { #[inline] fn f(); }",
+        "struct S{v:i32} impl S { #[inline] #[inline(never)] fn f(){} }",
+        "struct S{v:i32} impl S { #[inline] #[target_feature(enable=\"sse2\")] unsafe fn f(){} }",
+        "struct S{v:i32} impl S { #[target_feature(enable=\"sse2\")] #[inline(always)] unsafe fn f(){} }",
+        "#![deny(unused_attributes)] trait T { #[inline] fn f(); }",
+        "struct Foo<const N:usize>; trait T { #[inline] fn f()->Foo<{1}>; }",
+        "macro_rules! ty {()=>{u8}} trait T { #[inline] fn f()->ty!{}; }",
+        "struct S{v:i32} impl S { #[inline] extern \"C\" fn f(){} }",
     ] {
         let error = source::prepare_text("a1.rs", text, &SourceOptions::default()).unwrap_err();
         assert_eq!(error.kind, SourceErrorKind::Unsupported, "{text}: {error}");
+    }
+}
+
+#[test]
+fn original_associated_inline_hints_check_build_execute_without_hint_contract() {
+    for (mode, inline) in ["inline", "inline(always)", "inline(never)"]
+        .into_iter()
+        .enumerate()
+    {
+        let text = format!(
+            "trait T{{#[doc=\"default\"]#[{inline}]fn d(x:i32)->i32{{x}}fn f(x:i32)->i32;}}struct S{{v:i32}}impl T for S{{#[{inline}]fn f(x:i32)->i32{{x}}}}impl S{{/// body\n#[{inline}]fn h()->i32{{7}}}}fn main(){{assert!(S::h()==7);assert!(S::f(3)==3);assert!(S::d(4)==4);}}"
+        );
+        for workers in [1, 8] {
+            compiler::compile_observed(text.clone(), workers, true).unwrap();
+            let built = compiler::compile_observed(text.clone(), workers, false).unwrap();
+            let base = std::env::var_os("JCODE_SCRATCH_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(std::env::temp_dir);
+            let dir = base.join(format!(
+                "jr-associated-inline-{}-{mode}-{workers}",
+                std::process::id()
+            ));
+            fs::create_dir(&dir).unwrap();
+            let binary = dir.join("native");
+            fs::write(&binary, built.executable.unwrap()).unwrap();
+            fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+            let output = Command::new(&binary).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{inline}: {:?}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            fs::remove_dir_all(dir).unwrap();
+        }
     }
 }
 
