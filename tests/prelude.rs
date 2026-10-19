@@ -108,9 +108,13 @@ fn user_modules_and_imports_shadow_library_aliases() {
 }
 
 #[test]
-fn glob_imports_remain_explicitly_unsupported() {
-    let error = check_err("mod mine { pub fn Some(x:i32)->i32{x} } use mine::*; fn main() {}");
-    assert!(error.contains("unsupported: glob imports"), "{error}");
+fn glob_imports_shadow_library_aliases_when_user_named() {
+    assert_eq!(
+        run(
+            "mod mine { pub enum Option<T> { Some(T), None } } use mine::*; fn main(){ let x = Option::Some(1); match x { Option::Some(_) => println!(\"glob\"), Option::None => {} } }"
+        ),
+        "glob\n"
+    );
 }
 
 #[test]

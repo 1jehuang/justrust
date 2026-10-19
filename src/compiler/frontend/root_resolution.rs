@@ -80,6 +80,9 @@ struct Resolver<'a> {
     current_function_name: Option<AstPath>,
     /// Keys of `static mut` accessor functions (see static_mut.rs).
     static_muts: std::collections::HashSet<PathKey>,
+    /// `use prefix::*;` declarations, consulted after explicit bindings.
+    globs: &'a [GlobImport],
+    active_globs: std::collections::HashSet<(usize, PathKey, bool)>,
 }
 impl Resolver<'_> {
     fn with_source_owner<T>(
@@ -1235,7 +1238,7 @@ impl Resolver<'_> {
             .map_err(module_diagnostic)?;
         let key = self.key(path)?;
         let Some(bindings) = self.items.get(&key) else {
-            return Ok(None);
+            return self.glob_item(path, requester, namespace, visible_only);
         };
         let mut result = None;
         for (index, item) in bindings.iter().enumerate() {
@@ -1334,7 +1337,105 @@ impl Resolver<'_> {
                 ));
             }
         }
+        if result.is_none() {
+            return self.glob_item(path, requester, namespace, visible_only);
+        }
         Ok(result)
+    }
+    fn same_resolved(&self, a: &ResolvedItem, b: &ResolvedItem) -> Result<bool, String> {
+        Ok(match (&a.path, &b.path) {
+            (ResolvedPath::Source(x), ResolvedPath::Source(y)) => self.key(x)? == self.key(y)?,
+            (x, y) => format!("{x:?}") == format!("{y:?}"),
+        })
+    }
+    /// Glob-imported name: `path` is `module::ident` with no explicit
+    /// binding; each `use target::*` in `module` contributes `target::ident`
+    /// when that item is visible to the importing module. Distinct results
+    /// from different globs are ambiguous (E0659).
+    fn glob_item(
+        &mut self,
+        path: &AstPath,
+        requester: ModuleId,
+        namespace: bool,
+        visible_only: bool,
+    ) -> Result<Option<ResolvedItem>, String> {
+        if self.globs.is_empty() {
+            return Ok(None);
+        }
+        let Some(ident) = path.segments().last().copied() else {
+            return Ok(None);
+        };
+        let parent = path
+            .semantic_parent(self.names())
+            .map_err(native_adapter::name_diagnostic)?;
+        let parent_key = self.key(&parent)?;
+        let ident_key = self.key(path)?;
+        let mut found: Option<ResolvedItem> = None;
+        for index in 0..self.globs.len() {
+            let glob = &self.globs[index];
+            if self.key(&glob.module_path)? != parent_key {
+                continue;
+            }
+            let guard = (index, ident_key.clone(), namespace);
+            if !self.active_globs.insert(guard.clone()) {
+                continue;
+            }
+            let (module, target, visibility) =
+                (glob.module, glob.target.clone(), glob.visibility.clone());
+            let result = (|| -> Result<Option<ResolvedItem>, String> {
+                let Some(base) = self.path(&target, module, true, true)? else {
+                    return Err(format!("unresolved glob import {}", self.display(&target)?));
+                };
+                if !matches!(base.kind, ResolvedKind::Module | ResolvedKind::Enum) {
+                    return Err(format!(
+                        "glob import target {} is not a module or enum",
+                        self.display(&target)?
+                    ));
+                }
+                let ResolvedPath::Source(source) = &base.path else {
+                    return Ok(None);
+                };
+                let full = self.semantic_append(source, ident)?;
+                let Some(mut item) = self.item(&full, module, namespace, true)? else {
+                    return Ok(None);
+                };
+                if item
+                    .visibility
+                    .allows_reexport(&self.program.modules, &visibility)
+                    .map_err(module_diagnostic)?
+                {
+                    item.visibility = visibility.clone();
+                }
+                Ok(Some(item))
+            })();
+            self.active_globs.remove(&guard);
+            let Some(item) = result? else {
+                continue;
+            };
+            if !item
+                .visibility
+                .accessible_from(&self.program.modules, requester)
+                .map_err(module_diagnostic)?
+            {
+                if visible_only {
+                    continue;
+                }
+                return Err(format!(
+                    "private item {} is inaccessible from requesting module",
+                    self.display(path)?
+                ));
+            }
+            match &found {
+                Some(previous) if !self.same_resolved(previous, &item)? => {
+                    return Err(format!(
+                        "E0659: {} is ambiguous (glob imports)",
+                        self.display(path)?
+                    ));
+                }
+                _ => found = Some(item),
+            }
+        }
+        Ok(found)
     }
     fn import(
         &mut self,
@@ -3574,6 +3675,8 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     }
     let mut resolver = Resolver {
         static_muts,
+        globs: &parsed.glob_imports,
+        active_globs: std::collections::HashSet::new(),
         program: &parsed.program,
         type_depth: 0,
         alias_cache: HashMap::new(),

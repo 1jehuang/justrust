@@ -952,8 +952,11 @@ fn grouped_imports_reject_collisions_privacy_and_cycles() {
 }
 #[test]
 fn grouped_use_syntax_and_resource_fences() {
-    for source in ["use a::{*};fn main(){}", "use a::{f,*};fn main(){}"] {
-        assert!(parse(source).unwrap_err().contains("glob imports"));
+    for source in [
+        "mod a{pub fn f(){}pub fn g(){}}use a::{*};fn main(){f();g();}",
+        "mod a{pub fn f(){}}mod b{pub fn f(){}}use a::{f,*};use b::f as other;fn main(){f();other();}",
+    ] {
+        good(source);
     }
     for source in [
         "use a::{,};fn main(){}",
@@ -1179,8 +1182,8 @@ fn unsupported_module_forms_are_rejected_explicitly() {
             "type Alias<T> where T:Copy=T;fn main(){}",
             "type alias bounds and where clauses are unsupported",
         ),
-        ("use crate::a::*; fn main(){}", "glob imports"),
-        ("pub use crate::a::*; fn main(){}", "glob imports"),
+        ("use crate::*; fn main(){}", "glob imports of the crate root namespace are unsupported"),
+        ("pub use crate::*; fn main(){}", "glob imports of the crate root namespace are unsupported"),
         ("mod a{} mod a{} fn main(){}", "duplicate item"),
     ] {
         assert!(parse(source).unwrap_err().contains(message), "{source}");

@@ -8,14 +8,14 @@
 //! Character literals are Unicode scalars with equality/order, not integers.
 //! Explicit character casts admit char to integer and u8 to char only.
 //! Inline modules, named nonempty braced structs, nonempty unit/tuple/braced enums, ordinary visibility, and
-//! module-level named/grouped imports have separate type/value namespaces. Named
+//! module-level named/grouped/glob imports have separate type/value namespaces. Named
 //! structs and enums are nominal and non-Copy. Checked pattern decisions retain
 //! ordered scalar/tag observations and initialize bindings only after all tests
 //! succeed. Scoped acceptance and remaining pattern boundaries are documented
 //! in PATTERN-DECISIONS.md and PATTERN-USEFULNESS.md.
 //! Move checking belongs to CFG analysis, not
 //! this semantic checker. Restricted visibility names lexical ancestor modules.
-//! External modules, glob imports, and block-local items are not
+//! External modules and block-local items are not
 //! supported. An executable requires a declared root main, not an imported alias.
 use super::ir;
 use super::traits as tr;
@@ -4798,6 +4798,16 @@ pub struct ParsedProgram {
     pub program: Program,
     items: HashMap<PathKey, Vec<Item>>,
     empty_use_prefixes: Vec<(ModuleId, AstPath)>,
+    /// `use prefix::*;` declarations: importing module, its canonical path,
+    /// the glob target path and the import's visibility.
+    glob_imports: Vec<GlobImport>,
+}
+#[derive(Clone, Debug)]
+struct GlobImport {
+    module: ModuleId,
+    module_path: AstPath,
+    target: AstPath,
+    visibility: ir::Visibility,
 }
 /// Parser construction state has no detached or placeholder name store. The
 /// final program is published only after its one mutable owner is frozen.
@@ -4819,6 +4829,7 @@ struct ParsedDeclarations {
     program: ProgramDeclarations,
     items: HashMap<PathKey, Vec<Item>>,
     empty_use_prefixes: Vec<(ModuleId, AstPath)>,
+    glob_imports: Vec<GlobImport>,
 }
 impl ProgramDeclarations {
     fn publish(
@@ -7113,6 +7124,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             program: ProgramDeclarations::default(),
             items: HashMap::new(),
             empty_use_prefixes: Vec::new(),
+            glob_imports: Vec::new(),
         };
         while !child.is("") {
             child.reserve_item_publication(&mut product)?;
@@ -7208,6 +7220,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             .closure_sources
             .extend(generated.closure_sources);
         parsed.empty_use_prefixes.extend(product.empty_use_prefixes);
+        parsed.glob_imports.extend(product.glob_imports);
         Ok(())
     }
     fn reserve_item_publication(
@@ -9653,8 +9666,14 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.is("::") {
             return Err(self.unsupported("absolute extern crate use paths are unsupported"));
         }
-        if self.is("*") {
-            return Err(self.unsupported("glob imports are unsupported"));
+        if self.eat("*") {
+            if prefix.anchor() == PathAnchor::Relative && prefix.is_empty() {
+                return Err(
+                    self.unsupported("glob imports of the crate root namespace are unsupported")
+                );
+            }
+            imports.push((None, prefix.clone(), true));
+            return Ok(());
         }
         let mut path = prefix.clone();
         let prefix_bytes = path_text_len(self.names, prefix).map_err(native_adapter::name_error)?;
@@ -9718,8 +9737,9 @@ impl<'input, 'names> Parser<'input, 'names> {
                 if !self.eat("::") {
                     break;
                 }
-                if self.is("*") {
-                    return Err(self.unsupported("glob imports are unsupported"));
+                if self.eat("*") {
+                    imports.push((None, path, true));
+                    return Ok(());
                 }
                 if self.is("{") {
                     group_allowed = true;
@@ -10074,7 +10094,16 @@ impl<'input, 'names> Parser<'input, 'names> {
                     return Err(self.limit("source use logical expansion exceeds limit 16777216"));
                 }
                 let Some(name) = name else {
-                    parsed.empty_use_prefixes.push((module, path));
+                    if type_only {
+                        parsed.glob_imports.push(GlobImport {
+                            module,
+                            module_path: module_path.clone(),
+                            target: path,
+                            visibility: visibility.clone(),
+                        });
+                    } else {
+                        parsed.empty_use_prefixes.push((module, path));
+                    }
                     continue;
                 };
                 self.insert_item(
@@ -13113,6 +13142,7 @@ fn parse_syntax_tokens_configured(
             .publish(unit.names, unit.modules, unit.symbols, unit.scopes),
         items: unit.parsed.items,
         empty_use_prefixes: unit.parsed.empty_use_prefixes,
+        glob_imports: unit.parsed.glob_imports,
     })
 }
 fn parse_syntax_unit(
@@ -13133,6 +13163,7 @@ fn parse_syntax_unit(
         program: ProgramDeclarations::default(),
         items: HashMap::new(),
         empty_use_prefixes: Vec::new(),
+        glob_imports: Vec::new(),
     };
     let root = parser.modules.source_root().map_err(module_parse_error)?;
     let root_path =
@@ -14008,6 +14039,7 @@ mod inactive_item_syntax_tests {
             program: ProgramDeclarations::default(),
             items: HashMap::new(),
             empty_use_prefixes: Vec::new(),
+            glob_imports: Vec::new(),
         };
         let snapshot = budget.snapshot();
         let remaining = budget.limits().bytes - snapshot.retained_bytes - snapshot.temporary_bytes;

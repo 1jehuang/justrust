@@ -490,10 +490,6 @@ fn explicit_module_milestone_boundaries_reject_without_output() {
             "mod a { pub fn entry() {} } use a::entry as main;",
         ),
         ("external module", "mod external; fn main() {}"),
-        (
-            "glob import",
-            "mod a { pub fn f() {} } use a::*; fn main() {}",
-        ),
     ] {
         rejects(label, source);
     }
