@@ -949,9 +949,102 @@ fn matching(code: &[u8], open: usize) -> Option<usize> {
     None
 }
 
+/// Split `text` at top-level `sep`, ignoring separators nested in `()`, `[]`,
+/// `{}` or `<>`. `->` and `=>` do not close an angle bracket.
+fn split_top(text: &str, sep: u8) -> Vec<&str> {
+    let b = text.as_bytes();
+    let mut depth = 0isize;
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for (k, &c) in b.iter().enumerate() {
+        match c {
+            b'(' | b'[' | b'{' | b'<' => depth += 1,
+            b'>' if k > 0 && (b[k - 1] == b'-' || b[k - 1] == b'=') => {}
+            b')' | b']' | b'}' | b'>' => depth -= 1,
+            _ if c == sep && depth == 0 => {
+                parts.push(&text[start..k]);
+                start = k + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&text[start..]);
+    parts
+}
+
+/// Drop leading `#[...]` attributes, whitespace and a `pub`/`pub(...)`
+/// visibility from one field or variant.
+fn strip_field_prefix(mut piece: &str) -> &str {
+    loop {
+        piece = piece.trim_start();
+        if piece.starts_with("#[") || piece.starts_with("#![") {
+            match matching(piece.as_bytes(), piece.find('[').unwrap()) {
+                Some(close) => piece = &piece[close + 1..],
+                None => return "",
+            }
+        } else if let Some(rest) = piece.strip_prefix("pub") {
+            if rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+                return piece;
+            }
+            let rest = rest.trim_start();
+            piece = if rest.starts_with('(') {
+                match matching(rest.as_bytes(), 0) {
+                    Some(close) => &rest[close + 1..],
+                    None => return "",
+                }
+            } else {
+                rest
+            };
+        } else {
+            return piece;
+        }
+    }
+}
+
+/// Type references of a field list: `name: Type, ...` when `named`, else
+/// `Type, ...`. Field names are never references.
+fn field_type_refs(inner: &str, named: bool, refs: &mut BTreeSet<String>) {
+    for piece in split_top(inner, b',') {
+        let piece = strip_field_prefix(piece);
+        let ty = if named {
+            let b = piece.as_bytes();
+            let colon = (0..b.len()).find(|&k| {
+                b[k] == b':' && b.get(k + 1) != Some(&b':') && (k == 0 || b[k - 1] != b':')
+            });
+            match colon {
+                Some(k) => &piece[k + 1..],
+                None => continue,
+            }
+        } else {
+            piece
+        };
+        refs.extend(identifiers(ty).into_iter().map(String::from));
+    }
+}
+
+/// Type references of enum variants: variant names and discriminant
+/// expressions are skipped, payload field types are kept.
+fn variant_type_refs(inner: &str, refs: &mut BTreeSet<String>) {
+    for piece in split_top(inner, b',') {
+        let piece = strip_field_prefix(piece);
+        let name_end = piece
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(piece.len());
+        let rest = piece[name_end..].trim_start();
+        let named = rest.starts_with('{');
+        if (named || rest.starts_with('('))
+            && let Some(close) = matching(rest.as_bytes(), 0)
+        {
+            field_type_refs(&rest[1..close], named, refs);
+        }
+    }
+}
+
 /// Parse `struct`, `enum`, `union` and `type` declarations out of stripped,
-/// test-blanked code. Names are keyed by identifier (last path segment); a
-/// name declared more than once merges its references conservatively.
+/// test-blanked code. Only type positions count as references: field and
+/// variant names, discriminants, generic parameters and bounds do not.
+/// Names are keyed by identifier (last path segment); a name declared more
+/// than once merges its references conservatively.
 fn parse_type_decls(code: &[u8], file: &str, out: &mut BTreeMap<String, TypeDecl>) {
     let text = String::from_utf8_lossy(code);
     let bytes = text.as_bytes();
@@ -979,42 +1072,70 @@ fn parse_type_decls(code: &[u8], file: &str, out: &mut BTreeMap<String, TypeDecl
             continue;
         }
         let name = text[start..j].to_string();
-        // Body: through the matching brace/paren, or up to `;` for unit
-        // structs, tuple structs ending in `;`, and aliases.
+        let mut refs = BTreeSet::new();
         let mut k = j;
-        let mut end = None;
+        while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+            k += 1;
+        }
+        // Generic parameters and bounds are not owned fields.
+        if bytes.get(k) == Some(&b'<') {
+            k = matching(bytes, k).map_or(bytes.len(), |c| c + 1);
+        }
+        let mut end = bytes.len();
         while k < bytes.len() {
             match bytes[k] {
-                b'<' | b'(' => {
-                    // Generics and tuple-struct fields: skip to the close and
-                    // keep scanning to the body or `;`.
+                b'(' if keyword == "struct" => {
+                    // Tuple struct fields, then an optional where clause and `;`.
                     let close = matching(bytes, k).unwrap_or(bytes.len() - 1);
+                    field_type_refs(&text[k + 1..close], false, &mut refs);
                     k = close + 1;
-                    continue;
+                    while k < bytes.len() && bytes[k] != b';' {
+                        k += 1;
+                    }
+                    end = k + 1;
+                    break;
+                }
+                b'(' | b'<' | b'[' => {
+                    // Inside a where clause: skip balanced groups.
+                    k = matching(bytes, k).map_or(bytes.len(), |c| c + 1);
+                }
+                b'=' if keyword == "type" => {
+                    let rhs_end = (k..bytes.len())
+                        .find(|&e| bytes[e] == b';')
+                        .unwrap_or(bytes.len());
+                    refs.extend(
+                        identifiers(&text[k + 1..rhs_end])
+                            .into_iter()
+                            .map(String::from),
+                    );
+                    end = rhs_end + 1;
+                    break;
                 }
                 b'{' if keyword != "type" => {
-                    end = Some(matching(bytes, k).unwrap_or(bytes.len() - 1) + 1);
+                    let close = matching(bytes, k).unwrap_or(bytes.len() - 1);
+                    let inner = &text[k + 1..close];
+                    if keyword == "enum" {
+                        variant_type_refs(inner, &mut refs);
+                    } else {
+                        field_type_refs(inner, true, &mut refs);
+                    }
+                    end = close + 1;
                     break;
                 }
                 b';' => {
-                    end = Some(k + 1);
+                    end = k + 1;
                     break;
                 }
                 _ => k += 1,
             }
         }
-        let end = end.unwrap_or(bytes.len());
-        let body = &text[j..end];
-        let entry = out.entry(name.clone()).or_default();
+        refs.remove(&name);
+        let entry = out.entry(name).or_default();
         if entry.file.is_empty() {
             entry.file = file.to_string();
         }
-        for word in identifiers(body) {
-            if word != name {
-                entry.refs.insert(word.to_string());
-            }
-        }
-        i = end;
+        entry.refs.extend(refs);
+        i = end.min(bytes.len()).max(i + 1);
     }
 }
 
@@ -1281,6 +1402,12 @@ struct Generic<T> where T: Bound { value: T, count: AtomicUsize }
 struct UsesGeneric { g: Generic<Leaf> }
 struct Cycle { next: Option<Box<Cycle>>, leaf: Leaf }
 struct Clean { a: Arc<[u8]>, b: Box<Leaf>, f: fn(u8) -> u8 }
+struct Budget { lock: std::sync::Mutex<u8> }
+struct BudgetFailure { n: u32 }
+enum TokenError { Budget(BudgetFailure), Exhausted = 3, Named { why: Leaf } }
+struct HoldsError { error: TokenError, Guarded: u8 }
+struct Bounded<G: Into<Guarded>> where G: AsRef<Guarded> { g: u8 }
+struct Attributed { #[allow(dead_code)] pub(crate) inner: Leaf, #[doc = "Guarded"] other: u8 }
 #[cfg(test)]
 struct TestOnly { m: Mutex<u8> }
 // struct Commented { m: Mutex<u8> }
@@ -1294,10 +1421,19 @@ const S: &str = "struct InString { m: Mutex<u8> }";
         "cfg(test) items are excluded"
     );
     assert!(!decls.contains_key("Commented") && !decls.contains_key("InString"));
-    let roots: BTreeSet<String> = ["Fact", "Choice", "UsesGeneric", "Cycle", "Clean"]
-        .into_iter()
-        .map(String::from)
-        .collect();
+    let roots: BTreeSet<String> = [
+        "Fact",
+        "Choice",
+        "UsesGeneric",
+        "Cycle",
+        "Clean",
+        "HoldsError",
+        "Bounded",
+        "Attributed",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
     let found = reachable_mutable_state(&decls, &roots);
     let get = |r: &str, p: &str| {
         found
