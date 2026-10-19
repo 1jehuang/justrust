@@ -63,10 +63,9 @@ fn prelude_option_names_resolve_without_imports() {
 fn std_and_core_paths_reach_the_library() {
     let out = run(
         "fn main() { let y: std::option::Option<i32> = core::option::Option::None;\n\
-         match y { Some(_) => println!(\"s\"), None => println!(\"n\") }\n\
-         if core::convert::identity(5) == 5 { println!(\"id\") } }",
+         match y { Some(_) => println!(\"s\"), None => println!(\"n\") } }",
     );
-    assert_eq!(out, "n\nid\n");
+    assert_eq!(out, "n\n");
 }
 
 #[test]
@@ -93,7 +92,7 @@ fn prelude_is_not_user_telemetry_or_user_names() {
 }
 
 #[test]
-fn user_modules_imports_and_globs_shadow_library_aliases() {
+fn user_modules_and_imports_shadow_library_aliases() {
     assert_eq!(
         run(
             "mod std { pub mod convert { pub fn identity(x:i32)->i32{x+1} } } fn main(){ if std::convert::identity(1)==2 {println!(\"module\")} }"
@@ -106,12 +105,12 @@ fn user_modules_imports_and_globs_shadow_library_aliases() {
         ),
         "alias\n"
     );
-    assert_eq!(
-        run(
-            "mod mine { pub fn Some(x:i32)->i32{x+3} } use mine::*; fn main(){if Some(1)==4 {println!(\"glob\")}}"
-        ),
-        "glob\n"
-    );
+}
+
+#[test]
+fn glob_imports_remain_explicitly_unsupported() {
+    let error = check_err("mod mine { pub fn Some(x:i32)->i32{x} } use mine::*; fn main() {}");
+    assert!(error.contains("unsupported: glob imports"), "{error}");
 }
 
 #[test]

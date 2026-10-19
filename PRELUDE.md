@@ -23,8 +23,9 @@ Rust's std). It provides `std::`/`core::` paths and the implicit prelude.
 - `std::a::b` and `core::a::b` resolve to `__justrust_std::a::b` only when
   no user item or import named `std`/`core` is in scope.
 - An unresolved bare first path segment falls back to
-  `__justrust_std::prelude::v1` (`libraries/prelude/prelude.rs`). User items,
-  imports and glob imports are tried first, so they shadow prelude names.
+  `__justrust_std::prelude::v1` (`libraries/prelude/prelude.rs`). User items and
+  imports are tried first, so they shadow prelude names. Glob-import syntax
+  remains outside the compiler's current supported surface.
 - Inside prelude files `crate::` names the library root.
 
 ## Checking and codegen
