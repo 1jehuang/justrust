@@ -243,7 +243,7 @@ fn f(p:(bool,bool))->i32{match p{(true,_)=>1,(true,false)=>2,(false,_)=>3}}fn ma
             source: r#"fn f(p:(bool,bool))->i32{match p{(true,_)|(false,_)=>42}}fn main(){if f((false,true))==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "enum_multiple_payload_variants",
@@ -426,7 +426,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (24, 8));
-    assert_eq!(partition, (22, 6, 2, 2));
+    assert_eq!(partition, (23, 6, 1, 2));
 }
 #[test]
 fn stock_nested_pattern_usefulness_oracle_edition2024_actual_toolchain() {
@@ -669,7 +669,7 @@ fn closed_parser_lint_and_plain_let_boundaries_keep_distinct_stock_classificatio
             counts.2 += 1;
         }
     }
-    assert_eq!(counts, (1, 1, 2));
+    assert_eq!(counts, (1, 1, 1));
 }
 #[test]
 fn native_pattern_usefulness_workers1_8_check_build_no_compiler_fallback() {
@@ -678,6 +678,7 @@ fn native_pattern_usefulness_workers1_8_check_build_no_compiler_fallback() {
     // Neither run asserts a nonexistent optimized native code-generation mode.
     stock_all();
     let mut gates = 0;
+    let mut nonempty_images = 0;
     let mut modes = (0, 0, 0, 0, 0, 0, 0, 0);
     for case in cases() {
         for workers in [1, 8] {
@@ -732,11 +733,9 @@ fn native_pattern_usefulness_workers1_8_check_build_no_compiler_fallback() {
                     }
                 }
                 if !check && case.outcome == Outcome::Runtime {
-                    runtime(
-                        &image,
-                        case.stdout.expect("runtime source oracle"),
-                        &scratch,
-                    );
+                    let stdout = case.stdout.expect("runtime source oracle");
+                    runtime(&image, stdout, &scratch);
+                    nonempty_images += usize::from(!stdout.is_empty());
                 } else {
                     for path in ["native", "client", "a.out"] {
                         assert!(
@@ -761,8 +760,8 @@ fn native_pattern_usefulness_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 128);
-    assert_eq!(modes, (44, 44, 12, 12, 4, 4, 4, 4));
+    assert_eq!(modes, (46, 46, 12, 12, 2, 2, 4, 4));
     eprintln!(
-        "NATIVE PATTERN USEFULNESS:128 cells, modes{modes:?};42 nonempty-output main images;12 stock-valid Unsupported cells and8 stock-invalid/native-Unsupported cells are distinct boundaries, not ordinary-invalid parity or full Rust support"
+        "NATIVE PATTERN USEFULNESS:128 cells, modes{modes:?};{nonempty_images} nonempty-output main images;4 stock-valid Unsupported cells and8 stock-invalid/native-Unsupported cells are distinct boundaries, not ordinary-invalid parity or full Rust support"
     );
 }

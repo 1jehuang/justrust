@@ -474,7 +474,8 @@ fn source_aggregate_match_ir_has_checked_domains_and_only_plain_field_binding_pa
 }
 #[test]
 fn aggregate_advanced_pattern_boundaries_reject_in_their_actual_frontend_phase() {
-    let mut counts = (0, 0);
+    // Counts preserve parser, checker and resolver rejection phases separately.
+    let mut counts = (0, 0, 0);
     for case in cases()
         .into_iter()
         .filter(|case| case.outcome == Outcome::Unsupported)
@@ -485,7 +486,21 @@ fn aggregate_advanced_pattern_boundaries_reject_in_their_actual_frontend_phase()
             &source::SourceOptions::default(),
         )
         .and_then(|prepared| frontend::parse_prepared(&prepared));
-        if matches!(case.name, "guard_boundary" | "or_pattern_boundary") {
+        if case.name == "or_pattern_boundary" {
+            let parsed = parsed.expect("original root OR grammar must parse");
+            let error = match frontend::resolve(&parsed) {
+                Err(error) => error,
+                Ok(_) => panic!("{} binding OR must reject in resolver", case.name),
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("unsupported: or-pattern bindings are unsupported"),
+                "{}:{error}",
+                case.name
+            );
+            counts.2 += 1;
+        } else if case.name == "guard_boundary" {
             let error = match parsed {
                 Err(error) => error,
                 Ok(_) => panic!("{} must reject as explicit parser Unsupported", case.name),
@@ -526,7 +541,7 @@ fn aggregate_advanced_pattern_boundaries_reject_in_their_actual_frontend_phase()
             counts.1 += 1;
         }
     }
-    assert_eq!(counts, (2, 0));
+    assert_eq!(counts, (1, 0, 1));
 }
 #[test]
 fn native_aggregate_matches_workers1_8_check_build_no_compiler_fallback() {

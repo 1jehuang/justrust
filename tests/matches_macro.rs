@@ -2,8 +2,10 @@
 //! Stock first: /home/jeremy/.jcode/scratch/matches-macro-stock/results.json
 //! Receipt SHA256 7a98ef13729f223511d2c0133d68e5f1df35bf692da1297f290cfa42e3ae83d7
 //! Actual /usr/bin/rustc, edition2024, panic=abort, no RUSTC_BOOTSTRAP.
-//! Stock: 19 pass, 2 reject. Native: 15 live, 3 unsupported, 2 invalid, 1 syntax.
-//! Range retains the existing parser Syntax boundary, not an Unsupported claim.
+//! Stock: 19 pass, 2 reject. Frozen stock bytes and receipts remain unchanged.
+//! Current native: 18 live, 1 unsupported, 2 invalid, 0 syntax.
+//! Root scalar OR is promoted by the bounded original-source OR milestone.
+//! Range and guards retain their separately admitted behavior.
 //! Sources frozen before native checks. Root owns native gates.
 //! Module shadow stays unsupported; local_shadow is the distinct final append.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -130,8 +132,8 @@ For more information about this error, try `rustc --explain E0308`.
 "###, source_sha256: r###"71e1655e7716bc7b55e1e4a6fa148c1f797f44011139d518b51d3d3a89d85b28"###, boundary: r###""###, phase: r###"check"###, stock_stdout: r###"range
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""###, source_bytes: 58, source_fingerprint: 10514283390403151409, native: Native::Live, stock_compile_code: 0, stock_code: Some(0), },
         Case { name: r###"or_pattern"###, source: r###"fn main(){ if matches!(2, 1 | 2) { println!("or"); } }
-"###, source_sha256: r###"01a3675c88f71c8098daee3b1b0943f4de8d3a6bd765585c5783a397aafad098"###, boundary: r###"or-patterns and @ patterns are unsupported"###, phase: r###"parse"###, stock_stdout: r###"or
-"###, stock_stderr: r###""###, stock_compile_stderr: r###""###, source_bytes: 55, source_fingerprint: 15071238497542704403, native: Native::Unsupported, stock_compile_code: 0, stock_code: Some(0), },
+"###, source_sha256: r###"01a3675c88f71c8098daee3b1b0943f4de8d3a6bd765585c5783a397aafad098"###, boundary: r###""###, phase: r###"check"###, stock_stdout: r###"or
+"###, stock_stderr: r###""###, stock_compile_stderr: r###""###, source_bytes: 55, source_fingerprint: 15071238497542704403, native: Native::Live, stock_compile_code: 0, stock_code: Some(0), },
         Case { name: r###"module_shadow"###, source: r###"macro_rules! matches { ($($x:tt)*) => { true }; } fn main(){ if matches!(not a pattern) { println!("module"); } }
 "###, source_sha256: r###"66fd50c39024204a4063efbc46fa55d250cce590419a7706bdd8d74cb6ffc376"###, boundary: r###"module macros in expression position are unsupported"###, phase: r###"parse"###, stock_stdout: r###"module
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""###, source_bytes: 114, source_fingerprint: 1334715629782715367, native: Native::Unsupported, stock_compile_code: 0, stock_code: Some(0), },
@@ -379,7 +381,7 @@ fn frozen_matches_macro_sources_and_strict_phases() {
         });
     }
     // character and range became Live with SCALAR-PATTERNS.md (sources unchanged).
-    assert_eq!(partition, [17, 2, 2, 0]);
+    assert_eq!(partition, [18, 1, 2, 0]);
     failures.finish();
 }
 fn stock_all() {

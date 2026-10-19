@@ -660,7 +660,8 @@ fn nested_decisions_keep_actual_type_privacy_move_and_dead_arm_errors_invalid() 
 }
 #[test]
 fn valid_and_stock_invalid_unsupported_boundaries_are_distinct_and_phase_pinned() {
-    let mut counts = (0, 0, 0);
+    // Counts preserve parser, checker and resolver rejection phases separately.
+    let mut counts = (0, 0, 0, 0);
     for case in cases().into_iter().filter(|c| {
         matches!(
             c.outcome,
@@ -674,7 +675,21 @@ fn valid_and_stock_invalid_unsupported_boundaries_are_distinct_and_phase_pinned(
         )
         .unwrap();
         let parsed = frontend::parse_prepared(&prepared);
-        if matches!(case.name, "guard_boundary" | "or_boundary") {
+        if case.name == "or_boundary" {
+            let parsed = parsed.expect("original root OR grammar must parse");
+            let error = match frontend::resolve(&parsed) {
+                Err(error) => error,
+                Ok(_) => panic!("{} binding OR must reject in resolver", case.name),
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("unsupported: or-pattern bindings are unsupported"),
+                "{}:{error}",
+                case.name
+            );
+            counts.3 += 1;
+        } else if case.name == "guard_boundary" {
             let error = match parsed {
                 Err(e) => e,
                 Ok(_) => panic!("{} parser boundary admitted", case.name),
@@ -709,7 +724,7 @@ fn valid_and_stock_invalid_unsupported_boundaries_are_distinct_and_phase_pinned(
             }
         }
     }
-    assert_eq!(counts, (2, 1, 1));
+    assert_eq!(counts, (1, 1, 1, 1));
 }
 #[test]
 fn native_pattern_decisions_workers1_8_check_build_no_compiler_fallback() {

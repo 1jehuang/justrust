@@ -484,7 +484,8 @@ fn source_array_patterns_publish_exact_constant_indexes_without_omitted_bindings
 }
 #[test]
 fn array_pattern_closed_boundaries_reject_at_their_actual_frontend_phase() {
-    let mut counts = (0, 0);
+    // Counts preserve parser, checker and resolver rejection phases separately.
+    let mut counts = (0, 0, 0);
     for case in cases()
         .into_iter()
         .filter(|c| c.outcome == Outcome::Unsupported)
@@ -499,12 +500,23 @@ fn array_pattern_closed_boundaries_reject_at_their_actual_frontend_phase() {
             &source::SourceOptions::default(),
         )
         .and_then(|p| frontend::parse_prepared(&p));
-        if matches!(
+        if case.name == "or_boundary" {
+            let parsed = parsed.expect("original root OR grammar must parse");
+            let error = match frontend::resolve(&parsed) {
+                Err(error) => error,
+                Ok(_) => panic!("{} binding OR must reject in resolver", case.name),
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("unsupported: or-pattern bindings are unsupported"),
+                "{}:{error}",
+                case.name
+            );
+            counts.2 += 1;
+        } else if matches!(
             case.name,
-            "guard_boundary"
-                | "or_boundary"
-                | "tail_binding_boundary"
-                | "parameter_pattern_boundary"
+            "guard_boundary" | "tail_binding_boundary" | "parameter_pattern_boundary"
         ) {
             let error = match parsed {
                 Err(e) => e,
@@ -538,7 +550,7 @@ fn array_pattern_closed_boundaries_reject_at_their_actual_frontend_phase() {
             counts.1 += 1;
         }
     }
-    assert_eq!(counts, (4, 2));
+    assert_eq!(counts, (3, 2, 1));
 }
 #[test]
 fn native_array_patterns_workers1_8_check_build_no_compiler_fallback() {

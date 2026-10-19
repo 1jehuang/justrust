@@ -50,6 +50,7 @@ fn builtin_matches_source_shape_and_single_evaluation() {
 fn builtin_matches_bounded_grammar_and_late_invalid() {
     for source in [
         "fn main(){let b:bool=matches!(1,1);}",
+        "fn main(){let b:bool=matches!(1,1|2);}",
         "fn main(){let b:bool=matches!(true,false);}",
         "fn main(){let b:bool=matches!((1,true),(1,_));}",
         "fn main(){let b:bool=matches!([1,2],[1,..]);}",
@@ -67,10 +68,34 @@ fn builtin_matches_bounded_grammar_and_late_invalid() {
             "{args}"
         );
     }
-    for (args, diagnostic) in [
-        ("1,1|2", "or-patterns and @ patterns are unsupported"),
-        ("1,x @ _", "unsupported token \"@\""),
-    ] {
+    // Exact former parse-negative bytes. The bool tail still violates main's
+    // unit result contract, independently of valid original root OR syntax.
+    let program = parse("fn main(){matches!(1,1|2)}").unwrap();
+    assert_eq!(program.functions.len(), 1);
+    assert!(program.functions[0].body.statements.is_empty());
+    let Expr::Match { scrutinee, arms } = program.functions[0].body.tail.as_deref().unwrap() else {
+        panic!("expected one original source match");
+    };
+    assert!(matches!(scrutinee.as_ref(), Expr::Integer(literal) if literal.magnitude == 1));
+    assert_eq!(arms.len(), 2);
+    let Pattern::Alternatives(rows) = &arms[0].pattern else {
+        panic!("expected source OR alternatives");
+    };
+    assert_eq!(rows.len(), 2);
+    for (row, expected) in rows.iter().zip([1, 2]) {
+        assert!(
+            matches!(row, Pattern::Int { literal, negative: false } if literal.magnitude == expected)
+        );
+    }
+    assert!(matches!(arms[0].body, Expr::Bool(true)));
+    assert!(matches!(arms[1].pattern, Pattern::Wildcard));
+    assert!(matches!(arms[1].body, Expr::Bool(false)));
+    assert!(arms.iter().all(|arm| !arm.guarded));
+    assert!(
+        check(&program).is_err(),
+        "bool tail must not become unit main"
+    );
+    for (args, diagnostic) in [("1,x @ _", "unsupported token \"@\"")] {
         let error = parse(&format!("fn main(){{matches!({args})}}")).unwrap_err();
         assert!(error.contains(diagnostic), "{error}");
     }
