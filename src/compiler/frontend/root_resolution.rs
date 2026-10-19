@@ -69,6 +69,7 @@ struct Resolver<'a> {
     lexical_function: Option<ScopeId>,
     /// Interpret `crate` as the user crate root even inside the prelude.
     user_crate_anchor: bool,
+    anonymous_closure_body: bool,
 }
 impl Resolver<'_> {
     fn with_source_owner<T>(
@@ -80,6 +81,7 @@ impl Resolver<'_> {
         let allowed = self.self_allowed;
         let nominal = self.self_nominal.clone();
         let lexical = self.lexical_function;
+        let closure = self.anonymous_closure_body;
         if owner == SourceOwnerContext::None {
             self.self_allowed = false;
             self.self_nominal = None;
@@ -89,6 +91,7 @@ impl Resolver<'_> {
         self.self_allowed = allowed;
         self.self_nominal = nominal;
         self.lexical_function = lexical;
+        self.anonymous_closure_body = closure;
         result
     }
 
@@ -2631,6 +2634,29 @@ impl Resolver<'_> {
         module: ModuleId,
         locals: &mut Vec<std::collections::HashSet<LocalKey>>,
     ) -> Result<(), String> {
+        // Anonymous closure paths can only be minted by the parser's private
+        // declaration issuer. They do not exist in module/import lookup.
+        if let Expr::Call { name, args } = expr
+            && closures::anonymous_path(name, self.names())?
+        {
+            for arg in args {
+                self.expr(arg, module, locals)?;
+            }
+            return Ok(());
+        }
+        // Do not accidentally resolve a capture to a same-spelled module
+        // constructor. Only explicit paths may name nonlocal values until
+        // environment capture resolution is implemented.
+        if self.anonymous_closure_body
+            && let Expr::Var(path) = expr
+            && path.single().is_some()
+            && !self.local_contains(path, locals)?
+        {
+            return Err(
+                "unsupported: closure capture environments require checked capture resolution"
+                    .into(),
+            );
+        }
         if let Expr::Var(path) | Expr::Call { name: path, .. } = expr
             && self.local_contains(path, locals)?
         {
@@ -3171,6 +3197,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         type_params: Vec::new(),
         lexical_function: None,
         user_crate_anchor: false,
+        anonymous_closure_body: false,
     };
     for (bucket, items) in &parsed.items {
         for item in items {
@@ -3455,6 +3482,8 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         // Local/free declarations are collected separately by the frontend.
         // None may inherit a preceding trait/default/impl Self owner.
         resolver.with_source_owner(SourceOwnerContext::None, |resolver| {
+            resolver.anonymous_closure_body =
+                closures::anonymous_path(&function.name, resolver.names())?;
             resolver.type_params = function.type_params.clone();
             resolver.bounds(&mut function.bounds, function.module)?;
             resolver.ty(&mut function.result, function.module)?;
