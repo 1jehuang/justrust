@@ -1226,6 +1226,26 @@ fn graph_facts_reach_no_new_mutable_state() {
         .map(|(r, c, p)| format!("  {r} {c} {p}"))
         .collect();
     if !removed.is_empty() {
+        // Progress means a carrier lost its mutable field. A recorded root
+        // that is no longer discovered at all, while its carriers still hold
+        // their primitives, is a blind spot in root discovery, not progress.
+        let still_mutable: BTreeSet<&String> = decls
+            .iter()
+            .filter(|(_, d)| d.refs.iter().any(|r| FACT_MUTABLE.contains(&r.as_str())))
+            .map(|(name, _)| name)
+            .collect();
+        let vanished: Vec<String> = recorded
+            .difference(&current)
+            .filter(|(r, c, _)| !roots.contains(r) && still_mutable.contains(c))
+            .map(|(r, c, p)| format!("  {r} {c} {p}"))
+            .collect();
+        assert!(
+            vanished.is_empty(),
+            "recorded fact roots are no longer discovered, but their carriers still hold \
+             mutable state. This is lost coverage, not progress. Keep the fact read/publish in \
+             a shape fact_roots() recognizes, or extend fact_roots():\n{}",
+            vanished.join("\n")
+        );
         if std::env::var_os(SHRINK_ENV).is_some() {
             write_fact_debt(&found);
             return;
