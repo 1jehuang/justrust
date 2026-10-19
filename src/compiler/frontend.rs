@@ -31,6 +31,7 @@ pub use super::semantic_path::{AstPath, PathAnchor};
 use super::semantic_path::{NameAccess, PathKey};
 use native_adapter::{NativeParserInput, NativeTokenBuffer};
 mod char_literal;
+mod closures;
 mod name_scope;
 mod name_validation;
 mod pattern_usefulness;
@@ -6216,6 +6217,10 @@ struct ParserLexicalState {
     function: Option<FunctionMacroState>,
     item_macros: Option<super::source_item_macro::SourceItemMacroDriver>,
     inactive_items: Option<super::token_session::BudgetVec<Arc<UnexpandedMacroSyntax>>>,
+    /// Anonymous bodies remain independent checked callable declarations.
+    closure_functions: Vec<Function>,
+    closure_serial: usize,
+    closure_depth: usize,
 }
 struct FunctionMacroState {
     frontier: super::semantic_scope::FrontierId,
@@ -10951,6 +10956,9 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return self.scalar_output(")", "println", None);
             }
         } else if self.eat("(") {
+            if self.lexical.closure_depth != 0 && name.single().is_some() {
+                return Err(self.unsupported("unqualified calls inside closures require capture-aware resolution; use a crate-qualified function path"));
+            }
             let mut args = Vec::new();
             if !self.is(")") {
                 loop {
@@ -11166,6 +11174,9 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     #[inline(never)]
     fn ordinary_expr_prefix(&mut self, statement: bool) -> Result<Expr, ParseError> {
+        if self.is("|") || self.is("||") || self.is("move") {
+            return Err(self.unsupported("stored closures and capture environments are unsupported; use an explicitly typed immediate noncapturing closure"));
+        }
         if self.is("while")
             && self
                 .cursor
@@ -11290,6 +11301,9 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     #[inline(never)]
     fn group_prefix(&mut self) -> Result<Expr, ParseError> {
+        if self.is("|") || self.is("||") || self.is("move") {
+            return self.immediate_closure();
+        }
         if self.eat(")") {
             return Ok(Expr::Block(Block {
                 statements: Vec::new(),
@@ -11979,6 +11993,10 @@ fn parse_syntax_unit(
     if !parser.is("") {
         return Err(parser.error("unexpected module closing brace"));
     }
+    parsed
+        .program
+        .functions
+        .append(&mut parser.lexical.closure_functions);
     for function in &parsed.program.functions {
         let function_name = function
             .name

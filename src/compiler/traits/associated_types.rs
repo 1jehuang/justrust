@@ -1044,14 +1044,9 @@ impl ValidatedTraitWorld {
                 })
             }
             Ty::Struct(_) | Ty::Enum(_) => {
-                // Canonical nominal identities cannot be rebuilt by rewriting their fields.
-                if self.type_contains_projection(ty, depth + 1)? {
-                    return Err(FactsError::unsupported(
-                        &self.budget,
-                        "unsupported: projection in nominal field or actual metadata",
-                    ));
-                }
-                Ok(ty.clone())
+                self.normalize_nominal_actuals(ty, context.proof.env(), depth, |argument| {
+                    self.normalize_type_in(argument, context, stack, dependencies, depth + 1)
+                })
             }
             _ => Ok(ty.clone()),
         }

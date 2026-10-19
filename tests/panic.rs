@@ -566,7 +566,7 @@ dropped
             source_fingerprint: 12183947067569788194,
             source_sha256: r###"351c760037a6c67c5dc9fbd593d5a2cbbb1c43239a8d77fb5a3089a0f1673cc1"###,
             native: Native::Unsupported,
-            boundary: r###"expected ASCII identifier"###,
+            boundary: r###"stored closures and capture environments are unsupported"###,
             stock_compile_code: 0,
             stock_code: Some(-6),
             stock_stdout: r###""###,
@@ -589,7 +589,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_fingerprint: 12183947067569788194,
             source_sha256: r###"351c760037a6c67c5dc9fbd593d5a2cbbb1c43239a8d77fb5a3089a0f1673cc1"###,
             native: Native::Unsupported,
-            boundary: r###"expected ASCII identifier"###,
+            boundary: r###"stored closures and capture environments are unsupported"###,
             stock_compile_code: 0,
             stock_code: Some(0),
             stock_stdout: r###"caught=true

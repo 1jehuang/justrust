@@ -53,10 +53,14 @@ impl ValidatedTraitWorld {
                 "unsupported: projection-bearing trait default signatures",
             ));
         }
-        self.validate_projected_value_schema(&item.schema)
+        self.validate_projected_value_schema(&item.schema, item.receiver)
     }
 
-    fn validate_projected_value_schema(&self, schema: &GenericSchema) -> Result<()> {
+    fn validate_projected_value_schema(
+        &self,
+        schema: &GenericSchema,
+        receiver: ReceiverMode,
+    ) -> Result<()> {
         for predicate in schema.predicates.iter() {
             let Predicate::Implements(goal) = predicate else {
                 continue;
@@ -76,16 +80,37 @@ impl ValidatedTraitWorld {
                 }
             }
         }
-        for ty in schema
-            .signature
-            .params
-            .iter()
-            .chain(std::iter::once(&schema.signature.result))
-        {
+        for (index, ty) in schema.signature.params.iter().enumerate() {
             self.validate_ty_metadata_in(ty, &schema.env, 0)?;
-            self.reject_projected_references(ty, 0)?;
+            self.validate_projected_parameter_references(ty, index, receiver)?;
         }
-        Ok(())
+        self.validate_ty_metadata_in(&schema.signature.result, &schema.env, 0)?;
+        self.reject_projected_references(&schema.signature.result, 0)
+    }
+
+    fn validate_projected_parameter_references(
+        &self,
+        ty: &Ty,
+        index: usize,
+        receiver: ReceiverMode,
+    ) -> Result<()> {
+        // Source-region and declaration-schema validation authenticate receiver
+        // identity before this capability check. Only an ordinary projection-
+        // free borrowed receiver uses the existing reference-input machinery.
+        // Projected references and all reference-bearing results remain outside
+        // this value-result stage.
+        if index == 0
+            && let ReceiverMode::Borrowed { kind } = receiver
+            && let Ty::Ref {
+                kind: actual,
+                referent,
+            } = ty
+            && *actual == kind
+            && !self.type_contains_projection(referent, 1)?
+        {
+            return Ok(());
+        }
+        self.reject_projected_references(ty, 0)
     }
 
     // This is a value-oriented stage, including references hidden in nominals.
@@ -466,6 +491,12 @@ impl ValidatedTraitWorld {
                     )?),
                 })
             }
+            Ty::Struct(_) | Ty::Enum(_) => self.normalize_nominal_actuals(
+                ty,
+                &owner.implementation.schema_env,
+                depth,
+                |argument| self.normalize_owner_type(argument, owner, active, depth + 1),
+            ),
             _ if self.type_contains_projection(ty, depth)? => Err(FactsError::unsupported(
                 &self.budget,
                 "unsupported: projected nominal metadata in owning implementation",
@@ -521,7 +552,7 @@ impl ValidatedTraitWorld {
                     "unsupported: generic projected implementation method",
                 ));
             }
-            self.validate_projected_value_schema(schema)?;
+            self.validate_projected_value_schema(schema, self.info(declaration)?.receiver)?;
             let mut normalized = clone_schema(schema, &self.budget)?;
             for ty in &mut normalized.signature.params {
                 *ty = self.normalize_owner_type(ty, &owner, &mut Vec::new(), 0)?;
@@ -892,14 +923,10 @@ impl ValidatedTraitWorld {
             context.env(),
             None,
         )?;
-        for ty in instantiated
-            .signature
-            .params
-            .iter()
-            .chain(std::iter::once(&instantiated.signature.result))
-        {
-            self.reject_projected_references(ty, 0)?;
+        for (index, ty) in instantiated.signature.params.iter().enumerate() {
+            self.validate_projected_parameter_references(ty, index, item.receiver)?;
         }
+        self.reject_projected_references(&instantiated.signature.result, 0)?;
         let source_regions =
             self.validate_source_regions(item.declaration, &instantiated.signature)?;
         retain::<ProjectedMethodEvidence>(&self.budget, 1)?;
@@ -1179,6 +1206,57 @@ mod tests {
         world(
             "struct S;trait Has<A,B>{type Out;fn get(self)->Self::Out;}impl Has<i32,bool> for S{type Out=i128;fn get(self)->Self::Out{7i128}}impl Has<bool,i32> for S{type Out=bool;fn get(self)->Self::Out{true}}fn main(){}",
         )
+    }
+
+    #[test]
+    fn borrowed_receiver_gate_rejects_other_positions_kinds_and_projected_referents() {
+        let world = paired();
+        let shared = Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(Ty::Int(ir::IntTy::I32)),
+        };
+        let receiver = ReceiverMode::Borrowed {
+            kind: ir::BorrowKind::Shared,
+        };
+        world
+            .validate_projected_parameter_references(&shared, 0, receiver)
+            .unwrap();
+        for (index, mode) in [
+            (1, receiver),
+            (0, ReceiverMode::None),
+            (0, ReceiverMode::Value),
+            (
+                0,
+                ReceiverMode::Borrowed {
+                    kind: ir::BorrowKind::Mut,
+                },
+            ),
+        ] {
+            assert!(
+                world
+                    .validate_projected_parameter_references(&shared, index, mode)
+                    .is_err()
+            );
+        }
+        let projection = world
+            .headers
+            .items
+            .iter()
+            .find_map(|item| {
+                matches!(&item.schema.signature.result, Ty::AssociatedType(_))
+                    .then(|| item.schema.signature.result.clone())
+            })
+            .unwrap();
+        let projected = Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(projection),
+        };
+        assert!(
+            world
+                .validate_projected_parameter_references(&projected, 0, receiver)
+                .is_err()
+        );
+        assert!(world.reject_projected_references(&shared, 0).is_err());
     }
 
     fn owners(world: &ValidatedTraitWorld) -> Vec<&ImplHeader> {

@@ -44,6 +44,35 @@ caches them as ordinary per-declaration nodes). Nongeneric prelude bodies are
 only instantiated when reachable from user roots; generic ones are
 instantiated on demand as usual.
 
+## Source trait prerequisites
+
+The canonical catalog currently owns `Sized`, `Copy`, `Clone`, and `Drop`.
+It does not own `Deref`, `DerefMut`, `Iterator`, or `IntoIterator`, and this
+library does not mint weaker substitutes for those contracts.
+`tests/prelude_traits.rs` checks exact ordinary source contract fixtures with
+stock rustc and records these current native boundaries in check/build modes
+with one and eight workers:
+
+- `Iterator::next(&mut self) -> Option<Self::Item>` needs general associated
+  projection normalization inside canonical nominal applications. Even a
+  concrete source implementor currently fails the residual-projection guard.
+- `Deref::Target: ?Sized` needs general relaxed-bound semantics. Replacing it
+  with an implicitly `Sized` target would be a different contract.
+- `IntoIterator::IntoIter: Iterator<Item = Self::Item>` needs source trait
+  bounds and associated equalities on associated declarations. Dropping the
+  bound would admit invalid implementations.
+
+Projection-bearing source methods can use ordinary shared or mutable receivers
+when the receiver type is projection-free. Their value results use existing
+associated-assignment proof and source-region authority. Reference-bearing
+results and projected-reference parameters remain unsupported; accepting a
+borrowed receiver does not manufacture a returned-reference origin contract.
+Stock/native fixtures cover shared calls, mutable reborrows, and the unchanged
+reference-result boundary.
+
+The fixtures are stock acceptance evidence and native limitations, not claims
+of Iterator, dereference operators, adapters, or `for` desugaring support.
+
 ## Adding a module
 
 1. Write `libraries/prelude/NAME.rs`, add `pub mod NAME;` to `lib.rs`.

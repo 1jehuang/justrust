@@ -1025,7 +1025,7 @@ pub(super) struct Budget {
 }
 impl Budget {
     #[cfg(test)]
-    fn new(remaining: usize) -> Self {
+    pub(super) fn new(remaining: usize) -> Self {
         Self {
             remaining,
             work_limit: remaining,
