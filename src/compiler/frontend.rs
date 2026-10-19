@@ -57,6 +57,8 @@ mod format_spec;
 mod inherited_associated;
 mod iterator_traits;
 mod nominal_bounds;
+#[cfg(test)]
+mod nominal_intern_tests;
 mod operators;
 mod panic_format;
 mod param_projection;
@@ -18109,10 +18111,31 @@ impl PlanCtx {
         budget: &ir::PlanBudget,
     ) -> Result<ir::Ty, String> {
         self.check_budget(budget)?;
-        self.state
-            .lock()
-            .map_err(|_| "generic plan context poisoned")?
-            .intern(&self.registry, decl, args, caller, budget, 0)
+        let structural = match caller {
+            ir::FactsCtx::Validated(facts) => {
+                if !facts.budget().same_authority(budget)
+                    || !Arc::ptr_eq(facts.world(), &self.trait_world()?)
+                {
+                    return Err("nominal interning changed validated caller authority".into());
+                }
+                ir::FactsCtx::Universal(facts.env())
+            }
+            other => other,
+        };
+        for argument in args {
+            caller.validate_ty_metadata_with_budget(argument, budget)?;
+        }
+        // Metadata validation can ask SchemaAdapter to authenticate a nested
+        // nominal through this same state. Intern structurally while locked,
+        // then replay the original caller's authority after releasing the guard.
+        let out = {
+            self.state
+                .lock()
+                .map_err(|_| "generic plan context poisoned")?
+                .intern(&self.registry, decl, args, structural, budget, 0)?
+        };
+        caller.validate_ty_metadata_with_budget(&out, budget)?;
+        Ok(out)
     }
     pub fn instantiate_signature(
         &self,
