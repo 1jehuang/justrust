@@ -108,6 +108,54 @@ a hash or a file-name sort.
 
 ## Increments, each independently mergeable
 
+### Increment 1 owner derivation (for review, not activated)
+
+Today eight process-global counters issue owner ids through `allocate_identity`:
+
+| Domain | Site | Issued per |
+|---|---|---|
+| `SourceSnapshot` | token_session.rs `seal` | sealed source map |
+| `TokenSession` (`SessionId`) | token_session.rs `TokenSession::new` | session |
+| `ModuleArena` | module_identity.rs `ModuleArenaBuilder::new` | arena (source or catalog) |
+| `ScopeArena` | semantic_scope.rs `for_names` | scope arena |
+| `SourceItemMacroDriver` | source_item_macro.rs `new` | item macro driver |
+| `LocalMacroDriver` | source_macro.rs `new` | function macro driver |
+| `TokenSlice` (`SliceId`) | macro_cursor.rs `new` | owning token slice |
+| `PreparedView` | source_lex.rs | prepared lex view |
+
+Replacement: an `OwnerPath` value, structural and compared whole, never hashed
+or truncated into authority:
+
+```text
+OwnerPath = Root(EngineAuthority) / Child(domain, ordinal) / ...
+EngineAuthority = the engine's own graph id (engine state, allowed)
+domain = one closed enum tag per row above
+ordinal = position among siblings of that domain under the same parent,
+          assigned by the parent while it is exclusively owned (&mut)
+```
+
+- Domain separation: the domain tag is part of every step, so a session and a
+  module arena at the same position are never equal.
+- Distinct issued owners never share a path. Every issue is a child of a
+  unique parent, numbered by a counter inside that parent's `&mut` builder.
+  Two sessions in one file are `File[k]/Session#0` and `File[k]/Session#1`.
+  Expansion drivers and slices are children of the session that created them,
+  so every expansion occurrence is a structural child.
+- Standalone direct parsing (`frontend::parse`, unit tests, authority tests)
+  creates a fresh `EngineAuthority` per call, issued by the same engine-id
+  source, so two direct parses of the same text still reject each other's
+  handles as foreign.
+- Equality checks compare the full path, so cost scales with depth (bounded by
+  the file/expansion depth limits already charged).
+- No pointer identity fallback, no global cache. `allocate_identity` and the
+  eight `static NEXT` items are deleted in the same commit that activates
+  this, which shrinks `out_of_graph_state.baseline`.
+
+Required regression tests before activation, each at workers 1 and 8 and
+repeated runs: foreign-snapshot handles reject; duplicate occurrences from two
+sibling sessions reject; swapped source maps (same text, different snapshot)
+reject; concurrent direct parses of identical text get distinct roots.
+
 1. Deterministic owner ids derived from file ordinals. No behavior change.
    Shrinks the static/atomic baseline.
 2. `PARSE_FILE` per file with per-file sessions. During this step `PARSE` still
