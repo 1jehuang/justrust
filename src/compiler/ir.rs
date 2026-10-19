@@ -1777,20 +1777,78 @@ struct PlanUsage {
     reservations: ReservationAccounting,
     first_failure: Option<ResourceBudgetFailure>,
 }
+/// Immutable identity and policy, with no resource ledger or spending API.
+#[derive(Clone, Debug)]
+pub struct PlanAuthority {
+    identity: Arc<PlanAuthorityIdentity>,
+}
+#[derive(Debug)]
+struct PlanAuthorityIdentity {
+    limits: PlanLimits,
+}
+impl PlanAuthority {
+    pub fn limits(&self) -> PlanLimits {
+        self.identity.limits
+    }
+    pub fn same_authority(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.identity, &other.identity)
+    }
+}
+/// Evidence of paid storage, without a ledger or meter back-reference.
+/// Receipt drop/clone never refunds/charges bytes. The originating ledger or
+/// task conservatively retains admission charges until its own lifetime ends.
+#[derive(Clone, Debug)]
+pub struct RetainedStorage {
+    authority: PlanAuthority,
+    bytes: usize,
+}
+impl RetainedStorage {
+    pub fn authority(&self) -> &PlanAuthority {
+        &self.authority
+    }
+    pub fn bytes(&self) -> usize {
+        self.bytes
+    }
+}
 #[derive(Clone, Debug)]
 pub struct PlanBudget {
     limits: PlanLimits,
+    authority: PlanAuthority,
     usage: Arc<std::sync::Mutex<PlanUsage>>,
 }
 #[derive(Debug)]
 pub struct PlanReservation {
+    authority: PlanAuthority,
+    retained: bool,
     usage: Arc<std::sync::Mutex<PlanUsage>>,
     bytes: usize,
     /// Set when the bytes were charged to a task meter instead of the ledger.
     meter: Option<crate::engine::MeterHandle>,
 }
+impl PlanReservation {
+    /// Consume a paid lease without releasing or admitting its bytes again.
+    pub fn retain(mut self) -> Result<RetainedStorage, String> {
+        if self.meter.is_none() {
+            let mut usage = self
+                .usage
+                .lock()
+                .map_err(|_| "generic planning budget poisoned".to_string())?;
+            usage.reservations.record_retention();
+            usage.reservations.current_reservations =
+                usage.reservations.current_reservations.saturating_sub(1);
+        }
+        self.retained = true;
+        Ok(RetainedStorage {
+            authority: self.authority.clone(),
+            bytes: self.bytes,
+        })
+    }
+}
 impl Drop for PlanReservation {
     fn drop(&mut self) {
+        if self.retained {
+            return;
+        }
         if let Some(meter) = &self.meter {
             meter.meter().bytes.fetch_sub(
                 u64::try_from(self.bytes).unwrap_or(u64::MAX),
@@ -1822,14 +1880,20 @@ impl PlanBudget {
         };
         Self {
             limits,
+            authority: PlanAuthority {
+                identity: Arc::new(PlanAuthorityIdentity { limits }),
+            },
             usage: Arc::new(std::sync::Mutex::new(PlanUsage::default())),
         }
     }
     pub fn limits(&self) -> PlanLimits {
         self.limits
     }
+    pub fn authority(&self) -> &PlanAuthority {
+        &self.authority
+    }
     pub fn same_authority(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.usage, &other.usage)
+        self.authority.same_authority(&other.authority)
     }
     /// A fixed-size snapshot. A poisoned ledger is readable for reporting only,
     /// while all existing budget operations retain their poison error behavior.
@@ -1997,6 +2061,8 @@ impl PlanBudget {
         if let Some(meter) = crate::engine::MeterHandle::current() {
             self.charge_meter_bytes(meter.meter(), bytes)?;
             return Ok(PlanReservation {
+                authority: self.authority.clone(),
+                retained: false,
                 usage: self.usage.clone(),
                 bytes,
                 meter: Some(meter),
@@ -2010,6 +2076,8 @@ impl PlanBudget {
             Some(false),
         )?;
         Ok(PlanReservation {
+            authority: self.authority.clone(),
+            retained: false,
             usage: self.usage.clone(),
             bytes,
             meter: None,
@@ -8945,6 +9013,117 @@ mod tests {
         assert_eq!(failure.kind, ResourceBudgetKind::Depth);
         assert_eq!((failure.requested, failure.used, failure.limit), (4, 0, 3));
         assert_eq!(failure.line, line);
+    }
+
+    #[test]
+    fn retained_receipt_is_paid_once_and_never_refunds_direct_admission() {
+        let budget = PlanBudget::new(PlanLimits {
+            bytes: 11,
+            ..PlanLimits::default()
+        });
+        let ledger = Arc::downgrade(&budget.usage);
+        let authority = budget.authority().clone();
+        assert!(authority.same_authority(budget.clone().authority()));
+        assert!(!authority.same_authority(PlanBudget::default().authority()));
+        assert_eq!(authority.limits().bytes, 11);
+        let scratch = budget.reserve_bytes(3).unwrap();
+        let receipt = budget.reserve_bytes(8).unwrap().retain().unwrap();
+        assert_eq!(receipt.bytes(), 8);
+        assert!(receipt.authority().same_authority(&authority));
+        let usage = budget.usage_snapshot();
+        assert_eq!(usage.bytes, 11);
+        assert_eq!(usage.reservations.current_bytes, 11);
+        assert_eq!(usage.reservations.current_reservations, 1);
+        assert_eq!(usage.reservations.retentions, 1);
+        assert_eq!(usage.reservations.cumulative_bytes, 11);
+        let clone = receipt.clone();
+        drop(receipt);
+        assert_eq!(budget.usage_snapshot().reservations, usage.reservations);
+        assert!(budget.reserve_bytes(1).is_err());
+        drop(scratch);
+        assert_eq!(budget.usage_snapshot().bytes, 8);
+        let last = budget.reserve_bytes(3).unwrap();
+        assert!(budget.reserve_bytes(usize::MAX).is_err());
+        drop(last);
+        drop(clone);
+        assert_eq!(budget.usage_snapshot().bytes, 8);
+        let survivor = budget.reserve_bytes(0).unwrap().retain().unwrap();
+        drop(budget);
+        // Neither authority nor receipt keeps the accounting ledger alive.
+        assert!(ledger.upgrade().is_none());
+        assert_eq!(survivor.bytes(), 0);
+        assert!(survivor.authority().same_authority(&authority));
+    }
+
+    #[test]
+    fn retained_receipt_preserves_originating_task_byte_admission() {
+        use crate::engine::{Context, Engine, Key, Provider, TaskFuture};
+        struct Receipts;
+        impl Provider for Receipts {
+            fn outputs(&self, _: &Key) -> usize {
+                1
+            }
+            fn start(&self, cx: Context, _: Key) -> TaskFuture {
+                Box::pin(async move {
+                    let budget = PlanBudget::new(PlanLimits {
+                        bytes: 11,
+                        ..PlanLimits::default()
+                    });
+                    let scratch = budget.reserve_bytes(3).unwrap();
+                    let receipt = budget.reserve_bytes(8).unwrap().retain().unwrap();
+                    let clone = receipt.clone();
+                    drop(receipt);
+                    assert!(budget.reserve_bytes(1).is_err());
+                    drop(scratch);
+                    let last = budget.reserve_bytes(3).unwrap();
+                    assert!(budget.reserve_bytes(1).is_err());
+                    drop(last);
+                    let meter = crate::engine::MeterHandle::current().unwrap();
+                    assert_eq!(
+                        meter
+                            .meter()
+                            .bytes
+                            .load(std::sync::atomic::Ordering::Relaxed),
+                        8
+                    );
+                    drop(budget);
+                    cx.publish_fact(0, clone)?;
+                    assert_eq!(
+                        meter
+                            .meter()
+                            .bytes
+                            .load(std::sync::atomic::Ordering::Relaxed),
+                        8
+                    );
+                    Ok(())
+                })
+            }
+        }
+        let engine = Engine::new(Receipts);
+        let root = engine.request(Key::new(0, vec![]));
+        let report = engine.run(1).unwrap();
+        assert_eq!(report.failures, 0);
+        assert!(root.result(0).is_ok());
+    }
+
+    #[test]
+    fn retained_receipt_promotion_rejects_poison_without_fabricating_evidence() {
+        let budget = PlanBudget::default();
+        let reservation = budget.reserve_bytes(7).unwrap();
+        let usage = budget.usage.clone();
+        assert!(
+            std::thread::spawn(move || {
+                let _guard = usage.lock().unwrap();
+                panic!("poison test ledger");
+            })
+            .join()
+            .is_err()
+        );
+        assert!(reservation.retain().is_err());
+        let snapshot = budget.usage_snapshot();
+        assert!(snapshot.poisoned);
+        assert_eq!(snapshot.bytes, 7);
+        assert_eq!(snapshot.reservations.retentions, 0);
     }
 
     #[test]
