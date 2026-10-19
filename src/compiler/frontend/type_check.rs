@@ -2068,6 +2068,9 @@ pub(super) fn coerces(got: &ir::Ty, want: &ir::Ty) -> bool {
         _ => false,
     }
 }
+/// Reference layers peeled from a primitive-method receiver.
+const MAX_INTRINSIC_AUTODEREF: usize = 8;
+
 impl<'a> Checker<'a> {
     pub(super) fn names(&self) -> Result<&NameStore, String> {
         let names = &self.signatures.plan()?.program.names;
@@ -5388,11 +5391,16 @@ impl<'a> Checker<'a> {
         if !ir::IntrinsicOp::candidate_name(spelling) {
             return Ok(None);
         }
-        let Some(scalar) = self
-            .scalar_hint(receiver)?
-            .as_ref()
-            .and_then(ir::ScalarTy::of)
-        else {
+        // Method autoderef: `&T`/`&mut T` receivers (to bounded depth) reach
+        // the scalar's by-value inherent method, as in stock resolution.
+        let mut hint = self.scalar_hint(receiver)?;
+        for _ in 0..MAX_INTRINSIC_AUTODEREF {
+            match hint {
+                Some(ir::Ty::Ref { referent, .. }) => hint = Some(referent.as_ref().clone()),
+                _ => break,
+            }
+        }
+        let Some(scalar) = hint.as_ref().and_then(ir::ScalarTy::of) else {
             return Ok(None);
         };
         Ok(ir::Intrinsic::resolve(scalar, spelling))
@@ -5421,7 +5429,22 @@ impl<'a> Checker<'a> {
         // The hint grants no type authority. Check the receiver, then each
         // argument once, in source order against the exact signature.
         let mut checked = Vec::with_capacity(signature.params.len());
-        let value = self.expr(receiver)?;
+        let mut value = self.expr(receiver)?;
+        for _ in 0..MAX_INTRINSIC_AUTODEREF {
+            let ir::Ty::Ref { referent, .. } = &self.exprs[value.0].ty else {
+                break;
+            };
+            let ty = referent.as_ref().clone();
+            let completion = self.exprs[value.0].completion;
+            self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+            let id = ir::ExprId(self.exprs.len());
+            self.exprs.push(ir::TypedExpr {
+                ty,
+                kind: ir::ExprKind::Deref { value },
+                completion,
+            });
+            value = id;
+        }
         if self.exprs[value.0].ty != signature.params[0] {
             return Err("primitive method receiver must be an exactly typed scalar".into());
         }
