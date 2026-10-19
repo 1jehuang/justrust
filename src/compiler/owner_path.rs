@@ -1,24 +1,35 @@
 //! Structural owner identities (PARSE-SPLIT.md, "Increment 1 owner derivation").
 //!
-//! An [`OwnerPath`] names who issued a handle: an engine authority root
-//! followed by `(domain, ordinal)` steps. Every step is issued by an exclusively
-//! borrowed parent [`OwnerIssuer`], so siblings get distinct ordinals and two
-//! distinct issuances never share a path. Paths compare by full structure.
-//! There is no hashing, truncation, pointer identity or global cache.
+//! An [`OwnerPath`] names who issued a handle: the producer's [`OwnerRoot`]
+//! followed by `(domain, ordinal)` steps.
 //!
-//! Not yet activated: the existing process-global counters still issue the
-//! live owner ids. This module and its tests land first so the authority
-//! gates can be pinned before any `static NEXT` is removed.
+//! Distinct issuances never share a path because:
+//! - An `OwnerRoot` is minted once per graph node execution
+//!   (`Context::owner_root` rejects a second mint), or under a fresh engine id
+//!   for standalone work. It is neither `Copy` nor `Clone`.
+//! - [`OwnerIssuer::new`] consumes the root, so one root yields exactly one
+//!   top-level issuer and one ordinal sequence.
+//! - Every child, files included, comes from [`OwnerIssuer::issue`] on an
+//!   exclusively borrowed parent. Each child gets its own issuer, so the only
+//!   way to obtain an issuer at a given path is to be the one issuance that
+//!   created it. There is no positional or repeatable factory.
+//!
+//! Every path step is charged against the caller's [`ExpansionBudget`] before
+//! the step storage is allocated. Retained step storage holds a [`ByteLease`],
+//! so the charge is released when the last clone of the path drops.
+//!
+//! Not yet activated: the process-global counters still issue live owner ids.
 #![allow(dead_code)]
 
-use crate::EngineAuthority;
+use super::expansion_budget::{BudgetFailure, ByteLease, Counter, ExpansionBudget, Storage};
+use crate::{EngineAuthority, OwnerRoot};
 use std::sync::Arc;
 
 /// Closed set of owner domains. A step's domain is part of its identity, so a
 /// session and a module arena at the same position never compare equal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum OwnerDomain {
-    /// One source file unit, keyed by its child ordinal from the crate root.
+    /// One source file unit, issued by its parent in declaration order.
     File,
     SourceSnapshot,
     TokenSession,
@@ -28,63 +39,6 @@ pub enum OwnerDomain {
     LocalMacroDriver,
     TokenSlice,
     PreparedView,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-struct Step {
-    domain: OwnerDomain,
-    ordinal: u64,
-}
-
-/// Maximum path depth. Depth is already bounded by file nesting and expansion
-/// limits; this is the structural backstop, charged before allocation.
-pub const MAX_OWNER_DEPTH: usize = 256;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OwnerError {
-    /// The parent already has `MAX_OWNER_DEPTH` steps.
-    DepthExceeded,
-    /// The parent issued `u64::MAX` children of one domain.
-    OrdinalExhausted,
-}
-
-/// A complete, immutable owner identity. Cloning shares the step storage.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct OwnerPath {
-    root: EngineAuthority,
-    steps: Arc<[Step]>,
-}
-
-impl OwnerPath {
-    pub fn root(&self) -> EngineAuthority {
-        self.root
-    }
-    pub fn depth(&self) -> usize {
-        self.steps.len()
-    }
-    /// Bytes retained by this path's step storage, for paid accounting before
-    /// publication. Shared clones do not add storage.
-    pub fn retained_bytes(&self) -> usize {
-        std::mem::size_of_val::<[Step]>(&self.steps) + 2 * std::mem::size_of::<usize>()
-    }
-    /// Whether `self` was issued (transitively) under `ancestor`.
-    pub fn descends_from(&self, ancestor: &OwnerPath) -> bool {
-        self.root == ancestor.root
-            && self.steps.len() >= ancestor.steps.len()
-            && self.steps[..ancestor.steps.len()] == ancestor.steps[..]
-    }
-    /// The last step's domain, or `None` for an engine root.
-    pub fn domain(&self) -> Option<OwnerDomain> {
-        self.steps.last().map(|step| step.domain)
-    }
-}
-
-/// Issues child owners. Holding `&mut` is the only way to issue, so ordinals
-/// are assigned in one exclusive sequence per parent and domain.
-#[derive(Debug)]
-pub struct OwnerIssuer {
-    path: OwnerPath,
-    next: [u64; DOMAINS],
 }
 
 const DOMAINS: usize = 9;
@@ -103,60 +57,182 @@ fn domain_index(domain: OwnerDomain) -> usize {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct Step {
+    domain: OwnerDomain,
+    ordinal: u64,
+}
+
+/// Maximum path depth, checked before any allocation.
+pub const MAX_OWNER_DEPTH: usize = 256;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OwnerError {
+    DepthExceeded,
+    OrdinalExhausted,
+    Budget(BudgetFailure),
+    Allocation,
+}
+
+impl From<BudgetFailure> for OwnerError {
+    fn from(failure: BudgetFailure) -> Self {
+        Self::Budget(failure)
+    }
+}
+
+/// The producer's identity, shared by every path it issues.
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct RootId {
+    authority: EngineAuthority,
+    producer: Option<(u32, u32, Box<[u64]>)>,
+}
+
+#[derive(Debug)]
+struct Steps {
+    steps: Box<[Step]>,
+    _lease: ByteLease,
+}
+
+/// A complete, immutable owner identity. Clones share root and step storage.
+/// Equality, ordering and hashing compare the full structure.
+#[derive(Clone, Debug)]
+pub struct OwnerPath {
+    root: Arc<RootId>,
+    steps: Arc<Steps>,
+}
+
+impl PartialEq for OwnerPath {
+    fn eq(&self, other: &Self) -> bool {
+        self.root == other.root && self.steps.steps == other.steps.steps
+    }
+}
+impl Eq for OwnerPath {}
+impl std::hash::Hash for OwnerPath {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.root.hash(state);
+        self.steps.steps.hash(state);
+    }
+}
+
+impl OwnerPath {
+    pub fn authority(&self) -> EngineAuthority {
+        self.root.authority
+    }
+    pub fn depth(&self) -> usize {
+        self.steps.steps.len()
+    }
+    /// Whether `self` was issued (transitively) under `ancestor`.
+    pub fn descends_from(&self, ancestor: &OwnerPath) -> bool {
+        let (mine, theirs) = (&self.steps.steps, &ancestor.steps.steps);
+        self.root == ancestor.root
+            && mine.len() >= theirs.len()
+            && mine[..theirs.len()] == theirs[..]
+    }
+    pub fn domain(&self) -> Option<OwnerDomain> {
+        self.steps.steps.last().map(|step| step.domain)
+    }
+}
+
+/// Issues child owners from one exclusively held position in the tree.
+#[derive(Debug)]
+pub struct OwnerIssuer {
+    path: OwnerPath,
+    next: [u64; DOMAINS],
+    budget: ExpansionBudget,
+}
+
+/// Retained bytes for a path of `depth` steps, including fixed `Arc` headers.
+fn path_bytes(depth: usize) -> Result<u64, OwnerError> {
+    let bytes = depth
+        .checked_mul(std::mem::size_of::<Step>())
+        .and_then(|n| {
+            n.checked_add(std::mem::size_of::<Steps>() + 2 * std::mem::size_of::<usize>())
+        })
+        .ok_or(OwnerError::Allocation)?;
+    u64::try_from(bytes).map_err(|_| OwnerError::Allocation)
+}
+
+fn paid_steps(
+    budget: &ExpansionBudget,
+    prefix: &[Step],
+    last: Option<Step>,
+) -> Result<Arc<Steps>, OwnerError> {
+    let depth = prefix.len() + usize::from(last.is_some());
+    if depth > MAX_OWNER_DEPTH {
+        return Err(OwnerError::DepthExceeded);
+    }
+    // Pay for the copy and retained storage before allocating either.
+    budget.charge(Counter::Work, depth as u64 + 1)?;
+    let lease = budget.reserve(Storage::Retained, path_bytes(depth)?)?;
+    let mut steps = Vec::new();
+    steps
+        .try_reserve_exact(depth)
+        .map_err(|_| OwnerError::Allocation)?;
+    steps.extend_from_slice(prefix);
+    steps.extend(last);
+    Ok(Arc::new(Steps {
+        steps: steps.into_boxed_slice(),
+        _lease: lease,
+    }))
+}
+
 impl OwnerIssuer {
-    /// The issuer for an engine root. Roots come only from an
-    /// [`EngineAuthority`], which only the engine mints.
-    pub fn for_engine(root: EngineAuthority) -> Self {
-        Self {
+    /// The top-level issuer for one producer. Consumes the root, which is
+    /// minted once per node (`Context::owner_root`) or once per standalone
+    /// computation (`OwnerRoot::standalone`).
+    pub fn new(root: OwnerRoot, budget: &ExpansionBudget) -> Result<Self, OwnerError> {
+        let producer = root
+            .producer()
+            .map(|(kind, version, params)| (kind, version, params.into()));
+        let params = producer
+            .as_ref()
+            .map_or(0, |(_, _, p): &(u32, u32, Box<[u64]>)| p.len());
+        budget.charge(Counter::Work, params as u64 + 1)?;
+        let root = Arc::new(RootId {
+            authority: root.authority(),
+            producer,
+        });
+        Ok(Self {
             path: OwnerPath {
                 root,
-                steps: Arc::from([]),
+                steps: paid_steps(budget, &[], None)?,
             },
             next: [0; DOMAINS],
-        }
-    }
-
-    /// A fresh standalone root for direct, non-graph parsing. Every call is a
-    /// distinct authority, so repeated direct parses of identical text still
-    /// reject each other's handles.
-    pub fn standalone() -> Self {
-        Self::for_engine(EngineAuthority::standalone())
+            budget: budget.clone(),
+        })
     }
 
     pub fn path(&self) -> &OwnerPath {
         &self.path
     }
 
-    /// Issue the next child of `domain`, returning its own issuer.
+    /// Issue the next child of `domain`. The only way to create a child.
     pub fn issue(&mut self, domain: OwnerDomain) -> Result<OwnerIssuer, OwnerError> {
         let slot = &mut self.next[domain_index(domain)];
         let ordinal = *slot;
-        *slot = ordinal.checked_add(1).ok_or(OwnerError::OrdinalExhausted)?;
-        self.child(domain, ordinal)
-    }
-
-    /// The file at a canonical child-module ordinal. This is the only
-    /// positional step: a file's identity is its place in the module tree,
-    /// which is one graph node per engine. Every issued owner (sessions,
-    /// arenas, drivers, slices, views) must come from [`Self::issue`].
-    pub fn file(&self, ordinal: u64) -> Result<OwnerIssuer, OwnerError> {
-        self.child(OwnerDomain::File, ordinal)
-    }
-
-    fn child(&self, domain: OwnerDomain, ordinal: u64) -> Result<OwnerIssuer, OwnerError> {
-        if self.path.steps.len() >= MAX_OWNER_DEPTH {
-            return Err(OwnerError::DepthExceeded);
-        }
-        let mut steps = Vec::with_capacity(self.path.steps.len() + 1);
-        steps.extend_from_slice(&self.path.steps);
-        steps.push(Step { domain, ordinal });
+        let following = ordinal.checked_add(1).ok_or(OwnerError::OrdinalExhausted)?;
+        let steps = paid_steps(
+            &self.budget,
+            &self.path.steps.steps,
+            Some(Step { domain, ordinal }),
+        )?;
+        // Commit the ordinal only after the child exists, so a failed issue
+        // never skips or reuses a position.
+        *slot = following;
         Ok(OwnerIssuer {
             path: OwnerPath {
-                root: self.path.root,
-                steps: steps.into(),
+                root: self.path.root.clone(),
+                steps,
             },
             next: [0; DOMAINS],
+            budget: self.budget.clone(),
         })
+    }
+
+    /// The path without the issuing capability, for publication. The issuer's
+    /// budget handle is dropped here, so published paths carry no budget.
+    pub fn into_path(self) -> OwnerPath {
+        self.path
     }
 }
 
@@ -164,61 +240,77 @@ impl OwnerIssuer {
 mod tests {
     use super::*;
 
+    fn budget() -> ExpansionBudget {
+        ExpansionBudget::default()
+    }
+
+    fn standalone() -> OwnerIssuer {
+        OwnerIssuer::new(OwnerRoot::standalone().unwrap(), &budget()).unwrap()
+    }
+
     #[test]
     fn siblings_are_distinct_and_domains_are_separated() {
-        let mut root = OwnerIssuer::standalone();
+        let mut root = standalone();
         let a = root.issue(OwnerDomain::TokenSession).unwrap();
         let b = root.issue(OwnerDomain::TokenSession).unwrap();
         let m = root.issue(OwnerDomain::ModuleArena).unwrap();
         assert_ne!(a.path(), b.path());
-        // Same ordinal (0) in a different domain is a different owner.
         assert_ne!(a.path(), m.path());
         assert_eq!(a.path().domain(), Some(OwnerDomain::TokenSession));
     }
 
     #[test]
-    fn standalone_roots_never_collide() {
-        let mut first = OwnerIssuer::standalone();
-        let mut second = OwnerIssuer::standalone();
-        let x = first.issue(OwnerDomain::TokenSession).unwrap();
-        let y = second.issue(OwnerDomain::TokenSession).unwrap();
-        assert_ne!(first.path().root(), second.path().root());
-        assert_ne!(
-            x.path(),
-            y.path(),
-            "identical structure under distinct roots"
-        );
+    fn repeated_standalone_roots_never_collide() {
+        // Adversarial: build the same structure twice from fresh roots.
+        let mut first = standalone();
+        let mut second = standalone();
+        let x = first
+            .issue(OwnerDomain::File)
+            .unwrap()
+            .issue(OwnerDomain::TokenSession)
+            .unwrap();
+        let y = second
+            .issue(OwnerDomain::File)
+            .unwrap()
+            .issue(OwnerDomain::TokenSession)
+            .unwrap();
+        assert_ne!(first.path(), second.path());
+        assert_ne!(x.path(), y.path());
     }
 
     #[test]
-    fn concurrent_standalone_roots_are_distinct() {
-        let roots: Vec<_> = std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..16)
-                .map(|_| scope.spawn(|| OwnerIssuer::standalone().path().root()))
-                .collect();
-            handles.into_iter().map(|h| h.join().unwrap()).collect()
-        });
-        let unique: std::collections::BTreeSet<_> = roots.iter().collect();
-        assert_eq!(unique.len(), roots.len());
-    }
-
-    #[test]
-    fn nested_issue_descends_and_does_not_alias_cousins() {
-        let mut root = OwnerIssuer::standalone();
-        let mut file0 = root.file(0).unwrap();
-        let mut file1 = root.file(1).unwrap();
+    fn files_are_issued_not_positional() {
+        // Two files of one parent are distinct; re-issuing never repeats a file.
+        let mut root = standalone();
+        let mut file0 = root.issue(OwnerDomain::File).unwrap();
+        let mut file1 = root.issue(OwnerDomain::File).unwrap();
         let s0 = file0.issue(OwnerDomain::TokenSession).unwrap();
         let s1 = file1.issue(OwnerDomain::TokenSession).unwrap();
+        assert_ne!(file0.path(), file1.path());
         assert_ne!(s0.path(), s1.path());
         assert!(s0.path().descends_from(file0.path()));
         assert!(!s0.path().descends_from(file1.path()));
         assert!(s0.path().descends_from(root.path()));
-        let _ = root.issue(OwnerDomain::SourceSnapshot).unwrap();
     }
 
     #[test]
-    fn depth_is_bounded() {
-        let mut issuer = OwnerIssuer::standalone();
+    fn concurrent_standalone_roots_are_distinct() {
+        let paths: Vec<_> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..16)
+                .map(|_| scope.spawn(|| standalone().into_path()))
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        for (i, a) in paths.iter().enumerate() {
+            for b in &paths[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+    }
+
+    #[test]
+    fn depth_is_bounded_before_allocation() {
+        let mut issuer = standalone();
         for _ in 0..MAX_OWNER_DEPTH {
             issuer = issuer.issue(OwnerDomain::TokenSlice).unwrap();
         }
@@ -229,19 +321,78 @@ mod tests {
     }
 
     #[test]
-    fn engine_authority_matches_context_and_differs_across_engines() {
-        struct Nop;
-        impl crate::Provider for Nop {
-            fn outputs(&self, _: &crate::Key) -> usize {
+    fn issue_is_paid_before_allocation_and_failure_is_sticky() {
+        use super::super::expansion_budget::ExpansionLimits;
+        // Room for the root path plus exactly one depth-1 child.
+        let small = ExpansionBudget::new(ExpansionLimits {
+            bytes: path_bytes(0).unwrap() + path_bytes(1).unwrap(),
+            ..ExpansionLimits::default()
+        });
+        let mut root = OwnerIssuer::new(OwnerRoot::standalone().unwrap(), &small).unwrap();
+        let before = small.snapshot();
+        let _first = root.issue(OwnerDomain::TokenSession).unwrap();
+        assert!(
+            small.snapshot().retained_bytes > before.retained_bytes,
+            "issue reserved retained bytes"
+        );
+        // The next child does not fit: rejected by admission, not by an
+        // allocation that already happened.
+        assert!(matches!(
+            root.issue(OwnerDomain::TokenSession),
+            Err(OwnerError::Budget(_))
+        ));
+        // Expansion budgets latch the first failure: no later issue succeeds.
+        assert!(root.issue(OwnerDomain::ModuleArena).is_err());
+    }
+
+    #[test]
+    fn engine_roots_are_single_mint_and_distinct_across_engines() {
+        use crate::{Context, Engine, Key, Provider, TaskFuture};
+        use std::sync::Mutex;
+        type Seen = Arc<Mutex<Vec<(EngineAuthority, bool)>>>;
+        struct Mint(Seen);
+        impl Provider for Mint {
+            fn outputs(&self, _: &Key) -> usize {
                 1
             }
-            fn start(&self, cx: crate::Context, _: crate::Key) -> crate::TaskFuture {
-                Box::pin(async move { cx.publish(0, 1) })
+            fn start(&self, cx: Context, _: Key) -> TaskFuture {
+                let seen = self.0.clone();
+                Box::pin(async move {
+                    let first = cx.owner_root().expect("first mint succeeds");
+                    let second = cx.owner_root().is_err();
+                    seen.lock().unwrap().push((first.authority(), second));
+                    cx.publish(0, 1)
+                })
             }
         }
-        let a = crate::Engine::new(Nop);
-        let b = crate::Engine::new(Nop);
-        assert_ne!(a.authority(), b.authority());
-        assert_eq!(a.authority(), a.authority());
+        let seen: Seen = Arc::default();
+        let mut authorities = Vec::new();
+        for _ in 0..2 {
+            let engine = Engine::new(Mint(seen.clone()));
+            authorities.push(engine.authority());
+            let demand = engine.request(Key::new(1, vec![]));
+            engine.run(1).unwrap();
+            demand.completion().unwrap();
+        }
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert!(seen.iter().all(|(_, second_rejected)| *second_rejected));
+        assert_ne!(seen[0].0, seen[1].0);
+        assert_eq!(seen[0].0, authorities[0]);
+    }
+
+    #[test]
+    fn graph_id_allocation_fails_closed_at_exhaustion() {
+        use std::sync::atomic::AtomicU64;
+        let counter = AtomicU64::new(u64::MAX - 1);
+        assert_eq!(
+            crate::engine::allocate_graph_id_for_test(&counter).map(|id| id.get()),
+            Some(u64::MAX - 1)
+        );
+        // Issuing u64::MAX would leave no successor: refuse instead of wrapping.
+        assert!(crate::engine::allocate_graph_id_for_test(&counter).is_none());
+        assert!(crate::engine::allocate_graph_id_for_test(&counter).is_none());
+        let zero = AtomicU64::new(0);
+        assert!(crate::engine::allocate_graph_id_for_test(&zero).is_none());
     }
 }

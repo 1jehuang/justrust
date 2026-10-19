@@ -3,8 +3,9 @@
 //! These pin today's behavior with the process-global counters, so replacing
 //! them with structural owner paths must keep every rejection. Each case runs
 //! repeatedly and concurrently, mirroring workers 1 and 8.
+use justrust_engine::OwnerRoot;
 use justrust_engine::compiler::frontend::{self, Program};
-use justrust_engine::compiler::{ir, owner_path::OwnerIssuer};
+use justrust_engine::compiler::ir;
 use std::sync::Arc;
 
 const SOURCE: &str =
@@ -115,13 +116,13 @@ fn duplicate_occurrence_within_one_program_is_not_a_foreign_owner() {
 fn standalone_owner_roots_are_distinct_across_threads() {
     let roots: Vec<_> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..32)
-            .map(|_| scope.spawn(|| OwnerIssuer::standalone().path().clone()))
+            .map(|_| scope.spawn(|| OwnerRoot::standalone().unwrap()))
             .collect();
         handles.into_iter().map(|h| h.join().unwrap()).collect()
     });
     for (i, a) in roots.iter().enumerate() {
         for b in &roots[i + 1..] {
-            assert_ne!(a, b);
+            assert_ne!(a.authority(), b.authority());
         }
     }
 }
