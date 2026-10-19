@@ -36,6 +36,8 @@ mod name_scope;
 mod name_validation;
 mod pattern_usefulness;
 mod program_symbols;
+mod source_schemas;
+use source_schemas::{SourceSchemas, SourceSchemasBuilder, StoredSchema};
 mod token_cursor;
 use char_literal::{parse_byte_literal, parse_char_literal};
 mod trait_selection;
@@ -14671,12 +14673,7 @@ struct SourceTypeContext {
 #[derive(Debug)]
 struct PlanState {
     source_context: Option<SourceTypeContext>,
-    associated_type_rows: Vec<tr::AssociatedTypeValue>,
-    associated_type_rhs: HashMap<(ir::DeclId, ir::DeclId), ir::Ty>,
     schemas: HashMap<ir::DeclId, Arc<NominalSchema>>,
-    functions: HashMap<ir::DeclId, tr::GenericSchema>,
-    region_modes: HashMap<ir::DeclId, tr::RegionContractMode>,
-    source_regions: HashMap<ir::DeclId, Arc<ir::SourceRegionEnv>>,
     nominals: NominalInterner,
     contexts: HashMap<ir::DeclId, CallableContext>,
     reservations: Vec<ir::PlanReservation>,
@@ -14689,6 +14686,7 @@ pub struct PlanCtx {
     validated: Arc<HashMap<ir::DeclId, ir::GenericSignature>>,
     registry: Arc<DeclRegistry>,
     state: Arc<Mutex<PlanState>>,
+    source_schemas: Arc<SourceSchemas>,
     /// Immutable whole-program signature and nominal lookup maps, built once
     /// when the trait world is published and shared by every body check.
     /// Previously each body copied every signature, which made checking
@@ -15064,23 +15062,14 @@ impl PlanCtx {
                 .ok_or("registry inventory overflow")?,
             budget,
         )?;
+        let mut source_schemas = SourceSchemasBuilder::default();
         let mut state = PlanState {
             source_context: None,
-            associated_type_rows: Vec::new(),
-            associated_type_rhs: HashMap::new(),
             schemas: HashMap::new(),
-            region_modes: HashMap::new(),
-            source_regions: HashMap::new(),
-            functions: HashMap::new(),
             nominals: NominalInterner::default(),
             contexts: HashMap::new(),
             reservations: Vec::new(),
         };
-        let assignment_count = program.impls.iter().try_fold(0usize, |n, block| {
-            n.checked_add(block.associated_types.len())
-                .ok_or("associated assignment inventory overflow")
-        })?;
-        reserve_registry_map(&mut state.associated_type_rhs, assignment_count, budget)?;
         for entry in catalog_builder.base_declarations() {
             let info = &entry.info;
             budget.charge_work(1)?;
@@ -15092,11 +15081,18 @@ impl PlanCtx {
                 .declarations
                 .push(catalog_decl_info(entry, budget)?);
             if let Some(schema) = &entry.schema {
-                state.functions.insert(entry.declaration, schema.clone());
+                source_schemas.functions.insert(
+                    source_schemas::decl_slot(entry.declaration, &registry, budget)?,
+                    StoredSchema::copy(schema, budget)?,
+                    budget,
+                )?;
             }
-            state
-                .region_modes
-                .insert(entry.declaration, info.region_contract_mode);
+            source_schemas.set_region_mode(
+                entry.declaration,
+                info.region_contract_mode,
+                &registry,
+                budget,
+            )?;
             if info.kind == ir::DeclKind::Trait {
                 let canonical = match entry.origin {
                     tr::DeclOrigin::CoreCatalog {
@@ -15822,20 +15818,7 @@ impl PlanCtx {
                 let associated =
                     registry.associated_type_item(trait_decl, assignment.name, budget)?;
                 budget.retain_bytes(std::mem::size_of::<tr::AssociatedTypeValue>() + 256)?;
-                state
-                    .associated_type_rows
-                    .try_reserve_exact(1)
-                    .map_err(|_| "associated assignment allocation failed")?;
-                state.associated_type_rows.push(tr::AssociatedTypeValue {
-                    implementation: impl_id,
-                    associated,
-                    rhs: rhs.clone(),
-                });
-                // Keep every source row. A duplicate must never overwrite the raw callback authority.
-                state
-                    .associated_type_rhs
-                    .entry((impl_id, associated))
-                    .or_insert(rhs);
+                source_schemas.assignment(impl_id, associated, rhs, budget)?;
             }
             state.source_context = None;
             let ids = registry.associated_ids[implementation].clone();
@@ -15938,12 +15921,20 @@ impl PlanCtx {
                     return Err("duplicate parameter".into());
                 }
             }
-            let mut params = f
+            // Additional exact conservative admission, not a refund or carveout
+            // from the existing broad declaration reservation.
+            let capacity = f
                 .params
-                .iter()
-                .map(|(_, ty)| state.source_ty(&registry, ty, &bindings, caller, budget, 0, true))
-                .collect::<Result<Vec<_>, _>>()?;
+                .len()
+                .checked_add(usize::from(context.receiver != ReceiverKind::None))
+                .ok_or("signature params overflow")?;
+            let (mut params, params_storage) = StoredSchema::params(capacity, budget)?;
+            budget.charge_work(f.params.len())?;
+            for (_, ty) in &f.params {
+                params.push(state.source_ty(&registry, ty, &bindings, caller, budget, 0, true)?);
+            }
             if context.receiver != ReceiverKind::None {
+                budget.charge_work(params.len() + 1)?;
                 params.insert(
                     0,
                     receiver_ty(
@@ -15973,7 +15964,7 @@ impl PlanCtx {
                 budget,
             )?;
             state.retain(budget, 128)?;
-            state.region_modes.insert(id, region_mode);
+            source_schemas.set_region_mode(id, region_mode, &registry, budget)?;
             let signature = ir::Signature {
                 ref_contract: canonical_ref_contract(
                     (program.names.as_ref(), budget),
@@ -15987,8 +15978,8 @@ impl PlanCtx {
                 params,
                 result,
             };
-            state.source_regions.insert(
-                id,
+            source_schemas.source_regions.insert(
+                source_schemas::decl_slot(id, &registry, budget)?,
                 original_source_regions(
                     (program.names.as_ref(), budget),
                     id,
@@ -15998,7 +15989,8 @@ impl PlanCtx {
                     &signature.ref_contract,
                     context.receiver,
                 )?,
-            );
+                budget,
+            )?;
             let mut rows = Vec::new();
             append_implicit_sized(&registry, &info.env, &mut rows, budget)?;
             if let CallableSource::Associated { implementation, .. } =
@@ -16076,14 +16068,18 @@ impl PlanCtx {
                     args: args.into(),
                 }));
             }
-            state.functions.insert(
-                id,
-                tr::GenericSchema {
-                    env: info.env.clone(),
-                    signature,
-                    predicates: rows.into(),
+            source_schemas.functions.insert(
+                source_schemas::decl_slot(id, &registry, budget)?,
+                StoredSchema {
+                    value: tr::GenericSchema {
+                        env: info.env.clone(),
+                        signature,
+                        predicates: rows.into(),
+                    },
+                    params_storage,
                 },
-            );
+                budget,
+            )?;
         }
         for (ti, t) in program.traits.iter().enumerate() {
             let tid = registry.trait_ids[ti];
@@ -16106,14 +16102,19 @@ impl PlanCtx {
                         .and_then(|n| n.checked_mul(128))
                         .ok_or("trait signature allocation overflow")?,
                 )?;
-                let mut params = h
+                let capacity = h
                     .params
-                    .iter()
-                    .map(|(_, ty)| {
-                        state.source_ty(&registry, ty, &bindings, caller, budget, 0, true)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .len()
+                    .checked_add(usize::from(item.receiver != ReceiverKind::None))
+                    .ok_or("signature params overflow")?;
+                let (mut params, params_storage) = StoredSchema::params(capacity, budget)?;
+                budget.charge_work(h.params.len())?;
+                for (_, ty) in &h.params {
+                    params
+                        .push(state.source_ty(&registry, ty, &bindings, caller, budget, 0, true)?);
+                }
                 if item.receiver != ReceiverKind::None {
+                    budget.charge_work(params.len() + 1)?;
                     params.insert(0, receiver_ty(item.receiver, ir::Ty::Param(self_param)));
                 }
                 let result =
@@ -16128,8 +16129,8 @@ impl PlanCtx {
                     &params,
                     &result,
                 )?;
-                state.source_regions.insert(
-                    id,
+                source_schemas.source_regions.insert(
+                    source_schemas::decl_slot(id, &registry, budget)?,
                     original_source_regions(
                         (program.names.as_ref(), budget),
                         id,
@@ -16139,7 +16140,8 @@ impl PlanCtx {
                         &ref_contract,
                         item.receiver,
                     )?,
-                );
+                    budget,
+                )?;
                 let mut rows = Vec::new();
                 append_implicit_sized(&registry, &info.env, &mut rows, budget)?;
                 append_source_bounds(
@@ -16156,18 +16158,22 @@ impl PlanCtx {
                     self_ty: ir::Ty::Param(self_param),
                     args: args.into(),
                 }));
-                state.functions.insert(
-                    id,
-                    tr::GenericSchema {
-                        env: info.env.clone(),
-                        signature: ir::Signature {
-                            ref_contract,
-                            params,
-                            result,
+                source_schemas.functions.insert(
+                    source_schemas::decl_slot(id, &registry, budget)?,
+                    StoredSchema {
+                        value: tr::GenericSchema {
+                            env: info.env.clone(),
+                            signature: ir::Signature {
+                                ref_contract,
+                                params,
+                                result,
+                            },
+                            predicates: rows.into(),
                         },
-                        predicates: rows.into(),
+                        params_storage,
                     },
-                );
+                    budget,
+                )?;
             }
         }
         state.source_context = None;
@@ -16211,11 +16217,18 @@ impl PlanCtx {
                 .declarations
                 .push(catalog_decl_info(entry, budget)?);
             if let Some(schema) = &entry.schema {
-                state.functions.insert(entry.declaration, schema.clone());
+                source_schemas.functions.insert(
+                    source_schemas::decl_slot(entry.declaration, registry_mut, budget)?,
+                    StoredSchema::copy(schema, budget)?,
+                    budget,
+                )?;
             }
-            state
-                .region_modes
-                .insert(entry.declaration, entry.info.region_contract_mode);
+            source_schemas.set_region_mode(
+                entry.declaration,
+                entry.info.region_contract_mode,
+                registry_mut,
+                budget,
+            )?;
             if matches!(
                 entry.callable_provider,
                 Some(CallableProvider::Recipe { .. })
@@ -16234,6 +16247,8 @@ impl PlanCtx {
         }
         registry_mut.function_positions = positions;
         registry_mut.function_positions_sealed = true;
+        // Consume construction authority once before graph-facing adapters.
+        let source_schemas = source_schemas.seal_from_registry(&registry, budget)?;
         let mut plan = Self {
             program: shared.clone(),
             catalog,
@@ -16241,6 +16256,7 @@ impl PlanCtx {
             validated: Arc::new(HashMap::new()),
             registry,
             state: Arc::new(Mutex::new(state)),
+            source_schemas,
             shared_env: None,
             closed_roots: Arc::from([]),
             budget: budget.clone(),
@@ -16477,12 +16493,8 @@ impl PlanCtx {
                 predicates: predicates.into(),
                 items: pairs.into(),
                 associated_types: {
-                    let state = self
-                        .state
-                        .lock()
-                        .map_err(|_| "generic plan context poisoned")?;
                     let mut rows = Vec::new();
-                    for row in &state.associated_type_rows {
+                    for row in self.source_schemas.assignment_rows(budget)? {
                         budget.charge_work(1)?;
                         if row.implementation == declaration {
                             budget.retain_bytes(std::mem::size_of::<tr::AssociatedTypeValue>())?;
@@ -16515,6 +16527,7 @@ impl PlanCtx {
             catalog: self.catalog.clone(),
             registry: self.registry.clone(),
             state: self.state.clone(),
+            source_schemas: self.source_schemas.clone(),
             budget: budget.clone(),
         });
         let world = tr::ValidatedTraitWorld::build(headers, adapter, budget)
@@ -16794,48 +16807,13 @@ impl PlanCtx {
         Ok(schema.clone())
     }
     fn raw_schema(&self, id: ir::DeclId) -> Result<tr::GenericSchema, String> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| "generic plan context poisoned")?;
-        let schema = state
-            .functions
-            .get(&id)
-            .ok_or("unknown function declaration")?;
-        self.budget.charge_work(schema.signature.params.len() + 1)?;
-        self.budget.retain_bytes(
-            schema
-                .signature
-                .params
-                .len()
-                .checked_mul(4 * std::mem::size_of::<ir::Ty>() + 64)
-                .ok_or("signature allocation overflow")?,
-        )?;
-        Ok(schema.clone())
+        self.declaration(id)?;
+        self.source_schemas.schema(id, &self.budget)
     }
     pub fn source_region_env(&self, id: ir::DeclId) -> Result<Arc<ir::SourceRegionEnv>, String> {
-        self.budget.charge_work(1)?;
         self.declaration(id)?;
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| "source region registry poisoned")?;
-        if let Some(env) = state.source_regions.get(&id) {
-            return Ok(env.clone());
-        }
-        if state.functions.contains_key(&id) && self.catalog.declaration(id).is_none() {
-            return Err("source callable has no original lifetime environment".into());
-        }
-        // Catalog recipes and noncallable declaration headers declare no source
-        // lifetime names. Their fixed contracts remain separately authoritative.
-        self.budget
-            .retain_bytes(std::mem::size_of::<ir::SourceRegionEnv>() + 64)?;
-        Ok(Arc::new(ir::SourceRegionEnv {
-            declaration: id,
-            region_count: 0,
-            outlives: Arc::from([]),
-            normalized: Arc::from([]),
-        }))
+        self.source_schemas
+            .region_env(id, self.catalog.declaration(id).is_some(), &self.budget)
     }
     pub fn nominal_schema(
         &self,
@@ -17056,10 +17034,7 @@ impl PlanCtx {
         let mut environment_bytes = 0usize;
         for info in &self.registry.declarations {
             self.budget.charge_work(1)?;
-            let params = state
-                .functions
-                .get(&info.id)
-                .map_or(0, |s| s.signature.params.len());
+            let params = self.source_schemas.signature_arity(info.id, &self.budget)?;
             let bytes = info
                 .name
                 .len()
@@ -17564,6 +17539,7 @@ struct SchemaAdapter {
     catalog: Arc<tr::CoreCatalog>,
     registry: Arc<DeclRegistry>,
     state: Arc<Mutex<PlanState>>,
+    source_schemas: Arc<SourceSchemas>,
     budget: ir::PlanBudget,
 }
 impl SchemaAdapter {
@@ -17574,6 +17550,7 @@ impl SchemaAdapter {
             catalog: self.catalog.clone(),
             registry: self.registry.clone(),
             state: self.state.clone(),
+            source_schemas: self.source_schemas.clone(),
             budget: self.budget.clone(),
             world: None,
             validated: Arc::new(HashMap::new()),
@@ -17596,6 +17573,15 @@ impl tr::SchemaCx for SchemaAdapter {
         self.registry.declarations[0].id.snapshot
     }
     fn declaration_info(&self, id: ir::DeclId) -> Result<tr::SchemaDecl, tr::FactsError> {
+        if let Some(info) = self
+            .source_schemas
+            .declaration_info(id, &self.budget)
+            .map_err(|e| self.error(e))?
+        {
+            return Ok(info);
+        }
+        // Nonfunction source declarations retain the authoritative registry
+        // path and their original fixed Positioned contract.
         self.budget.charge_work(1).map_err(|e| self.error(e))?;
         let d = self.registry.declaration(id).map_err(|e| self.error(e))?;
         clone_visibility(&d.visibility, &self.budget).map_err(|e| self.error(e))?;
@@ -17609,20 +17595,13 @@ impl tr::SchemaCx for SchemaAdapter {
             module: d.path.module,
             visibility: d.visibility.clone(),
             receiver,
-            region_contract_mode: self
-                .state
-                .lock()
-                .map_err(|_| self.error("schema state lock poisoned".into()))?
-                .region_modes
-                .get(&id)
-                .copied()
-                .unwrap_or(tr::RegionContractMode::Positioned),
+            region_contract_mode: tr::RegionContractMode::Positioned,
         })
     }
     fn declaration_schema(&self, id: ir::DeclId) -> Result<tr::GenericSchema, tr::FactsError> {
         self.registry.declaration(id).map_err(|e| self.error(e))?;
-        self.raw_plan()
-            .and_then(|plan| plan.raw_schema(id))
+        self.source_schemas
+            .schema(id, &self.budget)
             .map_err(|e| self.error(e))
     }
     fn associated_type_rhs(
@@ -17661,13 +17640,9 @@ impl tr::SchemaCx for SchemaAdapter {
         if associated_info.owner != Some(trait_decl) {
             return Err(self.error("associated assignment pair owner mismatch".into()));
         }
-        self.state
-            .lock()
-            .map_err(|_| self.error("schema state lock poisoned".into()))?
-            .associated_type_rhs
-            .get(&(implementation, associated))
-            .cloned()
-            .ok_or_else(|| self.error("missing authoritative associated assignment".into()))
+        self.source_schemas
+            .associated_rhs(implementation, associated, &self.budget)
+            .map_err(|e| self.error(e))
     }
     fn associated_type_bounds(
         &self,
@@ -17701,8 +17676,9 @@ impl tr::SchemaCx for SchemaAdapter {
         &self,
         id: ir::DeclId,
     ) -> Result<Arc<ir::SourceRegionEnv>, tr::FactsError> {
-        self.raw_plan()
-            .and_then(|plan| plan.source_region_env(id))
+        self.registry.declaration(id).map_err(|e| self.error(e))?;
+        self.source_schemas
+            .region_env(id, self.catalog.declaration(id).is_some(), &self.budget)
             .map_err(|e| self.error(e))
     }
     fn instantiate_schema(
@@ -18833,6 +18809,7 @@ mod associated_registry_tests {
             catalog: plan.catalog.clone(),
             registry: plan.registry.clone(),
             state: plan.state.clone(),
+            source_schemas: plan.source_schemas.clone(),
             budget: plan.budget.clone(),
         };
         let implementation = plan.registry.impl_ids[0];
@@ -18849,7 +18826,13 @@ mod associated_registry_tests {
                 .associated_type_rhs(foreign.registry.impl_ids[0], a)
                 .is_err()
         );
-        assert_eq!(plan.state.lock().unwrap().associated_type_rows.len(), 2);
+        assert_eq!(
+            plan.source_schemas
+                .assignment_rows(&plan.budget)
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -18862,6 +18845,7 @@ mod associated_registry_tests {
             catalog: plan.catalog.clone(),
             registry: plan.registry.clone(),
             state: plan.state.clone(),
+            source_schemas: plan.source_schemas.clone(),
             budget: plan.budget.clone(),
         };
         let raw = adapter

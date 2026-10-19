@@ -692,6 +692,12 @@ real crates and multi-crate applications, not just adapted source snippets.
 
 ### G9. Integrated graph, persistence, security and operations
 
+Bounded private source metadata extraction is documented in SOURCE-SCHEMAS.md:
+five final tables move once into an immutable paid owner, with exact parameter
+storage and authoritative compact callable projections. The unchanged graph
+floor and strict lint pass on af5c06a69. This is partial progress only: mutable
+PlanCtx/interner/source-context debt and wide adapter activation remain held.
+
 - [ ] Split measured coarse source/resolve/signature work into independently
       publishable facts with complete declaration-discovery prerequisites and
       supported recursive convergence protocols, not hidden phase barriers.

@@ -178,6 +178,7 @@ fn nested_shared_source_authority_and_closed_boundaries_remain_distinct() {
         catalog: plan.catalog.clone(),
         registry: plan.registry.clone(),
         state: plan.state.clone(),
+        source_schemas: plan.source_schemas.clone(),
         budget: budget.clone(),
     };
     for (index, mode) in [
