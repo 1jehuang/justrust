@@ -320,6 +320,38 @@ site is in `frontend.rs`. The sites in `backend.rs`, `cfg.rs`, `ir.rs`,
 
 No accounting exclusions, no widened debt.
 
+#### Frozen store reachability: exact binding design
+
+Gate: `published_stores_reach_no_builder_owner_types` (scratch 45c54b60c,
+currently ignored) must pass un-ignored for `NameStore`, `ParsedProgram`,
+`Program` and `OwnerPath`.
+
+Types:
+
+- `TokenSession`: has no owner field, enum, path or mint. It keeps only its
+  8-byte `SessionId` (from the issued tag).
+- `SessionOwnerCap`: not `Clone` or `Copy`, no public constructor. It holds
+  `{ session: SessionId, path: BuilderOwnedPath }`. Only
+  `TokenSession::with_owner(snapshot, budget, Issued)` and
+  `TokenSession::standalone` create it, and they return
+  `(TokenSession, SessionOwnerCap)` bound to that session's id.
+- `NameStoreBuilder::new(session, cap, edition)` checks
+  `cap.session == session.id()` and rejects a foreign or swapped cap with
+  `TokenError::ForeignHandle`, even when budgets and snapshots are equal. The
+  builder keeps `cap.path`. `TokenSession` itself never holds it.
+- `NameStoreBuilder::freeze(self)` consumes the builder path into
+  `NameStore { owner: OwnerPath }`. The published store holds only the
+  immutable `OwnerPath` receipt.
+- Session-only fixtures (token-level tests that never build a store) drop the
+  cap, which refunds its lease. Without a cap they cannot construct a
+  `NameStoreBuilder`, so they cannot publish a store and duplicate same-owner
+  stores cannot reappear.
+
+Tests: the un-ignored type gate; swapped pairs (two sessions, crossed caps)
+rejected; a cap reused for a second store doesn't compile (compile_fail);
+exhausted or poisoned callers mint nothing; and the existing replay and
+accounting regressions.
+
 ## Coordination
 - Kind ids reserved by cricket: 121 `PARSE_FILE`, 122 `MODULE_INDEX`,
   123 `RESOLVE_IMPORT`, 124 `RESOLVE_ITEM`. 114 stays retired. 116/117 are
