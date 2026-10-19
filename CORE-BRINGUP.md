@@ -73,6 +73,46 @@ the whole convert module. Keep those claims separate.
    and unwind paths. Abort hello/args/IO and thread/mutex/file clients are scoped
    milestones, not full std or full Rust.
 
+## Discovery run 2026-10-19: per-file first blockers
+
+Executed, not static: every one of the 292 `.rs` files under
+`library/core/src` (stable checkout `~/justrust` 940ffe92e) was given to
+`jr-rust <file> --check --workers 1` as its own root. A single file is not the
+core crate, so this measures which language/attribute features block parsing
+and resolution first, nothing more. Zero files pass. Raw per-file results and
+class counts are in `experiments/results/core-discovery-20261019/`.
+
+**Layer 1, unchanged sources** (`raw-classes.txt`). Attributes block 270 of
+292 files before any other feature is reached: `stable` 90, `unstable` 60,
+`derive` 26, attributes on fields/params/associated items/statements 24,
+`must_use` 14, other attachment positions 11, `lang` 10, `allow` 10, then
+`repr`, `rustc_*`, `expect`, `cold`, `no_std`, `macro_use`.
+
+**Layer 2, a scratch copy with every attribute and doc comment removed**
+(`stripped-classes.txt`, not unchanged-source evidence; removing `cfg` and
+`lang` changes semantics). The next first blockers, in order of count:
+
+| Count | Blocker | Gate |
+|---|---|---|
+| 66 | `?` operator | G2/G4 (Try desugaring) |
+| 32 + 8 + 2 | const items, const fn/associated fns, const expressions | G5 const eval |
+| 13 | missing module files (cfg-selected `#[path]`/platform modules) | G1 cfg/path |
+| 12 + 10 | `pub(in path)` / `pub(crate)` visibility from a non-root file | G1 (file is not the crate root; expected) |
+| 12 | lifetime parameters on structs/impls | G3 |
+| 12 + 11 + 7 | item syntax not yet parsed (`unsafe impl`, `extern`, `auto trait`, ...), generic `>` | G1 |
+| 10 + 10 + 7 + 4 | macro_rules fragments (`$`, `@`, unsupported fragment kinds, empty repetitions) | G5 |
+| 10 + 9 | string continuation escapes, raw/byte/C string literals | G2 |
+| 6 + 6 | glob imports, const generics | G1, G5 |
+| 4 + 3 + 2 | bounds on nominal declarations, associated type projections, generic defaults | G4 |
+
+Priority this suggests for core: attribute admission (inert stability/lint/
+diagnostic attributes plus attachment positions) first, since it is cheap and
+gates 92% of files, then `?`, const evaluation, lifetime parameters on
+nominals, macro_rules fragments and string literal forms. Rerun this probe
+after each slice. It is the measurable core-progress signal until a real
+crate-root build of `core/src/lib.rs` gets past preparation. Today that crate
+root stops at `lib.rs:46:4`, the first `#[stable]`.
+
 ## Ownership and acceptance
 
 Freeze contracts before shared-file edits. Source/frontend owns attributes,

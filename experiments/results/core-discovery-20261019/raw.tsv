@@ -1,0 +1,292 @@
+./alloc/global.rs	jr-rust: ./alloc/global.rs: ./alloc/global.rs:188:3: unsupported: active attribute `stable` is unsupported
+./alloc/layout.rs	jr-rust: ./alloc/layout.rs: ./alloc/layout.rs:27:3: unsupported: active attribute `stable` is unsupported
+./alloc/mod.rs	jr-rust: ./alloc/mod.rs: ./alloc/mod.rs:3:4: unsupported: active attribute `stable` is unsupported
+./any.rs	jr-rust: ./any.rs: ./any.rs:87:4: unsupported: active attribute `stable` is unsupported
+./arch.rs	jr-rust: ./arch.rs: ./arch.rs:1:4: unsupported: nonliteral attribute RHS grammar is unsupported
+./array/ascii.rs	jr-rust: ./array/ascii.rs: ./array/ascii.rs:4:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./array/drain.rs	jr-rust: ./array/drain.rs: ./array/drain.rs:6:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./array/equality.rs	jr-rust: ./array/equality.rs: ./array/equality.rs:3:3: unsupported: active attribute `stable` is unsupported
+./array/iter/iter_inner.rs	jr-rust: ./array/iter/iter_inner.rs: ./array/iter/iter_inner.rs:9:3: unsupported: active attribute `allow` is unsupported
+./array/iter.rs	jr-rust: ./array/iter.rs: ./array/iter.rs:16:3: unsupported: active attribute `stable` is unsupported
+./array/mod.rs	jr-rust: ./array/mod.rs: ./array/mod.rs:5:4: unsupported: active attribute `stable` is unsupported
+./ascii/ascii_char.rs	jr-rust: ./ascii/ascii_char.rs: ./ascii/ascii_char.rs:57:3: unsupported: active attribute `derive` is unsupported
+./ascii.rs	jr-rust: ./ascii.rs: ./ascii.rs:10:4: unsupported: active attribute `stable` is unsupported
+./asserting.rs	jr-rust: ./asserting.rs: ./asserting.rs:8:4: unsupported: active attribute `allow` is unsupported
+./async_iter/async_iter.rs	jr-rust: ./async_iter/async_iter.rs: ./async_iter/async_iter.rs:13:3: unsupported: active attribute `unstable` is unsupported
+./async_iter/from_iter.rs	jr-rust: ./async_iter/from_iter.rs: ./async_iter/from_iter.rs:11:3: unsupported: active attribute `unstable` is unsupported
+./async_iter/mod.rs	jr-rust: ./async_iter/mod.rs: ./async_iter/async_iter.rs:13:3: unsupported: active attribute `unstable` is unsupported
+./attribute_docs.rs	jr-rust: ./attribute_docs.rs: ./attribute_docs.rs:1:3: unsupported: only doc string and doc(hidden) metadata are supported
+./bool.rs	jr-rust: ./bool.rs: ./bool.rs:6:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./borrow.rs	jr-rust: ./borrow.rs: ./borrow.rs:3:4: unsupported: active attribute `stable` is unsupported
+./bstr/mod.rs	jr-rust: ./bstr/mod.rs: ./bstr/mod.rs:5:3: unsupported: active attribute `unstable` is unsupported
+./bstr/traits.rs	jr-rust: ./bstr/traits.rs: ./bstr/traits.rs:8:3: unsupported: active attribute `unstable` is unsupported
+./cell/covariant_unsafe_cell.rs	jr-rust: ./cell/covariant_unsafe_cell.rs: ./cell/covariant_unsafe_cell.rs:7:3: unsupported: active attribute `unstable` is unsupported
+./cell/lazy.rs	jr-rust: ./cell/lazy.rs: ./cell/lazy.rs:53:3: unsupported: active attribute `stable` is unsupported
+./cell/once.rs	jr-rust: ./cell/once.rs: ./cell/once.rs:34:3: unsupported: active attribute `stable` is unsupported
+./cell.rs	jr-rust: ./cell.rs: ./cell.rs:250:4: unsupported: active attribute `stable` is unsupported
+./char/convert.rs	jr-rust: ./char/convert.rs: ./char/convert.rs:11:3: unsupported: active attribute `must_use` is unsupported
+./char/decode.rs	jr-rust: ./char/decode.rs: ./char/decode.rs:13:3: unsupported: active attribute `stable` is unsupported
+./char/methods.rs	jr-rust: ./char/methods.rs: ./char/methods.rs:3:4: unsupported: active attribute `expect` is unsupported
+./char/mod.rs	jr-rust: ./char/mod.rs: ./char/mod.rs:20:4: unsupported: active attribute `allow` is unsupported
+./clone.rs	jr-rust: ./clone.rs: ./clone.rs:37:4: unsupported: active attribute `stable` is unsupported
+./clone/uninit.rs	jr-rust: ./clone/uninit.rs: ./clone/uninit.rs:13:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./cmp/bytewise.rs	jr-rust: ./cmp/bytewise.rs: ./cmp/bytewise.rs:19:3: unsupported: active attribute `rustc_specialization_trait` is unsupported
+./cmp/clamp.rs	jr-rust: ./cmp/clamp.rs: ./cmp/clamp.rs:5:3: unsupported: active attribute `unstable` is unsupported
+./cmp.rs	jr-rust: ./cmp.rs: ./cmp.rs:26:4: unsupported: active attribute `stable` is unsupported
+./contracts.rs	jr-rust: ./contracts.rs: ./contracts.rs:13:3: unsupported: active attribute `unstable` is unsupported
+./convert/mod.rs	jr-rust: ./convert/mod.rs: ./convert/mod.rs:35:4: unsupported: active attribute `stable` is unsupported
+./convert/num.rs	jr-rust: ./convert/num.rs: ./convert/num.rs:5:3: unsupported: active attribute `unstable` is unsupported
+./default.rs	jr-rust: ./default.rs: ./default.rs:3:4: unsupported: active attribute `stable` is unsupported
+./error.rs	jr-rust: ./error.rs: ./error.rs:1:4: unsupported: nonliteral attribute RHS grammar is unsupported
+./escape.rs	jr-rust: ./escape.rs: ./escape.rs:64:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./ffi/c_str.rs	jr-rust: ./ffi/c_str.rs: ./ffi/c_str.rs:92:3: unsupported: active attribute `derive` is unsupported
+./ffi/mod.rs	jr-rust: ./ffi/mod.rs: ./ffi/mod.rs:9:4: unsupported: active attribute `stable` is unsupported
+./ffi/primitives.rs	jr-rust: ./ffi/primitives.rs: ./ffi/primitives.rs:21:64: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./ffi/va_list.rs	jr-rust: ./ffi/va_list.rs: ./ffi/va_list.rs:44:9: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./field.rs	jr-rust: ./field.rs: ./field.rs:8:3: unsupported: active attribute `unstable` is unsupported
+./fmt/builders.rs	jr-rust: ./fmt/builders.rs: ./fmt/builders.rs:1:4: unsupported: active attribute `allow` is unsupported
+./fmt/float.rs	jr-rust: ./fmt/float.rs: ./fmt/float.rs:7:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./fmt/mod.rs	jr-rust: ./fmt/mod.rs: ./fmt/mod.rs:3:4: unsupported: active attribute `stable` is unsupported
+./fmt/nofloat.rs	jr-rust: ./fmt/nofloat.rs: ./fmt/nofloat.rs:9:25: unsupported: expanded receiver self is unsupported
+./fmt/num_buffer.rs	jr-rust: ./fmt/num_buffer.rs: ./fmt/num_buffer.rs:4:3: unsupported: active attribute `unstable` is unsupported
+./fmt/num.rs	jr-rust: ./fmt/num.rs: ./fmt/num.rs:8:1: unsupported: attributes at this attachment position are unsupported
+./fmt/rt.rs	jr-rust: ./fmt/rt.rs: ./fmt/rt.rs:1:4: unsupported: active attribute `allow` is unsupported
+./future/async_drop.rs	jr-rust: ./future/async_drop.rs: ./future/async_drop.rs:1:4: unsupported: active attribute `unstable` is unsupported
+./future/future.rs	jr-rust: ./future/future.rs: ./future/future.rs:1:4: unsupported: active attribute `stable` is unsupported
+./future/into_future.rs	jr-rust: ./future/into_future.rs: ./future/into_future.rs:101:3: unsupported: active attribute `stable` is unsupported
+./future/join.rs	jr-rust: ./future/join.rs: ./future/join.rs:1:4: unsupported: active attribute `allow` is unsupported
+./future/mod.rs	jr-rust: ./future/mod.rs: ./future/mod.rs:1:4: unsupported: active attribute `stable` is unsupported
+./future/pending.rs	jr-rust: ./future/pending.rs: ./future/pending.rs:12:3: unsupported: active attribute `stable` is unsupported
+./future/poll_fn.rs	jr-rust: ./future/poll_fn.rs: ./future/poll_fn.rs:114:3: unsupported: active attribute `stable` is unsupported
+./future/ready.rs	jr-rust: ./future/ready.rs: ./future/ready.rs:9:3: unsupported: active attribute `stable` is unsupported
+./hash/mod.rs	jr-rust: ./hash/mod.rs: ./hash/mod.rs:84:4: unsupported: active attribute `stable` is unsupported
+./hash/sip.rs	jr-rust: ./hash/sip.rs: ./hash/sip.rs:3:4: unsupported: active attribute `allow` is unsupported
+./hint.rs	jr-rust: ./hint.rs: ./hint.rs:1:4: unsupported: active attribute `stable` is unsupported
+./index.rs	jr-rust: ./index.rs: ./index.rs:1:4: unsupported: active attribute `unstable` is unsupported
+./internal_macros.rs	jr-rust: ./internal_macros.rs: ./internal_macros.rs:71:1: unsupported: attributes at this attachment position are unsupported
+./intrinsics/bounds.rs	jr-rust: ./intrinsics/bounds.rs: ./intrinsics/bounds.rs:59:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./intrinsics/fallback.rs	jr-rust: ./intrinsics/fallback.rs: ./intrinsics/fallback.rs:1:4: unsupported: active attribute `unstable` is unsupported
+./intrinsics/gpu.rs	jr-rust: ./intrinsics/gpu.rs: ./intrinsics/gpu.rs:6:4: unsupported: active attribute `unstable` is unsupported
+./intrinsics/macros.rs	jr-rust: ./intrinsics/macros.rs: ./intrinsics/macros.rs:3:1: unsupported: attributes at this attachment position are unsupported
+./intrinsics/mir.rs	jr-rust: ./intrinsics/mir.rs: ./intrinsics/mir.rs:289:4: unsupported: active attribute `unstable` is unsupported
+./intrinsics/mod.rs	jr-rust: ./intrinsics/mod.rs: ./intrinsics/mod.rs:73:4: unsupported: active attribute `unstable` is unsupported
+./intrinsics/reflection.rs	jr-rust: ./intrinsics/reflection.rs: ./intrinsics/reflection.rs:18:3: unsupported: active attribute `rustc_nounwind` is unsupported
+./intrinsics/simd/mod.rs	jr-rust: ./intrinsics/simd/mod.rs: ./intrinsics/simd/mod.rs:16:3: unsupported: active attribute `rustc_intrinsic` is unsupported
+./intrinsics/simd/scalable.rs	jr-rust: ./intrinsics/simd/scalable.rs: ./intrinsics/simd/scalable.rs:12:3: unsupported: active attribute `rustc_nounwind` is unsupported
+./io/borrowed_buf.rs	jr-rust: ./io/borrowed_buf.rs: ./io/borrowed_buf.rs:1:4: unsupported: active attribute `unstable` is unsupported
+./io/cursor.rs	jr-rust: ./io/cursor.rs: ./io/cursor.rs:73:3: unsupported: active attribute `stable` is unsupported
+./io/error/os_functions_atomic.rs	jr-rust: ./io/error/os_functions_atomic.rs: ./io/error/os_functions_atomic.rs:35:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./io/error/os_functions.rs	jr-rust: ./io/error/os_functions.rs: ./io/error/os_functions.rs:9:10: visibility path escapes crate root, found ")"
+./io/error/repr_bitpacked.rs	jr-rust: ./io/error/repr_bitpacked.rs: ./io/error/repr_bitpacked.rs:127:3: unsupported: active attribute `repr` is unsupported
+./io/error/repr_unpacked.rs	jr-rust: ./io/error/repr_unpacked.rs: ./io/error/repr_unpacked.rs:12:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./io/error.rs	jr-rust: ./io/error.rs: ./io/error.rs:1:4: unsupported: active attribute `unstable` is unsupported
+./io/impls.rs	jr-rust: ./io/impls.rs: ./io/impls.rs:8:3: unsupported: active attribute `unstable` is unsupported
+./io/io_slice/repr_generic.rs	jr-rust: ./io/io_slice/repr_generic.rs: ./io/io_slice/repr_generic.rs:3:3: unsupported: active attribute `derive` is unsupported
+./io/io_slice/repr_iovec.rs	jr-rust: ./io/io_slice/repr_iovec.rs: ./io/io_slice/repr_iovec.rs:5:3: unsupported: active attribute `derive` is unsupported
+./io/io_slice/repr_uefi.rs	jr-rust: ./io/io_slice/repr_uefi.rs: ./io/io_slice/repr_uefi.rs:7:3: unsupported: active attribute `derive` is unsupported
+./io/io_slice/repr_windows.rs	jr-rust: ./io/io_slice/repr_windows.rs: ./io/io_slice/repr_windows.rs:4:3: unsupported: active attribute `repr` is unsupported
+./io/io_slice.rs	jr-rust: ./io/io_slice.rs: ./io/io_slice.rs:13:9: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./io/mod.rs	jr-rust: ./io/mod.rs: ./io/mod.rs:8:3: unsupported: active attribute `unstable` is unsupported
+./io/prelude.rs	jr-rust: ./io/prelude.rs: ./io/prelude.rs:12:3: unsupported: active attribute `stable` is unsupported
+./io/seek.rs	jr-rust: ./io/seek.rs: ./io/seek.rs:27:3: unsupported: active attribute `stable` is unsupported
+./io/size_hint.rs	jr-rust: ./io/size_hint.rs: ./io/size_hint.rs:12:3: unsupported: active attribute `unstable` is unsupported
+./io/util.rs	jr-rust: ./io/util.rs: ./io/util.rs:12:3: unsupported: active attribute `stable` is unsupported
+./io/write.rs	jr-rust: ./io/write.rs: ./io/write.rs:49:3: unsupported: active attribute `stable` is unsupported
+./iter/adapters/array_chunks.rs	jr-rust: ./iter/adapters/array_chunks.rs: ./iter/adapters/array_chunks.rs:14:3: unsupported: active attribute `derive` is unsupported
+./iter/adapters/by_ref_sized.rs	jr-rust: ./iter/adapters/by_ref_sized.rs: ./iter/adapters/by_ref_sized.rs:8:3: unsupported: active attribute `unstable` is unsupported
+./iter/adapters/chain.rs	jr-rust: ./iter/adapters/chain.rs: ./iter/adapters/chain.rs:20:3: unsupported: active attribute `derive` is unsupported
+./iter/adapters/cloned.rs	jr-rust: ./iter/adapters/cloned.rs: ./iter/adapters/cloned.rs:15:3: unsupported: active attribute `stable` is unsupported
+./iter/adapters/copied.rs	jr-rust: ./iter/adapters/copied.rs: ./iter/adapters/copied.rs:16:3: unsupported: active attribute `stable` is unsupported
+./iter/adapters/cycle.rs	jr-rust: ./iter/adapters/cycle.rs: ./iter/adapters/cycle.rs:12:3: unsupported: active attribute `derive` is unsupported
+./iter/adapters/enumerate.rs	jr-rust: ./iter/adapters/enumerate.rs: ./iter/adapters/enumerate.rs:14:3: unsupported: active attribute `derive` is unsupported
+./iter/adapters/filter_map.rs	jr-rust: ./iter/adapters/filter_map.rs: ./iter/adapters/filter_map.rs:15:3: unsupported: active attribute `must_use` is unsupported
+./iter/adapters/filter.rs	jr-rust: ./iter/adapters/filter.rs: ./iter/adapters/filter.rs:18:3: unsupported: active attribute `must_use` is unsupported
+./iter/adapters/flatten.rs	jr-rust: ./iter/adapters/flatten.rs: ./iter/adapters/flatten.rs:15:3: unsupported: active attribute `must_use` is unsupported
+./iter/adapters/fuse.rs	jr-rust: ./iter/adapters/fuse.rs: ./iter/adapters/fuse.rs:15:3: unsupported: active attribute `derive` is unsupported
+./iter/adapters/inspect.rs	jr-rust: ./iter/adapters/inspect.rs: ./iter/adapters/inspect.rs:15:3: unsupported: active attribute `must_use` is unsupported
+./iter/adapters/intersperse.rs	jr-rust: ./iter/adapters/intersperse.rs: ./iter/adapters/intersperse.rs:7:3: unsupported: active attribute `unstable` is unsupported
+./iter/adapters/map.rs	jr-rust: ./iter/adapters/map.rs: ./iter/adapters/map.rs:58:3: unsupported: active attribute `must_use` is unsupported
+./iter/adapters/map_while.rs	jr-rust: ./iter/adapters/map_while.rs: ./iter/adapters/map_while.rs:14:3: unsupported: active attribute `must_use` is unsupported
+./iter/adapters/map_windows.rs	jr-rust: ./iter/adapters/map_windows.rs: ./iter/adapters/map_windows.rs:9:3: unsupported: active attribute `must_use` is unsupported
+./iter/adapters/mod.rs	jr-rust: ./iter/adapters/mod.rs: ./iter/adapters/mod.rs:31:3: unsupported: active attribute `unstable` is unsupported
+./iter/adapters/peekable.rs	jr-rust: ./iter/adapters/peekable.rs: ./iter/adapters/peekable.rs:13:3: unsupported: active attribute `derive` is unsupported
+./iter/adapters/rev.rs	jr-rust: ./iter/adapters/rev.rs: ./iter/adapters/rev.rs:12:3: unsupported: active attribute `derive` is unsupported
+./iter/adapters/scan.rs	jr-rust: ./iter/adapters/scan.rs: ./iter/adapters/scan.rs:14:3: unsupported: active attribute `must_use` is unsupported
+./iter/adapters/skip.rs	jr-rust: ./iter/adapters/skip.rs: ./iter/adapters/skip.rs:18:3: unsupported: active attribute `derive` is unsupported
+./iter/adapters/skip_while.rs	jr-rust: ./iter/adapters/skip_while.rs: ./iter/adapters/skip_while.rs:14:3: unsupported: active attribute `must_use` is unsupported
+./iter/adapters/step_by.rs	jr-rust: ./iter/adapters/step_by.rs: ./iter/adapters/step_by.rs:14:3: unsupported: active attribute `must_use` is unsupported
+./iter/adapters/take.rs	jr-rust: ./iter/adapters/take.rs: ./iter/adapters/take.rs:14:3: unsupported: active attribute `derive` is unsupported
+./iter/adapters/take_while.rs	jr-rust: ./iter/adapters/take_while.rs: ./iter/adapters/take_while.rs:14:3: unsupported: active attribute `must_use` is unsupported
+./iter/adapters/zip.rs	jr-rust: ./iter/adapters/zip.rs: ./iter/adapters/zip.rs:10:3: unsupported: active attribute `derive` is unsupported
+./iter/mod.rs	jr-rust: ./iter/mod.rs: ./iter/mod.rs:356:4: unsupported: active attribute `stable` is unsupported
+./iter/range.rs	jr-rust: ./iter/range.rs: ./iter/range.rs:25:3: unsupported: active attribute `rustc_diagnostic_item` is unsupported
+./iter/sources/empty.rs	jr-rust: ./iter/sources/empty.rs: ./iter/sources/empty.rs:18:3: unsupported: active attribute `stable` is unsupported
+./iter/sources/from_coroutine.rs	jr-rust: ./iter/sources/from_coroutine.rs: ./iter/sources/from_coroutine.rs:26:3: unsupported: active attribute `unstable` is unsupported
+./iter/sources/from_fn.rs	jr-rust: ./iter/sources/from_fn.rs: ./iter/sources/from_fn.rs:44:3: unsupported: active attribute `stable` is unsupported
+./iter/sources/generator.rs	jr-rust: ./iter/sources/generator.rs: ./iter/sources/generator.rs:1:1: unsupported: attributes at this attachment position are unsupported
+./iter/sources/once.rs	jr-rust: ./iter/sources/once.rs: ./iter/sources/once.rs:55:3: unsupported: active attribute `stable` is unsupported
+./iter/sources/once_with.rs	jr-rust: ./iter/sources/once_with.rs: ./iter/sources/once_with.rs:60:3: unsupported: active attribute `stable` is unsupported
+./iter/sources/repeat_n.rs	jr-rust: ./iter/sources/repeat_n.rs: ./iter/sources/repeat_n.rs:58:3: unsupported: active attribute `stable` is unsupported
+./iter/sources/repeat.rs	jr-rust: ./iter/sources/repeat.rs: ./iter/sources/repeat.rs:62:3: unsupported: active attribute `stable` is unsupported
+./iter/sources/repeat_with.rs	jr-rust: ./iter/sources/repeat_with.rs: ./iter/sources/repeat_with.rs:64:3: unsupported: active attribute `stable` is unsupported
+./iter/sources.rs	jr-rust: ./iter/sources.rs: ./iter/sources.rs:12:3: unsupported: active attribute `stable` is unsupported
+./iter/sources/successors.rs	jr-rust: ./iter/sources/successors.rs: ./iter/sources/successors.rs:21:3: unsupported: active attribute `stable` is unsupported
+./iter/traits/accum.rs	jr-rust: ./iter/traits/accum.rs: ./iter/traits/accum.rs:12:3: unsupported: active attribute `stable` is unsupported
+./iter/traits/collect.rs	jr-rust: ./iter/traits/collect.rs: ./iter/traits/collect.rs:97:3: unsupported: active attribute `stable` is unsupported
+./iter/traits/double_ended.rs	jr-rust: ./iter/traits/double_ended.rs: ./iter/traits/double_ended.rs:41:3: unsupported: active attribute `stable` is unsupported
+./iter/traits/exact_size.rs	jr-rust: ./iter/traits/exact_size.rs: ./iter/traits/exact_size.rs:85:3: unsupported: active attribute `stable` is unsupported
+./iter/traits/iterator.rs	jr-rust: ./iter/traits/iterator.rs: ./iter/traits/iterator.rs:24:3: unsupported: active attribute `stable` is unsupported
+./iter/traits/marker.rs	jr-rust: ./iter/traits/marker.rs: ./iter/traits/marker.rs:10:3: unsupported: active attribute `unstable` is unsupported
+./iter/traits/mod.rs	jr-rust: ./iter/traits/mod.rs: ./iter/traits/mod.rs:8:3: unsupported: active attribute `unstable` is unsupported
+./keyword_docs.rs	jr-rust: ./keyword_docs.rs: ./keyword_docs.rs:1:3: unsupported: only doc string and doc(hidden) metadata are supported
+./lib.miri.rs	jr-rust: ./lib.miri.rs: ./lib.miri.rs:2:4: unsupported: active attribute `no_std` is unsupported
+./lib.rs	jr-rust: ./lib.rs: ./lib.rs:46:4: unsupported: active attribute `stable` is unsupported
+./macros/mod.rs	jr-rust: ./macros/mod.rs: ./macros/mod.rs:1:3: unsupported: nonliteral attribute RHS grammar is unsupported
+./marker.rs	jr-rust: ./marker.rs: ./marker.rs:7:4: unsupported: active attribute `stable` is unsupported
+./marker/variance.rs	jr-rust: ./marker/variance.rs: ./marker/variance.rs:1:4: unsupported: active attribute `unstable` is unsupported
+./mem/alignment.rs	jr-rust: ./mem/alignment.rs: ./mem/alignment.rs:1:4: unsupported: active attribute `allow` is unsupported
+./mem/drop_guard.rs	jr-rust: ./mem/drop_guard.rs: ./mem/drop_guard.rs:30:3: unsupported: active attribute `stable` is unsupported
+./mem/manually_drop.rs	jr-rust: ./mem/manually_drop.rs: ./mem/manually_drop.rs:151:3: unsupported: active attribute `stable` is unsupported
+./mem/maybe_dangling.rs	jr-rust: ./mem/maybe_dangling.rs: ./mem/maybe_dangling.rs:1:4: unsupported: active attribute `unstable` is unsupported
+./mem/maybe_uninit.rs	jr-rust: ./mem/maybe_uninit.rs: ./mem/maybe_uninit.rs:349:3: unsupported: active attribute `stable` is unsupported
+./mem/mod.rs	jr-rust: ./mem/mod.rs: ./mem/mod.rs:31:4: unsupported: active attribute `stable` is unsupported
+./mem/transmutability.rs	jr-rust: ./mem/transmutability.rs: ./mem/transmutability.rs:85:3: unsupported: active attribute `unstable` is unsupported
+./mem/type_info.rs	jr-rust: ./mem/type_info.rs: ./mem/type_info.rs:10:3: unsupported: active attribute `derive` is unsupported
+./net/display_buffer.rs	jr-rust: ./net/display_buffer.rs: ./net/display_buffer.rs:11:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./net/ip_addr.rs	jr-rust: ./net/ip_addr.rs: ./net/ip_addr.rs:27:3: unsupported: active attribute `rustc_diagnostic_item` is unsupported
+./net/mod.rs	jr-rust: ./net/mod.rs: ./net/mod.rs:12:4: unsupported: active attribute `stable` is unsupported
+./net/parser.rs	jr-rust: ./net/parser.rs: ./net/parser.rs:43:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./net/socket_addr.rs	jr-rust: ./net/socket_addr.rs: ./net/socket_addr.rs:31:3: unsupported: active attribute `derive` is unsupported
+./num/bfloat.rs	jr-rust: ./num/bfloat.rs: ./num/bfloat.rs:3:4: unsupported: active attribute `unstable` is unsupported
+./num/complex.rs	jr-rust: ./num/complex.rs: ./num/complex.rs:5:3: unsupported: active attribute `derive` is unsupported
+./num/error.rs	jr-rust: ./num/error.rs: ./num/error.rs:7:3: unsupported: active attribute `stable` is unsupported
+./num/f128.rs	jr-rust: ./num/f128.rs: ./num/f128.rs:12:4: unsupported: active attribute `unstable` is unsupported
+./num/f16.rs	jr-rust: ./num/f16.rs: ./num/f16.rs:12:4: unsupported: active attribute `unstable` is unsupported
+./num/f32.rs	jr-rust: ./num/f32.rs: ./num/f32.rs:12:4: unsupported: active attribute `stable` is unsupported
+./num/f64.rs	jr-rust: ./num/f64.rs: ./num/f64.rs:12:4: unsupported: active attribute `stable` is unsupported
+./num/float_parse.rs	jr-rust: ./num/float_parse.rs: ./num/float_parse.rs:84:3: unsupported: active attribute `expect` is unsupported
+./num/imp/bignum.rs	jr-rust: ./num/imp/bignum.rs: ./num/imp/bignum.rs:15:4: unsupported: active attribute `unstable` is unsupported
+./num/imp/dec2flt/common.rs	jr-rust: ./num/imp/dec2flt/common.rs: ./num/imp/dec2flt/common.rs:5:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./num/imp/dec2flt/decimal.rs	jr-rust: ./num/imp/dec2flt/decimal.rs: ./num/imp/dec2flt/decimal.rs:28:3: unsupported: active attribute `derive` is unsupported
+./num/imp/dec2flt/decimal_seq.rs	jr-rust: ./num/imp/dec2flt/decimal_seq.rs: ./num/imp/dec2flt/decimal_seq.rs:17:3: unsupported: active attribute `derive` is unsupported
+./num/imp/dec2flt/fpu.rs	jr-rust: ./num/imp/dec2flt/fpu.rs: ./num/imp/dec2flt/fpu.rs:4:10: visibility path escapes crate root, found ")"
+./num/imp/dec2flt/lemire.rs	jr-rust: ./num/imp/dec2flt/lemire.rs: unresolved or cyclic import crate::BiasedFp
+./num/imp/dec2flt/mod.rs	jr-rust: ./num/imp/dec2flt/mod.rs: ./num/imp/dec2flt/mod.rs:84:4: unsupported: active attribute `unstable` is unsupported
+./num/imp/dec2flt/parse.rs	jr-rust: ./num/imp/dec2flt/parse.rs: ./num/imp/dec2flt/parse.rs:141:50: unsupported: unsupported token "?"
+./num/imp/dec2flt/slow.rs	jr-rust: ./num/imp/dec2flt/slow.rs: ./num/imp/dec2flt/slow.rs:28:5: unsupported: const expressions and constant evaluation are unsupported, found "const"
+./num/imp/dec2flt/table.rs	jr-rust: ./num/imp/dec2flt/table.rs: ./num/imp/dec2flt/table.rs:18:3: unknown unregistered attribute `rustfmt`
+./num/imp/diy_float.rs	jr-rust: ./num/imp/diy_float.rs: ./num/imp/diy_float.rs:6:4: unsupported: active attribute `unstable` is unsupported
+./num/imp/flt2dec/decoder.rs	jr-rust: ./num/imp/flt2dec/decoder.rs: ./num/imp/flt2dec/decoder.rs:13:3: unsupported: active attribute `derive` is unsupported
+./num/imp/flt2dec/estimator.rs	jr-rust: ./num/imp/flt2dec/estimator.rs: main must exist, take no arguments and return ()
+./num/imp/flt2dec/mod.rs	jr-rust: ./num/imp/flt2dec/mod.rs: ./num/imp/flt2dec/mod.rs:119:4: unsupported: active attribute `unstable` is unsupported
+./num/imp/flt2dec/strategy/dragon.rs	jr-rust: ./num/imp/flt2dec/strategy/dragon.rs: ./num/imp/flt2dec/strategy/dragon.rs:20:1: unsupported: inactive item: item syntax is unsupported, found "static"
+./num/imp/flt2dec/strategy/grisu.rs	jr-rust: ./num/imp/flt2dec/strategy/grisu.rs: ./num/imp/flt2dec/strategy/grisu.rs:16:5: unsupported: const items and constant evaluation are unsupported, found "const"
+./num/imp/fmt.rs	jr-rust: ./num/imp/fmt.rs: ./num/imp/fmt.rs:3:4: unsupported: active attribute `unstable` is unsupported
+./num/imp/int_bits.rs	jr-rust: ./num/imp/int_bits.rs: ./num/imp/int_bits.rs:67:26: visibility path must name a lexical ancestor module, found ")"
+./num/imp/int_log10.rs	jr-rust: ./num/imp/int_log10.rs: ./num/imp/int_log10.rs:121:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./num/imp/int_sqrt.rs	jr-rust: ./num/imp/int_sqrt.rs: ./num/imp/int_sqrt.rs:37:3: unsupported: active attribute `must_use` is unsupported
+./num/imp/libm.rs	jr-rust: ./num/imp/libm.rs: ./num/imp/libm.rs:9:3: unsupported: active attribute `allow` is unsupported
+./num/imp/mod.rs	jr-rust: ./num/imp/mod.rs: ./num/imp/bignum.rs:15:4: unsupported: active attribute `unstable` is unsupported
+./num/imp/overflow_panic.rs	jr-rust: ./num/imp/overflow_panic.rs: ./num/imp/overflow_panic.rs:5:3: unsupported: active attribute `cold` is unsupported
+./num/imp/traits.rs	jr-rust: ./num/imp/traits.rs: ./num/imp/traits.rs:4:4: unsupported: active attribute `unstable` is unsupported
+./num/int_macros.rs	jr-rust: ./num/int_macros.rs: ./num/int_macros.rs:27:9: unsupported: documentation comments in macro-bearing input require token-tree doc lowering
+./num/mod.rs	jr-rust: ./num/mod.rs: ./num/mod.rs:3:4: unsupported: active attribute `stable` is unsupported
+./num/niche_types.rs	jr-rust: ./num/niche_types.rs: ./num/niche_types.rs:1:4: unsupported: active attribute `unstable` is unsupported
+./num/nonzero.rs	jr-rust: ./num/nonzero.rs: ./num/nonzero.rs:29:3: unsupported: active attribute `unstable` is unsupported
+./num/saturating.rs	jr-rust: ./num/saturating.rs: ./num/saturating.rs:38:3: unsupported: active attribute `stable` is unsupported
+./num/shells/legacy_int_modules.rs	jr-rust: ./num/shells/legacy_int_modules.rs: ./num/shells/legacy_int_modules.rs:60:28: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./num/traits.rs	jr-rust: ./num/traits.rs: ./num/traits.rs:5:3: unsupported: active attribute `unstable` is unsupported
+./num/uint_macros.rs	jr-rust: ./num/uint_macros.rs: ./num/uint_macros.rs:32:9: unsupported: documentation comments in macro-bearing input require token-tree doc lowering
+./num/wrapping.rs	jr-rust: ./num/wrapping.rs: ./num/wrapping.rs:39:3: unsupported: active attribute `stable` is unsupported
+./offload/mod.rs	jr-rust: ./offload/mod.rs: ./offload/mod.rs:2:3: unsupported: active attribute `unstable` is unsupported
+./ops/arith.rs	jr-rust: ./ops/arith.rs: ./ops/arith.rs:66:3: unsupported: active attribute `lang` is unsupported
+./ops/async_function.rs	jr-rust: ./ops/async_function.rs: ./ops/async_function.rs:7:3: unsupported: active attribute `stable` is unsupported
+./ops/bit.rs	jr-rust: ./ops/bit.rs: ./ops/bit.rs:31:3: unsupported: active attribute `lang` is unsupported
+./ops/control_flow.rs	jr-rust: ./ops/control_flow.rs: ./ops/control_flow.rs:82:3: unsupported: active attribute `stable` is unsupported
+./ops/coroutine.rs	jr-rust: ./ops/coroutine.rs: ./ops/coroutine.rs:8:3: unsupported: active attribute `derive` is unsupported
+./ops/deref.rs	jr-rust: ./ops/deref.rs: ./ops/deref.rs:133:3: unsupported: active attribute `lang` is unsupported
+./ops/drop.rs	jr-rust: ./ops/drop.rs: ./ops/drop.rs:206:3: unsupported: active attribute `lang` is unsupported
+./ops/function.rs	jr-rust: ./ops/function.rs: ./ops/function.rs:56:3: unsupported: active attribute `lang` is unsupported
+./ops/index_range.rs	jr-rust: ./ops/index_range.rs: ./ops/index_range.rs:12:3: unsupported: active attribute `derive` is unsupported
+./ops/index.rs	jr-rust: ./ops/index.rs: ./ops/index.rs:49:3: unsupported: active attribute `lang` is unsupported
+./ops/mod.rs	jr-rust: ./ops/mod.rs: ./ops/mod.rs:139:4: unsupported: active attribute `stable` is unsupported
+./ops/range.rs	jr-rust: ./ops/range.rs: ./ops/range.rs:39:3: unsupported: active attribute `lang` is unsupported
+./ops/try_trait.rs	jr-rust: ./ops/try_trait.rs: ./ops/try_trait.rs:116:3: unsupported: active attribute `unstable` is unsupported
+./ops/unsize.rs	jr-rust: ./ops/unsize.rs: ./ops/unsize.rs:34:3: unsupported: active attribute `unstable` is unsupported
+./option.rs	jr-rust: ./option.rs: ./option.rs:579:4: unsupported: active attribute `stable` is unsupported
+./os/darwin/mod.rs	jr-rust: ./os/darwin/mod.rs: ./os/darwin/mod.rs:16:4: unsupported: active attribute `unstable` is unsupported
+./os/darwin/objc.rs	jr-rust: ./os/darwin/objc.rs: ./os/darwin/objc.rs:3:4: unsupported: active attribute `unstable` is unsupported
+./os/mod.rs	jr-rust: ./os/mod.rs: ./os/mod.rs:3:4: unsupported: active attribute `unstable` is unsupported
+./panicking.rs	jr-rust: ./panicking.rs: ./panicking.rs:24:4: unsupported: active attribute `allow` is unsupported
+./panic/location.rs	jr-rust: ./panic/location.rs: ./panic/location.rs:36:3: unsupported: active attribute `lang` is unsupported
+./panic/panic_info.rs	jr-rust: ./panic/panic_info.rs: ./panic/panic_info.rs:11:3: unsupported: active attribute `lang` is unsupported
+./panic.rs	jr-rust: ./panic.rs: ./panic.rs:3:4: unsupported: active attribute `stable` is unsupported
+./panic/unwind_safe.rs	jr-rust: ./panic/unwind_safe.rs: ./panic/unwind_safe.rs:11:1: unsupported: attributes at this attachment position are unsupported
+./pat.rs	jr-rust: ./pat.rs: ./pat.rs:6:1: unsupported: attributes at this attachment position are unsupported
+./pin.rs	jr-rust: ./pin.rs: ./pin.rs:919:4: unsupported: active attribute `stable` is unsupported
+./pin/unsafe_pinned.rs	jr-rust: ./pin/unsafe_pinned.rs: ./pin/unsafe_pinned.rs:24:3: unsupported: active attribute `lang` is unsupported
+./prelude/mod.rs	jr-rust: ./prelude/mod.rs: ./prelude/mod.rs:10:4: unsupported: active attribute `stable` is unsupported
+./prelude/v1.rs	jr-rust: ./prelude/v1.rs: ./prelude/v1.rs:5:4: unsupported: active attribute `stable` is unsupported
+./primitive_docs.rs	jr-rust: ./primitive_docs.rs: ./primitive_docs.rs:1:3: unsupported: active attribute `rustc_doc_primitive` is unsupported
+./primitive.rs	jr-rust: ./primitive.rs: ./primitive.rs:40:3: unsupported: active attribute `stable` is unsupported
+./process.rs	jr-rust: ./process.rs: ./process.rs:37:3: unsupported: active attribute `unstable` is unsupported
+./profiling.rs	jr-rust: ./profiling.rs: ./profiling.rs:11:3: unsupported: active attribute `unstable` is unsupported
+./ptr/const_ptr.rs	jr-rust: ./ptr/const_ptr.rs: ./ptr/const_ptr.rs:8:7: unsupported: nonliteral attribute RHS grammar is unsupported
+./ptr/metadata.rs	jr-rust: ./ptr/metadata.rs: ./ptr/metadata.rs:1:4: unsupported: active attribute `unstable` is unsupported
+./ptr/mod.rs	jr-rust: ./ptr/mod.rs: ./ptr/mod.rs:425:4: unsupported: active attribute `stable` is unsupported
+./ptr/mut_ptr.rs	jr-rust: ./ptr/mut_ptr.rs: ./ptr/mut_ptr.rs:9:7: unsupported: nonliteral attribute RHS grammar is unsupported
+./ptr/non_null.rs	jr-rust: ./ptr/non_null.rs: ./ptr/non_null.rs:75:3: unsupported: active attribute `stable` is unsupported
+./ptr/unique.rs	jr-rust: ./ptr/unique.rs: ./ptr/unique.rs:27:3: unsupported: active attribute `unstable` is unsupported
+./random.rs	jr-rust: ./random.rs: ./random.rs:6:3: unsupported: active attribute `unstable` is unsupported
+./range/iter.rs	jr-rust: ./range/iter.rs: ./range/iter.rs:9:3: unsupported: active attribute `stable` is unsupported
+./range/legacy.rs	jr-rust: ./range/legacy.rs: ./range/legacy.rs:9:3: unsupported: only doc string and doc(hidden) metadata are supported
+./range.rs	jr-rust: ./range.rs: ./range.rs:23:3: unsupported: active attribute `stable` is unsupported
+./result.rs	jr-rust: ./result.rs: ./result.rs:542:4: unsupported: active attribute `stable` is unsupported
+./slice/ascii.rs	jr-rust: ./slice/ascii.rs: ./slice/ascii.rs:9:3: unsupported: active attribute `unstable` is unsupported
+./slice/cmp.rs	jr-rust: ./slice/cmp.rs: ./slice/cmp.rs:12:3: unsupported: active attribute `stable` is unsupported
+./slice/index.rs	jr-rust: ./slice/index.rs: ./slice/index.rs:9:3: unsupported: active attribute `stable` is unsupported
+./slice/iter/macros.rs	jr-rust: ./slice/iter/macros.rs: ./slice/iter/macros.rs:3:1: unsupported: attributes at this attachment position are unsupported
+./slice/iter.rs	jr-rust: ./slice/iter.rs: ./slice/iter.rs:3:3: unsupported: active attribute `macro_use` is unsupported
+./slice/memchr.rs	jr-rust: ./slice/memchr.rs: ./slice/memchr.rs:24:3: unsupported: active attribute `must_use` is unsupported
+./slice/mod.rs	jr-rust: ./slice/mod.rs: ./slice/mod.rs:7:4: unsupported: active attribute `stable` is unsupported
+./slice/raw.rs	jr-rust: ./slice/raw.rs: ./slice/raw.rs:118:3: inline requires a function owner
+./slice/rotate.rs	jr-rust: ./slice/rotate.rs: ./slice/rotate.rs:13:3: inline requires a function owner
+./slice/sort/mod.rs	jr-rust: ./slice/sort/mod.rs: ./slice/sort/stable/mod.rs:142:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./slice/sort/select.rs	jr-rust: ./slice/sort/select.rs: ./slice/sort/select.rs:23:13: expected "{", found "("
+./slice/sort/shared/mod.rs	jr-rust: ./slice/sort/shared/mod.rs: ./slice/sort/shared/mod.rs:10:3: unsupported: active attribute `unsafe` is unsupported
+./slice/sort/shared/pivot.rs	jr-rust: ./slice/sort/shared/pivot.rs: ./slice/sort/shared/pivot.rs:6:1: unsupported: const items and constant evaluation are unsupported, found "const"
+./slice/sort/shared/smallsort.rs	jr-rust: ./slice/sort/shared/smallsort.rs: ./slice/sort/shared/smallsort.rs:19:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./slice/sort/stable/drift.rs	jr-rust: ./slice/sort/stable/drift.rs: ./slice/sort/stable/drift.rs:275:3: unsupported: active attribute `derive` is unsupported
+./slice/sort/stable/merge.rs	jr-rust: ./slice/sort/stable/merge.rs: ./slice/sort/stable/merge.rs:73:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./slice/sort/stable/mod.rs	jr-rust: ./slice/sort/stable/mod.rs: ./slice/sort/stable/mod.rs:142:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./slice/sort/stable/quicksort.rs	jr-rust: ./slice/sort/stable/quicksort.rs: ./slice/sort/stable/quicksort.rs:197:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./slice/sort/stable/tiny.rs	jr-rust: ./slice/sort/stable/tiny.rs: ./slice/sort/stable/tiny.rs:10:29: expected generic closing >, found "("
+./slice/sort/unstable/heapsort.rs	jr-rust: ./slice/sort/unstable/heapsort.rs: ./slice/sort/unstable/heapsort.rs:12:13: expected "{", found "("
+./slice/sort/unstable/mod.rs	jr-rust: ./slice/sort/unstable/mod.rs: ./slice/sort/unstable/quicksort.rs:337:50: inactive item: expected generic closing >, found "("
+./slice/sort/unstable/quicksort.rs	jr-rust: ./slice/sort/unstable/quicksort.rs: ./slice/sort/unstable/quicksort.rs:337:50: inactive item: expected generic closing >, found "("
+./slice/specialize.rs	jr-rust: ./slice/specialize.rs: ./slice/specialize.rs:51:13: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./str/converts.rs	jr-rust: ./str/converts.rs: ./str/converts.rs:86:3: unsupported: active attribute `stable` is unsupported
+./str/count.rs	jr-rust: ./str/count.rs: ./str/count.rs:23:1: unsupported: const items and constant evaluation are unsupported, found "const"
+./str/error.rs	jr-rust: ./str/error.rs: ./str/error.rs:45:3: unsupported: active attribute `derive` is unsupported
+./str/iter.rs	jr-rust: ./str/iter.rs: ./str/iter.rs:27:3: unsupported: active attribute `derive` is unsupported
+./str/lossy.rs	jr-rust: ./str/lossy.rs: ./str/lossy.rs:9:5: unsupported: attributes on fields, parameters, associated items, statements, or expressions are unsupported
+./str/mod.rs	jr-rust: ./str/mod.rs: ./str/mod.rs:7:4: unsupported: active attribute `stable` is unsupported
+./str/pattern.rs	jr-rust: ./str/pattern.rs: ./str/pattern.rs:35:4: unsupported: active attribute `unstable` is unsupported
+./str/traits.rs	jr-rust: ./str/traits.rs: ./str/traits.rs:17:3: unsupported: active attribute `stable` is unsupported
+./str/validations.rs	jr-rust: ./str/validations.rs: ./str/validations.rs:33:3: unsupported: active attribute `unstable` is unsupported
+./sync/atomic.rs	jr-rust: ./sync/atomic.rs: ./sync/atomic.rs:237:4: unsupported: active attribute `stable` is unsupported
+./sync/mod.rs	jr-rust: ./sync/mod.rs: ./sync/mod.rs:3:4: unsupported: active attribute `stable` is unsupported
+./sync/sync_view.rs	jr-rust: ./sync/sync_view.rs: ./sync/sync_view.rs:92:3: unsupported: active attribute `stable` is unsupported
+./task/mod.rs	jr-rust: ./task/mod.rs: ./task/mod.rs:1:4: unsupported: active attribute `stable` is unsupported
+./task/poll.rs	jr-rust: ./task/poll.rs: ./task/poll.rs:1:4: unsupported: active attribute `stable` is unsupported
+./task/ready.rs	jr-rust: ./task/ready.rs: ./task/ready.rs:1:1: unsupported: attributes at this attachment position are unsupported
+./task/wake.rs	jr-rust: ./task/wake.rs: ./task/wake.rs:1:4: unsupported: active attribute `stable` is unsupported
+./time.rs	jr-rust: ./time.rs: ./time.rs:1:4: unsupported: active attribute `stable` is unsupported
+./tuple.rs	jr-rust: ./tuple.rs: ./tuple.rs:4:34: unsupported: glob imports are unsupported, found "*"
+./ub_checks.rs	jr-rust: ./ub_checks.rs: ./ub_checks.rs:6:1: unsupported: attributes at this attachment position are unsupported
+./unicode/mod.rs	jr-rust: ./unicode/mod.rs: ./unicode/mod.rs:2:4: unsupported: active attribute `unstable` is unsupported
+./unicode/unicode_data.rs	jr-rust: ./unicode/unicode_data.rs: ./unicode/unicode_data.rs:66:3: unsupported: active attribute `repr` is unsupported
+./unit.rs	jr-rust: ./unit.rs: ./unit.rs:16:3: unsupported: active attribute `stable` is unsupported
+./unsafe_binder.rs	jr-rust: ./unsafe_binder.rs: ./unsafe_binder.rs:3:1: unsupported: attributes at this attachment position are unsupported
+./view.rs	jr-rust: ./view.rs: ./view.rs:3:1: unsupported: attributes at this attachment position are unsupported
+./wtf8.rs	jr-rust: ./wtf8.rs: ./wtf8.rs:13:4: unsupported: active attribute `unstable` is unsupported

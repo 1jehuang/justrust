@@ -1,0 +1,38 @@
+     66 unsupported: unsupported token "?"
+     32 unsupported: const items and constant evaluation are unsupported, found X
+     13 module file not found
+     12 visibility path must name a lexical ancestor module, found X
+     12 unsupported: item syntax is unsupported, found X
+     12 lifetime parameters on nominal and impl declarations are unsupported, found X
+     11 expected "{", found X
+     10 visibility path escapes crate root, found X
+     10 unsupported: unsupported token "$"
+     10 unsupported: unsupported macro fragment kind
+     10 unsupported: string continuation escapes are unsupported
+      9 unsupported: raw, byte string and C literals are unsupported
+      8 unsupported: const associated functions are unsupported, found X
+      7 unsupported: unsupported token "@"
+      7 expected generic closing >, found X
+      7 expected attribute brackets
+      6 unsupported: glob imports are unsupported, found X
+      6 unsupported: const generic parameters are unsupported, found X
+      5 unresolved or cyclic import crate::P
+      5 expected ASCII identifier, found X
+      4 unsupported: bounds on nominal declarations are unsupported, found X
+      4 repetition matcher must consume at least one token, found X
+      4 pub impl is invalid, found X
+      3 unsupported: associated type projections are unsupported, found X
+      3 main must exist, take no arguments and return ()
+      2 unsupported: generic defaults are unsupported, found X
+      2 unsupported: expanded receiver self is unsupported
+      2 unsupported: const expressions and constant evaluation are unsupported, found X
+      1 unsupported: typed receivers are unsupported, found X
+      1 unsupported: static and inferred lifetimes are unsupported, found X
+      1 unsupported: item macro output must be exactly one nongeneric free function; generated attributes and other items are unsupported, found X
+      1 unsupported: inferred and never source type annotations are unsupported, found X
+      1 unsupported: generic trait methods are unsupported, found X
+      1 unsupported: explicit enum discriminants are unsupported, found X
+      1 unsupported: const-expression array length is unsupported; use an integer literal, found X
+      1 unknown module macro at this lexical point
+      1 expected ")", found X
+      1 expected fn, inline mod or simple use item, found X

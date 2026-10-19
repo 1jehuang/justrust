@@ -1,0 +1,292 @@
+./alloc/global.rs	jr-rust: ./alloc/global.rs: ./alloc/global.rs:354:26: unsupported: unsupported token "?"
+./alloc/layout.rs	jr-rust: ./alloc/layout.rs: ./alloc/layout.rs:135:13: unsupported: string continuation escapes are unsupported
+./alloc/mod.rs	jr-rust: ./alloc/mod.rs: ./alloc/global.rs:354:26: unsupported: unsupported token "?"
+./any.rs	jr-rust: ./any.rs: ./any.rs:141:19: unsupported: unsupported token "?"
+./arch.rs	jr-rust: ./arch.rs: ./arch.rs:15:36: unsupported: unsupported token "$"
+./array/ascii.rs	jr-rust: ./array/ascii.rs: ./array/ascii.rs:3:6: unsupported: const generic parameters are unsupported, found "const"
+./array/drain.rs	jr-rust: ./array/drain.rs: ./array/drain.rs:5:8: lifetime parameters on nominal and impl declarations are unsupported, found ","
+./array/equality.rs	jr-rust: ./array/equality.rs: ./array/equality.rs:5:1: unsupported: const items and constant evaluation are unsupported, found "const"
+./array/iter/iter_inner.rs	jr-rust: ./array/iter/iter_inner.rs: ./array/iter/iter_inner.rs:35:41: unsupported: unsupported token "?"
+./array/iter.rs	jr-rust: ./array/iter.rs: ./array/iter.rs:10:1: module iter_inner not found: expected ./array/iter_inner.rs or ./array/iter_inner/mod.rs
+./array/mod.rs	jr-rust: ./array/mod.rs: ./array/ascii.rs:3:6: unsupported: const generic parameters are unsupported, found "const"
+./ascii/ascii_char.rs	jr-rust: ./ascii/ascii_char.rs: ./ascii/ascii_char.rs:1223:54: unsupported: raw, byte string and C literals are unsupported
+./ascii.rs	jr-rust: ./ascii.rs: ./ascii.rs:16:1: module ascii_char not found: expected ./ascii_char.rs or ./ascii_char/mod.rs
+./asserting.rs	jr-rust: ./asserting.rs: ./asserting.rs:33:37: expected ASCII identifier, found "'_"
+./async_iter/async_iter.rs	jr-rust: ./async_iter/async_iter.rs: ./async_iter/async_iter.rs:86:9: unsupported: unsupported token "?"
+./async_iter/from_iter.rs	jr-rust: ./async_iter/from_iter.rs: ./async_iter/from_iter.rs:22:57: unsupported: associated type projections are unsupported, found "::"
+./async_iter/mod.rs	jr-rust: ./async_iter/mod.rs: ./async_iter/async_iter.rs:86:9: unsupported: unsupported token "?"
+./attribute_docs.rs	jr-rust: ./attribute_docs.rs: ./attribute_docs.rs:85:1: unsupported: const items and constant evaluation are unsupported, found "const"
+./bool.rs	jr-rust: ./bool.rs: ./bool.rs:36:15: unsupported: const associated functions are unsupported, found "fn"
+./borrow.rs	jr-rust: ./borrow.rs: ./borrow.rs:157:34: unsupported: unsupported token "?"
+./bstr/mod.rs	jr-rust: ./bstr/mod.rs: ./bstr/mod.rs:327:29: unsupported: raw, byte string and C literals are unsupported
+./bstr/traits.rs	jr-rust: ./bstr/traits.rs: ./bstr/traits.rs:10:1: unsupported: const items and constant evaluation are unsupported, found "const"
+./cell/covariant_unsafe_cell.rs	jr-rust: ./cell/covariant_unsafe_cell.rs: ./cell/covariant_unsafe_cell.rs:20:35: unsupported: unsupported token "?"
+./cell/lazy.rs	jr-rust: ./cell/lazy.rs: ./cell/lazy.rs:54:26: unsupported: generic defaults are unsupported, found "="
+./cell/once.rs	jr-rust: ./cell/once.rs: ./cell/once.rs:308:29: unsupported: unsupported token "?"
+./cell.rs	jr-rust: ./cell.rs: ./cell.rs:261:1: module covariant_unsafe_cell not found: expected ./covariant_unsafe_cell.rs or ./covariant_unsafe_cell/mod.rs
+./char/convert.rs	jr-rust: ./char/convert.rs: ./char/convert.rs:13:10: visibility path escapes crate root, found ")"
+./char/decode.rs	jr-rust: ./char/decode.rs: ./char/decode.rs:46:37: unsupported: unsupported token "?"
+./char/methods.rs	jr-rust: ./char/methods.rs: ./char/methods.rs:4:12: unsupported: glob imports are unsupported, found "*"
+./char/mod.rs	jr-rust: ./char/mod.rs: ./char/convert.rs:26:12: unsupported: const items and constant evaluation are unsupported, found "const"
+./clone.rs	jr-rust: ./clone.rs: ./clone.rs:40:1: module uninit not found: expected ./uninit.rs or ./uninit/mod.rs
+./clone/uninit.rs	jr-rust: ./clone/uninit.rs: ./clone/uninit.rs:7:10: visibility path escapes crate root, found ")"
+./cmp/bytewise.rs	jr-rust: ./cmp/bytewise.rs: ./cmp/bytewise.rs:20:12: unsupported: const items and constant evaluation are unsupported, found "const"
+./cmp/clamp.rs	jr-rust: ./cmp/clamp.rs: ./cmp/clamp.rs:65:22: unsupported: unsupported token "$"
+./cmp.rs	jr-rust: ./cmp.rs: ./cmp.rs:27:1: module bytewise not found: expected ./bytewise.rs or ./bytewise/mod.rs
+./contracts.rs	jr-rust: ./contracts.rs: ./contracts.rs:21:10: expected "{", found "("
+./convert/mod.rs	jr-rust: ./convert/mod.rs: ./convert/num.rs:6:9: pub impl is invalid, found "("
+./convert/num.rs	jr-rust: ./convert/num.rs: ./convert/num.rs:6:9: pub impl is invalid, found "("
+./default.rs	jr-rust: ./default.rs: ./default.rs:106:5: unsupported: const items and constant evaluation are unsupported, found "const"
+./error.rs	jr-rust: ./error.rs: ./error.rs:442:52: unsupported: unsupported token "?"
+./escape.rs	jr-rust: ./escape.rs: ./escape.rs:9:40: unsupported: raw, byte string and C literals are unsupported
+./ffi/c_str.rs	jr-rust: ./ffi/c_str.rs: ./ffi/c_str.rs:185:9: unsupported: raw, byte string and C literals are unsupported
+./ffi/mod.rs	jr-rust: ./ffi/mod.rs: ./ffi/c_str.rs:185:9: unsupported: raw, byte string and C literals are unsupported
+./ffi/primitives.rs	jr-rust: ./ffi/primitives.rs: ./ffi/primitives.rs:8:41: unsupported: unsupported macro fragment kind
+./ffi/va_list.rs	jr-rust: ./ffi/va_list.rs: ./ffi/va_list.rs:41:1: expected fn, inline mod or simple use item, found "crate"
+./field.rs	jr-rust: ./field.rs: ./field.rs:135:13: expected attribute brackets
+./fmt/builders.rs	jr-rust: ./fmt/builders.rs: ./fmt/builders.rs:34:43: unsupported: unsupported token "?"
+./fmt/float.rs	jr-rust: ./fmt/float.rs: ./fmt/float.rs:15:62: unsupported: expanded receiver self is unsupported
+./fmt/mod.rs	jr-rust: ./fmt/mod.rs: ./fmt/builders.rs:1096:17: unsupported: string continuation escapes are unsupported
+./fmt/nofloat.rs	jr-rust: ./fmt/nofloat.rs: ./fmt/nofloat.rs:9:25: unsupported: expanded receiver self is unsupported
+./fmt/num_buffer.rs	jr-rust: ./fmt/num_buffer.rs: ./fmt/num_buffer.rs:8:11: unsupported: const associated functions are unsupported, found "DEFAULT"
+./fmt/num.rs	jr-rust: ./fmt/num.rs: ./fmt/num.rs:66:73: unsupported: raw, byte string and C literals are unsupported
+./fmt/rt.rs	jr-rust: ./fmt/rt.rs: ./fmt/rt.rs:8:12: unsupported: glob imports are unsupported, found "*"
+./future/async_drop.rs	jr-rust: ./future/async_drop.rs: ./future/async_drop.rs:54:44: unsupported: unsupported token "?"
+./future/future.rs	jr-rust: ./future/future.rs: ./future/future.rs:113:9: unsupported: unsupported token "?"
+./future/into_future.rs	jr-rust: ./future/into_future.rs: ./future/into_future.rs:135:20: unsupported: associated type projections are unsupported, found "::"
+./future/join.rs	jr-rust: ./future/join.rs: ./future/join.rs:48:17: unsupported: unsupported token "$"
+./future/mod.rs	jr-rust: ./future/mod.rs: ./future/async_drop.rs:54:44: unsupported: unsupported token "?"
+./future/pending.rs	jr-rust: ./future/pending.rs: ./future/pending.rs:15:32: expected ASCII identifier, found "fn"
+./future/poll_fn.rs	jr-rust: ./future/poll_fn.rs: ./future/poll_fn.rs:117:13: expected "{", found "("
+./future/ready.rs	jr-rust: ./future/ready.rs: ./future/ready.rs:22:21: unsupported: typed receivers are unsupported, found ":"
+./hash/mod.rs	jr-rust: ./hash/mod.rs: ./hash/sip.rs:48:23: unsupported: bounds on nominal declarations are unsupported, found "{"
+./hash/sip.rs	jr-rust: ./hash/sip.rs: ./hash/sip.rs:48:23: unsupported: bounds on nominal declarations are unsupported, found "{"
+./hint.rs	jr-rust: ./hint.rs: ./hint.rs:102:5: unsupported: const items and constant evaluation are unsupported, found "const"
+./index.rs	jr-rust: ./index.rs: ./index.rs:52:1: unsupported: item syntax is unsupported, found "unsafe"
+./internal_macros.rs	jr-rust: ./internal_macros.rs: ./internal_macros.rs:4:44: unsupported: unsupported macro fragment kind
+./intrinsics/bounds.rs	jr-rust: ./intrinsics/bounds.rs: ./intrinsics/bounds.rs:10:5: unsupported: item syntax is unsupported, found "unsafe"
+./intrinsics/fallback.rs	jr-rust: ./intrinsics/fallback.rs: ./intrinsics/fallback.rs:4:5: unsupported: const items and constant evaluation are unsupported, found "const"
+./intrinsics/gpu.rs	jr-rust: ./intrinsics/gpu.rs: ./intrinsics/gpu.rs:50:53: expected "{", found ";"
+./intrinsics/macros.rs	jr-rust: ./intrinsics/macros.rs: ./intrinsics/macros.rs:74:1: repetition matcher must consume at least one token, found "pub"
+./intrinsics/mir.rs	jr-rust: ./intrinsics/mir.rs: ./intrinsics/mir.rs:323:1: repetition matcher must consume at least one token, found "pub"
+./intrinsics/mod.rs	jr-rust: ./intrinsics/mod.rs: ./intrinsics/bounds.rs:10:5: unsupported: item syntax is unsupported, found "unsafe"
+./intrinsics/reflection.rs	jr-rust: ./intrinsics/reflection.rs: ./intrinsics/reflection.rs:22:19: unsupported: unsupported token "?"
+./intrinsics/simd/mod.rs	jr-rust: ./intrinsics/simd/mod.rs: ./intrinsics/simd/scalable.rs:14:5: unsupported: item syntax is unsupported, found "unsafe"
+./intrinsics/simd/scalable.rs	jr-rust: ./intrinsics/simd/scalable.rs: ./intrinsics/simd/scalable.rs:14:5: unsupported: item syntax is unsupported, found "unsafe"
+./io/borrowed_buf.rs	jr-rust: ./io/borrowed_buf.rs: ./io/borrowed_buf.rs:28:29: lifetime parameters on nominal and impl declarations are unsupported, found ","
+./io/cursor.rs	jr-rust: ./io/cursor.rs: ./io/cursor.rs:324:49: unsupported: unsupported token "?"
+./io/error/os_functions_atomic.rs	jr-rust: ./io/error/os_functions_atomic.rs: ./io/error/os_functions_atomic.rs:15:1: unsupported: item syntax is unsupported, found "static"
+./io/error/os_functions.rs	jr-rust: ./io/error/os_functions.rs: ./io/error/os_functions.rs:9:10: visibility path escapes crate root, found ")"
+./io/error/repr_bitpacked.rs	jr-rust: ./io/error/repr_bitpacked.rs: ./io/error/repr_bitpacked.rs:112:1: unsupported: const items and constant evaluation are unsupported, found "const"
+./io/error/repr_unpacked.rs	jr-rust: ./io/error/repr_unpacked.rs: ./io/error/repr_unpacked.rs:9:10: visibility path escapes crate root, found ")"
+./io/error.rs	jr-rust: ./io/error.rs: ./io/error.rs:11:1: module repr not found: expected ./io/repr.rs or ./io/repr/mod.rs
+./io/impls.rs	jr-rust: ./io/impls.rs: ./io/impls.rs:22:17: unsupported: unsupported token "?"
+./io/io_slice/repr_generic.rs	jr-rust: ./io/io_slice/repr_generic.rs: ./io/io_slice/repr_generic.rs:4:29: lifetime parameters on nominal and impl declarations are unsupported, found ">"
+./io/io_slice/repr_iovec.rs	jr-rust: ./io/io_slice/repr_iovec.rs: ./io/io_slice/repr_iovec.rs:14:29: lifetime parameters on nominal and impl declarations are unsupported, found ">"
+./io/io_slice/repr_uefi.rs	jr-rust: ./io/io_slice/repr_uefi.rs: ./io/io_slice/repr_uefi.rs:9:29: lifetime parameters on nominal and impl declarations are unsupported, found ">"
+./io/io_slice/repr_windows.rs	jr-rust: ./io/io_slice/repr_windows.rs: ./io/io_slice/repr_windows.rs:13:29: lifetime parameters on nominal and impl declarations are unsupported, found ">"
+./io/io_slice.rs	jr-rust: ./io/io_slice.rs: ./io/io_slice.rs:5:1: unknown module macro at this lexical point
+./io/mod.rs	jr-rust: ./io/mod.rs: ./io/error.rs:11:1: module repr not found: expected ./io/error/repr.rs or ./io/error/repr/mod.rs
+./io/prelude.rs	jr-rust: ./io/prelude.rs: unresolved or cyclic import crate::Seek
+./io/seek.rs	jr-rust: ./io/seek.rs: ./io/seek.rs:78:38: unsupported: unsupported token "?"
+./io/size_hint.rs	jr-rust: ./io/size_hint.rs: ./io/size_hint.rs:50:9: unsupported: unsupported token "?"
+./io/util.rs	jr-rust: ./io/util.rs: ./io/util.rs:655:49: unsupported: unsupported token "?"
+./io/write.rs	jr-rust: ./io/write.rs: ./io/write.rs:381:33: unsupported: unsupported token "?"
+./iter/adapters/array_chunks.rs	jr-rust: ./iter/adapters/array_chunks.rs: ./iter/adapters/array_chunks.rs:88:49: unsupported: unsupported token "?"
+./iter/adapters/by_ref_sized.rs	jr-rust: ./iter/adapters/by_ref_sized.rs: ./iter/adapters/by_ref_sized.rs:10:25: lifetime parameters on nominal and impl declarations are unsupported, found ","
+./iter/adapters/chain.rs	jr-rust: ./iter/adapters/chain.rs: ./iter/adapters/chain.rs:82:82: unsupported: unsupported token "?"
+./iter/adapters/cloned.rs	jr-rust: ./iter/adapters/cloned.rs: ./iter/adapters/cloned.rs:23:23: visibility path must name a lexical ancestor module, found ")"
+./iter/adapters/copied.rs	jr-rust: ./iter/adapters/copied.rs: ./iter/adapters/copied.rs:24:23: visibility path must name a lexical ancestor module, found ")"
+./iter/adapters/cycle.rs	jr-rust: ./iter/adapters/cycle.rs: ./iter/adapters/cycle.rs:49:16: unsupported: unsupported token "@"
+./iter/adapters/enumerate.rs	jr-rust: ./iter/adapters/enumerate.rs: ./iter/adapters/enumerate.rs:80:33: unsupported: unsupported token "?"
+./iter/adapters/filter_map.rs	jr-rust: ./iter/adapters/filter_map.rs: ./iter/adapters/filter_map.rs:23:23: visibility path must name a lexical ancestor module, found ")"
+./iter/adapters/filter.rs	jr-rust: ./iter/adapters/filter.rs: ./iter/adapters/filter.rs:27:23: visibility path must name a lexical ancestor module, found ")"
+./iter/adapters/flatten.rs	jr-rust: ./iter/adapters/flatten.rs: ./iter/adapters/flatten.rs:427:34: unsupported: unsupported token "?"
+./iter/adapters/fuse.rs	jr-rust: ./iter/adapters/fuse.rs: ./iter/adapters/fuse.rs:339:43: unsupported: unsupported token "?"
+./iter/adapters/inspect.rs	jr-rust: ./iter/adapters/inspect.rs: ./iter/adapters/inspect.rs:23:23: visibility path must name a lexical ancestor module, found ")"
+./iter/adapters/intersperse.rs	jr-rust: ./iter/adapters/intersperse.rs: ./iter/adapters/intersperse.rs:10:1: unsupported: bounds on nominal declarations are unsupported, found "where"
+./iter/adapters/map.rs	jr-rust: ./iter/adapters/map.rs: ./iter/adapters/map.rs:68:23: visibility path must name a lexical ancestor module, found ")"
+./iter/adapters/map_while.rs	jr-rust: ./iter/adapters/map_while.rs: ./iter/adapters/map_while.rs:44:33: unsupported: unsupported token "?"
+./iter/adapters/map_windows.rs	jr-rust: ./iter/adapters/map_windows.rs: ./iter/adapters/map_windows.rs:105:66: unsupported: unsupported token "?"
+./iter/adapters/mod.rs	jr-rust: ./iter/adapters/mod.rs: ./iter/adapters/array_chunks.rs:17:37: unsupported: const generic parameters are unsupported, found "const"
+./iter/adapters/peekable.rs	jr-rust: ./iter/adapters/peekable.rs: ./iter/adapters/peekable.rs:59:20: unsupported: unsupported token "@"
+./iter/adapters/rev.rs	jr-rust: ./iter/adapters/rev.rs: ./iter/adapters/rev.rs:20:23: visibility path must name a lexical ancestor module, found ")"
+./iter/adapters/scan.rs	jr-rust: ./iter/adapters/scan.rs: ./iter/adapters/scan.rs:46:33: unsupported: unsupported token "?"
+./iter/adapters/skip.rs	jr-rust: ./iter/adapters/skip.rs: ./iter/adapters/skip.rs:59:44: unsupported: unsupported token "?"
+./iter/adapters/skip_while.rs	jr-rust: ./iter/adapters/skip_while.rs: ./iter/adapters/skip_while.rs:79:48: unsupported: unsupported token "?"
+./iter/adapters/step_by.rs	jr-rust: ./iter/adapters/step_by.rs: ./iter/adapters/step_by.rs:35:23: visibility path must name a lexical ancestor module, found ")"
+./iter/adapters/take.rs	jr-rust: ./iter/adapters/take.rs: ./iter/adapters/take.rs:23:23: visibility path must name a lexical ancestor module, found ")"
+./iter/adapters/take_while.rs	jr-rust: ./iter/adapters/take_while.rs: ./iter/adapters/take_while.rs:48:37: unsupported: unsupported token "?"
+./iter/adapters/zip.rs	jr-rust: ./iter/adapters/zip.rs: ./iter/adapters/zip.rs:21:23: visibility path must name a lexical ancestor module, found ")"
+./iter/mod.rs	jr-rust: ./iter/mod.rs: ./iter/traits/accum.rs:145:17: unsupported: string continuation escapes are unsupported
+./iter/range.rs	jr-rust: ./iter/range.rs: ./iter/range.rs:13:14: unsupported: unsupported macro fragment kind
+./iter/sources/empty.rs	jr-rust: ./iter/sources/empty.rs: ./iter/sources/empty.rs:30:41: expected ASCII identifier, found "fn"
+./iter/sources/from_coroutine.rs	jr-rust: ./iter/sources/from_coroutine.rs: ./iter/sources/from_coroutine.rs:43:18: unsupported: associated type projections are unsupported, found "::"
+./iter/sources/from_fn.rs	jr-rust: ./iter/sources/from_fn.rs: ./iter/sources/from_fn.rs:48:13: expected "{", found "("
+./iter/sources/generator.rs	jr-rust: ./iter/sources/generator.rs: ./iter/sources/generator.rs:24:16: unsupported: unsupported token "$"
+./iter/sources/once.rs	jr-rust: ./iter/sources/once.rs: ./iter/sources/once.rs:98:1: unsupported: item syntax is unsupported, found "unsafe"
+./iter/sources/once_with.rs	jr-rust: ./iter/sources/once_with.rs: ./iter/sources/once_with.rs:93:33: unsupported: unsupported token "?"
+./iter/sources/repeat_n.rs	jr-rust: ./iter/sources/repeat_n.rs: ./iter/sources/repeat_n.rs:71:49: unsupported: unsupported token "?"
+./iter/sources/repeat.rs	jr-rust: ./iter/sources/repeat.rs: ./iter/sources/repeat.rs:150:1: unsupported: item syntax is unsupported, found "unsafe"
+./iter/sources/repeat_with.rs	jr-rust: ./iter/sources/repeat_with.rs: ./iter/sources/repeat_with.rs:114:36: unsupported: unsupported token "?"
+./iter/sources.rs	jr-rust: ./iter/sources.rs: ./iter/sources.rs:1:1: module empty not found: expected ./iter/empty.rs or ./iter/empty/mod.rs
+./iter/sources/successors.rs	jr-rust: ./iter/sources/successors.rs: ./iter/sources/successors.rs:56:36: unsupported: unsupported token "?"
+./iter/traits/accum.rs	jr-rust: ./iter/traits/accum.rs: ./iter/traits/accum.rs:145:17: unsupported: string continuation escapes are unsupported
+./iter/traits/collect.rs	jr-rust: ./iter/traits/collect.rs: ./iter/traits/collect.rs:118:61: unsupported: generic trait methods are unsupported, found ";"
+./iter/traits/double_ended.rs	jr-rust: ./iter/traits/double_ended.rs: ./iter/traits/double_ended.rs:200:53: unsupported: unsupported token "?"
+./iter/traits/exact_size.rs	jr-rust: ./iter/traits/exact_size.rs: ./iter/traits/exact_size.rs:154:29: unsupported: unsupported token "?"
+./iter/traits/iterator.rs	jr-rust: ./iter/traits/iterator.rs: ./iter/traits/iterator.rs:310:42: unsupported: unsupported token "?"
+./iter/traits/marker.rs	jr-rust: ./iter/traits/marker.rs: ./iter/traits/marker.rs:35:25: unsupported: unsupported token "?"
+./iter/traits/mod.rs	jr-rust: ./iter/traits/mod.rs: ./iter/traits/accum.rs:145:17: unsupported: string continuation escapes are unsupported
+./keyword_docs.rs	jr-rust: ./keyword_docs.rs: ./keyword_docs.rs:76:1: unsupported: const items and constant evaluation are unsupported, found "const"
+./lib.miri.rs	jr-rust: ./lib.miri.rs: ./lib.miri.rs:3:1: unsupported: item syntax is unsupported, found "extern"
+./lib.rs	jr-rust: ./lib.rs: ./prelude/v1.rs:64:48: expected attribute brackets
+./macros/mod.rs	jr-rust: ./macros/mod.rs: ./macros/mod.rs:507:15: expected attribute brackets
+./marker.rs	jr-rust: ./marker.rs: ./marker.rs:8:1: module variance not found: expected ./variance.rs or ./variance/mod.rs
+./marker/variance.rs	jr-rust: ./marker/variance.rs: ./marker/variance.rs:100:1: repetition matcher must consume at least one token, found "macro_rules"
+./mem/alignment.rs	jr-rust: ./mem/alignment.rs: ./mem/alignment.rs:24:1: unsupported: const items and constant evaluation are unsupported, found "const"
+./mem/drop_guard.rs	jr-rust: ./mem/drop_guard.rs: ./mem/drop_guard.rs:34:1: expected "{", found "where"
+./mem/manually_drop.rs	jr-rust: ./mem/manually_drop.rs: ./mem/manually_drop.rs:156:28: unsupported: unsupported token "?"
+./mem/maybe_dangling.rs	jr-rust: ./mem/maybe_dangling.rs: ./mem/maybe_dangling.rs:72:29: unsupported: unsupported token "?"
+./mem/maybe_uninit.rs	jr-rust: ./mem/maybe_uninit.rs: ./mem/maybe_uninit.rs:355:5: unsupported: item syntax is unsupported, found "union"
+./mem/mod.rs	jr-rust: ./mem/mod.rs: ./mem/mod.rs:1667:21: expected attribute brackets
+./mem/transmutability.rs	jr-rust: ./mem/transmutability.rs: ./mem/transmutability.rs:93:10: unsupported: unsupported token "?"
+./mem/type_info.rs	jr-rust: ./mem/type_info.rs: ./mem/type_info.rs:55:24: unsupported: unsupported token "?"
+./net/display_buffer.rs	jr-rust: ./net/display_buffer.rs: ./net/display_buffer.rs:5:10: visibility path escapes crate root, found ")"
+./net/ip_addr.rs	jr-rust: ./net/ip_addr.rs: ./net/ip_addr.rs:232:15: unsupported: explicit enum discriminants are unsupported, found "="
+./net/mod.rs	jr-rust: ./net/mod.rs: ./net/display_buffer.rs:5:35: lifetime parameters on nominal and impl declarations are unsupported, found ">"
+./net/parser.rs	jr-rust: ./net/parser.rs: ./net/parser.rs:12:11: unsupported: const associated functions are unsupported, found "ZERO"
+./net/socket_addr.rs	jr-rust: ./net/socket_addr.rs: ./net/socket_addr.rs:172:15: unsupported: const associated functions are unsupported, found "fn"
+./num/bfloat.rs	jr-rust: ./num/bfloat.rs: ./num/bfloat.rs:73:15: unsupported: const associated functions are unsupported, found "fn"
+./num/complex.rs	jr-rust: ./num/complex.rs: ./num/complex.rs:1:37: unsupported: glob imports are unsupported, found "*"
+./num/error.rs	jr-rust: ./num/error.rs: ./num/error.rs:15:15: unsupported: const associated functions are unsupported, found "fn"
+./num/f128.rs	jr-rust: ./num/f128.rs: ./num/f128.rs:27:9: unsupported: const items and constant evaluation are unsupported, found "const"
+./num/f16.rs	jr-rust: ./num/f16.rs: ./num/f16.rs:29:9: unsupported: const items and constant evaluation are unsupported, found "const"
+./num/f32.rs	jr-rust: ./num/f32.rs: ./num/f32.rs:35:5: unsupported: const items and constant evaluation are unsupported, found "const"
+./num/f64.rs	jr-rust: ./num/f64.rs: ./num/f64.rs:35:5: unsupported: const items and constant evaluation are unsupported, found "const"
+./num/float_parse.rs	jr-rust: ./num/float_parse.rs: ./num/float_parse.rs:9:9: unsupported: unsupported macro fragment kind
+./num/imp/bignum.rs	jr-rust: ./num/imp/bignum.rs: ./num/imp/bignum.rs:30:12: unsupported: unsupported macro fragment kind
+./num/imp/dec2flt/common.rs	jr-rust: ./num/imp/dec2flt/common.rs: ./num/imp/dec2flt/common.rs:17:44: expected ")", found "("
+./num/imp/dec2flt/decimal.rs	jr-rust: ./num/imp/dec2flt/decimal.rs: ./num/imp/dec2flt/decimal.rs:80:80: unsupported: unsupported token "?"
+./num/imp/dec2flt/decimal_seq.rs	jr-rust: ./num/imp/dec2flt/decimal_seq.rs: ./num/imp/dec2flt/decimal_seq.rs:26:38: unsupported: const-expression array length is unsupported; use an integer literal, found "]"
+./num/imp/dec2flt/fpu.rs	jr-rust: ./num/imp/dec2flt/fpu.rs: ./num/imp/dec2flt/fpu.rs:4:10: visibility path escapes crate root, found ")"
+./num/imp/dec2flt/lemire.rs	jr-rust: ./num/imp/dec2flt/lemire.rs: unresolved or cyclic import crate::BiasedFp
+./num/imp/dec2flt/mod.rs	jr-rust: ./num/imp/dec2flt/mod.rs: ./num/imp/dec2flt/decimal.rs:80:80: unsupported: unsupported token "?"
+./num/imp/dec2flt/parse.rs	jr-rust: ./num/imp/dec2flt/parse.rs: ./num/imp/dec2flt/parse.rs:141:50: unsupported: unsupported token "?"
+./num/imp/dec2flt/slow.rs	jr-rust: ./num/imp/dec2flt/slow.rs: ./num/imp/dec2flt/slow.rs:28:5: unsupported: const expressions and constant evaluation are unsupported, found "const"
+./num/imp/dec2flt/table.rs	jr-rust: ./num/imp/dec2flt/table.rs: ./num/imp/dec2flt/table.rs:9:10: visibility path escapes crate root, found ")"
+./num/imp/diy_float.rs	jr-rust: ./num/imp/diy_float.rs: main must exist, take no arguments and return ()
+./num/imp/flt2dec/decoder.rs	jr-rust: ./num/imp/flt2dec/decoder.rs: unresolved or cyclic import crate::FpCategory
+./num/imp/flt2dec/estimator.rs	jr-rust: ./num/imp/flt2dec/estimator.rs: main must exist, take no arguments and return ()
+./num/imp/flt2dec/mod.rs	jr-rust: ./num/imp/flt2dec/mod.rs: ./num/imp/flt2dec/mod.rs:199:48: unsupported: raw, byte string and C literals are unsupported
+./num/imp/flt2dec/strategy/dragon.rs	jr-rust: ./num/imp/flt2dec/strategy/dragon.rs: ./num/imp/flt2dec/strategy/dragon.rs:15:1: unsupported: item syntax is unsupported, found "static"
+./num/imp/flt2dec/strategy/grisu.rs	jr-rust: ./num/imp/flt2dec/strategy/grisu.rs: ./num/imp/flt2dec/strategy/grisu.rs:16:5: unsupported: const items and constant evaluation are unsupported, found "const"
+./num/imp/fmt.rs	jr-rust: ./num/imp/fmt.rs: ./num/imp/fmt.rs:81:39: unsupported: unsupported token "?"
+./num/imp/int_bits.rs	jr-rust: ./num/imp/int_bits.rs: ./num/imp/int_bits.rs:67:26: visibility path must name a lexical ancestor module, found ")"
+./num/imp/int_log10.rs	jr-rust: ./num/imp/int_log10.rs: ./num/imp/int_log10.rs:15:5: unsupported: const expressions and constant evaluation are unsupported, found "const"
+./num/imp/int_sqrt.rs	jr-rust: ./num/imp/int_sqrt.rs: ./num/imp/int_sqrt.rs:17:1: unsupported: const items and constant evaluation are unsupported, found "const"
+./num/imp/libm.rs	jr-rust: ./num/imp/libm.rs: ./num/imp/libm.rs:10:1: unsupported: item syntax is unsupported, found "unsafe"
+./num/imp/mod.rs	jr-rust: ./num/imp/mod.rs: ./num/imp/flt2dec/mod.rs:199:48: unsupported: raw, byte string and C literals are unsupported
+./num/imp/overflow_panic.rs	jr-rust: ./num/imp/overflow_panic.rs: ./num/imp/overflow_panic.rs:7:18: visibility path must name a lexical ancestor module, found ")"
+./num/imp/traits.rs	jr-rust: ./num/imp/traits.rs: ./num/imp/traits.rs:27:11: unsupported: const associated functions are unsupported, found "ZERO"
+./num/int_macros.rs	jr-rust: ./num/int_macros.rs: ./num/int_macros.rs:3:23: unsupported: unsupported macro fragment kind
+./num/mod.rs	jr-rust: ./num/mod.rs: ./num/imp/flt2dec/mod.rs:199:48: unsupported: raw, byte string and C literals are unsupported
+./num/niche_types.rs	jr-rust: ./num/niche_types.rs: ./num/niche_types.rs:92:1: repetition matcher must consume at least one token, found "define_valid_range_type"
+./num/nonzero.rs	jr-rust: ./num/nonzero.rs: ./num/nonzero.rs:30:9: pub impl is invalid, found "("
+./num/saturating.rs	jr-rust: ./num/saturating.rs: ./num/saturating.rs:46:42: expected ASCII identifier, found "'_"
+./num/shells/legacy_int_modules.rs	jr-rust: ./num/shells/legacy_int_modules.rs: ./num/shells/legacy_int_modules.rs:8:13: unsupported: item macro output must be exactly one nongeneric free function; generated attributes and other items are unsupported, found "mod"
+./num/traits.rs	jr-rust: ./num/traits.rs: ./num/traits.rs:7:9: pub impl is invalid, found "("
+./num/uint_macros.rs	jr-rust: ./num/uint_macros.rs: ./num/uint_macros.rs:3:23: unsupported: unsupported macro fragment kind
+./num/wrapping.rs	jr-rust: ./num/wrapping.rs: ./num/wrapping.rs:47:42: expected ASCII identifier, found "'_"
+./offload/mod.rs	jr-rust: ./offload/mod.rs: ./offload/mod.rs:42:29: unsupported: unsupported macro fragment kind
+./ops/arith.rs	jr-rust: ./ops/arith.rs: ./ops/arith.rs:71:5: unsupported: const items and constant evaluation are unsupported, found "const"
+./ops/async_function.rs	jr-rust: ./ops/async_function.rs: ./ops/async_function.rs:65:23: unsupported: unsupported token "?"
+./ops/bit.rs	jr-rust: ./ops/bit.rs: ./ops/bit.rs:35:5: unsupported: const items and constant evaluation are unsupported, found "const"
+./ops/control_flow.rs	jr-rust: ./ops/control_flow.rs: ./ops/control_flow.rs:89:27: unsupported: generic defaults are unsupported, found "="
+./ops/coroutine.rs	jr-rust: ./ops/coroutine.rs: ./ops/coroutine.rs:123:9: unsupported: unsupported token "?"
+./ops/deref.rs	jr-rust: ./ops/deref.rs: ./ops/deref.rs:144:18: unsupported: unsupported token "?"
+./ops/drop.rs	jr-rust: ./ops/drop.rs: ./ops/drop.rs:209:5: unsupported: const items and constant evaluation are unsupported, found "const"
+./ops/function.rs	jr-rust: ./ops/function.rs: ./ops/function.rs:219:29: unsupported: unsupported token "?"
+./ops/index_range.rs	jr-rust: ./ops/index_range.rs: ./ops/index_range.rs:170:32: unsupported: unsupported token "?"
+./ops/index.rs	jr-rust: ./ops/index.rs: ./ops/index.rs:56:28: unsupported: unsupported token "?"
+./ops/mod.rs	jr-rust: ./ops/mod.rs: ./ops/arith.rs:71:5: unsupported: const items and constant evaluation are unsupported, found "const"
+./ops/range.rs	jr-rust: ./ops/range.rs: ./ops/range.rs:98:28: unsupported: unsupported token "?"
+./ops/try_trait.rs	jr-rust: ./ops/try_trait.rs: ./ops/try_trait.rs:121:5: unsupported: const items and constant evaluation are unsupported, found "const"
+./ops/unsize.rs	jr-rust: ./ops/unsize.rs: ./ops/unsize.rs:42:8: lifetime parameters on nominal and impl declarations are unsupported, found ","
+./option.rs	jr-rust: ./option.rs: ./option.rs:1622:15: unsupported: unsupported token "@"
+./os/darwin/mod.rs	jr-rust: ./os/darwin/mod.rs: ./os/darwin/objc.rs:61:17: unsupported: unsupported token "$"
+./os/darwin/objc.rs	jr-rust: ./os/darwin/objc.rs: ./os/darwin/objc.rs:61:17: unsupported: unsupported token "$"
+./os/mod.rs	jr-rust: ./os/mod.rs: ./os/darwin/objc.rs:61:17: unsupported: unsupported token "$"
+./panicking.rs	jr-rust: ./panicking.rs: ./panicking.rs:33:5: unsupported: string continuation escapes are unsupported
+./panic/location.rs	jr-rust: ./panic/location.rs: ./panic/location.rs:39:23: lifetime parameters on nominal and impl declarations are unsupported, found ">"
+./panic/panic_info.rs	jr-rust: ./panic/panic_info.rs: ./panic/panic_info.rs:137:44: unsupported: unsupported token "?"
+./panic.rs	jr-rust: ./panic.rs: ./panic.rs:4:1: module location not found: expected ./location.rs or ./location/mod.rs
+./panic/unwind_safe.rs	jr-rust: ./panic/unwind_safe.rs: ./panic/unwind_safe.rs:193:9: unsupported: unsupported token "?"
+./pat.rs	jr-rust: ./pat.rs: ./pat.rs:25:5: unsupported: const items and constant evaluation are unsupported, found "const"
+./pin.rs	jr-rust: ./pin.rs: ./pin.rs:931:1: module unsafe_pinned not found: expected ./unsafe_pinned.rs or ./unsafe_pinned/mod.rs
+./pin/unsafe_pinned.rs	jr-rust: ./pin/unsafe_pinned.rs: ./pin/unsafe_pinned.rs:27:28: unsupported: unsupported token "?"
+./prelude/mod.rs	jr-rust: ./prelude/mod.rs: ./prelude/v1.rs:64:48: expected attribute brackets
+./prelude/v1.rs	jr-rust: ./prelude/v1.rs: ./prelude/v1.rs:64:48: expected attribute brackets
+./primitive_docs.rs	jr-rust: ./primitive_docs.rs: ./primitive_docs.rs:61:1: unsupported: const items and constant evaluation are unsupported, found "const"
+./primitive.rs	jr-rust: ./primitive.rs: unresolved or cyclic import crate::bool
+./process.rs	jr-rust: ./process.rs: ./process.rs:42:35: unsupported: inferred and never source type annotations are unsupported, found "!"
+./profiling.rs	jr-rust: ./profiling.rs: ./profiling.rs:13:42: unsupported: const generic parameters are unsupported, found ">"
+./ptr/const_ptr.rs	jr-rust: ./ptr/const_ptr.rs: ./ptr/const_ptr.rs:27:13: unsupported: unsupported token "@"
+./ptr/metadata.rs	jr-rust: ./ptr/metadata.rs: ./ptr/metadata.rs:84:16: expected "{", found "="
+./ptr/mod.rs	jr-rust: ./ptr/mod.rs: ./ptr/mod.rs:555:9: unsupported: string continuation escapes are unsupported
+./ptr/mut_ptr.rs	jr-rust: ./ptr/mut_ptr.rs: ./ptr/mut_ptr.rs:365:17: unsupported: unsupported token "@"
+./ptr/non_null.rs	jr-rust: ./ptr/non_null.rs: ./ptr/non_null.rs:820:45: unsupported: unsupported token "?"
+./ptr/unique.rs	jr-rust: ./ptr/unique.rs: ./ptr/unique.rs:30:36: unsupported: bounds on nominal declarations are unsupported, found "{"
+./random.rs	jr-rust: ./random.rs: ./random.rs:20:8: lifetime parameters on nominal and impl declarations are unsupported, found ","
+./range/iter.rs	jr-rust: ./range/iter.rs: ./range/iter.rs:38:11: unsupported: unsupported macro fragment kind
+./range/legacy.rs	jr-rust: ./range/legacy.rs: unresolved or cyclic import crate::Range
+./range.rs	jr-rust: ./range.rs: ./range.rs:24:5: module legacy not found: expected ./legacy.rs or ./legacy/mod.rs
+./result.rs	jr-rust: ./result.rs: ./result.rs:593:15: unsupported: const associated functions are unsupported, found "fn"
+./slice/ascii.rs	jr-rust: ./slice/ascii.rs: ./slice/ascii.rs:96:37: unsupported: unsupported token "@"
+./slice/cmp.rs	jr-rust: ./slice/cmp.rs: ./slice/cmp.rs:14:1: unsupported: const items and constant evaluation are unsupported, found "const"
+./slice/index.rs	jr-rust: ./slice/index.rs: ./slice/index.rs:114:50: unsupported: unsupported token "?"
+./slice/iter/macros.rs	jr-rust: ./slice/iter/macros.rs: ./slice/iter/macros.rs:11:47: unsupported: unsupported macro fragment kind
+./slice/iter.rs	jr-rust: ./slice/iter.rs: ./slice/iter.rs:4:1: module macros not found: expected ./slice/macros.rs or ./slice/macros/mod.rs
+./slice/memchr.rs	jr-rust: ./slice/memchr.rs: ./slice/memchr.rs:57:9: unsupported: unsupported token "@"
+./slice/mod.rs	jr-rust: ./slice/mod.rs: ./slice/memchr.rs:6:1: unsupported: const items and constant evaluation are unsupported, found "const"
+./slice/raw.rs	jr-rust: ./slice/raw.rs: ./slice/raw.rs:124:5: unsupported: const items and constant evaluation are unsupported, found "const"
+./slice/rotate.rs	jr-rust: ./slice/rotate.rs: ./slice/rotate.rs:14:10: visibility path escapes crate root, found ")"
+./slice/sort/mod.rs	jr-rust: ./slice/sort/mod.rs: ./slice/sort/stable/merge.rs:8:25: expected generic closing >, found "("
+./slice/sort/select.rs	jr-rust: ./slice/sort/select.rs: ./slice/sort/select.rs:23:13: expected "{", found "("
+./slice/sort/shared/mod.rs	jr-rust: ./slice/sort/shared/mod.rs: ./slice/sort/shared/pivot.rs:6:1: unsupported: const items and constant evaluation are unsupported, found "const"
+./slice/sort/shared/pivot.rs	jr-rust: ./slice/sort/shared/pivot.rs: ./slice/sort/shared/pivot.rs:6:1: unsupported: const items and constant evaluation are unsupported, found "const"
+./slice/sort/shared/smallsort.rs	jr-rust: ./slice/sort/shared/smallsort.rs: ./slice/sort/shared/smallsort.rs:23:27: expected generic closing >, found "("
+./slice/sort/stable/drift.rs	jr-rust: ./slice/sort/stable/drift.rs: ./slice/sort/stable/drift.rs:20:24: expected generic closing >, found "("
+./slice/sort/stable/merge.rs	jr-rust: ./slice/sort/stable/merge.rs: ./slice/sort/stable/merge.rs:8:25: expected generic closing >, found "("
+./slice/sort/stable/mod.rs	jr-rust: ./slice/sort/stable/mod.rs: ./slice/sort/stable/merge.rs:8:25: expected generic closing >, found "("
+./slice/sort/stable/quicksort.rs	jr-rust: ./slice/sort/stable/quicksort.rs: ./slice/sort/stable/quicksort.rs:16:29: expected generic closing >, found "("
+./slice/sort/stable/tiny.rs	jr-rust: ./slice/sort/stable/tiny.rs: ./slice/sort/stable/tiny.rs:10:29: expected generic closing >, found "("
+./slice/sort/unstable/heapsort.rs	jr-rust: ./slice/sort/unstable/heapsort.rs: ./slice/sort/unstable/heapsort.rs:12:13: expected "{", found "("
+./slice/sort/unstable/mod.rs	jr-rust: ./slice/sort/unstable/mod.rs: ./slice/sort/unstable/heapsort.rs:12:13: expected "{", found "("
+./slice/sort/unstable/quicksort.rs	jr-rust: ./slice/sort/unstable/quicksort.rs: ./slice/sort/unstable/quicksort.rs:27:13: expected "{", found "("
+./slice/specialize.rs	jr-rust: ./slice/specialize.rs: ./slice/specialize.rs:49:6: unsupported: unsupported token "$"
+./str/converts.rs	jr-rust: ./str/converts.rs: ./str/converts.rs:178:5: unsupported: const items and constant evaluation are unsupported, found "const"
+./str/count.rs	jr-rust: ./str/count.rs: ./str/count.rs:23:1: unsupported: const items and constant evaluation are unsupported, found "const"
+./str/error.rs	jr-rust: ./str/error.rs: ./str/error.rs:48:14: visibility path escapes crate root, found ")"
+./str/iter.rs	jr-rust: ./str/iter.rs: ./str/iter.rs:30:20: lifetime parameters on nominal and impl declarations are unsupported, found ">"
+./str/lossy.rs	jr-rust: ./str/lossy.rs: ./str/lossy.rs:116:26: unsupported: unsupported token "?"
+./str/mod.rs	jr-rust: ./str/mod.rs: ./str/pattern.rs:130:17: unsupported: string continuation escapes are unsupported
+./str/pattern.rs	jr-rust: ./str/pattern.rs: ./str/pattern.rs:130:17: unsupported: string continuation escapes are unsupported
+./str/traits.rs	jr-rust: ./str/traits.rs: ./str/traits.rs:372:74: unsupported: unsupported token "?"
+./str/validations.rs	jr-rust: ./str/validations.rs: ./str/validations.rs:23:10: visibility path escapes crate root, found ")"
+./sync/atomic.rs	jr-rust: ./sync/atomic.rs: ./sync/atomic.rs:244:21: unsupported: glob imports are unsupported, found "*"
+./sync/mod.rs	jr-rust: ./sync/mod.rs: ./sync/atomic.rs:244:21: unsupported: glob imports are unsupported, found "*"
+./sync/sync_view.rs	jr-rust: ./sync/sync_view.rs: ./sync/sync_view.rs:101:24: unsupported: unsupported token "?"
+./task/mod.rs	jr-rust: ./task/mod.rs: ./task/ready.rs:50:17: unsupported: unsupported token "$"
+./task/poll.rs	jr-rust: ./task/poll.rs: ./task/poll.rs:49:18: expected "{", found "("
+./task/ready.rs	jr-rust: ./task/ready.rs: ./task/ready.rs:50:17: unsupported: unsupported token "$"
+./task/wake.rs	jr-rust: ./task/wake.rs: ./task/wake.rs:29:14: unsupported: static and inferred lifetimes are unsupported, found "'static"
+./time.rs	jr-rust: ./time.rs: ./time.rs:26:1: unsupported: const items and constant evaluation are unsupported, found "const"
+./tuple.rs	jr-rust: ./tuple.rs: ./tuple.rs:4:34: unsupported: glob imports are unsupported, found "*"
+./ub_checks.rs	jr-rust: ./ub_checks.rs: ./ub_checks.rs:71:25: unsupported: string continuation escapes are unsupported
+./unicode/mod.rs	jr-rust: ./unicode/mod.rs: ./unicode/unicode_data.rs:21:19: unsupported: const generic parameters are unsupported, found ","
+./unicode/unicode_data.rs	jr-rust: ./unicode/unicode_data.rs: ./unicode/unicode_data.rs:21:19: unsupported: const generic parameters are unsupported, found ","
+./unit.rs	jr-rust: ./unit.rs: ./unit.rs:27:9: unsupported: unsupported token "?"
+./unsafe_binder.rs	jr-rust: ./unsafe_binder.rs: ./unsafe_binder.rs:9:17: expected attribute brackets
+./view.rs	jr-rust: ./view.rs: main must exist, take no arguments and return ()
+./wtf8.rs	jr-rust: ./wtf8.rs: ./wtf8.rs:61:50: unsupported: unsupported token "?"
