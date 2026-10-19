@@ -2,11 +2,15 @@
 
 `libraries/prelude/` is justrust's own library, written in ordinary Rust (not
 Rust's std). It provides `std::`/`core::` paths and the implicit prelude.
-The initial source library contains `Option<T>` and its `Some`/`None`
-constructors. The explicit bootstrap `native_heap` module adds Rust-source
+The source library contains `Option<T>` and `Result<T, E>`, their constructors,
+borrowing predicates (`is_some`, `is_none`, `is_ok`, `is_err`), and consuming
+`unwrap_or`. Methods are ordinary generic Rust impl bodies, not compiler
+method-name exceptions. `unwrap` and other panicking convenience APIs are not
+provided until their panic and trait-bound contracts can be implemented
+correctly. The explicit bootstrap `native_heap` module adds Rust-source
 allocation and pointer helpers over a primitive Linux syscall ABI, documented
-in NATIVE-HEAP.md. This is not full std/core support. Methods, iterator traits and
-other library APIs remain follow-up work, not compiler method-name exceptions.
+in NATIVE-HEAP.md. This is not full std/core support. Iterator traits and the
+rest of std/core remain follow-up work.
 
 ## Loading (graph inputs)
 

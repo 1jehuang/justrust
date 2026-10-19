@@ -78,8 +78,10 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       once, left to right, before body-only source bindings. Pre-body advancement
       preserves break/continue/labels and never increments an inclusive maximum.
       `tests/loops.rs` compares stock execution and invalid type/scope/control
-      cases with native check/build at one and eight workers. General iterable
-      values, adapters and expression-position for loops remain open.
+      cases with native check/build at one and eight workers. By-value Copy-array
+      iteration snapshots its iterable once, advances before the body, and supports
+      existing irrefutable scalar/tuple/array patterns. Non-Copy elements, borrowed
+      iterable arrays, adapters and expression-position for loops remain open.
 - [x] Genuine let-else with old-frontier initializer/else validation, dedicated
       persistent-binding IR and checked failure divergence. LET-ELSE.md records
       stock33/native132 cells per bootstrap profile,26 public authority controls
@@ -101,6 +103,11 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       retain conservative coverage; cyclic metadata and resource failures fail
       closed. This is not general Rust pattern grammar or full compatibility.
 - [x] Fieldless nominal enums and scalar/enum match with exhaustive coverage.
+- [x] Scoped local numeric literal constraints from later scalar uses, returns,
+      assignments and monomorphic calls, before existing peer-aware fallback.
+      `LOCAL-LITERALS.md` records 28 stock-differential witnesses and unchanged
+      Collatz exact native check/build/run acceptance. General structured and
+      reference inference remain open, with no new graph kinds or ratchet changes.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
 - [x] Payload enums, typed downcasts, bounded selection proofs and native tagged values.
 - [x] Fixed arrays, repeat effects, literal indexing and private by-value array ABI.
@@ -259,6 +266,7 @@ missing-file changes invalidate only justified consumers without stale lookup.
 - [x] Native i128/u128 scalar arithmetic, numeric casts, transport and exact
       typed constants under INTEGER128.md (not platform ABI or full Rust).
 - [x] Bounded Unicode `char` literals, scalar transport, Copy/Clone/Sized and comparisons (CHARS.md). Character casts `char as int`/`u8 as char` are implemented (CHAR-CASTS.md).
+- [x] Exact ASCII byte literals and byte escapes with rigid `u8` typing, pattern/range and macro forwarding support (BYTE-LITERALS.md). Byte strings remain unsupported.
 - [x] Character literal patterns and integer/char range patterns with exact interval exhaustiveness (SCALAR-PATTERNS.md).
 - [x] Width-correct primitive integer `.leading_zeros()` and unchanged original
       core exponent-estimator module acceptance under LEADING-ZEROS.md. This is

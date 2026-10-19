@@ -10,6 +10,9 @@
 //! The original nonliteral source stops at its earlier string-binding parser boundary.
 //! Root owns native observations. Harness reused from panic.rs/literal_output.rs.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/native_prelude.rs"]
+mod native_prelude;
+
 use justrust_engine::compiler::{self, frontend, ir};
 use justrust_engine::{Key, Report};
 use std::fs::{self, OpenOptions};
@@ -870,7 +873,7 @@ fn evaluated_once(report: &Report, kind: u32, index: usize, case: &Case) {
     assert_eq!(nodes[0].1, 1, "{}: repeated {key:?}", case.name);
 }
 fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, check: bool) {
-    let program = frontend::parse(case.source).expect("positive frozen source parses");
+    let program = native_prelude::parse(case.source).expect("positive frozen source parses");
     frontend::check(&program).expect("all bodies checked independent of reachability");
     let plan = frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
     assert_eq!(compiled.source_bytes, case.source.len());
@@ -885,7 +888,7 @@ fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, chec
         evaluated_once(&compiled.report, 110, index, case);
         let universal = match plan.callable_provider(declaration).unwrap() {
             frontend::CallableProvider::Source { .. } => {
-                source_bodies += 1;
+                source_bodies += usize::from(!plan.is_prelude_decl(declaration).unwrap());
                 plan.callable_env(declaration).unwrap().is_generic()
             }
             frontend::CallableProvider::Recipe { .. } => true,

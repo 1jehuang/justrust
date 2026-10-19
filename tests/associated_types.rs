@@ -1,11 +1,11 @@
 //! Frozen stock-first closed projection witnesses for ASSOCIATED-TYPES.md.
-//! Native categories below are acceptance expectations, not measured outcomes.
+//! Native categories are exact-source stock/native measurements, rechecked 2026-10-19.
 //! First18 JSON SHA256 ab503e0282894e9a3c55229f1179225198499225992a4df1b2b247fcebca2293.
 //! Append9 JSON SHA256 bf933985f8a1a93f75a7ecce9489727eeb6dc2d28eb88ab39bdccf734fa90e43.
 //! Literal append12 JSON SHA256 ac05abbe21575c3a1d16d66a9aadd849ad45ec176de4f8015beeee4991bb16a7.
 //! Sources retain original 01..27 bytes/order and append 28..39, including final LF.
-//! Original stock-valid cases are earlier formatting boundaries, NOT projection parity.
-//! Case16 never establishes a later rvalue-borrow or reference-normal-form outcome.
+//! Original cases 01,03,04,15..17,19,21..23,26,27 now match stock output.
+//! Case16 witnesses this closed reference projection, not general reference parity.
 //! Case07 stops at unresolved String, before checking its associated Copy obligation.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use justrust_engine::compiler::{frontend, source};
@@ -38,7 +38,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: Some("42\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         // Source SHA256 15f4e9033f3e0f0d95e0e8cdb9dd08fad6f24c412954d078171f7aedafc7437e
         Case {
@@ -56,7 +56,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: Some("42\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         // Source SHA256 e86817c10961ae9b4dbbbb826160d13820493c77eec9b331e7b80c2fabe6f0e6
         Case {
@@ -65,7 +65,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: Some("42\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         // Source SHA256 f50bdc6a656d5aad155c7b4d492bfed30d43b6618e16cc82ed31d0c335fb6b55
         Case {
@@ -164,7 +164,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: Some("42\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         // Source SHA256 92c6be4b1df4de6e17180a36a72861ac0cd7e88c5183ede2700c33d6f7284eb8
         Case {
@@ -173,7 +173,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: Some("42\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         // Source SHA256 a369e02b0ee590d856c7e27d0ea4c70cc9bdadb4bc9dfb852514893604339fd9
         Case {
@@ -182,7 +182,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: Some("42 true\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         // Source SHA256 aef6e467bc36c90fcdd49673a740a029f67553788e8312cf2e7398b4aaa38062
         Case {
@@ -200,7 +200,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: Some("42 true 9000\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         // Source SHA256 be357731ced256bd685158d2e236bb3e437037002c1198116a3cbee79c799bcc
         Case {
@@ -218,7 +218,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: Some("42\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         // Source SHA256 a95d5a936e39e090c83aa672f0b5997b85a6b0c18f4611585e03b319d0642d75
         Case {
@@ -227,7 +227,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: Some("1267650600228229401496703205376\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         // Source SHA256 0ab7b94e8276c1d008428d154fb4ee35dd2a95f0a08a72adfc6044d8bd04d900
         Case {
@@ -236,7 +236,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: Some("42 true\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         // Source SHA256 f50bdc6a656d5aad155c7b4d492bfed30d43b6618e16cc82ed31d0c335fb6b55
         Case {
@@ -263,7 +263,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: Some("42\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         // Source SHA256 e5ff7c3e0dfe5391ad8b76a86eb479a22079654eb240e33e71c13cc75b02af24
         Case {
@@ -272,7 +272,7 @@ fn cases() -> Vec<Case> {
 "#,
             stdout: Some("42 true\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         // Source SHA256 0be435af31b06a64d9cb8e969d6d60c26f8dcbcdaaf290807abdb9d7ae717c76
         Case {
@@ -557,56 +557,46 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (28, 12));
-    assert_eq!(partition, (12, 12, 16, 0));
+    assert_eq!(partition, (24, 12, 4, 0));
 }
 #[test]
 fn stock_nested_associated_types_oracle_edition2024_actual_toolchain() {
     stock_all();
 }
 #[test]
-fn original_stock_valid_sources_keep_their_actual_earlier_boundaries() {
+fn original_stock_valid_sources_keep_their_measured_phases() {
     for case in cases()
         .into_iter()
         .take(27)
         .filter(|case| case.stdout.is_some())
     {
-        let error = match source::prepare_text(
+        let parsed = source::prepare_text(
             "projection.rs",
             case.source,
             &source::SourceOptions::default(),
-        ) {
-            Err(error) => error.to_string(),
-            Ok(prepared) => match frontend::parse_prepared(&prepared) {
-                Err(error) => error.to_string(),
-                Ok(_) => panic!(
-                    "{} earlier boundary changed; remeasure explicitly",
-                    case.name
-                ),
-            },
-        };
-        if case.name.starts_with("20_") {
+        )
+        .map_err(|error| error.to_string())
+        .and_then(|prepared| {
+            frontend::parse_prepared(&prepared).map_err(|error| error.to_string())
+        });
+        if case.outcome == Outcome::Runtime {
+            parsed.expect(case.name);
+        } else {
+            let error = parsed.expect_err(case.name);
             assert!(
-                error.contains("active attribute `derive` is unsupported"),
+                error.contains(unsupported_boundary(&case)),
                 "{}:{error}",
                 case.name
             );
-            continue;
         }
-        if case.name.starts_with("14_") {
-            assert!(
-                error.to_string().contains("unsupported"),
-                "{}:{error}",
-                case.name
-            );
-            continue;
-        }
-        assert!(
-            error
-                .to_string()
-                .contains("println! formatting placeholders are unsupported"),
-            "{}:{error}",
-            case.name
-        );
+    }
+}
+fn unsupported_boundary(case: &Case) -> &'static str {
+    match case.name {
+        "02_same_self_distinct_argument" => "only bare {} formatting placeholders are supported",
+        "14_generic_rigid_forward" => "associated type projections are unsupported",
+        "20_copy_record" | "34_literal_copy_record" => "active attribute `derive` is unsupported",
+        _ => panic!("unclassified Unsupported fixture: {}", case.name),
     }
 }
 #[test]
@@ -653,15 +643,8 @@ fn native_associated_types_workers1_8_check_build_no_compiler_fallback() {
                     assert!(result.stdout.is_empty());
                     assert!(!diagnostic.is_empty());
                     if case.outcome == Outcome::Unsupported {
-                        // Original stock-valid sources fail at literal formatting syntax,
-                        // before any later projected-method/rigid/reference semantics.
                         assert!(
-                            diagnostic.contains("println! formatting placeholders are unsupported")
-                                || (case.name.starts_with("14_")
-                                    && diagnostic.contains("unsupported"))
-                                || ((case.name.starts_with("20_") || case.name.starts_with("34_"))
-                                    && diagnostic
-                                        .contains("active attribute `derive` is unsupported")),
+                            diagnostic.contains(unsupported_boundary(&case)),
                             "{}:{diagnostic}",
                             case.name
                         );
@@ -708,8 +691,8 @@ fn native_associated_types_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 160);
-    assert_eq!(modes, (24, 24, 24, 24, 32, 32, 0, 0));
+    assert_eq!(modes, (48, 48, 24, 24, 8, 8, 0, 0));
     eprintln!(
-        "NATIVE ASSOCIATED TYPES:160 cells, modes{modes:?};24 nonempty-output main images;64 stock-valid Unsupported cells remain distinct boundaries;case07 is unresolved String, not Copy-obligation parity or full Rust support"
+        "NATIVE ASSOCIATED TYPES:160 cells, modes{modes:?};48 nonempty-output main images;16 stock-valid Unsupported cells remain distinct boundaries;case07 is unresolved String, not Copy-obligation parity or full Rust support"
     );
 }
