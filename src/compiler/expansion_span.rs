@@ -9,6 +9,7 @@ pub enum SyntheticReason {
     TransportDelimiter,
     DocumentationAttribute,
     ExpansionToken,
+    DerivedMember,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

@@ -1,6 +1,12 @@
 //! Module-domain expansion authority, separate from function lexical frontiers.
 use super::*;
+#[path = "item_metadata.rs"]
+mod metadata;
 use crate::compiler::module_identity::{ModuleArena, ModuleArenaBuilder, ModuleError, ModuleId};
+pub(super) use metadata::Builder as MetadataBuilder;
+pub(crate) use metadata::{
+    DerivedMemberAdmission, DerivedMemberKind, ItemDerivedCopyId, ItemMetadataId,
+};
 
 mod sealed {
     pub trait Sealed {}
@@ -201,6 +207,7 @@ struct ItemAnchor {
 }
 
 pub(super) struct ItemScopeState {
+    pub(super) metadata: metadata::State,
     source_root: Option<ModuleId>,
     points: BudgetVec<ModulePoint>,
     anchors: BudgetVec<ItemAnchor>,
@@ -210,6 +217,7 @@ pub(super) struct ItemScopeState {
 impl ItemScopeState {
     pub(super) fn new(b: &ExpansionBudget) -> Result<Self, ScopeError> {
         Ok(Self {
+            metadata: metadata::State::default(),
             source_root: None,
             points: BudgetVec::new(b, Storage::Retained)?,
             anchors: BudgetVec::new(b, Storage::Retained)?,

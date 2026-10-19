@@ -816,6 +816,14 @@ remain separate open work.
       Twenty-three stock cases pass native CHECK without artifacts and BUILD/run
       at workers 1 and 8, including skipped-reference cycles and unused bad types.
       General const-fn execution and unchanged time-core acceptance remain open.
+- [ ] Complete generated-item metadata and derive expansion (GENERATED-METADATA.md).
+      The bounded unit-struct slice retains exact original metadata/item/derive
+      occurrences and emits real Copy/Clone/Debug implementations. Canonical
+      source fmt signatures and derived executable scopes have separate replayed
+      authority. One original combined derive consumer passes stock and native
+      CHECK/BUILD/run at workers 1 and 8. Four exact metadata/member provenance
+      units and the unchanged graph-integrity gate pass on the current-parent
+      candidate. Generic/field/enum recipes and unchanged time-core remain open.
 
 **Acceptance:**
 expansion order/hygiene, const failures and generated diagnostics match pinned

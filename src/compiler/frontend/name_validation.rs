@@ -18,8 +18,15 @@ fn transport(error: TokenError) -> String {
 /// depth validation remains a separate gate, with its existing policy unchanged.
 pub(super) fn validate_program_names(program: &Program) -> Result<(), String> {
     generated_owners::validate(program)?;
+    generated_metadata::validate(program)?;
     let mut validator = Validator::new(program)?;
     validator.require_coverage = true;
+    for recipe in generated_metadata::debug_recipes(&program.generated_metadata) {
+        if recipe.implementation.is_none() {
+            validator.work(1)?;
+            validator.generated.push(recipe.scope).map_err(transport)?;
+        }
+    }
     if let Some(scopes) = &program.scopes {
         scopes
             .check_item_authority(program.names.as_ref(), program.modules.as_ref())
@@ -106,6 +113,7 @@ enum Visit<'a> {
     Bound(&'a TypeBound),
     Regions(&'a RegionDecls),
     Type(&'a Type),
+    DerivedSignatureType(&'a Type, ModuleId),
     GenericPath(&'a GenericPath),
     TraitPath(&'a TraitPath),
     Block(&'a Block),
@@ -457,8 +465,17 @@ impl<'a> Validator<'a> {
                 self.push(Visit::Regions(&function.regions))?;
                 self.identifiers(&function.type_params, LookupClass::TypeParameter)?;
                 self.many(&function.bounds, Visit::Bound)?;
-                self.parameters(&function.params)?;
-                self.push(Visit::Type(&function.result))?;
+                if let Some(module) = generated_debug::signature_module(self.program, function)? {
+                    self.work(function.params.len())?;
+                    for (name, ty) in &function.params {
+                        self.push(Visit::Binding(*name))?;
+                        self.push(Visit::DerivedSignatureType(ty, module))?;
+                    }
+                    self.push(Visit::DerivedSignatureType(&function.result, module))?;
+                } else {
+                    self.parameters(&function.params)?;
+                    self.push(Visit::Type(&function.result))?;
+                }
             }
             Visit::RestoreScope(scope, module) => {
                 self.scope = scope;
@@ -639,6 +656,11 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Region(*left))?;
                     self.push(Visit::Region(*right))?;
                 }
+            }
+            Visit::DerivedSignatureType(ty, module) => {
+                self.source_module(module)?;
+                self.enter_scope(None, module)?;
+                self.push(Visit::Type(ty))?;
             }
             Visit::Type(ty) => match ty {
                 Type::Opaque(opaque) => {

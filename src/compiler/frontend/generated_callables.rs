@@ -91,6 +91,26 @@ impl Parser<'_, '_> {
                 )
             })?;
         }
+        for recipe in generated_metadata::debug_recipes(&product.generated_metadata) {
+            self.names
+                .budget()
+                .charge(super::super::expansion_budget::Counter::Work, 1)
+                .map_err(|error| native_adapter::transport_error(error.into()))?;
+            scopes
+                .seal_item_product(
+                    self.names,
+                    &*self.modules,
+                    proof,
+                    recipe.scope,
+                    recipe.method,
+                )
+                .map_err(scope_parse_error)?;
+            count = count.checked_add(1).ok_or_else(|| {
+                native_adapter::transport_error(
+                    super::super::token_session::TokenError::IdExhausted,
+                )
+            })?;
+        }
         scopes
             .complete_item_expansion(self.names, &*self.modules, proof, count)
             .map_err(scope_parse_error)

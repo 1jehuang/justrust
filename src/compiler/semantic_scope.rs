@@ -21,7 +21,8 @@ use super::token_session::{
 mod item_scope;
 mod receiver;
 pub(crate) use item_scope::{
-    ExpansionTokenAdmission, ItemExpansionAdmission, ModuleAccess, ModuleFrontierId, OccurrenceRole,
+    DerivedMemberAdmission, DerivedMemberKind, ExpansionTokenAdmission, ItemDerivedCopyId,
+    ItemExpansionAdmission, ItemMetadataId, ModuleAccess, ModuleFrontierId, OccurrenceRole,
 };
 
 macro_rules! handle {
@@ -298,6 +299,7 @@ impl fmt::Debug for ScopeArena {
 }
 #[derive(Debug)]
 pub struct ScopeArenaBuilder {
+    metadata_builder: item_scope::MetadataBuilder,
     arena: ScopeArena,
 }
 
@@ -311,6 +313,7 @@ impl ScopeArenaBuilder {
             (size_of::<ScopeArena>() + 2 * size_of::<usize>()) as u64,
         )?;
         Ok(Self {
+            metadata_builder: item_scope::MetadataBuilder::new(&budget)?,
             arena: ScopeArena {
                 owner: allocate_identity(&NEXT)?,
                 names: names.session().id(),
@@ -534,9 +537,10 @@ impl ScopeArenaBuilder {
         )?;
         Ok(admission)
     }
-    pub fn freeze(self) -> Result<Arc<ScopeArena>, ScopeError> {
+    pub fn freeze(mut self) -> Result<Arc<ScopeArena>, ScopeError> {
         self.arena.budget.check()?;
         self.arena.check_item_completion()?;
+        self.arena.items.metadata = self.metadata_builder.freeze(&mut self.arena._lease)?;
         Ok(Arc::new(self.arena))
     }
     pub fn check_names(&self, names: &impl NameAccess) -> Result<(), ScopeError> {

@@ -4079,7 +4079,13 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     let mut equality_boundary = None;
     let mut associated_boundary = None;
     let mut associated_bound_sources = Vec::new();
+    let mut derived_debug_source = None;
     for (source_index, declaration) in program.traits.iter_mut().enumerate() {
+        if generated_debug::canonical_source(&parsed.program, declaration)?
+            && derived_debug_source.replace(source_index).is_some()
+        {
+            return Err("duplicate canonical native Debug trait".into());
+        }
         resolver.with_source_owner(SourceOwnerContext::Trait { source_index }, |resolver| {
             clone_vector(&declaration.type_params, &resolver.alias_budget)?;
             resolver.type_params = declaration.type_params.clone();
@@ -4329,6 +4335,25 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
             }
             Ok(())
         })?;
+    }
+    let derived_debug = generated_metadata::materialize_debug(&mut program, derived_debug_source)?;
+    for index in derived_debug {
+        let implementation = &mut program.impls[index];
+        resolver.self_nominal = match &implementation.self_ty {
+            Type::Named(path) => Some(path.clone()),
+            _ => None,
+        };
+        resolver.self_allowed = true;
+        resolver.source_owner = SourceOwnerContext::None;
+        resolver.type_params.clear();
+        for item in &mut implementation.items {
+            let locals = resolver.function_locals(&item.function, item.receiver)?;
+            resolver.block(
+                &mut item.function.body,
+                implementation.module,
+                &mut vec![locals],
+            )?;
+        }
     }
     // Closure syntax is final only after free, default and implementation bodies
     // have all been resolved by this producer. No child can observe a partial map.

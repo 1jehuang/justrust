@@ -39,6 +39,9 @@ pub(super) mod closures;
 pub use closures::shape_seal::ClosureShapeSeal;
 mod function_qualifiers;
 mod generated_callables;
+mod generated_debug;
+mod generated_derive;
+mod generated_metadata;
 mod generated_owners;
 mod invocation;
 #[cfg(test)]
@@ -4983,6 +4986,7 @@ pub struct Program {
     core_prelude_scope: Option<ModuleId>,
     core_library_module: Option<ModuleId>,
     generated_owners: Arc<[generated_owners::Certificate]>,
+    generated_metadata: Arc<[generated_metadata::Attachment]>,
     c_abi: Arc<c_abi::Declarations>,
     pub names: Arc<NameStore>,
     pub modules: Arc<ModuleArena>,
@@ -5041,6 +5045,7 @@ struct GlobImport {
 /// final program is published only after its one mutable owner is frozen.
 #[derive(Default)]
 struct ProgramDeclarations {
+    generated_metadata: Vec<generated_metadata::Attachment>,
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     core_prelude_scope: Option<ModuleId>,
     core_library_module: Option<ModuleId>,
@@ -5076,6 +5081,7 @@ impl ProgramDeclarations {
             core_prelude_scope: self.core_prelude_scope,
             core_library_module: self.core_library_module,
             generated_owners: Arc::from([]),
+            generated_metadata: self.generated_metadata.into(),
             c_abi: Arc::new(self.c_abi),
             names,
             modules,
@@ -5237,6 +5243,7 @@ impl ProgramBuilder {
             core_library_module: None,
             extern_mounts: Vec::new(),
             closure_sources: HashMap::new(),
+            generated_metadata: Vec::new(),
         }
         .publish(names, modules, self.symbols, None);
         program.validate_name_handles()?;
@@ -7278,6 +7285,7 @@ struct Parser<'input, 'names> {
     expansion_depth: u32,
     purpose: ParserPurpose,
     item_expansion: Option<super::semantic_scope::ItemExpansionAdmission>,
+    generated_metadata: Vec<generated_metadata::Attachment>,
     module_frontier: Option<super::semantic_scope::ModuleFrontierId>,
     module: ModuleId,
     alias_target: bool,
@@ -7466,6 +7474,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             expansion_depth: 0,
             purpose: ParserPurpose::Active,
             item_expansion: Some(proof),
+            generated_metadata: Vec::new(),
             module_frontier: self.module_frontier,
             module,
             alias_target: false,
@@ -7494,6 +7503,10 @@ impl<'input, 'names> Parser<'input, 'names> {
             child.reserve_item_publication(&mut product)?;
             let start = child.cursor.checkpoint();
             let previous_count = product.program.functions.len();
+            let metadata_start = child.generated_metadata.len();
+            let nominal_start = product.program.structs.len();
+            child.retain_generated_item_metadata()?;
+            let metadata_end = child.generated_metadata.len();
             let (visibility, explicit_visibility) = child.visibility(module)?;
             let item_start = [
                 "fn", "trait", "impl", "struct", "enum", "type", "const", "static", "pub",
@@ -7529,6 +7542,11 @@ impl<'input, 'names> Parser<'input, 'names> {
                 visibility,
                 explicit_visibility,
             )?;
+            child.finish_generated_metadata(
+                &mut product.program,
+                metadata_start..metadata_end,
+                nominal_start,
+            )?;
             if child.cursor.is_at(start) {
                 return Err(native_adapter::transport_error(
                     super::token_session::TokenError::InvalidHandle,
@@ -7539,6 +7557,10 @@ impl<'input, 'names> Parser<'input, 'names> {
         // No function or empty expansion is published until the entire native
         // token buffer has been consumed. The shared expansion is provenance,
         // not a substitute for each function's exact occurrence and fresh scope.
+        product
+            .program
+            .generated_metadata
+            .append(&mut child.generated_metadata);
         drop(child);
         self.seal_emitted_callables(&product.program, &proof)?;
         for key in product.items.keys() {
@@ -7550,13 +7572,22 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.reserve_item_publication(parsed)?;
             parsed.items.insert(key, items);
         }
-        let generated = product.program;
+        let mut generated = product.program;
+        generated_metadata::rebase(
+            &mut generated.generated_metadata,
+            parsed.program.structs.len(),
+            parsed.program.impls.len(),
+        )?;
         parsed.program.functions.extend(generated.functions);
         parsed.program.constants.extend(generated.constants);
         parsed.program.structs.extend(generated.structs);
         parsed.program.enums.extend(generated.enums);
         parsed.program.impls.extend(generated.impls);
         parsed.program.traits.extend(generated.traits);
+        parsed
+            .program
+            .generated_metadata
+            .extend(generated.generated_metadata);
         parsed.program.trait_imports.extend(generated.trait_imports);
         parsed
             .program
@@ -8811,6 +8842,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             expansion_depth,
             purpose: self.purpose,
             item_expansion: self.item_expansion,
+            generated_metadata: Vec::new(),
             module_frontier: self.module_frontier,
             module: self.module,
             alias_target: false,
@@ -9202,6 +9234,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             expansion_depth: 0,
             purpose,
             item_expansion: None,
+            generated_metadata: Vec::new(),
             module_frontier: None,
             module,
             alias_target: false,
@@ -10543,6 +10576,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 {
                     return Err(self.limit("trait item limit exceeded"));
                 }
+                self.retain_generated_item_metadata()?;
                 if self.is("pub") {
                     return Err(self.error("trait items cannot declare visibility"));
                 }
@@ -10880,6 +10914,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 {
                     return Err(self.limit("associated item limit exceeded"));
                 }
+                self.retain_generated_item_metadata()?;
                 let (visibility, explicit_visibility) = self.visibility(module)?;
                 if explicit_visibility && trait_path.is_some() {
                     return Err(self.error("trait impl items cannot declare pub"));

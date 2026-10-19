@@ -13,7 +13,9 @@ use super::token_session::{
     BudgetVec, SessionId, SpanId, SymbolId, SyntaxContextId, TokenError, TokenSession,
 };
 
+mod derived;
 mod literal_consume;
+pub(crate) use derived::{DerivedAtom, validate_derived_identifier};
 pub(crate) use literal_consume::{LiteralError, LiteralParts};
 
 /// A checked occurrence in a single program's append-only canonical name arena.
