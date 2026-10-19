@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet, VecDeque, hash_map::DefaultHasher};
 use std::fmt;
 use std::future::{Future, poll_fn};
 use std::hash::{Hash, Hasher};
+use std::num::NonZeroU64;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -241,6 +242,31 @@ impl Report {
     }
 }
 
+/// Root of every compiler-issued owner identity (PARSE-SPLIT.md, OwnerPath).
+///
+/// Only the engine constructor mints one: the value is the engine's own graph
+/// id, already unique per `Engine` and issued by engine state. There is no
+/// public constructor, so compiler code cannot fabricate a root. Equal
+/// authorities mean the same engine; distinct engines never compare equal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct EngineAuthority(NonZeroU64);
+impl EngineAuthority {
+    fn of(shared: &Shared) -> Self {
+        Self(NonZeroU64::new(shared.id).expect("engine graph ids start at 1"))
+    }
+    /// A fresh authority for one standalone, non-graph computation (direct
+    /// parsing in library calls and tests). Each call is a distinct engine
+    /// identity, so two direct parses never share an owner root.
+    pub fn standalone() -> Self {
+        let id = NEXT_GRAPH.fetch_add(1, Ordering::Relaxed);
+        Self(NonZeroU64::new(id).expect("engine graph ids start at 1"))
+    }
+    /// Opaque value for structural encoding only. Not a constructor input.
+    pub fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
 #[derive(Clone)]
 pub struct Context {
     shared: Arc<Shared>,
@@ -424,6 +450,11 @@ fn panic_error(where_: &str, payload: Box<dyn Any + Send>) -> Error {
 }
 
 impl Engine {
+    /// The authority every owner issued for this engine's snapshot descends from.
+    pub fn authority(&self) -> EngineAuthority {
+        EngineAuthority::of(&self.shared)
+    }
+
     pub fn new(provider: impl Provider) -> Self {
         Self::configured(provider, 64, EVENT_CAPACITY)
     }
@@ -764,6 +795,11 @@ impl Node {
 }
 
 impl Context {
+    /// The authority of the engine running this node.
+    pub fn authority(&self) -> EngineAuthority {
+        EngineAuthority::of(&self.shared)
+    }
+
     pub fn request(&self, key: Key) -> Outputs {
         Outputs {
             node: self.shared.intern(key),

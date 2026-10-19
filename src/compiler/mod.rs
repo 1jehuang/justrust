@@ -21,6 +21,7 @@ mod macro_matcher;
 pub mod macro_rules;
 mod macro_transcribe;
 pub mod module_identity;
+pub mod owner_path;
 pub mod ownership;
 mod resource_accounting;
 mod root_cleanup;
