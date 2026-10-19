@@ -151,7 +151,39 @@ fn validator_rejects_malformed_slice_operands() {
         }
     }
     assert_eq!(mutated, 1);
-    assert!(f.validate().unwrap_err().contains("whole local"));
+    // Whole descriptor moves are legal, including the unique-slice transport
+    // introduced by MUTABLE-SLICES.md. A projection is still not a snapshot.
+    f.validate().unwrap();
+    for block in &mut f.blocks {
+        for statement in &mut block.statements {
+            if let Statement::Assign {
+                value:
+                    Rvalue::SliceIndex {
+                        slice: Operand::Move(place),
+                        ..
+                    },
+                ..
+            } = &mut statement.value
+            {
+                place.projection.push(Projection::Deref);
+            }
+        }
+    }
+    assert!(f.validate().is_err(), "projected slice carrier accepted");
+    for block in &f.blocks {
+        for statement in &block.statements {
+            if let Statement::Assign {
+                value: Rvalue::SliceIndex { slice, .. },
+                ..
+            } = &statement.value
+            {
+                assert_eq!(
+                    f.slice_operand_ty(slice, ir::FactsCtx::Concrete),
+                    Err("CFG slice operand must copy a whole local".into())
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -214,11 +246,12 @@ fn copied_array_keeps_slice_and_moved_holder_kills_it() {
 }
 
 #[test]
-fn slice_escape_into_return_is_rejected() {
-    let error = rejected("fn f<'a>(b: &'a [u8]) -> &'a [u8] { b }");
-    assert!(error.contains("unsupported"), "{error}");
-    let error = rejected("fn f(b: &[u8], c: &[u8]) -> &[u8] { c }");
-    assert!(error.contains("unsupported"), "{error}");
+fn slice_returns_preserve_declared_lifetime_and_reject_ambiguous_elision() {
+    accepted(
+        "fn f<'a>(b: &'a [u8]) -> &'a [u8] { b } fn main() { let a = [1u8]; let s = f(&a); let n = s.len(); }",
+    );
+    let error = rejected("fn f(b: &[u8], c: &[u8]) -> &[u8] { c } fn main() {}");
+    assert!(error.contains("missing lifetime specifier"), "{error}");
 }
 
 #[test]

@@ -5006,7 +5006,7 @@ mod tests {
             assert_eq!(argument_words(&slice), Ok(2));
             assert_eq!(value_size(&slice), Ok(16));
             assert_eq!(indirect(&slice), Ok(true));
-            assert!(result_indirect(&slice).is_err());
+            assert_eq!(result_indirect(&slice), Ok(true));
             assert!(!slice.shared_byte_slice());
             let array = ir::Ty::Array {
                 element: std::sync::Arc::new(element),
