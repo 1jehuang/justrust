@@ -7205,6 +7205,122 @@ impl<'a> Checker<'a> {
         self.reachable = outer_reachable;
         result
     }
+    /// Fixed-array dispatch retains existing canonical indexed-loan overlap.
+    /// Keep each real element borrow and its source body in one branch: joining
+    /// alternative mutable handles would conservatively overlap sibling loans.
+    #[inline(never)]
+    fn for_borrowed_array_body(
+        &mut self,
+        carrier: (ir::LocalId, ir::LocalId),
+        element: (&ir::Ty, ir::BorrowKind),
+        len: usize,
+        pattern: &Pattern,
+        body: &Block,
+    ) -> Result<ir::ExprId, String> {
+        let (array, saved_index) = carrier;
+        let (element, kind) = element;
+        let mut selected = None;
+        for index in (0..len.max(1)).rev() {
+            let item = if len == 0 {
+                // No reference to a nonexistent element is fabricated. The
+                // zero-length guard never enters this diverging typed operand,
+                // but the genuine source pattern and body are still checked.
+                let depth = self.loops.len();
+                let id = self.enter_loop(false);
+                self.loops.truncate(depth);
+                let item = self.for_expr(
+                    ir::Ty::Ref {
+                        kind,
+                        referent: Arc::new(element.clone()),
+                    },
+                    ir::ExprKind::Loop {
+                        id,
+                        body: ir::Block {
+                            statements: vec![],
+                            tail: None,
+                        },
+                    },
+                )?;
+                self.exprs[item.0].completion = ir::Completion::Never;
+                item
+            } else {
+                self.borrow_expression(
+                    kind,
+                    ir::Place {
+                        local: array,
+                        projection: vec![
+                            ir::Projection::Deref,
+                            ir::Projection::ConstantIndex(index),
+                        ],
+                    },
+                )?
+            };
+            self.reachable = true;
+            let (kind, flow) = self.lower_match_value(
+                item,
+                [BorrowedMatchArm {
+                    pattern: Some(pattern),
+                    guarded: false,
+                    body: MatchBody::Block(body),
+                }]
+                .into_iter(),
+                Some(&ir::Ty::Unit),
+            )?;
+            self.require(&flow, &ir::Ty::Unit)?;
+            let branch = self.for_expr(flow.ty, kind)?;
+            self.exprs[branch.0].completion = if flow.completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            };
+            let Some(previous) = selected else {
+                selected = Some(branch);
+                continue;
+            };
+            let read = self.for_expr(
+                ir::Ty::Int(ir::IntTy::Usize),
+                ir::ExprKind::Local(saved_index),
+            )?;
+            let expected = self.for_expr(
+                ir::Ty::Int(ir::IntTy::Usize),
+                ir::ExprKind::Int(ir::IntValue::usize(index as u64)),
+            )?;
+            let condition = self.for_expr(
+                ir::Ty::Bool,
+                ir::ExprKind::Binary {
+                    op: BinaryOp::Eq,
+                    left: read,
+                    right: expected,
+                },
+            )?;
+            let completes = flow.completes || self.flow(previous).completes;
+            let joined = self.for_expr(
+                if completes {
+                    ir::Ty::Unit
+                } else {
+                    ir::Ty::Never
+                },
+                ir::ExprKind::If {
+                    condition,
+                    then_block: ir::Block {
+                        statements: vec![],
+                        tail: Some(branch),
+                    },
+                    else_block: ir::Block {
+                        statements: vec![],
+                        tail: Some(previous),
+                    },
+                },
+            )?;
+            self.exprs[joined.0].completion = if completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            };
+            selected = Some(joined);
+        }
+        selected.ok_or_else(|| "missing fixed-array loan dispatch".into())
+    }
     #[inline(never)]
     fn for_array_statement(
         &mut self,
@@ -7219,18 +7335,30 @@ impl<'a> Checker<'a> {
         let result = (|| {
             let value = self.expr(source)?;
             let flow = self.flow(value);
-            let ir::Ty::Array { element, len } = &flow.ty else {
-                return Err(
-                    "for currently requires an integer range or a by-value Copy array".into(),
-                );
+            let (element, len, borrowed) = match &flow.ty {
+                ir::Ty::Array { element, len } => {
+                    if !self.facts().must_copy(element)? {
+                        return Err(
+                            "unsupported: by-value for array iteration requires Copy elements"
+                                .into(),
+                        );
+                    }
+                    (element.as_ref().clone(), *len, None)
+                }
+                ir::Ty::Ref { kind, referent } => {
+                    let ir::Ty::Array { element, len } = referent.as_ref() else {
+                        return Err("unsupported: for iteration requires an array element-place authority; runtime slices are not supported".into());
+                    };
+                    // The existing loan authority has static projections only.
+                    // Bound the dispatch instead of inventing untracked runtime
+                    // addresses or widening the graph's resource limits.
+                    if *len > 32 {
+                        return Err("unsupported: referenced array for iteration currently supports at most 32 elements".into());
+                    }
+                    (element.as_ref().clone(), *len, Some(*kind))
+                }
+                _ => return Err("for currently requires an integer range or an array".into()),
             };
-            if !self.facts().must_copy(element)? {
-                return Err(
-                    "unsupported: by-value for array iteration requires Copy elements".into(),
-                );
-            }
-            let element = element.as_ref().clone();
-            let len = *len;
             self.charge_node(std::mem::size_of::<ir::Stmt>() * 7)?;
             let array = self.temporary("$for_array", flow.ty.clone(), false)?;
             let index_ty = ir::Ty::Int(ir::IntTy::Usize);
@@ -7290,37 +7418,48 @@ impl<'a> Checker<'a> {
                     },
                 },
             )?;
-            let base = self.for_expr(flow.ty.clone(), ir::ExprKind::Local(array))?;
-            let item_index = self.for_expr(index_ty, ir::ExprKind::Local(saved_index))?;
-            let item = self.for_expr(
-                element,
-                ir::ExprKind::DynamicIndex {
-                    base,
-                    index: item_index,
-                },
-            )?;
             let id = self.enter_loop(false);
             let key = self.label_key(label)?;
             let frame = self.loops.last_mut().unwrap();
             frame.label = key;
             frame.checking_condition = false;
             self.reachable = true;
-            let (kind, body_flow) = self.lower_match_value(
-                item,
-                [BorrowedMatchArm {
-                    pattern: Some(pattern),
-                    guarded: false,
-                    body: MatchBody::Block(body),
-                }]
-                .into_iter(),
-                Some(&ir::Ty::Unit),
-            )?;
-            self.require(&body_flow, &ir::Ty::Unit)?;
-            let matched = self.for_expr(body_flow.ty, kind)?;
-            self.exprs[matched.0].completion = if body_flow.completes {
-                ir::Completion::Returns
+            let matched = if let Some(kind) = borrowed {
+                self.for_borrowed_array_body(
+                    (array, saved_index),
+                    (&element, kind),
+                    len,
+                    pattern,
+                    body,
+                )?
             } else {
-                ir::Completion::Never
+                let base = self.for_expr(flow.ty.clone(), ir::ExprKind::Local(array))?;
+                let item_index = self.for_expr(index_ty, ir::ExprKind::Local(saved_index))?;
+                let item = self.for_expr(
+                    element,
+                    ir::ExprKind::DynamicIndex {
+                        base,
+                        index: item_index,
+                    },
+                )?;
+                let (kind, body_flow) = self.lower_match_value(
+                    item,
+                    [BorrowedMatchArm {
+                        pattern: Some(pattern),
+                        guarded: false,
+                        body: MatchBody::Block(body),
+                    }]
+                    .into_iter(),
+                    Some(&ir::Ty::Unit),
+                )?;
+                self.require(&body_flow, &ir::Ty::Unit)?;
+                let matched = self.for_expr(body_flow.ty, kind)?;
+                self.exprs[matched.0].completion = if body_flow.completes {
+                    ir::Completion::Returns
+                } else {
+                    ir::Completion::Never
+                };
+                matched
             };
             let block = ir::Block {
                 statements: vec![

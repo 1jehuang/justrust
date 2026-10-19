@@ -668,10 +668,102 @@ fn copy_array_for_invalid_scope_mutability_refutability_and_unit_obligations() {
 }
 
 #[test]
+fn referenced_array_for_uses_real_shared_and_mutable_elements() {
+    let source = r#"
+fn main(){
+    let mut values=[1,2,3];
+    let mut sum=0;
+    for x in &values {sum=sum+*x;}
+    if sum==6 {println!("shared ok");}
+    for x in &mut values {*x=*x+10;}
+    if values[0]==11 && values[1]==12 && values[2]==13 {println!("mutation ok");}
+    let mut sum=0;
+    for x in &values {if *x==12 {continue;}sum=sum+*x;}
+    if sum==24 {println!("continue ok");}
+    for x in &mut values {*x=5;break;}
+    values[2]=7;
+    if values[0]==5 && values[2]==7 {println!("last use ok");}
+}
+"#;
+    let expected = "shared ok\nmutation ok\ncontinue ok\nlast use ok\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn referenced_array_for_keeps_once_only_control_and_noncopy_storage() {
+    let source = r#"
+struct Item {value:i32}
+fn update(a:&mut [i32;3])->i32 {
+    for x in a {*x=*x+1;if *x==3 {return *x;}}
+    0
+}
+fn main(){
+    let mut values=[1,2,3];
+    let mut hits=0;
+    for x in ({hits=hits+1;&mut values}) {*x=*x+1;}
+    if hits==1 && values[2]==4 {println!("source once ok");}
+    let mut count=0;
+    'outer: for x in &mut values {
+        *x=*x+1;
+        for y in [0,1] {if y==1 {continue 'outer;}count=count+1;}
+    }
+    if count==3 && values[2]==5 {println!("labels ok");}
+    let mut more=[1,2,3];
+    if update(&mut more)==3 && more[0]==2 && more[1]==3 && more[2]==3 {println!("return ok");}
+    let items=[Item{value:7},Item{value:8}];
+    let mut sum=0;
+    for item in &items {sum=sum+item.value;}
+    if sum==15 && items[0].value==7 {println!("noncopy owner ok");}
+}
+"#;
+    let expected = "source once ok\nlabels ok\nreturn ok\nnoncopy owner ok\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn referenced_array_for_empty_and_singleton_keep_body_types() {
+    let source = r#"
+fn main(){
+    let mut empty:[i32;0]=[];
+    for x in &empty {let n=*x;println!("bad");}
+    for x in &mut empty {*x=7;println!("bad");}
+    let mut one=[8];
+    for x in &mut one {*x=*x+1;}
+    if one[0]==9 {println!("empty singleton ok");}
+}
+"#;
+    stock(source, Some("empty singleton ok\n"));
+    runs(source, "empty singleton ok\n");
+}
+
+#[test]
+fn referenced_array_for_rejects_aliasing_mutability_and_escape() {
+    for source in [
+        "fn main(){let a=[1,2];for x in &a {*x=3;}}",
+        "fn main(){let a=[1,2];for x in &mut a {*x=3;}}",
+        "fn main(){let mut a=[1,2];for x in &a {a[0]=3;let n=*x;}}",
+        "fn main(){let mut a=[1,2];for x in &mut a {let n=a[0];*x=n;}}",
+        "fn main(){let mut a=[1,2];for x in &mut a {let y=&*x;*x=3;let n=*y;}}",
+        "fn main(){let mut a=[1,2];for x in &mut a {let y=&mut *x;*x=3;*y=4;}}",
+        "fn main(){let a=[1,2];for x in &a {} let n=*x;}",
+        "fn main(){let mut a=[1,2];let r=&a;for x in &mut a {*x=3;} let n=(*r)[0];}",
+        "fn main(){let mut a=[1,2];let r=&mut a;for x in r {*x=3;}for x in r {*x=4;}}",
+        "fn bad<'a>()->&'a i32{let a=[1,2];for x in &a {return x;}loop{}}fn main(){}",
+        "fn main(){let a:[i32;0]=[];for x in &a {*x=3;}}",
+        "fn main(){let a=[1,2];for x in &a {true}}",
+    ] {
+        stock(source, None);
+        rejects("invalid referenced-array element loan", source);
+    }
+}
+
+#[test]
 fn array_iteration_unsupported_boundaries_are_stock_valid_not_invalid_claims() {
     for source in [
         "struct Item{x:i32} fn main(){for item in [Item{x:1},Item{x:2}] {}}",
-        "fn main(){let values=[1,2];for x in &values {}}",
+        "fn main(){let values=[1;33];for x in &values {}}",
         "fn main(){for x in [1,2].iter() {}}",
         "fn main(){for x in [1,2].into_iter() {}}",
     ] {
