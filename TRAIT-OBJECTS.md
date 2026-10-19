@@ -10,6 +10,10 @@ BUILD at workers 1 and 8 through `jr-rust`).
   (E0562 outside parameters, E0107 on turbofish over anonymous parameters).
 - `&dyn Trait` and `&mut dyn Trait` for nongeneric principal traits without
   associated types, including supertraits and default methods.
+- Shared virtual methods through `&mut dyn Trait` create whole-object shared
+  reborrows, preserve both carrier words, and keep returned loans live through
+  their last use. Mutable calls resume afterward and are rejected while a
+  returned shared loan remains live (stock-frozen positive/negative fixtures).
 - `Ty::Dyn(DynTy { principal })` is a rigid unsized metadata leaf, admitted
   only behind a reference. The reference carrier is two words (data, vtable).
 - Unsizing coercion `&T -> &dyn P` and `&mut T -> &mut dyn P` (`ExprKind::
