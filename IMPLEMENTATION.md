@@ -185,6 +185,11 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       preserving byte provenance and inert doctest attributes. Focused stock/native
       CHECK/BUILD/run at workers 1 and 8, malformed controls and graph gates pass
       (tests/doc_metadata.rs). This does not implement rustdoc or doctest execution.
+- [x] Original documentation on noncallable associated type/const declarations
+      retains exact member spans and accepts no other semantic attributes.
+      Stock and native CHECK/BUILD/run workers 1/8 cover the unchanged time-core
+      `Per<T>` declaration excerpt and unused invalid members
+      (`tests/associated_member_docs.rs`), not full time-core compatibility.
 - [x] Explicit source-locked original attributed identity declaration at runtime,
       retained constness with universally checked forwarding-only bodies and
       scalar-root shared/mutable inference replay under CORE-IDENTITY.md. This

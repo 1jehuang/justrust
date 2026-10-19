@@ -39,6 +39,12 @@ while original byte positions and attribute records are preserved.
 `tests/doc_metadata.rs` compares original time-core metadata with stock and native
 CHECK/BUILD/run at workers 1 and 8; focused parser controls reject malformed
 settings, nesting and depth overflow. This does not implement rustdoc/doctests.
+Original outer documentation also attaches to trait associated types/constants,
+impl associated types/constants and inherent constants. Each record retains the
+original member range. These noncallable positions accept documentation only,
+not inline/cfg or other semantic attributes. `tests/associated_member_docs.rs`
+checks the unchanged time-core `Per<T>` declaration excerpt with stock and native
+CHECK/BUILD/run at workers 1 and 8, including unused invalid member controls.
 Supported inline hints do not promise optimization. Other stock-warning
 documentation forms remain explicit policy boundaries.
 Active path overrides, derives, representation/language attributes and arbitrary

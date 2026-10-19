@@ -115,6 +115,7 @@ enum Owner {
     Module,
     Function,
     AssociatedFunction,
+    AssociatedDeclaration,
     FreeItem,
     Unsupported,
 }
@@ -432,13 +433,18 @@ impl Filter<'_> {
     ) -> Result<bool, AttributeError> {
         // Only literal docs and a preflighted single inline hint are admitted.
         // Never activate cfg/cfg_attr or semantic attributes at this position.
-        if owner == Owner::AssociatedFunction {
+        if matches!(
+            owner,
+            Owner::AssociatedFunction | Owner::AssociatedDeclaration
+        ) {
             for attr in attrs {
-                if attr.path == AttributePath::Other {
+                if attr.path == AttributePath::Other
+                    || (owner == Owner::AssociatedDeclaration && attr.path != AttributePath::Doc)
+                {
                     return Err(error(
                         AttributeErrorKind::Unsupported,
                         attr.range.clone(),
-                        "only literal documentation and one inline hint on associated function bodies are supported",
+                        "associated declarations admit only documentation, with inline hints restricted to function bodies",
                     ));
                 }
             }
@@ -1016,12 +1022,17 @@ impl Filter<'_> {
                 return Err(error(
                     AttributeErrorKind::Syntax,
                     attrs[0].range.clone(),
-                    "outer attribute has no associated function owner",
+                    "outer attribute has no associated item owner",
                 ));
             }
             let member = i;
             let (kind, mut cursor) = self.item_kind(i, end);
-            if !attrs.is_empty() && kind != "fn" {
+            let owner = match kind {
+                "fn" => Owner::AssociatedFunction,
+                "const" | "type" => Owner::AssociatedDeclaration,
+                _ => Owner::Unsupported,
+            };
+            if !attrs.is_empty() && owner == Owner::Unsupported {
                 return Err(error(
                     AttributeErrorKind::Unsupported,
                     attrs[0].range.clone(),
@@ -1088,7 +1099,7 @@ impl Filter<'_> {
             if !attrs.is_empty() {
                 self.attributes(
                     &attrs,
-                    Owner::AssociatedFunction,
+                    owner,
                     Some(self.tokens[member].range.start..self.tokens[stop - 1].range.end),
                 )?;
             }
@@ -1763,8 +1774,6 @@ mod tests {
         for text in [
             "trait T { //! inner\n fn f(); }",
             "impl S { #![doc=\"inner\"] fn f(){} }",
-            "trait T { #[doc=\"type\"] type A; }",
-            "trait T { #[doc=\"const\"] const A:u8; }",
             "impl S { fn f(#[doc=\"param\"] x:i32){} }",
             "impl S { fn #[doc=\"header\"] f(){} }",
             "impl S { fn f(){ #[doc=\"statement\"] let x=1; } }",

@@ -2,8 +2,9 @@
 //! Stock-first oracle: /usr/bin/rustc 1.98.1, commit
 //! 48a229ceaefd4985c50990b14116b6d856af0985, edition2024,
 //! x86_64-unknown-linux-gnu, lib metadata, default cfg/profile, 2026-10-19.
-//! Warning-accepted doc=42/doc(foo), inner docs, associated const/type docs and
-//! statement docs remain explicit native policy exclusions, not invalid Rust.
+//! Warning-accepted doc=42/doc(foo), inner docs and statement docs remain explicit
+//! native policy exclusions, not invalid Rust. Associated declaration docs are
+//! covered by associated_member_docs.rs.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use justrust_engine::compiler::{
     self,
@@ -143,8 +144,6 @@ fn stock_valid_forms_outside_docs_only_a1_remain_explicitly_unsupported() {
         "struct S{v:i32} impl S { #![doc=\"inner\"] fn f(){} }",
         "trait T { #[doc=42] fn f(); }",
         "trait T { #[doc(foo)] fn f(); }",
-        "trait T { #[doc=\"const\"] const N:u8=1; }",
-        "trait T { #[doc=\"type\"] type A; }",
         "struct S{v:i32} impl S { fn f(){ #[doc=\"statement\"] let x=1; } }",
         "trait T { #[doc=\"prefix\"] #[inline] fn f(); }",
         "struct S{v:i32} impl S { #[cfg(any())] #[doc=\"prefix\"] fn f(){} }",

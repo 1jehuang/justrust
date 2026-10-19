@@ -64,6 +64,62 @@ fn malformed_known_doc_settings_and_nested_grammar_are_not_ignored() {
 }
 
 #[test]
+fn original_associated_type_and_constant_docs_keep_owner_spans() {
+    let text = "trait Per<T>{/// smallest output\n type Output;/** ratio */ const VALUE:Self::Output;}impl Per<u8> for u8{#[doc=\"output\"]type Output=u8;#[doc(hidden)]const VALUE:u8={7};}impl S{/// inherent\n const N:u8=1;}";
+    let out = prepare(text, &CfgSet::default()).unwrap();
+    assert_eq!(out.text.len(), text.len());
+    assert_eq!(out.attributes.len(), 5);
+    assert!(out.text.contains("type Output;"));
+    assert!(out.text.contains("const VALUE:Self::Output;"));
+    assert!(out.text.contains("const VALUE:u8={7};"));
+    for record in out.attributes {
+        assert!(record.effective);
+        assert_eq!(record.name, "doc");
+        for (original, masked) in text[record.range.clone()]
+            .bytes()
+            .zip(out.text[record.range].bytes())
+        {
+            assert_eq!(
+                masked,
+                if matches!(original, b'\r' | b'\n') {
+                    original
+                } else {
+                    b' '
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn associated_declaration_docs_do_not_activate_other_attributes_or_nested_docs() {
+    for item in ["type A;", "const N:u8;", "const N:u8={1};"] {
+        for attribute in [
+            "inline",
+            "cfg(any())",
+            "cfg_attr(any(),doc=\"x\")",
+            "allow(dead_code)",
+            "derive(Copy)",
+        ] {
+            let text = format!("trait T{{#[doc=\"prefix\"]#[{attribute}]{item}}}");
+            assert_eq!(
+                prepare(&text, &CfgSet::default()).unwrap_err().kind,
+                AttributeErrorKind::Unsupported,
+                "{text}"
+            );
+        }
+    }
+    for text in [
+        "trait T{#[doc=\"dangling\"]}",
+        "trait T{type #[doc=\"header\"]A;}",
+        "impl S{#[doc=\"outer\"]const N:u8={#[doc=\"nested\"]1};}",
+        "trait T{#![doc=\"inner\"]type A;}",
+    ] {
+        assert!(prepare(text, &CfgSet::default()).is_err(), "{text}");
+    }
+}
+
+#[test]
 fn nested_doc_metadata_uses_existing_parser_depth_limit() {
     let source = format!(
         "#![doc(test(attr({}x{})))] fn main(){{}}",
