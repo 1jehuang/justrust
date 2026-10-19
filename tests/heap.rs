@@ -192,6 +192,16 @@ fn heap_case(name: &str, body: &str) {
 }
 
 #[test]
+fn generic_functions_drop_concrete_owning_roots() {
+    heap_case("generic_owner", &fixture("generic_owner.rs"));
+}
+
+#[test]
+fn generic_functions_drop_real_allocations() {
+    heap_case("generic_allocation", &fixture("generic_allocation.rs"));
+}
+
+#[test]
 fn source_heap_allocate_write_read_free() {
     heap_case(
         "allocate_write_read_free",
@@ -684,6 +694,8 @@ fn source_drop_escaping_borrows_and_unsupported_aggregates_reject() {
         "struct D { value:i32 } impl Drop for D { fn drop(&mut self) {} } fn field(owner:&D)->&i32{&owner.value} fn main(){let escaped;{let owner=D{value:1};escaped=field(&owner);}println!(\"{}\",*escaped);}",
         "struct D { value:i32 } impl Drop for D { fn drop(&mut self) {} } fn main(){let escaped;loop{let owner=D{value:1};escaped=&owner.value;break;}println!(\"{}\",*escaped);}",
         "struct D { value:i32 } impl Drop for D { fn drop(&mut self) {} } fn main(){let seed=0i32;let mut escaped=&seed;let mut step=0i32;while step<1{let owner=D{value:1};escaped=&owner.value;step=step+1;continue;}println!(\"{}\",*escaped);}",
+        "fn consume<T>(value:T){}fn bad<T>(value:T){consume::<T>(value);consume::<T>(value);}fn main(){}",
+        "fn observe<T>(value:&T){}fn bad<T>(left:T,right:T){let mut owner=left;let loan=&owner;owner=right;observe::<T>(loan);}fn main(){}",
         "struct D { value:i32 } impl Drop for D { fn drop(&mut self) { let escaped; { let value=3i32;escaped=&value; } self.value=*escaped; } } fn main(){}",
     ] {
         if body.contains("continue;") {
@@ -710,7 +722,8 @@ fn source_drop_escaping_borrows_and_unsupported_aggregates_reject() {
     }
     for body in [
         "fn main(){ let pair=(heap::allocate(8usize,8usize),1i32); }",
-        "fn carry<T>(value:T){} fn main(){ carry::<heap::Allocation>(heap::allocate(8usize,8usize)); }",
+        "fn wrap<T>(value:T){let pair=(value,1i32);}fn main(){wrap::<heap::Allocation>(heap::allocate(8usize,8usize));}",
+        "fn wrap<T>(value:T){let array=[value];}fn main(){wrap::<heap::Allocation>(heap::allocate(8usize,8usize));}",
     ] {
         rejects_source(
             "unsupported_drop_position",

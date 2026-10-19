@@ -82,7 +82,7 @@ pub struct VerifiedTemplateCfg {
     template: cfg::TemplateCfg,
     analysis: Arc<Analysis>,
     carrier_effects: Option<Arc<CarrierEffectProof>>,
-    _reservation: Arc<super::ir::PlanReservation>,
+    _reservation: Arc<super::ir::RetainedStorage>,
 }
 impl VerifiedTemplateCfg {
     pub fn source(&self) -> &Arc<CheckedFunction> {
@@ -356,7 +356,7 @@ impl CarrierEffectTable {
 pub struct ConcreteCfg {
     closed: cfg::ClosedCfg,
     analysis: Arc<Analysis>,
-    _reservation: Arc<super::ir::PlanReservation>,
+    _reservation: Arc<super::ir::RetainedStorage>,
 }
 impl ConcreteCfg {
     pub fn facts(&self) -> &Arc<ValidatedFacts> {
@@ -684,14 +684,16 @@ fn bind_proof(
     function: &cfg::Function,
     budget: &super::ir::PlanBudget,
     wrapper_bytes: usize,
-) -> Result<(Arc<Analysis>, Arc<super::ir::PlanReservation>), Analysis> {
+) -> Result<(Arc<Analysis>, Arc<super::ir::RetainedStorage>), Analysis> {
     let reservation = budget.charge_nodes(1).and_then(|()| {
-        budget.reserve_bytes(
-            wrapper_bytes
-                + std::mem::size_of::<Analysis>()
-                + std::mem::size_of::<super::ir::PlanReservation>()
-                + 128,
-        )
+        let bytes = wrapper_bytes
+            .checked_add(std::mem::size_of::<Analysis>())
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<super::ir::PlanReservation>()))
+            .and_then(|bytes| bytes.checked_add(128))
+            .ok_or("ownership proof allocation overflow")?;
+        budget
+            .reserve_bytes(bytes)
+            .and_then(super::ir::PlanReservation::retain)
     });
     match reservation {
         Ok(reservation) => Ok((Arc::new(analysis), Arc::new(reservation))),
@@ -3528,6 +3530,40 @@ mod tests {
         assert!(ownership_state_bytes(0, 0, usize::MAX, 0).is_err());
         assert!(ownership_state_bytes(0, 0, 0, usize::MAX).is_err());
         assert!(ownership_state_bytes(usize::MAX, usize::MAX, 0, 1).is_err());
+    }
+
+    #[test]
+    fn proof_storage_publication_retains_exact_charge_and_rejects_overflow() {
+        use super::super::ir::PlanBudget;
+        let analysis = || Analysis {
+            stats: AnalysisStats::default(),
+            diagnostics: Box::new([]),
+            complete: true,
+        };
+        let budget = PlanBudget::default();
+        let bytes = 17
+            + std::mem::size_of::<Analysis>()
+            + std::mem::size_of::<super::super::ir::PlanReservation>()
+            + 128;
+        let (proof, receipt) = bind_proof(analysis(), &fixture(), &budget, 17).unwrap();
+        assert!(proof.passed());
+        assert_eq!(receipt.bytes(), bytes);
+        assert!(receipt.authority().same_authority(budget.authority()));
+        let clone = receipt.clone();
+        let usage = budget.usage_snapshot();
+        assert_eq!(usage.bytes, bytes);
+        assert_eq!(usage.reservations.current_reservations, 0);
+        assert_eq!(usage.reservations.retentions, 1);
+        assert_eq!(usage.reservations.cumulative_bytes, bytes);
+        drop(receipt);
+        drop(clone);
+        drop(proof);
+        assert_eq!(budget.usage_snapshot().reservations, usage.reservations);
+        let overflow = PlanBudget::default();
+        let rejected = bind_proof(analysis(), &fixture(), &overflow, usize::MAX).unwrap_err();
+        assert!(!rejected.complete);
+        assert_eq!(rejected.diagnostics[0].kind, ErrorKind::ResourceLimit);
+        assert_eq!(overflow.usage_snapshot().bytes, 0);
     }
 
     // Retain the real checked source-name owner alongside its module arena.

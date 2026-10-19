@@ -787,11 +787,6 @@ pub(super) fn build(
                     .map_err(|e| e.into_legacy_diagnostic(budget))?
                 {
                     traits::NormalDropPlan::Destructor(destructor) => {
-                        if env.is_generic() {
-                            return Err(
-                                "unsupported: generic function carrying a normal Drop owner".into(),
-                            );
-                        }
                         budget.charge_work(cleanup_targets.len())?;
                         if !cleanup_targets.contains(destructor.target()) {
                             budget.retain_bytes(2 * std::mem::size_of::<ir::CallTarget>())?;
@@ -1414,6 +1409,78 @@ mod tests {
         plan.cleanup_targets = demanded.clone();
         plan.lookup.remove(&demanded[0]);
         assert!(plan.validate_cleanup_dependencies(&function).is_err());
+    }
+
+    #[test]
+    fn generic_normal_drop_is_relowered_and_demands_its_destructor() {
+        let text = "fn consume<T>(value:T){}struct D{v:i32}impl Drop for D{fn drop(&mut self){}}fn main(){consume::<D>(D{v:1});}";
+        let program = frontend::parse(text).unwrap();
+        let budget = ir::PlanBudget::default();
+        let mut context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = context.function_decl(0).unwrap();
+        let mut sources = Vec::new();
+        let mut publication = None;
+        for index in 0..context.callable_count() {
+            let current = context.callable_decl(index).unwrap();
+            match context.publish_callable_body(current, &budget).unwrap() {
+                frontend::PublishedCallableBody::Source(source) => {
+                    if current == declaration {
+                        publication = Some(source.clone());
+                    }
+                    sources.push(source.source().clone());
+                }
+                frontend::PublishedCallableBody::Recipe(source) => sources.push(source),
+            }
+        }
+        let publication = publication.unwrap();
+        let template = super::super::cfg::lower_source_template(&publication, &budget).unwrap();
+        let verified = super::super::ownership::verify_template(template).unwrap();
+        assert!(!verified.function().blocks.iter().any(|block| matches!(
+            block.terminator.value,
+            super::super::cfg::Terminator::Drop { .. }
+        )));
+        let mut plan = build(&mut context, &sources, &budget).unwrap();
+        let target = plan
+            .entries
+            .iter()
+            .find(|entry| entry.target.declaration == declaration)
+            .unwrap()
+            .target
+            .clone();
+        let facts = context.instance_facts(&target).unwrap();
+        let checked =
+            ir::instantiate_checked(&verified, &target.type_args, &facts, &mut context, &budget)
+                .unwrap();
+        let function = super::super::cfg::lower_with_facts(&checked, &facts, &budget).unwrap();
+        plan.validate_cleanup_dependencies(&function).unwrap();
+        let site = function
+            .blocks
+            .iter()
+            .position(|block| {
+                matches!(
+                    block.terminator.value,
+                    super::super::cfg::Terminator::Drop { .. }
+                )
+            })
+            .unwrap();
+        let mut missing = function.clone();
+        let super::super::cfg::Terminator::Drop { next, .. } =
+            missing.blocks[site].terminator.value
+        else {
+            unreachable!()
+        };
+        missing.blocks[site].terminator.value = super::super::cfg::Terminator::Goto(next);
+        assert!(super::super::cfg::close(Arc::new(missing), facts.clone(), &budget).is_err());
+        let mut stale = function.clone();
+        stale.lowering_proof = verified.function().lowering_proof.clone();
+        assert!(super::super::cfg::close(Arc::new(stale), facts.clone(), &budget).is_err());
+        super::super::cfg::close(Arc::new(function.clone()), facts, &budget).unwrap();
+        plan.cleanup_targets.clear();
+        assert!(
+            plan.validate_cleanup_dependencies(&function)
+                .unwrap_err()
+                .contains("implicit instance demand")
+        );
     }
 
     #[test]

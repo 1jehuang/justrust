@@ -29,9 +29,9 @@ InstanceBodyFact ValidatedTraitWorld Mutex  # InstanceBodyFact -> ValidatedFacts
 ParsedProgram DeclaredCallableContext Mutex  # ParsedProgram -> Program -> Function -> GeneratedCfgShape -> ValidatedTraitWorld -> DeclaredCallableContext -> Mutex
 ParsedProgram ExpansionBudget Mutex  # ParsedProgram -> Program -> BudgetVec -> ExpansionBudget -> Mutex
 ParsedProgram InvocationBudget Mutex  # ParsedProgram -> Program -> BudgetVec -> ExpansionBudget -> State -> StateLease -> InvocationBudget -> Mutex
-ParsedProgram PlanBudget Mutex  # ParsedProgram -> Item -> TokenError -> Budget -> PlanBudget -> Mutex
+ParsedProgram PlanBudget Mutex  # ParsedProgram -> Program -> Function -> GeneratedCfgShape -> PlanBudget -> Mutex
 ParsedProgram PlanCtx Mutex  # ParsedProgram -> Program -> Function -> GeneratedCfgShape -> CanonicalSourcePublication -> OriginalBody -> OriginalSource -> PlanCtx -> Mutex
-ParsedProgram PlanReservation Mutex  # ParsedProgram -> Item -> TokenError -> Budget -> PlanReservation -> Mutex
+ParsedProgram PlanReservation Mutex  # ParsedProgram -> Program -> Function -> BodySubstitutionProof -> VerifiedTemplateCfg -> PlanReservation -> Mutex
 ParsedProgram ValidatedTraitWorld Mutex  # ParsedProgram -> Program -> Function -> GeneratedCfgShape -> ValidatedTraitWorld -> Mutex
 PlanCtx DeclaredCallableContext Mutex  # PlanCtx -> ValidatedTraitWorld -> DeclaredCallableContext -> Mutex
 PlanCtx ExpansionBudget Mutex  # PlanCtx -> CoreCatalog -> ModuleArena -> ExpansionBudget -> Mutex
@@ -68,13 +68,8 @@ TemplateCfg PlanBudget Mutex  # TemplateCfg -> PlanBudget -> Mutex
 TemplateCfg PlanCtx Mutex  # TemplateCfg -> Function -> GeneratedCfgShape -> CanonicalSourcePublication -> OriginalBody -> OriginalSource -> PlanCtx -> Mutex
 TemplateCfg PlanReservation Mutex  # TemplateCfg -> CheckedFunction -> BodySubstitutionProof -> VerifiedTemplateCfg -> PlanReservation -> Mutex
 TemplateCfg ValidatedTraitWorld Mutex  # TemplateCfg -> ValidatedFacts -> ValidatedTraitWorld -> Mutex
-UnitResult DeclaredCallableContext Mutex  # UnitResult -> FileUnit -> SourceError -> SourceErrorKind -> Module -> Function -> GeneratedCfgShape -> ValidatedTraitWorld -> DeclaredCallableContext -> Mutex
 UnitResult ExpansionBudget Mutex  # UnitResult -> FileUnit -> SourceError -> ByteLease -> ExpansionBudget -> Mutex
 UnitResult InvocationBudget Mutex  # UnitResult -> FileUnit -> SourceError -> ByteLease -> ExpansionBudget -> State -> StateLease -> InvocationBudget -> Mutex
-UnitResult PlanBudget Mutex  # UnitResult -> FileUnit -> SourceError -> SourceErrorKind -> Module -> Function -> GeneratedCfgShape -> PlanBudget -> Mutex
-UnitResult PlanCtx Mutex  # UnitResult -> FileUnit -> SourceError -> SourceErrorKind -> Module -> Function -> GeneratedCfgShape -> CanonicalSourcePublication -> OriginalBody -> OriginalSource -> PlanCtx -> Mutex
-UnitResult PlanReservation Mutex  # UnitResult -> FileUnit -> SourceError -> SourceErrorKind -> Module -> Function -> BodySubstitutionProof -> VerifiedTemplateCfg -> PlanReservation -> Mutex
-UnitResult ValidatedTraitWorld Mutex  # UnitResult -> FileUnit -> SourceError -> SourceErrorKind -> Module -> Function -> GeneratedCfgShape -> ValidatedTraitWorld -> Mutex
 UniversalProofFact DeclaredCallableContext Mutex  # UniversalProofFact -> VerifiedTemplateCfg -> CarrierEffectProof -> ValidatedFacts -> ValidatedTraitWorld -> DeclaredCallableContext -> Mutex
 UniversalProofFact ExpansionBudget Mutex  # UniversalProofFact -> VerifiedTemplateCfg -> CarrierEffectProof -> Function -> AstPath -> PathData -> BudgetVec -> ExpansionBudget -> Mutex
 UniversalProofFact InvocationBudget Mutex  # UniversalProofFact -> VerifiedTemplateCfg -> CarrierEffectProof -> Function -> AstPath -> PathData -> BudgetVec -> ExpansionBudget -> State -> StateLease -> InvocationBudget -> Mutex

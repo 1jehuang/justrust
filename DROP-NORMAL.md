@@ -179,19 +179,32 @@ counters for conditional moves/loop continue/replacement/self-move, shared and
 mutable owner helpers, and stock/native borrow escape, move and replacement
 conflicts. A panic=abort control requires no user cleanup output. Generic and
 aggregate owners, partial moves of non-Copy fields, nested owning fields and
-unwinding remain excluded. This does not implement Box<T> or generic Drop glue.
+unwinding remain excluded. Generic functions with these nongeneric owning
+values are supported by the concrete-cleanup extension below. This does not
+implement Box<T> or generic owning structs.
 
-## Next prerequisite: concrete generic cleanup
+## Concrete generic-function cleanup (2026-10-19)
 
-The next implementation increment must preserve universal source proof while
-re-lowering each demanded closed instance before capturing its generated CFG
-shape. Start with generic functions carrying the already supported nongeneric
-owner, not a new Box-specific cleanup path. The existing rejection in both
-`cfg/drop_normal.rs::admit` and the instance frontier is a compatibility boundary,
-not permission to erase ownership: replace it only with exact concrete cleanup
-and per-instance canonical destructor demand, including ordinary analysis and
-object dependencies for every generated target. Universal unresolved Drop is
-not evidence of trivial destruction.
+Universal source proof remains authoritative while each demanded closed
+instance is re-lowered before capturing its generated CFG shape. Generic
+functions can now carry the supported nongeneric owner. The instance frontier
+resolves each concrete canonical destructor and retains its implicit demand;
+ordinary analysis and object graph dependencies remain mandatory. Universal
+unresolved Drop never becomes evidence of trivial executable destruction.
+
+An adversarial unit starts with a generic universal template containing no
+Drop, instantiates it with a scalar-field owner and requires concrete cleanup.
+Deleting that cleanup, transplanting the universal lowering shape or removing
+its destructor demand must fail. Stock/native whole-owner tests require the
+exact counter value eight across transfer, conditional consumption, early
+return and replacement. Real mmap controls cover generic return/break transport,
+parameter cleanup and consuming release without double-unmap. Generic move and
+borrow conflicts remain semantic errors; tuples/arrays containing owners still
+reject explicitly. Frozen `unsupported/generic_function.rs` and
+`unsupported/dead_generic.rs` sources and receipts are unchanged and promoted
+to native-positive (29 native positives).
+
+## Next prerequisite: generic owners and pointee destruction
 
 Then admit generic pointer-field owners through canonical trait resolution of
 closed owner arguments. Layout and `drop_in_place` need typed graph facts keyed
