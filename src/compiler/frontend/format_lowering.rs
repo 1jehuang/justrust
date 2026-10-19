@@ -122,7 +122,7 @@ impl Checker<'_> {
     }
 
     /// Prelude trait `std::<module>::<name>` and its method `method`.
-    pub(in crate::compiler) fn prelude_trait_method(
+    fn prelude_trait_method(
         &self,
         module: &str,
         name: &str,

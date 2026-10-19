@@ -45,31 +45,6 @@ pub struct SourceOptions {
     /// Library target: no `main` is required. A check/build of the library
     /// gets an inert entry; under `cfg(test)` the harness is the entry.
     pub library: bool,
-    /// Libtest selection applied when synthesizing the `cfg(test)` harness.
-    pub test_filter: TestFilter,
-}
-/// Libtest command-line selection: name filters (substring, or exact with
-/// `--exact`), `--skip`, `--ignored` and `--include-ignored`.
-#[derive(Clone, Debug, Default)]
-pub struct TestFilter {
-    pub filters: Vec<String>,
-    pub skip: Vec<String>,
-    pub exact: bool,
-    pub ignored: bool,
-    pub include_ignored: bool,
-}
-impl TestFilter {
-    fn selects(&self, name: &str) -> bool {
-        let matches = |pattern: &String| {
-            if self.exact {
-                name == pattern
-            } else {
-                name.contains(pattern.as_str())
-            }
-        };
-        (self.filters.is_empty() || self.filters.iter().any(matches))
-            && !self.skip.iter().any(matches)
-    }
 }
 impl Default for SourceOptions {
     fn default() -> Self {
@@ -79,7 +54,6 @@ impl Default for SourceOptions {
             opt: super::ssa::OptMode::default(),
             externs: Vec::new(),
             library: false,
-            test_filter: TestFilter::default(),
         }
     }
 }
@@ -694,7 +668,6 @@ pub struct SourceAssembler {
     in_prelude: bool,
     /// `cfg(test)`: synthesize the native test harness entry after the crate.
     harness: Option<Vec<source_attrs::TestItem>>,
-    test_filter: TestFilter,
     /// Library target without a harness: append an inert entry.
     library: bool,
     externs: Vec<String>,
@@ -741,7 +714,6 @@ impl SourceAssembler {
             in_prelude: false,
             harness: options.cfg.names.contains("test").then(Vec::new),
             library: options.library && !options.cfg.names.contains("test"),
-            test_filter: options.test_filter.clone(),
             externs: options.externs.iter().map(|e| e.name.clone()).collect(),
             next_extern: 0,
             in_extern: false,
@@ -872,7 +844,7 @@ impl SourceAssembler {
                 };
                 if !self.in_prelude && !self.in_extern {
                     let entry = match self.harness.take() {
-                        Some(tests) => Some(test_harness(tests, &self.test_filter)),
+                        Some(tests) => Some(test_harness(tests)),
                         None if std::mem::take(&mut self.library) => {
                             Some("\nfn main() {}\n".to_string())
                         }
@@ -980,20 +952,12 @@ impl SourceAssembler {
 }
 /// The `cfg(test)` entry point: run every `#[test]` in name order through
 /// the native harness (`libraries/prelude/test.rs`), like libtest.
-fn test_harness(mut tests: Vec<source_attrs::TestItem>, filter: &TestFilter) -> String {
+fn test_harness(mut tests: Vec<source_attrs::TestItem>) -> String {
     tests.sort_by(|a, b| a.path.cmp(&b.path));
-    let total = tests.len();
-    tests.retain(|test| filter.selects(&test.path.join("::")) && (!filter.ignored || test.ignore));
     let mut out = format!(
-        "\nfn main() {{\n    let mut __h = std::test::Harness::start({}usize);\n    __h.filtered_out({}usize);\n",
-        tests.len(),
-        total - tests.len()
+        "\nfn main() {{\n    let mut __h = std::test::Harness::start({}usize);\n",
+        tests.len()
     );
-    for test in &mut tests {
-        if filter.ignored || filter.include_ignored {
-            test.ignore = false;
-        }
-    }
     for test in &tests {
         let name = test.path.join("::");
         let (mode, expected) = match &test.should_panic {

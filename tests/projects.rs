@@ -116,15 +116,6 @@ fn failing_tests_report_like_libtest_and_exit_101() {
     assert!(
         String::from_utf8_lossy(&test.stderr).contains("error: test failed, to rerun pass `--lib`")
     );
-    // Libtest filters are applied by the native harness.
-    let filtered = jr("failing", &["test", "halves"]);
-    assert!(filtered.status.success());
-    assert!(
-        String::from_utf8_lossy(&filtered.stdout)
-            .contains("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out")
-    );
-    let ignored = jr("failing", &["test", "--", "--ignored"]);
-    assert!(String::from_utf8_lossy(&ignored.stdout).contains("test tests::skipped ... ok"));
     // A plain build of the library ignores #[test] items entirely.
     assert!(jr("failing", &["check"]).status.success());
 }

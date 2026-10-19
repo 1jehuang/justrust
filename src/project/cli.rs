@@ -89,9 +89,9 @@ fn run(command: &str, args: &[String]) -> Result<i32, Box<dyn std::error::Error>
             other if other.starts_with('-') => {
                 return Err(format!("unexpected argument '{other}' found\n{USAGE}").into());
             }
-            other if command == Command::Test => {
+            other if command == Command::Test && sel.trailing.is_empty() => {
                 // Test name filter, forwarded to the harness.
-                sel.trailing.insert(0, other.to_string());
+                sel.trailing.push(other.to_string());
             }
             other => return Err(format!("unexpected argument '{other}' found").into()),
         }

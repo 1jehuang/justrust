@@ -19,6 +19,5 @@ pub mod default;
 pub mod hash;
 pub mod string;
 pub mod fmt;
-pub mod primitive;
 pub mod ptr;
 pub mod test;

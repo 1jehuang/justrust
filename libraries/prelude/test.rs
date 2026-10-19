@@ -13,7 +13,6 @@ pub struct Harness {
     names: String,
     pid: usize,
     read_fd: usize,
-    filtered: usize,
 }
 
 fn sys(n: usize, a: usize, b: usize, c: usize) -> usize {
@@ -36,12 +35,7 @@ impl Harness {
             names: String::new(),
             pid: 0usize,
             read_fd: 0usize,
-            filtered: 0usize,
         }
-    }
-
-    pub fn filtered_out(&mut self, count: usize) {
-        self.filtered = count;
     }
 
     // Returns true in the child process, which must run the test and exit.
@@ -144,8 +138,8 @@ impl Harness {
             print!("test result: ok. ");
         }
         println!(
-            "{} passed; {} failed; {} ignored; 0 measured; {} filtered out; finished in 0.00s",
-            self.passed, self.failed, self.ignored, self.filtered
+            "{} passed; {} failed; {} ignored; 0 measured; 0 filtered out; finished in 0.00s",
+            self.passed, self.failed, self.ignored
         );
         println!("");
         if self.failed > 0usize {

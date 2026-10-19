@@ -33,10 +33,6 @@ pub trait Debug {
 
 pub trait Write {
     fn write_str(&mut self, s: &str) -> Result;
-    /// write!/writeln! target: append the macro's formatted buffer.
-    fn __jr_write_buf(&mut self, buf: String) -> Result {
-        self.write_str(buf.as_str())
-    }
 }
 
 /// Saved spec returned by `push_spec`, restored by `pop_spec`.
@@ -132,11 +128,6 @@ impl Formatter {
     fn clear_spec(&mut self) -> Spec {
         let alternate = self.alternate;
         self.push_spec(' ', 0u8, Option::None, Option::None, if alternate { 1u32 } else { 0u32 })
-    }
-
-    /// write!/writeln! on a Formatter (inherent, like std's write_fmt).
-    pub fn __jr_write_buf(&mut self, buf: String) -> Result {
-        self.write_str(buf.as_str())
     }
 
     pub fn write_str(&mut self, s: &str) -> Result {
@@ -1126,79 +1117,5 @@ impl Debug for super::cmp::Ordering {
             super::cmp::Ordering::Equal => "Equal",
             super::cmp::Ordering::Greater => "Greater",
         })
-    }
-}
-
-// ---- format!/write!/writeln! entry points ----
-// Each placeholder of format!/write! appends `prefix`, the formatted value,
-// then `suffix` to the macro's private String. Spec encoding matches *Arg.
-
-pub trait DisplayInto {
-    fn __jr_fmt_into(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32);
-}
-impl<T: Display + ?Sized> DisplayInto for T {
-    fn __jr_fmt_into(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
-        let mut f = arg_formatter(fill, align, width, precision, flags);
-        let _ = self.fmt(&mut f);
-        buf.push_str(prefix);
-        buf.push_str(f.as_str());
-        buf.push_str(suffix);
-    }
-}
-
-pub trait DebugInto {
-    fn __jr_fmt_into(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32);
-}
-impl<T: Debug + ?Sized> DebugInto for T {
-    fn __jr_fmt_into(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
-        let mut f = arg_formatter(fill, align, width, precision, flags);
-        let _ = self.fmt(&mut f);
-        buf.push_str(prefix);
-        buf.push_str(f.as_str());
-        buf.push_str(suffix);
-    }
-}
-
-pub trait StrDisplayInto {
-    fn __jr_fmt_into_str(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32);
-}
-impl StrDisplayInto for str {
-    fn __jr_fmt_into_str(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
-        let mut f = arg_formatter(fill, align, width, precision, flags);
-        let _ = f.pad(self);
-        buf.push_str(prefix);
-        buf.push_str(f.as_str());
-        buf.push_str(suffix);
-    }
-}
-
-pub trait StrDebugInto {
-    fn __jr_fmt_into_str(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32);
-}
-impl StrDebugInto for str {
-    fn __jr_fmt_into_str(&self, buf: &mut String, prefix: &str, suffix: &str, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
-        let mut f = arg_formatter(fill, align, width, precision, flags);
-        let _ = debug_str(&mut f, self);
-        buf.push_str(prefix);
-        buf.push_str(f.as_str());
-        buf.push_str(suffix);
-    }
-}
-
-/// format! result: a call (not a block) so method chains type normally.
-pub fn __jr_format(buf: String) -> String {
-    buf
-}
-
-impl Write for Formatter {
-    fn write_str(&mut self, s: &str) -> Result {
-        Formatter::write_str(self, s)
-    }
-}
-
-impl Write for String {
-    fn write_str(&mut self, s: &str) -> Result {
-        self.push_str(s);
-        Result::Ok(())
     }
 }

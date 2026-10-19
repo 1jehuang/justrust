@@ -1956,6 +1956,17 @@ impl ValidatedTraitWorld {
                     },
                 )?;
             }
+            Ty::ParamArray { element, len } => {
+                if !env.contains(*len) {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "const parameter is outside its binder",
+                    ));
+                }
+                child(element, TypeUse::Aggregate)?;
+                walk.has_parameters = true;
+            }
+            Ty::ConstValue(_) => {}
             Ty::Slice { element } => {
                 // Unsized: only meaningful directly behind a reference, or
                 // as a root trait Self type (`impl Tr for [T]`), like `str`.
@@ -2413,6 +2424,17 @@ impl ValidatedTraitWorld {
                 && self.eq_ty(&a.trait_ref.self_ty, &b.trait_ref.self_ty, depth + 1)?
                 && self.eq_types(&a.trait_ref.args, &b.trait_ref.args, depth + 1)?),
             (Ty::Param(a), Ty::Param(b)) => Ok(a == b),
+            (Ty::ConstValue(a), Ty::ConstValue(b)) => Ok(a == b),
+            (
+                Ty::ParamArray {
+                    element: a,
+                    len: al,
+                },
+                Ty::ParamArray {
+                    element: b,
+                    len: bl,
+                },
+            ) => Ok(al == bl && self.eq_ty(a, b, depth + 1)?),
             (Ty::Int(a), Ty::Int(b)) => Ok(a == b),
             (Ty::Float(a), Ty::Float(b)) => Ok(a == b),
             (Ty::Char, Ty::Char)
@@ -3805,6 +3827,9 @@ impl ValidatedTraitWorld {
                     len: bl,
                 },
             ) if al == bl => self.collect_nominal_mappings(a, b, output, depth + 1)?,
+            (Ty::ParamArray { element: a, .. }, Ty::Array { element: b, .. }) => {
+                self.collect_nominal_mappings(a, b, output, depth + 1)?;
+            }
             (Ty::Slice { element: a }, Ty::Slice { element: b }) => {
                 self.collect_nominal_mappings(a, b, output, depth + 1)?;
             }
@@ -6070,6 +6095,12 @@ impl ValidatedTraitWorld {
         let mut children: Vec<&Ty> = Vec::new();
         let known = match &goal.self_ty {
             Ty::Param(_) => return Ok(Some(ProofOutcome::NotProven)),
+            // Const generic values satisfy the implicit parameter `Sized`.
+            Ty::ConstValue(_) => true,
+            Ty::ParamArray { element, .. } => {
+                push(&self.budget, &mut children, element.as_ref())?;
+                true
+            }
             Ty::Struct(t) if item == CatalogItem::Sized => {
                 for f in t.def().fields.iter() {
                     push(&self.budget, &mut children, &f.ty)?;
