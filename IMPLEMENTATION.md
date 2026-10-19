@@ -375,8 +375,11 @@ missing-file changes invalidate only justified consumers without stale lookup.
       remain moves, while declaration-written reference fields and written actuals
       retain reborrows (`tests/inference_move_authority.rs`). Partial nominal
       applications and newly inferred generic reference consumers retain explicit
-      unsupported boundaries. Closure constraints and general iterator-item
-      projections remain follow-up work.
+      unsupported boundaries. Array-loop constraints preserve owned, shared and
+      mutable binding modes, and resolved non-array receivers request the canonical
+      IntoIterator::Item projection. Adapter execution and full-program 08 still
+      depend on the ordinary iterator lowering/library activation. Closure
+      constraints and general iterator-item projections remain follow-up work.
 
 **Next:** enumerate remaining type/pattern forms and freeze one end-to-end slice,
 such as general slice metadata or nested patterns, with resource accounting.

@@ -4,6 +4,9 @@
 //! back through arbitrary nesting rather than defaulting a binding prematurely.
 use super::*;
 
+#[path = "local_literals/iteration.rs"]
+mod iteration;
+
 #[path = "local_literals/positional_pattern.rs"]
 mod positional_pattern;
 
@@ -47,6 +50,7 @@ struct Solver<'a, 'b, 's> {
     projections: Vec<Projection>,
     delayed_results: Vec<Term>,
     coercions: Vec<(Term, Term)>,
+    iterator_items: Vec<(Term, Term)>,
     patterns: Vec<(&'s Pattern, Term, HashMap<LocalKey, Term>)>,
     pattern_bindings: Option<HashMap<LocalKey, Term>>,
     replaying_pattern: bool,
@@ -66,6 +70,7 @@ pub(super) fn hints(
         projections: Vec::new(),
         delayed_results: Vec::new(),
         coercions: Vec::new(),
+        iterator_items: Vec::new(),
         patterns: Vec::new(),
         pattern_bindings: None,
         replaying_pattern: false,
@@ -572,6 +577,7 @@ impl<'s> Solver<'_, '_, 's> {
                 }
             }
             projections = pending;
+            progress |= self.solve_iterator_items()?;
             let coercions = std::mem::take(&mut self.coercions);
             for (actual, expected) in coercions {
                 if matches!(self.domain(actual), Domain::Unknown) {
@@ -1020,22 +1026,7 @@ impl<'s> Solver<'_, '_, 's> {
                     body,
                     ..
                 } => {
-                    let item = match &source.iterable {
-                        ForIterable::Range { start, end, .. } => {
-                            let start = self.expr(start, depth + 1)?;
-                            let end = self.expr(end, depth + 1)?;
-                            self.unify(start, end)?;
-                            start
-                        }
-                        ForIterable::Value(value) => {
-                            let source = self.expr(value, depth + 1)?;
-                            let source = self.peel_refs(source);
-                            match self.domain(source) {
-                                Domain::Array(item, _) | Domain::Slice(item) => item,
-                                _ => self.fresh()?,
-                            }
-                        }
-                    };
+                    let item = self.iteration_item(source, depth)?;
                     self.sites.push((stmt as *const Stmt as usize, item));
                     self.scopes.push(HashMap::new());
                     self.pattern(pattern, item)?;

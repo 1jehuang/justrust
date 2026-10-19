@@ -118,6 +118,30 @@ fn expected_slice_coercions_do_not_equate_array_and_slice_shapes() {
 }
 
 #[test]
+fn borrowed_loop_bindings_constrain_later_receiver_uses() {
+    compare(
+        "shared-loop",
+        "fn observe(n: &u8) -> u8 { *n } fn main() { let values = [7u8, 8]; let mut out = Vec::new(); for n in &values { out.push(observe(n)); } println!(\"{}\", out.len()); }",
+    );
+    compare(
+        "mutable-loop",
+        "fn observe(n: &mut u8) -> u8 { *n } fn main() { let mut values = [7u8, 8]; let mut out = Vec::new(); for n in &mut values { out.push(observe(n)); } println!(\"{}\", out.len()); }",
+    );
+    compare(
+        "nominal-loop",
+        "struct Event { value: u8 } fn observe(e: &Event) -> u8 { e.value } fn main() { let values = [Event { value: 7 }, Event { value: 8 }]; let mut out = Vec::new(); for e in &values { out.push(observe(e)); } println!(\"{}\", out.len()); }",
+    );
+}
+
+#[test]
+fn borrowed_iteration_modes_match_stock() {
+    compare(
+        "owned-loop",
+        "fn main() { let values = [7u8, 8]; let mut out = Vec::new(); for n in values { out.push(n); } println!(\"{}\", out.len()); }",
+    );
+}
+
+#[test]
 fn contradictory_and_underconstrained_bindings_reject() {
     for (name, source) in [
         (
