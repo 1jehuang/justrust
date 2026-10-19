@@ -26,9 +26,10 @@ milestone, not full Rust support (see RUST-COMPATIBILITY.md).
 Landed since bf4ad37: char literal/range patterns (671f9090f), argument-position
 `impl Trait` (8347eaf25), rvalue method receivers (2dcaa3841), char casts.
 
-0/20 pass. First native diagnostics: derive attribute 8, `for` 4,
-string literal in expression position 4, `vec!`/`write!` style macro 2,
-const 1, byte literal 1, `Fn` bound syntax 1.
+1/20 pass: `01_hello` now checks, builds and executes with exact stock stdout
+using native shared-str and scalar `{}` formatting. Other programs retain
+explicit rejection diagnostics until their remaining features land. This is
+not full formatting or full Rust support. See `FORMAT-SCALARS.md`.
 
 ## Ranked blockers (feature -> programs blocked)
 

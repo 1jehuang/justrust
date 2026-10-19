@@ -717,7 +717,12 @@ pub(super) fn build(
                 );
             }
         };
-        if source && !context.callable_env(declaration)?.is_generic() {
+        // Nongeneric native prelude bodies are library code: still checked
+        // universally, but instantiated only when reachable from user roots.
+        if source
+            && !context.callable_env(declaration)?.is_generic()
+            && !context.is_prelude_decl(declaration)?
+        {
             queue.add(
                 ir::CallTarget {
                     declaration,

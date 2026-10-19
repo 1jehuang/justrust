@@ -1558,6 +1558,11 @@ fn preflight_with_plan(
                             operand(field, &mut budget)?;
                         }
                     }
+                    Rvalue::Format { arguments, .. } => {
+                        for value in arguments {
+                            operand(value, &mut budget)?;
+                        }
+                    }
                     Rvalue::Println(_) | Rvalue::Output(_) | Rvalue::Str(_) => {}
                 }
             }
@@ -2746,7 +2751,11 @@ impl Transfer<'_> {
                 self.operand(state, left)?;
                 self.operand(state, right)?;
             }
-            Rvalue::Aggregate { fields, .. } | Rvalue::EnumVariant { fields, .. } => {
+            Rvalue::Aggregate { fields, .. }
+            | Rvalue::EnumVariant { fields, .. }
+            | Rvalue::Format {
+                arguments: fields, ..
+            } => {
                 for field in fields {
                     self.operand(state, field)?;
                 }

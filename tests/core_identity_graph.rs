@@ -55,8 +55,12 @@ fn original_identity_uses_source_graph_and_ordinary_native_instances() {
                 .iter()
                 .filter(|(key, _)| key.kind == 107)
                 .collect();
-            assert_eq!(source_nodes.len(), 1);
-            assert_eq!(source_nodes[0].1, 1);
+            assert_eq!(source_nodes.len(), 5);
+            assert!(
+                source_nodes
+                    .iter()
+                    .all(|(_, evaluations)| *evaluations == 1)
+            );
             if check {
                 assert!(
                     compiled

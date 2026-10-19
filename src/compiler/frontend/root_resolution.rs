@@ -67,6 +67,8 @@ struct Resolver<'a> {
     active: std::collections::HashSet<(PathKey, usize, bool)>,
     type_params: Vec<AstIdent>,
     lexical_function: Option<ScopeId>,
+    /// Interpret `crate` as the user crate root even inside the prelude.
+    user_crate_anchor: bool,
 }
 impl Resolver<'_> {
     fn with_source_owner<T>(
@@ -1365,12 +1367,15 @@ impl Resolver<'_> {
         let parts = path.segments();
         let mut at = 0;
         let initial_module = match path.anchor() {
-            PathAnchor::Crate => Some(
-                self.program
+            // Inside the native prelude library `crate` names the library root.
+            PathAnchor::Crate => Some(match self.prelude_root_of(from)? {
+                Some(prelude) if !self.user_crate_anchor => prelude,
+                _ => self
+                    .program
                     .modules
                     .source_root()
                     .map_err(module_diagnostic)?,
-            ),
+            }),
             PathAnchor::SelfModule => Some(from),
             PathAnchor::Super(levels) => {
                 let mut current = from;
@@ -1451,6 +1456,8 @@ impl Resolver<'_> {
                 self.item(&full, from, type_namespace, importing && parts.len() == 1)?
             {
                 item
+            } else if let Some(found) = self.prelude_path(path, from, namespace, type_namespace)? {
+                return Ok(found);
             } else if type_namespace
                 && (self.atom_is(*ident, BuiltinAtom::Core, Namespace::Type)?
                     || self.atom_is(*ident, BuiltinAtom::Std, Namespace::Type)?)
@@ -1502,6 +1509,65 @@ impl Resolver<'_> {
             at += 1;
         }
         Ok((current.module == namespace).then_some(current))
+    }
+    /// The native prelude library root containing `module`, if any.
+    fn prelude_root_of(&self, module: ModuleId) -> Result<Option<ModuleId>, String> {
+        let Some(prelude) = self.program.prelude_module else {
+            return Ok(None);
+        };
+        Ok(self
+            .program
+            .modules
+            .is_descendant(module, prelude)
+            .map_err(module_diagnostic)?
+            .then_some(prelude))
+    }
+    /// Fallback for an unresolved relative first segment: `std`/`core` name
+    /// the native prelude library, and any other name is looked up in the
+    /// library's `prelude::v1` module. User items and imports were tried first,
+    /// so they shadow both. `Ok(None)` means not found (the caller continues
+    /// with closed catalog paths such as `core::marker::Copy`).
+    fn prelude_path(
+        &mut self,
+        path: &AstPath,
+        from: ModuleId,
+        namespace: bool,
+        type_namespace: bool,
+    ) -> Result<Option<Option<ResolvedItem>>, String> {
+        let Some(prelude) = self.program.prelude_module else {
+            return Ok(None);
+        };
+        let parts = path.segments();
+        let Some(first) = parts.first().copied() else {
+            return Ok(None);
+        };
+        let rest = &parts[1..];
+        let library = type_namespace
+            && !rest.is_empty()
+            && (self.atom_is(first, BuiltinAtom::Core, Namespace::Type)?
+                || self.atom_is(first, BuiltinAtom::Std, Namespace::Type)?);
+        let (base, suffix) = if library {
+            (prelude, rest)
+        } else if let Some(scope) = self.program.prelude_scope {
+            (scope, parts)
+        } else {
+            return Ok(None);
+        };
+        let base_path = self.module_path(base)?;
+        let mut segments = base_path.segments().to_vec();
+        segments.extend_from_slice(suffix);
+        let full = AstPath::new(self.names(), PathAnchor::Crate, &segments)
+            .map_err(native_adapter::name_diagnostic)?;
+        // The rebuilt canonical path is anchored at the user crate root even
+        // when the requester is inside the prelude library.
+        let previous = std::mem::replace(&mut self.user_crate_anchor, true);
+        let found = self.path(&full, from, namespace, false);
+        self.user_crate_anchor = previous;
+        let found = found?;
+        if found.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(found))
     }
     fn reject_nonbound_equalities(
         &mut self,
@@ -2736,7 +2802,12 @@ impl Resolver<'_> {
                     self.expr(arg, module, locals)?;
                 }
             }
-            Expr::Array(elements) | Expr::Tuple(elements) => {
+            Expr::Array(elements)
+            | Expr::Tuple(elements)
+            | Expr::Format {
+                arguments: elements,
+                ..
+            } => {
                 for value in elements {
                     self.expr(value, module, locals)?;
                 }
@@ -3098,6 +3169,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         active: std::collections::HashSet::new(),
         type_params: Vec::new(),
         lexical_function: None,
+        user_crate_anchor: false,
     };
     for (bucket, items) in &parsed.items {
         for item in items {

@@ -1628,6 +1628,18 @@ impl SourceInventory {
             }
             Expr::Output(output) => validate_output_site(output, &self.names)
                 .map_err(|message| source_error(budget, &message))?,
+            Expr::Format { arguments, .. } => {
+                for (index, argument) in arguments.iter().enumerate() {
+                    self.expr(
+                        argument,
+                        &node.child(21, index, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
+            }
             Expr::Panic(panic) => validate_panic_site(panic, &self.names)
                 .map_err(|message| source_error(budget, &message))?,
             Expr::Apply { path, value } => {
@@ -4068,6 +4080,12 @@ pub struct Program {
     pub impls: Vec<ImplDecl>,
     pub traits: Vec<TraitDecl>,
     pub trait_imports: Vec<(ModuleId, TraitPath)>,
+    /// Hidden crate-root module holding the embedded native prelude library,
+    /// when loaded. `std::`/`core::` paths and prelude names resolve into it.
+    pub prelude_module: Option<ModuleId>,
+    /// The `prelude::v1` module inside the prelude library. Its public names
+    /// (types, variants, traits) are in scope in every module unless shadowed.
+    pub prelude_scope: Option<ModuleId>,
     // Resolver-issued source authority. Shared unchanged by public AST clones.
     associated_bound_sources: Arc<[AssociatedBoundSource]>,
 }
@@ -4097,6 +4115,8 @@ struct ProgramDeclarations {
     impls: Vec<ImplDecl>,
     traits: Vec<TraitDecl>,
     trait_imports: Vec<(ModuleId, TraitPath)>,
+    prelude_module: Option<ModuleId>,
+    prelude_scope: Option<ModuleId>,
 }
 struct ParsedDeclarations {
     program: ProgramDeclarations,
@@ -4122,6 +4142,8 @@ impl ProgramDeclarations {
             impls: self.impls,
             traits: self.traits,
             trait_imports: self.trait_imports,
+            prelude_module: self.prelude_module,
+            prelude_scope: self.prelude_scope,
             associated_bound_sources: Arc::from([]),
         }
     }
@@ -4249,6 +4271,8 @@ impl ProgramBuilder {
             impls: self.impls,
             traits: self.traits,
             trait_imports: self.trait_imports,
+            prelude_module: None,
+            prelude_scope: None,
         }
         .publish(names, modules, self.symbols, None);
         program.validate_name_handles()?;
@@ -4256,6 +4280,24 @@ impl ProgramBuilder {
     }
 }
 impl Program {
+    fn in_prelude(&self, module: ModuleId) -> bool {
+        self.prelude_module
+            .is_some_and(|prelude| self.modules.is_descendant(module, prelude).unwrap_or(false))
+    }
+    /// User-crate struct count, excluding the embedded prelude library.
+    pub fn user_structs(&self) -> usize {
+        self.structs
+            .iter()
+            .filter(|s| !self.in_prelude(s.module))
+            .count()
+    }
+    /// User-crate enum count, excluding the embedded prelude library.
+    pub fn user_enums(&self) -> usize {
+        self.enums
+            .iter()
+            .filter(|e| !self.in_prelude(e.module))
+            .count()
+    }
     fn validate_name_handles(&self) -> Result<(), String> {
         name_validation::validate_program_names(self)
     }
@@ -5299,6 +5341,12 @@ pub enum Expr {
         label: Option<AstIdent>,
     },
     Println(String),
+    Format {
+        pieces: Vec<String>,
+        arguments: Vec<Expr>,
+        stream: ir::OutputStream,
+        newline: bool,
+    },
     Output(Box<SourceOutput>),
     Panic(Box<SourcePanic>),
 }
@@ -6644,6 +6692,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else {
             return Err(self.error("expected an output macro delimiter"));
         };
+        if !self.is(close) {
+            return self.scalar_output(close, spelling, Some(site));
+        }
         let (nonliteral, placeholders, arguments) = match spelling {
             "print" => (
                 "print! nonliteral arguments are unsupported",
@@ -6689,6 +6740,105 @@ impl<'input, 'names> Parser<'input, 'names> {
             })
             .map_err(native_adapter::name_error)?;
         Ok(Expr::Output(payload))
+    }
+    fn scalar_output(
+        &mut self,
+        close: &str,
+        spelling: &str,
+        site: Option<super::expansion_span::SpanId>,
+    ) -> Result<Expr, ParseError> {
+        let buffer;
+        let token = if self.token().is_opaque_literal() {
+            buffer = self
+                .input
+                .opaque_literal_buffer(&self.token(), self.names)?;
+            TokenCursor::new(&buffer).current()
+        } else {
+            self.token()
+        };
+        if !token.string {
+            if spelling == "println" {
+                return Err(self.error("println! requires one literal string"));
+            }
+            return Err(
+                self.unsupported(&format!("{spelling}! nonliteral arguments are unsupported"))
+            );
+        }
+        let text = self.string_literal_value(token.text)?;
+        self.cursor.bump();
+        let mut pieces = Vec::new();
+        let mut piece = String::new();
+        let mut chars = text.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '{' => match chars.next() {
+                    Some('{') => piece.push('{'),
+                    Some('}') => {
+                        pieces.push(std::mem::take(&mut piece));
+                    }
+                    None => return Err(self.error("unmatched opening brace in format string")),
+                    _ => {
+                        return Err(
+                            self.unsupported("only bare {} formatting placeholders are supported")
+                        );
+                    }
+                },
+                '}' => {
+                    if chars.next() == Some('}') {
+                        piece.push('}');
+                    } else {
+                        return Err(self.error("unmatched closing brace in format string"));
+                    }
+                }
+                _ => piece.push(c),
+            }
+        }
+        pieces.push(piece);
+        let mut arguments = Vec::new();
+        while self.eat(",") && !self.is(close) {
+            arguments.push(self.nested_expr()?);
+        }
+        self.expect(close)?;
+        if pieces.len() != arguments.len() + 1 {
+            return Err(self.error("format argument count mismatch"));
+        }
+        let stream = if matches!(spelling, "print" | "println") {
+            ir::OutputStream::Stdout
+        } else {
+            ir::OutputStream::Stderr
+        };
+        let newline = matches!(spelling, "println" | "eprintln");
+        if arguments.is_empty() {
+            let text = pieces.pop().unwrap();
+            return if let Some(site) = site {
+                Ok(Expr::Output(
+                    self.names
+                        .try_parser_box(SourceOutput {
+                            output: ir::LiteralOutput {
+                                text,
+                                stream,
+                                newline,
+                            },
+                            site,
+                        })
+                        .map_err(native_adapter::name_error)?,
+                ))
+            } else {
+                Ok(Expr::Println(text))
+            };
+        }
+        self.names
+            .retain_parser_text(
+                pieces.len() * std::mem::size_of::<String>()
+                    + arguments.len() * std::mem::size_of::<Expr>(),
+            )
+            .map_err(native_adapter::name_error)?;
+        Ok(Expr::Format {
+            pieces,
+            arguments,
+            stream,
+            newline,
+        })
     }
     fn panic_expression(&mut self, spelling: &'static str) -> Result<Expr, ParseError> {
         let (default, delimiter, nonliteral, placeholders, arguments) = match spelling {
@@ -7244,43 +7394,6 @@ impl<'input, 'names> Parser<'input, 'names> {
         let text = literal_format_owned(token.text, self.names).map_err(|error| {
             if error.kind == super::source::SourceErrorKind::Syntax {
                 self.unsupported(formatting)
-            } else {
-                error
-            }
-        })?;
-        self.cursor.bump();
-        Ok(text)
-    }
-    fn println_literal(&mut self) -> Result<String, ParseError> {
-        if self.token().is_opaque_literal() {
-            let buffer = self
-                .input
-                .opaque_literal_buffer(&self.token(), self.names)?;
-            let mut cursor = TokenCursor::new(&buffer);
-            if !cursor.current().string {
-                return Err(self.error("println! requires one literal string"));
-            }
-            let text =
-                literal_format_owned(cursor.current().text, self.names).map_err(|error| {
-                    if error.kind == super::source::SourceErrorKind::Syntax {
-                        self.error(&error.message)
-                    } else {
-                        error
-                    }
-                })?;
-            cursor.bump();
-            if !cursor.current().matches("") {
-                return Err(self.error("println! requires one literal string"));
-            }
-            self.cursor.bump();
-            return Ok(text);
-        }
-        if !self.token().string {
-            return Err(self.error("println! requires one literal string"));
-        }
-        let text = literal_format_owned(self.token().text, self.names).map_err(|error| {
-            if error.kind == super::source::SourceErrorKind::Syntax {
-                self.error(&error.message)
             } else {
                 error
             }
@@ -8640,6 +8753,38 @@ impl<'input, 'names> Parser<'input, 'names> {
                     .modules
                     .intern_child(self.names, module, name)
                     .map_err(module_parse_error)?;
+                if module == self.modules.source_root().map_err(module_parse_error)?
+                    && self
+                        .names
+                        .spelling(name)
+                        .map_err(native_adapter::name_error)?
+                        == super::source::source_prelude::PRELUDE_MODULE
+                {
+                    if parsed.program.prelude_module.is_some() {
+                        return Err(self.error("duplicate native prelude module"));
+                    }
+                    parsed.program.prelude_module = Some(child);
+                }
+                if let Some(prelude) = parsed.program.prelude_module {
+                    let spelling = self
+                        .names
+                        .spelling(name)
+                        .map_err(native_adapter::name_error)?;
+                    let parent = self.modules.parent(module).map_err(module_parse_error)?;
+                    if spelling == "v1"
+                        && parent == Some(prelude)
+                        && self
+                            .modules
+                            .name(module)
+                            .map_err(module_parse_error)?
+                            .map(|ident| self.names.spelling(ident).map(|s| s == "prelude"))
+                            .transpose()
+                            .map_err(native_adapter::name_error)?
+                            == Some(true)
+                    {
+                        parsed.program.prelude_scope = Some(child);
+                    }
+                }
                 if self.eat(";") {
                     return Err(
                         self.unsupported("external module files are unsupported; use inline mod")
@@ -10465,10 +10610,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return Err(self.error("only println! is supported"));
             }
             self.expect("(")?;
-            let text = self.println_literal()?;
-            self.eat(",");
-            self.expect(")")?;
-            Expr::Println(text)
+            if self.is(")") {
+                self.expect(")")?;
+                Expr::Println(String::new())
+            } else {
+                return self.scalar_output(")", "println", None);
+            }
         } else if self.eat("(") {
             let mut args = Vec::new();
             if !self.is(")") {
@@ -12984,7 +13131,10 @@ fn walk_depth_inspecting(
                     push(DepthNode::Expr(left))?;
                     push(DepthNode::Expr(right))?;
                 }
-                Expr::Call { args, .. } => {
+                Expr::Call { args, .. }
+                | Expr::Format {
+                    arguments: args, ..
+                } => {
                     for arg in args {
                         push(DepthNode::Expr(arg))?;
                     }
@@ -14598,6 +14748,8 @@ impl PlanCtx {
                 .schemas
                 .insert(id, Arc::new(NominalSchema::Enum(d.clone())));
         }
+        // User callables keep their indices; native prelude callables follow.
+        let mut prelude_callables: Vec<(ir::DeclId, CallableSource)> = Vec::new();
         for (index, f) in program.functions.iter().enumerate() {
             let item = *f
                 .name
@@ -14612,8 +14764,12 @@ impl PlanCtx {
                 ir::DeclKind::Function,
                 index,
             )?;
-            registry.function_ids.push(id);
-            registry.callable_sources.push(CallableSource::Free(index));
+            if program.in_prelude(f.module) {
+                prelude_callables.push((id, CallableSource::Free(index)));
+            } else {
+                registry.function_ids.push(id);
+                registry.callable_sources.push(CallableSource::Free(index));
+            }
         }
         for (index, declaration) in program.traits.iter().enumerate() {
             let item = *declaration
@@ -14657,13 +14813,16 @@ impl PlanCtx {
                         ir::DeclKind::AssociatedFunction,
                         item,
                     )?;
-                    registry.function_ids.push(id);
-                    registry
-                        .callable_sources
-                        .push(CallableSource::TraitDefault {
-                            trait_index: index,
-                            item,
-                        });
+                    let source = CallableSource::TraitDefault {
+                        trait_index: index,
+                        item,
+                    };
+                    if program.in_prelude(declaration.module) {
+                        prelude_callables.push((id, source));
+                    } else {
+                        registry.function_ids.push(id);
+                        registry.callable_sources.push(source);
+                    }
                 }
             }
             let mut associated_types = Vec::new();
@@ -14732,14 +14891,23 @@ impl PlanCtx {
                     ir::DeclKind::AssociatedFunction,
                     item,
                 )?;
-                registry.function_ids.push(id);
-                registry.callable_sources.push(CallableSource::Associated {
+                let source = CallableSource::Associated {
                     implementation,
                     item,
-                });
+                };
+                if program.in_prelude(block.module) {
+                    prelude_callables.push((id, source));
+                } else {
+                    registry.function_ids.push(id);
+                    registry.callable_sources.push(source);
+                }
                 ids.push(id);
             }
             registry.associated_ids.push(ids);
+        }
+        for (id, source) in prelude_callables {
+            registry.function_ids.push(id);
+            registry.callable_sources.push(source);
         }
         for entry in catalog_builder.base_declarations() {
             if entry.info.kind != ir::DeclKind::Trait {
@@ -14777,9 +14945,13 @@ impl PlanCtx {
             )?];
             registry.declarations[id.index as usize].visibility = declaration.visibility.clone();
         }
-        for (index, function) in program.functions.iter().enumerate() {
+        for (position, source) in registry.callable_sources.iter().enumerate() {
+            let CallableSource::Free(index) = *source else {
+                continue;
+            };
+            let function = &program.functions[index];
             clone_visibility(&function.visibility, budget)?;
-            let id = registry.function_ids[index];
+            let id = registry.function_ids[position];
             registry.declarations[id.index as usize].visibility = function.visibility.clone();
         }
         for (index, declaration) in program.traits.iter().enumerate() {
@@ -15791,6 +15963,19 @@ impl PlanCtx {
             .catalog
             .declaration(id)
             .map_or(tr::DeclOrigin::Source, |d| d.origin))
+    }
+    /// Whether a declaration lives in the embedded native prelude library.
+    /// Prelude items are library code: not user telemetry, and nongeneric
+    /// prelude bodies are instantiated only on demand.
+    pub fn is_prelude_decl(&self, id: ir::DeclId) -> Result<bool, String> {
+        let Some(prelude) = self.program.prelude_module else {
+            return Ok(false);
+        };
+        let module = self.declaration(id)?.path.module;
+        self.program
+            .modules
+            .is_descendant(module, prelude)
+            .map_err(module_diagnostic)
     }
     pub fn callable_provider(&self, id: ir::DeclId) -> Result<CallableProvider, String> {
         self.declaration(id)?;

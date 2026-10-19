@@ -509,6 +509,12 @@ pub enum Rvalue {
     /// Materialize a `&'static str` descriptor over immutable program data.
     Str(std::sync::Arc<str>),
     Println(String),
+    Format {
+        pieces: Vec<String>,
+        arguments: Vec<Operand>,
+        stream: ir::OutputStream,
+        newline: bool,
+    },
     /// Unsizes exactly shared `&[u8; N]` to shared `&[u8]`. N comes from the
     /// operand's validated type. The operand is evaluated once and its loan
     /// and origin set is the only storage authority of the result.
@@ -598,7 +604,11 @@ impl Rvalue {
                 visit(left)?;
                 visit(right)?;
             }
-            Self::Aggregate { fields, .. } | Self::EnumVariant { fields, .. } => {
+            Self::Aggregate { fields, .. }
+            | Self::EnumVariant { fields, .. }
+            | Self::Format {
+                arguments: fields, ..
+            } => {
                 for value in fields {
                     visit(value)?;
                 }
@@ -1043,6 +1053,25 @@ impl Function {
                             )?,
                             Rvalue::Output(output) => {
                                 add(&mut bytes, output.text.len(), 1, budget)?
+                            }
+                            Rvalue::Format {
+                                pieces, arguments, ..
+                            } => {
+                                add(
+                                    &mut bytes,
+                                    pieces.len(),
+                                    std::mem::size_of::<String>(),
+                                    budget,
+                                )?;
+                                for piece in pieces {
+                                    add(&mut bytes, piece.len(), 1, budget)?;
+                                }
+                                add(
+                                    &mut bytes,
+                                    arguments.len(),
+                                    std::mem::size_of::<Operand>(),
+                                    budget,
+                                )?;
                             }
                             Rvalue::Println(text) => add(&mut bytes, text.len(), 1, budget)?,
                             Rvalue::Str(text) => add(&mut bytes, text.len(), 1, budget)?,
@@ -1655,6 +1684,11 @@ impl Function {
                                 operand(index, budget, facts)?;
                             }
                             Rvalue::Discriminant(place) => path(place, budget)?,
+                            Rvalue::Format { arguments, .. } => {
+                                for value in arguments {
+                                    operand(value, budget, facts)?;
+                                }
+                            }
                             Rvalue::Borrow(_)
                             | Rvalue::Println(_)
                             | Rvalue::Output(_)
@@ -2102,6 +2136,24 @@ impl Function {
                 Ok(element.clone())
             }
             Rvalue::Println(_) | Rvalue::Output(_) => Ok(Ty::Unit),
+            Rvalue::Format {
+                pieces, arguments, ..
+            } => {
+                if pieces.len() != arguments.len() + 1 {
+                    return Err("format argument count mismatch".into());
+                }
+                for argument in arguments {
+                    let ty = self.operand_ty_with_facts(argument, facts)?;
+                    if !matches!(ty, Ty::Int(_) | Ty::Bool | Ty::Char | Ty::Never)
+                        && !ty.is_shared_str()
+                    {
+                        return Err(
+                            "format argument requires integer, bool, char or &str Display".into(),
+                        );
+                    }
+                }
+                Ok(Ty::Unit)
+            }
             Rvalue::Str(_) => Ok(Ty::shared_str_ty()),
             Rvalue::Unary { op, value } => {
                 let ty = self.operand_ty_with_facts(value, facts)?;
@@ -4054,6 +4106,54 @@ impl Lowerer<'_> {
             }
             ir::ExprKind::Println(text) => {
                 self.assign(destination.clone(), Rvalue::Println(text.clone()), origin)
+            }
+            ir::ExprKind::Format {
+                pieces,
+                arguments,
+                stream,
+                newline,
+            } => {
+                let mut operands = Vec::new();
+                if !self.allocate(
+                    0,
+                    arguments.len() * std::mem::size_of::<Operand>()
+                        + pieces.len() * std::mem::size_of::<String>(),
+                ) {
+                    return Err(self.resource_error.clone().unwrap());
+                }
+                for piece in pieces {
+                    if !self.allocate(0, piece.len()) {
+                        return Err(self.resource_error.clone().unwrap());
+                    }
+                }
+                for &id in arguments {
+                    let mut operand = self.expression(id)?;
+                    if matches!(
+                        self.source.exprs[id.0].kind,
+                        ir::ExprKind::Borrow {
+                            kind: ir::BorrowKind::Shared,
+                            ..
+                        }
+                    ) {
+                        let Operand::Copy(place) = &mut operand else {
+                            return Err(
+                                "format shared borrow requires Copy reference operand".into()
+                            );
+                        };
+                        place.projection.push(ir::Projection::Deref);
+                    }
+                    operands.push(operand);
+                }
+                self.assign(
+                    destination.clone(),
+                    Rvalue::Format {
+                        pieces: pieces.clone(),
+                        arguments: operands,
+                        stream: *stream,
+                        newline: *newline,
+                    },
+                    origin,
+                );
             }
         }
         Ok(destination)
@@ -10655,7 +10755,10 @@ mod tests {
                                 live_operand(right, &live);
                             }
                             Rvalue::Aggregate { fields, .. }
-                            | Rvalue::EnumVariant { fields, .. } => {
+                            | Rvalue::EnumVariant { fields, .. }
+                            | Rvalue::Format {
+                                arguments: fields, ..
+                            } => {
                                 for value in fields {
                                     live_operand(value, &live);
                                 }

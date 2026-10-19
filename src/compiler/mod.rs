@@ -354,7 +354,9 @@ impl Provider for CompilerProvider {
                                 return Err(Error::new("prepared program has no source input"));
                             }
                         },
-                        [_] => return Err(Error::new("source root ordinal must be 0")),
+                        // [1] attaches the embedded native prelude library.
+                        [1] => source::prepare_prelude_unit(options, &budget),
+                        [_] => return Err(Error::new("source root ordinal must be 0 or 1")),
                         [parent @ .., index] => {
                             let parent: Arc<source::UnitResult> =
                                 facts.get(Key::new(SOURCE, parent.to_vec())).await?;
@@ -1115,6 +1117,8 @@ fn compile_input_configured(
         for index in 0..context.callable_count() {
             let declaration = context.callable_decl(index)?;
             match context.callable_provider(declaration)? {
+                frontend::CallableProvider::Source { .. }
+                    if context.is_prelude_decl(declaration)? => {}
                 frontend::CallableProvider::Source { .. } => {
                     count = count
                         .checked_add(1)
@@ -1184,8 +1188,8 @@ fn compile_input_configured(
         executable: executable.map(|bytes| bytes.as_ref().clone()),
         report,
         functions,
-        structs: program.as_ref().map_or(0, |program| program.structs.len()),
-        enums: program.as_ref().map_or(0, |program| program.enums.len()),
+        structs: program.as_ref().map_or(0, |program| program.user_structs()),
+        enums: program.as_ref().map_or(0, |program| program.user_enums()),
         cfg_blocks,
         cfg_edges,
         cfg_locals,
