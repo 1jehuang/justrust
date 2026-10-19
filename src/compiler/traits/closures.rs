@@ -2,6 +2,65 @@
 //! ordered owner actuals, site and immutable checked signature.
 use super::*;
 
+impl ValidatedFacts {
+    pub(in crate::compiler) fn closure_lowering_identity(
+        &self,
+    ) -> Option<(Arc<ir::ClosureTy>, ir::ClosureKind)> {
+        self.closure.clone().zip(self.closure_mode)
+    }
+    pub(in crate::compiler) fn validate_closure_body_source(
+        &self,
+        closure: &Arc<ir::ClosureTy>,
+        mode: ir::ClosureKind,
+        source: &ir::CheckedFunction,
+    ) -> Result<()> {
+        self.world.check_facts(self, true)?;
+        if self.closure_mode != Some(mode) || self.declaration() != closure.provider() {
+            return Err(FactsError::invalid(
+                self.budget(),
+                "closure lowering changed provider or receiver mode",
+            ));
+        }
+        let original = self.closure.as_ref().ok_or_else(|| {
+            FactsError::invalid(
+                self.budget(),
+                "closure lowering has no checked parent metadata",
+            )
+        })?;
+        if !self.world.eq_ty(
+            &Ty::Closure(original.clone()),
+            &Ty::Closure(closure.clone()),
+            0,
+        )? {
+            return Err(FactsError::invalid(
+                self.budget(),
+                "closure lowering changed canonical parent metadata",
+            ));
+        }
+        self.world.validate_closure_metadata(closure, self.env())?;
+        let mut params = Vec::new();
+        for local in &source.params {
+            let ty = source.locals.get(local.0).ok_or_else(|| {
+                FactsError::invalid(self.budget(), "closure lowering parameter local is invalid")
+            })?;
+            push(self.budget(), &mut params, ty.ty.clone())?;
+        }
+        self.validate_signature(
+            SignatureSubject::Body,
+            &Signature {
+                params,
+                result: source.result.clone(),
+                ref_contract: source.ref_contract.clone(),
+            },
+        )?;
+        charged(
+            self.budget(),
+            source.validate_with_facts(ir::FactsCtx::from_validated(self)),
+        )?;
+        Ok(())
+    }
+}
+
 impl ValidatedTraitWorld {
     pub(in crate::compiler) fn closure_trait_kind(
         &self,

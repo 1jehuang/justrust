@@ -549,6 +549,9 @@ cleanup failures.
       (`tests/stored_closures.rs`). Stored value/move capture environments and
       FnOnce consumption use canonical receiver-mode-specific executable facts
       (`tests/closure_captures.rs`), including stock-matching move rejection.
+      No-call closure CFGs also retain exact parent-body/mode lowering proof for
+      owning Drop scratch locals (`tests/closure_drop_proof.rs`), without
+      weakening destructor or source-authorization gates.
       Stored reference captures, generic-parent closures, opaque returns and
       iterator integration remain open.
 - [ ] Extend monomorphization/recursive instance planning to the new forms while

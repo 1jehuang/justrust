@@ -1,6 +1,99 @@
 use super::*;
 
 #[test]
+fn closure_lowering_requires_exact_parent_body_and_mode() {
+    let program = parse("fn main(){let n=7i32;let f=move ||n;}").unwrap();
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&program, &budget).unwrap();
+    let (provider, owner) = (0..plan.callable_count())
+        .find_map(|index| {
+            let provider = plan.callable_decl(index).ok()?;
+            plan.stored_closure_owner(provider)
+                .ok()
+                .flatten()
+                .map(|(owner, _)| (provider, owner))
+        })
+        .unwrap();
+    let (_, bodies) =
+        type_check::type_callable_source_and_closures(&program, owner, &plan, &budget, None)
+            .unwrap();
+    let original = bodies
+        .iter()
+        .find(|body| body.ty.provider() == provider)
+        .unwrap();
+    let world = plan.trait_world().unwrap();
+    let facts = world
+        .closure_callable_facts_for(original.ty.clone(), ir::ClosureKind::Fn)
+        .unwrap();
+    let source = original.body_for(ir::ClosureKind::Fn).unwrap();
+    let lowered = crate::compiler::cfg::lower_closure_template(
+        source.clone(),
+        facts.clone(),
+        original,
+        ir::ClosureKind::Fn,
+        &budget,
+    )
+    .unwrap();
+    // Equal payloads do not manufacture the canonical parent's allocation.
+    assert!(
+        crate::compiler::cfg::lower_closure_template(
+            Arc::new(source.as_ref().clone()),
+            facts.clone(),
+            original,
+            ir::ClosureKind::Fn,
+            &budget
+        )
+        .is_err()
+    );
+    assert!(
+        crate::compiler::cfg::lower_closure_template(
+            source.clone(),
+            facts.clone(),
+            original,
+            ir::ClosureKind::FnOnce,
+            &budget
+        )
+        .is_err()
+    );
+    let mut foreign = original.clone();
+    foreign.ty = Arc::new(
+        ir::ClosureTy::new(
+            owner,
+            Arc::from([]),
+            original.ty.site() + 1,
+            provider,
+            original.ty.params().into(),
+            original.ty.result().clone(),
+            original.ty.captures().into(),
+            original.ty.kind(),
+        )
+        .with_sources(original.ty.sources().into()),
+    );
+    assert!(
+        crate::compiler::cfg::lower_closure_template(
+            source,
+            facts.clone(),
+            &foreign,
+            ir::ClosureKind::Fn,
+            &budget
+        )
+        .is_err()
+    );
+    let mut changed = lowered.function().as_ref().clone();
+    changed.name.push_str(" forged");
+    assert!(changed.validate_provenance(&facts, &budget).is_err());
+    let once = world
+        .closure_callable_facts_for(original.ty.clone(), ir::ClosureKind::FnOnce)
+        .unwrap();
+    assert!(
+        lowered
+            .function()
+            .validate_provenance(&once, &budget)
+            .is_err()
+    );
+}
+
+#[test]
 fn capture_sources_and_receiver_modes_are_parent_authorized() {
     let program = parse("struct Item{i:i32}fn main(){let x=Item{i:7};let f=move ||x;}").unwrap();
     let budget = ir::PlanBudget::default();

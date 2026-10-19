@@ -918,6 +918,8 @@ impl Provider for CompilerProvider {
                             &this.0.budget,
                         )
                         .map_err(|error| source_fact_error(error, &this.0.budget))?
+                    } else if let Some(closure) = &template.closure {
+                        cfg::lower_closure_template(source, callable, closure, template.closure_mode.ok_or_else(|| Error::new("closure lowering lacks canonical mode"))?, &this.0.budget).map_err(Error::new)?
                     } else {
                         cfg::lower_template(source, callable, &this.0.budget).map_err(Error::new)?
                     };

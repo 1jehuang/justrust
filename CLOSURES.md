@@ -1,5 +1,12 @@
 # Closure callable foundation
 
+No-call stored closure bodies retain canonical CFG lowering authority even when
+unused capture-check scratch locals have owning Drop obligations. The lowering
+entry reads the exact checked parent-body allocation and validates owner, site,
+provider, receiver mode and signature before capturing the actual CFG shape.
+Foreign bodies, metadata, modes and modified shapes reject. This does not admit
+new capture modes or relax destructor checks (`tests/closure_drop_proof.rs`).
+
 Stored closures now retain immutable parent-body capture environments. Value and
 `move` captures support direct calls and generic `Fn`/`FnOnce` bounds, with
 mode-specific concrete receiver bodies and ordinary move/drop checking. Capture

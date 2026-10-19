@@ -6,6 +6,8 @@
 use super::frontend::{BinaryOp, UnaryOp};
 use super::ir::{self, ExprId, IntTy, IntValue, LocalId, LoopId, Place, Projection, Ty};
 mod drop_normal;
+mod closure_template;
+pub(super) use closure_template::lower_closure_template;
 mod grouped_or;
 mod intrinsics;
 mod runtime_sites;
@@ -89,6 +91,7 @@ pub struct GeneratedCfgShape {
     capsules: std::sync::Arc<[std::sync::Arc<ir::ValidatedCallEvidence>]>,
     body_proof: Option<std::sync::Arc<ir::BodySubstitutionProof>>,
     original_publication: Option<std::sync::Arc<super::source_replay::CanonicalSourcePublication>>,
+    closure_authority: Option<(std::sync::Arc<ir::ClosureTy>, ir::ClosureKind)>,
     budget: ir::PlanBudget,
 }
 impl GeneratedCfgShape {
@@ -128,6 +131,7 @@ impl GeneratedCfgShape {
             return_local: f.return_local,
             body_proof: f.body_substitution.clone(),
             original_publication: publication.cloned(),
+            closure_authority: facts.closure_lowering_identity(),
             budget: budget.clone(),
             world: facts.world().clone(),
             declaration: facts.declaration(),
@@ -174,6 +178,12 @@ impl GeneratedCfgShape {
             || !facts.budget().same_authority(budget)
         {
             return Err("lowering proof facts authority changed".into());
+        }
+        match (&self.closure_authority, facts.closure_lowering_identity()) {
+            (Some((original, mode)), Some((current, current_mode))) if *mode == current_mode
+                && facts.world().types_equal(&[Ty::Closure(original.clone())], &[Ty::Closure(current.clone())]).map_err(|e| e.into_legacy_diagnostic(budget))? => {},
+            (None, None) => {},
+            _ => return Err("lowering proof closure parent or capability changed".into()),
         }
         match (&self.target, facts.target()) {
             (Some(a), Some(b))
