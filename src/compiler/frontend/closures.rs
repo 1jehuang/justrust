@@ -54,9 +54,9 @@ impl Parser<'_, '_> {
         segments.reverse();
         AstPath::new(self.names, PathAnchor::Crate, &segments).map_err(native_adapter::name_error)
     }
-    /// The opening grouping parenthesis has already been consumed. This first
-    /// increment has an empty environment and explicit scalar result typing.
-    /// Stored closures and inferred signatures require genuine environment types.
+    /// The opening grouping parenthesis has already been consumed. Immediate
+    /// callables retain explicit scalar result typing and source capture sites.
+    /// Stored closures and inferred signatures remain unsupported.
     pub(super) fn immediate_closure(&mut self) -> Result<Expr, ParseError> {
         // A closure retains its complete signature while parsing a nested
         // callable. Bound that heavier recursive frame before entering it.
