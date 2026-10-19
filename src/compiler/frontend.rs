@@ -41,6 +41,7 @@ use source_schemas::{SourceSchemas, SourceSchemasBuilder, StoredSchema};
 mod token_cursor;
 use char_literal::{parse_byte_literal, parse_char_literal};
 mod format_args;
+mod vec_macro;
 mod format_spec;
 mod operators;
 mod trait_selection;
@@ -7387,6 +7388,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         if self.builtin_macro_ahead("matches")? {
             return self.matches_expression();
+        }
+        if self.builtin_macro_ahead("vec")? {
+            return self.vec_expression();
         }
         if self.builtin_macro_ahead("assert")? {
             return self.assert_expression();
