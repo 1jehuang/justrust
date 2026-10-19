@@ -399,6 +399,20 @@ impl PlanState {
             Type::Slice(_) => {
                 return Err(BARE_SLICE_UNSUPPORTED.into());
             }
+            Type::RawPtr { kind, pointee }
+                if matches!(
+                    pointee.as_ref(),
+                    Type::Ref { kind: ir::BorrowKind::Shared, referent, .. }
+                        if matches!(referent.as_ref(), Type::Str)
+                ) =>
+            {
+                // A raw pointer to a `&str` word pair carries no loan; its
+                // pointee is the origin-free string descriptor.
+                ir::Ty::RawPtr {
+                    kind: *kind,
+                    pointee: Arc::new(ir::Ty::shared_str_ty()),
+                }
+            }
             Type::RawPtr { kind, pointee } => ir::Ty::RawPtr {
                 kind: *kind,
                 pointee: Arc::new(self.source_ty_with_transport(

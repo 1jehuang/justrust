@@ -1,10 +1,10 @@
 //! Source checking, local inference and checked body construction.
 use super::*;
 
-#[path = "local_literals.rs"]
-mod local_literals;
 #[path = "type_check/inferred_owner.rs"]
 mod inferred_owner;
+#[path = "local_literals.rs"]
+mod local_literals;
 #[path = "try_operator.rs"]
 mod try_operator;
 
@@ -3985,6 +3985,29 @@ impl<'a> Checker<'a> {
         self.require(flow,&ir::Ty::Int(ir::IntTy::Usize)).map_err(|_|"runtime index requires usize, without implicit i32 conversion; backward numeric inference is unsupported".into())
     }
     #[inline(never)]
+    /// Self type of `<owner as Trait>::f(args)`; `Trait::f(args)` leaves the
+    /// owner as `_`, inferred from the first argument (peeling one reference
+    /// for borrowed receivers).
+    pub(super) fn trait_call_owner(&self, owner: &Type, args: &[Expr]) -> Result<ir::Ty, String> {
+        if !matches!(owner, Type::Infer) {
+            return checked_local_ty(owner, self.signatures);
+        }
+        let first = args
+            .first()
+            .ok_or("unsupported: trait path call without arguments needs `<T as Trait>::`")?;
+        let ty = match first {
+            Expr::Borrow { .. } | Expr::BorrowValue { .. } => {
+                match self.method_receiver_hint(first)? {
+                    Some(ir::Ty::Ref { referent, .. }) => Some(referent.as_ref().clone()),
+                    other => other,
+                }
+            }
+            _ => self.method_receiver_hint(first)?,
+        };
+        ty.ok_or_else(|| {
+            "unsupported: cannot infer Self type of trait path call; use `<T as Trait>::`".into()
+        })
+    }
     fn method_receiver_hint(&self, receiver: &Expr) -> Result<Option<ir::Ty>, String> {
         if let Some(ty) = self.scalar_hint(receiver)? {
             return Ok(Some(ty));
@@ -4023,14 +4046,14 @@ impl<'a> Checker<'a> {
                 owner,
                 trait_path,
                 name,
-                ..
+                args,
             } => {
                 let plan = self
                     .signatures
                     .plan
                     .as_ref()
                     .ok_or("missing trait registry")?;
-                let owner = checked_local_ty(owner, self.signatures)?;
+                let owner = self.trait_call_owner(owner, args)?;
                 let trait_ref = plan.resolve_trait_use(
                     &owner,
                     trait_path,
@@ -4065,20 +4088,47 @@ impl<'a> Checker<'a> {
                     .iter()
                     .map(|t| self.checked_type_actual(t))
                     .collect::<Result<Vec<_>, _>>()?;
-                let owner = checked_local_ty(owner, self.signatures)?;
-                Some(
-                    plan.select_associated(
-                        &owner,
-                        name,
-                        &args,
-                        self.facts(),
-                        &self.module,
-                        false,
-                        &plan.budget,
-                    )?
-                    .1
-                    .result,
-                )
+                if inferred_owner::has_inferred_owner(owner) {
+                    let Expr::AssociatedCall {
+                        args: call_args, ..
+                    } = e
+                    else {
+                        unreachable!()
+                    };
+                    match self.infer_associated_owner(owner, name, type_args.len(), call_args, None)
+                    {
+                        Ok(owner) => Some(owner),
+                        Err(_) => None,
+                    }
+                    .map(|owner| {
+                        plan.select_associated(
+                            &owner,
+                            name,
+                            &args,
+                            self.facts(),
+                            &self.module,
+                            false,
+                            &plan.budget,
+                        )
+                    })
+                    .transpose()?
+                    .map(|found| found.1.result)
+                } else {
+                    let owner = checked_local_ty(owner, self.signatures)?;
+                    Some(
+                        plan.select_associated(
+                            &owner,
+                            name,
+                            &args,
+                            self.facts(),
+                            &self.module,
+                            false,
+                            &plan.budget,
+                        )?
+                        .1
+                        .result,
+                    )
+                }
             }
             Expr::MethodCall { receiver, .. }
                 if leading_zeros_candidate(e, self.names()?)?
@@ -6500,7 +6550,7 @@ impl<'a> Checker<'a> {
             e,
             Expr::TraitCall { .. } | Expr::MethodCall { .. } | Expr::AssociatedCall { .. }
         ) {
-            return self.associated_expression(e);
+            return self.associated_expression(e, expectation.hard());
         }
         self.expr_without_cast(e, expectation)
     }
@@ -7002,6 +7052,7 @@ impl<'a> Checker<'a> {
     pub(super) fn associated_expression(
         &mut self,
         expression: &Expr,
+        expected: Option<&ir::Ty>,
     ) -> Result<ir::ExprId, String> {
         if let Expr::MethodCall {
             receiver,
@@ -7040,7 +7091,11 @@ impl<'a> Checker<'a> {
                 type_args,
                 args,
             } => (
-                checked_local_ty(owner, self.signatures)?,
+                if inferred_owner::has_inferred_owner(owner) {
+                    self.infer_associated_owner(owner, name, type_args.len(), args, expected)?
+                } else {
+                    checked_local_ty(owner, self.signatures)?
+                },
                 name,
                 type_args,
                 args,
@@ -7049,7 +7104,7 @@ impl<'a> Checker<'a> {
             Expr::TraitCall {
                 owner, name, args, ..
             } => (
-                checked_local_ty(owner, self.signatures)?,
+                self.trait_call_owner(owner, args)?,
                 name,
                 &empty,
                 args,

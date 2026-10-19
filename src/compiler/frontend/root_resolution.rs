@@ -365,6 +365,35 @@ impl Resolver<'_> {
         target.resolved_use = Some(self.resolved_use(&canonical, source)?);
         Ok(())
     }
+    /// `Trait::method(args)` is `<_ as Trait>::method(args)`: the Self type
+    /// is inferred from the first argument during type checking.
+    fn trait_path_call(
+        &mut self,
+        name: &AstPath,
+        args: &mut Vec<Expr>,
+        module: ModuleId,
+    ) -> Result<Option<Expr>, String> {
+        if true || name.len() < 2 || name.anchor() == PathAnchor::SelfType {
+            return Ok(None);
+        }
+        let prefix = name
+            .semantic_parent(self.names())
+            .map_err(native_adapter::name_diagnostic)?;
+        let Ok(Some(item)) = self.path(&prefix, module, true, false) else {
+            return Ok(None);
+        };
+        if item.kind != ResolvedKind::Trait {
+            return Ok(None);
+        }
+        let method = *name.segments().last().ok_or("empty trait call path")?;
+        let trait_path = TraitPath::Source(self.alias_source_path(&prefix)?);
+        Ok(Some(Expr::TraitCall {
+            owner: Type::Infer,
+            trait_path: Box::new(trait_path),
+            name: method,
+            args: std::mem::take(args),
+        }))
+    }
     fn alias_source_path(&self, path: &AstPath) -> Result<GenericPath, String> {
         path.check(self.names())
             .map_err(native_adapter::name_diagnostic)?;
@@ -1670,11 +1699,25 @@ impl Resolver<'_> {
             resolved_use: None,
         }
         .path(self.names())?;
-        let item = match self.path(&prefix, module, true, false)? {
-            Some(item) => Some(item),
-            None => self.path(&prefix, module, false, false)?,
-        }
-        .ok_or_else(|| "unresolved generic declaration".to_owned())?;
+        // An already-canonical path (resolved once before, e.g. a prelude
+        // item reached from inside the library) is anchored at the user root.
+        let canonical_crate = path.resolved_use.is_some() && path.anchor == PathAnchor::Crate;
+        let anchored = self.user_crate_anchor || canonical_crate;
+        let previous = std::mem::replace(&mut self.user_crate_anchor, anchored);
+        let found = match self.path(&prefix, module, true, false) {
+            Ok(Some(item)) => Ok(Some(item)),
+            Ok(None) => self.path(&prefix, module, false, false),
+            Err(error) => Err(error),
+        };
+        self.user_crate_anchor = previous;
+        let item = found?.ok_or_else(|| {
+            format!(
+                "unresolved generic declaration {}",
+                self.display(&prefix)
+                    .map(|d| d.to_string())
+                    .unwrap_or_default()
+            )
+        })?;
         if item.kind == ResolvedKind::Module {
             return Err("generic arguments are not allowed on modules".into());
         }
@@ -1762,7 +1805,29 @@ impl Resolver<'_> {
                 self.generic_path(&mut prefix, module)?;
                 Type::Apply(prefix)
             } else {
-                Type::Named(self.resolved_use(resolved.source()?, &owner_path)?)
+                let named = self.resolved_use(resolved.source()?, &owner_path)?;
+                let arity = self
+                    .nominal_arity
+                    .get(&self.key(&named)?)
+                    .copied()
+                    .unwrap_or(0);
+                if arity > 0 {
+                    // `Vec::new()`: impl arguments are inferred by the checker.
+                    let mut generic = self.alias_source_path(&named)?;
+                    generic.segments.last_mut().ok_or("empty owner path")?.args =
+                        vec![Type::Infer; arity];
+                    return Ok(Some((Type::Apply(generic), item.name, item.args.clone())))
+                        .and_then(|found| {
+                            let mut found = found;
+                            if let Some((_, _, args)) = &mut found {
+                                for arg in args {
+                                    self.ty(arg, module)?;
+                                }
+                            }
+                            Ok(found)
+                        });
+                }
+                Type::Named(named)
             }
         };
         self.ty(&mut owner, module)?;
@@ -1827,9 +1892,23 @@ impl Resolver<'_> {
                 pointee: element, ..
             } => self.ty(element, module)?,
             Type::Named(name) => {
-                let item = self
-                    .path(name, module, true, false)?
-                    .ok_or_else(|| "unresolved type".to_owned())?;
+                let mut found = self.path(name, module, true, false)?;
+                // Canonical `crate::__justrust_std::..` paths re-resolved from
+                // inside the prelude library are anchored at the user root.
+                if found.is_none() && name.anchor() == PathAnchor::Crate && !self.user_crate_anchor
+                {
+                    let previous = std::mem::replace(&mut self.user_crate_anchor, true);
+                    let retry = self.path(name, module, true, false);
+                    self.user_crate_anchor = previous;
+                    found = retry?;
+                }
+                let item = found.ok_or_else(|| {
+                    let shown = self
+                        .display(name)
+                        .map(|d| d.to_string())
+                        .unwrap_or_default();
+                    format!("unresolved type {shown}")
+                })?;
                 if item.kind == ResolvedKind::TypeAlias {
                     *ty = self.expand_alias(item.source()?, &[], name)?;
                     return Ok(());
@@ -3016,6 +3095,10 @@ impl Resolver<'_> {
                     };
                     return self.expr(expr, module, locals);
                 }
+                if let Some(rewritten) = self.trait_path_call(name, args, module)? {
+                    *expr = rewritten;
+                    return self.expr(expr, module, locals);
+                }
                 if name.anchor() == PathAnchor::SelfType && self.self_allowed {
                     for arg in args.iter_mut() {
                         self.expr(arg, module, locals)?;
@@ -3031,9 +3114,13 @@ impl Resolver<'_> {
                     };
                     return Ok(());
                 }
-                let resolved = self
-                    .path(name, module, false, false)?
-                    .ok_or_else(|| "unresolved function".to_owned())?;
+                let resolved = self.path(name, module, false, false)?.ok_or_else(|| {
+                    let shown = self
+                        .display(name)
+                        .map(|d| d.to_string())
+                        .unwrap_or_default();
+                    format!("unresolved function {shown}")
+                })?;
                 for arg in args.iter_mut() {
                     self.expr(arg, module, locals)?;
                 }
@@ -3114,7 +3201,9 @@ impl Resolver<'_> {
                 args,
                 ..
             } => {
-                self.ty(owner, module)?;
+                if !matches!(owner, Type::Infer) {
+                    self.ty(owner, module)?;
+                }
                 self.trait_path(trait_path, module)?;
                 for arg in args {
                     self.expr(arg, module, locals)?;

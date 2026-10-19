@@ -12,3 +12,4 @@ pub mod native_heap;
 pub mod mem;
 
 pub mod vec;
+pub mod string;
