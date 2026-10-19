@@ -1613,6 +1613,11 @@ impl SourceInventory {
                 }
                 Stmt::AssignIndex { index, value, .. }
                 | Stmt::AssignIndexOp { index, value, .. } => {
+                    self.operator_site(
+                        statement as *const Stmt as usize | 1,
+                        &here.child(41, 0, budget)?,
+                        budget,
+                    )?;
                     self.expr(
                         index,
                         &here.child(4, 0, budget)?,
@@ -1648,7 +1653,6 @@ impl SourceInventory {
                     )?
                 }
                 Stmt::Assign { value, .. }
-                | Stmt::AssignPlace { value, .. }
                 | Stmt::Expr(value)
                 | Stmt::ImplicitExpr(value)
                 | Stmt::Return(Some(value)) => self.expr(
@@ -1659,6 +1663,21 @@ impl SourceInventory {
                     budget,
                     depth + 1,
                 )?,
+                Stmt::AssignPlace { value, .. } => {
+                    self.operator_site(
+                        statement as *const Stmt as usize | 1,
+                        &here.child(41, 0, budget)?,
+                        budget,
+                    )?;
+                    self.expr(
+                        value,
+                        &here.child(4, 0, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
                 Stmt::WhileLet {
                     pattern,
                     scrutinee,
@@ -2012,9 +2031,21 @@ impl SourceInventory {
                     depth + 1,
                 )?
             }
-            Expr::Cast { value, .. }
-            | Expr::BorrowValue { value, .. }
-            | Expr::Repeat { value, .. } => self.expr(
+            Expr::Borrow { .. } => {
+                self.operator_site(expr as *const Expr as usize, node, budget)?;
+            }
+            Expr::BorrowValue { value, .. } => {
+                self.operator_site(expr as *const Expr as usize, node, budget)?;
+                self.expr(
+                    value,
+                    &node.child(11, 0, budget)?,
+                    None,
+                    None,
+                    budget,
+                    depth + 1,
+                )?;
+            }
+            Expr::Cast { value, .. } | Expr::Repeat { value, .. } => self.expr(
                 value,
                 &node.child(11, 0, budget)?,
                 None,
@@ -2303,8 +2334,7 @@ impl SourceInventory {
                     budget,
                 )?;
             }
-            Expr::Borrow { .. }
-            | Expr::Integer(_)
+            Expr::Integer(_)
             | Expr::Float(_)
             | Expr::Char(_)
             | Expr::Str(_)

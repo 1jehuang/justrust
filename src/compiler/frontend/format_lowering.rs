@@ -193,7 +193,18 @@ impl Checker<'_> {
             let place = static_source_place(argument)
                 .ok()
                 .filter(|_| place_expression(argument));
-            let operand = if let Some(place) = &place {
+            let indexed_reference =
+                if matches!(argument, Expr::Index { .. } | Expr::DynamicIndex { .. }) {
+                    match self.exprs[id.0].kind {
+                        ir::ExprKind::Deref { value } => Some(value),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+            let operand = if let Some(reference) = indexed_reference {
+                reference
+            } else if let Some(place) = &place {
                 let (place, _, _) = self.checked_place(place)?;
                 self.borrow_expression(ir::BorrowKind::Shared, place)?
             } else if native
