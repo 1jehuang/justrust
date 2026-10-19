@@ -8,6 +8,8 @@ use std::sync::Arc;
 pub mod source_attrs;
 #[path = "source_cfg.rs"]
 pub mod source_cfg;
+#[path = "source_derive.rs"]
+mod source_derive;
 #[path = "source_lex.rs"]
 pub mod source_lex;
 #[path = "source_map.rs"]
@@ -887,6 +889,7 @@ struct Loader<'a> {
     origins: Vec<OriginSegment>,
     attributes: Vec<PreparedAttribute>,
     children: Vec<ChildModule>,
+    derives: Vec<(usize, String)>,
 }
 impl<'a> Loader<'a> {
     fn new(
@@ -907,6 +910,7 @@ impl<'a> Loader<'a> {
             origins: Vec::new(),
             attributes: Vec::new(),
             children: Vec::new(),
+            derives: Vec::new(),
         }
     }
     fn error(
@@ -976,6 +980,7 @@ impl<'a> Loader<'a> {
                 effective: a.effective,
             });
         }
+        self.derives = filtered.derives;
         self.expand(&filtered.text, 0, directory, depth)
     }
     /// Lexical validation only, before configuration processing or module IO.
@@ -1020,6 +1025,19 @@ impl<'a> Loader<'a> {
         append_to(&mut self.text, &mut self.origins, text, origin, synthetic)
     }
     fn copy(&mut self, text: &str, base: usize, r: Range<usize>) -> Result<(), SourceError> {
+        // Built-in derive output is synthetic text inserted right after its item.
+        if let Some(index) = self
+            .derives
+            .iter()
+            .position(|(at, _)| *at > base + r.start && *at <= base + r.end)
+        {
+            let (at, generated) = self.derives.remove(index);
+            let split = at - base;
+            self.copy(text, base, r.start..split)?;
+            let anchor = Self::span(self.id, at.saturating_sub(1)..at);
+            self.append(&generated, anchor, true)?;
+            return self.copy(text, base, split..r.end);
+        }
         let id = self.id;
         let original = self.contents.clone();
         let mut start = r.start;

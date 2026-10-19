@@ -33,6 +33,8 @@ pub struct InactiveItem {
 #[derive(Clone, Debug)]
 pub struct AttributeOutput {
     pub text: String,
+    /// Built-in derive expansions: (filtered-text offset just after the item, generated impls).
+    pub derives: Vec<(usize, String)>,
     pub attributes: Vec<AttributeRecord>,
     pub inactive_items: Vec<InactiveItem>,
 }
@@ -131,6 +133,8 @@ fn prepare_with_context(
         bytes: text.as_bytes().to_vec(),
         records: Vec::new(),
         inactive_items: Vec::new(),
+        derives: Vec::new(),
+        consumed: Vec::new(),
         work: 0,
     };
     filter.scope(0, filter.tokens.len(), 0..text.len(), Owner::Crate, 0)?;
@@ -138,6 +142,7 @@ fn prepare_with_context(
         text: String::from_utf8(filter.bytes).expect("masking preserves UTF-8"),
         attributes: filter.records,
         inactive_items: filter.inactive_items,
+        derives: filter.derives,
     })
 }
 struct Filter<'a> {
@@ -148,6 +153,9 @@ struct Filter<'a> {
     bytes: Vec<u8>,
     records: Vec<AttributeRecord>,
     inactive_items: Vec<InactiveItem>,
+    derives: Vec<(usize, String)>,
+    /// Helper attributes (`#[default]`) consumed by a built-in derive.
+    consumed: Vec<usize>,
     work: usize,
 }
 impl Filter<'_> {
@@ -498,6 +506,7 @@ impl Filter<'_> {
                 raw
             };
             match meta.name.as_str() {
+                "derive" => self.derive(&meta, owner, item.clone())?,
                 "doc" => match &meta.value {
                     MetaValue::String(_) => {}
                     MetaValue::List(a)
@@ -741,9 +750,62 @@ impl Filter<'_> {
         };
         (kind, i)
     }
+    fn derive(
+        &mut self,
+        raw: &Meta,
+        owner: Owner,
+        item: Option<Range<usize>>,
+    ) -> Result<(), AttributeError> {
+        let unsupported = |message: String| AttributeError {
+            kind: AttributeErrorKind::Unsupported,
+            range: raw.range.clone(),
+            message,
+        };
+        let (Owner::FreeItem, Some(item)) = (owner, item) else {
+            return Err(unsupported(
+                "`derive` may only be applied to `struct`s, `enum`s and `union`s".into(),
+            ));
+        };
+        // Derive paths: `Debug`, `std::fmt::Debug`, `core::cmp::PartialEq`, ...
+        let content = &self.text[raw.range.clone()];
+        let open = content.find('(').ok_or_else(|| {
+            error(
+                AttributeErrorKind::Syntax,
+                raw.range.clone(),
+                "malformed `derive` attribute input",
+            )
+        })?;
+        let close = content.rfind(')').unwrap_or(content.len());
+        let mut names = Vec::new();
+        for path in content[open + 1..close].split(',') {
+            let path: String = path.chars().filter(|c| !c.is_whitespace()).collect();
+            if path.is_empty() {
+                continue;
+            }
+            names.push(path.rsplit("::").next().unwrap_or(&path).to_string());
+        }
+        let generated =
+            super::source_derive::expand(&self.text[item.clone()], &names).map_err(|message| {
+                let kind = if message.starts_with("unsupported") {
+                    AttributeErrorKind::Unsupported
+                } else {
+                    AttributeErrorKind::Syntax
+                };
+                error(kind, raw.range.clone(), &message)
+            })?;
+        for range in super::source_derive::default_attribute_ranges(&self.text[item.clone()]) {
+            self.mask(item.start + range.start..item.start + range.end);
+            self.consumed.push(item.start + range.start);
+        }
+        self.derives.push((item.end, generated));
+        Ok(())
+    }
     fn reject_nested(&self, start: usize, end: usize) -> Result<(), AttributeError> {
         for i in start..end {
             if let Some((a, _)) = self.attr(i, end)? {
+                if self.consumed.contains(&a.range.start) {
+                    continue;
+                }
                 return Err(error(
                     AttributeErrorKind::Unsupported,
                     a.range,
