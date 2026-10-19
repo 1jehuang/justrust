@@ -18,6 +18,7 @@ mod macro_transcribe;
 pub mod module_identity;
 pub mod ownership;
 mod resource_accounting;
+mod root_cleanup;
 pub mod semantic_name;
 pub mod semantic_path;
 pub mod semantic_scope;
@@ -143,6 +144,7 @@ const MONO_PLAN: u32 = 113;
 const UNIVERSAL_EFFECTS_READY: u32 = 115;
 const BODY_LEXICAL: u32 = 116;
 const CAPTURE_ENV: u32 = 117;
+const ROOT_CLEANUP_DEMAND: u32 = 125;
 
 enum Input {
     Text(String),
@@ -772,6 +774,27 @@ impl Provider for CompilerProvider {
                     };
                     cx.publish_fact(0, fact)
                 }
+                ROOT_CLEANUP_DEMAND => {
+                    let index = item_index(&key, "missing closed root index")?;
+                    let types = facts.types().await?;
+                    let (target, source) = root_instance(&types, index)?.ok_or_else(|| {
+                        Error::new("cleanup demand is restricted to closed roots")
+                    })?;
+                    let body: Arc<InstanceBodyFact> = facts.get(function(BODY, index)).await?;
+                    let template = facts.template(source).await?;
+                    let publication = template
+                        .publication
+                        .as_ref()
+                        .ok_or_else(|| Error::new("cleanup demand omitted Source publication"))?;
+                    let demand = root_cleanup::RootCleanupDemand::derive(
+                        &target,
+                        &body,
+                        publication,
+                        &this.0.budget,
+                    )
+                    .map_err(Error::new)?;
+                    cx.publish_fact(0, demand)
+                }
                 LOWER => {
                     let index = item_index(&key, "missing instance index")?;
                     let types = facts.types().await?;
@@ -813,12 +836,20 @@ impl Provider for CompilerProvider {
                             .map_err(|error| source_fact_error(error, &this.0.budget))?;
                     }
                     if has_drop(&lowered) {
-                        facts
-                            .plan()
-                            .await?
-                            .plan
-                            .validate_cleanup_dependencies(&lowered)
-                            .map_err(Error::new)?;
+                        if root_instance(&types, index)?.is_some() {
+                            let demand: Arc<root_cleanup::RootCleanupDemand> =
+                                facts.get(function(ROOT_CLEANUP_DEMAND, index)).await?;
+                            demand
+                                .validate(&instance_target, &lowered, &this.0.budget)
+                                .map_err(Error::new)?;
+                        } else {
+                            facts
+                                .plan()
+                                .await?
+                                .plan
+                                .validate_cleanup_dependencies(&lowered)
+                                .map_err(Error::new)?;
+                        }
                     }
                     let closed = cfg::close(lowered, body.facts.clone(), &this.0.budget)
                         .map_err(Error::new)?;
@@ -876,12 +907,21 @@ impl Provider for CompilerProvider {
                     // checking (ARCHITECTURE.md section 17).
                     let proof: Arc<ConcreteProofFact> = facts.get(function(ANALYZE, index)).await?;
                     if has_drop(proof.concrete.function()) {
-                        facts
-                            .plan()
-                            .await?
-                            .plan
-                            .validate_cleanup_dependencies(proof.concrete.function())
-                            .map_err(Error::new)?;
+                        let types = facts.types().await?;
+                        if let Some((target, _)) = root_instance(&types, index)? {
+                            let demand: Arc<root_cleanup::RootCleanupDemand> =
+                                facts.get(function(ROOT_CLEANUP_DEMAND, index)).await?;
+                            demand
+                                .validate(&target, proof.concrete.function(), &this.0.budget)
+                                .map_err(Error::new)?;
+                        } else {
+                            facts
+                                .plan()
+                                .await?
+                                .plan
+                                .validate_cleanup_dependencies(proof.concrete.function())
+                                .map_err(Error::new)?;
+                        }
                     }
                     // Callee symbols derive from targets alone. BUILD links
                     // against the sealed plan, which rejects any unplanned
@@ -944,7 +984,13 @@ impl Provider for CompilerProvider {
                     let handles = root_handles.into_iter().chain(handles);
                     if key.kind == CHECK {
                         for handle in handles {
-                            cx.read(handle).await?;
+                            let proof: Arc<ConcreteProofFact> = cx.read_fact(handle).await?;
+                            if has_drop(proof.concrete.function()) {
+                                // Owner-local admission is not executable inventory authority.
+                                plan.plan
+                                    .validate_cleanup_dependencies(proof.concrete.function())
+                                    .map_err(Error::new)?;
+                            }
                         }
                         return cx.publish(0, 1);
                     }
