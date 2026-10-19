@@ -40,6 +40,8 @@ mod source_schemas;
 use source_schemas::{SourceSchemas, SourceSchemasBuilder, StoredSchema};
 mod token_cursor;
 use char_literal::{parse_byte_literal, parse_char_literal};
+mod format_args;
+mod format_spec;
 mod operators;
 mod trait_selection;
 pub use program_symbols::ProgramSymbols;
@@ -1815,6 +1817,11 @@ impl SourceInventory {
                 .map_err(|message| source_error(budget, &message))?,
             Expr::Format { arguments, .. } => {
                 for (index, argument) in arguments.iter().enumerate() {
+                    self.operator_site(
+                        argument as *const Expr as usize | 2,
+                        &node.child(42, index, budget)?,
+                        budget,
+                    )?;
                     self.expr(
                         argument,
                         &node.child(21, index, budget)?,
@@ -5982,6 +5989,7 @@ pub enum Expr {
         pieces: Vec<String>,
         arguments: Vec<Expr>,
         modes: Vec<ir::FormatMode>,
+        specs: Vec<format_spec::FormatSpec>,
         stream: ir::OutputStream,
         newline: bool,
     },
@@ -7674,48 +7682,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         let text = self.string_literal_value(token.text)?;
         self.cursor.bump();
-        let mut pieces = Vec::new();
-        let mut modes = Vec::new();
-        let mut piece = String::new();
-        let mut chars = text.chars();
-        while let Some(c) = chars.next() {
-            match c {
-                '{' => match chars.next() {
-                    Some('{') => piece.push('{'),
-                    Some('}') => {
-                        pieces.push(std::mem::take(&mut piece));
-                        modes.push(ir::FormatMode::Display);
-                    }
-                    Some(':') if chars.next() == Some('?') && chars.next() == Some('}') => {
-                        pieces.push(std::mem::take(&mut piece));
-                        modes.push(ir::FormatMode::Debug);
-                    }
-                    None => return Err(self.error("unmatched opening brace in format string")),
-                    _ => {
-                        return Err(self.unsupported(
-                            "only {} and {:?} formatting placeholders are supported",
-                        ));
-                    }
-                },
-                '}' => {
-                    if chars.next() == Some('}') {
-                        piece.push('}');
-                    } else {
-                        return Err(self.error("unmatched closing brace in format string"));
-                    }
-                }
-                _ => piece.push(c),
-            }
-        }
-        pieces.push(piece);
-        let mut arguments = Vec::new();
-        while self.eat(",") && !self.is(close) {
-            arguments.push(self.nested_expr()?);
-        }
-        self.expect(close)?;
-        if pieces.len() != arguments.len() + 1 {
-            return Err(self.error("format argument count mismatch"));
-        }
+        let (mut pieces, holders) =
+            format_spec::parse_format(&text).map_err(|message| self.error(&message))?;
+        let (arguments, modes, specs) = self.format_arguments(close, &holders)?;
         let stream = if matches!(spelling, "print" | "println") {
             ir::OutputStream::Stdout
         } else {
@@ -7752,6 +7721,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pieces,
             arguments,
             modes,
+            specs,
             stream,
             newline,
         })

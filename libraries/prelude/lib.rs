@@ -14,9 +14,9 @@ pub mod process;
 pub mod boxed;
 pub mod vec;
 pub mod ops;
-//pub mod cmp;
-//pub mod default;
-//pub mod hash;
+pub mod cmp;
+pub mod default;
+pub mod hash;
 pub mod string;
-//pub mod fmt; // gated until per-task Work budget lands
+pub mod fmt;
 pub mod ptr;

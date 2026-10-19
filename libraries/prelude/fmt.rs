@@ -996,3 +996,116 @@ pub fn to_string_display<T: Display>(value: &T) -> String {
     let _ = Display::fmt(value, &mut f);
     f.into_string()
 }
+
+// ---- output (println!/print!/eprintln!/eprint! lowering target) ----
+
+/// Write the formatted buffer to `fd` (1 stdout, 2 stderr).
+pub fn print_formatter(f: Formatter, fd: usize) {
+    let (p, n) = super::string::str_parts(f.as_str());
+    let mut done = 0usize;
+    while done < n {
+        let wrote = unsafe {
+            __justrust_linux_syscall6!(1usize, fd, p + done, n - done, 0usize, 0usize, 0usize)
+        };
+        if wrote == 0usize || wrote > n {
+            break;
+        }
+        done += wrote;
+    }
+}
+
+impl Display for str {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.pad(self)
+    }
+}
+impl Debug for str {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        debug_str(f, self)
+    }
+}
+impl<T: Display + ?Sized> Display for &T {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        Display::fmt(*self, f)
+    }
+}
+impl<T: Debug + ?Sized> Debug for &T {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        Debug::fmt(*self, f)
+    }
+}
+impl<T: Display + ?Sized> Display for &mut T {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        Display::fmt(&**self, f)
+    }
+}
+impl<T: Debug + ?Sized> Debug for &mut T {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        Debug::fmt(&**self, f)
+    }
+}
+
+// ---- format-argument entry points (println!/print!/eprint! lowering) ----
+// The compiler lowers each `{}` / `{:?}` placeholder whose type has no native
+// formatter (or that carries a spec) to one call of these traits. `width` and
+// `precision` use usize::MAX for "absent". `align`: 0 none, 1 <, 2 >, 3 ^.
+// `flags`: bit0 '#', bit1 '+', bit2 '0'.
+
+fn arg_formatter(fill: char, align: u8, width: usize, precision: usize, flags: u32) -> Formatter {
+    let mut f = Formatter::new();
+    let mut w: Option<usize> = Option::None;
+    if width != 18446744073709551615usize {
+        w = Option::Some(width);
+    }
+    let mut p: Option<usize> = Option::None;
+    if precision != 18446744073709551615usize {
+        p = Option::Some(precision);
+    }
+    let _ = f.push_spec(fill, align, w, p, flags);
+    f
+}
+
+pub trait DisplayArg {
+    fn __jr_fmt(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32);
+}
+impl<T: Display + ?Sized> DisplayArg for T {
+    fn __jr_fmt(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
+        let mut f = arg_formatter(fill, align, width, precision, flags);
+        let _ = self.fmt(&mut f);
+        print_formatter(f, fd);
+    }
+}
+
+pub trait DebugArg {
+    fn __jr_fmt(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32);
+}
+impl<T: Debug + ?Sized> DebugArg for T {
+    fn __jr_fmt(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
+        let mut f = arg_formatter(fill, align, width, precision, flags);
+        let _ = self.fmt(&mut f);
+        print_formatter(f, fd);
+    }
+}
+
+// `str` cannot yet instantiate the blanket impls (no unsized generic
+// arguments), so string slices use these concrete entry points.
+pub trait StrDisplayArg {
+    fn __jr_fmt_str(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32);
+}
+impl StrDisplayArg for str {
+    fn __jr_fmt_str(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
+        let mut f = arg_formatter(fill, align, width, precision, flags);
+        let _ = f.pad(self);
+        print_formatter(f, fd);
+    }
+}
+pub trait StrDebugArg {
+    fn __jr_fmt_str(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32);
+}
+impl StrDebugArg for str {
+    fn __jr_fmt_str(&self, fd: usize, fill: char, align: u8, width: usize, precision: usize, flags: u32) {
+        let mut f = arg_formatter(fill, align, width, precision, flags);
+        let _ = debug_str(&mut f, self);
+        print_formatter(f, fd);
+    }
+}

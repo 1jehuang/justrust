@@ -356,9 +356,9 @@ fn literal_output_empty_and_unsupported_arguments_are_explicit() {
         }
         for (args, label) in [
             ("42", "nonliteral arguments"),
-            ("\"{}\"", "argument count mismatch"),
-            ("\"{name}\"", "only {} and {:?}"),
-            ("\"literal\", 42", "argument count mismatch"),
+            ("\"{}\"", "invalid reference to positional argument 0"),
+            ("\"{:q}\"", "unknown format trait"),
+            ("\"literal\", 42", "argument never used"),
             ("\"literal\",,", "expected"),
         ] {
             let source = format!("fn main(){{{name}!({args})}}");

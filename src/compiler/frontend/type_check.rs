@@ -1,6 +1,8 @@
 //! Source checking, local inference and checked body construction.
 use super::*;
 
+#[path = "format_lowering.rs"]
+mod format_lowering;
 #[path = "type_check/inferred_owner.rs"]
 mod inferred_owner;
 #[path = "local_literals.rs"]
@@ -9383,65 +9385,10 @@ impl<'a> Checker<'a> {
                 pieces,
                 arguments,
                 modes,
+                specs,
                 stream,
                 newline,
-            } => {
-                let mut ids = Vec::new();
-                let mut completion = ir::Completion::Returns;
-                if pieces.len() != arguments.len() + 1 || modes.len() != arguments.len() {
-                    return Err("format argument count mismatch".into());
-                }
-                for (argument, &mode) in arguments.iter().zip(modes) {
-                    let id = self.expr_expected(argument, None)?;
-                    let flow = self.flow(id);
-                    ir::validate_format_ty(mode, &flow.ty, Some(&self.signatures.plan()?.budget))?;
-                    if !flow.completes {
-                        completion = ir::Completion::Never;
-                    }
-                    // format_args borrows place arguments until the output call.
-                    // Keep that loan live across later argument evaluation rather
-                    // than accepting mutation of an already-snapshotted place.
-                    let id = if let Ok(place) = static_source_place(argument) {
-                        let (place, _, _) = self.checked_place(&place)?;
-                        self.borrow_expression(ir::BorrowKind::Shared, place)?
-                    } else if matches!(
-                        argument,
-                        Expr::DynamicIndex { .. }
-                            | Expr::Deref { .. }
-                            | Expr::Field { .. }
-                            | Expr::Index { .. }
-                    ) {
-                        return Err(
-                            "unsupported: dynamic or temporary-rooted format place arguments"
-                                .into(),
-                        );
-                    } else {
-                        id
-                    };
-                    ids.push(id);
-                }
-                for piece in pieces {
-                    self.charge_node(piece.len())?;
-                }
-                self.charge_node(
-                    ids.len() * std::mem::size_of::<ir::ExprId>()
-                        + pieces.len() * std::mem::size_of::<String>()
-                        + modes.len() * std::mem::size_of::<ir::FormatMode>(),
-                )?;
-                (
-                    ir::ExprKind::Format {
-                        pieces: pieces.clone(),
-                        arguments: ids,
-                        modes: modes.clone(),
-                        stream: *stream,
-                        newline: *newline,
-                    },
-                    Flow {
-                        ty: ir::Ty::Unit,
-                        completes: completion == ir::Completion::Returns,
-                    },
-                )
-            }
+            } => self.check_format(pieces, arguments, modes, specs, *stream, *newline)?,
             Expr::Unary { op, value } => {
                 if matches!(op, UnaryOp::Neg)
                     && let Expr::Integer(literal) = value.as_ref()

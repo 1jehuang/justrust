@@ -182,8 +182,10 @@ pub(super) fn preflight_clone_node(
                 pieces,
                 arguments,
                 modes,
+                specs,
                 ..
             } => {
+                clone_vector(specs, budget)?;
                 clone_vector(pieces, budget)?;
                 for piece in pieces {
                     clone_text(piece, budget)?;

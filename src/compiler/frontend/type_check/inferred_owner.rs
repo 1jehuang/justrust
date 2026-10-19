@@ -197,7 +197,13 @@ fn mentions_param(ty: &ir::Ty) -> bool {
         ir::Ty::Tuple(fields) => fields.iter().any(mentions_param),
         ir::Ty::Struct(t) => t.def().type_args.iter().any(mentions_param),
         ir::Ty::Enum(t) => t.def().type_args.iter().any(mentions_param),
-        ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool | ir::Ty::Char | ir::Ty::Str | ir::Ty::Unit | ir::Ty::Never => false,
+        ir::Ty::Int(_)
+        | ir::Ty::Float(_)
+        | ir::Ty::Bool
+        | ir::Ty::Char
+        | ir::Ty::Str
+        | ir::Ty::Unit
+        | ir::Ty::Never => false,
         _ => true,
     }
 }
