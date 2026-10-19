@@ -15481,6 +15481,9 @@ pub struct NominalInterner {
     applications: HashMap<(ir::DeclId, Vec<ir::Ty>), ir::Ty>,
     ordered: Vec<ir::Ty>,
     active: Vec<ir::DeclId>,
+    /// Applications under construction, keyed by exact application, with the
+    /// cycle-closing back edge handed to recursive references to them.
+    building: Vec<((ir::DeclId, Vec<ir::Ty>), ir::Ty)>,
 }
 #[derive(Clone, Copy, Debug)]
 struct SourceTypeContext {
@@ -18621,6 +18624,10 @@ impl tr::SchemaCx for SchemaAdapter {
         ) -> Result<usize, String> {
             b.check_depth(depth)?;
             b.charge_work(1)?;
+            if ty.is_nominal_back_edge() {
+                // Cycle-closing edge: its definition is the strong outer one.
+                return Ok(0);
+            }
             let nominal = match ty {
                 ir::Ty::Struct(t) => Some((t.def().id, t.def() as *const _ as usize)),
                 ir::Ty::Enum(t) => Some((t.def().id, t.def() as *const _ as usize)),
@@ -18733,6 +18740,9 @@ fn raw_type_has_projection(
     depth: usize,
 ) -> Result<bool, String> {
     budget.check_depth(depth)?;
+    if ty.is_nominal_back_edge() {
+        return Ok(false);
+    }
     budget.charge_work(1)?;
     match ty {
         ir::Ty::AssociatedType(_) => Ok(true),
@@ -19387,6 +19397,9 @@ fn argument_height(
         .check_depth(depth)
         .map_err(|e| format!("generic type nesting resource limit: {e}"))?;
     budget.charge_work(1)?;
+    if ty.is_nominal_back_edge() {
+        return Ok(0);
+    }
     let id = match ty {
         ir::Ty::Struct(t) => Some(t.def().id),
         ir::Ty::Enum(t) => Some(t.def().id),

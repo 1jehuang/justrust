@@ -536,8 +536,21 @@ impl PlanState {
         if let Some(ty) = self.nominals.applications.get(&application_key) {
             return Ok(ty.clone());
         }
+        if let Some((_, back)) = self
+            .nominals
+            .building
+            .iter()
+            .find(|(key, _)| *key == application_key)
+        {
+            // Recursive reference to an application under construction. A
+            // by-value cycle is rejected once the outer definition completes.
+            return Ok(back.clone());
+        }
         if self.nominals.active.contains(&decl) {
-            return Err(format!("by-value nominal cycle involving {}", info.name));
+            return Err(format!(
+                "unsupported: polymorphically recursive nominal {}",
+                info.name
+            ));
         }
         budget.charge_application()?;
         self.retain(
@@ -623,136 +636,210 @@ impl PlanState {
                     .checked_mul(2)
                     .ok_or("nominal name allocation overflow")?,
             )?;
-            let ty = match schema.as_ref() {
-                NominalSchema::Struct(d) => {
-                    self.schema_identity(registry, decl, &d.name, d.module, &d.visibility)?;
-                    clone_visibility(&d.visibility, budget)?;
-                    match d.shape {
-                        StructShape::Record if d.fields.is_empty() => {
-                            return Err("unsupported: empty record structs are unsupported".into());
-                        }
-                        StructShape::Unit => {
-                            if !d.fields.is_empty() {
-                                return Err("unit struct source schema has fields".into());
-                            }
-                            if !d.type_params.is_empty() || !args.is_empty() {
-                                return Err(
-                                    "unsupported: generic unit structs are unsupported".into()
-                                );
-                            }
-                        }
-                        StructShape::Tuple => {
-                            if d.fields.is_empty() {
-                                return Err(
-                                    "unsupported: zero-field tuple structs are unsupported".into(),
-                                );
-                            }
-                            // The application key, parameter bindings and argument
-                            // evidence were validated above for this exact DeclId.
-                            // Keep tuple fields on the same substitution path as
-                            // record fields, preserving actual nominal arguments.
-                            for (index, field) in d.fields.iter().enumerate() {
-                                budget.charge_work(1)?;
-                                if !matches!(field.name, FieldName::Tuple(actual) if actual == index)
-                                {
-                                    return Err("tuple struct fields must have contiguous numeric identities".into());
+            // Reserve this application's index before building fields, which
+            // may intern other applications (e.g. `Box<Self>`).
+            let index = self.nominals.ordered.len();
+            self.nominals
+                .ordered
+                .try_reserve(1)
+                .map_err(|_| "nominal ordering allocation failed")?;
+            self.nominals.ordered.push(ir::Ty::Unit);
+            let id = ir::NominalAppId {
+                snapshot: decl.snapshot,
+                index,
+            };
+            let is_struct = matches!(schema.as_ref(), NominalSchema::Struct(_));
+            let mut build = |back: ir::Ty| -> Result<ir::Ty, String> {
+                self.nominals
+                    .building
+                    .try_reserve(1)
+                    .map_err(|_| "nominal building allocation failed")?;
+                self.nominals.building.push((application_key.clone(), back));
+                let built = (|| -> Result<ir::Ty, String> {
+                    Ok(match schema.as_ref() {
+                        NominalSchema::Struct(d) => {
+                            self.schema_identity(registry, decl, &d.name, d.module, &d.visibility)?;
+                            clone_visibility(&d.visibility, budget)?;
+                            match d.shape {
+                                StructShape::Record if d.fields.is_empty() => {
+                                    return Err(
+                                        "unsupported: empty record structs are unsupported".into(),
+                                    );
                                 }
+                                StructShape::Unit => {
+                                    if !d.fields.is_empty() {
+                                        return Err("unit struct source schema has fields".into());
+                                    }
+                                    if !d.type_params.is_empty() || !args.is_empty() {
+                                        return Err(
+                                            "unsupported: generic unit structs are unsupported"
+                                                .into(),
+                                        );
+                                    }
+                                }
+                                StructShape::Tuple => {
+                                    if d.fields.is_empty() {
+                                        return Err(
+                                            "unsupported: zero-field tuple structs are unsupported"
+                                                .into(),
+                                        );
+                                    }
+                                    // The application key, parameter bindings and argument
+                                    // evidence were validated above for this exact DeclId.
+                                    // Keep tuple fields on the same substitution path as
+                                    // record fields, preserving actual nominal arguments.
+                                    for (index, field) in d.fields.iter().enumerate() {
+                                        budget.charge_work(1)?;
+                                        if !matches!(field.name, FieldName::Tuple(actual) if actual == index)
+                                        {
+                                            return Err("tuple struct fields must have contiguous numeric identities".into());
+                                        }
+                                    }
+                                }
+                                StructShape::Record => {}
                             }
+                            let fields = make_fields(self, &d.fields, d.module)?;
+                            let display = d
+                                .name
+                                .display(registry.names.as_ref())
+                                .map_err(native_adapter::name_diagnostic)?;
+                            let name = self.schema_text(display.as_str(), budget)?;
+                            ir::Ty::Struct(ir::StructTy::new(ir::StructDef {
+                                id,
+                                source_decl: decl,
+                                type_args: args.to_vec().into(),
+                                name,
+                                module: d.module,
+                                visibility: d.visibility.clone(),
+                                fields,
+                            }))
                         }
-                        StructShape::Record => {}
-                    }
-                    let fields = make_fields(self, &d.fields, d.module)?;
-                    let display = d
-                        .name
-                        .display(registry.names.as_ref())
-                        .map_err(native_adapter::name_diagnostic)?;
-                    let name = self.schema_text(display.as_str(), budget)?;
-                    let id = ir::NominalAppId {
-                        snapshot: decl.snapshot,
-                        index: self.nominals.ordered.len(),
-                    };
-                    ir::Ty::Struct(ir::StructTy::new(ir::StructDef {
-                        id,
-                        source_decl: decl,
-                        type_args: args.to_vec().into(),
-                        name,
-                        module: d.module,
-                        visibility: d.visibility.clone(),
-                        fields,
-                    }))
-                }
-                NominalSchema::Enum(d) => {
-                    self.schema_identity(registry, decl, &d.name, d.module, &d.visibility)?;
-                    clone_visibility(&d.visibility, budget)?;
-                    if d.variants.is_empty() || d.variants.len() > 4096 {
-                        return Err("enum variant count exceeds supported limits".into());
-                    }
-                    self.retain(
-                        budget,
-                        d.variants
-                            .len()
-                            .checked_mul(std::mem::size_of::<ir::VariantDef>() * 4 + 128)
-                            .ok_or("enum allocation overflow")?,
-                    )?;
-                    let mut names = std::collections::HashSet::new();
-                    let mut variants = Vec::new();
-                    names
-                        .try_reserve(d.variants.len())
-                        .map_err(|_| "enum variant key allocation failed")?;
-                    variants
-                        .try_reserve_exact(d.variants.len())
-                        .map_err(|_| "enum variant allocation failed")?;
-                    for v in &d.variants {
-                        budget.charge_work(1)?;
-                        let key = registry
-                            .names
-                            .key(v.name, LookupClass::Member)
-                            .map_err(native_adapter::name_diagnostic)?;
-                        if !names.insert(key) {
-                            return Err("duplicate enum variant".into());
-                        }
-                        if v.shape == ir::VariantShape::Unit && !v.fields.is_empty() {
-                            return Err("unit variant cannot have fields".into());
-                        }
-                        if v.shape == ir::VariantShape::Tuple
+                        NominalSchema::Enum(d) => {
+                            self.schema_identity(registry, decl, &d.name, d.module, &d.visibility)?;
+                            clone_visibility(&d.visibility, budget)?;
+                            if d.variants.is_empty() || d.variants.len() > 4096 {
+                                return Err("enum variant count exceeds supported limits".into());
+                            }
+                            self.retain(
+                                budget,
+                                d.variants
+                                    .len()
+                                    .checked_mul(std::mem::size_of::<ir::VariantDef>() * 4 + 128)
+                                    .ok_or("enum allocation overflow")?,
+                            )?;
+                            let mut names = std::collections::HashSet::new();
+                            let mut variants = Vec::new();
+                            names
+                                .try_reserve(d.variants.len())
+                                .map_err(|_| "enum variant key allocation failed")?;
+                            variants
+                                .try_reserve_exact(d.variants.len())
+                                .map_err(|_| "enum variant allocation failed")?;
+                            for v in &d.variants {
+                                budget.charge_work(1)?;
+                                let key = registry
+                                    .names
+                                    .key(v.name, LookupClass::Member)
+                                    .map_err(native_adapter::name_diagnostic)?;
+                                if !names.insert(key) {
+                                    return Err("duplicate enum variant".into());
+                                }
+                                if v.shape == ir::VariantShape::Unit && !v.fields.is_empty() {
+                                    return Err("unit variant cannot have fields".into());
+                                }
+                                if v.shape == ir::VariantShape::Tuple
                             && v.fields.iter().enumerate().any(
                                 |(i, f)| !matches!(f.name, FieldName::Tuple(index) if index == i),
                             )
                         {
                             return Err("tuple variant fields require positional names".into());
                         }
-                        variants.push(ir::VariantDef {
-                            name: self.schema_text(
-                                registry
-                                    .names
-                                    .spelling(v.name)
-                                    .map_err(native_adapter::name_diagnostic)?,
-                                budget,
-                            )?,
-                            shape: v.shape,
-                            fields: make_fields(self, &v.fields, d.module)?,
-                        });
-                    }
-                    let display = d
-                        .name
-                        .display(registry.names.as_ref())
-                        .map_err(native_adapter::name_diagnostic)?;
-                    let name = self.schema_text(display.as_str(), budget)?;
-                    let id = ir::NominalAppId {
-                        snapshot: decl.snapshot,
-                        index: self.nominals.ordered.len(),
-                    };
-                    ir::Ty::Enum(ir::EnumTy::new(ir::EnumDef {
-                        id,
-                        source_decl: decl,
-                        type_args: args.to_vec().into(),
-                        name,
-                        module: d.module,
-                        visibility: d.visibility.clone(),
-                        variants: variants.into(),
-                    }))
-                }
+                                variants.push(ir::VariantDef {
+                                    name: self.schema_text(
+                                        registry
+                                            .names
+                                            .spelling(v.name)
+                                            .map_err(native_adapter::name_diagnostic)?,
+                                        budget,
+                                    )?,
+                                    shape: v.shape,
+                                    fields: make_fields(self, &v.fields, d.module)?,
+                                });
+                            }
+                            let display = d
+                                .name
+                                .display(registry.names.as_ref())
+                                .map_err(native_adapter::name_diagnostic)?;
+                            let name = self.schema_text(display.as_str(), budget)?;
+                            ir::Ty::Enum(ir::EnumTy::new(ir::EnumDef {
+                                id,
+                                source_decl: decl,
+                                type_args: args.to_vec().into(),
+                                name,
+                                module: d.module,
+                                visibility: d.visibility.clone(),
+                                variants: variants.into(),
+                            }))
+                        }
+                    })
+                })();
+                self.nominals.building.pop();
+                built
             };
+            // Recursive applications get a cycle-closing back edge into their
+            // own allocation; definitions with back edges are leaked so the
+            // edge stays valid for the rest of the compilation.
+            let mut failure = None;
+            let ty = if is_struct {
+                let arc = std::sync::Arc::new_cyclic(|weak| {
+                    let back = ir::Ty::Struct(ir::StructTy::from_ref(ir::NominalRef::Back(
+                        weak.clone(),
+                        id,
+                    )));
+                    match build(back).and_then(|ty| match ty {
+                        ir::Ty::Struct(t) => t.into_def(),
+                        _ => Err("nominal kind changed during construction".into()),
+                    }) {
+                        Ok(def) => def,
+                        Err(error) => {
+                            failure = Some(error);
+                            ir::StructDef::placeholder(id, decl, info.path.module)
+                        }
+                    }
+                });
+                if std::sync::Arc::weak_count(&arc) > 0 {
+                    std::mem::forget(arc.clone());
+                }
+                ir::Ty::Struct(ir::StructTy::from_ref(ir::NominalRef::Strong(arc)))
+            } else {
+                let arc = std::sync::Arc::new_cyclic(|weak| {
+                    let back =
+                        ir::Ty::Enum(ir::EnumTy::from_ref(ir::NominalRef::Back(weak.clone(), id)));
+                    match build(back).and_then(|ty| match ty {
+                        ir::Ty::Enum(t) => t.into_def(),
+                        _ => Err("nominal kind changed during construction".into()),
+                    }) {
+                        Ok(def) => def,
+                        Err(error) => {
+                            failure = Some(error);
+                            ir::EnumDef::placeholder(id, decl, info.path.module)
+                        }
+                    }
+                });
+                if std::sync::Arc::weak_count(&arc) > 0 {
+                    std::mem::forget(arc.clone());
+                }
+                ir::Ty::Enum(ir::EnumTy::from_ref(ir::NominalRef::Strong(arc)))
+            };
+            if let Some(error) = failure {
+                return Err(error);
+            }
+            if ir::by_value_contains(&ty, id, 0)? {
+                return Err(format!(
+                    "recursive type `{}` has infinite size (insert some indirection, e.g. Box)",
+                    info.name
+                ));
+            }
             if transport.is_some() {
                 if !raw_type_has_projection(&ty, budget, 0)? {
                     ir::carrier_locations(&ty, budget)?;
@@ -769,7 +856,7 @@ impl PlanState {
                 .try_reserve(1)
                 .map_err(|_| "nominal application allocation failed")?;
             self.nominals.active.pop();
-            self.nominals.ordered.push(ty.clone());
+            self.nominals.ordered[index] = ty.clone();
             self.nominals
                 .applications
                 .insert(application_key, ty.clone());

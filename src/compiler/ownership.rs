@@ -1697,6 +1697,9 @@ fn preflight_ty(ty: &Ty, depth: usize, budget: &mut Budget) -> Result<(), Exhaus
     if depth > 128 {
         return Err(Exhausted);
     }
+    if ty.is_nominal_back_edge() {
+        return Ok(());
+    }
     if let Ty::Ref { referent, .. } = ty {
         preflight_ty(referent, depth + 1, budget)?;
     }

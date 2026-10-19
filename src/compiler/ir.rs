@@ -1166,8 +1166,8 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
         ) => an == bn && Arc::ptr_eq(a, b),
         (Ty::AssociatedType(a), Ty::AssociatedType(b)) => Arc::ptr_eq(a, b),
         (Ty::Tuple(a), Ty::Tuple(b)) => Arc::ptr_eq(a, b),
-        (Ty::Struct(a), Ty::Struct(b)) => Arc::ptr_eq(&a.0, &b.0),
-        (Ty::Enum(a), Ty::Enum(b)) => Arc::ptr_eq(&a.0, &b.0),
+        (Ty::Struct(a), Ty::Struct(b)) => std::ptr::eq(a.def(), b.def()),
+        (Ty::Enum(a), Ty::Enum(b)) => std::ptr::eq(a.def(), b.def()),
         (Ty::Dyn(a), Ty::Dyn(b)) => a.principal == b.principal,
         (Ty::Param(a), Ty::Param(b)) => a == b,
         (Ty::Int(a), Ty::Int(b)) => a == b,
@@ -3082,6 +3082,9 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
     reject_associated_types(root, Some(budget))?;
     fn walk(ty: &Ty, budget: &PlanBudget, depth: usize) -> Result<(), String> {
         budget.check_depth(depth)?;
+        if ty.is_nominal_back_edge() {
+            return Ok(());
+        }
         budget.charge_work(1)?;
         match ty {
             Ty::AssociatedType(_) => {
@@ -3482,31 +3485,90 @@ impl NumTy {
     }
 }
 
+/// Shared handle to an immutable nominal definition. `Back` is the cycle-
+/// closing edge of a recursive type (`enum List { Cons(Box<List>) }`): the
+/// interner leaks one strong reference of every definition that has back
+/// edges, so a completed back edge always points at a live definition.
+pub enum NominalRef<D> {
+    Strong(Arc<D>),
+    Back(std::sync::Weak<D>, NominalAppId),
+}
+impl<D> Clone for NominalRef<D> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Strong(a) => Self::Strong(a.clone()),
+            Self::Back(w, id) => Self::Back(w.clone(), *id),
+        }
+    }
+}
+impl<D> NominalRef<D> {
+    fn get(&self) -> &D {
+        match self {
+            Self::Strong(a) => a,
+            Self::Back(w, _) => {
+                assert!(
+                    w.strong_count() > 0,
+                    "recursive nominal definition read before completion"
+                );
+                // SAFETY: completed recursive definitions are leaked (strong
+                // count never returns to zero), so the allocation stays live.
+                unsafe { &*w.as_ptr() }
+            }
+        }
+    }
+    /// A cycle-closing edge. Type walkers treat it as a leaf: its definition
+    /// is reached (and checked) through the strong outer application.
+    pub fn is_back_edge(&self) -> bool {
+        matches!(self, Self::Back(..))
+    }
+}
+
 #[derive(Clone)]
-pub struct EnumTy(Arc<EnumDef>);
+pub struct EnumTy(NominalRef<EnumDef>);
 
 impl EnumTy {
     pub(super) fn new(def: EnumDef) -> Self {
-        Self(Arc::new(def))
+        Self(NominalRef::Strong(Arc::new(def)))
+    }
+    pub fn from_ref(r: NominalRef<EnumDef>) -> Self {
+        Self(r)
+    }
+    /// Owned definition of a freshly built, unshared strong handle.
+    pub fn into_def(self) -> Result<EnumDef, String> {
+        match self.0 {
+            NominalRef::Strong(a) => Arc::try_unwrap(a).map_err(|_| "shared nominal".into()),
+            NominalRef::Back(..) => Err("back edge has no owned definition".into()),
+        }
+    }
+    pub fn is_back_edge(&self) -> bool {
+        self.0.is_back_edge()
+    }
+    /// Canonical application identity, readable even on a back edge whose
+    /// definition is still under construction.
+    pub fn id(&self) -> NominalAppId {
+        match &self.0 {
+            NominalRef::Strong(a) => a.id,
+            NominalRef::Back(_, id) => *id,
+        }
     }
 
     pub fn def(&self) -> &EnumDef {
-        &self.0
+        self.0.get()
     }
 
     pub fn has_payload(&self) -> bool {
-        self.0
+        self.def()
             .variants
             .iter()
             .any(|variant| variant.shape != VariantShape::Unit)
     }
 
     pub(super) fn validate(&self) -> Result<(), String> {
-        if self.0.variants.is_empty() || self.0.variants.len() > MAX_ENUM_VARIANTS {
+        if self.def().variants.is_empty() || self.def().variants.len() > MAX_ENUM_VARIANTS {
             return Err("enum variant count must be between 1 and 4096".into());
         }
         let mut fields = 0usize;
-        for variant in self.0.variants.iter() {
+        for variant in self.def().variants.iter() {
             fields = fields
                 .checked_add(variant.fields.len())
                 .ok_or("enum payload field limit exceeded")?;
@@ -3523,13 +3585,16 @@ impl EnumTy {
 
 impl std::fmt::Debug for EnumTy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let name = &self.0.name;
+        if self.is_back_edge() {
+            return f.debug_struct("EnumTy").field("back", &self.id()).finish();
+        }
+        let name = &self.def().name;
         let end = name
             .char_indices()
             .nth(128)
             .map_or(name.len(), |(at, _)| at);
         f.debug_struct("EnumTy")
-            .field("id", &self.0.id)
+            .field("id", &self.id())
             .field("name", &&name[..end])
             .finish_non_exhaustive()
     }
@@ -3537,13 +3602,13 @@ impl std::fmt::Debug for EnumTy {
 
 impl PartialEq for EnumTy {
     fn eq(&self, other: &Self) -> bool {
-        self.0.id == other.0.id
+        self.id() == other.id()
     }
 }
 impl Eq for EnumTy {}
 impl Hash for EnumTy {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.id.hash(state);
+        self.id().hash(state);
     }
 }
 
@@ -3612,6 +3677,105 @@ impl Visibility {
         }
         Ok(())
     }
+}
+
+impl EnumDef {
+    /// Never published: stands in only when construction failed.
+    pub(crate) fn placeholder(
+        id: NominalAppId,
+        source_decl: DeclId,
+        module: super::module_identity::ModuleId,
+    ) -> Self {
+        Self {
+            id,
+            source_decl,
+            type_args: Arc::from(Vec::new()),
+            name: String::new(),
+            module,
+            visibility: Visibility::Public,
+            variants: Arc::from(Vec::new()),
+        }
+    }
+}
+impl StructDef {
+    /// Never published: stands in only when construction failed.
+    pub(crate) fn placeholder(
+        id: NominalAppId,
+        source_decl: DeclId,
+        module: super::module_identity::ModuleId,
+    ) -> Self {
+        Self {
+            id,
+            source_decl,
+            type_args: Arc::from(Vec::new()),
+            name: String::new(),
+            module,
+            visibility: Visibility::Public,
+            fields: Arc::from(Vec::new()),
+        }
+    }
+}
+
+impl Ty {
+    /// A cycle-closing reference of a recursive nominal type. Recursive type
+    /// walkers treat it as a leaf: the outer strong application owns it.
+    pub fn is_nominal_back_edge(&self) -> bool {
+        match self {
+            Ty::Struct(t) => t.is_back_edge(),
+            Ty::Enum(t) => t.is_back_edge(),
+            _ => false,
+        }
+    }
+}
+
+/// True when `ty` stores application `id` by value (not behind a pointer):
+/// such a recursive type has infinite size.
+pub fn by_value_contains(ty: &Ty, id: NominalAppId, depth: usize) -> Result<bool, String> {
+    if depth > 256 {
+        return Err("type nesting resource limit exceeded".into());
+    }
+    Ok(match ty {
+        Ty::Struct(t) => {
+            if depth > 0 && t.id() == id {
+                return Ok(true);
+            }
+            if t.is_back_edge() {
+                return Ok(false);
+            }
+            for f in t.def().fields.iter() {
+                if by_value_contains(&f.ty, id, depth + 1)? {
+                    return Ok(true);
+                }
+            }
+            false
+        }
+        Ty::Enum(t) => {
+            if depth > 0 && t.id() == id {
+                return Ok(true);
+            }
+            if t.is_back_edge() {
+                return Ok(false);
+            }
+            for v in t.def().variants.iter() {
+                for f in v.fields.iter() {
+                    if by_value_contains(&f.ty, id, depth + 1)? {
+                        return Ok(true);
+                    }
+                }
+            }
+            false
+        }
+        Ty::Tuple(fields) => {
+            for f in fields.iter() {
+                if by_value_contains(f, id, depth + 1)? {
+                    return Ok(true);
+                }
+            }
+            false
+        }
+        Ty::Array { element, .. } => by_value_contains(element, id, depth + 1)?,
+        _ => false,
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -3828,19 +3992,25 @@ fn projected_ty_inner<'a>(
 /// Immutable nominal handle. Equality and hashing use declaration identity,
 /// never field shape, names or Arc's structural pointee equality.
 #[derive(Clone)]
-pub struct StructTy(Arc<StructDef>);
+pub struct StructTy(NominalRef<StructDef>);
 
 impl std::fmt::Debug for StructTy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.is_back_edge() {
+            return f
+                .debug_struct("StructTy")
+                .field("back", &self.id())
+                .finish();
+        }
         // Types are a shared DAG, not a tree to expand into diagnostics. Names
         // themselves can be long, so bound their diagnostic rendering as well.
-        let name = &self.0.name;
+        let name = &self.def().name;
         let end = name
             .char_indices()
             .nth(128)
             .map_or(name.len(), |(at, _)| at);
         f.debug_struct("StructTy")
-            .field("id", &self.0.id)
+            .field("id", &self.id())
             .field("name", &&name[..end])
             .finish_non_exhaustive()
     }
@@ -3850,21 +4020,45 @@ impl StructTy {
     /// The declaration builder must validate the entire by-value dependency DAG
     /// before constructing definitions in dependency-first order.
     pub(super) fn new(def: StructDef) -> Self {
-        Self(Arc::new(def))
+        Self(NominalRef::Strong(Arc::new(def)))
+    }
+    pub fn from_ref(r: NominalRef<StructDef>) -> Self {
+        Self(r)
+    }
+    /// Owned definition of a freshly built, unshared strong handle.
+    pub fn into_def(self) -> Result<StructDef, String> {
+        match self.0 {
+            NominalRef::Strong(a) => Arc::try_unwrap(a).map_err(|_| "shared nominal".into()),
+            NominalRef::Back(..) => Err("back edge has no owned definition".into()),
+        }
+    }
+    pub fn is_back_edge(&self) -> bool {
+        self.0.is_back_edge()
+    }
+    /// Canonical application identity, readable even on a back edge whose
+    /// definition is still under construction.
+    pub fn id(&self) -> NominalAppId {
+        match &self.0 {
+            NominalRef::Strong(a) => a.id,
+            NominalRef::Back(_, id) => *id,
+        }
     }
 
     pub fn def(&self) -> &StructDef {
-        &self.0
+        self.0.get()
     }
 
     pub fn field_index(&self, name: &str) -> Option<usize> {
-        self.0.fields.iter().position(|field| field.name == name)
+        self.def()
+            .fields
+            .iter()
+            .position(|field| field.name == name)
     }
 }
 
 impl PartialEq for StructTy {
     fn eq(&self, other: &Self) -> bool {
-        self.0.id == other.0.id
+        self.id() == other.id()
     }
 }
 
@@ -3872,7 +4066,7 @@ impl Eq for StructTy {}
 
 impl Hash for StructTy {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.id.hash(state);
+        self.id().hash(state);
     }
 }
 
@@ -4114,6 +4308,9 @@ fn type_metadata_walk(
         charge(budget, work)?;
         if depth > MAX_PATTERN_PROJECTION_DEPTH {
             return Err("associated type traversal depth limit exceeded".into());
+        }
+        if ty.is_nominal_back_edge() {
+            return Ok((false, 0));
         }
         if let Some(budget) = budget {
             budget.check_depth(depth)?;
@@ -4601,6 +4798,10 @@ fn slice_boundary_walk(
             Frame::Enter(node, at) => {
                 if let Some(b) = budget {
                     b.check_depth(at)?;
+                }
+                if node.is_nominal_back_edge() {
+                    heights.push(0usize, budget)?;
+                    continue;
                 }
                 let key = match node {
                     Ty::AssociatedType(_) => return Err("unsupported: residual associated type projection at slice boundary".into()),
@@ -5343,6 +5544,9 @@ fn ref_type_walk(
         memo: &mut std::collections::HashMap<(usize, bool), (bool, usize)>,
     ) -> Result<(bool, usize), String> {
         budget.check_depth(depth)?;
+        if ty.is_nominal_back_edge() {
+            return Ok((false, 0));
+        }
         budget.charge_work(1)?;
         *visits += 1;
         if *visits > MAX_PATTERN_PROJECTION_WORK {
@@ -5359,10 +5563,10 @@ fn ref_type_walk(
         }
         // Trait objects erase their concrete type and slices have a runtime
         // element domain. Neither can be enumerated as fixed input paths.
-        // Their original lifetime/kind-qualified input envelope remains the
-        // authority for returned references, checked against actual body loans.
         // Raw pointees (Box, Vec storage) are likewise reachable only through
         // the pointer, never as a field path of the input.
+        // Their original lifetime/kind-qualified input envelope remains the
+        // authority for returned references, checked against actual body loans.
         let mut opaque = matches!(
             ty,
             Ty::Param(_) | Ty::Dyn(_) | Ty::Slice { .. } | Ty::RawPtr { .. }
