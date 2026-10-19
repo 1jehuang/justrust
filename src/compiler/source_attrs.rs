@@ -6,6 +6,8 @@ use super::source_cfg::{
 };
 use super::source_probe::VerifiedIdentityContext;
 use std::ops::Range;
+#[path = "source_attrs/doc_metadata.rs"]
+mod doc_metadata;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AttributeErrorKind {
@@ -572,20 +574,7 @@ impl Filter<'_> {
                     retained_abi.push(original.unwrap().range.clone());
                 }
                 "derive" => self.derive(&meta, owner, item.clone())?,
-                "doc" => match &meta.value {
-                    MetaValue::String(_) => {}
-                    MetaValue::List(a)
-                        if a.len() == 1
-                            && a[0].name == "hidden"
-                            && matches!(a[0].value, MetaValue::Word) => {}
-                    _ => {
-                        return Err(error(
-                            AttributeErrorKind::Unsupported,
-                            meta.range,
-                            "only doc string and doc(hidden) metadata are supported",
-                        ));
-                    }
-                },
+                "doc" => doc_metadata::validate(&meta, owner)?,
                 "inline" => {
                     if !matches!(owner, Owner::Function | Owner::AssociatedFunction) {
                         return Err(error(

@@ -27,9 +27,20 @@ recursively evaluated. Attribute envelope syntax remains validated. Unknown
 unregistered active attributes are syntax errors, while recognized valid forms
 outside the admitted policy receive explicit unsupported diagnostics.
 
-The admitted inert policy includes ordinary documentation strings/hidden markers
-and the supported inline hints. Inlining hints do not promise optimization.
-Other stock-warning documentation forms can remain explicit policy boundaries.
+The admitted inert policy includes ordinary documentation strings/hidden markers,
+crate URL-string settings (`html_favicon_url`, `html_logo_url`, `html_root_url`,
+`html_playground_url`, `issue_tracker_base_url`), and parsed `test(attr(...))` /
+`test(no_crate_inject)` rustdoc configuration. The existing bounded metadata
+parser checks nested attribute grammar and full token consumption. Doctest
+attributes are not executed as native attributes: nested `cfg` cannot remove a
+native item, and documentation cannot grant identity or bypass unused-body checks.
+Unknown settings and unsupported attachment positions retain explicit diagnostics,
+while original byte positions and attribute records are preserved.
+`tests/doc_metadata.rs` compares original time-core metadata with stock and native
+CHECK/BUILD/run at workers 1 and 8; focused parser controls reject malformed
+settings, nesting and depth overflow. This does not implement rustdoc/doctests.
+Supported inline hints do not promise optimization. Other stock-warning
+documentation forms remain explicit policy boundaries.
 Active path overrides, derives, representation/language attributes and arbitrary
 semantic attributes are not silently discarded. Attribute token trees containing
 unimplemented byte/C/character or non-decimal numeric literal classes are

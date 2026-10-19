@@ -179,6 +179,10 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Configured text/file SOURCE preparation, bounded cfg/cfg_attr and inert
       attribute policy, cfg-before-child-IO discovery and original syntax spans
       under SOURCE-PREPARATION.md. Full inactive syntax and expansion remain open.
+- [x] Original-source rustdoc URL-string and `test(attr(...))` metadata grammar,
+      preserving byte provenance and inert doctest attributes. Focused stock/native
+      CHECK/BUILD/run at workers 1 and 8, malformed controls and graph gates pass
+      (tests/doc_metadata.rs). This does not implement rustdoc or doctest execution.
 - [x] Explicit source-locked original attributed identity declaration at runtime,
       retained constness with universally checked forwarding-only bodies and
       scalar-root shared/mutable inference replay under CORE-IDENTITY.md. This
