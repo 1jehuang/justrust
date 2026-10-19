@@ -789,6 +789,18 @@ impl Provider for CompilerProvider {
                     cx.publish_fact(0, object)
                 }
                 CHECK | BUILD => {
+                    // Closed source roots have stable slots from SIGNATURES.
+                    // Demand them before sealing the additional generic frontier:
+                    // otherwise MONO_PLAN becomes a scheduling barrier even
+                    // though these pipelines do not depend on its output.
+                    let types = facts.types().await?;
+                    let root_count = types.closed_roots().len();
+                    let kind = if key.kind == BUILD { OBJECT } else { ANALYZE };
+                    let (mut root_handles, _root_handles_reservation) =
+                        this.scratch_vec(root_count)?;
+                    for index in 0..root_count {
+                        root_handles.push(cx.request(function(kind, index)).get(0));
+                    }
                     let plan = facts.plan().await?;
                     if key.kind == CHECK {
                         // Required universal admission is per-caller, not one
@@ -814,12 +826,17 @@ impl Provider for CompilerProvider {
                         }
                     }
 
-                    let kind = if key.kind == BUILD { OBJECT } else { ANALYZE };
-                    let (mut handles, _handles_reservation) =
-                        this.scratch_vec(plan.plan.entries.len())?;
-                    for index in 0..plan.plan.entries.len() {
+                    let additional = plan
+                        .plan
+                        .entries
+                        .len()
+                        .checked_sub(root_count)
+                        .ok_or_else(|| Error::new("instance plan omitted a closed source root"))?;
+                    let (mut handles, _handles_reservation) = this.scratch_vec(additional)?;
+                    for index in root_count..plan.plan.entries.len() {
                         handles.push(cx.request(function(kind, index)).get(0));
                     }
+                    let handles = root_handles.into_iter().chain(handles);
                     if key.kind == CHECK {
                         for handle in handles {
                             cx.read(handle).await?;
@@ -828,7 +845,7 @@ impl Provider for CompilerProvider {
                     }
                     let (mut objects, _objects_reservation) =
                         this.scratch_vec(plan.plan.entries.len())?;
-                    for (handle, instance) in handles.into_iter().zip(plan.plan.entries.iter()) {
+                    for (handle, instance) in handles.zip(plan.plan.entries.iter()) {
                         let object: Arc<backend::Object> = cx.read_fact(handle).await?;
                         let mut bytes = object.code.len();
                         for (_, name) in &object.calls {

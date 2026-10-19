@@ -739,6 +739,23 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                 assert!(report.capture_complete);
                 assert_eq!(report.failures, 0);
                 assert_eq!(report.events_dropped, 0);
+                let discovered = |key: Key| {
+                    let detail = format!("{key:?}");
+                    report
+                        .events
+                        .iter()
+                        .position(|event| event.kind == "discovered" && event.detail == detail)
+                };
+                let plan_discovery = discovered(Key::new(113, vec![])).unwrap();
+                for index in 0..3 {
+                    // CHECK and BUILD may race, but whichever requests the
+                    // plan first must already have demanded every closed root.
+                    let early = [109, 103].into_iter().any(|kind| {
+                        discovered(Key::new(kind, vec![index]))
+                            .is_some_and(|position| position < plan_discovery)
+                    });
+                    assert!(early, "root {index} was held behind MONO_PLAN");
+                }
                 // These operation IDs are the compiler graph schema, not fixtures.
                 let mut expected = vec![
                     Key::new(107, vec![0]), // Root source file unit.
