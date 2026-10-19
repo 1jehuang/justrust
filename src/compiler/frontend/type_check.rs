@@ -4927,10 +4927,13 @@ impl<'a> Checker<'a> {
             inclusive,
         } = value
         {
-            if kind != ir::BorrowKind::Shared {
-                return Err("unsupported: mutable subslices (&mut s[a..b])".into());
-            }
-            return self.subslice(base, start.as_deref(), end.as_deref(), *inclusive);
+            return self.subslice_with_kind(
+                kind,
+                base,
+                start.as_deref(),
+                end.as_deref(),
+                *inclusive,
+            );
         }
         if let Some(id) = self.borrow_indexed_place(kind, value)? {
             return Ok(id);
@@ -7002,37 +7005,23 @@ impl<'a> Checker<'a> {
         end: Option<&Expr>,
         inclusive: bool,
     ) -> Result<ir::ExprId, String> {
+        self.subslice_with_kind(ir::BorrowKind::Shared, base, start, end, inclusive)
+    }
+
+    pub(super) fn subslice_with_kind(
+        &mut self,
+        kind: ir::BorrowKind,
+        base: &Expr,
+        start: Option<&Expr>,
+        end: Option<&Expr>,
+        inclusive: bool,
+    ) -> Result<ir::ExprId, String> {
         let usize_ty = ir::Ty::Int(ir::IntTy::Usize);
-        // A local array (`&a[1..]`) is borrowed whole as a place, then unsized.
-        // A chained range (`s[1..][..2]`) subslices the inner subslice.
-        let mut slice = match self.scalar_hint(base)? {
-            _ if matches!(base, Expr::RangeIndex { .. }) => {
-                let Expr::RangeIndex {
-                    base,
-                    start,
-                    end,
-                    inclusive,
-                } = base
-                else {
-                    unreachable!()
-                };
-                self.subslice(base, start.as_deref(), end.as_deref(), *inclusive)?
-            }
-            Some(ir::Ty::Array { .. }) => {
-                let place = static_source_place(base).map_err(|_| {
-                    "unsupported: range indexing of a non-place array value".to_string()
-                })?;
-                self.expr(&Expr::Borrow {
-                    kind: ir::BorrowKind::Shared,
-                    place,
-                })?
-            }
-            _ => self.expr(base)?,
-        };
+        let mut slice = self.range_slice_base(kind, base)?;
         let mut flow = self.flow(slice);
-        if let Some((element, _)) = flow.ty.shared_array_element_len() {
+        if let Some((source_kind, element, _)) = flow.ty.array_ref_element_len() {
             let target = ir::Ty::Ref {
-                kind: ir::BorrowKind::Shared,
+                kind: source_kind,
                 referent: std::sync::Arc::new(ir::Ty::Slice {
                     element: std::sync::Arc::new(element.clone()),
                 }),
@@ -7043,11 +7032,14 @@ impl<'a> Checker<'a> {
         if flow.ty.is_shared_str() {
             return Err("unsupported: str range slicing".into());
         }
-        let element = flow
+        let (source_kind, element) = flow
             .ty
-            .shared_slice_element()
-            .ok_or("unsupported: range indexing requires a shared slice or array")?
-            .clone();
+            .slice_ref_element()
+            .ok_or("unsupported: range indexing requires a slice or array")?;
+        if source_kind != kind {
+            return Err("E0596: range borrow requires matching source mutability".into());
+        }
+        let element = element.clone();
         ir::validate_shared_slice_element(&element, self.facts(), &self.signatures.plan()?.budget)?;
         let mut completes = flow.completes;
         let mut bound =

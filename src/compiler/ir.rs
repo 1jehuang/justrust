@@ -8807,8 +8807,8 @@ impl CheckedFunction {
                             return Err("subslice bound requires usize".into());
                         }
                     }
-                    let Some(element) = self.exprs[slice.0].ty.shared_slice_element() else {
-                        return Err("subslice requires shared slice".into());
+                    let Some((_, element)) = self.exprs[slice.0].ty.slice_ref_element() else {
+                        return Err("subslice requires slice reference".into());
                     };
                     validate_shared_slice_element_with_facts(element, facts)?;
                     if !pattern_types_equal_with_facts(
@@ -8817,7 +8817,7 @@ impl CheckedFunction {
                         &mut 0,
                         facts,
                     )? {
-                        return Err("subslice result must equal its shared slice type".into());
+                        return Err("subslice result must equal its source slice type".into());
                     }
                 }
                 ExprKind::SliceIndex { slice, index } => {

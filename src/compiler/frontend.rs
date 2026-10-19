@@ -4851,6 +4851,8 @@ mod indexed_borrow;
 mod leading_zero_tests;
 mod mut_slice;
 #[cfg(test)]
+mod mutable_range_source_tests;
+#[cfg(test)]
 mod name_tests;
 mod or_patterns;
 mod range_expr;

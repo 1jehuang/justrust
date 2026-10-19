@@ -1976,8 +1976,9 @@ impl Function {
         }
     }
 
-    /// Slice operations take a whole-local Copy of a shared reference. No slice
-    /// place projection, move, constant or never-typed operand is admitted.
+    /// Range descriptors consume a whole-local reference snapshot. Mutable
+    /// snapshots must move, while shared snapshots may copy. The original
+    /// source authority belongs to the ordinary reborrow, not to this view.
     /// Kept out of line so the large `rvalue_ty` frame does not grow.
     #[inline(never)]
     fn subslice_ty(
@@ -1988,9 +1989,9 @@ impl Function {
         facts: ir::FactsCtx<'_>,
     ) -> Result<Ty, String> {
         let source = self.slice_operand_ty(slice, facts)?;
-        let element = source
-            .shared_slice_element()
-            .ok_or("CFG subslice requires shared slice")?;
+        let (_, element) = source
+            .slice_ref_element()
+            .ok_or("CFG subslice requires slice reference")?;
         ir::validate_shared_slice_element_with_facts(element, facts)?;
         self.require_operand_with_facts(start, &Ty::Int(IntTy::Usize), facts)?;
         if let Some(end) = end {

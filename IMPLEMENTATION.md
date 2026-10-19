@@ -7,9 +7,10 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 ## Completed foundations, not full compatibility
 
 - [x] Indexed native format arguments retain checked shared place borrows, evaluate source indices once and reject conflicting later mutations (`INDEXED-FORMAT.md`). G0-G12 remain partial.
-- [x] Mutable slice parameters and local carriers with same-kind array unsizing, generic reference-free elements, shared read reborrows and Copy-element checked writes (`MUTABLE-SLICES.md`). G0-G12 remain partial: mutable ranges and non-Copy replacement remain open.
+- [x] Mutable slice parameters and local carriers with same-kind array unsizing, generic reference-free elements, shared read reborrows and Copy-element checked writes (`MUTABLE-SLICES.md`). G0-G12 remain partial: non-Copy replacement remains open.
+- [x] Mutable range borrows and shared views use ordinary local-rooted reborrow authority and conservatively retain the whole source loan, with stock range-order/trap, lifetime and canonical-source tests (`MUTABLE-RANGES.md`). G0-G12 remain partial.
 - [x] Canonical unsafe raw slice constructors support generic shared/mutable descriptor transport and non-Copy elements, with native stock fixtures, unsafe/forged-origin rejection and unchanged graph-integrity ceilings (`RAW-SLICES.md`). G0-G12 remain partial.
-- [x] Root shared and mutable slice returns use caller-owned descriptor storage and preserve source lifetime/alias authority, including generic non-Copy element transport (`SLICE-RETURNS.md`). G0-G12 remain partial: nested slice carriers and mutable subslices remain open.
+- [x] Root shared and mutable slice returns use caller-owned descriptor storage and preserve source lifetime/alias authority, including generic non-Copy element transport (`SLICE-RETURNS.md`). G0-G12 remain partial: nested slice carriers remain open.
 
 - [x] Independent graph runtime with shared immutable facts and lifecycle telemetry.
 - [x] Direct native Linux x86-64 executable generation for the initial subset.
@@ -343,8 +344,9 @@ missing-file changes invalidate only justified consumers without stale lookup.
       (NESTED-INDEX.md). Reference-rooted and non-scalar-leaf forms remain
       Unsupported.
       Delivered: shared subslices `&s[a..b]` of all range kinds with stock
-      order and checks (SUBSLICE.md); `&mut` subslices and str slicing remain
-      Unsupported.
+      order and checks (SUBSLICE.md). Local-rooted mutable range reborrows
+      and shared views retain conservative whole-source loans
+      (MUTABLE-RANGES.md); str slicing remains Unsupported.
 - [ ] Complete nested/or/range/ref/@/slice patterns, guards, match ergonomics,
       exhaustiveness/usefulness, conditional pattern forms beyond delivered
       IF-LET.md/WHILE-LET.md/LET-ELSE.md slices and destructuring assignment.

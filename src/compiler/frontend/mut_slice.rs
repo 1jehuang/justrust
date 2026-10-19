@@ -8,6 +8,61 @@
 use super::*;
 
 impl type_check::Checker<'_> {
+    /// Obtain a range receiver through ordinary borrow checking. The range
+    /// descriptor never invents storage authority or proves disjointness.
+    pub(super) fn range_slice_base(
+        &mut self,
+        kind: ir::BorrowKind,
+        base: &Expr,
+    ) -> Result<ir::ExprId, String> {
+        if let Expr::RangeIndex {
+            base,
+            start,
+            end,
+            inclusive,
+        } = base
+        {
+            return self.subslice_with_kind(
+                kind,
+                base,
+                start.as_deref(),
+                end.as_deref(),
+                *inclusive,
+            );
+        }
+        let hint = self.scalar_hint(base)?;
+        if matches!(hint, Some(ir::Ty::Array { .. })) {
+            let place = type_check::static_source_place(base).map_err(|_| {
+                "unsupported: range indexing of a non-place array value".to_string()
+            })?;
+            return self.expr(&Expr::Borrow { kind, place });
+        }
+        if let Some(ir::Ty::Ref {
+            kind: source_kind,
+            referent,
+        }) = &hint
+            && matches!(
+                referent.as_ref(),
+                ir::Ty::Slice { .. } | ir::Ty::Array { .. }
+            )
+        {
+            if kind == ir::BorrowKind::Mut && *source_kind != ir::BorrowKind::Mut {
+                return Err("E0596: cannot mutably borrow a shared range receiver".into());
+            }
+            if *source_kind == ir::BorrowKind::Mut {
+                let source = type_check::static_source_place(base).map_err(|_| {
+                    "unsupported: range reborrow requires a source place".to_string()
+                })?;
+                let (mut place, _, _) = self.checked_place(&source)?;
+                if place.projection.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+                    return Err("place projection nesting exceeds limit128".into());
+                }
+                place.projection.push(ir::Projection::Deref);
+                return self.borrow_expression(kind, place);
+            }
+        }
+        self.expr(base)
+    }
     pub(super) fn mut_slice_constant_assignment(
         &mut self,
         place: &Place,
@@ -17,7 +72,7 @@ impl type_check::Checker<'_> {
         let Some((FieldSelector::ConstantIndex(index), prefix)) = place.fields.split_last() else {
             return Ok(None);
         };
-        self.charge_node(std::mem::size_of::<FieldSelector>() * prefix.len())?;
+        self.charge_node(std::mem::size_of_val(prefix))?;
         let array = Place {
             local: place.local,
             fields: prefix.to_vec(),

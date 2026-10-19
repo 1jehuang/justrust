@@ -2740,9 +2740,9 @@ impl Emitter<'_> {
                 inclusive,
             } => {
                 let slice_ty = self.function().operand_ty(slice)?;
-                let element = slice_ty
-                    .shared_slice_element()
-                    .ok_or("subslice requires exactly shared &[T]")?;
+                let (_, element) = slice_ty
+                    .slice_ref_element()
+                    .ok_or("subslice requires a slice reference")?;
                 let layout = shared_slice_layout(element)?;
                 for bound in std::iter::once(start).chain(end.iter()) {
                     if self.function().operand_ty(bound)? != ir::Ty::Int(ir::IntTy::Usize) {
