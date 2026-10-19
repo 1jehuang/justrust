@@ -160,6 +160,10 @@ pub enum Msg {
         id: u64,
         #[serde(default)]
         failed: Vec<String>,
+        /// At least one current failure was "No space left on device" on the
+        /// agent. Older agents never set it; older daemons ignore it.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        disk_full: bool,
     },
     /// Run `justrust <args>` in `cwd`. Client -> daemon also carries the
     /// source roots that must be synced first.
@@ -370,6 +374,40 @@ pub fn read_frame<R: Read>(r: &mut R) -> Result<Option<(Msg, Vec<u8>)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn barrier_ack_disk_full_is_compatible_both_ways() {
+        // An old agent's ack (no field) reads as not disk-full.
+        let old: Msg = serde_json::from_value(serde_json::json!({
+            "t":"BarrierAck", "id":3, "failed":["/w/a.rs"]
+        }))
+        .unwrap();
+        assert_eq!(
+            old,
+            Msg::BarrierAck {
+                id: 3,
+                failed: vec!["/w/a.rs".into()],
+                disk_full: false
+            }
+        );
+        // A healthy ack omits the field, so it is byte-identical for old daemons.
+        let healthy = serde_json::to_value(Msg::BarrierAck {
+            id: 4,
+            failed: vec![],
+            disk_full: false,
+        })
+        .unwrap();
+        assert!(healthy.get("disk_full").is_none(), "{healthy}");
+        // A disk-full ack carries it and round-trips.
+        let full = Msg::BarrierAck {
+            id: 5,
+            failed: vec!["/w/b.rs".into()],
+            disk_full: true,
+        };
+        let v = serde_json::to_value(&full).unwrap();
+        assert_eq!(v["disk_full"], serde_json::json!(true));
+        assert_eq!(serde_json::from_value::<Msg>(v).unwrap(), full);
+    }
 
     #[test]
     fn guarded_run_and_submission_state_roundtrip_without_changing_legacy_run() {

@@ -208,7 +208,7 @@ struct Routes {
     /// Set once the agent's stdout closed: nothing registered after that
     /// would ever be answered.
     dead: bool,
-    barriers: HashMap<u64, Sender<Vec<String>>>,
+    barriers: HashMap<u64, Sender<SyncAck>>,
     runs: HashMap<u64, Sender<(Msg, Vec<u8>)>>,
 }
 
@@ -723,9 +723,13 @@ fn read_agent(link: &Link, mut stdout: BufReader<std::process::ChildStdout>) {
         }
         let mut r = link.routes.lock().unwrap();
         match msg {
-            Msg::BarrierAck { id, failed } => {
+            Msg::BarrierAck {
+                id,
+                failed,
+                disk_full,
+            } => {
                 if let Some(tx) = r.barriers.remove(&id) {
-                    let _ = tx.send(failed);
+                    let _ = tx.send(SyncAck { failed, disk_full });
                 }
             }
             Msg::Out { id, .. }
@@ -990,14 +994,23 @@ fn barrier(d: &Daemon, st: &mut Sync, link: &Link) -> Result<()> {
         r.barriers.insert(id, tx);
     }
     link.send(&Msg::Barrier { id }, &[])?;
-    let failed = rx
+    let ack = rx
         .recv_timeout(BARRIER_TIMEOUT)
         .map_err(|_| anyhow::anyhow!("remote machine did not acknowledge the sync"))?;
-    check_sync_failures(st, &failed)
+    check_sync_failures(st, &ack)
+}
+
+/// The agent's answer to a barrier: paths it could not apply, and whether
+/// any of them failed because the machine's disk is full.
+#[derive(Debug, Default)]
+struct SyncAck {
+    failed: Vec<String>,
+    disk_full: bool,
 }
 
 /// Both standalone and run-integrated barriers repair the same manifest.
-fn check_sync_failures(st: &mut Sync, failed: &[String]) -> Result<()> {
+fn check_sync_failures(st: &mut Sync, ack: &SyncAck) -> Result<()> {
+    let failed = &ack.failed;
     if failed.is_empty() {
         return Ok(());
     }
@@ -1010,6 +1023,13 @@ fn check_sync_failures(st: &mut Sync, failed: &[String]) -> Result<()> {
                 r.manifest.insert(rel.to_path_buf(), UNKNOWN);
             }
         }
+    }
+    if ack.disk_full {
+        bail!(
+            "hosted build machine disk full: could not apply {} file{} (No space left on device)",
+            failed.len(),
+            if failed.len() == 1 { "" } else { "s" },
+        );
     }
     bail!(
         "the remote machine could not apply {} file{} (see ~/.justrust/remote/daemon.log): {}",
@@ -1150,8 +1170,8 @@ fn run(
             };
             link.send(&msg, &[])?;
             if pipeline {
-                let failed = match barrier_rx.recv_timeout(BARRIER_TIMEOUT) {
-                    Ok(failed) => failed,
+                let ack = match barrier_rx.recv_timeout(BARRIER_TIMEOUT) {
+                    Ok(ack) => ack,
                     Err(_) => {
                         let _ = link.send(&Msg::Cancel { id }, &[]);
                         let mut rt = link.routes.lock().unwrap();
@@ -1162,7 +1182,7 @@ fn run(
                         );
                     }
                 };
-                if let Err(e) = check_sync_failures(&mut st, &failed) {
+                if let Err(e) = check_sync_failures(&mut st, &ack) {
                     // The agent confirmed it never launched this request.
                     // A local fallback is safe only after this rejection.
                     write_frame(
@@ -1342,21 +1362,47 @@ mod tests {
             link: None,
             roots: BTreeMap::from([(root.clone(), make_root()), (other.clone(), make_root())]),
         };
-        assert!(check_sync_failures(&mut sync, &[]).is_ok());
+        assert!(check_sync_failures(&mut sync, &SyncAck::default()).is_ok());
         assert_eq!(sync.roots[&root].manifest[&entry], stamp);
         assert!(
             check_sync_failures(
                 &mut sync,
-                &[
-                    "/workspace/src/lib.rs".into(),
-                    "/workspace/deleted.rs".into()
-                ]
+                &SyncAck {
+                    failed: vec![
+                        "/workspace/src/lib.rs".into(),
+                        "/workspace/deleted.rs".into()
+                    ],
+                    disk_full: false,
+                }
             )
             .is_err()
         );
         assert_eq!(sync.roots[&root].manifest[&entry], UNKNOWN);
         assert_eq!(sync.roots[&root].manifest[Path::new("deleted.rs")], UNKNOWN);
         assert_eq!(sync.roots[&other].manifest[&entry], stamp);
+        let generic = check_sync_failures(
+            &mut sync,
+            &SyncAck {
+                failed: vec!["/workspace/src/lib.rs".into()],
+                disk_full: false,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(!generic.contains("disk full"), "{generic}");
+        let full = check_sync_failures(
+            &mut sync,
+            &SyncAck {
+                failed: vec!["/workspace/src/lib.rs".into()],
+                disk_full: true,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            full.contains("hosted build machine disk full") && full.contains("No space left"),
+            "{full}"
+        );
     }
 
     #[test]

@@ -69,6 +69,8 @@ mod record;
 mod remote;
 #[cfg(unix)]
 mod remote_agent;
+#[cfg(unix)]
+mod remote_evict;
 /// The remote agent runs on the (Linux) build machines only.
 #[cfg(windows)]
 mod remote_agent {

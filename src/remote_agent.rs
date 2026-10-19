@@ -101,6 +101,39 @@ fn write_atomic(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> {
     res
 }
 
+/// One low-disk collection pass over this agent's mirrored roots
+/// (`JUSTRUST_REMOTE_EVICT`: dry by default). Logged to the agent's stderr.
+fn evict_now(roots: &crate::remote_evict::Shared) {
+    use crate::remote_evict as ev;
+    let Some(home) = dirs::home_dir() else { return };
+    let Ok(registry) = roots.lock() else { return };
+    ev::collect(
+        &registry,
+        &home,
+        ev::Mode::from_env(),
+        ev::DEFAULT_GRACE,
+        &ev::System,
+        &mut |line| eprintln!("justrust agent: {line}"),
+    );
+}
+
+/// Free bytes if below the build floor even after an eviction attempt.
+fn low_disk_after_eviction(roots: &crate::remote_evict::Shared) -> Option<u64> {
+    use crate::remote_evict as ev;
+    let home = dirs::home_dir()?;
+    ev::below_floor(&ev::System, &home)?;
+    evict_now(roots);
+    ev::below_floor(&ev::System, &home)
+}
+
+/// ENOSPC ("No space left on device") or a quota exhaustion.
+pub(crate) fn is_disk_full(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded
+    ) || matches!(e.raw_os_error(), Some(libc::ENOSPC | libc::EDQUOT))
+}
+
 fn remove(path: &Path) -> std::io::Result<()> {
     match std::fs::symlink_metadata(path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -235,10 +268,15 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
         }
     };
     let pids: Arc<Mutex<HashMap<u64, RunStatus>>> = Arc::default();
+    // Mirrored roots and their builds, for low-disk `target/` eviction.
+    let roots: crate::remote_evict::Shared = Arc::default();
     // Paths whose latest Write or Delete failed: the tree differs from what
     // the daemon believes. Reported with every barrier until a later frame
     // for the same path succeeds, so no build runs on a stale file.
     let mut failed: BTreeSet<String> = BTreeSet::new();
+    // The subset of `failed` whose cause was a full disk (ENOSPC), so the
+    // client can say "hosted disk full" instead of a generic sync failure.
+    let mut disk_full: BTreeSet<String> = BTreeSet::new();
     let res = loop {
         let (msg, payload) = match read_frame(&mut input) {
             Ok(Some(f)) => f,
@@ -253,18 +291,31 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
             Msg::Write { path, mode } => match write_atomic(&at(&path), &payload, mode) {
                 Ok(()) => {
                     failed.remove(&path);
+                    disk_full.remove(&path);
                 }
                 Err(e) => {
                     eprintln!("justrust agent: write {path}: {e}");
+                    if is_disk_full(&e) {
+                        evict_now(&roots);
+                        disk_full.insert(path.clone());
+                    } else {
+                        disk_full.remove(&path);
+                    }
                     failed.insert(path);
                 }
             },
             Msg::Delete { path } => match remove(&at(&path)) {
                 Ok(()) => {
                     failed.remove(&path);
+                    disk_full.remove(&path);
                 }
                 Err(e) => {
                     eprintln!("justrust agent: delete {path}: {e}");
+                    if is_disk_full(&e) {
+                        disk_full.insert(path.clone());
+                    } else {
+                        disk_full.remove(&path);
+                    }
                     failed.insert(path);
                 }
             },
@@ -272,14 +323,19 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                 let _ = std::fs::create_dir_all(at(&path));
             }
             Msg::Synced { path } => {
+                if let Ok(mut r) = roots.lock() {
+                    r.touch(&at(&path));
+                }
                 let under = format!("{}/", path.trim_end_matches('/'));
                 failed.retain(|p| !p.starts_with(&under));
+                disk_full.retain(|p| !p.starts_with(&under));
             }
             Msg::Barrier { id } => send(
                 &out,
                 &Msg::BarrierAck {
                     id,
                     failed: failed.iter().cloned().collect(),
+                    disk_full: !disk_full.is_empty(),
                 },
                 &[],
             ),
@@ -305,6 +361,7 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                         &Msg::BarrierAck {
                             id,
                             failed: failed.iter().cloned().collect(),
+                            disk_full: !disk_full.is_empty(),
                         },
                         &[],
                     );
@@ -313,7 +370,11 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                             &out,
                             &Msg::Error {
                                 id,
-                                msg: "source sync failed, build not started".into(),
+                                msg: if disk_full.is_empty() {
+                                    "source sync failed, build not started".into()
+                                } else {
+                                    "hosted build machine disk full: source sync failed, build not started".into()
+                                },
                             },
                             &[],
                         );
@@ -327,23 +388,55 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                 // Register before spawning the worker: an immediate Cancel
                 // must survive the window before its process has a PID.
                 pids.lock().unwrap().insert(id, RunStatus::default());
+                let roots = roots.clone();
                 std::thread::spawn(move || {
-                    let code =
-                        match start_run(&executable, id, &cwd, &args, &env, &run_id, &out, &pids) {
-                            Ok(c) => c,
-                            Err(e) => {
-                                pids.lock().unwrap().remove(&id);
-                                send(
-                                    &out,
-                                    &Msg::Error {
-                                        id,
-                                        msg: format!("{e:#}"),
-                                    },
-                                    &[],
-                                );
-                                return;
-                            }
-                        };
+                    let root = roots.lock().ok().and_then(|r| r.root_of(&cwd));
+                    if let Some(free) = low_disk_after_eviction(&roots) {
+                        pids.lock().unwrap().remove(&id);
+                        send(
+                            &out,
+                            &Msg::Error {
+                                id,
+                                msg: format!(
+                                    "hosted build machine disk full: {:.1} GiB free, build not started",
+                                    free as f64 / (1u64 << 30) as f64
+                                ),
+                            },
+                            &[],
+                        );
+                        return;
+                    }
+                    // Shared per-root lock: eviction of this root's target/
+                    // waits for the build, and the build for an eviction.
+                    let _build_lock = root.as_deref().and_then(crate::remote_evict::build_lock);
+                    if let (Some(root), Ok(mut r)) = (&root, roots.lock()) {
+                        r.begin(root);
+                    }
+                    let result =
+                        start_run(&executable, id, &cwd, &args, &env, &run_id, &out, &pids);
+                    if let (Some(root), Ok(mut r)) = (&root, roots.lock()) {
+                        r.end(
+                            root,
+                            crate::remote_evict::Probe::now(&crate::remote_evict::System),
+                        );
+                    }
+                    drop(_build_lock);
+                    evict_now(&roots);
+                    let code = match result {
+                        Ok(c) => c,
+                        Err(e) => {
+                            pids.lock().unwrap().remove(&id);
+                            send(
+                                &out,
+                                &Msg::Error {
+                                    id,
+                                    msg: format!("{e:#}"),
+                                },
+                                &[],
+                            );
+                            return;
+                        }
+                    };
                     let summary = summary_for(&run_id).unwrap_or_default();
                     if version >= RUN_FILES_VERSION
                         && let Some(dir) = run_dir(&run_id)
@@ -658,6 +751,22 @@ fn start_run(
 mod tests {
     use super::*;
 
+    #[test]
+    fn disk_full_errors_are_classified() {
+        assert!(is_disk_full(&std::io::Error::from_raw_os_error(
+            libc::ENOSPC
+        )));
+        assert!(is_disk_full(&std::io::Error::from_raw_os_error(
+            libc::EDQUOT
+        )));
+        assert!(is_disk_full(&std::io::Error::from(
+            std::io::ErrorKind::StorageFull
+        )));
+        assert!(!is_disk_full(&std::io::Error::from_raw_os_error(
+            libc::EACCES
+        )));
+        assert!(!is_disk_full(&std::io::Error::other("other")));
+    }
     #[test]
     fn unpinned_projects_build_with_the_store_toolchain() {
         let d = std::env::temp_dir().join(format!("jr-store-tc-{}", std::process::id()));

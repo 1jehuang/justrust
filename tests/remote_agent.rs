@@ -153,7 +153,12 @@ impl Agent {
     fn barrier(&mut self, id: u64) -> Vec<String> {
         self.send(Msg::Barrier { id }, &[]);
         match self.recv() {
-            (Msg::BarrierAck { id: got, failed }, _) => {
+            (
+                Msg::BarrierAck {
+                    id: got, failed, ..
+                },
+                _,
+            ) => {
                 assert_eq!(got, id);
                 failed
             }
@@ -549,7 +554,8 @@ edition="2024"
             a.recv().0,
             Msg::BarrierAck {
                 id,
-                failed: vec!["/block/nested.rs".into()]
+                failed: vec!["/block/nested.rs".into()],
+                disk_full: false,
             }
         );
         assert!(matches!(a.recv().0, Msg::Error { id: got, .. } if got == id));
@@ -589,7 +595,14 @@ edition="2024"
         }
         let msg = request(&a, id);
         a.send(msg, &[]);
-        assert_eq!(a.recv().0, Msg::BarrierAck { id, failed: vec![] });
+        assert_eq!(
+            a.recv().0,
+            Msg::BarrierAck {
+                id,
+                failed: vec![],
+                disk_full: false
+            }
+        );
         let mut output = String::new();
         loop {
             match a.recv() {
@@ -954,7 +967,14 @@ fn immediate_pipeline_cancel_is_not_lost_before_pid_registration() {
         );
         // Do not wait for Pong, output, or PID publication before cancelling.
         a.send(Msg::Cancel { id }, &[]);
-        assert_eq!(a.recv().0, Msg::BarrierAck { id, failed: vec![] });
+        assert_eq!(
+            a.recv().0,
+            Msg::BarrierAck {
+                id,
+                failed: vec![],
+                disk_full: false
+            }
+        );
         loop {
             match a.recv().0 {
                 Msg::Out { id: got, .. } if got == id => {}
