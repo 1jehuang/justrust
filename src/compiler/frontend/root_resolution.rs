@@ -33,6 +33,7 @@ enum ResolvedKind {
     Trait,
     Module,
     Function,
+    Const,
     Struct,
     Enum,
     Variant,
@@ -1212,6 +1213,7 @@ impl Resolver<'_> {
                 ItemKind::TypeAlias(_) if namespace => Some(ResolvedKind::TypeAlias),
                 ItemKind::Module(_) if namespace => Some(ResolvedKind::Module),
                 ItemKind::Function if !namespace => Some(ResolvedKind::Function),
+                ItemKind::Const if !namespace => Some(ResolvedKind::Const),
                 ItemKind::Trait if namespace => Some(ResolvedKind::Trait),
                 ItemKind::Struct
                     if namespace || self.source_struct(&item.path)?.shape == StructShape::Tuple =>
@@ -1943,6 +1945,9 @@ impl Resolver<'_> {
         module: ModuleId,
     ) -> Result<Option<ResolvedItem>, String> {
         if let Some(item) = self.path(path, module, false, false)? {
+            if item.kind == ResolvedKind::Const {
+                return Err("unsupported: constant patterns require source-authenticated graph pattern values".into());
+            }
             if item.kind == ResolvedKind::Variant {
                 return Ok(Some(item));
             }
@@ -2933,6 +2938,12 @@ impl Resolver<'_> {
             }
             Expr::Var(name) => {
                 let value_item = self.path(name, module, false, false)?;
+                if let Some(item) = &value_item
+                    && item.kind == ResolvedKind::Const
+                {
+                    *expr = Expr::ConstItem(self.resolved_use(item.source()?, name)?);
+                    return Ok(());
+                }
                 if value_item
                     .as_ref()
                     .is_some_and(|item| item.kind == ResolvedKind::Struct)
@@ -3378,6 +3389,15 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         }
     }
     let mut program = parsed.program.clone();
+    for declaration in &mut program.constants {
+        resolver.type_params.clear();
+        resolver.ty(&mut declaration.ty, declaration.module)?;
+        resolver.expr(
+            &mut declaration.initializer,
+            declaration.module,
+            &mut vec![std::collections::HashSet::new()],
+        )?;
+    }
     for path in &paths {
         let key = resolver.key(path)?;
         for (index, item) in parsed

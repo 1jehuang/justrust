@@ -2,6 +2,11 @@
 pub mod backend;
 mod borrow;
 pub mod cfg;
+mod const_check;
+mod const_diagnostics;
+pub mod const_eval;
+mod const_graph;
+mod const_source;
 mod expansion_budget;
 mod expansion_span;
 pub mod frontend;
@@ -144,6 +149,9 @@ const MONO_PLAN: u32 = 113;
 const UNIVERSAL_EFFECTS_READY: u32 = 115;
 const BODY_LEXICAL: u32 = 116;
 const CAPTURE_ENV: u32 = 117;
+const CONST_DECL: u32 = 118;
+const CONST_BODY: u32 = 119;
+const CONST_VALUE: u32 = 120;
 const ROOT_CLEANUP_DEMAND: u32 = 125;
 /// Optimizer nodes (OPTIMIZATION.md section 8). Per instance index; only BUILD
 /// (through OBJECT) demands them, and never when the mode is `Off`.
@@ -348,7 +356,7 @@ impl CompilerProvider {
 impl Provider for CompilerProvider {
     fn outputs(&self, key: &Key) -> usize {
         match key.kind {
-            UNIVERSAL_ANALYZE | ANALYZE => 2,
+            UNIVERSAL_ANALYZE | ANALYZE | CONST_BODY => 2,
             PARSE => PARSE_OUTPUTS,
             _ => 1,
         }
@@ -360,6 +368,7 @@ impl Provider for CompilerProvider {
             let root = Facts::root;
             let function = Facts::item;
             match key.kind {
+                CONST_DECL | CONST_BODY | CONST_VALUE => this.constant_node(&cx, &key).await,
                 SOURCE => {
                     // One node per source file, keyed by its child-ordinal path
                     // from the root file: [0] is the root, [0, i] its i-th
@@ -551,8 +560,31 @@ impl Provider for CompilerProvider {
                         }
                     }
                     let declaration = types.callable_decl(index).map_err(Error::new)?;
+                    let prepared = types
+                        .prepare_body_constants(declaration, &this.0.budget)
+                        .map_err(|error| source_fact_error(error, &this.0.budget))?;
+                    let (mut constant_handles, _constant_handles_storage) =
+                        this.scratch_vec(prepared.direct().len())?;
+                    for declaration in prepared.direct() {
+                        constant_handles.push(
+                            cx.request(function(CONST_VALUE, declaration.index as usize))
+                                .get(0),
+                        );
+                    }
+                    let (mut values, _values_storage) =
+                        this.scratch_vec::<Arc<const_check::ValueFact>>(constant_handles.len())?;
+                    for handle in constant_handles {
+                        values.push(cx.read_fact(handle).await?);
+                    }
+                    let constants = types
+                        .seal_body_constants(prepared, values, &this.0.budget)
+                        .map_err(|error| source_fact_error(error, &this.0.budget))?;
                     let body = types
-                        .publish_callable_body(declaration, &this.0.budget)
+                        .publish_callable_body_with_constants(
+                            declaration,
+                            constants,
+                            &this.0.budget,
+                        )
                         .map_err(|error| source_fact_error(error, &this.0.budget))?;
                     let fact = match body {
                         frontend::PublishedCallableBody::Source(publication) => {
@@ -1096,6 +1128,15 @@ impl Provider for CompilerProvider {
                     // though these pipelines do not depend on its output.
                     let types = facts.types().await?;
                     let root_count = types.closed_roots().len();
+                    let (mut constant_handles, _constant_handles_storage) =
+                        this.scratch_vec(types.constant_count())?;
+                    for index in 0..types.constant_count() {
+                        let declaration = types.constant_decl(index).map_err(Error::new)?;
+                        constant_handles.push(
+                            cx.request(function(CONST_VALUE, declaration.index as usize))
+                                .get(0),
+                        );
+                    }
                     let kind = if key.kind == BUILD { OBJECT } else { ANALYZE };
                     let (mut root_handles, _root_handles_reservation) =
                         this.scratch_vec(root_count)?;
@@ -1103,6 +1144,9 @@ impl Provider for CompilerProvider {
                         root_handles.push(cx.request(function(kind, index)).get(0));
                     }
                     let plan = facts.plan().await?;
+                    for handle in constant_handles {
+                        cx.read(handle).await?;
+                    }
                     if key.kind == CHECK {
                         // Required universal admission is per-caller, not one
                         // root join. CHECK only waits on the callables that
@@ -1456,7 +1500,13 @@ fn compile_input_configured(
         resource_usage: Box::new(snapshot.budget.usage_snapshot()),
     })?;
     let failure = |error: Error, report: &Report| Failure {
-        error,
+        error: const_diagnostics::qualification_cycle_error(
+            &engine,
+            report,
+            &error,
+            &snapshot.budget,
+        )
+        .unwrap_or(error),
         report: Some(Box::new(report.clone())),
         analyses: retained_analyses(&engine),
         resource_usage: Box::new(metered_usage(&snapshot.budget, report)),

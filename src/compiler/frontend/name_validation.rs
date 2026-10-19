@@ -25,6 +25,7 @@ pub(super) fn validate_program_names(program: &Program) -> Result<(), String> {
             .map_err(scope_diagnostic)?;
     }
     validator.many(&program.functions, |value| Visit::Function(value, None))?;
+    validator.many(&program.constants, Visit::Const)?;
     validator.many(&program.structs, Visit::Struct)?;
     validator.many(&program.enums, Visit::Enum)?;
     validator.many(&program.impls, Visit::Impl)?;
@@ -81,6 +82,7 @@ pub(super) fn validate_associated_bound_names(
 }
 
 enum Visit<'a> {
+    Const(&'a ConstDecl),
     Function(&'a Function, Option<ModuleId>),
     RestoreScope(Option<ScopeId>, ModuleId),
     RestoreBindings(usize),
@@ -358,6 +360,17 @@ impl<'a> Validator<'a> {
     }
     fn visit(&mut self, node: Visit<'a>) -> Result<(), String> {
         match node {
+            Visit::Const(declaration) => {
+                self.visibility(&declaration.visibility, declaration.module)?;
+                self.declaration_path_in(
+                    &declaration.name,
+                    declaration.module,
+                    OccurrenceRole::OriginalModule(declaration.module),
+                )?;
+                self.enter_scope(None, declaration.module)?;
+                self.push(Visit::Expr(&declaration.initializer))?;
+                self.push(Visit::Type(&declaration.ty))?;
+            }
             Visit::Function(function, containing_module) => {
                 let mut declaration_role = OccurrenceRole::OriginalModule(function.module);
                 if let Some(scope) = function.lexical_scope {
@@ -865,6 +878,7 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Expr(base))?;
                     self.push(Visit::Selector(field))?;
                 }
+                Expr::ConstItem(path) => self.push(Visit::Path(path))?,
                 Expr::Var(path) => {
                     self.push(Visit::Path(path))?;
                     if self.scope.is_some()

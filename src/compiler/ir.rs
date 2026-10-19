@@ -53,6 +53,7 @@ pub struct DeclId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DeclKind {
     Function,
+    Const,
     Struct,
     Enum,
     Impl,

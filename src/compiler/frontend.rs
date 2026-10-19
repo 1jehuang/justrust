@@ -490,6 +490,8 @@ mod canonical_source_replay_tests {
             declaration: original.declaration,
             facts: original.facts.clone(),
             inventory,
+            constants: Vec::new(),
+            constant_emissions: Default::default(),
             calls: Default::default(),
             builtin_leading_zeros: Default::default(),
             builtin_lens: Default::default(),
@@ -629,6 +631,8 @@ struct SourceInventory {
     function_scope: Option<super::semantic_scope::ScopeId>,
     owner: sr::OriginalBodyId,
     calls: Vec<SourceCallSite>,
+    constants: Vec<(sr::SourceNode, PathKey)>,
+    constant_pointers: HashMap<usize, usize>,
     bindings: Vec<SourceBindingSite>,
     call_pointers: HashMap<usize, usize>,
     for_pointers: HashMap<usize, usize>,
@@ -1150,6 +1154,8 @@ impl SourceInventory {
             function_scope: function.lexical_scope,
             owner: owner.clone(),
             calls: Vec::new(),
+            constants: Vec::new(),
+            constant_pointers: HashMap::new(),
             bindings: Vec::new(),
             call_pointers: HashMap::new(),
             for_pointers: HashMap::new(),
@@ -2000,6 +2006,18 @@ impl SourceInventory {
                 budget,
                 depth + 1,
             )?,
+            Expr::ConstItem(path) => {
+                let key = name_scope::path_key(self.names.as_ref(), path, Namespace::Value)
+                    .map_err(|error| source_error(budget, &error))?;
+                let index = self.constants.len();
+                sr::push(&mut self.constants, (node.clone(), key), budget)?;
+                insert_source_pointer(
+                    &mut self.constant_pointers,
+                    expr as *const Expr as usize,
+                    index,
+                    budget,
+                )?;
+            }
             Expr::Borrow { .. }
             | Expr::Integer(_)
             | Expr::Float(_)
@@ -2131,6 +2149,8 @@ pub(super) struct CanonicalSourceCapability {
     declaration: ir::DeclId,
     facts: Arc<tr::ValidatedFacts>,
     inventory: SourceInventory,
+    constants: Vec<const_inputs::SourceConstantUse>,
+    constant_emissions: std::cell::RefCell<Vec<(usize, ir::ExprId)>>,
     calls: std::cell::RefCell<Vec<(usize, ir::ExprId, ir::Callee)>>,
     builtin_leading_zeros: std::cell::RefCell<Vec<BuiltinLeadingZerosOccurrence>>,
     builtin_lens: std::cell::RefCell<Vec<BuiltinLenOccurrence>>,
@@ -2147,6 +2167,8 @@ pub(super) struct OriginalSource {
     declaration: ir::DeclId,
     facts: Arc<tr::ValidatedFacts>,
     identity: sr::OriginalBodyId,
+    constants: Vec<const_inputs::SourceConstantUse>,
+    constant_emissions: Vec<(usize, ir::ExprId)>,
     calls: Vec<SourceCallSite>,
     bindings: Vec<SourceBindingSite>,
     call_mapping: Vec<(usize, ir::ExprId, ir::Callee)>,
@@ -3673,6 +3695,7 @@ pub(super) fn replay_source_body(
         original.identity.clone(),
         budget,
     )?;
+    const_inputs::validate_constants(original, &fresh, checked, budget)?;
     if fresh.calls.len() != original.calls.len() || fresh.bindings.len() != original.bindings.len()
     {
         return Err(FactsError::invalid(
@@ -4210,6 +4233,28 @@ impl PlanCtx {
         declaration: ir::DeclId,
         budget: &ir::PlanBudget,
     ) -> Result<PublishedCallableBody, FactsError> {
+        let prepared = self.prepare_body_constants(declaration, budget)?;
+        if !prepared.direct().is_empty() {
+            return Err(FactsError::invalid(
+                budget,
+                "source constants require graph input handles",
+            ));
+        }
+        let sealed = self.seal_body_constants(prepared, Vec::new(), budget)?;
+        self.publish_callable_body_with_constants(declaration, sealed, budget)
+    }
+    pub(super) fn publish_callable_body_with_constants(
+        &self,
+        declaration: ir::DeclId,
+        mut constants: const_inputs::SealedBodyConstants,
+        budget: &ir::PlanBudget,
+    ) -> Result<PublishedCallableBody, FactsError> {
+        if constants.declaration != declaration {
+            return Err(FactsError::invalid(
+                budget,
+                "sealed constant inputs changed callable owner",
+            ));
+        }
         self.check_budget(budget)
             .map_err(|e| source_error(budget, &e))?;
         let env = self
@@ -4267,17 +4312,17 @@ impl PlanCtx {
                     })
                 }
                 .map_err(|e| source_error(budget, &e))?;
-                let function = self
-                    .callable_body(&self.program, declaration)
-                    .map_err(|e| source_error(budget, &e))?;
-                let identity = sr::OriginalBodyId::new(budget)?;
-                let inventory =
-                    SourceInventory::build(&self.program, function, identity.clone(), budget)?;
+                let inventory = constants.inventory.take().ok_or_else(|| {
+                    FactsError::invalid(budget, "sealed source inventory missing")
+                })?;
+                let identity = inventory.owner.clone();
                 let mut cap = CanonicalSourceCapability {
                     plan: self.clone(),
                     declaration,
                     facts: facts.clone(),
                     inventory,
+                    constants: constants.uses,
+                    constant_emissions: Default::default(),
                     calls: Default::default(),
                     builtin_leading_zeros: Default::default(),
                     builtin_lens: Default::default(),
@@ -4318,6 +4363,8 @@ impl PlanCtx {
                     declaration,
                     facts: facts.clone(),
                     identity,
+                    constants: std::mem::take(&mut cap.constants),
+                    constant_emissions: cap.constant_emissions.take(),
                     calls,
                     bindings: std::mem::take(&mut cap.inventory.bindings),
                     call_mapping: cap.calls.take(),
@@ -4345,6 +4392,10 @@ impl PlanCtx {
 
 #[cfg(test)]
 mod associated_bounds;
+mod const_inputs;
+mod const_items;
+#[cfg(test)]
+mod const_source_tests;
 #[cfg(test)]
 mod leading_zero_tests;
 #[cfg(test)]
@@ -4361,6 +4412,7 @@ pub struct Program {
     pub symbols: Arc<ProgramSymbols>,
     pub scopes: Option<Arc<super::semantic_scope::ScopeArena>>,
     pub functions: Vec<Function>,
+    pub constants: Vec<ConstDecl>,
     pub structs: Vec<StructDecl>,
     pub enums: Vec<EnumDecl>,
     pub impls: Vec<ImplDecl>,
@@ -4399,6 +4451,7 @@ pub struct ParsedProgram {
 #[derive(Default)]
 struct ProgramDeclarations {
     functions: Vec<Function>,
+    constants: Vec<ConstDecl>,
     structs: Vec<StructDecl>,
     enums: Vec<EnumDecl>,
     impls: Vec<ImplDecl>,
@@ -4427,6 +4480,7 @@ impl ProgramDeclarations {
             symbols,
             scopes,
             functions: self.functions,
+            constants: self.constants,
             structs: self.structs,
             enums: self.enums,
             impls: self.impls,
@@ -4448,6 +4502,7 @@ pub struct ProgramBuilder {
     symbols: Arc<ProgramSymbols>,
     fixture_anchor: super::expansion_span::SpanId,
     pub functions: Vec<Function>,
+    pub constants: Vec<ConstDecl>,
     pub structs: Vec<StructDecl>,
     pub enums: Vec<EnumDecl>,
     pub impls: Vec<ImplDecl>,
@@ -4478,6 +4533,7 @@ impl ProgramBuilder {
             symbols,
             fixture_anchor,
             functions: Vec::new(),
+            constants: Vec::new(),
             structs: Vec::new(),
             enums: Vec::new(),
             impls: Vec::new(),
@@ -4558,6 +4614,7 @@ impl ProgramBuilder {
             .map_err(native_adapter::name_diagnostic)?;
         let program = ProgramDeclarations {
             functions: self.functions,
+            constants: self.constants,
             structs: self.structs,
             enums: self.enums,
             impls: self.impls,
@@ -4669,6 +4726,7 @@ enum ItemKind {
     TypeAlias(TypeAliasDecl),
     Module(ModuleId),
     Function,
+    Const,
     Struct,
     Enum,
     Trait,
@@ -4687,6 +4745,16 @@ struct TypeAliasDecl {
 pub enum Constness {
     Runtime,
     Const,
+}
+/// Original-source immutable constant declaration. This parsed AST remains in
+/// the source graph only, never in the published constant fact payloads.
+#[derive(Clone, Debug)]
+pub struct ConstDecl {
+    pub module: ModuleId,
+    pub visibility: ir::Visibility,
+    pub name: AstPath,
+    pub ty: Type,
+    pub initializer: Expr,
 }
 /// Wildcards never enter a lexical binding map or acquire a semantic name key.
 #[derive(Clone, Copy, Debug)]
@@ -5591,6 +5659,8 @@ pub enum Expr {
 
     Bool(bool),
     Var(AstPath),
+    /// Resolved module constant, never a local binding or mutable place.
+    ConstItem(AstPath),
     Unary {
         op: UnaryOp,
         value: Box<Expr>,
@@ -9215,9 +9285,6 @@ impl<'input, 'names> Parser<'input, 'names> {
         {
             return Err(self.unsupported("item syntax is unsupported"));
         }
-        if self.is("const") && !self.cursor.peek(1).is_some_and(|t| t.text == "fn") {
-            return Err(self.unsupported("const items and constant evaluation are unsupported"));
-        }
         let (name, kind) = if self.eat("use") {
             let mut imports = Vec::new();
             let mut work = 0;
@@ -9639,6 +9706,28 @@ impl<'input, 'names> Parser<'input, 'names> {
             });
             self.type_params.clear();
             return Ok(());
+        } else if self.is("const") && !self.cursor.peek(1).is_some_and(|t| t.text == "fn") {
+            if self.item_expansion.is_some() {
+                return Err(self.unsupported("generated const item authority is unsupported"));
+            }
+            self.expect("const")?;
+            let name = self.ident()?;
+            self.expect(":")?;
+            let ty = self.ty()?;
+            self.expect("=")?;
+            let initializer = self.nested_expr()?;
+            self.expect(";")?;
+            self.reserve_parser_items(&mut parsed.program.constants, 1)?;
+            parsed.program.constants.push(ConstDecl {
+                module,
+                visibility: visibility.clone(),
+                name: module_path
+                    .push(self.names, name)
+                    .map_err(native_adapter::name_error)?,
+                ty,
+                initializer,
+            });
+            (name, ItemKind::Const)
         } else if self.is("fn") || self.is("const") {
             let mut function = self.function()?;
             function.visibility = visibility.clone();
@@ -9746,6 +9835,9 @@ impl<'input, 'names> Parser<'input, 'names> {
                     | (ItemKind::Struct, ItemKind::Module(_))
                     | (ItemKind::Struct, ItemKind::Struct)
                     | (ItemKind::Function, ItemKind::Function)
+                    | (ItemKind::Function, ItemKind::Const)
+                    | (ItemKind::Const, ItemKind::Function)
+                    | (ItemKind::Const, ItemKind::Const)
             )
         }) {
             return Err(self.error(&format!("duplicate item {path:?}")));
@@ -14021,6 +14113,8 @@ pub struct DeclRegistry {
     symbols: Arc<ProgramSymbols>,
     declarations: Vec<DeclInfo>,
     functions: HashMap<PathKey, ir::DeclId>,
+    constants: HashMap<PathKey, ir::DeclId>,
+    const_ids: Vec<ir::DeclId>,
     nominals: HashMap<PathKey, ir::DeclId>,
     function_ids: Vec<ir::DeclId>,
     callable_sources: Vec<CallableSource>,
@@ -14926,6 +15020,8 @@ impl PlanCtx {
             symbols: program.symbols.clone(),
             declarations: Vec::new(),
             functions: HashMap::new(),
+            constants: HashMap::new(),
+            const_ids: Vec::new(),
             nominals: HashMap::new(),
             function_ids: Vec::new(),
             callable_sources: Vec::new(),
@@ -14941,6 +15037,18 @@ impl PlanCtx {
             function_positions_sealed: false,
         };
         reserve_registry_map(&mut registry.functions, program.functions.len(), budget)?;
+        reserve_registry_map(&mut registry.constants, program.constants.len(), budget)?;
+        budget.retain_bytes(
+            program
+                .constants
+                .len()
+                .checked_mul(std::mem::size_of::<ir::DeclId>())
+                .ok_or("constant identity inventory overflow")?,
+        )?;
+        registry
+            .const_ids
+            .try_reserve_exact(program.constants.len())
+            .map_err(|_| "constant identity inventory allocation")?;
         let nominal_count = program
             .structs
             .len()
@@ -15018,6 +15126,7 @@ impl PlanCtx {
             .functions
             .len()
             .checked_add(program.structs.len())
+            .and_then(|n| n.checked_add(program.constants.len()))
             .and_then(|n| n.checked_add(program.enums.len()))
             .and_then(|n| {
                 program.traits.iter().try_fold(n, |n, t| {
@@ -15132,17 +15241,29 @@ impl PlanCtx {
             let param_env = Arc::new(ir::ParamEnv::new(ir::BinderId { declaration: id }, arity)?);
             if matches!(
                 kind,
-                ir::DeclKind::Function | ir::DeclKind::Struct | ir::DeclKind::Enum
+                ir::DeclKind::Function
+                    | ir::DeclKind::Const
+                    | ir::DeclKind::Struct
+                    | ir::DeclKind::Enum
             ) {
                 let path = path.ok_or("contract: missing declaration path")?;
-                let namespace = if kind == ir::DeclKind::Function {
+                let namespace = if matches!(kind, ir::DeclKind::Function | ir::DeclKind::Const) {
                     Namespace::Value
                 } else {
                     Namespace::Type
                 };
                 let key = name_scope::path_key(program.names.as_ref(), path, namespace)?;
-                let previous = if kind == ir::DeclKind::Function {
-                    registry.functions.insert(key, id)
+                let previous = if matches!(kind, ir::DeclKind::Function | ir::DeclKind::Const) {
+                    if registry.functions.contains_key(&key)
+                        || registry.constants.contains_key(&key)
+                    {
+                        return Err(format!("duplicate value declaration {name}"));
+                    }
+                    if kind == ir::DeclKind::Function {
+                        registry.functions.insert(key, id)
+                    } else {
+                        registry.constants.insert(key, id)
+                    }
                 } else {
                     registry.nominals.insert(key, id)
                 };
@@ -15369,6 +15490,22 @@ impl PlanCtx {
             }
             registry.associated_ids.push(ids);
         }
+        for (index, declaration) in program.constants.iter().enumerate() {
+            let item = *declaration
+                .name
+                .segments()
+                .last()
+                .ok_or("empty constant path")?;
+            let id = insert(
+                Some(&declaration.name),
+                declaration.module,
+                DeclItemName::Source(item),
+                &[],
+                ir::DeclKind::Const,
+                index,
+            )?;
+            registry.const_ids.push(id);
+        }
         for (id, source) in prelude_callables {
             registry.function_ids.push(id);
             registry.callable_sources.push(source);
@@ -15390,6 +15527,13 @@ impl PlanCtx {
                     .map(|item| item.declaration)
                     .collect(),
             );
+        }
+        for declaration in &program.constants {
+            clone_visibility(&declaration.visibility, budget)?;
+            let key =
+                name_scope::path_key(program.names.as_ref(), &declaration.name, Namespace::Value)?;
+            let id = registry.constants[&key];
+            registry.declarations[id.index as usize].visibility = declaration.visibility.clone();
         }
         for declaration in &program.structs {
             clone_visibility(&declaration.visibility, budget)?;
@@ -19044,9 +19188,8 @@ mod const_declaration_tests {
     }
 
     #[test]
-    fn const_required_contexts_and_associated_qualifiers_remain_unsupported() {
+    fn const_execution_contexts_and_associated_qualifiers_remain_unsupported() {
         for source in [
-            "const VALUE:u8=1;fn main(){}",
             "fn main(){let x=const {1};}",
             "const fn id(x:u8)->u8{x}fn main(){let x=[0u8;id(1u8)];}",
             "const fn id(x:u8)->u8{x}fn main(){let x:[u8;id(1u8)]=[0u8];}",

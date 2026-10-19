@@ -290,14 +290,42 @@ impl ConstValueFact {
 /// and read its typed fact. It must not evaluate a runtime function or consult a
 /// graph side table. Only the resolver's actual engine handle reads record
 /// cross-item graph edges. This callback is not itself graph authentication.
+/// Keep graph/dependency failures distinct from scalar language diagnostics.
+#[derive(Debug)]
+pub enum EvaluateError<E> {
+    Scalar(ConstError),
+    Dependency(E),
+}
+impl<E> From<ConstError> for EvaluateError<E> {
+    fn from(error: ConstError) -> Self {
+        Self::Scalar(error)
+    }
+}
+
 pub async fn evaluate<F, Fut>(
     body: &ConstBodyFact,
     budget: &PlanBudget,
-    mut read: F,
+    read: F,
 ) -> Result<ConstValueFact, ConstError>
 where
     F: FnMut(DeclId) -> Fut,
     Fut: Future<Output = Result<ConstValueFact, ConstError>>,
+{
+    evaluate_with_read(body, budget, read)
+        .await
+        .map_err(|error| match error {
+            EvaluateError::Scalar(error) | EvaluateError::Dependency(error) => error,
+        })
+}
+
+pub async fn evaluate_with_read<F, Fut, E>(
+    body: &ConstBodyFact,
+    budget: &PlanBudget,
+    mut read: F,
+) -> Result<ConstValueFact, EvaluateError<E>>
+where
+    F: FnMut(DeclId) -> Fut,
+    Fut: Future<Output = Result<ConstValueFact, E>>,
 {
     let bytes = body
         .exprs
@@ -319,9 +347,9 @@ where
         let value = match expr.kind {
             ExprKind::Literal(v) => v,
             ExprKind::Reference(declaration) => {
-                let fact = read(declaration).await?;
+                let fact = read(declaration).await.map_err(EvaluateError::Dependency)?;
                 if fact.declaration != declaration {
-                    return Err(invalid("constant graph read returned another declaration"));
+                    return Err(invalid("constant graph read returned another declaration").into());
                 }
                 fact.value.validate()?;
                 fact.value
@@ -362,11 +390,11 @@ where
                 }
             }
             ExprKind::RuntimeCall | ExprKind::UnsupportedConstCall => {
-                return Err(invalid("unqualified call in checked constant body"));
+                return Err(invalid("unqualified call in checked constant body").into());
             }
         };
         if value.ty() != expr.ty {
-            return Err(type_error());
+            return Err(type_error().into());
         }
         values[id] = Some(value);
     }

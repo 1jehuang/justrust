@@ -174,7 +174,7 @@ pub(super) fn preflight_clone_node(
             Expr::UnexpandedMacro(_) => {
                 return Err("unexpanded macro syntax cannot enter active AST cloning".into());
             }
-            Expr::Var(path) => clone_ast_path(path, budget)?,
+            Expr::Var(path) | Expr::ConstItem(path) => clone_ast_path(path, budget)?,
             Expr::Println(text) => clone_text(text, budget)?,
             Expr::Format {
                 pieces,
@@ -304,6 +304,13 @@ pub(super) fn preflight_program_clone(
     // their original leases, never deep-cloned here.
     budget.retain_bytes(std::mem::size_of::<Program>())?;
     clone_vector(&program.functions, budget)?;
+    clone_vector(&program.constants, budget)?;
+    for declaration in &program.constants {
+        clone_visibility(&declaration.visibility, budget)?;
+        clone_ast_path(&declaration.name, budget)?;
+        walk_depth(DepthNode::Type(&declaration.ty), Some(budget))?;
+        walk_depth(DepthNode::Expr(&declaration.initializer), Some(budget))?;
+    }
     for function in &program.functions {
         preflight_function_clone(function, &program.names, budget)?;
     }

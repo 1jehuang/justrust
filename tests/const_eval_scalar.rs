@@ -1,12 +1,7 @@
-//! Standalone evaluator validation only. This does not establish compiler
-//! acceptance of const items. Replace the path import when graph integration lands.
-mod ir {
-    pub use justrust_engine::compiler::ir::*;
-}
-#[path = "../src/compiler/const_eval.rs"]
-mod const_eval;
-use const_eval::*;
-use ir::{DeclId, IntTy, IntValue, PlanBudget, SnapshotId};
+//! Scalar evaluator validation only. Compiler acceptance has separate source
+//! workflow and graph integrity gates.
+use justrust_engine::compiler::const_eval::*;
+use justrust_engine::compiler::ir::{self, DeclId, IntTy, IntValue, PlanBudget, SnapshotId};
 use std::{
     future::{Future, ready},
     pin::pin,

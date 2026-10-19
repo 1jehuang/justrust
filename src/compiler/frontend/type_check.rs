@@ -995,6 +995,13 @@ impl<'s> Checker<'s> {
             Expr::Bool(_) => self.infer_node(InferKind::Rigid(ir::Ty::Bool))?,
             Expr::Char(_) => self.infer_node(InferKind::Rigid(ir::Ty::Char))?,
             Expr::Str(_) => self.infer_node(InferKind::Rigid(ir::Ty::shared_str_ty()))?,
+            Expr::ConstItem(_) => {
+                let value = self
+                    .canonical
+                    .ok_or("contract: constant inference requires sealed graph inputs")?
+                    .constant_value(expr)?;
+                self.infer_node(InferKind::Rigid(const_inputs::scalar_ir_type(value.ty())))?
+            }
             Expr::Var(name) => match self.lookup_optional(name)? {
                 Some(local) => self.infer_type_term(&self.locals[local.0].ty, None, depth + 1)?,
                 None => self.infer_node(InferKind::Unknown(false))?,
@@ -4092,6 +4099,12 @@ impl<'a> Checker<'a> {
             Expr::Bool(_) => Some(ir::Ty::Bool),
             Expr::Char(_) => Some(ir::Ty::Char),
             Expr::Str(_) => Some(ir::Ty::shared_str_ty()),
+            Expr::ConstItem(_) => Some(const_inputs::scalar_ir_type(
+                self.canonical
+                    .ok_or("contract: constant hint requires sealed graph inputs")?
+                    .constant_value(e)?
+                    .ty(),
+            )),
             Expr::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
             Expr::Var(name) => self
                 .lookup_optional(name)?
@@ -8401,6 +8414,21 @@ impl<'a> Checker<'a> {
                     Flow::value(ir::Ty::shared_str_ty()),
                 )
             }
+            Expr::ConstItem(_) => {
+                let value = self
+                    .canonical
+                    .ok_or("contract: constant occurrence requires sealed graph inputs")?
+                    .constant_value(e)?;
+                let kind = match value {
+                    crate::compiler::const_eval::ScalarValue::Int(value) => {
+                        ir::ExprKind::Int(value)
+                    }
+                    crate::compiler::const_eval::ScalarValue::Bool(value) => {
+                        ir::ExprKind::Bool(value)
+                    }
+                };
+                (kind, Flow::value(const_inputs::scalar_ir_type(value.ty())))
+            }
             Expr::Var(n) => {
                 let local = self.lookup(n)?;
                 let ty = self.locals[local.0].ty.clone();
@@ -8962,6 +8990,11 @@ impl<'a> Checker<'a> {
             },
             kind,
         });
+        if matches!(e, Expr::ConstItem(_)) {
+            self.canonical
+                .ok_or("contract: constant emission requires sealed graph inputs")?
+                .record_constant(e, id)?;
+        }
         Ok(id)
     }
 }
