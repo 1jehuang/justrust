@@ -174,8 +174,6 @@ fn unsupported_closure_values_and_inference_fail_explicitly() {
         "fn main() { let n = 1i32; (|| -> i32 { n })(); }",
         "fn run(n:i32){let n=2; (||->i32{n})();}fn main(){}",
         "fn run(n:i32){(move ||->i32{n})();}fn main(){}",
-        "fn run(mut n:i32){(||->i32{n+=1;n})();}fn main(){}",
-        "fn run(mut n:i32){(||->i32{let r=&mut n;*r})();}fn main(){}",
         "fn run(n:&i32){(||->i32{*n})();}fn main(){}",
         "struct Value; fn main() { let Value = 1i32; (|| -> i32 { Value })(); }",
     ] {
@@ -187,6 +185,142 @@ fn unsupported_closure_values_and_inference_fail_explicitly() {
                 failure.to_string().contains("unsupported"),
                 "{failure}\n{source}"
             );
+        }
+    }
+}
+
+#[test]
+fn mutable_scalar_parent_parameter_captures_match_stock() {
+    assert!(
+        std::process::Command::new("rustc")
+            .arg("-vV")
+            .output()
+            .is_ok_and(|output| output.status.success()),
+        "stock oracle required"
+    );
+    let cases = [
+        Case {
+            name: "scalar_layouts_full_width",
+            source: "fn run(mut wide:usize,mut f:f64,mut flag:bool,mut c:char,mut unit:())->usize{(||->(){wide+=1;f=f+0.5;flag=true;c='z';unit=();})();assert_eq!(f,2.5);assert!(flag);assert_eq!(c,'z');assert_eq!(unit,());wide}fn main(){assert_eq!(run(4294967295usize,2.0,false,'a',()),4294967296usize);}",
+            expect: Expect::Run(""),
+        },
+        Case {
+            name: "write_original",
+            source: "fn run(mut n:i32)->i32{(||->(){n=42;})();n}fn main(){assert_eq!(run(1),42);}",
+            expect: Expect::Run(""),
+        },
+        Case {
+            name: "read_then_upgrade_dedup",
+            source: "fn run(mut n:i32)->i32{let out=(||->i32{let old=n;n+=2;old+n})();out+n}fn main(){assert_eq!(run(10),34);}",
+            expect: Expect::Run(""),
+        },
+        Case {
+            name: "mut_then_shared",
+            source: "fn run(mut n:i32)->i32{(||->i32{n+=1;let r=&n;*r+n})()}fn main(){assert_eq!(run(20),42);}",
+            expect: Expect::Run(""),
+        },
+        Case {
+            name: "explicit_mut_reborrow",
+            source: "fn run(mut n:i32)->i32{(||->i32{let r=&mut n;*r+=2;*r})()}fn main(){assert_eq!(run(40),42);}",
+            expect: Expect::Run(""),
+        },
+        Case {
+            name: "mixed_first_use",
+            source: "fn run(mut a:i32,b:i32,mut c:i32)->i32{(||->i32{c+=b;a+=c;a+c+b})()}fn main(){assert_eq!(run(1,10,5),41);}",
+            expect: Expect::Run(""),
+        },
+        Case {
+            name: "nested_explicit_parameter",
+            source: "fn main(){assert_eq!((|mut n:i32|->i32{(||->(){n+=2;})();n})(40),42);}",
+            expect: Expect::Run(""),
+        },
+        Case {
+            name: "argument_order",
+            source: "fn mark(n:i32)->i32{println!(\"{}\",n);n}fn run(mut n:i32)->i32{(|a:i32,b:i32|->i32{n+=a+b;n})(crate::mark(1),crate::mark(2))}fn main(){assert_eq!(run(39),42);}",
+            expect: Expect::Run("1\n2\n"),
+        },
+        Case {
+            name: "construction_before_read_arg",
+            source: "fn run(mut n:i32){(|x:i32|->(){n+=x;})(n);}fn main(){run(1);}",
+            expect: Expect::Invalid("E0503"),
+        },
+        Case {
+            name: "construction_before_shared_arg",
+            source: "fn run(mut n:i32){(|x:&i32|->(){n+=*x;})(&n);}fn main(){run(1);}",
+            expect: Expect::Invalid("E0502"),
+        },
+        Case {
+            name: "construction_before_write_arg",
+            source: "fn run(mut n:i32){(|x:()|->(){n+=1;})({n=2;});}fn main(){run(1);}",
+            expect: Expect::Invalid("E0506"),
+        },
+        Case {
+            name: "immutable_parent",
+            source: "fn run(n:i32){(||->(){n=2;})();}fn main(){}",
+            expect: Expect::Invalid("E0594"),
+        },
+        Case {
+            name: "immutable_parent_borrow",
+            source: "fn run(n:i32){(||->(){let r=&mut n;*r=2;})();}fn main(){}",
+            expect: Expect::Invalid("E0596"),
+        },
+        Case {
+            name: "unused_type_error",
+            source: "fn unused(mut n:i32){(||->i32{n+=1;true})();}fn main(){}",
+            expect: Expect::Invalid("E0308"),
+        },
+        Case {
+            name: "unused_body_loan",
+            source: "fn unused(mut n:i32){(||->i32{let r=&n;n=2;*r})();}fn main(){}",
+            expect: Expect::Invalid("E0506"),
+        },
+    ];
+    oracle::check("closure-mut-captures", &cases);
+    for case in &cases {
+        for workers in [1, 8] {
+            for check_only in [true, false] {
+                let result = compiler::compile_observed(case.source.into(), workers, check_only);
+                match case.expect {
+                    Expect::Invalid(_) => {
+                        let failure = result.err().expect("invalid captured body must reject");
+                        assert!(
+                            !failure.to_string().contains("unsupported"),
+                            "{}: {failure}",
+                            case.name
+                        );
+                    }
+                    Expect::Run(stdout) => {
+                        let compiled = result.unwrap_or_else(|error| {
+                            panic!(
+                                "{} workers={workers} check={check_only}: {error}",
+                                case.name
+                            )
+                        });
+                        assert_eq!(compiled.executable.is_none(), check_only);
+                        if let Some(bytes) = compiled.executable {
+                            use std::os::unix::fs::PermissionsExt;
+                            let base = std::env::var_os("JCODE_SCRATCH_DIR")
+                                .map(std::path::PathBuf::from)
+                                .unwrap_or_else(std::env::temp_dir);
+                            let image = base.join(format!(
+                                "jr-mut-capture-{}-{}-{workers}",
+                                std::process::id(),
+                                case.name
+                            ));
+                            std::fs::write(&image, bytes).unwrap();
+                            std::fs::set_permissions(
+                                &image,
+                                std::fs::Permissions::from_mode(0o700),
+                            )
+                            .unwrap();
+                            let output = std::process::Command::new(&image).output().unwrap();
+                            std::fs::remove_file(image).unwrap();
+                            assert!(output.status.success(), "{}: {output:?}", case.name);
+                            assert_eq!(output.stdout, stdout.as_bytes(), "{}", case.name);
+                        }
+                    }
+                }
+            }
         }
     }
 }

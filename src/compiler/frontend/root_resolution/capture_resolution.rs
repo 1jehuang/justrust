@@ -3,15 +3,20 @@
 use super::*;
 
 impl Resolver<'_> {
-    pub(super) fn reject_mutable_capture(
-        &self,
-        name: LocalName,
+    pub(super) fn mutable_capture_place(
+        &mut self,
+        place: &mut Place,
         locals: &[std::collections::HashSet<LocalKey>],
     ) -> Result<(), String> {
-        if let LocalName::Named(ident) = name {
+        if let LocalName::Named(ident) = place.local {
             let path = self.single_path(ident)?;
             if !self.local_contains(&path, locals)? {
-                return Err("unsupported: mutable closure captures are not implemented".into());
+                if !place.fields.is_empty() {
+                    return Err(
+                        "unsupported: projected closure captures are not implemented".into(),
+                    );
+                }
+                *place = self.capture_place_kind(&path, ir::BorrowKind::Mut)?;
             }
         }
         Ok(())
@@ -49,7 +54,7 @@ impl Resolver<'_> {
                     (
                         BindingName::Named(capture.environment),
                         Type::Ref {
-                            kind: ir::BorrowKind::Shared,
+                            kind: capture.kind,
                             region: None,
                             referent: Box::new(capture.ty.clone()),
                         },
@@ -94,6 +99,14 @@ impl Resolver<'_> {
     /// Only original explicit scalar parent parameters are admitted. A shadowed
     /// local is checked again at the construction site, never guessed by text.
     pub(super) fn capture_place(&mut self, path: &AstPath) -> Result<Place, String> {
+        self.capture_place_kind(path, ir::BorrowKind::Shared)
+    }
+
+    pub(super) fn capture_place_kind(
+        &mut self,
+        path: &AstPath,
+        kind: ir::BorrowKind,
+    ) -> Result<Place, String> {
         let ident = path
             .single()
             .ok_or("unsupported: nonlocal closure capture path")?;
@@ -136,6 +149,13 @@ impl Resolver<'_> {
             .iter()
             .position(|capture| capture.parameter == parameter);
         let environment = if let Some(slot) = existing {
+            let source = self
+                .active_closure
+                .as_mut()
+                .ok_or("missing active closure source")?;
+            if kind == ir::BorrowKind::Mut {
+                source.captures[slot].kind = kind;
+            }
             source.captures[slot].environment
         } else {
             self.charge_entries::<closures::SourceCapture>(1)?;
@@ -156,6 +176,7 @@ impl Resolver<'_> {
                 name,
                 environment,
                 ty,
+                kind,
             });
             environment
         };
@@ -230,7 +251,7 @@ impl Resolver<'_> {
                 return Err("unsupported: shadowed or non-parameter closure capture".into());
             }
             fields.push(Expr::Borrow {
-                kind: ir::BorrowKind::Shared,
+                kind: capture.kind,
                 place: Place {
                     local: LocalName::Named(capture.name),
                     fields: Vec::new(),

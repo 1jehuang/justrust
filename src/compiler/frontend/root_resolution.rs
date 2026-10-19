@@ -2396,9 +2396,19 @@ impl Resolver<'_> {
             }
             match stmt {
                 Stmt::Assign { name, .. } if self.anonymous_closure_body => {
-                    self.reject_mutable_capture(*name, locals)?;
+                    let mut place = Place {
+                        local: *name,
+                        fields: Vec::new(),
+                    };
+                    self.mutable_capture_place(&mut place, locals)?;
                     if let Stmt::Assign { value, .. } = stmt {
                         self.expr(value, module, locals)?;
+                        if !place.fields.is_empty() {
+                            *stmt = Stmt::AssignPlace {
+                                place,
+                                value: std::mem::replace(value, Expr::Tuple(Vec::new())),
+                            };
+                        }
                     }
                 }
                 Stmt::AssignOp { place, .. }
@@ -2407,7 +2417,7 @@ impl Resolver<'_> {
                 | Stmt::AssignIndexOp { array: place, .. }
                     if self.anonymous_closure_body =>
                 {
-                    self.reject_mutable_capture(place.local, locals)?;
+                    self.mutable_capture_place(place, locals)?;
                     match stmt {
                         Stmt::AssignIndex { index, value, .. }
                         | Stmt::AssignIndexOp { index, value, .. } => {
@@ -2883,10 +2893,13 @@ impl Resolver<'_> {
                 {
                     let path = self.single_path(ident)?;
                     if !self.local_contains(&path, locals)? {
-                        if *kind != ir::BorrowKind::Shared || !place.fields.is_empty() {
-                            return Err("unsupported: mutable or projected closure captures are not implemented".into());
+                        if !place.fields.is_empty() {
+                            return Err(
+                                "unsupported: projected closure captures are not implemented"
+                                    .into(),
+                            );
                         }
-                        *place = self.capture_place(&path)?;
+                        *place = self.capture_place_kind(&path, *kind)?;
                         return Ok(());
                     }
                 }

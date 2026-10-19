@@ -10,6 +10,7 @@ pub(in crate::compiler) enum CaptureScalar {
     Int(ir::IntTy),
     Float(ir::FloatTy),
 }
+
 impl CaptureScalar {
     fn source(ty: &Type) -> Result<Self, String> {
         Ok(match ty {
@@ -37,6 +38,7 @@ pub(in crate::compiler) struct LexicalCapture {
     pub binding: sr::SourceNode,
     pub parameter: usize,
     pub scalar: CaptureScalar,
+    pub kind: ir::BorrowKind,
 }
 #[derive(Clone, Debug)]
 pub(in crate::compiler) struct LexicalClosureSite {
@@ -192,6 +194,7 @@ impl PlanCtx {
                         binding,
                         parameter,
                         scalar,
+                        kind: capture.kind,
                     },
                     budget,
                 )
@@ -276,13 +279,12 @@ impl PlanCtx {
             if CaptureScalar::checked(actual)? != capture.scalar {
                 return Err("typed capture differs from original parameter".into());
             }
-            let ir::Ty::Ref {
-                kind: ir::BorrowKind::Shared,
-                referent,
-            } = &fields[index]
-            else {
-                return Err("capture field is not a real shared loan".into());
+            let ir::Ty::Ref { kind, referent } = &fields[index] else {
+                return Err("capture field is not a real loan".into());
             };
+            if *kind != capture.kind {
+                return Err("capture environment loan mode changed".into());
+            }
             if CaptureScalar::checked(referent)? != capture.scalar {
                 return Err("capture environment field type changed".into());
             }
@@ -293,5 +295,56 @@ impl PlanCtx {
             declaration: site.declaration,
             fields: site.captures.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mutable_capture_facts_preserve_first_use_and_reject_forged_modes() {
+        let program = parse("fn run(mut a:i32,b:i32,mut c:i32)->i32{(||->i32{let old=c;let x=b;a+=1;c+=a;old+x+c})()}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let owner = (0..plan.callable_count())
+            .find(|index| {
+                plan.closure_graph_owners(*index, &budget)
+                    .unwrap()
+                    .contains(index)
+            })
+            .unwrap();
+        let lexical = plan.publish_closure_lexical(owner, &budget).unwrap();
+        assert_eq!(lexical.sites.len(), 1);
+        let site = &lexical.sites[0];
+        assert_eq!(
+            site.captures
+                .iter()
+                .map(|c| (c.parameter, c.kind))
+                .collect::<Vec<_>>(),
+            vec![
+                (2, ir::BorrowKind::Mut),
+                (1, ir::BorrowKind::Shared),
+                (0, ir::BorrowKind::Mut)
+            ]
+        );
+        plan.publish_capture_environment(&lexical, &site.node.path, &budget)
+            .unwrap();
+        for field in 0..site.captures.len() {
+            let mut forged = lexical.clone();
+            let mut sites = forged.sites.to_vec();
+            let mut captures = sites[0].captures.to_vec();
+            captures[field].kind = match captures[field].kind {
+                ir::BorrowKind::Mut => ir::BorrowKind::Shared,
+                ir::BorrowKind::Shared => ir::BorrowKind::Mut,
+            };
+            sites[0].captures = captures.into();
+            forged.sites = sites.into();
+            assert!(
+                plan.publish_capture_environment(&forged, &site.node.path, &budget)
+                    .unwrap_err()
+                    .contains("loan mode changed")
+            );
+        }
     }
 }
