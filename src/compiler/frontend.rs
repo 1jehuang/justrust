@@ -6466,47 +6466,99 @@ impl<'input, 'names> Parser<'input, 'names> {
             items: HashMap::new(),
             empty_use_prefixes: Vec::new(),
         };
-        child.reserve_item_publication(&mut product)?;
-        let (visibility, explicit_visibility) = child.visibility(module)?;
-        if !child.is("fn") {
-            return Err(child.unsupported("item macro output must be exactly one nongeneric free function; generated attributes and other items are unsupported"));
+        while !child.is("") {
+            child.reserve_item_publication(&mut product)?;
+            let start = child.cursor.checkpoint();
+            let previous_count = product.program.functions.len();
+            let (visibility, explicit_visibility) = child.visibility(module)?;
+            if !child.is("fn") {
+                let valid_unadmitted_item = [
+                    "#",
+                    "mod",
+                    "use",
+                    "trait",
+                    "impl",
+                    "macro_rules",
+                    "struct",
+                    "enum",
+                    "type",
+                    "const",
+                    "static",
+                    "extern",
+                    "unsafe",
+                    "async",
+                    ";",
+                ]
+                .iter()
+                .any(|token| child.is(token))
+                    || child.token().is_ident()
+                        && child.cursor.peek(1).is_some_and(|token| token.matches("!"));
+                return Err(if valid_unadmitted_item {
+                    child.unsupported("item macro output must contain only nongeneric free functions; generated attributes and other items are unsupported")
+                } else {
+                    child.error("expected a complete free function or end of item macro output")
+                });
+            }
+            child.nonmodule_item(
+                module,
+                module_path,
+                &mut product,
+                visibility,
+                explicit_visibility,
+            )?;
+            if child.cursor.is_at(start)
+                || product.program.functions.len().checked_sub(previous_count) != Some(1)
+            {
+                return Err(native_adapter::transport_error(
+                    super::token_session::TokenError::InvalidHandle,
+                ));
+            }
         }
-        child.nonmodule_item(
-            module,
-            module_path,
-            &mut product,
-            visibility,
-            explicit_visibility,
-        )?;
-        if !child.is("") || product.program.functions.len() != 1 {
-            return Err(
-                child.unsupported("item macro output must be exactly one complete free function")
-            );
-        }
+        // No function or empty expansion is published until the entire native
+        // token buffer has been consumed. The shared expansion is provenance,
+        // not a substitute for each function's exact occurrence and fresh scope.
         drop(child);
-        let generated = &product.program.functions[0];
-        let declaration = *generated.name.segments().last().ok_or_else(|| {
+        let scopes = self.lexical.scopes.as_mut().ok_or_else(|| {
             native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
         })?;
-        let function = generated.lexical_scope.ok_or_else(|| {
-            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
-        })?;
-        self.lexical
-            .scopes
-            .as_mut()
-            .ok_or_else(|| {
+        for generated in &product.program.functions {
+            let declaration = *generated.name.segments().last().ok_or_else(|| {
                 native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
-            })?
-            .seal_item_product(self.names, &*self.modules, &proof, function, declaration)
+            })?;
+            let function = generated.lexical_scope.ok_or_else(|| {
+                native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+            })?;
+            scopes
+                .seal_item_product(self.names, &*self.modules, &proof, function, declaration)
+                .map_err(scope_parse_error)?;
+        }
+        scopes
+            .complete_item_expansion(
+                self.names,
+                &*self.modules,
+                &proof,
+                product.program.functions.len(),
+            )
             .map_err(scope_parse_error)?;
-        self.reserve_item_publication(parsed)?;
-        for (key, item) in product.items {
-            if parsed.items.contains_key(&key) {
+        if product.items.len() != product.program.functions.len() {
+            return Err(native_adapter::transport_error(
+                super::token_session::TokenError::InvalidHandle,
+            ));
+        }
+        for key in product.items.keys() {
+            if parsed.items.contains_key(key) {
                 return Err(self.error("duplicate item name"));
             }
-            parsed.items.insert(key, item);
         }
-        parsed.program.functions.extend(product.program.functions);
+        for function in product.program.functions {
+            let key = function.name.key(Namespace::Type);
+            let items = product.items.remove(&key).ok_or_else(|| {
+                native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+            })?;
+            self.reserve_item_publication(parsed)?;
+            parsed.items.insert(key, items);
+            parsed.program.functions.push(function);
+        }
         Ok(())
     }
     fn reserve_item_publication(

@@ -495,6 +495,17 @@ iteration and suspended-state destruction each have executable oracle cases.
       gate. Exact original-use certificates preserve generated use authority
       through canonical resolution. Generated cfg/modules, exports and general
       item expansion remain outside this bounded client.
+- [x] Implement zero/many nongeneric free-function outputs for original module
+      item macros, with complete native-token consumption, distinct function
+      occurrence/scope/source-callable identities and explicit empty close.
+      Completion is an immutable scalar after publication, added inline to the
+      existing paid anchor, with exact sealed-product/function coverage. The
+      detached `942b537dc` lane passes 42 stock cases / 168 native workers-1/8
+      CHECK/BUILD cells, unused bad first/second/repeated sibling type checks,
+      18 authority controls, unchanged macro regressions and graph-integrity
+      gates. See ITEM-SOURCE-MACROS.md and data/runs/macro-many/. Composed
+      primary-branch acceptance/integration remains coordinator-owned. This
+      adds no exports, proc macros, new fragments or general hygiene claim.
 - [ ] Generalize nested/recursive expansion and namespace-specific hygiene,
       generated declarations, cfg-before-child-IO and graph discovery closure.
       Add real item/export/import/cross-crate clients and remaining fragment/AST

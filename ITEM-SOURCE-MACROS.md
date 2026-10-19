@@ -7,11 +7,15 @@ checkpoint `9d7356315`. Final hosted all-target check
 strict all-target lint `20261017-102503349-1585919`, formatting and diff checks pass.
 This is not general item-macro or full Rust support.
 
+The zero/many-function follow-up below is independently validated on detached
+checkpoint `942b537dc`. Its scoped gates do not substitute for the coordinator's
+composed acceptance gate or imply that the frozen primary checkout was changed.
+
 ## Admitted client
 
 Original module-level macro_rules definitions may be selected by later
-unqualified item-position calls. Each invocation must emit exactly one
-non-generic free function in the existing supported function grammar. Its name
+unqualified item-position calls. Each invocation may emit zero or more
+non-generic free functions in the existing supported function grammar. Each name
 may be captured or generated. Its parameters, local bindings and uses must retain
 real checked identities, including captured-root versus generated-marked names.
 The existing ordered tt/ident/literal engine remains the matcher authority.
@@ -24,9 +28,9 @@ frontiers are sealed before expansion, with no retry of an older definition on
 matching or transcription failure.
 
 Generated attributes, modules, imports, traits, impls and macro definitions are
-outside this slice. So are empty/multiple-item output, exports, path-qualified
-macro calls and user macro calls inside emitted bodies. Existing builtin println
-remains its supported path. Legal but unadmitted output must be Unsupported,
+outside this slice. So are exports, path-qualified macro calls and user macro
+calls inside emitted bodies. Existing builtin println remains its supported
+path. Legal but unadmitted output must be Unsupported,
 not fabricated invalid-Rust diagnostics or stock fallback.
 
 ## Separate module proof and function authority
@@ -45,8 +49,13 @@ Each parsed function receives a real fresh function scope. Its association seals
 this expansion, exact function-name occurrence and actual module. A module proof
 does not authorize arbitrary scopes in the same module. Declaration/header/body
 validation uses explicit occurrence roles, including unused functions and public
-metadata. The item product is sealed only after exactly one function and EOF
-have been parsed. Final scope validation checks all anchors and sealed products.
+metadata. Every item product is sealed only after the complete output and EOF
+have been parsed. One inline invocation-anchor scalar is then closed with the
+exact product count. `Some(0)` certifies consumed empty output, while `None` is
+always incomplete. Double close and products appended after close reject.
+Final scope validation checks all closed anchors, exact counts and sealed
+products. The retained function inventory must still cover each product exactly
+once, including unused siblings.
 
 Generated local lookup first respects exact-context lexical bindings. An item
 mark with no local binding returns NoLocalBinding, never a fallback into a
@@ -103,9 +112,10 @@ its layout and scoped-pattern exclusions remain explicit.
 
 ## Executed acceptance gates
 
-The stock-first corpus contains 29 sources: 22 stock-valid and seven rejected.
-The native matrix contains 116 workers-1/8 CHECK/BUILD cells: ten runtime sources,
-seven ordinary invalid sources and twelve explicit Unsupported boundaries, with
+The original stock-first corpus contained 29 sources: 22 stock-valid and seven rejected.
+The original single-function checkpoint's native matrix contained 116
+workers-1/8 CHECK/BUILD cells: ten runtime sources, seven ordinary invalid sources
+and twelve explicit Unsupported boundaries, with
 real executable stdout/exit and no compiler fallback. All earlier source, literal
 and nested macro corpora remain unchanged. Thirteen public authority controls
 exercise real parsed product/scope/name/body mutations, removals, foreign owners
@@ -139,3 +149,79 @@ wrong function-name occurrences, unsealed products, poisoned budgets and attempt
 to promote inactive syntax. Complete unchanged regressions, all-target check,
 strict lint, formatting and exact scoped receipts are required. Full Rust,
 general item macros and performance remain open claims.
+
+## Zero/many-function follow-up (2026-10-19 UTC)
+
+The scoped parser change is confined to `Parser::item_macro_invocation`. One
+child parser consumes the single native expansion buffer to its actual EOF,
+using the existing function parser once per product. It does not regenerate
+source text, clone a whole Program, create per-function source snapshots, or
+reparse the whole source file. Empty output follows the same explicit close.
+Generated attributes, const functions, generic functions and other item kinds
+remain excluded. No function-head, const, token adapter or graph-kind changes
+are part of this increment.
+
+Each output keeps a distinct declaration occurrence, module-qualified path and
+fresh function scope. Existing `nonmodule_item` registration records each item;
+the exact retained Functions are moved into the Program only after complete
+consumption, all seals and collision preflight. Each push has paid capacity
+admission. Existing declaration-registry construction then issues distinct
+`DeclId`/`CallableSource::Free(index)` entries, with the exact original AST still
+available for checking. The expansion ID is shared provenance, not callable
+identity. A source-snapshot test checks unchanged original bytes and one source
+file, separate declaration spans/scopes and shared expansion provenance.
+
+`ItemAnchor` adds only `Option<usize>` completion metadata to the existing paid
+anchor element. It introduces no retained vector, resource ledger, mutable
+receipt, new mutable graph-fact carrier, or graph node. Only the builder closes
+the latest open anchor, after checking owner/proof identity, every product seal
+and exact count. Pop/push reuses its already admitted capacity. On failure no
+ScopeArena is published, and freeze rechecks complete exact counts. Nested item
+expansion remains unsupported, making this latest-anchor discipline explicit.
+After freeze the close scalar is immutable. Existing final coverage remains a
+bijection, so dropping or duplicating an unused sibling does not erase its
+obligation.
+
+Thirteen added sources were measured against stock `rustc 1.98.1` before the
+parser change. Exact source bytes, hashes, compiler identity, full diagnostics
+and executable results are in `data/runs/macro-many/stock-2026-10-19.json`.
+The expanded corpus has 42 stock sources: 27 compile/run and 15 reject. Native
+acceptance has 168 workers-1/8 CHECK/BUILD cells and executes 32 images. Native
+outcomes are 16 runtime sources, 14 ordinary invalid sources and 12 explicit
+phase boundaries. Eleven boundaries are stock-valid excluded syntax. The
+remaining boundary is trailing `@`, which stock rejects but the existing native
+token adapter rejects earlier as unsupported punctuation. It is not advertised
+as syntax-phase parity. Trailing `+` instead reaches the child parser and
+rejects as Syntax at the exact expanded token. A malformed second function also
+rejects as Syntax. Both diagnostics retain original line/column plus definition
+and invocation provenance. No valid first function silently hides leftover
+output.
+
+Unused bad first, second and repetition-emitted siblings are independently
+rejected in both native modes with workers 1 and 8. The test requires the actual
+`expected Int(I32), got Bool` semantic diagnostic, not merely any nonzero exit,
+resource failure, contract failure or Unsupported result. Failure leaves no
+artifact. Same-expansion mutation controls reject scope/name substitution,
+one/two-way body binding-authority transfers, missing one/all siblings and
+duplicate products. Private controls require explicit zero close, all seals,
+exact count, distinct occurrences and no append/double close. No general
+hygiene, procedural-macro, export or `$crate` consumer claim is added.
+
+Scoped passing runs (exported with failed attempts in
+`data/runs/macro-many/2026-10-19.jsonl`):
+
+- Final all-target check: `20261018-205007291-3027561`.
+- Seven item-scope unit tests: `20261018-204630429-2895379`.
+- Twenty-four item-source/authority tests, including strengthened exact semantic
+  and expansion-location assertions: `20261018-205007804-3027974`.
+- Seven unchanged graph-integrity tests: `20261018-204638764-2898783`.
+- Final strict all-target clippy: `20261018-205018924-3038606`.
+- Twenty-three unchanged matcher/local/nested/literal tests:
+  `20261018-204734049-2906299`.
+
+The initial hosted check passed. A subsequent hosted connection timed out;
+these scoped acceptance runs used the stable client's documented automatic
+local fallback, confirmed by `justrust show`. Native compiler fallback remains
+blocked by the acceptance harness. The isolated target directory is separate
+from stable clients and other lanes. No install, primary-checkout mutation,
+composed full-suite acceptance or speed claim is made here.

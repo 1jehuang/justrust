@@ -192,10 +192,18 @@ struct ItemProduct {
     occurrence: u32,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ItemAnchor {
+    proof: ItemExpansionAdmission,
+    // Builder-only close, issued after complete output consumption and all
+    // product seals. Some(0) is an explicitly consumed empty expansion.
+    completed_count: Option<usize>,
+}
+
 pub(super) struct ItemScopeState {
     source_root: Option<ModuleId>,
     points: BudgetVec<ModulePoint>,
-    anchors: BudgetVec<ItemExpansionAdmission>,
+    anchors: BudgetVec<ItemAnchor>,
     products: BudgetVec<ItemProduct>,
     seals: BudgetVec<ScopeId>,
 }
@@ -341,7 +349,10 @@ impl ScopeArenaBuilder {
                 Err(ScopeError::ConflictingAssociation)
             };
         }
-        self.arena.items.anchors.push(proof)?;
+        self.arena.items.anchors.push(ItemAnchor {
+            proof,
+            completed_count: None,
+        })?;
         Ok(proof)
     }
     pub(crate) fn generated_function_root(
@@ -354,11 +365,12 @@ impl ScopeArenaBuilder {
         self.check_names(names)?;
         proof.check_modules(names, modules)?;
         self.arena.check_item_proof(proof)?;
+        self.arena.check_item_open(proof)?;
         proof.validate_span(names.session(), names.span(declaration)?)?;
         let occurrence = semantic_name::occurrence_index(names, declaration)?;
         for p in self.arena.items.products.as_slice() {
             self.arena.budget.charge(Counter::Work, 1)?;
-            if p.proof.expansion == proof.expansion {
+            if p.occurrence == occurrence {
                 return Err(ScopeError::ConflictingAssociation);
             }
         }
@@ -395,6 +407,51 @@ impl ScopeArenaBuilder {
             return Ok(());
         }
         self.arena.items.seals.push(function)?;
+        Ok(())
+    }
+    /// Close only the current invocation, after the parser has consumed EOF.
+    /// Item expansion cannot recursively create another item expansion. The
+    /// existing paid anchor slot therefore suffices, without another retained
+    /// allocation, resource carrier, or mutable state in published facts.
+    pub(crate) fn complete_item_expansion(
+        &mut self,
+        names: &impl NameAccess,
+        modules: &impl ModuleAccess,
+        proof: &ItemExpansionAdmission,
+        expected_count: usize,
+    ) -> Result<(), ScopeError> {
+        self.check_names(names)?;
+        proof.check_modules(names, modules)?;
+        self.arena.check_item_proof(proof)?;
+        self.arena.check_item_open(proof)?;
+        let mut count = 0usize;
+        for product in self.arena.items.products.as_slice() {
+            self.arena.budget.charge(Counter::Work, 1)?;
+            if product.proof == *proof {
+                if !self.arena.item_is_sealed(product.function)? {
+                    return Err(ScopeError::ConflictingAssociation);
+                }
+                count = count.checked_add(1).ok_or(TokenError::IdExhausted)?;
+            }
+        }
+        if count != expected_count {
+            return Err(ScopeError::ConflictingAssociation);
+        }
+        let anchor = self
+            .arena
+            .items
+            .anchors
+            .last()
+            .copied()
+            .ok_or(ScopeError::UnregisteredExpansion)?;
+        if anchor.proof != *proof {
+            return Err(ScopeError::ConflictingAssociation);
+        }
+        self.arena.items.anchors.pop();
+        self.arena.items.anchors.push(ItemAnchor {
+            proof: *proof,
+            completed_count: Some(count),
+        })?;
         Ok(())
     }
     #[cfg(test)]
@@ -528,8 +585,8 @@ impl ScopeArena {
         self.budget.check()?;
         for p in self.items.anchors.as_slice() {
             self.budget.charge(Counter::Work, 1)?;
-            if p.expansion == e {
-                return Ok(Some(*p));
+            if p.proof.expansion == e {
+                return Ok(Some(p.proof));
             }
         }
         Ok(None)
@@ -543,6 +600,13 @@ impl ScopeArena {
             return Err(ScopeError::UnregisteredExpansion);
         }
         Ok(())
+    }
+    fn check_item_open(&self, proof: &ItemExpansionAdmission) -> Result<(), ScopeError> {
+        self.budget.check()?;
+        match self.items.anchors.last() {
+            Some(anchor) if anchor.proof == *proof && anchor.completed_count.is_none() => Ok(()),
+            _ => Err(ScopeError::ConflictingAssociation),
+        }
     }
     fn item_product(&self, f: ScopeId) -> Result<Option<ItemProduct>, ScopeError> {
         self.check_function(f)?;
@@ -568,17 +632,20 @@ impl ScopeArena {
         self.budget.check()?;
         for p in self.items.anchors.as_slice() {
             self.budget.charge(Counter::Work, 1)?;
+            let expected = p
+                .completed_count
+                .ok_or(ScopeError::ConflictingAssociation)?;
             let mut count = 0usize;
             for product in self.items.products.as_slice() {
                 self.budget.charge(Counter::Work, 1)?;
-                if product.proof.expansion == p.expansion {
+                if product.proof == p.proof {
                     if !self.item_is_sealed(product.function)? {
                         return Err(ScopeError::ConflictingAssociation);
                     }
                     count += 1;
                 }
             }
-            if count != 1 {
+            if count != expected {
                 return Err(ScopeError::ConflictingAssociation);
             }
         }
@@ -653,6 +720,7 @@ impl ScopeArena {
         }
         for p in self.items.anchors.as_slice() {
             self.budget.charge(Counter::Work, 1)?;
+            let p = &p.proof;
             p.check_modules(names, modules)?;
             if self.module_of(p.definition)? != p.definition_module
                 || self.module_of(p.call)? != p.target_module
@@ -1033,6 +1101,10 @@ mod tests {
                 )
                 .is_err()
         );
+        assert!(scopes.check_item_function_coverage(&[function]).is_err());
+        scopes
+            .complete_item_expansion(&f.names, &f.modules, &proof, 1)
+            .unwrap();
         scopes.check_item_function_coverage(&[function]).unwrap();
         let frozen = scopes.freeze().unwrap();
         frozen.check_item_authority(&f.names, &f.modules).unwrap();
@@ -1053,6 +1125,133 @@ mod tests {
                 .is_err()
         );
         assert!(scopes.freeze().is_err());
+    }
+
+    #[test]
+    fn empty_item_output_requires_explicit_close_and_rejects_second_close_or_append() {
+        let mut f = fixture();
+        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let proof = anchor(&f, &mut scopes);
+        assert!(scopes.check_item_function_coverage(&[]).is_err());
+        assert!(
+            scopes
+                .complete_item_expansion(&f.names, &f.modules, &proof, 1)
+                .is_err()
+        );
+        scopes
+            .complete_item_expansion(&f.names, &f.modules, &proof, 0)
+            .unwrap();
+        assert!(
+            scopes
+                .complete_item_expansion(&f.names, &f.modules, &proof, 0)
+                .is_err()
+        );
+        let declaration = f
+            .names
+            .admit_item_token(f.marked, Edition::E2024, &proof)
+            .unwrap();
+        assert!(
+            scopes
+                .generated_function_root(&f.names, &f.modules, &proof, declaration)
+                .is_err()
+        );
+        scopes.check_item_function_coverage(&[]).unwrap();
+        let frozen = scopes.freeze().unwrap();
+        frozen.check_item_authority(&f.names, &f.modules).unwrap();
+        frozen.check_item_function_coverage(&[]).unwrap();
+    }
+
+    #[test]
+    fn sibling_products_need_distinct_occurrences_all_seals_and_exact_closed_coverage() {
+        let mut f = fixture();
+        let mut scopes = ScopeArenaBuilder::for_names(&f.names).unwrap();
+        let proof = anchor(&f, &mut scopes);
+        let first = f
+            .names
+            .admit_item_token(f.marked, Edition::E2024, &proof)
+            .unwrap();
+        let first_start = scopes
+            .generated_function_root(&f.names, &f.modules, &proof, first)
+            .unwrap();
+        let first_scope = scopes.function(first_start).unwrap();
+        assert!(
+            scopes
+                .generated_function_root(&f.names, &f.modules, &proof, first)
+                .is_err()
+        );
+        let second = f
+            .names
+            .admit_item_token(f.marked, Edition::E2024, &proof)
+            .unwrap();
+        let second_start = scopes
+            .generated_function_root(&f.names, &f.modules, &proof, second)
+            .unwrap();
+        let second_scope = scopes.function(second_start).unwrap();
+        assert_ne!(first_scope, second_scope);
+        scopes
+            .seal_item_product(&f.names, &f.modules, &proof, first_scope, first)
+            .unwrap();
+        assert!(
+            scopes
+                .complete_item_expansion(&f.names, &f.modules, &proof, 2)
+                .is_err()
+        );
+        scopes
+            .seal_item_product(&f.names, &f.modules, &proof, second_scope, second)
+            .unwrap();
+        assert!(
+            scopes
+                .complete_item_expansion(&f.names, &f.modules, &proof, 1)
+                .is_err()
+        );
+        assert!(
+            scopes
+                .check_item_function_coverage(&[first_scope, second_scope])
+                .is_err()
+        );
+        scopes
+            .complete_item_expansion(&f.names, &f.modules, &proof, 2)
+            .unwrap();
+        assert!(
+            scopes
+                .complete_item_expansion(&f.names, &f.modules, &proof, 2)
+                .is_err()
+        );
+        let third = f
+            .names
+            .admit_item_token(f.marked, Edition::E2024, &proof)
+            .unwrap();
+        assert!(
+            scopes
+                .generated_function_root(&f.names, &f.modules, &proof, third)
+                .is_err()
+        );
+        assert!(scopes.check_item_function_coverage(&[]).is_err());
+        assert!(scopes.check_item_function_coverage(&[first_scope]).is_err());
+        assert!(
+            scopes
+                .check_item_function_coverage(&[first_scope, first_scope])
+                .is_err()
+        );
+        assert!(
+            scopes
+                .check_generated_function(
+                    &f.names,
+                    &f.modules,
+                    first_scope,
+                    second,
+                    f.modules.source_root().unwrap()
+                )
+                .is_err()
+        );
+        scopes
+            .check_item_function_coverage(&[first_scope, second_scope])
+            .unwrap();
+        let frozen = scopes.freeze().unwrap();
+        frozen.check_item_authority(&f.names, &f.modules).unwrap();
+        frozen
+            .check_item_function_coverage(&[second_scope, first_scope])
+            .unwrap();
     }
 
     #[test]

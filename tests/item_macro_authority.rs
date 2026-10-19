@@ -60,6 +60,96 @@ fn function(program: &Program, spelling: &str) -> usize {
         .unwrap_or_else(|| panic!("missing real parsed function {spelling}"))
 }
 
+fn sibling_fixture() -> Program {
+    let program = frontend::parse(
+        r#"
+macro_rules! emit {
+    ($($name:ident),*) => { $(
+        fn $name(input:i32)->i32 { let local:i32=input; local }
+    )* };
+}
+emit!(first,second);
+fn main() {}
+"#,
+    )
+    .expect("real same-expansion sibling fixture");
+    let first = function(&program, "first");
+    let second = function(&program, "second");
+    assert_ne!(
+        program.functions[first].lexical_scope,
+        program.functions[second].lexical_scope
+    );
+    assert_eq!(program.functions.len(), 3);
+    program
+}
+
+#[test]
+fn exact_same_expansion_siblings_keep_separate_callable_sources() {
+    let program = sibling_fixture();
+    PlanCtx::from_shared_program(Arc::new(program), &PlanBudget::default()).unwrap();
+}
+
+#[test]
+fn sibling_scope_or_name_cannot_replace_another_product_identity() {
+    for swap_scope in [true, false] {
+        let mut program = sibling_fixture();
+        let first = function(&program, "first");
+        let second = function(&program, "second");
+        if swap_scope {
+            program.functions[first].lexical_scope = program.functions[second].lexical_scope;
+        } else {
+            program.functions[first].name = program.functions[second].name.clone();
+        }
+        reject_before_authority(program, true);
+    }
+}
+
+#[test]
+fn sibling_body_copy_or_two_way_swap_cannot_transfer_binding_authority() {
+    for swap_both in [false, true] {
+        let mut program = sibling_fixture();
+        let first = function(&program, "first");
+        let second = function(&program, "second");
+        let first_body = program.functions[first].body.clone();
+        program.functions[first].body = program.functions[second].body.clone();
+        if swap_both {
+            program.functions[second].body = first_body;
+        }
+        reject_before_authority(program, true);
+    }
+}
+
+#[test]
+fn removing_one_or_all_siblings_preserves_closed_product_coverage_obligation() {
+    for remove_all in [false, true] {
+        let mut program = sibling_fixture();
+        let first = function(&program, "first");
+        let second = function(&program, "second");
+        if remove_all {
+            let scopes = [
+                program.functions[first].lexical_scope,
+                program.functions[second].lexical_scope,
+            ];
+            program
+                .functions
+                .retain(|function| !scopes.contains(&function.lexical_scope));
+        } else {
+            program.functions.remove(first);
+        }
+        function(&program, "main");
+        reject_before_authority(program, true);
+    }
+}
+
+#[test]
+fn duplicating_a_sibling_cannot_satisfy_another_closed_product() {
+    let mut program = sibling_fixture();
+    let first = function(&program, "first");
+    let second = function(&program, "second");
+    program.functions[second] = program.functions[first].clone();
+    reject_before_authority(program, true);
+}
+
 fn reject_before_authority(program: Program, require_contract: bool) {
     let budget = PlanBudget::default();
     let error = match PlanCtx::from_shared_program(Arc::new(program), &budget) {
