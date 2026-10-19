@@ -7,7 +7,10 @@ borrowing predicates (`is_some`, `is_none`, `is_ok`, `is_err`), and consuming
 `unwrap_or`. Methods are ordinary generic Rust impl bodies, not compiler
 method-name exceptions. `unwrap` and other panicking convenience APIs are not
 provided until their panic and trait-bound contracts can be implemented
-correctly. Iterator traits and the rest of std/core remain follow-up work.
+correctly. The explicit bootstrap `native_heap` module adds Rust-source
+allocation and pointer helpers over a primitive Linux syscall ABI, documented
+in NATIVE-HEAP.md. This is not full std/core support. Iterator traits and the
+rest of std/core remain follow-up work.
 
 ## Loading (graph inputs)
 

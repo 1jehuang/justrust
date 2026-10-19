@@ -2571,6 +2571,7 @@ pub fn instantiate_checked(
             | ExprKind::Int(_)
             | ExprKind::Bool(_)
             | ExprKind::Local(_)
+            | ExprKind::NativeSyscall(_)
             | ExprKind::Tuple(_)
             | ExprKind::Field { .. }
             | ExprKind::Unary { .. }
@@ -6095,6 +6096,8 @@ pub struct LiteralOutput {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExprKind {
+    /// Linux syscall number followed by its six usize ABI arguments.
+    NativeSyscall(Vec<ExprId>),
     Char(CharValue),
     /// Inherent primitive method. `args[0]` is the by-value receiver; all
     /// operand and result types are exactly `intrinsic.signature()`.
@@ -6798,7 +6801,8 @@ impl CheckedFunction {
                 ExprKind::Block(value)
                 | ExprKind::Loop { body: value, .. }
                 | ExprKind::LabeledBlock { body: value, .. } => block(value, facts, budget, 0)?,
-                ExprKind::Tuple(values)
+                ExprKind::NativeSyscall(values)
+                | ExprKind::Tuple(values)
                 | ExprKind::Array(values)
                 | ExprKind::Intrinsic { args: values, .. } => {
                     storage(budget, values.len(), std::mem::size_of::<ExprId>())?
@@ -7716,6 +7720,23 @@ impl CheckedFunction {
                     }
                 }
                 ExprKind::Local(id) => local(*id)?,
+                ExprKind::NativeSyscall(arguments) => {
+                    if arguments.len() != 7 || value.ty != Ty::Int(IntTy::Usize) {
+                        return Err("invalid native syscall shape".into());
+                    }
+                    let mut completes = true;
+                    for &id in arguments {
+                        expr(id)?;
+                        let argument = &self.exprs[id.0];
+                        if argument.ty != Ty::Int(IntTy::Usize) {
+                            return Err("native syscall arguments must be usize".into());
+                        }
+                        completes &= argument.completion == Completion::Returns;
+                    }
+                    if (value.completion == Completion::Returns) != completes {
+                        return Err("native syscall completion mismatch".into());
+                    }
+                }
                 ExprKind::Tuple(elements) => {
                     for &id in elements {
                         expr(id)?;
