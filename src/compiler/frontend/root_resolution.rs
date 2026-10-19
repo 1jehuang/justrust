@@ -3728,6 +3728,7 @@ fn defer_equality_boundary(
 }
 
 pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
+    parsed.program.validate_c_source()?;
     parsed.program.validate_name_handles()?;
     parsed
         .program
@@ -4196,6 +4197,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         ));
     }
     program.associated_bound_sources = associated_bound_sources.into();
+    program.seal_resolved_c_source()?;
     Ok(program)
 }
 

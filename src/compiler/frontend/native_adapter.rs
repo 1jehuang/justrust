@@ -909,8 +909,14 @@ impl NativeParserInput {
                                 "invalid punctuation range",
                             )
                         })?;
-                        let deferred = !punctuation(text) && input.macro_source.is_some();
-                        if !punctuation(text) && !deferred {
+                        let attribute = text == "#"
+                            && events.get(at + 1).is_some_and(|next| {
+                                matches!(next.token, InputToken::Open { .. })
+                                    && projection.text().get(next.prepared.clone()) == Some("[")
+                            });
+                        let admitted = punctuation(text) || attribute;
+                        let deferred = !admitted && input.macro_source.is_some();
+                        if !admitted && !deferred {
                             return Err(event_error(
                                 event,
                                 if matches!(text, "#" | "@" | "?" | "$" | "~") {

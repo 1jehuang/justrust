@@ -88,6 +88,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
             Some("--check") => check = true,
+            Some("--emit-object") => source_options.native_link.emit_object = true,
+            Some("--native-object") => {
+                let path = args.next().ok_or("missing native object path")?;
+                source_options
+                    .native_link
+                    .objects
+                    .push(std::fs::read(path)?);
+            }
+            Some("--native-library") => {
+                let name = args.next().ok_or("missing native library name")?;
+                source_options.native_link.libraries.push(
+                    name.to_str()
+                        .ok_or("native library name must be UTF-8")?
+                        .to_owned(),
+                );
+            }
             Some("--lib") => source_options.library = true,
             Some("--test") => {
                 source_options.cfg.names.insert("test".into());

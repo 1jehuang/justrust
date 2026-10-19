@@ -495,6 +495,7 @@ impl Filter<'_> {
             ));
         }
         let mut seen_identity_metadata = std::collections::BTreeSet::new();
+        let mut retained_abi = Vec::new();
         for raw in effective {
             if self.identity_metadata.is_some()
                 && matches!(
@@ -523,7 +524,7 @@ impl Filter<'_> {
                 }
                 continue;
             }
-            let meta = if matches!(raw.name.as_str(), "doc" | "inline") {
+            let meta = if matches!(raw.name.as_str(), "doc" | "inline" | "repr" | "unsafe") {
                 parse_meta(&self.text[raw.range.clone()], raw.range.start).map_err(|e| {
                     if raw.name == "doc" && !e.limit {
                         error(
@@ -539,6 +540,34 @@ impl Filter<'_> {
                 raw
             };
             match meta.name.as_str() {
+                "repr" | "unsafe" => {
+                    let valid = match (&*meta.name, &meta.value) {
+                        ("repr", MetaValue::List(values)) => {
+                            owner == Owner::FreeItem
+                                && values.len() == 1
+                                && values[0].name == "C"
+                                && matches!(values[0].value, MetaValue::Word)
+                        }
+                        ("unsafe", MetaValue::List(values)) => {
+                            owner == Owner::Function
+                                && values.len() == 1
+                                && values[0].name == "no_mangle"
+                                && matches!(values[0].value, MetaValue::Word)
+                        }
+                        _ => false,
+                    };
+                    let original = attrs
+                        .iter()
+                        .find(|attr| attr.content == meta.range && !attr.inner);
+                    if !valid || original.is_none() {
+                        return Err(error(
+                            AttributeErrorKind::Unsupported,
+                            meta.range,
+                            "only original repr(C) structs and unsafe(no_mangle) extern C functions are supported",
+                        ));
+                    }
+                    retained_abi.push(original.unwrap().range.clone());
+                }
                 "derive" => self.derive(&meta, owner, item.clone())?,
                 "doc" => match &meta.value {
                     MetaValue::String(_) => {}
@@ -605,7 +634,9 @@ impl Filter<'_> {
             }
         }
         for attr in attrs {
-            self.mask(attr.range.clone());
+            if !retained_abi.contains(&attr.range) {
+                self.mask(attr.range.clone());
+            }
         }
         Ok(true)
     }
@@ -855,6 +886,15 @@ impl Filter<'_> {
             && self.tokens[i + 1].text(self.text) == "fn"
         {
             i += 1;
+        }
+        if i < end && self.tokens[i].text(self.text) == "extern" {
+            let mut next = i + 1;
+            if next < end && self.tokens[next].text(self.text).starts_with('"') {
+                next += 1;
+            }
+            if next < end && self.tokens[next].text(self.text) == "fn" {
+                i = next;
+            }
         }
         let kind = if i < end {
             match self.tokens[i].text(self.text) {
@@ -1656,7 +1696,11 @@ mod tests {
         let out = prep(text).unwrap();
         assert_eq!(out.text.len(), text.len());
         assert_eq!(out.attributes.len(), 2);
-        assert!(out.attributes.iter().all(|a| a.name == "doc" && a.effective));
+        assert!(
+            out.attributes
+                .iter()
+                .all(|a| a.name == "doc" && a.effective)
+        );
         assert!(out.text.contains("macro_rules! impl_per"));
         assert!(out.text.contains("const _: () = ();"));
         assert!(!out.text.contains("/// conversions"));
@@ -1992,10 +2036,7 @@ mod tests {
             prep("#[doc=42] fn f(){}").unwrap_err().kind,
             AttributeErrorKind::Unsupported
         );
-        assert_eq!(
-            prep("#[repr(C)] struct S{}").unwrap_err().kind,
-            AttributeErrorKind::Unsupported
-        );
+        assert!(prep("#[repr(C)] struct S{}").is_ok());
     }
     #[test]
     fn inactive_fragments_keep_original_byte_coordinates() {

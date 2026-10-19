@@ -60,8 +60,8 @@ fn unsupported_qualifiers_keep_explicit_semantic_boundaries() {
     for source in [
         "async fn f(){}fn main(){}",
         "async unsafe fn f(){}fn main(){}",
-        "extern \"C\" fn f(){}fn main(){}",
-        "unsafe extern \"C\" fn f(){}fn main(){}",
+        "extern \"system\" fn f(){}fn main(){}",
+        "unsafe extern \"C-unwind\" fn f(){}fn main(){}",
     ] {
         let error = frontend::parse(source).unwrap_err();
         assert!(error.contains("unsupported"), "{source}: {error}");

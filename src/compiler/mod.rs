@@ -1,6 +1,7 @@
 //! Source-to-native compiler built on the fact graph. See COMPILER.md.
 pub mod backend;
 mod borrow;
+pub mod c_abi;
 pub mod cfg;
 mod const_check;
 mod const_diagnostics;
@@ -1175,7 +1176,21 @@ impl Provider for CompilerProvider {
                     // against the sealed plan, which rejects any unplanned
                     // symbol, so this needs no whole-program read.
                     let types = facts.types().await?;
-                    if this.0.source_options.opt != ssa::OptMode::Off {
+                    let c_boundary = if let Some((target, _)) = root_instance(&types, index)? {
+                        types
+                            .c_abi_for(target.declaration)
+                            .map_err(Error::new)?
+                            .map(|(abi, signature)| (target, abi.imported, abi.exported, signature))
+                    } else {
+                        None
+                    };
+                    if let Some((target, true, _, signature)) = &c_boundary {
+                        let symbol = types.c_abi_symbol(target.declaration).map_err(Error::new)?;
+                        let object = c_abi::import(signature, &symbol, &this.0.budget)
+                            .map_err(Error::new)?;
+                        return cx.publish_fact(0, object);
+                    }
+                    if this.0.source_options.opt != ssa::OptMode::Off && c_boundary.is_none() {
                         let optimized: Arc<SsaFact> = facts.get(function(IPO_OPT, index)).await?;
                         if let Some(lowered) = &optimized.lowered {
                             let meter = ssa::meter::Meter::new(&this.0.budget);
@@ -1193,10 +1208,18 @@ impl Provider for CompilerProvider {
                             return cx.publish_fact(0, object);
                         }
                     }
-                    let object = backend::emit_cfg_function(&proof.concrete, &|target| {
+                    let mut object = backend::emit_cfg_function(&proof.concrete, &|target| {
                         instances::symbol_of(target, &types, &this.0.budget)
                     })
                     .map_err(Error::new)?;
+                    if let Some((target, false, true, signature)) = c_boundary {
+                        let private = instances::symbol_of(&target, &types, &this.0.budget)
+                            .map_err(Error::new)?;
+                        let symbol = types.c_abi_symbol(target.declaration).map_err(Error::new)?;
+                        let wrapper = c_abi::export(&signature, &private, &this.0.budget)
+                            .map_err(Error::new)?;
+                        c_abi::attach_export(&mut object, wrapper, symbol).map_err(Error::new)?;
+                    }
                     cx.publish_fact(0, object)
                 }
                 SSA => {
@@ -1204,6 +1227,20 @@ impl Provider for CompilerProvider {
                     let proof: Arc<ConcreteProofFact> = facts.get(function(ANALYZE, index)).await?;
                     let types = facts.types().await?;
                     let meter = ssa::meter::Meter::new(&this.0.budget);
+                    if let Some((target, _)) = root_instance(&types, index)?
+                        && types
+                            .c_abi_for(target.declaration)
+                            .map_err(Error::new)?
+                            .is_some_and(|(abi, _)| abi.imported)
+                    {
+                        return cx.publish_fact(
+                            0,
+                            SsaFact::unsupported(
+                                "external C declaration has no Rust SSA body",
+                                &meter,
+                            )?,
+                        );
+                    }
                     let function = proof.concrete.function();
                     let fact = match ssa::lower::lower(
                         function,
@@ -1452,7 +1489,18 @@ impl Provider for CompilerProvider {
                     // The linked artifact is released only after the explicit
                     // "every required check passed" fact.
                     cx.read(cx.request(root(CHECK)).get(0)).await?;
-                    cx.publish_fact(0, backend::link(&objects).map_err(Error::new)?)
+                    let native = &this.0.source_options.native_link;
+                    let bytes = if types.has_c_abi()
+                        || native.emit_object
+                        || !native.objects.is_empty()
+                        || !native.libraries.is_empty()
+                    {
+                        c_abi::elf::link(&objects, native, &this.0.budget)
+                    } else {
+                        backend::link(&objects)
+                    }
+                    .map_err(Error::new)?;
+                    cx.publish_fact(0, bytes)
                 }
                 _ => Err(Error::new("unknown compiler operation")),
             }

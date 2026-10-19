@@ -1096,6 +1096,7 @@ pub fn emit(
         calls,
         strings,
         vtables: Vec::new(),
+        exports: Vec::new(),
         receipt: None,
     };
     // Reconcile to the real retained capacity (the bound was an estimate).

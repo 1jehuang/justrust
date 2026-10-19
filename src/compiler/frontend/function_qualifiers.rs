@@ -64,6 +64,9 @@ impl Parser<'_, '_> {
             external |= next == 4;
             self.cursor.bump();
             if next == 4 && self.token().string {
+                if self.token().text != "C" {
+                    return Err(self.unsupported("unsupported ABI: only extern C is supported"));
+                }
                 self.cursor.bump();
             }
         }
@@ -76,9 +79,10 @@ impl Parser<'_, '_> {
         if asynchronous {
             return Err(self.unsupported("async function semantics are unsupported"));
         }
-        if external {
-            return Err(self.unsupported("extern ABI function qualifiers are unsupported"));
+        if external && associated {
+            return Err(self.unsupported("associated extern C functions are unsupported"));
         }
+        self.pending_c_abi = external;
         Ok((
             if constant && !associated {
                 Constness::Const

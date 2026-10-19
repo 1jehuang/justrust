@@ -32,6 +32,7 @@ use super::semantic_path::{NameAccess, PathKey};
 use native_adapter::{NativeParserInput, NativeTokenBuffer};
 mod assignment_expr;
 mod break_prefix;
+mod c_abi;
 mod carrier_regions;
 mod char_literal;
 pub(super) mod closures;
@@ -4841,6 +4842,7 @@ pub use tr::CallableProvider;
 
 #[derive(Clone, Debug)]
 pub struct Program {
+    c_abi: Arc<c_abi::Declarations>,
     pub names: Arc<NameStore>,
     pub modules: Arc<ModuleArena>,
     pub symbols: Arc<ProgramSymbols>,
@@ -4898,6 +4900,7 @@ struct GlobImport {
 /// final program is published only after its one mutable owner is frozen.
 #[derive(Default)]
 struct ProgramDeclarations {
+    c_abi: c_abi::Declarations,
     functions: Vec<Function>,
     constants: Vec<ConstDecl>,
     structs: Vec<StructDecl>,
@@ -4925,6 +4928,7 @@ impl ProgramDeclarations {
         scopes: Option<Arc<super::semantic_scope::ScopeArena>>,
     ) -> Program {
         Program {
+            c_abi: Arc::new(self.c_abi),
             names,
             modules,
             symbols,
@@ -5070,6 +5074,7 @@ impl ProgramBuilder {
             .freeze()
             .map_err(native_adapter::name_diagnostic)?;
         let program = ProgramDeclarations {
+            c_abi: c_abi::Declarations::default(),
             functions: self.functions,
             constants: self.constants,
             structs: self.structs,
@@ -7027,6 +7032,11 @@ enum ConditionPurpose {
 }
 
 struct Parser<'input, 'names> {
+    c_abi: c_abi::Declarations,
+    pending_c_abi: bool,
+    pending_c_export: bool,
+    pending_repr_c: bool,
+    foreign_c: bool,
     debug_assertions: bool,
     input: &'input NativeTokenBuffer,
     names: &'names mut NameStoreBuilder,
@@ -7208,6 +7218,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             &proof,
         )?;
         let mut child = Parser {
+            c_abi: c_abi::Declarations::default(),
+            pending_c_abi: false,
+            pending_c_export: false,
+            pending_repr_c: false,
+            foreign_c: false,
             debug_assertions: self.debug_assertions,
             input: &buffer,
             names: &mut *self.names,
@@ -8533,6 +8548,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         expansion_depth: u32,
     ) -> Result<Expr, ParseError> {
         let mut child = Parser {
+            c_abi: c_abi::Declarations::default(),
+            pending_c_abi: false,
+            pending_c_export: false,
+            pending_repr_c: false,
+            foreign_c: false,
             debug_assertions: self.debug_assertions,
             input: buffer,
             names: &mut *self.names,
@@ -8916,6 +8936,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         let lexical = ParserState::owned(state, names.budget())?;
         Ok(Self {
             debug_assertions: super::source::CfgSet::DEFAULT_DEBUG_ASSERTIONS,
+            c_abi: c_abi::Declarations::default(),
+            pending_c_abi: false,
+            pending_c_export: false,
+            pending_repr_c: false,
+            foreign_c: false,
             input: tokens,
             names,
             modules,
@@ -10085,6 +10110,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         .map_err(scope_parse_error)?,
                 );
             }
+            self.c_attributes()?;
             let (visibility, explicit_visibility) = self.visibility(module)?;
             if self.is("macro_rules") && self.cursor.peek(1).is_some_and(|token| token.matches("!"))
             {
@@ -10130,6 +10156,23 @@ impl<'input, 'names> Parser<'input, 'names> {
         visibility: ir::Visibility,
         explicit_visibility: bool,
     ) -> Result<(), ParseError> {
+        if self.is("unsafe")
+            && self.cursor.peek(1).is_some_and(|t| t.matches("extern"))
+            && !self.starts_qualified_function()
+        {
+            if explicit_visibility || self.pending_c_export || self.pending_repr_c {
+                return Err(
+                    self.unsupported("attributes or visibility on extern blocks are unsupported")
+                );
+            }
+            return self.c_foreign_block(module, module_path, parsed);
+        }
+        if self.pending_repr_c && !self.is("struct") {
+            return Err(self.unsupported("repr(C) currently requires a struct"));
+        }
+        if self.pending_c_export && !self.starts_qualified_function() {
+            return Err(self.unsupported("no_mangle requires a free extern C function"));
+        }
         if (!self.token().string
             && matches!(
                 self.token().text,
@@ -10431,6 +10474,20 @@ impl<'input, 'names> Parser<'input, 'names> {
             (name, ItemKind::Enum)
         } else if self.eat("struct") {
             let name = self.ident()?;
+            if std::mem::take(&mut self.pending_repr_c) {
+                self.names
+                    .retain_parser_text(128)
+                    .map_err(native_adapter::name_error)?;
+                self.c_abi
+                    .repr_c
+                    .try_reserve(1)
+                    .map_err(|_| self.limit("repr(C) metadata allocation"))?;
+                let key = self
+                    .names
+                    .key(name, LookupClass::Item(Namespace::Type))
+                    .map_err(native_adapter::name_error)?;
+                self.c_abi.repr_c.insert((module, key));
+            }
             let type_params = self.type_parameters()?;
             let region_params = self.pending_regions.params.clone();
             self.type_params = type_params.clone();
@@ -10880,6 +10937,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.reserve_parser_items(&mut body_bounds, head.bounds.len())?;
         body_bounds.extend(head.bounds.iter().cloned());
         self.set_visible_bounds(&body_bounds)?;
+        let external = std::mem::take(&mut self.pending_c_abi) || self.foreign_c;
+        let exported = std::mem::take(&mut self.pending_c_export);
+        if external && associated {
+            return Err(self.unsupported("associated extern C functions are unsupported"));
+        }
         let previous_parent = self.lexical.closure_parent.take();
         if !associated {
             self.lexical.closure_parent = Some(closures::ClosureParent {
@@ -10888,7 +10950,25 @@ impl<'input, 'names> Parser<'input, 'names> {
             });
         }
         let result = (|| {
-            let (body, lexical_scope) = if let Some(proof) = self.item_expansion {
+            let (body, lexical_scope) = if self.foreign_c {
+                self.expect(";")?;
+                // Foreign declarations have no Rust body. The uninhabited
+                // source carrier traverses normal signature/CFG authority,
+                // but OBJECT emits only the issued native import bridge.
+                (
+                    Block {
+                        statements: Vec::new(),
+                        tail: Some(Box::new(Expr::Loop {
+                            label: None,
+                            body: Block {
+                                statements: Vec::new(),
+                                tail: None,
+                            },
+                        })),
+                    },
+                    None,
+                )
+            } else if let Some(proof) = self.item_expansion {
                 if associated
                     || !inherited.is_empty()
                     || !head.type_params.is_empty()
@@ -10927,7 +11007,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     lexical_scope,
                     module: self.module,
                     constness: head.constness,
-                    unsafety: head.unsafety,
+                    unsafety: head.unsafety || self.foreign_c,
                     static_mut: false,
                     visibility: ir::Visibility::Public,
                     name: AstPath::new(self.names, PathAnchor::Relative, &[head.name])
@@ -10944,6 +11024,10 @@ impl<'input, 'names> Parser<'input, 'names> {
                 receiver,
             ))
         })();
+        let result = result.and_then(|(function, receiver)| {
+            self.record_c_function(&function, external, exported)?;
+            Ok((function, receiver))
+        });
         self.lexical.closure_parent = previous_parent;
         self.visible_bounds = enclosing_bounds;
         result
@@ -11112,6 +11196,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         if !self.is(")") {
             loop {
+                if (self.foreign_c || self.pending_c_abi) && (self.is("...") || self.is("..")) {
+                    return Err(self.unsupported("C variadic functions are unsupported"));
+                }
                 if self.is("[") {
                     return Err(self.unsupported("array parameter patterns are unsupported"));
                 }
@@ -13246,6 +13333,7 @@ fn parse_syntax_unit(
     let root_path =
         AstPath::new(parser.names, PathAnchor::Crate, &[]).map_err(native_adapter::name_error)?;
     parser.items(root, &root_path, &mut parsed)?;
+    parsed.program.c_abi = std::mem::take(&mut parser.c_abi);
     if !parser.is("") {
         return Err(parser.error("unexpected module closing brace"));
     }
@@ -16093,6 +16181,7 @@ impl PlanCtx {
     ) -> Result<Self, String> {
         let program = shared.as_ref();
         program.validate_name_handles()?;
+        program.validate_c_source()?;
         program.validate_associated_bound_sources(budget)?;
         // Source constructors retain nominal identity. Generic unit declarations
         // remain outside source-shape admission.
@@ -17427,6 +17516,7 @@ impl PlanCtx {
         };
         plan.validate_inherent_overlaps(budget)?;
         plan.publish_trait_world(program)?;
+        plan.validate_c_abi()?;
         plan.closed_roots = plan.compute_closed_roots()?;
         Ok(plan)
     }

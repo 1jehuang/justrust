@@ -667,6 +667,15 @@ host macro and compiles its generated target source.
 
 ### G6. Runtime, FFI, linking and target expansion
 
+- [x] External Linux x86-64 C ABI slice: original extern C declarations and
+      definitions, repr(C) scalar/nested aggregate layout separate from private
+      carriers, INTEGER/SSE register classification with complete aggregate
+      rollback, stack arguments, mixed/two-register and hidden-pointer results.
+      Direct ELF64 relocatable emission and native object/archive/library linking
+      support real C callbacks and C-main executables. See `C-ABI.md` and the
+      worker-1/8 native, authority and graph gates. G6 remains open for variadics,
+      unwind, TLS, atomics, aggregate pointers, further repr/ABI forms and targets.
+
 - [x] Native primitive `{:?}` for integers/bool/unit and recursively Copy
       tuples/fixed arrays, with immutable per-argument modes, shared place loans,
       stock differential streams/evaluation and forged IR/CFG authority gates.

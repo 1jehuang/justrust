@@ -31,6 +31,8 @@ const MAX_ORIGINS: usize = 1024 * 1024;
 /// Native x86_64 Linux configuration plus bounded user predicates.
 /// The default pins abort and enables debug assertions, not complete Rust panic semantics.
 pub struct SourceOptions {
+    /// Native ELF object emission/link inputs, frozen before graph execution.
+    pub native_link: super::c_abi::elf::LinkOptions,
     pub cfg: CfgSet,
     /// Attach the embedded native prelude library (`libraries/prelude`) after
     /// the user crate in graph compilation. See PRELUDE.md.
@@ -74,6 +76,7 @@ impl TestFilter {
 impl Default for SourceOptions {
     fn default() -> Self {
         Self {
+            native_link: super::c_abi::elf::LinkOptions::default(),
             cfg: CfgSet::native_x86_64_linux(),
             prelude: true,
             opt: super::ssa::OptMode::default(),

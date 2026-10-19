@@ -170,7 +170,7 @@ fn result_indirect(ty: &ir::Ty) -> Result<bool, String> {
 /// whose operand convention is its snapshot ADDRESS in rax, exactly like
 /// aggregates, so local copies move both words. It never crosses a call
 /// boundary as a pointer: calls use `argument_words` == 2 and push both words.
-fn indirect(ty: &ir::Ty) -> Result<bool, String> {
+pub(super) fn indirect(ty: &ir::Ty) -> Result<bool, String> {
     ir::reject_associated_types(ty, None)?;
     if let Some(element) = ty.descriptor_element() {
         shared_slice_layout(element)?;
@@ -205,7 +205,7 @@ fn indirect(ty: &ir::Ty) -> Result<bool, String> {
     }
 }
 
-fn value_size(ty: &ir::Ty) -> Result<i32, String> {
+pub(super) fn value_size(ty: &ir::Ty) -> Result<i32, String> {
     ir::reject_associated_types(ty, None)?;
     if wide_integer(ty) {
         // PRIVATE layout: low limb at 0, high limb at 8, eight-byte alignment.
@@ -346,6 +346,8 @@ fn allocate_value(frame: &mut i32, ty: &ir::Ty) -> Result<i32, String> {
 #[derive(Clone, Debug)]
 pub struct Object {
     pub code: Vec<u8>,
+    /// Additional externally visible C entry points, each at a byte offset.
+    pub exports: Vec<(usize, String)>,
     pub calls: Vec<(usize, String)>,
     pub strings: Vec<(usize, Vec<u8>)>,
     /// Absolute u64 immediate fields that receive the address of a linked
@@ -2149,6 +2151,7 @@ impl<'a> Emitter<'a> {
                     calls: Vec::new(),
                     strings: Vec::new(),
                     vtables: Vec::new(),
+                    exports: Vec::new(),
                     receipt: None,
                 },
             ),
@@ -3342,6 +3345,7 @@ pub fn emit_cfg_function(
             calls: Vec::new(),
             strings: Vec::new(),
             vtables: Vec::new(),
+            exports: Vec::new(),
             receipt: None,
         },
         concrete,
@@ -4273,6 +4277,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 vtables: Vec::new(),
+                exports: Vec::new(),
                 receipt: None,
             },
             concrete: &concrete,
@@ -4339,6 +4344,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 vtables: Vec::new(),
+                exports: Vec::new(),
                 receipt: None,
             },
             concrete: &concrete,
@@ -4389,6 +4395,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 vtables: Vec::new(),
+                exports: Vec::new(),
                 receipt: None,
             },
             concrete: &concrete,
@@ -4857,6 +4864,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 vtables: Vec::new(),
+                exports: Vec::new(),
                 receipt: None,
             },
             concrete: &concrete,
@@ -4999,6 +5007,7 @@ mod tests {
                 calls: Vec::new(),
                 strings: Vec::new(),
                 vtables: Vec::new(),
+                exports: Vec::new(),
                 receipt: None,
             },
             concrete: &concrete,
@@ -7323,6 +7332,7 @@ mod tests {
                 calls: vec![],
                 strings: vec![],
                 vtables: vec![],
+                exports: Vec::new(),
                 receipt: None,
             },
             concrete: &concrete,
@@ -7580,6 +7590,7 @@ mod tests {
                     calls: vec![],
                     strings: vec![],
                     vtables: vec![],
+                    exports: Vec::new(),
                     receipt: None,
                 },
                 concrete: &concrete,
@@ -7668,6 +7679,7 @@ mod tests {
                 calls: vec![],
                 strings: vec![],
                 vtables: vec![],
+                exports: Vec::new(),
                 receipt: None,
             },
             concrete: &concrete,
