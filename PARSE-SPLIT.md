@@ -156,6 +156,21 @@ repeated runs: foreign-snapshot handles reject; duplicate occurrences from two
 sibling sessions reject; swapped source maps (same text, different snapshot)
 reject; concurrent direct parses of identical text get distinct roots.
 
+Review status (scratch commits 75e6521c4, 6081dfe90, not pushed): the
+foundation is in `src/compiler/owner_path.rs` and `Context::owner_root`.
+First review found reusable root/file factories, allocation before payment,
+and a wrapping graph-id counter; all three are fixed. Roots are single-mint
+and not `Clone`, files are issued rather than positional, steps are paid
+before allocation, and graph ids fail closed at exhaustion.
+
+Open before activation: each step's `ByteLease` holds an `ExpansionBudget`,
+which contains a `Mutex`. Once an `OwnerPath` is reachable from a published
+fact, `graph_facts_reach_no_new_mutable_state` would record a new
+`ByteLease`/`ExpansionBudget` triple, which the ratchet forbids. Published
+paths must carry no lease: pay at admission, then retain through the
+producing node's meter (as `PlanBudget::retain_bytes` does) instead of a
+budget handle. Waiting on the coordinator's choice.
+
 1. Deterministic owner ids derived from file ordinals. No behavior change.
    Shrinks the static/atomic baseline.
 2. `PARSE_FILE` per file with per-file sessions. During this step `PARSE` still
