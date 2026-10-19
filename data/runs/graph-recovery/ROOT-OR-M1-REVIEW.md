@@ -81,3 +81,39 @@ rounding. A bounded design for allocation-free comparisons, paid projection
 copies and fallible accounted growth was requested separately. No broad CFG
 rewrite, new cap, shared API or allowance increase is approved by this note.
 The source remains private while repairs and their validation are reviewed.
+
+## Scoped repair review, October 19, 2026
+
+Exact separate private repair:
+`20c00b60c263cfa961f54ec9eecd1834539d82d5`. Independent read-only
+inspection closes both blockers above, without importing OR support into main:
+
+- `ir.rs:6215-6217` and `6256-6258` reject a prefailed ledger before validation
+  or further charges. `has_resource_failure` is read-only and also rejects
+  poison. Tests exercise prior Bytes and oversized rejected Work failures,
+  both entry points twice, exact original failure and unchanged work/bytes.
+- `frontend.rs:10427-10435` pays one Work unit before `render_span`, before
+  row allocation. The replacement authenticates exact snapshot/file/range
+  and UTF-8 boundaries through bounded indexed lookup and stack-only span
+  construction. No prefix traversal or successful payload allocation remains.
+- The long-prefix Work-counter equality test is only a metering control: the
+  old unmetered prefix scan would also pass it. Source inspection, not that
+  test alone, establishes removal of the scan. Normal error String allocation
+  remains existing diagnostic debt.
+
+Inherited CFG repairs are a separate private implementation, not accepted by
+this review. Owner-reported hosted runs on its uncommitted snapshot passed
+seven focused controls (`20261019-010004684-85883`) and 65 OR/authority/unchanged
+all-graph controls (`20261019-010013668-86677`), including required 1208.
+Existing CFG regression run `20261019-010033657-88030` was **red: 131/132**.
+The remaining test's old element-only admission expectation differed by 312
+bytes after new container admission. That explanation is not yet acceptance:
+any test repair must derive actual capacity admissions and preserve two full
+panic copies plus the third one-byte-short failure before payload cloning,
+with exact first-failure and sticky retry checks. No charges or graph gates
+may be reduced to make the fixture green.
+
+Current main baseline is optimizer acceptance `b85a0b6dd`, full 3627/3627.
+That baseline does not include any OR checkpoint. Current-base replay, exact
+owner-cap constructor adaptation, independent CFG failure-path review and
+central acceptance remain pending. Corpus remains 3/20.
