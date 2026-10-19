@@ -6251,6 +6251,9 @@ pub struct MatchArm {
 
 /// The deliberately closed Copy domain of original root-arm alternatives.
 pub fn validate_alternative_domain(ty: &Ty, budget: Option<&PlanBudget>) -> Result<(), String> {
+    if budget.is_some_and(PlanBudget::has_resource_failure) {
+        return Err("planning resource budget already exhausted".into());
+    }
     fn walk(
         ty: &Ty,
         budget: Option<&PlanBudget>,
@@ -6289,6 +6292,9 @@ fn validate_alternative_rows(
     rows: &[Vec<PatternTest>],
     budget: Option<&PlanBudget>,
 ) -> Result<(), String> {
+    if budget.is_some_and(PlanBudget::has_resource_failure) {
+        return Err("planning resource budget already exhausted".into());
+    }
     fn charge(work: &mut usize, amount: usize, budget: Option<&PlanBudget>) -> Result<(), String> {
         CheckedFunction::decision_work(work, amount)?;
         if let Some(budget) = budget {

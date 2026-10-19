@@ -1,4 +1,38 @@
 use super::*;
+#[test]
+fn root_or_entry_preserves_prior_bytes_and_work_failure_on_retry() {
+    for kind in [ResourceBudgetKind::Bytes, ResourceBudgetKind::Work] {
+        let budget = PlanBudget::new(PlanLimits {
+            bytes: 0,
+            work: 100,
+            ..PlanLimits::default()
+        });
+        match kind {
+            ResourceBudgetKind::Bytes => assert!(budget.reserve_bytes(1).is_err()),
+            ResourceBudgetKind::Work => assert!(budget.charge_work(101).is_err()),
+            _ => unreachable!(),
+        }
+        let before = budget.usage_snapshot();
+        let first = before.first_failure.unwrap();
+        assert_eq!(first.kind, kind);
+        // Both failures leave enough work for these otherwise valid inputs.
+        assert_eq!(before.work, 0);
+        for _ in 0..2 {
+            assert_eq!(
+                validate_alternative_domain(&Ty::Bool, Some(&budget)).unwrap_err(),
+                "planning resource budget already exhausted"
+            );
+            assert_eq!(
+                validate_alternative_rows(&Ty::Bool, &[Vec::new(), Vec::new()], Some(&budget))
+                    .unwrap_err(),
+                "planning resource budget already exhausted"
+            );
+            assert_eq!(budget.first_resource_failure(), Some(first));
+            assert_eq!(budget.usage_snapshot().work, before.work);
+            assert_eq!(budget.usage_snapshot().bytes, before.bytes);
+        }
+    }
+}
 fn rows() -> Vec<Vec<PatternTest>> {
     [true, false]
         .into_iter()

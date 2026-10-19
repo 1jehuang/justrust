@@ -57,6 +57,22 @@ conversion or independent budget is introduced by flat rows. Existing canonical
 body publication owns its wrapper accounting. Resource rejection stays sticky
 and cannot be converted into exhaustiveness, usefulness or source authority.
 
+Review follow-up: both typed alternative validators reject at entry when the
+caller ledger already failed, preserving its exact first failure without another
+charge. The original OR span check pays one Work unit and uses `render_span` for
+exact snapshot/range/UTF-8 authentication, not diagnostic line-prefix scanning.
+Regression controls cover prior Bytes and Work failures with spare Work, retries,
+and constant parser work across a 128 KiB same-line whitespace prefix.
+
+These are scoped accounting claims, not complete CFG accounting. Inherited
+`decision_pattern_test` helpers still allocate comparison vectors and clone a
+projected place without paying the second projection capacity. Existing
+block/statement pushes pay element bytes rather than geometric backing capacity;
+scope headers and live-local backing pushes also need admission. Adjacent
+cleanup collections reachable from decision lowering need separate inventory.
+Those helpers predate OR and remain separate design/review work, not repaired by
+the two-slice follow-up. No fully paid CFG claim follows from the tests here.
+
 ## Evidence boundaries
 
 The frozen stock matrix has 32 original cases plus separately approved I9.

@@ -6009,6 +6009,34 @@ fn canonical_path_text_len(
 #[cfg(test)]
 mod local_macro_parser_tests {
     use super::*;
+    #[test]
+    fn root_or_span_validation_work_is_independent_of_line_prefix() {
+        use super::super::expansion_budget::{Counter, ExpansionBudget};
+        fn measured(prefix: usize) -> u64 {
+            let source = format!("{}0 | 1", " ".repeat(prefix));
+            let budget = ExpansionBudget::default();
+            let projection = super::super::source::PreparedLexInput::identity(
+                std::path::Path::new("or.rs"),
+                &source,
+                &budget,
+            )
+            .unwrap();
+            let (tokens, session) = native_input(&projection, budget.clone())
+                .unwrap()
+                .into_parts();
+            let mut names =
+                NameStoreBuilder::new(session, super::super::token::Edition::E2024).unwrap();
+            let mut parser = Parser::new(&tokens, &mut names).unwrap();
+            let before = budget.snapshot().counters[Counter::Work as usize];
+            assert!(
+                matches!(parser.arm_pattern().unwrap(), Pattern::Alternatives(rows) if rows.len() == 2)
+            );
+            budget.snapshot().counters[Counter::Work as usize] - before
+        }
+        let short = measured(0);
+        assert!(short > 0);
+        assert_eq!(measured(128 * 1024), short);
+    }
     fn syntax_with_budget(
         source: &str,
         budget: &super::super::expansion_budget::ExpansionBudget,
@@ -10417,9 +10445,13 @@ impl<'input, 'names> Parser<'input, 'names> {
             )
             .map_err(native_adapter::transport_error)?;
         self.names
+            .budget()
+            .charge(super::expansion_budget::Counter::Work, 1)
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        self.names
             .session()
             .sources()
-            .location(original)
+            .render_span(original)
             .map_err(native_adapter::transport_error)?;
         let mut rows = Vec::new();
         self.reserve_rest_patterns(&mut rows, 1)?;
