@@ -8084,6 +8084,38 @@ impl<'input, 'names> Parser<'input, 'names> {
             ),
         };
         let message = if self.eat(",") && !self.is(close) {
+            if self.panic_has_format() {
+                // Stock prints the formatted message (assert!) or the
+                // comparison header plus message (assert_eq!/assert_ne!).
+                let (spelling, header) = match comparison {
+                    Some(BinaryOp::Eq) => ("assert_eq", "assertion `left == right` failed"),
+                    Some(BinaryOp::Ne) => ("assert_ne", "assertion `left != right` failed"),
+                    _ => ("panic", ""),
+                };
+                let failure = self.formatted_panic(close, spelling, header, site)?;
+                let condition = self
+                    .names
+                    .try_parser_box(condition)
+                    .map_err(native_adapter::name_error)?;
+                let failure = self
+                    .names
+                    .try_parser_box(failure)
+                    .map_err(native_adapter::name_error)?;
+                let expression = Expr::If {
+                    condition,
+                    then_block: Block {
+                        statements: Vec::new(),
+                        tail: None,
+                    },
+                    else_block: Block {
+                        statements: Vec::new(),
+                        tail: Some(failure),
+                    },
+                };
+                validate_depth(DepthNode::Expr(&expression))
+                    .map_err(|e| self.depth_error(&e))?;
+                return Ok(expression);
+            }
             if !self.token().string && !self.token().is_opaque_literal() {
                 return Err(self.unsupported(nonliteral));
             }
