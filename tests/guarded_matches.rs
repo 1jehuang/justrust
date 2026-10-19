@@ -422,7 +422,7 @@ fn exact_runtime(case: &Case, result: &Captured, source: &Path, stock: bool) {
     );
     let mut stderr = String::from_utf8(result.stderr.clone()).unwrap();
     stderr = stderr.replace(&source.display().to_string(), "<SOURCE>");
-    let expected = if stock {
+    let expected = if stock || case.stock_signal.is_some() {
         if let Some(start) = stderr.find("thread 'main' (") {
             let start = start + "thread 'main' (".len();
             let end = start + stderr[start..].find(')').unwrap();
@@ -430,8 +430,6 @@ fn exact_runtime(case: &Case, result: &Captured, source: &Path, stock: bool) {
             stderr.replace_range(start..end, "<PID>");
         }
         case.stock_stderr.to_owned()
-    } else if case.stock_signal.is_some() {
-        "panicked at <SOURCE>:1:58:\nguard-stop\n".to_owned()
     } else {
         case.stock_stderr.to_owned()
     };

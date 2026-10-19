@@ -684,6 +684,11 @@ host macro and compiles its generated target source.
       move, borrowed replacement and invalid specialization controls pass.
       Additional nominal/impl bounds, owned parameter fields, nested glue,
       typed layout/drop-in-place and actual source Box<T> remain open.
+- [x] Main-thread literal/formatted panic-abort diagnostics include the runtime
+      process ID, original source location, message and stock default backtrace
+      hint. PID-only-normalized exact stderr compares with stock at workers 1/8
+      (`tests/runtime_panic_header.rs`, RUST_BACKTRACE=0). Backtrace generation,
+      unwind mode and ordinary arithmetic/bounds panic source sites remain open.
 - [ ] Provide debug/source information and runtime failure/exit diagnostics.
       Expand architectures/OSes only with target-specific executable evidence.
 

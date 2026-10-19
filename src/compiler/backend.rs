@@ -28,6 +28,7 @@ use super::ir::{self, LocalId};
 use super::ownership;
 use std::collections::HashMap;
 
+mod panic_header;
 mod wide_float;
 mod wide_int;
 
@@ -1793,23 +1794,52 @@ impl<'a> Emitter<'a> {
     /// Write the complete (rsi, rdx) byte range. Empty descriptors are valid.
     /// Linux may interrupt or partially satisfy a write, including pipe writes.
     fn write_output(&mut self, stream: ir::OutputStream) -> Result<(), String> {
+        let panic_output = matches!(stream, ir::OutputStream::PanicStderr);
+        if panic_output {
+            // A diagnostic must reach the abort even with a broken stderr
+            // pipe. Restore SIGPIPE ignore before the first native segment.
+            // Failed signal setup is infrastructure failure, never Rust success.
+            self.bytes(&[0x56, 0x52, 0x48, 0x83, 0xec, 32, 0x31, 0xc0]);
+            for offset in [0, 8, 16, 24] {
+                self.bytes(&[0x48, 0x89, 0x44, 0x24, offset]);
+            }
+            self.bytes(&[0x48, 0xc7, 0x04, 0x24, 1, 0, 0, 0]);
+            self.bytes(&[0xb8, 13, 0, 0, 0, 0xbf, 13, 0, 0, 0]);
+            self.bytes(&[
+                0x48, 0x89, 0xe6, 0x31, 0xd2, 0x41, 0xba, 8, 0, 0, 0, 0x0f, 0x05,
+            ]);
+            self.bytes(&[0x48, 0x83, 0xc4, 32, 0x5a, 0x5e, 0x48, 0x85, 0xc0]);
+            let ready = self.jump(&[0x0f, 0x84]);
+            self.bytes(&[
+                0xbf, 101, 0, 0, 0, 0xb8, 231, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
+            ]);
+            self.patch(ready, self.position())?;
+        }
         self.bytes(&[0x48, 0x85, 0xd2]);
         let empty = self.jump(&[0x0f, 0x84]);
         let retry = self.position();
         let descriptor = match stream {
             ir::OutputStream::Stdout => 1,
-            ir::OutputStream::Stderr => 2,
+            ir::OutputStream::Stderr | ir::OutputStream::PanicStderr => 2,
         };
         self.bytes(&[0xb8, 1, 0, 0, 0, 0xbf, descriptor, 0, 0, 0, 0x0f, 0x05]);
         self.bytes(&[0x48, 0x83, 0xf8, 0xfc]);
         let interrupted = self.jump(&[0x0f, 0x84]);
         self.patch(interrupted, retry)?;
         self.bytes(&[0x48, 0x85, 0xc0]);
-        self.trap_if(0x8e);
+        let failed_panic_write = if panic_output {
+            Some(self.jump(&[0x0f, 0x8e]))
+        } else {
+            self.trap_if(0x8e);
+            None
+        };
         self.bytes(&[0x48, 0x01, 0xc6, 0x48, 0x29, 0xc2]);
         let more = self.jump(&[0x0f, 0x85]);
         self.patch(more, retry)?;
         self.patch(empty, self.position())?;
+        if let Some(failed) = failed_panic_write {
+            self.patch(failed, self.position())?;
+        }
         Ok(())
     }
     fn format_integer(&mut self, ty: ir::IntTy, stream: ir::OutputStream) -> Result<(), String> {
@@ -2155,17 +2185,20 @@ fn emit_panic(this: &mut dyn PanicSink, message: &str, location: &str) -> Result
             .location
             .len()
             .checked_add(panic.message.len())
-            .and_then(|length| length.checked_add(b"panicked at :\n\n".len()))
+            .and_then(|length| length.checked_add(b") panicked at :\n\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".len()))
             .ok_or("panic diagnostic storage overflow")?;
         let mut diagnostic = this.diagnostic(length)?;
         // An empty location marks a diagnostic already written by a
         // preceding formatted stderr output (formatted panic! messages).
         if !panic.location.is_empty() {
-            diagnostic.extend_from_slice(b"panicked at ");
+            diagnostic.extend_from_slice(b") panicked at ");
             diagnostic.extend_from_slice(panic.location.as_bytes());
             diagnostic.extend_from_slice(b":\n");
             diagnostic.extend_from_slice(panic.message.as_bytes());
             diagnostic.push(b'\n');
+            diagnostic.extend_from_slice(
+                b"note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n",
+            );
         }
 
         // Reserve a zeroed kernel sigaction (handler, flags, restorer, mask).
@@ -2189,6 +2222,10 @@ fn emit_panic(this: &mut dyn PanicSink, message: &str, location: &str) -> Result
         ])?;
         this.bytes(&[0x48, 0x85, 0xc0])?;
         let failed_sigpipe = this.jump(&[0x0f, 0x85])?;
+
+        if !panic.location.is_empty() {
+            panic_header::emit(this)?;
+        }
 
         this.bytes(&[0x48, 0xbe])?;
         let relocation = this.position();
@@ -3833,7 +3870,7 @@ mod tests {
                 assert!(diagnostic.contains("panicked at "), "{diagnostic}");
                 assert!(diagnostic.contains(":2:5:\n"), "{diagnostic}");
                 assert!(
-                    diagnostic.ends_with(&format!("{expected}\n")),
+                    diagnostic.ends_with(&format!("{expected}\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n")),
                     "{diagnostic}"
                 );
             }
@@ -3986,7 +4023,7 @@ mod tests {
         if number == 13 {
             assert!(output.stderr.is_empty(), "{output:?}");
         } else {
-            assert!(output.stderr.ends_with(b"denied setup\n"), "{output:?}");
+            assert!(output.stderr.ends_with(b"denied setup\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"), "{output:?}");
         }
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(path.parent().unwrap()).unwrap();
@@ -4110,7 +4147,7 @@ mod tests {
             assert!(
                 String::from_utf8(output.stderr)
                     .unwrap()
-                    .ends_with("denied pid\n")
+                    .ends_with("denied pid\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n")
             );
         }
         std::fs::remove_file(&path).unwrap();

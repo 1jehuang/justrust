@@ -6644,6 +6644,9 @@ pub struct PanicMessage {
 pub enum OutputStream {
     Stdout,
     Stderr,
+    /// Internal panic diagnostic output. Write failures must not return or
+    /// replace the panic-abort terminator with an unrelated output trap.
+    PanicStderr,
 }
 
 /// Native formatting operations, not name-based std::fmt trait dispatch.

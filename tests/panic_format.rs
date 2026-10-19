@@ -52,8 +52,12 @@ fn formatted_panic_messages_match_stock_text() {
     for (name, source, tail) in cases {
         let (stdout, stderr, signal) = run(name, source);
         assert!(!stdout.contains("after"), "{name}: {stdout}");
-        assert!(stderr.starts_with("panicked at "), "{name}: {stderr}");
-        assert!(stderr.ends_with(tail), "{name}: {stderr:?}");
+        assert!(stderr.starts_with("\nthread 'main' ("), "{name}: {stderr}");
+        let (_, diagnostic) = stderr.split_once(") panicked at ").expect("panic header");
+        let expected_tail = format!(
+            "{tail}note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+        );
+        assert!(diagnostic.ends_with(&expected_tail), "{name}: {stderr:?}");
         assert_eq!(signal, Some(6), "{name}");
     }
 }

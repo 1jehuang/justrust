@@ -98,7 +98,7 @@ impl Checker<'_> {
             int(
                 match stream {
                     ir::OutputStream::Stdout => 1,
-                    ir::OutputStream::Stderr => 2,
+                    ir::OutputStream::Stderr | ir::OutputStream::PanicStderr => 2,
                 },
                 ir::IntTy::Usize,
             ),
