@@ -25,8 +25,11 @@ The chicken audit's failures are real even when the lexical gate passes:
   cache reuse. Graph execution now admits obligations through each node's engine
   meter with the same 4096 limit. Direct non-graph API calls retain ledger limits.
   Aggregate obligation telemetry includes those per-node counters. Obligations
-  count recursive proof-search misses, not fixed canonical leaf decisions:
-  primitive/reference/raw-pointer Sized/Copy/Clone rules do not search impls or
+  count recursive proof-search misses, not terminal rule decisions or exact
+  declared Implements assumptions. Assumptions still require the exact predicate
+  including binder identity in the admitted caller context. Projection equality
+  never takes that shortcut. Fixed canonical leaf decisions use the
+  primitive/reference/raw-pointer Sized/Copy/Clone rules, which do not search impls or
   recurse. They still admit full metadata, reject active ancestry, consider exact
   assumptions, meter work and evidence, and mint context-specific evidence. In
   particular `&mut T` is not Copy/Clone. Parameters, projections, aggregates and
@@ -37,7 +40,10 @@ semantic value. No whole-program kind or ratchet ceiling is added or raised.
 
 ## Proof scratch invariants
 
-1. Every public proof/normalization operation starts fresh local scratch.
+1. Every public proof/normalization operation starts fresh local scratch, or
+   receives an explicitly borrowed invocation-local `ProofSession`. The instance
+   planner owns one world-bound session for its synchronous admission loop so
+   nested recursive instance prefixes reuse completed exact-context proofs.
    Scratch never belongs to a published world, facts object or static.
 2. The complete memo key retains the exact predicate environment index, facts
    phase, owner-finalization stage and predicate/projection. Projection keys also

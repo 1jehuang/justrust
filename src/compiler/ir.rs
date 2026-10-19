@@ -2773,13 +2773,43 @@ pub fn substitute_callee(
     cx: &mut impl SubstitutionCx,
     budget: &PlanBudget,
 ) -> Result<Callee, String> {
+    substitute_callee_with_session(callee, env, args, closed_facts, cx, budget, None)
+}
+
+pub(crate) fn substitute_callee_in(
+    callee: &Callee,
+    env: &GenericEnv,
+    args: &[Ty],
+    closed_facts: &super::traits::ValidatedFacts,
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+    session: &mut super::traits::ProofSession,
+) -> Result<Callee, String> {
+    substitute_callee_with_session(callee, env, args, closed_facts, cx, budget, Some(session))
+}
+
+fn substitute_callee_with_session(
+    callee: &Callee,
+    env: &GenericEnv,
+    args: &[Ty],
+    closed_facts: &super::traits::ValidatedFacts,
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+    session: Option<&mut super::traits::ProofSession>,
+) -> Result<Callee, String> {
     let substituted = substitute_callee_metadata(callee, env, args, closed_facts, cx, budget)?;
     match substituted {
         Callee::Direct(target) => {
-            closed_facts
-                .service()
-                .discharge_direct(&target, closed_facts)
-                .map_err(|e| e.into_legacy_diagnostic(budget))?;
+            if let Some(session) = session {
+                closed_facts
+                    .world()
+                    .discharge_direct_in(&target, closed_facts, session)
+            } else {
+                closed_facts
+                    .service()
+                    .discharge_direct(&target, closed_facts)
+            }
+            .map_err(|e| e.into_legacy_diagnostic(budget))?;
             Ok(Callee::Direct(target))
         }
         Callee::TraitItem(call) => Ok(closed_facts

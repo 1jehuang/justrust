@@ -585,6 +585,7 @@ pub(super) fn build(
     sources: &[Arc<ir::CheckedFunction>],
     budget: &ir::PlanBudget,
 ) -> Result<Plan, String> {
+    let mut proof_session = context.trait_world()?.proof_session();
     let mut declarations = HashMap::new();
     let mut entries = Vec::new();
     let mut seen = HashMap::new();
@@ -611,6 +612,7 @@ pub(super) fn build(
     reservations.push(registry_reservation);
 
     struct Queue<'a> {
+        proof_session: &'a mut traits::ProofSession,
         declarations: &'a HashMap<ir::DeclId, usize>,
         entries: &'a mut Vec<Instance>,
         seen: &'a mut HashMap<ir::CallTarget, usize>,
@@ -629,7 +631,7 @@ pub(super) fn build(
             // A cached target or canonical nominal app is not admission authority.
             // Validate all exact instance metadata before residual projection
             // rejection or any recursive/cache-hit lookup.
-            context.instance_facts(&target)?;
+            context.instance_facts_in(&target, self.proof_session)?;
             charge_target_lookup(&target, budget)?;
             // Exact recursive instances are already finite, regardless of call depth.
             if self.seen.contains_key(&target) {
@@ -696,6 +698,7 @@ pub(super) fn build(
         }
     }
     let mut queue = Queue {
+        proof_session: &mut proof_session,
         declarations: &declarations,
         entries: &mut entries,
         seen: &mut seen,
@@ -743,7 +746,7 @@ pub(super) fn build(
         let depth = queue.depths[cursor];
         let schema = context.function_schema(target.declaration)?;
         let env = schema.env;
-        let closed_facts = context.instance_facts(&target)?;
+        let closed_facts = context.instance_facts_in(&target, queue.proof_session)?;
         let source = sources
             .get(source_index)
             .ok_or("missing universally checked declaration body")?;
@@ -843,13 +846,14 @@ pub(super) fn build(
             }
             // --- end trait objects ---
             if let ir::ExprKind::Call { target: callee, .. } = &expression.kind {
-                let resolved = ir::substitute_callee(
+                let resolved = ir::substitute_callee_in(
                     callee,
                     &env,
                     &target.type_args,
                     &closed_facts,
                     context,
                     budget,
+                    queue.proof_session,
                 )?;
                 let ir::Callee::Direct(next) = resolved else {
                     return Err("unresolved trait callee in concrete instance frontier".into());

@@ -16226,6 +16226,15 @@ impl PlanCtx {
             .instance_facts(target)
             .map_err(|e| e.into_legacy_diagnostic(&self.budget))
     }
+    pub(crate) fn instance_facts_in(
+        &self,
+        target: &ir::CallTarget,
+        session: &mut tr::ProofSession,
+    ) -> Result<Arc<tr::ValidatedFacts>, String> {
+        self.trait_world()?
+            .instance_facts_in(target, session)
+            .map_err(|e| e.into_legacy_diagnostic(&self.budget))
+    }
     fn check_budget(&self, budget: &ir::PlanBudget) -> Result<(), String> {
         if !self.budget.same_authority(budget) {
             return Err("generic planning budget authority mismatch".into());

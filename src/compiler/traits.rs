@@ -989,6 +989,14 @@ struct ProofScratch {
     active: Vec<GoalKey>,
     memo: Vec<MemoEntry>,
 }
+
+/// Explicit invocation-local search reuse. Never retain this in a graph fact:
+/// its only owner is the synchronous planner task using it. Semantic results
+/// escape exclusively as immutable, context-bound proof evidence.
+pub(crate) struct ProofSession {
+    world: WorldId,
+    scratch: ProofScratch,
+}
 impl std::ops::Deref for ProofScratch {
     type Target = [GoalKey];
     fn deref(&self) -> &[GoalKey] {
@@ -4771,6 +4779,44 @@ impl ValidatedTraitWorld {
         }))
     }
     pub fn instance_facts(self: &Arc<Self>, target: &CallTarget) -> Result<Arc<ValidatedFacts>> {
+        self.instance_facts_in(target, &mut self.proof_session())
+    }
+    pub(crate) fn proof_session(&self) -> ProofSession {
+        ProofSession {
+            world: self.id,
+            scratch: ProofScratch::default(),
+        }
+    }
+    pub(crate) fn discharge_direct_in(
+        &self,
+        target: &CallTarget,
+        facts: &ValidatedFacts,
+        session: &mut ProofSession,
+    ) -> Result<DirectCallProof> {
+        if session.world != self.id {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "proof session belongs to another trait world",
+            ));
+        }
+        self.check_facts(facts, true)?;
+        self.discharge_in_scratch(
+            target,
+            ProofContext::from_facts(facts),
+            &mut session.scratch,
+        )
+    }
+    pub(crate) fn instance_facts_in(
+        self: &Arc<Self>,
+        target: &CallTarget,
+        session: &mut ProofSession,
+    ) -> Result<Arc<ValidatedFacts>> {
+        if session.world != self.id {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "proof session belongs to another trait world",
+            ));
+        }
         // The temporary context is private and never published before all entry
         // requirements have been proved. Its assumptions are genuinely empty.
         let mut facts = ValidatedFacts {
@@ -4779,7 +4825,12 @@ impl ValidatedTraitWorld {
             predicates: self.empty.clone(),
             requirements: Arc::from([]),
         };
-        let proof = self.discharge_direct(target, &facts)?;
+        self.check_facts(&facts, true)?;
+        let proof = self.discharge_in_scratch(
+            target,
+            ProofContext::from_facts(&facts),
+            &mut session.scratch,
+        )?;
         facts.requirements = proof.evidence;
         retain::<ValidatedFacts>(&self.budget, 1)?;
         Ok(Arc::new(facts))
@@ -5628,6 +5679,13 @@ impl ValidatedTraitWorld {
                 ));
             }
         }
+        if matches!(predicate, Predicate::Implements(_)) {
+            for assumption in facts.predicates.predicates.iter() {
+                if self.eq_predicate(assumption, predicate)? {
+                    return self.evidence(predicate, facts, ProofOrigin::Assumption);
+                }
+            }
+        }
         // These catalog rules are complete context-independent leaf decisions,
         // not an implementation search. Metadata and DFS ancestry were checked
         // above, and prove_uncached still considers exact caller assumptions
@@ -6001,6 +6059,14 @@ impl ValidatedTraitWorld {
         target: &CallTarget,
         context: ProofContext<'_>,
     ) -> Result<DirectCallProof> {
+        self.discharge_in_scratch(target, context, &mut ProofScratch::default())
+    }
+    fn discharge_in_scratch(
+        &self,
+        target: &CallTarget,
+        context: ProofContext<'_>,
+        scratch: &mut ProofScratch,
+    ) -> Result<DirectCallProof> {
         self.ensure_provider(target.declaration)?;
         let schema = self.callable_schema(target.declaration)?;
         let instantiated = self.instantiate_in(
@@ -6015,7 +6081,7 @@ impl ValidatedTraitWorld {
             push(
                 &self.budget,
                 &mut evidence,
-                self.require_in(predicate, context, &mut Default::default())?,
+                self.require_in(predicate, context, scratch)?,
             )?;
         }
         Ok(DirectCallProof {
@@ -8674,7 +8740,7 @@ mod tests {
         ));
         assert!(
             !scratch.memo.is_empty(),
-            "parameters still use exact-assumption proof search"
+            "unbounded parameters still require proof search"
         );
         let foreign = case();
         let foreign_world = foreign.build().unwrap();
@@ -8682,6 +8748,72 @@ mod tests {
         assert!(
             matches!(world.prove_goal(&unbounded, &foreign_facts), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
         );
+    }
+
+    #[test]
+    fn exact_assumptions_are_terminal_context_specific_proofs() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let goal = c.goal(c.caller_parameter.clone());
+        let mut scratch = ProofScratch::default();
+        let before = c.budget.usage_snapshot();
+        let ProofOutcome::Proved(proof) = world.prove(&goal, &facts, &mut scratch).unwrap() else {
+            panic!("declared exact bound must be usable");
+        };
+        assert!(matches!(proof.0.origin, ProofOrigin::Assumption));
+        assert_eq!(proof.0.world, world.id);
+        assert_eq!(proof.0.environment, facts.predicates.index);
+        assert!(world.eq_predicate(&proof.0.goal, &goal).unwrap());
+        assert!(scratch.active.is_empty());
+        assert!(scratch.memo.is_empty());
+        let after = c.budget.usage_snapshot();
+        assert!(after.work > before.work);
+        assert_eq!(after.obligations, before.obligations);
+        let foreign_binder = Predicate::Implements(TraitRef {
+            declaration: c.value_trait,
+            self_ty: Ty::Param(ParamId {
+                owner: BinderId {
+                    declaration: c.body,
+                },
+                index: 0,
+            }),
+            args: Arc::from([]),
+        });
+        assert!(world.prove(&foreign_binder, &facts, &mut scratch).is_err());
+    }
+
+    #[test]
+    fn planner_session_reuses_only_world_bound_completed_evidence() {
+        let c = case();
+        let world = c.build().unwrap();
+        let mut session = world.proof_session();
+        let target = CallTarget {
+            declaration: c.caller,
+            type_args: Arc::from([c.boxed.clone()]),
+        };
+        let first = world.instance_facts_in(&target, &mut session).unwrap();
+        assert!(!session.scratch.memo.is_empty());
+        let after_first = c.budget.usage_snapshot();
+        let second = world.instance_facts_in(&target, &mut session).unwrap();
+        let after_second = c.budget.usage_snapshot();
+        assert_eq!(after_first.obligations, after_second.obligations);
+        assert!(after_second.work > after_first.work);
+        assert_eq!(first.requirements.len(), second.requirements.len());
+        for (a, b) in first.requirements.iter().zip(second.requirements.iter()) {
+            assert!(Arc::ptr_eq(&a.0, &b.0));
+            assert_eq!(a.0.environment, world.empty.index);
+            assert_eq!(a.0.phase, FactsPhase::Closed);
+        }
+        let foreign = case();
+        let foreign_world = foreign.build().unwrap();
+        assert!(matches!(
+            foreign_world.instance_facts_in(&target, &mut session),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata
+        ));
+        let mut independent = world.proof_session();
+        world.instance_facts_in(&target, &mut independent).unwrap();
+        assert!(c.budget.usage_snapshot().obligations > after_second.obligations);
     }
 
     #[test]
@@ -8749,7 +8881,7 @@ mod tests {
             let engine = Engine::new(ProofReaders {
                 world: world.clone(),
                 facts,
-                goal: c.goal(c.caller_parameter.clone()),
+                goal: c.goal(c.boxed.clone()),
             });
             let readers = (0..8)
                 .map(|i| engine.request(Key::new(1, vec![i])))
@@ -8776,7 +8908,7 @@ mod tests {
         let c = case();
         let world = c.build().unwrap();
         let facts = world.callable_facts(c.caller).unwrap();
-        let goal = c.goal(c.caller_parameter.clone());
+        let goal = c.goal(c.boxed.clone());
         let key = GoalKey {
             environment: facts.predicates.index,
             phase: facts.phase(),
