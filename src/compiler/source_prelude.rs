@@ -80,6 +80,10 @@ const PRELUDE_FILES: &[(&str, &str)] = &[
         "__justrust_std/hash.rs",
         include_str!("../../libraries/prelude/hash.rs"),
     ),
+    (
+        "__justrust_std/test.rs",
+        include_str!("../../libraries/prelude/test.rs"),
+    ),
 ];
 
 fn lookup(path: &Path) -> Option<&'static str> {

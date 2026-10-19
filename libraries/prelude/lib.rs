@@ -20,3 +20,4 @@ pub mod hash;
 pub mod string;
 pub mod fmt;
 pub mod ptr;
+pub mod test;

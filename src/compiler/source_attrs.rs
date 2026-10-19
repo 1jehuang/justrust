@@ -25,6 +25,21 @@ pub struct AttributeRecord {
     pub name: String,
     pub effective: bool,
 }
+/// One `#[test]` function: its path inside this file (inline modules then
+/// the function name), `#[ignore]`, and `#[should_panic]` (with optional
+/// expected substring).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TestItem {
+    pub path: Vec<String>,
+    pub ignore: bool,
+    pub should_panic: Option<Option<String>>,
+}
+#[derive(Clone, Debug, Default)]
+struct PendingTest {
+    test: bool,
+    ignore: bool,
+    should_panic: Option<Option<String>>,
+}
 #[derive(Clone, Debug)]
 pub struct InactiveItem {
     pub range: Range<usize>,
@@ -33,6 +48,11 @@ pub struct InactiveItem {
 #[derive(Clone, Debug)]
 pub struct AttributeOutput {
     pub text: String,
+    /// `#[test]` functions found under `cfg(test)`, in source order.
+    pub tests: Vec<TestItem>,
+    /// Byte range of the name of a file-level `fn main` under `cfg(test)`.
+    /// A crate root renames it so the synthesized harness owns the entry.
+    pub test_main: Option<Range<usize>>,
     /// Built-in derive expansions: (filtered-text offset just after the item, generated impls).
     pub derives: Vec<(usize, String)>,
     pub attributes: Vec<AttributeRecord>,
@@ -136,6 +156,10 @@ fn prepare_with_context(
         derives: Vec::new(),
         consumed: Vec::new(),
         work: 0,
+        module_path: Vec::new(),
+        pending: PendingTest::default(),
+        tests: Vec::new(),
+        test_main: None,
     };
     filter.scope(0, filter.tokens.len(), 0..text.len(), Owner::Crate, 0)?;
     Ok(AttributeOutput {
@@ -143,6 +167,8 @@ fn prepare_with_context(
         attributes: filter.records,
         inactive_items: filter.inactive_items,
         derives: filter.derives,
+        tests: filter.tests,
+        test_main: filter.test_main,
     })
 }
 struct Filter<'a> {
@@ -157,6 +183,12 @@ struct Filter<'a> {
     /// Helper attributes (`#[default]`) consumed by a built-in derive.
     consumed: Vec<usize>,
     work: usize,
+    /// Inline module names enclosing the current scope.
+    module_path: Vec<String>,
+    /// Test attributes seen on the item currently being admitted.
+    pending: PendingTest,
+    tests: Vec<TestItem>,
+    test_main: Option<Range<usize>>,
 }
 impl Filter<'_> {
     fn mask(&mut self, range: Range<usize>) {
@@ -410,6 +442,7 @@ impl Filter<'_> {
             }
         }
         let record_start = self.records.len();
+        self.pending = PendingTest::default();
         self.work = self.work.saturating_add(attrs.len());
         if self.work > MAX_WORK {
             return Err(error(
@@ -544,6 +577,16 @@ impl Filter<'_> {
                         }
                     }
                 }
+                "test" | "ignore" | "should_panic" if owner == Owner::Function => {
+                    self.test_attribute(&meta)?;
+                    // Outside `cfg(test)` a test function is configured out.
+                    if meta.name == "test" && !self.cfg.names.contains("test") {
+                        for r in &mut self.records[record_start..] {
+                            r.effective = false;
+                        }
+                        return Ok(false);
+                    }
+                }
                 _ => {
                     return Err(error(
                         if known_semantic_attribute(&meta.name) {
@@ -631,6 +674,7 @@ impl Filter<'_> {
             }
             let item_start = i;
             let (kind, mut cursor) = self.item_kind(i, end);
+            let keyword = cursor;
             let mut body = None;
             let mut stop = end;
             while cursor < end {
@@ -684,18 +728,28 @@ impl Filter<'_> {
                 )?;
                 self.mask(self.tokens[first].range.start..self.tokens[stop - 1].range.end);
             } else {
+                self.admit_test_item(kind, item_start, keyword);
                 // Only modules introduce supported nested item attachment positions.
                 let header_end = body.map_or(stop, |(open, _)| open);
                 self.reject_nested(item_start, header_end)?;
                 if let Some((open, close)) = body {
                     if kind == "mod" {
-                        self.scope(
+                        let name = self
+                            .tokens
+                            .get(keyword + 1)
+                            .map_or("", |t| t.text(self.text))
+                            .trim_start_matches("r#")
+                            .to_string();
+                        self.module_path.push(name);
+                        let result = self.scope(
                             open + 1,
                             close,
                             self.tokens[open].range.end..self.tokens[close].range.start,
                             Owner::Module,
                             depth + 1,
-                        )?;
+                        );
+                        self.module_path.pop();
+                        result?;
                     } else if matches!(kind, "impl" | "trait") {
                         self.associated_function_attributes(open + 1, close)?;
                     } else if kind != "macro_rules" {
@@ -706,6 +760,80 @@ impl Filter<'_> {
             i = stop;
         }
         Ok(())
+    }
+    fn test_attribute(&mut self, meta: &Meta) -> Result<(), AttributeError> {
+        let meta = &parse_meta(&self.text[meta.range.clone()], meta.range.start)?;
+        let malformed =
+            |message: &str| error(AttributeErrorKind::Syntax, meta.range.clone(), message);
+        match meta.name.as_str() {
+            "test" => {
+                if !matches!(meta.value, MetaValue::Word) {
+                    return Err(malformed("malformed `test` attribute input"));
+                }
+                self.pending.test = true;
+            }
+            "ignore" => {
+                if !matches!(meta.value, MetaValue::Word | MetaValue::String(_)) {
+                    return Err(malformed("malformed `ignore` attribute input"));
+                }
+                self.pending.ignore = true;
+            }
+            _ => {
+                let expected = match &meta.value {
+                    MetaValue::Word => None,
+                    MetaValue::String(value) => Some(value.clone()),
+                    MetaValue::List(args)
+                        if args.len() == 1
+                            && args[0].name == "expected"
+                            && matches!(args[0].value, MetaValue::String(_)) =>
+                    {
+                        let MetaValue::String(value) = &args[0].value else {
+                            unreachable!()
+                        };
+                        Some(value.clone())
+                    }
+                    _ => return Err(malformed("malformed `should_panic` attribute input")),
+                };
+                self.pending.should_panic = Some(expected);
+            }
+        }
+        Ok(())
+    }
+    /// Under `cfg(test)`, make test functions and every private module
+    /// reachable from the synthesized harness at the crate root, the way
+    /// libtest's generated harness bypasses privacy. Records the test path.
+    fn admit_test_item(&mut self, kind: &str, item_start: usize, keyword: usize) {
+        let pending = std::mem::take(&mut self.pending);
+        if !self.cfg.names.contains("test") {
+            return;
+        }
+        let visible = self.tokens[item_start].text(self.text) == "pub";
+        let at = self.tokens[item_start].range.start;
+        if kind == "mod" && !visible && at > 0 {
+            self.derives.push((at, "pub(crate) ".into()));
+        }
+        let name_token = self.tokens.get(keyword + 1).map(|t| t.range.clone());
+        let name = name_token
+            .clone()
+            .map_or("", |r| &self.text[r])
+            .trim_start_matches("r#")
+            .to_string();
+        if kind == "fn" && name == "main" && self.module_path.is_empty() && !pending.test {
+            self.test_main = name_token;
+        }
+        if kind != "fn" || !pending.test {
+            return;
+        }
+        if !visible && at > 0 {
+            self.derives.push((at, "pub(crate) ".into()));
+        }
+        let mut path = self.module_path.clone();
+        path.push(name);
+        self.tests.push(TestItem {
+            path,
+            ignore: pending.ignore,
+            should_panic: pending.should_panic,
+        });
     }
     fn item_kind(&self, mut i: usize, end: usize) -> (&'static str, usize) {
         if self.tokens[i].text(self.text) == "pub" {

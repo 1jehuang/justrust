@@ -314,6 +314,8 @@ pub struct ChildModule {
     pub directory: PathBuf,
     /// Module nesting depth of the child file's top level.
     pub depth: usize,
+    /// Module path of the child file below the crate root.
+    pub module: Vec<String>,
 }
 
 /// Prepared form of exactly one source file: original bytes, configured and
@@ -331,6 +333,10 @@ pub struct FileUnit {
     pub origins: Vec<OriginSegment>,
     pub attributes: Vec<PreparedAttribute>,
     pub children: Vec<ChildModule>,
+    /// Module path of this file below its crate root.
+    pub module: Vec<String>,
+    /// `#[test]` functions declared in this file (paths relative to `module`).
+    pub tests: Vec<source_attrs::TestItem>,
     /// The first error found in this file, reported after every child that
     /// precedes it in source order, exactly where sequential loading stopped.
     pub terminal: Option<SourceError>,
@@ -370,7 +376,7 @@ fn root_unit_with(
         unanchored(Loader::error(SourceErrorKind::Unsupported, None, message))
     })?;
     let directory = path.parent().unwrap_or_else(|| Path::new("."));
-    file_unit(path, directory, 0, &[], options, reader, budget)
+    file_unit(Vec::new(), path, directory, 0, &[], options, reader, budget)
 }
 /// Child `index` of an already prepared parent unit.
 pub fn prepare_child_unit(
@@ -399,6 +405,7 @@ pub fn prepare_prelude_unit(
 ) -> UnitResult {
     let path = Path::new(source_prelude::PRELUDE_ROOT);
     file_unit(
+        Vec::new(),
         path,
         Path::new(source_prelude::PRELUDE_DIR),
         0,
@@ -424,6 +431,7 @@ fn child_unit_with(
         anchored: false,
     })?;
     file_unit(
+        child.module.clone(),
         &child.path,
         &child.directory,
         child.depth,
@@ -447,6 +455,7 @@ pub fn prepare_text_unit(
         unanchored(Loader::error(SourceErrorKind::Unsupported, None, message))
     })?;
     snapshot_unit(
+        Vec::new(),
         name.into(),
         text.to_owned(),
         Path::new("."),
@@ -457,7 +466,9 @@ pub fn prepare_text_unit(
         &super::expansion_budget::ExpansionBudget::default(),
     )
 }
+#[allow(clippy::too_many_arguments)]
 fn file_unit(
+    module: Vec<String>,
     path: &Path,
     directory: &Path,
     depth: usize,
@@ -516,6 +527,7 @@ fn file_unit(
     chain.extend_from_slice(ancestors);
     chain.push(canonical);
     snapshot_unit(
+        module,
         path.to_owned(),
         text,
         directory,
@@ -528,6 +540,7 @@ fn file_unit(
 }
 #[allow(clippy::too_many_arguments)]
 fn snapshot_unit<'a>(
+    module: Vec<String>,
     path: PathBuf,
     text: String,
     directory: &Path,
@@ -560,6 +573,8 @@ fn snapshot_unit<'a>(
         origins: builder.origins,
         attributes: builder.attributes,
         children: builder.children,
+        module,
+        tests: builder.tests,
         terminal,
     })
 }
@@ -589,6 +604,8 @@ pub struct SourceAssembler {
     prelude: bool,
     /// Prelude units are library inputs, not user source telemetry.
     in_prelude: bool,
+    /// `cfg(test)`: synthesize the native test harness entry after the crate.
+    harness: Option<Vec<source_attrs::TestItem>>,
 }
 struct Frame {
     unit: Arc<FileUnit>,
@@ -628,6 +645,7 @@ impl SourceAssembler {
             started: false,
             prelude: options.prelude,
             in_prelude: false,
+            harness: options.cfg.names.contains("test").then(Vec::new),
         }
     }
     /// Assemble only the user crate, without the prelude library.
@@ -676,6 +694,15 @@ impl SourceAssembler {
         if !self.in_prelude {
             self.prepared.source_bytes += unit.contents.len();
             self.prepared.files += 1;
+            if let Some(tests) = &mut self.harness {
+                for test in &unit.tests {
+                    let mut test = test.clone();
+                    let mut path = unit.module.clone();
+                    path.append(&mut test.path);
+                    test.path = path;
+                    tests.push(test);
+                }
+            }
         }
         let id = self
             .prepared
@@ -714,6 +741,8 @@ impl SourceAssembler {
                     origins: unit.origins.clone(),
                     attributes: unit.attributes.clone(),
                     children: unit.children.clone(),
+                    module: unit.module.clone(),
+                    tests: unit.tests.clone(),
                     terminal: unit.terminal.as_ref().map(|e| copy_error(e, e.primary)),
                 }
             }
@@ -722,6 +751,20 @@ impl SourceAssembler {
     fn run(&mut self) -> Result<AssemblyStep, SourceError> {
         loop {
             let Some(frame) = self.frames.last_mut() else {
+                if !self.in_prelude
+                    && let Some(tests) = self.harness.take()
+                {
+                    let anchor = SourceSpan {
+                        file: FileId(0),
+                        lo: 0,
+                        hi: 0,
+                    };
+                    if let Err(error) =
+                        append_segment(&mut self.prepared, &test_harness(tests), anchor, true)
+                    {
+                        return Err(self.fail(error));
+                    }
+                }
                 if self.prelude {
                     self.prelude = false;
                     self.in_prelude = true;
@@ -791,6 +834,36 @@ impl SourceAssembler {
             self.frames.pop();
         }
     }
+}
+/// The `cfg(test)` entry point: run every `#[test]` in name order through
+/// the native harness (`libraries/prelude/test.rs`), like libtest.
+fn test_harness(mut tests: Vec<source_attrs::TestItem>) -> String {
+    tests.sort_by(|a, b| a.path.cmp(&b.path));
+    let mut out = format!(
+        "\nfn main() {{\n    let mut __h = std::test::Harness::start({}usize);\n",
+        tests.len()
+    );
+    for test in &tests {
+        let name = test.path.join("::");
+        let (mode, expected) = match &test.should_panic {
+            None => (0, String::new()),
+            Some(None) => (1, String::new()),
+            Some(Some(expected)) => (2, expected.clone()),
+        };
+        let quote = |s: &str| format!("{s:?}");
+        out.push_str(&format!(
+            "    if __h.begin({name:?}, {}) {{ crate::{name}(); std::process::exit(0); }}\n",
+            test.ignore
+        ));
+        if !test.ignore {
+            out.push_str(&format!(
+                "    __h.end({name:?}, {mode}usize, {});\n",
+                quote(&expected)
+            ));
+        }
+    }
+    out.push_str("    __h.finish();\n}\n");
+    out
 }
 /// Append prepared text with provenance, merging contiguous original bytes.
 fn append_segment(
@@ -890,6 +963,9 @@ struct Loader<'a> {
     attributes: Vec<PreparedAttribute>,
     children: Vec<ChildModule>,
     derives: Vec<(usize, String)>,
+    /// Inline module names enclosing the text being expanded.
+    module_stack: Vec<String>,
+    tests: Vec<source_attrs::TestItem>,
 }
 impl<'a> Loader<'a> {
     fn new(
@@ -911,6 +987,8 @@ impl<'a> Loader<'a> {
             attributes: Vec::new(),
             children: Vec::new(),
             derives: Vec::new(),
+            module_stack: Vec::new(),
+            tests: Vec::new(),
         }
     }
     fn error(
@@ -981,7 +1059,19 @@ impl<'a> Loader<'a> {
             });
         }
         self.derives = filtered.derives;
-        self.expand(&filtered.text, 0, directory, depth)
+        self.tests = filtered.tests;
+        let mut text = filtered.text;
+        if self.root
+            && let Some(name) = filtered.test_main
+        {
+            // Under cfg(test) the harness is the entry; the crate's own main
+            // stays checked under a private name, as libtest leaves it unused.
+            text.replace_range(name.clone(), &" ".repeat(name.len()));
+            self.derives
+                .push((name.start + 1, "__justrust_user_main".into()));
+            self.derives.sort_by_key(|(at, _)| *at);
+        }
+        self.expand(&text, 0, directory, depth)
     }
     /// Lexical validation only, before configuration processing or module IO.
     /// No token input counts are charged until the configured lexer actually
@@ -1179,6 +1269,11 @@ impl<'a> Loader<'a> {
                         path,
                         directory: directory.join(name),
                         depth: depth + 1,
+                        module: {
+                            let mut module = self.module_stack.clone();
+                            module.push(name.trim_start_matches("r#").to_string());
+                            module
+                        },
                     });
                     self.append("\n}", decl, true)?;
                     copied = tokens[head + 2].end;
@@ -1188,12 +1283,16 @@ impl<'a> Loader<'a> {
                 if delimiter == "{" {
                     let end = close_group(&tokens, text, head + 2);
                     self.copy(text, base, copied..tokens[head + 2].end)?;
-                    self.expand(
+                    self.module_stack
+                        .push(name.trim_start_matches("r#").to_string());
+                    let expanded = self.expand(
                         &text[tokens[head + 2].end..tokens[end].start],
                         base + tokens[head + 2].end,
                         &directory.join(name),
                         depth + 1,
-                    )?;
+                    );
+                    self.module_stack.pop();
+                    expanded?;
                     copied = tokens[end].start;
                     i = end + 1;
                     continue;
