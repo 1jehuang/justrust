@@ -95,11 +95,7 @@ fn builtin_matches_bounded_grammar_and_late_invalid() {
         check(&program).is_err(),
         "bool tail must not become unit main"
     );
-    {
-        let (args, diagnostic) = ("1,x @ _", "unsupported token \"@\"");
-        let error = parse(&format!("fn main(){{matches!({args})}}")).unwrap_err();
-        assert!(error.contains(diagnostic), "{error}");
-    }
+    parse("fn main(){let _b=matches!(1,x @ _);}").unwrap();
     for source in [
         "fn main(){matches!(1,true);}",
         "fn main(){return;matches!(1,true);}",
@@ -149,7 +145,14 @@ fn builtin_matches_guard_shape_and_single_evaluation() {
             let identity = sr::OriginalBodyId::new(&budget).unwrap();
             let inventory =
                 SourceInventory::build(&program, &program.functions[2], identity, &budget).unwrap();
-            assert_eq!(inventory.calls.len(), 2);
+            assert_eq!(
+                inventory
+                    .calls
+                    .iter()
+                    .filter(|call| !call.operator_candidate)
+                    .count(),
+                2
+            );
             let env = type_env(&program).unwrap();
             let checked = type_function_with_env(&program, 2, &env).unwrap();
             assert_eq!(
@@ -197,8 +200,7 @@ fn builtin_matches_guards_use_existing_checker_and_binding_scope() {
     ] {
         bad(source);
     }
-    let error = parse("fn main(){match 1 {1 if true=>true,_=>false};}").unwrap_err();
-    assert!(error.contains("match guards, or-patterns and @ patterns are unsupported"));
+    parse("fn main(){match 1 {1 if true=>true,_=>false};}").unwrap();
 }
 
 #[test]

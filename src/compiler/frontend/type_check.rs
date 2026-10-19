@@ -16,6 +16,8 @@ mod local_literals;
 mod method_owner;
 #[path = "type_check/partial_annotation.rs"]
 pub(super) mod partial_annotation;
+#[path = "type_check/shared_or_arms.rs"]
+mod shared_or_arms;
 #[path = "try_operator.rs"]
 mod try_operator;
 #[path = "type_check/unsafety.rs"]
@@ -3325,13 +3327,20 @@ impl<'a> Checker<'a> {
     }
     #[inline(never)]
     fn publish_pattern(&mut self, plan: PendingPatternPlan) -> Result<ir::MatchPattern, String> {
+        self.publish_pattern_with_bindings(plan, None)
+    }
+    fn publish_pattern_with_bindings(
+        &mut self,
+        plan: PendingPatternPlan,
+        previous: Option<&HashMap<NameKey, ir::LocalId>>,
+    ) -> Result<ir::MatchPattern, String> {
         if matches!(plan.test, PatternTest::Binding) {
             let [binding] = plan.bindings.rows.as_slice() else {
                 return Err("contract: whole binding plan cardinality".into());
             };
             let binding = &binding.local;
             return self
-                .local(binding.name, binding.ty.clone(), binding.mutable)
+                .pattern_local(binding.name, binding.ty.clone(), binding.mutable, previous)
                 .map(ir::MatchPattern::Binding);
         }
         let decision_tests = if let PatternTest::Decision { tests, .. } = &plan.test {
@@ -3361,7 +3370,8 @@ impl<'a> Checker<'a> {
                 .charge_work(binding.projection.len())?;
             let mut projection = self.retained_pattern_vec(binding.projection.len())?;
             projection.extend_from_slice(&binding.projection);
-            let local = self.local(binding.name, binding.ty.clone(), binding.mutable)?;
+            let local =
+                self.pattern_local(binding.name, binding.ty.clone(), binding.mutable, previous)?;
             bindings.push(ir::PatternBinding {
                 local,
                 projection,
@@ -9086,8 +9096,11 @@ impl<'a> Checker<'a> {
                 _ => None,
             });
         }
+        let mut shared: Vec<Option<shared_or_arms::SharedOrArm>> =
+            (0..flattened.len()).map(|_| None).collect();
+        let mut expanded_groups = Vec::new();
         let mut expanded = Vec::with_capacity(arms.len());
-        for (arm, flat) in arms.zip(&flattened) {
+        for (group, (arm, flat)) in arms.zip(&flattened).enumerate() {
             let arm = BorrowedMatchArm {
                 pattern: flat.as_ref().or(arm.pattern),
                 ..arm
@@ -9097,12 +9110,14 @@ impl<'a> Checker<'a> {
             {
                 self.signatures.plan()?.budget.charge_work(rows.len())?;
                 for row in rows {
+                    expanded_groups.push(group);
                     expanded.push(BorrowedMatchArm {
                         pattern: Some(row),
                         ..arm
                     });
                 }
             } else {
+                expanded_groups.push(group);
                 expanded.push(arm);
             }
         }
@@ -9172,7 +9187,9 @@ impl<'a> Checker<'a> {
         let mut result = ir::Ty::Never;
         let mut completes = false;
         let mut unsupported_alternative = false;
-        for arm in arms.clone() {
+        for (arm_index, arm) in arms.clone().enumerate() {
+            let group = expanded_groups[arm_index];
+            let previous = shared[group].as_ref();
             let scope_depth = self.scopes.len();
             self.scopes.push(HashMap::new());
             let arm_result = (|| {
@@ -9270,7 +9287,14 @@ impl<'a> Checker<'a> {
                             .map(|matrix| plan.insert_coverage(matrix))
                             .transpose()?
                     };
-                    (self.publish_pattern(plan)?, coverage, useful)
+                    (
+                        self.publish_pattern_with_bindings(
+                            plan,
+                            previous.map(|row| &row.bindings),
+                        )?,
+                        coverage,
+                        useful,
+                    )
                 } else {
                     let useful = matrix
                         .as_mut()
@@ -9304,21 +9328,36 @@ impl<'a> Checker<'a> {
                 let useful = exact_useful.unwrap_or_else(|| {
                     !catchall && !fully_covered && key.is_none_or(|key| !covered.contains(&key))
                 });
-                let guard = arm
-                    .guard
-                    .map(|guard| -> Result<ir::ExprId, String> {
-                        let id = self.expr_expected(guard, Some(&ir::Ty::Bool))?;
-                        self.require(&self.flow(id), &ir::Ty::Bool)?;
-                        Ok(id)
-                    })
-                    .transpose()?;
-                let body = self.match_arm_body_with_expectation(
-                    arm.body,
-                    self.reachable && source.completes && useful,
-                    expectation,
-                )?;
+                let (guard, body) = if let Some(previous) = previous {
+                    (previous.guard, previous.body)
+                } else {
+                    let guard = arm
+                        .guard
+                        .map(|guard| -> Result<ir::ExprId, String> {
+                            let id = self.expr_expected(guard, Some(&ir::Ty::Bool))?;
+                            self.require(&self.flow(id), &ir::Ty::Bool)?;
+                            Ok(id)
+                        })
+                        .transpose()?;
+                    let body = self.match_arm_body_with_expectation(
+                        arm.body,
+                        self.reachable && source.completes && useful,
+                        expectation,
+                    )?;
+                    (guard, body)
+                };
                 Ok::<_, String>((pattern, coverage, body, useful, guard))
             })();
+            if arm.guard.is_some()
+                && shared[group].is_none()
+                && let Ok((_, _, body, _, guard)) = &arm_result
+            {
+                shared[group] = Some(shared_or_arms::SharedOrArm {
+                    bindings: self.shared_pattern_bindings(scope_depth)?,
+                    guard: *guard,
+                    body: *body,
+                });
+            }
             self.scopes.truncate(scope_depth);
             let (pattern, coverage, body, useful, guard) = arm_result?;
             let arm_flow = self.flow(body);
@@ -9349,6 +9388,7 @@ impl<'a> Checker<'a> {
                 body,
             });
         }
+        let checked = self.group_or_arms(checked, &expanded_groups, &domain)?;
         let exhaustive = if let Some(matrix) = matrix.as_ref() {
             matrix.exhaustive()?
         } else {

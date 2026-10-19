@@ -9,6 +9,8 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 /// Combined explicit loan sites and formal reference-parameter origins.
 pub const MAX_LOAN_SITES: usize = 4096;
+#[path = "ir/grouped_or.rs"]
+mod grouped_or;
 use std::sync::atomic::{AtomicU64, Ordering};
 #[path = "ir/closure.rs"]
 mod closure;
@@ -1290,6 +1292,19 @@ fn identical_pattern_types(
 ) -> Result<bool, String> {
     budget.charge_work(1)?;
     match (a, b) {
+        (MatchPattern::Or { ty: a, rows: ar }, MatchPattern::Or { ty: b, rows: br }) => {
+            grouped_or::validate_or_rows(ar)?;
+            grouped_or::validate_or_rows(br)?;
+            if ar.len() != br.len() || !identical_type(a, b, budget)? {
+                return Ok(false);
+            }
+            for (a, b) in ar.iter().zip(br) {
+                if !identical_pattern_types(a, b, budget)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
         (
             MatchPattern::Alternatives { ty: a, rows: ar },
             MatchPattern::Alternatives { ty: b, rows: br },
@@ -3301,6 +3316,14 @@ impl<C: SubstitutionCx> Instantiate<'_, C> {
     }
     fn pattern(&mut self, pattern: &mut MatchPattern) -> Result<(), String> {
         match pattern {
+            MatchPattern::Or { ty, rows } => {
+                grouped_or::validate_or_rows(rows)?;
+                *ty = self.ty(ty)?;
+                self.budget.charge_work(rows.len())?;
+                for row in rows {
+                    self.pattern(row)?;
+                }
+            }
             MatchPattern::Alternatives { ty, rows } => {
                 *ty = self.ty(ty)?;
                 self.budget.charge_work(rows.len())?;
@@ -6638,6 +6661,11 @@ impl PatternTestKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MatchPattern {
+    /// One source arm with ordered alternatives and one canonical binding set.
+    Or {
+        ty: Ty,
+        rows: Vec<MatchPattern>,
+    },
     /// Ordered source root alternatives. Each row is a binder-free conjunction.
     Alternatives {
         ty: Ty,
@@ -7267,13 +7295,23 @@ impl CheckedFunction {
             Ok(())
         }
         fn pattern(
-            pattern: &MatchPattern,
+            value: &MatchPattern,
             visit: &mut impl FnMut(&Ty) -> Result<(), String>,
             budget: Option<&PlanBudget>,
             work: &mut usize,
         ) -> Result<(), String> {
             rows(1, budget, work)?;
-            match pattern {
+            match value {
+                MatchPattern::Or {
+                    ty,
+                    rows: alternatives,
+                } => {
+                    grouped_or::validate_or_rows(alternatives)?;
+                    visit(ty)?;
+                    for row in alternatives {
+                        pattern(row, visit, budget, work)?;
+                    }
+                }
                 MatchPattern::Alternatives {
                     ty,
                     rows: alternatives,
@@ -7442,6 +7480,14 @@ impl CheckedFunction {
             budget: &PlanBudget,
         ) -> Result<(), String> {
             match pattern {
+                MatchPattern::Or { ty, rows } => {
+                    grouped_or::validate_or_rows(rows)?;
+                    facts.validate_value_ty_with_budget(ty, budget)?;
+                    storage(budget, rows.capacity(), std::mem::size_of::<MatchPattern>())?;
+                    for row in rows {
+                        pattern_storage(row, facts, budget)?;
+                    }
+                }
                 MatchPattern::Alternatives { ty, rows } => {
                     validate_alternative_domain(ty, Some(budget))?;
                     facts.validate_value_ty_with_budget(ty, budget)?;
@@ -7722,6 +7768,11 @@ impl CheckedFunction {
         bindings: &mut std::collections::HashSet<LocalId>,
     ) -> Result<(), String> {
         let valid = match pattern {
+            MatchPattern::Or { ty: domain, rows } => {
+                self.validate_or_pattern(domain, rows, parameters, bindings)?;
+                let mut work = 0;
+                *ty == Ty::Never || pattern_types_equal(ty, domain, &mut work)?
+            }
             MatchPattern::Alternatives { ty: domain, rows } => {
                 validate_alternative_rows(domain, rows, None)?;
                 let mut work = 0;
@@ -7976,7 +8027,10 @@ impl CheckedFunction {
         else_branch: ExprId,
         parameters: &std::collections::HashSet<LocalId>,
     ) -> Result<(), String> {
-        if matches!(pattern, MatchPattern::Alternatives { .. }) {
+        if matches!(
+            pattern,
+            MatchPattern::Alternatives { .. } | MatchPattern::Or { .. }
+        ) {
             return Err("unsupported: or-pattern outside match arm root".into());
         }
         let value = self

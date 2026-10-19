@@ -7735,9 +7735,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.expect(",")?;
         let pattern = self.arm_pattern()?;
         let guarded = self.eat("if");
-        if guarded && matches!(pattern, Pattern::Alternatives(_)) {
-            return Err(self.unsupported("guards on or-patterns are unsupported"));
-        }
+        let mut arm_guard = None;
         let body = if guarded {
             let frontier = self.enter_lexical()?;
             let guard = (|| {
@@ -7746,31 +7744,42 @@ impl<'input, 'names> Parser<'input, 'names> {
             })();
             self.restore_frontier(frontier);
             let guard = guard?;
-            self.names
-                .budget()
-                .charge(super::expansion_budget::Counter::Work, 3)
-                .map_err(|error| native_adapter::transport_error(error.into()))?;
-            Expr::If {
-                condition: self
-                    .names
-                    .try_parser_box(guard)
-                    .map_err(native_adapter::name_error)?,
-                then_block: Block {
-                    statements: Vec::new(),
-                    tail: Some(
-                        self.names
-                            .try_parser_box(Expr::Bool(true))
-                            .map_err(native_adapter::name_error)?,
-                    ),
-                },
-                else_block: Block {
-                    statements: Vec::new(),
-                    tail: Some(
-                        self.names
-                            .try_parser_box(Expr::Bool(false))
-                            .map_err(native_adapter::name_error)?,
-                    ),
-                },
+            if or_patterns::has_nested_alternatives(&pattern, false) {
+                // An or-pattern guard retries each matching alternative. A
+                // boolean-valued body would return false after the first one.
+                arm_guard = Some(
+                    self.names
+                        .try_parser_box(guard)
+                        .map_err(native_adapter::name_error)?,
+                );
+                Expr::Bool(true)
+            } else {
+                self.names
+                    .budget()
+                    .charge(super::expansion_budget::Counter::Work, 3)
+                    .map_err(|error| native_adapter::transport_error(error.into()))?;
+                Expr::If {
+                    condition: self
+                        .names
+                        .try_parser_box(guard)
+                        .map_err(native_adapter::name_error)?,
+                    then_block: Block {
+                        statements: Vec::new(),
+                        tail: Some(
+                            self.names
+                                .try_parser_box(Expr::Bool(true))
+                                .map_err(native_adapter::name_error)?,
+                        ),
+                    },
+                    else_block: Block {
+                        statements: Vec::new(),
+                        tail: Some(
+                            self.names
+                                .try_parser_box(Expr::Bool(false))
+                                .map_err(native_adapter::name_error)?,
+                        ),
+                    },
+                }
             }
         } else {
             Expr::Bool(true)
@@ -7801,7 +7810,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pattern,
             body,
             guarded,
-            guard: None,
+            guard: arm_guard,
         });
         arms.push(MatchArm {
             pattern: Pattern::Wildcard,

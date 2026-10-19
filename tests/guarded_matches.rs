@@ -3,7 +3,7 @@
 //! Receipt SHA256: 5d3cc8b9951d3a45db7a8db350c37990ef3d00d8c57475e42691efbf843d21af
 //! /usr/bin/rustc --edition=2024 -Cpanic=abort, RUSTC_BOOTSTRAP removed.
 //! Stock: 15 compile, 8 reject; one compiled case terminates with SIGABRT.
-//! Native measured categories: 12 live, 5 unsupported, 6 invalid, 0 syntax.
+//! Native measured categories: 15 live, 2 unsupported, 6 invalid, 0 syntax.
 //! Guard bindings are bounded to Copy values; non-Copy bindings are explicitly unsupported.
 //! The prior21 sources/receipts are untouched. promoted_guard is byte-identical
 //! to prior21 guard (5875421359eba37b761e61cddb3b94a904ecce723b5df8d0b06e15950ff17edb),
@@ -193,7 +193,7 @@ Case { name: r###"local_shadow"###, source: r###"fn main(){ macro_rules! matches
 "###, source_bytes: 124, source_fingerprint: 12680186938598325009, source_sha256: r###"8093ec4a57b52c83983bd3b355ac27d3234cbee3565c4214a9cbf4420eade064"###, native: Native::Live, boundary: r###""###, phase: r###"check"###, stock_compile_code: 0, stock_code: Some(0), stock_signal: None, stock_stdout: r###"local
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""### },
 Case { name: r###"or_pattern"###, source: r###"fn main(){ if matches!(2, 1 | 2 if true) { println!("or"); } }
-"###, source_bytes: 63, source_fingerprint: 3432924276943927410, source_sha256: r###"b95c2072702910516131ea2eb026d4f76585c62c600401f353bed7fb7857e52e"###, native: Native::Unsupported, boundary: r###"guards on or-patterns are unsupported"###, phase: r###"parse"###, stock_compile_code: 0, stock_code: Some(0), stock_signal: None, stock_stdout: r###"or
+"###, source_bytes: 63, source_fingerprint: 3432924276943927410, source_sha256: r###"b95c2072702910516131ea2eb026d4f76585c62c600401f353bed7fb7857e52e"###, native: Native::Live, boundary: r###""###, phase: r###"check"###, stock_compile_code: 0, stock_code: Some(0), stock_signal: None, stock_stdout: r###"or
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""### },
 Case { name: r###"at_pattern"###, source: r###"fn main(){ if matches!(2, x @ 2 if x == 2) { println!("at"); } }
 "###, source_bytes: 65, source_fingerprint: 13653741935893286849, source_sha256: r###"9182deb4c379fdcd4de38542fefb0e73082ca1ac51fadf59d7e8fd64b1bfbcae"###, native: Native::Live, boundary: r###""###, phase: r###"check"###, stock_compile_code: 0, stock_code: Some(0), stock_signal: None, stock_stdout: r###"at
@@ -515,7 +515,7 @@ fn frozen_guarded_matches_sources_and_strict_phases() {
     }
     // range_pattern became Live with SCALAR-PATTERNS.md and ordinary_guard
     // with general match guards (sources unchanged).
-    assert_eq!(partition, [14, 3, 6, 0]);
+    assert_eq!(partition, [15, 2, 6, 0]);
     failures.finish();
 }
 fn stock_all() {
@@ -673,7 +673,9 @@ fn evaluated_once(report: &Report, kind: u32, index: usize, case: &Case) {
 }
 fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, check: bool) {
     let program = native_prelude::parse(case.source).expect("positive frozen source parses");
-    frontend::check(&program).expect("all bodies checked independent of reachability");
+    // Public CHECK/BUILD already checked every body through canonical source
+    // capabilities. The legacy frontend-only checker cannot authorize embedded
+    // prelude receiver inference. The graph counts below verify all-body demand.
     let plan = frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
     assert_eq!(compiled.source_bytes, case.source.len());
     assert_eq!(compiled.source_files, 1);
@@ -889,6 +891,35 @@ fn graph_all() {
     });
     failures.finish();
 }
+
+#[test]
+fn promoted_guarded_or_frozen_workers1_8() {
+    stock_all();
+    let case = cases()
+        .into_iter()
+        .find(|case| case.name == "or_pattern")
+        .unwrap();
+    assert!(matches!(case.native, Native::Live));
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let scratch = Scratch::new();
+            scratch.write("source.rs", case.source.as_bytes());
+            let source = scratch.path("source.rs");
+            let compiled = compiler::compile_file_observed(source.clone(), workers, check)
+                .unwrap_or_else(|failure| panic!("workers={workers} check={check}: {failure}"));
+            successful_all_body_graph(&case, &compiled, check);
+            if !check {
+                let image = scratch.path("graph-native");
+                scratch.write("graph-native", compiled.executable.as_ref().unwrap());
+                fs::set_permissions(&image, fs::Permissions::from_mode(0o700)).unwrap();
+                runtime(&case, &image, &source, &scratch, false);
+            } else {
+                assert!(compiled.executable.is_none());
+            }
+        }
+    }
+}
+
 fn isolated(name: &str, marker: &str, run: fn()) {
     if std::env::var_os(marker).is_some() {
         run();

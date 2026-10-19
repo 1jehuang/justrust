@@ -356,6 +356,12 @@ missing-file changes invalidate only justified consumers without stale lookup.
       operations for fields and indexed targets (`tests/assignment_expressions.rs`).
       Unparenthesized top-level or-patterns in let/let-else bindings are syntax
       errors; parenthesized patterns retain ordinary checking.
+      Guarded ordinary/macro or-patterns retry overlapping alternatives with
+      Copy bindings and binding-sensitive side effects. Explicit checked groups
+      share one source guard/body; canonical call authority and cross-arm fresh
+      bindings are retained. Borrowed payload retries remain explicitly unsupported
+      until SCC loan renewal is proved; the stock-positive fixture stays active
+      as a native CHECK/BUILD rejection boundary, not a support claim.
 - [ ] Extend bidirectional/local inference, coercion sites, partial type holes,
       omitted method arguments and control-flow joins, preserving rigid universal
       parameters and diagnostics for unresolved constraints.

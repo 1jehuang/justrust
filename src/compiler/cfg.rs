@@ -6,6 +6,7 @@
 use super::frontend::{BinaryOp, UnaryOp};
 use super::ir::{self, ExprId, IntTy, IntValue, LocalId, LoopId, Place, Projection, Ty};
 mod drop_normal;
+mod grouped_or;
 mod intrinsics;
 pub use drop_normal::ValidatedCleanupCall;
 
@@ -3231,19 +3232,26 @@ impl Lowerer<'_> {
         let completes = self.source.exprs[scrutinee.0].completion == ir::Completion::Returns;
         let join = self.block();
         for arm in arms {
+            if let ir::MatchPattern::Or { rows, .. } = &arm.pattern {
+                self.grouped_or_arm(id, &source, rows, arm, &destination, completes, join)?;
+                continue;
+            }
+            let pattern = &arm.pattern;
+            let guard = arm.guard;
+            let body = arm.body;
             let PatternTest {
                 selected,
                 rejected: next,
                 temporaries: test_scope,
-            } = self.pattern_test(id, &source, &arm.pattern, completes)?;
+            } = self.pattern_test(id, &source, pattern, completes)?;
             self.current = selected;
             for local in test_scope.iter().rev() {
                 self.end_storage(*local, Some(id));
             }
             self.push_scope()?;
-            self.initialize_pattern_bindings(id, &source, &arm.pattern, completes)?;
+            self.initialize_pattern_bindings(id, &source, pattern, completes)?;
             let mut guard_fallthrough = None;
-            if let Some(guard) = arm.guard {
+            if let Some(guard) = guard {
                 let condition = self.expression(guard)?;
                 let pass = self.block();
                 let fail = self.block();
@@ -3262,7 +3270,7 @@ impl Lowerer<'_> {
                 self.terminate(Terminator::Goto(after), Some(id))?;
                 self.current = pass;
             }
-            let value = self.expression(arm.body)?;
+            let value = self.expression(body)?;
             if completes {
                 self.assign(destination.clone(), Rvalue::Use(value), Some(id));
             }
