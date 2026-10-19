@@ -624,6 +624,38 @@ struct SourceInventory {
     scopes: Vec<HashMap<LocalKey, sr::SourceNode>>,
     root_block_pointer: usize,
 }
+/// Static local-rooted place syntax for `&place`, or None for value operands.
+fn borrow_place(mut expr: &Expr) -> Option<Place> {
+    let mut fields = Vec::new();
+    loop {
+        match expr {
+            Expr::Var(path) => {
+                let local = if path.anchor() == PathAnchor::SelfModule && path.is_empty() {
+                    LocalName::Receiver
+                } else if path.anchor() == PathAnchor::Relative {
+                    LocalName::Named(path.single()?)
+                } else {
+                    return None;
+                };
+                fields.reverse();
+                return Some(Place { local, fields });
+            }
+            Expr::Deref { value } => {
+                fields.push(FieldSelector::Deref);
+                expr = value;
+            }
+            Expr::Field { base, field } => {
+                fields.push(field.clone());
+                expr = base;
+            }
+            Expr::Index { base, index } => {
+                fields.push(FieldSelector::ConstantIndex(*index));
+                expr = base;
+            }
+            _ => return None,
+        }
+    }
+}
 fn source_local_name(path: &AstPath, names: &NameStore) -> Result<LocalName, String> {
     path.check(names).map_err(native_adapter::name_diagnostic)?;
     match (path.anchor(), path.segments()) {
@@ -1599,6 +1631,7 @@ impl SourceInventory {
             }
             Expr::Cast { value, .. }
             | Expr::Deref { value }
+            | Expr::BorrowValue { value, .. }
             | Expr::Repeat { value, .. }
             | Expr::Unary { value, .. } => self.expr(
                 value,
@@ -5013,6 +5046,13 @@ pub enum Expr {
     Borrow {
         kind: ir::BorrowKind,
         place: Place,
+    },
+    /// Borrow of a value expression that is not a static place, such as
+    /// `&P { .. }`, `&f()` or `&a[i]`. The operand is evaluated into a
+    /// temporary whose scope follows Rust's temporary lifetime rules.
+    BorrowValue {
+        kind: ir::BorrowKind,
+        value: Box<Expr>,
     },
     Deref {
         value: Box<Expr>,
@@ -10503,8 +10543,13 @@ impl<'input, 'names> Parser<'input, 'names> {
                 ir::BorrowKind::Shared
             };
             let value = self.expr(11)?;
-            let place=self.assignment_place(value).map_err(|_|self.unsupported("borrowing requires a local-root static place; rvalues and runtime indexed borrows are unsupported"))?;
-            Expr::Borrow { kind, place }
+            match borrow_place(&value) {
+                Some(place) => Expr::Borrow { kind, place },
+                None => Expr::BorrowValue {
+                    kind,
+                    value: Box::new(value),
+                },
+            }
         } else if self.eat("*") {
             Expr::Deref {
                 value: Box::new(self.expr(11)?),
@@ -12571,7 +12616,9 @@ fn walk_depth_inspecting(
                         push(DepthNode::Expr(e))?;
                     }
                 }
-                Expr::Deref { value } => push(DepthNode::Expr(value))?,
+                Expr::Deref { value } | Expr::BorrowValue { value, .. } => {
+                    push(DepthNode::Expr(value))?
+                }
                 Expr::Repeat { value, .. } => push(DepthNode::Expr(value))?,
                 Expr::DynamicIndex { base, index } => {
                     push(DepthNode::Expr(base))?;

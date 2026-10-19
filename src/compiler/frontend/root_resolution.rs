@@ -2703,10 +2703,35 @@ impl Resolver<'_> {
                 return Err("cast bypassed resolver expression dispatcher".into());
             }
             Expr::Deref { value }
+            | Expr::BorrowValue { value, .. }
             | Expr::Repeat { value, .. }
             | Expr::Index { base: value, .. }
             | Expr::Unary { value, .. } => self.expr(value, module, locals)?,
-            Expr::Borrow { .. } => {}
+            Expr::Borrow { kind, place } => {
+                // A bare non-local root such as `&Marker` or an imported unit
+                // variant names a value constructor, not a place.
+                if let LocalName::Named(ident) = place.local
+                    && place.fields.is_empty()
+                {
+                    let path = AstPath::new(self.names(), PathAnchor::Relative, &[ident])
+                        .map_err(native_adapter::name_diagnostic)?;
+                    let constructor = !self.local_contains(&path, locals)?
+                        && (self
+                            .path(&path, module, false, false)?
+                            .is_some_and(|item| item.kind == ResolvedKind::Variant)
+                            || match self.path(&path, module, true, false)? {
+                                Some(item) => self.is_unit_struct(&item)?,
+                                None => false,
+                            });
+                    if constructor {
+                        *expr = Expr::BorrowValue {
+                            kind: *kind,
+                            value: Box::new(Expr::Var(path)),
+                        };
+                        return self.expr(expr, module, locals);
+                    }
+                }
+            }
             Expr::DynamicIndex { base, index } => {
                 self.expr(base, module, locals)?;
                 self.expr(index, module, locals)?;
