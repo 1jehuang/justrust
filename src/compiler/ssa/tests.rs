@@ -1521,9 +1521,411 @@ fn metered_call_target_eq_matches_derived_eq() {
             assert_eq!(lower::call_target_eq_for_tests(a, b, &m).unwrap(), a == b);
         }
     }
-    // Work tracks the shared nested prefix actually visited.
-    let deep = target(vec![leaf(200)]);
+    // Within the caller's semantic depth: succeeds, work tracks the shared
+    // nested prefix actually visited (one node per level here).
+    let depth = PlanLimits::default().depth;
+    let within = target(vec![leaf(depth - 1)]);
     let before = usage(&budget).1;
-    assert!(lower::call_target_eq_for_tests(&deep, &deep.clone(), &m).unwrap());
-    assert!(usage(&budget).1 - before > 200);
+    assert!(lower::call_target_eq_for_tests(&within, &within.clone(), &m).unwrap());
+    assert!(usage(&budget).1 - before >= depth - 1);
+    // Past the caller's depth: fails through the caller's own check_depth,
+    // which records a sticky depth failure (no local cap).
+    let budget = PlanBudget::default();
+    let m = meter::Meter::new(&budget);
+    let deep = target(vec![leaf(depth + 8)]);
+    assert!(lower::call_target_eq_for_tests(&deep, &deep.clone(), &m).is_err());
+    assert!(
+        budget.first_resource_failure().is_some(),
+        "depth failure is sticky"
+    );
+    assert!(m.work(0).is_err());
+}
+
+fn snapshot_of(budget: &PlanBudget) -> (usize, usize, usize, usize, usize) {
+    let s = budget.usage_snapshot();
+    (
+        s.bytes,
+        s.work,
+        s.reservations.current_reservations,
+        s.reservations.cumulative_bytes,
+        s.reservations.peak_bytes,
+    )
+}
+
+#[test]
+fn buf_rejects_foreign_or_sticky_meter_before_any_mutation() {
+    let own = PlanBudget::default();
+    let foreign = PlanBudget::default();
+    let mine = meter::Meter::new(&own);
+    let theirs = meter::Meter::new(&foreign);
+    let mut buf = mine.buf::<u8>(4).unwrap();
+    buf.extend(&[1, 2]).unwrap();
+    let state = |b: &meter::Buf<u8>| {
+        (
+            b.as_slice().as_ptr() as usize,
+            b.capacity(),
+            b.limit(),
+            b.len(),
+            b.lease_bytes(),
+        )
+    };
+    let before = (state(&buf), snapshot_of(&own), snapshot_of(&foreign));
+    // Fast path (fits in capacity), slow path (reallocates), and growing
+    // appends: all rejected with every observable unchanged.
+    assert!(buf.grow(&theirs, 0).is_err(), "fast path zero");
+    assert!(buf.grow(&theirs, 1).is_err(), "fast path");
+    assert!(buf.grow(&theirs, 1 << 12).is_err(), "slow path");
+    assert!(buf.extend_growing(&theirs, &[3]).is_err(), "fit path");
+    assert!(buf.extend_growing(&theirs, &[0; 64]).is_err(), "grow path");
+    assert!(buf.push_growing(&theirs, 9).is_err());
+    assert_eq!(
+        (state(&buf), snapshot_of(&own), snapshot_of(&foreign)),
+        before
+    );
+    // The buffer still belongs to its owner and seals normally.
+    buf.extend_growing(&mine, &[3, 4, 5, 6, 7]).unwrap();
+    let (_, lease) = buf.into_parts();
+    assert!(lease.seal(&mine).is_ok());
+
+    // Sticky: after a ledger failure, every Buf operation is rejected with
+    // no change, fast and slow path alike.
+    let budget = limited(1 << 20, 1 << 20);
+    let m = meter::Meter::new(&budget);
+    let mut buf = m.buf::<u8>(4).unwrap();
+    buf.extend(&[1]).unwrap();
+    assert!(m.work(usize::MAX / 2).is_err());
+    let before = (state(&buf), snapshot_of(&budget));
+    assert!(buf.grow(&m, 1).is_err());
+    assert!(buf.grow(&m, 1 << 12).is_err());
+    assert!(buf.extend_growing(&m, &[2]).is_err());
+    assert!(buf.extend_growing(&m, &[0; 64]).is_err());
+    assert_eq!((state(&buf), snapshot_of(&budget)), before);
+}
+
+#[test]
+fn buf_growth_failure_is_transactional_and_peak_is_exact() {
+    // Exact peak: growing from capacity C to N holds old + new, no more.
+    let budget = PlanBudget::default();
+    let m = meter::Meter::new(&budget);
+    let mut buf = m.buf::<u64>(16).unwrap();
+    buf.extend(&[7; 16]).unwrap();
+    let held = usage(&budget).0;
+    let old = buf.lease_bytes();
+    // Reset the peak tracker view: compare relative to the current level.
+    let peak_before = snapshot_of(&budget).4;
+    buf.grow(&m, 48).unwrap();
+    let new = buf.lease_bytes();
+    let peak = snapshot_of(&budget).4;
+    assert_eq!(peak.max(peak_before), (held + new).max(peak_before));
+    assert!(peak <= held + new, "peak {peak} vs old {old} + new {new}");
+    assert_eq!(
+        usage(&budget).0,
+        held - old + new,
+        "old released after commit"
+    );
+    assert_eq!(buf.as_slice(), &[7; 16]);
+    // A budget that cannot pay the new buffer while the old one is held:
+    // failure leaves pointer, capacity, limit, contents and ledger bytes
+    // unchanged. The limit leaves room for the old buffer plus less than the
+    // new one, so the reservation itself is what fails.
+    let element = std::mem::size_of::<u64>();
+    let tight = limited(64 * element + 64 * element, 1 << 30);
+    let tm = meter::Meter::new(&tight);
+    let mut small = tm.buf::<u64>(64).unwrap();
+    small.extend(&[1; 64]).unwrap();
+    let before = (
+        small.as_slice().as_ptr() as usize,
+        small.capacity(),
+        small.limit(),
+        small.lease_bytes(),
+        usage(&tight).0,
+    );
+    // New limit 256 needs 256 * 8 more bytes while 64 * 8 are held.
+    assert!(small.grow(&tm, 192).is_err());
+    assert_eq!(
+        (
+            small.as_slice().as_ptr() as usize,
+            small.capacity(),
+            small.limit(),
+            small.lease_bytes(),
+            usage(&tight).0,
+        ),
+        before
+    );
+    assert!(small.as_slice().iter().all(|&v| v == 1));
+}
+
+#[test]
+fn lease_bookkeeping_growth_peak_is_old_plus_new() {
+    let budget = PlanBudget::default();
+    let m = meter::Meter::new(&budget);
+    let mut lease = m.lease(8).unwrap();
+    // Force several chunk-vector reallocations.
+    for _ in 0..64 {
+        lease.admit(&m, 1).unwrap();
+    }
+    assert_eq!(lease.bytes(), 72);
+    let data_and_book = lease.bytes() + lease.bookkeeping_bytes();
+    assert_eq!(usage(&budget).0, data_and_book, "steady state is exact");
+    // The ledger's recorded peak never exceeds steady data + the largest
+    // old + new chunk-vector overlap.
+    let chunk = 64; // generous per-chunk entry size bound
+    let peak = snapshot_of(&budget).4;
+    assert!(
+        peak <= lease.bytes() + 3 * lease.bookkeeping_bytes() + chunk,
+        "peak {peak}"
+    );
+    // Shrink is exact and work is charged per visited chunk.
+    let w = usage(&budget).1;
+    lease.resize(&m, 8).unwrap();
+    assert_eq!(lease.bytes(), 8);
+    assert!(usage(&budget).1 - w >= 64, "chunk visits charged");
+    drop(lease);
+    assert_eq!(usage(&budget).0, 0);
+}
+
+fn panic_function(payload: usize) -> SsaFunction {
+    let (mut b, _) = Builder::new(vec![U32], U32);
+    let kind = b.panic_text("m".repeat(payload), "src/x.rs:1:1".into());
+    b.terminate(SsaBlock(0), SsaTerminator::Panic(kind));
+    b.finish()
+}
+
+#[test]
+fn canonical_and_copy_charge_panic_payload_bytes_before_allocating() {
+    let mut works = Vec::new();
+    for payload in [16usize, 4096, 1 << 20] {
+        let function = panic_function(payload);
+        for which in 0..2 {
+            let budget = PlanBudget::default();
+            let m = meter::Meter::new(&budget);
+            let w = usage(&budget).1;
+            if which == 0 {
+                drop(hash::canonical_metered(&function, &m).unwrap());
+            } else {
+                drop(store::copy_function(&m, &function).unwrap());
+            }
+            let spent = usage(&budget).1 - w;
+            assert!(spent >= payload, "payload {payload} spent {spent}");
+            works.push((which, payload, spent));
+            // A work budget below the payload fails closed with the byte
+            // ledger back at zero (nothing published, everything refunded).
+            let tight = limited(1 << 30, payload / 2 + 8);
+            let tm = meter::Meter::new(&tight);
+            let result = if which == 0 {
+                hash::canonical_metered(&function, &tm).map(drop)
+            } else {
+                store::copy_function(&tm, &function).map(drop)
+            };
+            assert!(result.is_err(), "payload {payload} under tight work");
+            assert_eq!(usage(&tight).0, 0, "no bytes left held");
+        }
+    }
+    // Scaling: work grows with P.
+    for which in 0..2 {
+        let row: Vec<_> = works.iter().filter(|w| w.0 == which).collect();
+        assert!(row[2].2 - row[0].2 >= (1 << 20) - 16);
+    }
+}
+
+/// A valid function exercising every machine output buffer: calls with
+/// arguments (symbols, pushes), a loop with block arguments (edges, moves),
+/// trapping arithmetic (traps) and an explicit panic (strings, panic sink).
+fn machine_sample() -> lower::Lowered {
+    let (mut b, params) = Builder::new(vec![U32], U32);
+    let (header, hp) = b.block(&[U32, U32]);
+    let (body, bp) = b.block(&[U32, U32]);
+    let (exit, xp) = b.block(&[U32, U32]);
+    let (fail, _) = b.block(&[]);
+    let zero = b.constant(SsaBlock(0), U32, 0);
+    b.terminate(SsaBlock(0), jump(header, vec![zero, params[0]]));
+    let lt = b.inst(
+        header,
+        InstKind::Cmp {
+            op: CmpOp::Lt,
+            lhs: hp[0],
+            rhs: hp[1],
+        },
+    );
+    b.terminate(
+        header,
+        SsaTerminator::Branch {
+            cond: lt,
+            then: target(body, vec![hp[1], hp[0]]),
+            otherwise: target(exit, vec![hp[0], hp[1]]),
+        },
+    );
+    let mut value = bp[1];
+    for _ in 0..12 {
+        value = b.inst(
+            body,
+            InstKind::Call {
+                callee: FuncRef(0),
+                args: vec![value],
+            },
+        );
+    }
+    let one = b.constant(body, U32, 1);
+    let next = bin(&mut b, body, BinOp::Add, Overflow::Trap, value, one);
+    b.terminate(body, jump(header, vec![next, bp[0]]));
+    let big = b.constant(exit, U32, 1000);
+    let over = b.inst(
+        exit,
+        InstKind::Cmp {
+            op: CmpOp::Lt,
+            lhs: big,
+            rhs: xp[0],
+        },
+    );
+    let (ok, okp) = b.block(&[U32]);
+    b.terminate(
+        exit,
+        SsaTerminator::Branch {
+            cond: over,
+            then: target(fail, vec![]),
+            otherwise: target(ok, vec![xp[0]]),
+        },
+    );
+    b.terminate(ok, SsaTerminator::Return(okp[0]));
+    let kind = b.panic_text("too big".repeat(64), "src/m.rs:1:1".into());
+    b.terminate(fail, SsaTerminator::Panic(kind));
+    let callee = {
+        let (mut c, p) = Builder::new(vec![U32], U32);
+        c.terminate(SsaBlock(0), SsaTerminator::Return(p[0]));
+        c.finish()
+    };
+    lowered(
+        b.finish(),
+        vec![lower::SsaCallee {
+            symbol: "callee_symbol_name".into(),
+            target: dummy_target(),
+            signature: callee.signature(),
+        }],
+    )
+}
+
+fn emit_sample(
+    sample: &lower::Lowered,
+    budget: &PlanBudget,
+) -> Result<(crate::compiler::backend::Object, meter::Receipt), String> {
+    let m = meter::Meter::new(budget);
+    let types = sample.verify(&m).map_err(|e| e.to_string())?;
+    let (owned, _) = machine::emit(sample, &types, &m)?;
+    drop(types);
+    owned.seal(&m)
+}
+
+#[test]
+fn machine_underestimated_bounds_grow_paid_instead_of_rejecting() {
+    let sample = machine_sample();
+    let reference = emit_sample(&sample, &PlanBudget::default()).unwrap();
+    // Every estimate forced down to 1 element: valid source must still emit
+    // the identical object, with an exact receipt.
+    for cap in [0usize, 1, 3] {
+        let budget = PlanBudget::default();
+        let (object, receipt) =
+            machine::bound_override::with(cap, || emit_sample(&sample, &budget)).unwrap();
+        assert_eq!(object.code, reference.0.code, "cap {cap}");
+        assert_eq!(object.calls, reference.0.calls);
+        assert_eq!(object.strings, reference.0.strings);
+        assert_eq!(receipt.bytes(), machine::object_bytes(&object).unwrap());
+        assert!(receipt.same_authority(&budget));
+    }
+}
+
+#[test]
+fn machine_emission_succeeds_with_enough_budget_and_fails_closed_below() {
+    let sample = machine_sample();
+    // Measure the real need (bytes high-water mark and work) under the
+    // underestimate, so growth is exercised in both directions.
+    let budget = PlanBudget::default();
+    machine::bound_override::with(1, || emit_sample(&sample, &budget)).unwrap();
+    let snapshot = budget.usage_snapshot();
+    let (peak, work) = (snapshot.reservations.peak_bytes, snapshot.work);
+    // Just enough: succeeds.
+    let enough = limited(peak, work);
+    let (object, receipt) =
+        machine::bound_override::with(1, || emit_sample(&sample, &enough)).unwrap();
+    assert_eq!(receipt.bytes(), machine::object_bytes(&object).unwrap());
+    // Below the need in bytes or in work: a resource failure, nothing held
+    // except what the failed attempt refunded (ledger back to zero).
+    for (bytes, work) in [(peak / 2, work), (peak, work / 2)] {
+        let tight = limited(bytes, work);
+        let result = machine::bound_override::with(1, || emit_sample(&sample, &tight));
+        assert!(result.is_err(), "bytes {bytes} work {work}");
+        assert!(tight.first_resource_failure().is_some(), "resource failure");
+        assert_eq!(usage(&tight).0, 0, "no partial output held");
+    }
+}
+
+#[test]
+fn inline_expansion_grows_with_budget_and_fails_closed_below() {
+    let leaf = {
+        let (mut b, p) = Builder::new(vec![U32], U32);
+        let kind = b.panic_text("leaf panic text".repeat(16), "src/l.rs:2:2".into());
+        let (bad, _) = b.block(&[]);
+        let (good, gp) = b.block(&[U32]);
+        let zero = b.constant(SsaBlock(0), U32, 0);
+        let is_zero = b.inst(
+            SsaBlock(0),
+            InstKind::Cmp {
+                op: CmpOp::Eq,
+                lhs: p[0],
+                rhs: zero,
+            },
+        );
+        b.terminate(
+            SsaBlock(0),
+            SsaTerminator::Branch {
+                cond: is_zero,
+                then: target(bad, vec![]),
+                otherwise: target(good, vec![p[0]]),
+            },
+        );
+        b.terminate(bad, SsaTerminator::Panic(kind));
+        b.terminate(good, SsaTerminator::Return(gp[0]));
+        lowered(b.finish(), vec![])
+    };
+    let caller = {
+        let (mut b, p) = Builder::new(vec![U32], U32);
+        let mut value = p[0];
+        for _ in 0..24 {
+            value = b.inst(
+                SsaBlock(0),
+                InstKind::Call {
+                    callee: FuncRef(0),
+                    args: vec![value],
+                },
+            );
+        }
+        b.terminate(SsaBlock(0), SsaTerminator::Return(value));
+        lowered(
+            b.finish(),
+            vec![lower::SsaCallee {
+                symbol: "leaf".into(),
+                target: dummy_target(),
+                signature: leaf.function.signature(),
+            }],
+        )
+    };
+    let budget = PlanBudget::default();
+    let m = meter::Meter::new(&budget);
+    let out = inline::inline(&caller, &[(0, &leaf)], &m).unwrap();
+    assert_eq!(
+        out.bytes(),
+        store::lowered_capacity_bytes(&out.value).unwrap()
+    );
+    drop(out);
+    let snapshot = budget.usage_snapshot();
+    let (peak, work) = (snapshot.reservations.peak_bytes, snapshot.work);
+    let enough = limited(peak, work);
+    let em = meter::Meter::new(&enough);
+    assert!(inline::inline(&caller, &[(0, &leaf)], &em).is_ok());
+    for (bytes, work) in [(peak / 2, work), (peak, work / 2)] {
+        let tight = limited(bytes, work);
+        let tm = meter::Meter::new(&tight);
+        assert!(inline::inline(&caller, &[(0, &leaf)], &tm).is_err());
+        assert!(tight.first_resource_failure().is_some());
+        assert_eq!(usage(&tight).0, 0);
+    }
 }

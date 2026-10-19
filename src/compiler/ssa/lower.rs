@@ -724,91 +724,107 @@ pub fn lower(
     Ok(Lowering::Lowered(Box::new(owned)))
 }
 
-/// `CallTarget` equality identical to the derived `PartialEq`, charging one
-/// unit of work per type node visited. Nominal types compare by identity
-/// (as their `PartialEq` does), so they are single nodes.
+/// `CallTarget` equality identical to the derived `PartialEq`, computed
+/// iteratively on paid scratch. One unit of work per type node visited, and
+/// the semantic depth of each node is checked through the caller's
+/// `PlanBudget::check_depth` (sticky, the caller's own limit): no local depth
+/// constant and no recursion. Depth rises by one per type node; a tuple's
+/// element list does not add a level of its own. Nominal and object types
+/// compare by identity, exactly as their `PartialEq` does.
 fn call_target_eq(
     a: &ir::CallTarget,
     b: &ir::CallTarget,
     meter: &Meter<'_>,
 ) -> Result<bool, String> {
+    use ir::Ty;
     meter.work(1)?;
-    if a.declaration != b.declaration {
+    if a.declaration != b.declaration || a.type_args.len() != b.type_args.len() {
         return Ok(false);
     }
-    ty_slice_eq(&a.type_args, &b.type_args, meter, 0)
-}
-
-fn ty_slice_eq(
-    a: &[ir::Ty],
-    b: &[ir::Ty],
-    meter: &Meter<'_>,
-    depth: usize,
-) -> Result<bool, String> {
-    meter.work(1)?;
-    if a.len() != b.len() {
-        return Ok(false);
+    let mut stack = meter.buf::<(&Ty, &Ty, usize)>(a.type_args.len())?;
+    for (x, y) in a.type_args.iter().zip(b.type_args.iter()) {
+        stack.push_growing(meter, (x, y, 1))?;
     }
-    for (x, y) in a.iter().zip(b) {
-        if !ty_eq(x, y, meter, depth + 1)? {
-            return Ok(false);
+    while let Some(&(x, y, depth)) = stack.last() {
+        let len = stack.len();
+        stack.truncate(len - 1);
+        meter.work(1)?;
+        meter.budget().check_depth(depth)?;
+        let child = depth + 1;
+        match (x, y) {
+            (Ty::AssociatedType(p), Ty::AssociatedType(q)) => {
+                if p.item != q.item
+                    || p.trait_ref.declaration != q.trait_ref.declaration
+                    || p.trait_ref.args.len() != q.trait_ref.args.len()
+                {
+                    return Ok(false);
+                }
+                stack.push_growing(meter, (&p.trait_ref.self_ty, &q.trait_ref.self_ty, child))?;
+                for (u, v) in p.trait_ref.args.iter().zip(q.trait_ref.args.iter()) {
+                    stack.push_growing(meter, (u, v, child))?;
+                }
+            }
+            (
+                Ty::Ref {
+                    kind: k,
+                    referent: u,
+                },
+                Ty::Ref {
+                    kind: l,
+                    referent: v,
+                },
+            )
+            | (
+                Ty::RawPtr {
+                    kind: k,
+                    pointee: u,
+                },
+                Ty::RawPtr {
+                    kind: l,
+                    pointee: v,
+                },
+            ) => {
+                if k != l {
+                    return Ok(false);
+                }
+                stack.push_growing(meter, (u, v, child))?;
+            }
+            (Ty::Tuple(u), Ty::Tuple(v)) => {
+                if u.len() != v.len() {
+                    return Ok(false);
+                }
+                for (p, q) in u.iter().zip(v.iter()) {
+                    stack.push_growing(meter, (p, q, child))?;
+                }
+            }
+            (Ty::Array { element: u, len: m }, Ty::Array { element: v, len: n }) => {
+                if m != n {
+                    return Ok(false);
+                }
+                stack.push_growing(meter, (u, v, child))?;
+            }
+            (Ty::Slice { element: u }, Ty::Slice { element: v }) => {
+                stack.push_growing(meter, (u, v, child))?;
+            }
+            (Ty::Param(_), _)
+            | (Ty::Int(_), _)
+            | (Ty::Char, _)
+            | (Ty::Str, _)
+            | (Ty::Float(_), _)
+            | (Ty::Bool, _)
+            | (Ty::Unit, _)
+            | (Ty::Struct(_), _)
+            | (Ty::Enum(_), _)
+            | (Ty::Dyn(_), _)
+            | (Ty::Never, _) => {
+                if x != y {
+                    return Ok(false);
+                }
+            }
+            _ => return Ok(false),
         }
     }
     Ok(true)
-}
-
-fn ty_eq(a: &ir::Ty, b: &ir::Ty, meter: &Meter<'_>, depth: usize) -> Result<bool, String> {
-    use ir::Ty;
-    meter.work(1)?;
-    if depth > 4096 {
-        return Err("type argument nesting exceeds the comparison depth limit".into());
-    }
-    Ok(match (a, b) {
-        (Ty::AssociatedType(x), Ty::AssociatedType(y)) => {
-            x.item == y.item
-                && x.trait_ref.declaration == y.trait_ref.declaration
-                && ty_eq(&x.trait_ref.self_ty, &y.trait_ref.self_ty, meter, depth + 1)?
-                && ty_slice_eq(&x.trait_ref.args, &y.trait_ref.args, meter, depth + 1)?
-        }
-        (
-            Ty::Ref {
-                kind: k,
-                referent: x,
-            },
-            Ty::Ref {
-                kind: l,
-                referent: y,
-            },
-        )
-        | (
-            Ty::RawPtr {
-                kind: k,
-                pointee: x,
-            },
-            Ty::RawPtr {
-                kind: l,
-                pointee: y,
-            },
-        ) => k == l && ty_eq(x, y, meter, depth + 1)?,
-        (Ty::Tuple(x), Ty::Tuple(y)) => ty_slice_eq(x, y, meter, depth + 1)?,
-        (Ty::Array { element: x, len: m }, Ty::Array { element: y, len: n }) => {
-            m == n && ty_eq(x, y, meter, depth + 1)?
-        }
-        (Ty::Slice { element: x }, Ty::Slice { element: y }) => ty_eq(x, y, meter, depth + 1)?,
-        // Leaves and identity-compared nominal/object types.
-        (Ty::Param(_), _)
-        | (Ty::Int(_), _)
-        | (Ty::Char, _)
-        | (Ty::Str, _)
-        | (Ty::Float(_), _)
-        | (Ty::Bool, _)
-        | (Ty::Unit, _)
-        | (Ty::Struct(_), _)
-        | (Ty::Enum(_), _)
-        | (Ty::Dyn(_), _)
-        | (Ty::Never, _) => a == b,
-        _ => false,
-    })
 }
 
 #[cfg(test)]

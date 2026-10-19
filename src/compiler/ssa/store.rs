@@ -279,11 +279,17 @@ pub fn try_clone_block(data: &BlockData) -> Result<BlockData, String> {
     })
 }
 
-pub fn try_clone_panics(panics: &[PanicText]) -> Result<Vec<PanicText>, String> {
+/// Metered copy of a panic table. For each text, the copied byte count
+/// (message + location) is computed with checked arithmetic and charged as
+/// work BEFORE any allocation for it. Storage is paid by the caller's
+/// preflight (`shape_bytes` counts these bytes).
+pub fn copy_panics(panics: &[PanicText], meter: &Meter<'_>) -> Result<Vec<PanicText>, String> {
+    meter.work(panics.len())?;
     let mut out = Vec::new();
     out.try_reserve_exact(panics.len())
         .map_err(|_| "optimizer allocation failed".to_string())?;
     for text in panics {
+        meter.work(meter::add(text.message.len(), text.location.len())?)?;
         out.push(PanicText {
             message: try_string(&text.message)?,
             location: try_string(&text.location)?,
@@ -292,7 +298,7 @@ pub fn try_clone_panics(panics: &[PanicText]) -> Result<Vec<PanicText>, String> 
     Ok(out)
 }
 
-pub fn try_clone_function(function: &SsaFunction) -> Result<SsaFunction, String> {
+fn copy_function_body(function: &SsaFunction, meter: &Meter<'_>) -> Result<SsaFunction, String> {
     let mut blocks = Vec::new();
     blocks
         .try_reserve_exact(function.blocks.len())
@@ -304,7 +310,7 @@ pub fn try_clone_function(function: &SsaFunction) -> Result<SsaFunction, String>
         params: try_vec(&function.params)?,
         ret: function.ret,
         blocks,
-        panics: try_clone_panics(&function.panics)?,
+        panics: copy_panics(&function.panics, meter)?,
     })
 }
 
@@ -320,7 +326,7 @@ pub fn copy_function(
     Owned::build(
         meter,
         shape,
-        || try_clone_function(function),
+        || copy_function_body(function, meter),
         capacity_bytes,
     )
 }

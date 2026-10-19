@@ -83,16 +83,11 @@ impl<'a> Meter<'a> {
     #[track_caller]
     pub fn lease(&self, bytes: usize) -> Result<Lease, String> {
         let reservation = self.reserve(bytes)?;
-        Ok(Lease {
-            authority: self.budget.authority().clone(),
-            first: Chunk {
-                reservation,
-                bytes,
-                book: false,
-            },
-            extra: Vec::new(),
-            book: None,
-        })
+        Ok(Lease::new(
+            self.budget.authority().clone(),
+            reservation,
+            bytes,
+        ))
     }
 
     /// Fixed-length scratch table filled with `fill`.
@@ -164,96 +159,133 @@ impl<'a> Meter<'a> {
 struct Chunk {
     reservation: PlanReservation,
     bytes: usize,
-    /// Bookkeeping (chunk-vector storage) rather than leased data bytes.
-    book: bool,
 }
 
 /// Paid bytes, refunded on drop unless sealed into a receipt.
 ///
-/// Bound to one planning authority: every operation with a different
-/// authority is rejected before any ledger change, and every operation fails
-/// once the ledger has a sticky resource failure.
+/// Bound to one planning authority: every operation checks the meter's
+/// authority and the sticky ledger state before touching anything, including
+/// no-op and zero-sized operations.
 ///
 /// Growth adds a delta chunk instead of re-admitting the existing total, and
-/// absorbing moves the other lease's chunks over unchanged, so neither causes
-/// a phantom peak. The first chunk is inline; further chunks live in `extra`,
-/// a vector whose own storage is paid by the `book` chunk (old and new chunk
-/// vectors are both paid while the vector reallocates).
+/// absorbing moves the other lease's chunks unchanged, so neither charges a
+/// phantom peak. Chunks after the first live in `extra`, whose own storage is
+/// paid by `book` (the requested capacity, plus any allocator surplus as a
+/// second reservation). When `extra` reallocates, the full new vector is
+/// reserved while the old reservation (already charged) is still held, and
+/// the old one is released afterwards: the ledger peak is exactly old + new.
+///
+/// `total` caches the data bytes, so `bytes()` is O(1). Shrinking pops each
+/// chunk it empties, so every chunk is visited by a shrink at most once over
+/// the lease's lifetime (amortized linear). Every chunk moved, visited or
+/// retained is charged one unit of work.
 #[derive(Debug)]
 pub struct Lease {
     authority: PlanAuthority,
     first: Chunk,
     extra: Vec<Chunk>,
-    book: Option<Chunk>,
+    book: [Option<Chunk>; 2],
+    total: usize,
 }
 
 impl Lease {
-    /// Bytes currently paid for the leased storage (excluding the chunk
-    /// bookkeeping, which is paid separately by `book`).
-    pub fn bytes(&self) -> usize {
-        self.first.bytes
-            + self
-                .extra
-                .iter()
-                .filter(|chunk| !chunk.book)
-                .map(|chunk| chunk.bytes)
-                .sum::<usize>()
+    fn new(authority: PlanAuthority, reservation: PlanReservation, bytes: usize) -> Self {
+        Lease {
+            authority,
+            first: Chunk { reservation, bytes },
+            extra: Vec::new(),
+            book: [None, None],
+            total: bytes,
+        }
     }
 
-    fn push(&mut self, meter: &Meter<'_>, chunk: Chunk) -> Result<(), String> {
-        if self.extra.len() == self.extra.capacity() {
-            let element = std::mem::size_of::<Chunk>();
-            let new_cap = add(mul(self.extra.capacity(), 2)?, 2)?;
-            let old_bytes = mul(self.extra.capacity(), element)?;
-            // Old and new chunk vectors coexist during reallocation.
-            let peak = meter.reserve(add(old_bytes, mul(new_cap, element)?)?)?;
-            self.extra
-                .try_reserve_exact(new_cap - self.extra.len())
-                .map_err(|_| "optimizer allocation failed".to_string())?;
-            let steady_bytes = mul(self.extra.capacity(), element)?;
-            let steady = meter.reserve(steady_bytes)?;
-            drop(peak);
-            self.book = Some(Chunk {
-                reservation: steady,
-                bytes: steady_bytes,
-                book: true,
-            });
+    /// Bytes currently paid for the leased storage (excluding the chunk
+    /// bookkeeping, which `book` pays separately).
+    pub fn bytes(&self) -> usize {
+        self.total
+    }
+
+    /// Bytes paid for chunk bookkeeping (not part of `bytes()`).
+    pub fn bookkeeping_bytes(&self) -> usize {
+        self.book.iter().flatten().map(|chunk| chunk.bytes).sum()
+    }
+
+    /// Validate authority and sticky state; every public operation starts here.
+    fn check(&self, meter: &Meter<'_>) -> Result<(), String> {
+        meter.same(&self.authority)?;
+        meter.live()
+    }
+
+    /// Ensure room for `more` chunks in `extra`, paying the exact old + new
+    /// reallocation peak. Transactional: on failure nothing changed.
+    fn room(&mut self, meter: &Meter<'_>, more: usize) -> Result<(), String> {
+        let needed = add(self.extra.len(), more)?;
+        if needed <= self.extra.capacity() {
+            return Ok(());
         }
-        self.extra.push(chunk);
+        let element = std::mem::size_of::<Chunk>();
+        let new_cap = needed.max(add(mul(self.extra.capacity(), 2)?, 2)?);
+        let requested = mul(new_cap, element)?;
+        // Charge moving the existing chunks before any allocation.
+        meter.work(self.extra.len())?;
+        // The old vector stays charged by the current `book` until commit.
+        let reservation = meter.reserve(requested)?;
+        let mut next: Vec<Chunk> = Vec::new();
+        next.try_reserve_exact(new_cap)
+            .map_err(|_| "optimizer allocation failed".to_string())?;
+        let actual = mul(next.capacity(), element)?;
+        let surplus = if actual > requested {
+            let bytes = actual - requested;
+            Some(Chunk {
+                reservation: meter.reserve(bytes)?,
+                bytes,
+            })
+        } else {
+            None
+        };
+        // Commit point: nothing below can fail.
+        next.append(&mut self.extra);
+        self.extra = next;
+        self.book = [
+            Some(Chunk {
+                reservation,
+                bytes: requested,
+            }),
+            surplus,
+        ];
         Ok(())
     }
 
-    /// Reconcile to at least `total` paid bytes. Growth admits only the delta.
-    /// A shrink keeps the existing charge: conservative (it may over-report
-    /// by the released surplus until the lease drops), never under-reporting.
+    /// Append data chunks; room must already exist.
+    fn append(&mut self, chunk: Chunk) {
+        self.total += chunk.bytes;
+        self.extra.push(chunk);
+    }
+
+    /// Reconcile to exactly `total` paid bytes. Growth admits only the
+    /// delta; shrink is exact and decrease-only (never admits).
     #[track_caller]
     pub fn resize(&mut self, meter: &Meter<'_>, total: usize) -> Result<(), String> {
-        meter.same(&self.authority)?;
-        meter.live()?;
-        let current = self.bytes();
+        self.check(meter)?;
+        let current = self.total;
         if total > current {
             return self.admit(meter, total - current);
         }
-        // Shrink exactly, decrease-only: release trailing data chunks, then
-        // shrink the last needed chunk in place. Never admits anything.
         let mut excess = current - total;
         while excess > 0 {
-            let chunk = match self
-                .extra
-                .iter_mut()
-                .rev()
-                .find(|chunk| !chunk.book && chunk.bytes > 0)
-            {
+            meter.work(1)?;
+            let chunk = match self.extra.last_mut() {
                 Some(chunk) => chunk,
                 None => &mut self.first,
             };
             let release = excess.min(chunk.bytes);
-            if release == 0 {
-                return Err("optimizer lease shrink accounting mismatch".into());
-            }
             chunk.reservation.shrink(release)?;
             chunk.bytes -= release;
+            self.total -= release;
             excess -= release;
+            if chunk.bytes == 0 && self.extra.pop().is_none() && excess > 0 {
+                return Err("optimizer lease shrink accounting mismatch".into());
+            }
         }
         Ok(())
     }
@@ -261,62 +293,64 @@ impl Lease {
     /// Admit `bytes` more as a delta chunk.
     #[track_caller]
     pub fn admit(&mut self, meter: &Meter<'_>, bytes: usize) -> Result<(), String> {
-        meter.same(&self.authority)?;
-        meter.live()?;
+        self.check(meter)?;
         if bytes == 0 {
             return Ok(());
         }
+        add(self.total, bytes)?;
+        self.room(meter, 1)?;
         let reservation = meter.reserve(bytes)?;
-        self.push(
-            meter,
-            Chunk {
-                reservation,
-                bytes,
-                book: false,
-            },
-        )
+        self.append(Chunk { reservation, bytes });
+        Ok(())
     }
 
     /// Absorb another lease of the same authority without re-admitting it.
+    /// Rejected before any change unless both leases belong to the meter's
+    /// authority and the ledger is live. On a later failure `other` drops
+    /// and refunds to its own ledger; `self` is unchanged.
     #[track_caller]
     pub fn absorb(&mut self, meter: &Meter<'_>, other: Lease) -> Result<(), String> {
-        meter.same(&self.authority)?;
-        meter.same(&other.authority)?;
-        meter.live()?;
+        self.check(meter)?;
+        other.check(meter)?;
+        let moved = add(other.extra.len(), 1)?;
+        add(self.total, other.total)?;
+        meter.work(moved)?;
+        self.room(meter, moved)?;
+        // Commit: pure moves into reserved room.
         let Lease {
             first, extra, book, ..
         } = other;
-        self.push(meter, first)?;
+        self.append(first);
         for chunk in extra {
-            self.push(meter, chunk)?;
+            self.append(chunk);
         }
-        if let Some(book) = book {
-            self.push(meter, book)?;
-        }
+        // The absorbed lease's chunk vector was consumed and freed above,
+        // so its bookkeeping bytes are released, not carried over.
+        drop(book);
         Ok(())
     }
 
     /// Seal into an immutable receipt. Same authority and no sticky failure
-    /// required.
+    /// required; the lease is consumed only on success.
     pub fn seal(self, meter: &Meter<'_>) -> Result<Receipt, String> {
-        meter.same(&self.authority)?;
-        meter.live()?;
-        let bytes = self.bytes();
+        self.check(meter)?;
+        // Retaining is charged per chunk before anything is consumed.
+        meter.work(add(self.extra.len(), 1)?)?;
+        let bytes = self.total;
         let Lease {
             authority,
             first,
             extra,
             book,
+            ..
         } = self;
-        // Retained reservations stay charged for the task's lifetime; the
-        // receipt itself holds no heap storage, so its size is static.
+        // Retained reservations stay charged for the task's lifetime. The
+        // `extra` vector is freed right here, so its bookkeeping refunds.
         drop(first.reservation.retain()?);
         for chunk in extra {
             drop(chunk.reservation.retain()?);
         }
-        if let Some(book) = book {
-            drop(book.reservation.retain()?);
-        }
+        drop(book);
         Ok(Receipt { authority, bytes })
     }
 }
@@ -395,6 +429,10 @@ impl<T> List<T> {
         self.data.retain(keep);
     }
 
+    pub fn truncate(&mut self, len: usize) {
+        self.data.truncate(len);
+    }
+
     pub fn swap_remove(&mut self, index: usize) -> T {
         self.data.swap_remove(index)
     }
@@ -426,10 +464,15 @@ impl<T> std::ops::DerefMut for List<T> {
     }
 }
 
-/// Growable output buffer with an independently paid logical `limit`. Every
-/// append checks the limit before writing; raising the limit (`grow`) admits
-/// the old+new capacity peak before reallocating and reconciles the real
-/// capacity immediately after. Never grows silently.
+/// Growable output buffer with an independently paid logical `limit`.
+///
+/// Appends check the limit before writing. Growth is the only way to raise
+/// the limit, and it is transactional: authority and sticky state are checked
+/// before any change (fast path included), the full new buffer is reserved
+/// while the old one (already charged) is still held, so the ledger peak is
+/// exactly old + new, the copy is charged as work, and the new buffer and
+/// lease replace the old pair only after every fallible step succeeded. On
+/// any failure the data, pointer, capacity, limit and ledger are unchanged.
 #[derive(Debug)]
 pub struct Buf<T> {
     data: Vec<T>,
@@ -437,13 +480,26 @@ pub struct Buf<T> {
     lease: Lease,
 }
 
-impl<T: Copy> Buf<T> {
+impl<T> Buf<T> {
     pub fn len(&self) -> usize {
         self.data.len()
     }
 
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
+    }
+
+    /// Paid element limit (independent of allocator capacity).
+    pub fn limit(&self) -> usize {
+        self.limit
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.data.capacity()
+    }
+
+    pub fn lease_bytes(&self) -> usize {
+        self.lease.bytes()
     }
 
     pub fn push(&mut self, value: T) -> Result<(), String> {
@@ -454,6 +510,84 @@ impl<T: Copy> Buf<T> {
         Ok(())
     }
 
+    /// Raise the paid limit by at least `more` elements.
+    pub fn grow(&mut self, meter: &Meter<'_>, more: usize) -> Result<(), String> {
+        self.lease.check(meter)?;
+        let element = std::mem::size_of::<T>();
+        let new_limit = add(self.limit, more)?;
+        if new_limit <= self.data.capacity() {
+            self.limit = new_limit;
+            return Ok(());
+        }
+        let requested = mul(new_limit, element)?;
+        // Copy work, charged before allocating.
+        meter.work(self.data.len())?;
+        // New lease while the old one is still held: peak = old + new.
+        let mut lease = meter.lease(requested)?;
+        let mut next: Vec<T> = Vec::new();
+        next.try_reserve_exact(new_limit)
+            .map_err(|_| "optimizer allocation failed".to_string())?;
+        let actual = mul(next.capacity(), element)?;
+        if actual > requested {
+            lease.admit(meter, actual - requested)?;
+        }
+        // Commit point: nothing below can fail.
+        next.append(&mut self.data);
+        self.data = next;
+        self.lease = lease;
+        self.limit = new_limit;
+        Ok(())
+    }
+
+    /// Ensure room for `more` elements, growing geometrically (paid).
+    pub fn reserve_growing(&mut self, meter: &Meter<'_>, more: usize) -> Result<(), String> {
+        self.lease.check(meter)?;
+        let end = add(self.data.len(), more)?;
+        if end > self.limit {
+            let target = end.max(add(mul(self.limit, 2)?, 8)?);
+            self.grow(meter, target - self.limit)?;
+        }
+        Ok(())
+    }
+
+    /// Push, growing first (paid, transactional) when the limit is reached.
+    pub fn push_growing(&mut self, meter: &Meter<'_>, value: T) -> Result<(), String> {
+        self.reserve_growing(meter, 1)?;
+        self.push(value)
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        &self.data
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        &mut self.data
+    }
+
+    pub fn clear(&mut self) {
+        self.data.clear();
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.data.truncate(len);
+    }
+
+    pub fn swap_remove(&mut self, index: usize) -> T {
+        self.data.swap_remove(index)
+    }
+
+    pub fn into_parts(self) -> (Vec<T>, Lease) {
+        (self.data, self.lease)
+    }
+}
+
+impl<T> std::ops::DerefMut for Buf<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        &mut self.data
+    }
+}
+
+impl<T: Copy> Buf<T> {
     pub fn extend(&mut self, values: &[T]) -> Result<(), String> {
         let end = add(self.data.len(), values.len())?;
         if end > self.limit || end > self.data.capacity() {
@@ -463,50 +597,17 @@ impl<T: Copy> Buf<T> {
         Ok(())
     }
 
-    /// Raise the paid limit by `more` elements, paying the reallocation peak.
-    pub fn grow(&mut self, meter: &Meter<'_>, more: usize) -> Result<(), String> {
-        let element = std::mem::size_of::<T>();
-        let new_limit = add(self.limit, more)?;
-        if new_limit <= self.data.capacity() {
-            self.limit = new_limit;
-            return Ok(());
-        }
-        let old_bytes = mul(self.data.capacity(), element)?;
-        let new_bytes = mul(new_limit, element)?;
-        // Old and new buffers coexist during reallocation.
-        let peak = meter.reserve(add(old_bytes, new_bytes)?)?;
-        self.data
-            .try_reserve_exact(new_limit - self.data.len())
-            .map_err(|_| "optimizer allocation failed".to_string())?;
-        // Steady state: the lease must cover the real new capacity.
-        let actual = mul(self.data.capacity(), element)?;
-        self.lease.resize(meter, actual)?;
-        drop(peak);
-        self.limit = new_limit;
-        Ok(())
-    }
-
-    pub fn as_slice(&self) -> &[T] {
-        &self.data
-    }
-
-    /// Append, raising the paid limit first (old+new peak paid by `grow`)
-    /// when `values` would not fit. Used only by producers whose final size
-    /// is not known up front (the paid panic adapter).
+    /// Append, growing first (paid, transactional) when `values` would not
+    /// fit. Authority and sticky state are checked before anything else.
     pub fn extend_growing(&mut self, meter: &Meter<'_>, values: &[T]) -> Result<(), String> {
-        let end = add(self.data.len(), values.len())?;
-        if end > self.limit {
-            let target = end.max(mul(self.limit, 2)?);
-            self.grow(meter, target - self.limit)?;
-        }
+        self.reserve_growing(meter, values.len())?;
         self.extend(values)
     }
+}
 
-    pub fn as_mut_slice(&mut self) -> &mut [T] {
-        &mut self.data
-    }
-
-    pub fn into_parts(self) -> (Vec<T>, Lease) {
-        (self.data, self.lease)
+impl<T> std::ops::Deref for Buf<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        &self.data
     }
 }

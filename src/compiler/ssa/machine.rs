@@ -68,18 +68,20 @@ fn int_of(ty: SsaTy) -> SsaIntTy {
 }
 
 /// Machine output under construction. Every buffer is a `meter::Buf` whose
-/// logical limit was paid up front (`emit_bound`); appends check that limit
-/// before writing, so emission can never grow storage that was not paid for.
-/// The only growth path is `Buf::grow`, which pays the reallocation peak and
-/// reconciles the real capacity immediately.
-struct Asm {
+/// initial paid limit is only an estimate (`emit_bound`). Appends that
+/// exceed it grow through paid, transactional, input-scaled growth
+/// (`Buf::extend_growing`), so an underestimated bound never rejects valid
+/// source: emission fails only when the caller's budget is truly exhausted.
+struct Asm<'m> {
     code: meter::Buf<u8>,
     traps: meter::Buf<usize>,
+    meter: Meter<'m>,
 }
 
-impl Asm {
+impl Asm<'_> {
     fn bytes(&mut self, bytes: &[u8]) -> Result<(), String> {
-        self.code.extend(bytes)
+        let meter = self.meter;
+        self.code.extend_growing(&meter, bytes)
     }
 
     fn i32(&mut self, value: i32) -> Result<(), String> {
@@ -99,14 +101,15 @@ impl Asm {
         self.code
             .as_mut_slice()
             .get_mut(at..at + 4)
-            .ok_or("patch outside emitted code")?
+            .ok_or("internal contract: patch outside emitted code")?
             .copy_from_slice(&displacement.to_le_bytes());
         Ok(())
     }
 
     fn trap_if(&mut self, condition: u8) -> Result<(), String> {
         let at = self.rel32(&[0x0f, condition])?;
-        self.traps.push(at)
+        let meter = self.meter;
+        self.traps.push_growing(&meter, at)
     }
 
     fn rex(w: bool, reg: u8, base: u8) -> u8 {
@@ -552,18 +555,18 @@ fn allocate(
 /// `pending` is caller-owned paid scratch, reused across edges; the search is
 /// charged per comparison (moves are at most the target's parameter count).
 fn parallel_move(
-    asm: &mut Asm,
+    asm: &mut Asm<'_>,
     moves: &[(Loc, Loc)],
-    pending: &mut meter::List<(Loc, Loc)>,
+    pending: &mut meter::Buf<(Loc, Loc)>,
     meter: &Meter<'_>,
 ) -> Result<(), String> {
     pending.clear();
     for &(dst, src) in moves {
         if dst != src {
-            pending.push((dst, src))?;
+            pending.push_growing(meter, (dst, src))?;
         }
     }
-    let emit = |asm: &mut Asm, dst: Loc, src: Loc| -> Result<(), String> {
+    let emit = |asm: &mut Asm<'_>, dst: Loc, src: Loc| -> Result<(), String> {
         match (dst, src) {
             (Loc::Reg(reg), _) => asm.load(reg, src),
             (_, Loc::Reg(reg)) => asm.store(dst, reg),
@@ -599,9 +602,13 @@ fn parallel_move(
     Ok(())
 }
 
-/// Longest encoding (bytes) any single instruction kind emits, including
-/// operand loads and the result store. Div/Rem with the signed guard is the
-/// longest sequence.
+// Initial-size ESTIMATES for the paid output buffers (conservative checked
+// admission estimates, not supported-source ceilings). Output that exceeds
+// them grows through paid fallible growth; only a genuinely exhausted caller
+// budget can fail emission.
+
+/// Estimated longest encoding (bytes) of one instruction kind, including
+/// operand loads and the result store.
 const MAX_INST_BYTES: usize = 96;
 /// Longest single move (load + store through rcx) or push.
 const MAX_MOVE_BYTES: usize = 24;
@@ -610,8 +617,8 @@ const MAX_TERM_BYTES: usize = 48;
 const PROLOGUE_BYTES: usize = 16;
 const TRAP_BYTES: usize = 14;
 
-/// Sound upper bounds on emitted output, computed before emission so code,
-/// relocation and label tables are admitted at their maximum capacity.
+/// Initial paid sizes for emitted output, estimated before emission so the
+/// common case needs no growth. Never a limit: see `Asm`.
 struct EmitBound {
     code: usize,
     traps: usize,
@@ -619,6 +626,23 @@ struct EmitBound {
     edges: usize,
     moves: usize,
     panic_texts: usize,
+}
+
+#[cfg(test)]
+impl EmitBound {
+    /// Test-only: force a deliberate underestimate.
+    fn shrink_to(&mut self, cap: usize) {
+        for field in [
+            &mut self.code,
+            &mut self.traps,
+            &mut self.calls,
+            &mut self.edges,
+            &mut self.moves,
+            &mut self.panic_texts,
+        ] {
+            *field = (*field).min(cap);
+        }
+    }
 }
 
 fn emit_bound(lowered: &Lowered, meter: &Meter<'_>) -> Result<EmitBound, String> {
@@ -687,9 +711,14 @@ pub fn emit(
 ) -> Result<(Owned<Object>, Stats), String> {
     let function = &lowered.function;
     let layout = allocate(lowered, types, meter)?;
-    let bound = emit_bound(lowered, meter)?;
-    // Every output buffer is a paid `Buf`/`List`; each carries its own lease
-    // for its admitted limit and they are absorbed into one at the end.
+    #[allow(unused_mut)]
+    let mut bound = emit_bound(lowered, meter)?;
+    #[cfg(test)]
+    if let Some(cap) = bound_override::get() {
+        bound.shrink_to(cap);
+    }
+    // Every output buffer is a paid growable `Buf`; the bound only seeds the
+    // initial paid size. Leases are absorbed into one at the end.
     let loc = &layout.loc;
     let ty = |value: SsaValue| -> Result<SsaTy, String> {
         types
@@ -701,9 +730,10 @@ pub fn emit(
     let mut asm = Asm {
         code: meter.buf(bound.code)?,
         traps: meter.buf(bound.traps)?,
+        meter: *meter,
     };
-    let mut calls = meter.list::<(usize, String)>(bound.calls)?;
-    let mut strings = meter.list::<(usize, Vec<u8>)>(bound.panic_texts)?;
+    let mut calls = meter.buf::<(usize, String)>(bound.calls)?;
+    let mut strings = meter.buf::<(usize, Vec<u8>)>(bound.panic_texts)?;
     // Call symbol strings: admitted before each allocation (`clone_string`).
     let mut symbols = meter.lease(0)?;
     asm.bytes(&[0x55, 0x48, 0x89, 0xe5])?; // push rbp; mov rbp, rsp
@@ -712,17 +742,17 @@ pub fn emit(
         asm.i32(layout.frame)?;
     }
     let mut labels = meter.table(function.blocks.len(), 0usize)?;
-    let mut edges = meter.list::<(usize, usize)>(bound.edges)?;
-    let mut pending = meter.list::<(Loc, Loc)>(bound.moves)?;
-    let mut then_moves = meter.list::<(Loc, Loc)>(bound.moves)?;
-    let mut else_moves = meter.list::<(Loc, Loc)>(bound.moves)?;
+    let mut edges = meter.buf::<(usize, usize)>(bound.edges)?;
+    let mut pending = meter.buf::<(Loc, Loc)>(bound.moves)?;
+    let mut then_moves = meter.buf::<(Loc, Loc)>(bound.moves)?;
+    let mut else_moves = meter.buf::<(Loc, Loc)>(bound.moves)?;
     let edge_moves =
-        |target: &super::SsaTarget, out: &mut meter::List<(Loc, Loc)>| -> Result<(), String> {
+        |target: &super::SsaTarget, out: &mut meter::Buf<(Loc, Loc)>| -> Result<(), String> {
             out.clear();
             let params = &function.blocks[target.block.0 as usize].params;
             meter.work(params.len())?;
             for ((param, _), arg) in params.iter().zip(&target.args) {
-                out.push((loc[param.0 as usize], loc[arg.0 as usize]))?;
+                out.push_growing(meter, (loc[param.0 as usize], loc[arg.0 as usize]))?;
             }
             Ok(())
         };
@@ -893,7 +923,7 @@ pub fn emit(
                     // admitted before allocation, surplus capacity after.
                     // Conservative: the plan's symbol table also charged it.
                     let symbol = meter.clone_string(&callee.symbol, &mut symbols)?;
-                    calls.push((at, symbol))?;
+                    calls.push_growing(meter, (at, symbol))?;
                     if !args.is_empty() {
                         asm.bytes(&[0x48, 0x81, 0xc4])?;
                         asm.i32((args.len() * 8) as i32)?;
@@ -934,7 +964,7 @@ pub fn emit(
             }
             SsaTerminator::Panic(_) => {
                 let at = asm.rel32(&[0xe9])?;
-                asm.traps.push(at)?;
+                asm.traps.push_growing(meter, at)?;
             }
             SsaTerminator::Jump(target) => {
                 edge_moves(target, &mut then_moves)?;
@@ -942,7 +972,7 @@ pub fn emit(
                 let to = target.block.0 as usize;
                 if to != next {
                     let at = asm.rel32(&[0xe9])?;
-                    edges.push((at, to))?;
+                    edges.push_growing(meter, (at, to))?;
                 }
             }
             SsaTerminator::Branch {
@@ -977,16 +1007,16 @@ pub fn emit(
                 let else_trivial = else_moves.iter().all(|(d, s)| d == s);
                 if then_block != next || !else_trivial {
                     let at = asm.rel32(&[0xe9])?;
-                    edges.push((at, then_block))?;
+                    edges.push_growing(meter, (at, then_block))?;
                 }
                 if else_trivial {
-                    edges.push((to_else, otherwise.block.0 as usize))?;
+                    edges.push_growing(meter, (to_else, otherwise.block.0 as usize))?;
                 } else {
                     let here = asm.code.len();
                     asm.patch(to_else, here)?;
                     parallel_move(&mut asm, &else_moves, &mut pending, meter)?;
                     let at = asm.rel32(&[0xe9])?;
-                    edges.push((at, otherwise.block.0 as usize))?;
+                    edges.push_growing(meter, (at, otherwise.block.0 as usize))?;
                 }
             }
         }
@@ -1006,8 +1036,9 @@ pub fn emit(
     }
     let mut stats = layout.stats;
     stats.code_bytes = asm.code.len();
-    let (code, mut lease) = asm.code.into_parts();
-    let (_traps, traps_lease) = asm.traps.into_parts();
+    let Asm { code, traps, .. } = asm;
+    let (code, mut lease) = code.into_parts();
+    let (_traps, traps_lease) = traps.into_parts();
     let (calls, calls_lease) = calls.into_parts();
     let (strings, strings_lease) = strings.into_parts();
     lease.absorb(meter, calls_lease)?;
@@ -1023,7 +1054,7 @@ pub fn emit(
     };
     drop(_traps);
     drop(traps_lease);
-    // Reconcile to the real retained capacity (bounds were upper bounds).
+    // Reconcile to the real retained capacity (the bound was an estimate).
     let actual = object_bytes(&object)?;
     let owned = store::Owned::adopt(lease, object, actual, meter)?;
     Ok((owned, stats))
@@ -1032,8 +1063,8 @@ pub fn emit(
 /// Paid panic adapter: the shared abort sequence written into the machine's
 /// paid buffers under the exact meter of this emission.
 struct MachinePanic<'s, 'm> {
-    asm: &'s mut Asm,
-    strings: &'s mut meter::List<(usize, Vec<u8>)>,
+    asm: &'s mut Asm<'m>,
+    strings: &'s mut meter::Buf<(usize, Vec<u8>)>,
     diagnostics: &'s mut meter::Lease,
     meter: &'s Meter<'m>,
 }
@@ -1041,7 +1072,7 @@ struct MachinePanic<'s, 'm> {
 impl crate::compiler::backend::PanicSink for MachinePanic<'_, '_> {
     fn bytes(&mut self, bytes: &[u8]) -> Result<(), String> {
         self.meter.work(bytes.len())?;
-        self.asm.code.extend_growing(self.meter, bytes)
+        self.asm.bytes(bytes)
     }
     fn position(&self) -> usize {
         self.asm.code.len()
@@ -1069,9 +1100,9 @@ impl crate::compiler::backend::PanicSink for MachinePanic<'_, '_> {
         Ok(diagnostic)
     }
     fn string(&mut self, at: usize, payload: Vec<u8>) -> Result<(), String> {
-        // The relocation slot was admitted by `emit_bound`; the payload was
-        // paid by `diagnostic` and is moved here, not copied.
-        self.strings.push((at, payload))
+        // The relocation slot grows (paid) if the estimate was low; the
+        // payload was paid by `diagnostic` and is moved here, not copied.
+        self.strings.push_growing(self.meter, (at, payload))
     }
 }
 
@@ -1099,4 +1130,23 @@ pub fn object_bytes(object: &Object) -> Result<usize, String> {
         total = meter::add(total, payload.capacity())?;
     }
     Ok(total)
+}
+
+/// Test-only thread-local override that shrinks every emit estimate, to prove
+/// that an underestimate grows (paid) instead of rejecting valid source.
+#[cfg(test)]
+pub(crate) mod bound_override {
+    use std::cell::Cell;
+    thread_local! {
+        static CAP: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+    pub(crate) fn get() -> Option<usize> {
+        CAP.with(Cell::get)
+    }
+    pub(crate) fn with<R>(cap: usize, f: impl FnOnce() -> R) -> R {
+        CAP.with(|c| c.set(Some(cap)));
+        let out = f();
+        CAP.with(|c| c.set(None));
+        out
+    }
 }

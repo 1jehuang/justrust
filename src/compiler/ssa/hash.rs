@@ -100,7 +100,7 @@ pub fn canonical_metered(
                 params,
                 ret: function.ret,
                 blocks,
-                panics: store::try_clone_panics(&function.panics)?,
+                panics: store::copy_panics(&function.panics, meter)?,
             })
         },
         store::capacity_bytes,
