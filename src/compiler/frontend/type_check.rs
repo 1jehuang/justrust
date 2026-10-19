@@ -6737,7 +6737,10 @@ impl<'a> Checker<'a> {
             inclusive,
         } = &source.iterable
         else {
-            return Err("for currently requires an integer range".into());
+            let ForIterable::Value(value) = &source.iterable else {
+                unreachable!()
+            };
+            return self.for_array_statement(label, pattern, value, body);
         };
         let loop_depth = self.loops.len();
         let scope_depth = self.scopes.len();
@@ -6947,6 +6950,161 @@ impl<'a> Checker<'a> {
                 ir::Completion::Never
             };
             Ok((ir::Stmt::Expr(block), completes))
+        })();
+        self.loops.truncate(loop_depth);
+        self.scopes.truncate(scope_depth);
+        self.reachable = outer_reachable;
+        result
+    }
+    #[inline(never)]
+    fn for_array_statement(
+        &mut self,
+        label: Option<AstIdent>,
+        pattern: &Pattern,
+        source: &Expr,
+        body: &Block,
+    ) -> Result<(ir::Stmt, bool), String> {
+        let loop_depth = self.loops.len();
+        let scope_depth = self.scopes.len();
+        let outer_reachable = self.reachable;
+        let result = (|| {
+            let value = self.expr(source)?;
+            let flow = self.flow(value);
+            let ir::Ty::Array { element, len } = &flow.ty else {
+                return Err(
+                    "for currently requires an integer range or a by-value Copy array".into(),
+                );
+            };
+            if !self.facts().must_copy(element)? {
+                return Err(
+                    "unsupported: by-value for array iteration requires Copy elements".into(),
+                );
+            }
+            let element = element.as_ref().clone();
+            let len = *len;
+            self.charge_node(std::mem::size_of::<ir::Stmt>() * 7)?;
+            let array = self.temporary("$for_array", flow.ty.clone(), false)?;
+            let index_ty = ir::Ty::Int(ir::IntTy::Usize);
+            let index = self.temporary("$for_index", index_ty.clone(), true)?;
+            let saved_index = self.temporary("$for_item_index", index_ty.clone(), true)?;
+            // Every written checked expression occurrence owns distinct storage.
+            let zero =
+                self.for_expr(index_ty.clone(), ir::ExprKind::Int(ir::IntValue::usize(0)))?;
+            let saved_zero =
+                self.for_expr(index_ty.clone(), ir::ExprKind::Int(ir::IntValue::usize(0)))?;
+            let length = self.for_expr(
+                index_ty.clone(),
+                ir::ExprKind::Int(ir::IntValue::usize(len as u64)),
+            )?;
+            let one = self.for_expr(index_ty.clone(), ir::ExprKind::Int(ir::IntValue::usize(1)))?;
+            let compare_index = self.for_expr(index_ty.clone(), ir::ExprKind::Local(index))?;
+            let snapshot_index = self.for_expr(index_ty.clone(), ir::ExprKind::Local(index))?;
+            let increment_index = self.for_expr(index_ty.clone(), ir::ExprKind::Local(index))?;
+            let in_range = self.for_expr(
+                ir::Ty::Bool,
+                ir::ExprKind::Binary {
+                    op: BinaryOp::Lt,
+                    left: compare_index,
+                    right: length,
+                },
+            )?;
+            let next = self.for_expr(
+                index_ty.clone(),
+                ir::ExprKind::Binary {
+                    op: BinaryOp::Add,
+                    left: increment_index,
+                    right: one,
+                },
+            )?;
+            let yes = self.for_expr(ir::Ty::Bool, ir::ExprKind::Bool(true))?;
+            let no = self.for_expr(ir::Ty::Bool, ir::ExprKind::Bool(false))?;
+            let condition = self.for_expr(
+                ir::Ty::Bool,
+                ir::ExprKind::If {
+                    condition: in_range,
+                    then_block: ir::Block {
+                        statements: vec![
+                            ir::Stmt::Assign {
+                                local: saved_index,
+                                value: snapshot_index,
+                            },
+                            ir::Stmt::Assign {
+                                local: index,
+                                value: next,
+                            },
+                        ],
+                        tail: Some(yes),
+                    },
+                    else_block: ir::Block {
+                        statements: vec![],
+                        tail: Some(no),
+                    },
+                },
+            )?;
+            let base = self.for_expr(flow.ty.clone(), ir::ExprKind::Local(array))?;
+            let item_index = self.for_expr(index_ty, ir::ExprKind::Local(saved_index))?;
+            let item = self.for_expr(
+                element,
+                ir::ExprKind::DynamicIndex {
+                    base,
+                    index: item_index,
+                },
+            )?;
+            let id = self.enter_loop(false);
+            let key = self.label_key(label)?;
+            let frame = self.loops.last_mut().unwrap();
+            frame.label = key;
+            frame.checking_condition = false;
+            self.reachable = true;
+            let (kind, body_flow) = self.lower_match_value(
+                item,
+                [BorrowedMatchArm {
+                    pattern: Some(pattern),
+                    guarded: false,
+                    body: MatchBody::Block(body),
+                }]
+                .into_iter(),
+                Some(&ir::Ty::Unit),
+            )?;
+            self.require(&body_flow, &ir::Ty::Unit)?;
+            let matched = self.for_expr(body_flow.ty, kind)?;
+            self.exprs[matched.0].completion = if body_flow.completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            };
+            let block = ir::Block {
+                statements: vec![
+                    ir::Stmt::Let {
+                        local: array,
+                        value,
+                    },
+                    ir::Stmt::Let {
+                        local: index,
+                        value: zero,
+                    },
+                    ir::Stmt::Let {
+                        local: saved_index,
+                        value: saved_zero,
+                    },
+                    ir::Stmt::While {
+                        id,
+                        condition,
+                        body: ir::Block {
+                            statements: vec![ir::Stmt::Expr(matched)],
+                            tail: None,
+                        },
+                    },
+                ],
+                tail: None,
+            };
+            let block = self.for_expr(ir::Ty::Unit, ir::ExprKind::Block(block))?;
+            self.exprs[block.0].completion = if flow.completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            };
+            Ok((ir::Stmt::Expr(block), flow.completes))
         })();
         self.loops.truncate(loop_depth);
         self.scopes.truncate(scope_depth);

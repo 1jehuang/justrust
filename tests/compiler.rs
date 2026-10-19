@@ -530,7 +530,7 @@ fn invalid_programs_fail_without_publishing_an_executable() {
         ("main return", "fn main() -> i32 { 0 }"),
         ("formatted println", "fn main() { println!(\"{}\", 1); }"),
         ("nonliteral println", "fn main() { println!(1); }"),
-        ("for loop", "fn main() { for x in 0..2 {} }"),
+        ("refutable for pattern", "fn main() { for 1 in 0..2 {} }"),
         ("struct", "struct X {} fn main() {}"),
         ("malformed syntax", "fn main( {"),
     ];

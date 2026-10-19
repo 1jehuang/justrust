@@ -612,3 +612,67 @@ fn main(){
     stock(source, Some(expected));
     runs(source, expected);
 }
+
+#[test]
+fn copy_array_for_matches_stock_snapshot_patterns_and_control() {
+    let source = r#"
+fn values()->[i32;3]{println!("array once");[2,3,4]}
+fn main(){
+    let mut values=[1,2,3];
+    let mut sum=0;
+    for x in values {values[1]=99;sum=sum+x;}
+    if sum==6 && values[1]==99 {println!("array snapshot ok");}
+    let mut total=0;
+    for x in [2,3,4] {if x==3 {continue;} total=total+x;}
+    if total==6 {println!("array continue ok");}
+    let mut pairs=0;
+    for (a,b) in [(1,2),(3,4)] {pairs=pairs+a+b;}
+    for [a,b] in [[5,6],[7,8]] {pairs=pairs+a+b;}
+    if pairs==36 {println!("array patterns ok");}
+    let mut nested=0;
+    'outer: for x in [1,2,3] {
+        for y in [4,5] {if y==5 {continue 'outer;} nested=nested+x;}
+    }
+    if nested==6 {println!("array labels ok");}
+    let mut first=0;
+    for x in [7,8] {first=x;break;}
+    if first==7 {println!("array break ok");}
+    let x=9;
+    for mut x in [x,10] {x=x+1;}
+    if x==9 {println!("array scope ok");}
+    for _ in crate::values() {}
+}
+"#;
+    let expected = "array snapshot ok\narray continue ok\narray patterns ok\narray labels ok\narray break ok\narray scope ok\narray once\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn copy_array_for_invalid_scope_mutability_refutability_and_unit_obligations() {
+    for source in [
+        "fn main(){for x in [1,2] {} let y=x;}",
+        "fn main(){for x in [1,2] {x=3;}}",
+        "fn main(){for 1 in [1,2] {}}",
+        "fn main(){for (a,b) in [1,2] {}}",
+        "fn main(){for x in [1,2] {break 7;}}",
+        "fn main(){for x in [1,2] {true}}",
+        "fn f()->i32{for _ in [1,2] {}} fn main(){}",
+    ] {
+        stock(source, None);
+        rejects("invalid Copy-array iteration", source);
+    }
+}
+
+#[test]
+fn array_iteration_unsupported_boundaries_are_stock_valid_not_invalid_claims() {
+    for source in [
+        "struct Item{x:i32} fn main(){for item in [Item{x:1},Item{x:2}] {}}",
+        "fn main(){let values=[1,2];for x in &values {}}",
+        "fn main(){for x in [1,2].iter() {}}",
+        "fn main(){for x in [1,2].into_iter() {}}",
+    ] {
+        stock(source, Some(""));
+        rejects("explicit unsupported iterator boundary", source);
+    }
+}
