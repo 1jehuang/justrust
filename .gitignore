@@ -1,4 +1,6 @@
 /target
+# Ad hoc verification target dirs (e.g. CARGO_TARGET_DIR=target-verify)
+/target-*/
 /toolchain/rustc/src/llvm-project/
 /toolchain/rustc/src/gcc/
 /toolchain/rustc/src/tools/enzyme/
