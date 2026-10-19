@@ -2073,6 +2073,30 @@ impl SourceInventory {
                     depth + 1,
                 )?;
             }
+            Expr::RangeIndex {
+                base, start, end, ..
+            } => {
+                self.expr(
+                    base,
+                    &node.child(13, 0, budget)?,
+                    None,
+                    None,
+                    budget,
+                    depth + 1,
+                )?;
+                for (ordinal, bound) in [(1, start), (2, end)] {
+                    if let Some(bound) = bound {
+                        self.expr(
+                            bound,
+                            &node.child(13, ordinal, budget)?,
+                            None,
+                            None,
+                            budget,
+                            depth + 1,
+                        )?;
+                    }
+                }
+            }
             Expr::Index { base, .. } | Expr::Field { base, .. } => {
                 if matches!(expr, Expr::Index { .. }) {
                     // May become an overloaded `*Index::index(&base, N)`.
@@ -5922,6 +5946,13 @@ pub enum Expr {
     DynamicIndex {
         base: Box<Expr>,
         index: Box<Expr>,
+    },
+    /// `base[start..end]` / `..=` / open bounds (SUBSLICE.md).
+    RangeIndex {
+        base: Box<Expr>,
+        start: Option<Box<Expr>>,
+        end: Option<Box<Expr>>,
+        inclusive: bool,
     },
     Array(Vec<Expr>),
     Repeat {
@@ -11514,6 +11545,30 @@ impl<'input, 'names> Parser<'input, 'names> {
             Stmt::AssignPlace { place, value }
         })
     }
+    /// After `base[` and an optional start, at `..` or `..=`: parse the rest
+    /// of a range index through the closing `]`.
+    #[inline(never)]
+    fn range_index(&mut self, base: Expr, start: Option<Expr>) -> Result<Expr, ParseError> {
+        let inclusive = self.eat("..=");
+        if !inclusive {
+            self.expect("..")?;
+        }
+        let end = if self.is("]") {
+            if inclusive {
+                return Err(self.error("inclusive range index requires an end bound"));
+            }
+            None
+        } else {
+            Some(Box::new(self.nested_expr()?))
+        };
+        self.expect("]")?;
+        Ok(Expr::RangeIndex {
+            base: Box::new(base),
+            start: start.map(Box::new),
+            end,
+            inclusive,
+        })
+    }
     #[inline(never)]
     fn compound_statement(&mut self, target: Expr, op: BinaryOp) -> Result<Stmt, ParseError> {
         let value = self.expr(0)?;
@@ -12697,12 +12752,16 @@ impl<'input, 'names> Parser<'input, 'names> {
                         index,
                     };
                 } else {
-                    if self.is("..") {
-                        return Err(self.unsupported("unsupported: range indexing and subslicing"));
+                    if self.is("..") || self.is("..=") {
+                        left = self.range_index(left, None)?;
+                        validate_depth(DepthNode::Expr(&left)).map_err(|e| self.depth_error(&e))?;
+                        continue;
                     }
                     let index = self.nested_expr()?;
                     if self.is("..") || self.is("..=") {
-                        return Err(self.unsupported("unsupported: range indexing and subslicing"));
+                        left = self.range_index(left, Some(index))?;
+                        validate_depth(DepthNode::Expr(&left)).map_err(|e| self.depth_error(&e))?;
+                        continue;
                     }
                     self.expect("]")?;
                     left = Expr::DynamicIndex {
@@ -14453,6 +14512,14 @@ fn walk_depth_inspecting(
                 Expr::DynamicIndex { base, index } => {
                     push(DepthNode::Expr(base))?;
                     push(DepthNode::Expr(index))?;
+                }
+                Expr::RangeIndex {
+                    base, start, end, ..
+                } => {
+                    push(DepthNode::Expr(base))?;
+                    for bound in [start, end].into_iter().flatten() {
+                        push(DepthNode::Expr(bound))?;
+                    }
                 }
                 Expr::Index { base, .. } => push(DepthNode::Expr(base))?,
                 Expr::EnumVariant { fields, .. } => {

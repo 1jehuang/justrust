@@ -2721,6 +2721,7 @@ pub fn instantiate_checked(
             | ExprKind::RefToDyn { .. }
             | ExprKind::SliceLen { .. }
             | ExprKind::SliceIndex { .. }
+            | ExprKind::Subslice { .. }
             | ExprKind::Array(_)
             | ExprKind::Repeat { .. }
             | ExprKind::Index { .. }
@@ -6754,6 +6755,16 @@ pub enum ExprKind {
         slice: ExprId,
         index: ExprId,
     },
+    /// Shared subslice `&s[start..end]` (`..=` when `inclusive`) of a shared
+    /// `&[T]` (SUBSLICE.md). Absent bounds mean 0 / len. Evaluation order is
+    /// slice, start, end; then stock checks: end overflow (inclusive), end > len,
+    /// start > end, each a runtime trap. Result shares the source loan.
+    Subslice {
+        slice: ExprId,
+        start: Option<ExprId>,
+        end: Option<ExprId>,
+        inclusive: bool,
+    },
     Array(Vec<ExprId>),
     Repeat {
         value: ExprId,
@@ -7457,6 +7468,7 @@ impl CheckedFunction {
                 | ExprKind::RefToDyn { .. }
                 | ExprKind::SliceLen { .. }
                 | ExprKind::SliceIndex { .. }
+                | ExprKind::Subslice { .. }
                 | ExprKind::Repeat { .. }
                 | ExprKind::Index { .. }
                 | ExprKind::Int(_)
@@ -8265,6 +8277,26 @@ impl CheckedFunction {
                     }
                     if value.completion != source.completion {
                         return Err("slice length completion mismatch".into());
+                    }
+                }
+                ExprKind::Subslice {
+                    slice, start, end, ..
+                } => {
+                    expr(*slice)?;
+                    for bound in [start, end].into_iter().flatten() {
+                        expr(*bound)?;
+                        if self.exprs[bound.0].ty != Ty::Int(IntTy::Usize)
+                            && self.exprs[bound.0].ty != Ty::Never
+                        {
+                            return Err("subslice bound requires usize".into());
+                        }
+                    }
+                    let Some(element) = self.exprs[slice.0].ty.shared_slice_element() else {
+                        return Err("subslice requires shared slice".into());
+                    };
+                    validate_shared_slice_element_with_facts(element, facts)?;
+                    if !pattern_types_equal(&value.ty, &self.exprs[slice.0].ty, &mut 0)? {
+                        return Err("subslice result must equal its shared slice type".into());
                     }
                 }
                 ExprKind::SliceIndex { slice, index } => {

@@ -333,6 +333,27 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
                 index: bb,
             },
         ) => Ok(same_operand_types(a, b, budget)? && same_operand_types(aa, bb, budget)?),
+        (
+            Rvalue::Subslice {
+                slice: a,
+                start: aa,
+                end: ae,
+                inclusive: ai,
+            },
+            Rvalue::Subslice {
+                slice: b,
+                start: bb,
+                end: be,
+                inclusive: bi,
+            },
+        ) => Ok(ai == bi
+            && same_operand_types(a, b, budget)?
+            && same_operand_types(aa, bb, budget)?
+            && match (ae, be) {
+                (Some(x), Some(y)) => same_operand_types(x, y, budget)?,
+                (None, None) => true,
+                _ => false,
+            }),
         _ => Ok(true),
     }
 }
@@ -558,6 +579,15 @@ pub enum Rvalue {
         slice: Operand,
         index: Operand,
     },
+    /// Shared subslice of exactly shared `&[T]` (SUBSLICE.md). `start` is a
+    /// usize (constant 0 when omitted); `end` is None for the source length.
+    /// Traps on inclusive end overflow, end > len, start > end, in that order.
+    Subslice {
+        slice: Operand,
+        start: Operand,
+        end: Option<Operand>,
+        inclusive: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -617,6 +647,15 @@ impl Rvalue {
             Self::SliceIndex { slice, index } => {
                 visit(slice)?;
                 visit(index)?;
+            }
+            Self::Subslice {
+                slice, start, end, ..
+            } => {
+                visit(slice)?;
+                visit(start)?;
+                if let Some(end) = end {
+                    visit(end)?;
+                }
             }
             Self::Binary { left, right, .. } => {
                 visit(left)?;
@@ -1689,6 +1728,15 @@ impl Function {
                                 operand(slice, budget, facts)?;
                                 operand(index, budget, facts)?;
                             }
+                            Rvalue::Subslice {
+                                slice, start, end, ..
+                            } => {
+                                operand(slice, budget, facts)?;
+                                operand(start, budget, facts)?;
+                                if let Some(end) = end {
+                                    operand(end, budget, facts)?;
+                                }
+                            }
                             Rvalue::Repeat { ty, value } => {
                                 facts.validate_ty_with_budget(ty, budget)?;
                                 operand(value, budget, facts)?;
@@ -1904,6 +1952,27 @@ impl Function {
 
     /// Slice operations take a whole-local Copy of a shared reference. No slice
     /// place projection, move, constant or never-typed operand is admitted.
+    /// Kept out of line so the large `rvalue_ty` frame does not grow.
+    #[inline(never)]
+    fn subslice_ty(
+        &self,
+        slice: &Operand,
+        start: &Operand,
+        end: Option<&Operand>,
+        facts: ir::FactsCtx<'_>,
+    ) -> Result<Ty, String> {
+        let source = self.slice_operand_ty(slice, facts)?;
+        let element = source
+            .shared_slice_element()
+            .ok_or("CFG subslice requires shared slice")?;
+        ir::validate_shared_slice_element_with_facts(element, facts)?;
+        self.require_operand_with_facts(start, &Ty::Int(IntTy::Usize), facts)?;
+        if let Some(end) = end {
+            self.require_operand_with_facts(end, &Ty::Int(IntTy::Usize), facts)?;
+        }
+        Ok(source)
+    }
+
     fn slice_operand_ty(&self, value: &Operand, facts: ir::FactsCtx<'_>) -> Result<Ty, String> {
         let Operand::Copy(place) = value else {
             return Err("CFG slice operand must copy a whole local".into());
@@ -2243,6 +2312,9 @@ impl Function {
                 }
                 Ok(element.clone())
             }
+            Rvalue::Subslice {
+                slice, start, end, ..
+            } => self.subslice_ty(slice, start, end.as_ref(), facts),
             Rvalue::NativeSyscall(arguments) => {
                 if arguments.len() != 7 {
                     return Err("CFG native syscall arity mismatch".into());
@@ -3965,6 +4037,37 @@ impl Lowerer<'_> {
         Ok(destination)
     }
 
+    /// Slice, then start, then end, each once; checks run afterwards. Kept
+    /// out of line so the recursive materialization frame does not grow.
+    #[inline(never)]
+    fn lower_subslice(
+        &mut self,
+        destination: &Place,
+        slice: ExprId,
+        start: Option<ExprId>,
+        end: Option<ExprId>,
+        inclusive: bool,
+        origin: Option<ExprId>,
+    ) -> Result<(), String> {
+        let slice = self.expression(slice)?;
+        let start = match start {
+            Some(start) => self.expression(start)?,
+            None => Operand::Constant(Constant::Int(IntValue::usize(0))),
+        };
+        let end = end.map(|end| self.expression(end)).transpose()?;
+        self.assign(
+            destination.clone(),
+            Rvalue::Subslice {
+                slice,
+                start,
+                end,
+                inclusive,
+            },
+            origin,
+        );
+        Ok(())
+    }
+
     fn materialize_expression_inner(&mut self, id: ExprId) -> Result<Place, String> {
         let expression = self
             .source
@@ -4011,6 +4114,15 @@ impl Lowerer<'_> {
             ir::ExprKind::SliceLen { slice } => {
                 let slice = self.expression(*slice)?;
                 self.assign(destination.clone(), Rvalue::SliceLen { slice }, origin);
+            }
+            ir::ExprKind::Subslice {
+                slice,
+                start,
+                end,
+                inclusive,
+            } => {
+                let (slice, start, end, inclusive) = (*slice, *start, *end, *inclusive);
+                self.lower_subslice(&destination, slice, start, end, inclusive, origin)?;
             }
             // Receiver first, then index, each once into a distinct snapshot.
             ir::ExprKind::SliceIndex { slice, index } => {
@@ -11414,6 +11526,15 @@ mod tests {
                                 reference: value, ..
                             }
                             | Rvalue::SliceLen { slice: value } => live_operand(value, &live),
+                            Rvalue::Subslice {
+                                slice, start, end, ..
+                            } => {
+                                live_operand(slice, &live);
+                                live_operand(start, &live);
+                                if let Some(end) = end {
+                                    live_operand(end, &live);
+                                }
+                            }
                             Rvalue::Binary { left, right, .. }
                             | Rvalue::SliceIndex {
                                 slice: left,

@@ -2455,6 +2455,8 @@ impl CarrierBuilder<'_, '_> {
             // and loan set at the same fixed carrier position. Length metadata
             // contributes no provenance.
             Rvalue::ArrayToSlice { reference } => self.operand_value(state, reference),
+            // A subslice carries exactly the source handle's loan and origins.
+            Rvalue::Subslice { slice, .. } => self.operand_value(state, slice),
             // A trait object carrier holds exactly the input reference's loan
             // and origins; the vtable word is static metadata.
             Rvalue::RefToDyn { reference, .. } => self.operand_value(state, reference),
@@ -4335,6 +4337,15 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
         Rvalue::SliceIndex { slice, index } => {
             visit_operand(slice, &mut visit);
             visit_operand(index, &mut visit);
+        }
+        Rvalue::Subslice {
+            slice, start, end, ..
+        } => {
+            visit_operand(slice, &mut visit);
+            visit_operand(start, &mut visit);
+            if let Some(end) = end {
+                visit_operand(end, &mut visit);
+            }
         }
         Rvalue::Binary { left, right, .. } => {
             visit_operand(left, &mut visit);

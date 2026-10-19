@@ -576,6 +576,14 @@ pub(super) fn inventory(
             | Expr::Unary { value, .. }
             | Expr::Field { base: value, .. }
             | Expr::Index { base: value, .. } => expr(value, ds, b, d + 1)?,
+            Expr::RangeIndex {
+                base, start, end, ..
+            } => {
+                expr(base, ds, b, d + 1)?;
+                for bound in [start, end].into_iter().flatten() {
+                    expr(bound, ds, b, d + 1)?;
+                }
+            }
             Expr::DynamicIndex { base, index }
             | Expr::Binary {
                 left: base,

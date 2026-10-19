@@ -866,6 +866,14 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Expr(base))?;
                     self.push(Visit::Expr(index))?;
                 }
+                Expr::RangeIndex {
+                    base, start, end, ..
+                } => {
+                    self.push(Visit::Expr(base))?;
+                    for bound in [start, end].into_iter().flatten() {
+                        self.push(Visit::Expr(bound))?;
+                    }
+                }
                 Expr::NativeSyscall(elements) | Expr::Array(elements) | Expr::Tuple(elements) => {
                     self.many(elements, Visit::Expr)?
                 }

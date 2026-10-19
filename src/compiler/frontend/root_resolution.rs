@@ -3126,6 +3126,14 @@ impl Resolver<'_> {
                 self.expr(base, module, locals)?;
                 self.expr(index, module, locals)?;
             }
+            Expr::RangeIndex {
+                base, start, end, ..
+            } => {
+                self.expr(base, module, locals)?;
+                for bound in [start, end].into_iter().flatten() {
+                    self.expr(bound, module, locals)?;
+                }
+            }
             Expr::Var(name) => {
                 let value_item = self.path(name, module, false, false)?;
                 if let Some(item) = &value_item

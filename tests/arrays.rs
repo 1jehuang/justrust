@@ -420,13 +420,14 @@ fn main() { if run() == 37 { println!("array oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_array_slice() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "array_slice",
+fn promotes_unchanged_array_slice_subslice() {
+    // Formerly a legal-unsupported boundary; shared subslices are now
+    // supported (SUBSLICE.md). Stock rustc 1.98.1 prints exactly this line.
+    runs(
         r#"fn run()->i32{let a=[3,7];let s=&a[..];s[1]}
 fn main() { if run() == 7 { println!("array oracle ok"); } }
 "#,
+        "array oracle ok\n",
     );
 }
 

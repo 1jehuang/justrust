@@ -239,11 +239,12 @@ fn cases() -> Vec<Case> {
             outcome: Outcome::Unsupported,
         },
         Case {
+            // Promoted unchanged: shared subslices are supported (SUBSLICE.md).
             name: "slice_range",
             source: r###"fn main(){let a=[1,42];let s:&[i32]=&a[1..];if s[0]==42{println!("ok");}}"###,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "generic_reference_substitution",
@@ -436,7 +437,7 @@ fn stock_all() {
             }
         }
     }
-    assert_eq!(counts, [18, 3, 5, 6]);
+    assert_eq!(counts, [19, 3, 5, 5]);
 }
 #[test]
 fn stock_typed_slices_edition2024_actual_toolchain() {
@@ -568,7 +569,7 @@ fn every_admitted_function_checks_universally_and_slice_ir_keeps_exact_element()
         }
         count += 1;
     }
-    assert_eq!(count, 21);
+    assert_eq!(count, 22);
     assert_eq!(generic, 3);
     assert!(indices >= 20);
     assert!(coercions >= 21);
@@ -616,9 +617,11 @@ fn valid_borrowed_projection_reference_elements_returns_mutability_and_ranges_st
             "reference_elements" => {
                 "slice elements containing references or slices, or nested slice carriers"
             }
-            // This source reaches the earlier inferred-reference replay boundary,
-            // not a proof that concrete substitution rejected a reference element.
-            "generic_reference_substitution" => "reference generic arguments are unsupported",
+            // Reference generic arguments are admitted (G3), so concrete
+            // substitution now reaches the reference-element slice boundary.
+            "generic_reference_substitution" => {
+                "slice elements containing references or slices, or nested slice carriers"
+            }
             _ => "unsupported:",
         };
         assert!(
@@ -628,7 +631,7 @@ fn valid_borrowed_projection_reference_elements_returns_mutability_and_ranges_st
         );
         count += 1;
     }
-    assert_eq!(count, 6);
+    assert_eq!(count, 5);
 }
 #[test]
 fn native_typed_slices_workers1_8_check_build_no_compiler_fallback() {
@@ -672,20 +675,14 @@ fn native_typed_slices_workers1_8_check_build_no_compiler_fallback() {
                 if !accepted {
                     assert!(result.stdout.is_empty());
                     assert!(!diagnostic.is_empty());
-                    if case.name == "reference_elements" {
+                    if case.name == "reference_elements"
+                        || case.name == "generic_reference_substitution"
+                    {
                         assert_eq!(case.outcome, Outcome::Unsupported);
                         assert!(
                             diagnostic.contains(
                                 "slice elements containing references or slices, or nested slice carriers"
                             ),
-                            "{}:{diagnostic}",
-                            case.name
-                        );
-                    } else if case.name == "generic_reference_substitution" {
-                        // Earlier replay boundary, not post-substitution admission proof.
-                        assert_eq!(case.outcome, Outcome::Unsupported);
-                        assert!(
-                            diagnostic.contains("reference generic arguments are unsupported"),
                             "{}:{diagnostic}",
                             case.name
                         );
@@ -732,9 +729,9 @@ fn native_typed_slices_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 128);
-    assert_eq!(modes, [36, 36, 6, 6, 10, 10, 12, 12]);
-    assert_eq!(images, 42);
+    assert_eq!(modes, [38, 38, 6, 6, 10, 10, 10, 10]);
+    assert_eq!(images, 44);
     eprintln!(
-        "TYPED SLICES native128cells/42ELF executions/profile, modes{modes:?};6stock-validUnsupported capabilities are not ordinary-invalid parity, general borrowing or full Rust"
+        "TYPED SLICES native128cells/44ELF executions/profile, modes{modes:?};5stock-validUnsupported capabilities are not ordinary-invalid parity, general borrowing or full Rust"
     );
 }

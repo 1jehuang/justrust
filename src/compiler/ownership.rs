@@ -1583,6 +1583,15 @@ fn preflight_with_plan(
                         operand(slice, &mut budget)?;
                         operand(index, &mut budget)?;
                     }
+                    Rvalue::Subslice {
+                        slice, start, end, ..
+                    } => {
+                        operand(slice, &mut budget)?;
+                        operand(start, &mut budget)?;
+                        if let Some(end) = end {
+                            operand(end, &mut budget)?;
+                        }
+                    }
                     Rvalue::Repeat { ty, value } => {
                         preflight_ty(ty, 0, &mut budget)?;
                         operand(value, &mut budget)?;
@@ -2844,6 +2853,18 @@ impl Transfer<'_> {
             Rvalue::RefToDyn { reference, .. } => self.operand(state, reference)?,
             // Length reads only the slice handle, never the referent storage.
             Rvalue::SliceLen { slice } => self.operand(state, slice)?,
+            // A subslice copies the shared handle once (its loan and origins
+            // are the operand's) and reads only usize bounds plus the length
+            // metadata; it performs no read of the referent storage.
+            Rvalue::Subslice {
+                slice, start, end, ..
+            } => {
+                self.operand(state, slice)?;
+                self.operand(state, start)?;
+                if let Some(end) = end {
+                    self.operand(state, end)?;
+                }
+            }
             // Receiver snapshot, index snapshot, then a live shared read of the
             // referent through the handle's issued origins.
             Rvalue::SliceIndex { slice, index } => {

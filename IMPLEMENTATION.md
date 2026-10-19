@@ -316,6 +316,9 @@ missing-file changes invalidate only justified consumers without stale lookup.
       through fields) with per-level stock order and bounds checks
       (NESTED-INDEX.md). Reference-rooted and non-scalar-leaf forms remain
       Unsupported.
+      Delivered: shared subslices `&s[a..b]` of all range kinds with stock
+      order and checks (SUBSLICE.md); `&mut` subslices and str slicing remain
+      Unsupported.
 - [ ] Complete nested/or/range/ref/@/slice patterns, guards, match ergonomics,
       exhaustiveness/usefulness, conditional pattern forms beyond delivered
       IF-LET.md/WHILE-LET.md/LET-ELSE.md slices and destructuring assignment.

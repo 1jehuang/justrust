@@ -2579,6 +2579,76 @@ impl Emitter<'_> {
                 self.slice_operand(slice)?;
                 self.slice_len(SHARED_BYTE_SLICE_LAYOUT);
             }
+            cfg::Rvalue::Subslice {
+                slice,
+                start,
+                end,
+                inclusive,
+            } => {
+                let slice_ty = self.function().operand_ty(slice)?;
+                let element = slice_ty
+                    .shared_slice_element()
+                    .ok_or("subslice requires exactly shared &[T]")?;
+                let layout = shared_slice_layout(element)?;
+                for bound in std::iter::once(start).chain(end.iter()) {
+                    if self.function().operand_ty(bound)? != ir::Ty::Int(ir::IntTy::Usize) {
+                        return Err("subslice bound requires genuine usize operand".into());
+                    }
+                }
+                // Bounds were already evaluated in source order by lowering;
+                // these loads only read their snapshots. Stack: start, [end].
+                self.operand(start)?;
+                self.bytes(&[0x50]); // push rax = start
+                if let Some(end) = end {
+                    self.operand(end)?;
+                    self.bytes(&[0x50]); // push rax = end
+                }
+                self.slice_operand(slice)?;
+                self.snapshot_slice(layout); // rsi = data, rdx = len
+                if end.is_some() {
+                    self.bytes(&[0x59]); // pop rcx = end
+                } else {
+                    self.bytes(&[0x48, 0x89, 0xd1]); // rcx = len
+                }
+                self.bytes(&[0x41, 0x58]); // pop r8 = start
+                // rsi = data, rdx = len, rcx = end, r8 = start.
+                if *inclusive {
+                    // Stock: inclusive end == usize::MAX overflows first.
+                    self.bytes(&[0x48, 0x83, 0xc1, 0x01]); // add rcx, 1
+                    self.trap_if(0x82); // jc
+                }
+                self.bytes(&[0x48, 0x39, 0xd1]); // cmp rcx, rdx
+                self.trap_if(0x87); // ja: end > len
+                self.bytes(&[0x4c, 0x39, 0xc1]); // cmp rcx, r8
+                self.trap_if(0x82); // jb: end < start
+                let stride = i32::try_from(layout.element_stride)
+                    .map_err(|_| "slice stride exceeds private layout limit")?;
+                if stride != value_size(element)? {
+                    return Err("slice stride disagrees with exact array element layout".into());
+                }
+                self.bytes(&[0x4c, 0x29, 0xc1]); // sub rcx, r8 -> new len
+                self.bytes(&[0x4c, 0x89, 0xc0]); // mov rax, r8 = start
+                self.bytes(&[0x49, 0x89, 0xc9]); // mov r9, rcx (save new len)
+                self.bytes(&[0xb9]); // mov ecx, stride
+                self.i32(stride);
+                self.bytes(&[0x48, 0xf7, 0xe1]); // mul rcx: rdx:rax = start*stride
+                self.trap_if(0x80); // jo: product overflow (start <= len, cannot)
+                self.bytes(&[0x48, 0x01, 0xf0]); // add rax, rsi = new data
+                self.trap_if(0x82); // jc
+                let data = self
+                    .aggregate_scratch
+                    .checked_add(i32::from(layout.data_offset))
+                    .ok_or("slice carrier offset too large")?;
+                let len_at = self
+                    .aggregate_scratch
+                    .checked_add(i32::from(layout.len_offset))
+                    .ok_or("slice carrier offset too large")?;
+                self.bytes(&[0x48, 0x89, 0x85]); // mov [rbp+data], rax
+                self.i32(data);
+                self.bytes(&[0x4c, 0x89, 0x8d]); // mov [rbp+len], r9
+                self.i32(len_at);
+                self.address(self.aggregate_scratch);
+            }
             cfg::Rvalue::SliceIndex { slice, index } => {
                 if self.function().operand_ty(index)? != ir::Ty::Int(ir::IntTy::Usize) {
                     return Err("slice index requires genuine usize operand".into());
@@ -3084,6 +3154,7 @@ pub fn emit_cfg_function(
                     }
                     cfg::Rvalue::EnumVariant { ty, .. } => value_size(&ir::Ty::Enum(ty.clone()))?,
                     cfg::Rvalue::ArrayToSlice { .. }
+                    | cfg::Rvalue::Subslice { .. }
                     | cfg::Rvalue::Str(_)
                     | cfg::Rvalue::RefToDyn { .. }
                     | cfg::Rvalue::Borrow(_) => 2 * i32::from(SHARED_BYTE_SLICE_LAYOUT.word_bytes),
