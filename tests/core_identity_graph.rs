@@ -1,3 +1,8 @@
+// Shared helper also exposes declaration preparation for other graph targets.
+#[allow(dead_code)]
+#[path = "support/native_prelude.rs"]
+mod native_prelude;
+
 use justrust_engine::compiler;
 use justrust_engine::compiler::source::SourceProbeRequest;
 use std::path::PathBuf;
@@ -55,7 +60,11 @@ fn original_identity_uses_source_graph_and_ordinary_native_instances() {
                 .iter()
                 .filter(|(key, _)| key.kind == 107)
                 .collect();
-            assert_eq!(source_nodes.len(), 5);
+            let library_keys = native_prelude::library_source_keys();
+            assert_eq!(source_nodes.len(), library_keys.len() + 1);
+            for expected in library_keys {
+                assert!(source_nodes.iter().any(|(key, _)| *key == expected));
+            }
             assert!(
                 source_nodes
                     .iter()

@@ -645,7 +645,9 @@ const LEAF_CLOSURE_GROWTH_CEILING: f64 = 1.02;
 
 /// Ceiling on planning work growth from 16 to 32 functions. Linear compilation
 /// is about 2.0; quadratic is 4.0. Target: at most 2.2. May only go down.
-const WORK_GROWTH_CEILING: f64 = 1.92;
+// Source-library methods add fixed universal work. The lower ratio is not an
+// algorithmic speedup, but the measured growth ceiling must still only shrink.
+const WORK_GROWTH_CEILING: f64 = 1.81;
 
 /// The largest generated program that must compile. Raise as fixed; the
 /// architectural target is no fixed program-size ceiling at all.
