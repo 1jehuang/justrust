@@ -111,6 +111,14 @@ fn primitive_methods_match_stock() {
             assert_eq!((-9223372036854775808i64).saturating_add(-1), -9223372036854775808i64);
             assert_eq!(9223372036854775807i64.saturating_sub(-1), 9223372036854775807i64);
             assert_eq!(255u8.saturating_sub(1), 254);
+            assert_eq!((-128i8).saturating_add(-1), -128);
+            assert_eq!(127i8.saturating_sub(-1), 127);
+            assert_eq!((-128i8).saturating_add(127), -1);
+            assert_eq!(255u8.saturating_add(0), 255);
+            assert_eq!((-0.0f64).min(0.0), 0.0); assert_eq!(0.0f64.min(-0.0), 0.0);
+            assert_eq!((-0.0f64).max(0.0), 0.0); assert_eq!(0.0f64.max(-0.0), 0.0);
+            assert_eq!((-0.0f32).min(0.0), 0.0); assert_eq!(0.0f32.min(-0.0), 0.0);
+            assert_eq!((-0.0f32).max(0.0), 0.0); assert_eq!(0.0f32.max(-0.0), 0.0);
             let nan: f32 = 0.0f32 / 0.0f32;
             assert!(nan.min(nan).is_nan()); assert_eq!(2.0f32.min(nan), 2.0);
             assert_eq!(2.0f32.max(nan), 2.0); assert!((-1.0f32).sqrt().is_nan());
@@ -151,4 +159,58 @@ fn primitive_methods_match_stock() {
             },
         ],
     );
+}
+
+#[test]
+fn checked_primitive_overflow_matches_stock() {
+    use std::{fs, process::Command};
+    let root = std::env::var_os("JCODE_SCRATCH_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("jr-primitive-overflow-{}", std::process::id()));
+    fs::create_dir(&root).unwrap();
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(root.clone());
+    for (name, source) in [
+        (
+            "abs_min",
+            "fn main() { let n: i8 = -128; let result: i8 = n.abs(); assert_eq!(result, 0); }",
+        ),
+        (
+            "pow_overflow",
+            "fn main() { let n: i8 = 12; let result: i8 = n.pow(2); assert_eq!(result, 0); }",
+        ),
+    ] {
+        let path = root.join("main.rs");
+        fs::write(&path, source).unwrap();
+        for (compiler, stock) in [("rustc", true), (env!("CARGO_BIN_EXE_jr-rust"), false)] {
+            let image = root.join(format!("{name}-{}", if stock { "stock" } else { "native" }));
+            let mut command = Command::new(compiler);
+            if stock {
+                command.env_remove("RUSTC_BOOTSTRAP").args([
+                    "--edition=2024",
+                    "-Cpanic=abort",
+                    "-Coverflow-checks=yes",
+                    "--crate-name=oracle",
+                ]);
+            }
+            let output = command.arg(&path).arg("-o").arg(&image).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{name} {compiler}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let ran = Command::new(&image).output().unwrap();
+            assert!(!ran.status.success(), "{name} {compiler} did not trap");
+            assert!(
+                !String::from_utf8_lossy(&ran.stderr).contains("assertion failed"),
+                "{name} {compiler} reached the assertion instead of trapping overflow"
+            );
+        }
+    }
 }
