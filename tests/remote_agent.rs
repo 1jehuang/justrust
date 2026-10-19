@@ -221,6 +221,23 @@ fn authenticated_enrollment_survives_agent_exit_and_native_gc_defaults_dry() {
     let target = agent.at("/project/target/debug");
     std::fs::create_dir_all(&target).unwrap();
     std::fs::write(target.join("artifact"), b"recomputable").unwrap();
+    // Reproduce the shipping upgrade boundary, not only fresh 0600 locks.
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let root = agent.at("/project");
+    let hash = root
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .fold(0xcbf29ce484222325u64, |h, b| {
+            (h ^ u64::from(*b)).wrapping_mul(0x100000001b3)
+        });
+    let locks = agent.dir.join("home/remote/evict-locks");
+    std::fs::create_dir_all(&locks).unwrap();
+    std::fs::set_permissions(&locks, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let lock = locks.join(format!("{hash:016x}.lock"));
+    std::fs::write(&lock, b"legacy inode").unwrap();
+    std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o664)).unwrap();
+    let inode = std::fs::metadata(&lock).unwrap().ino();
     agent.send(
         Msg::Synced {
             path: "/project".into(),
@@ -243,6 +260,9 @@ fn authenticated_enrollment_survives_agent_exit_and_native_gc_defaults_dry() {
     let (version, code) = agent.wait_run(3);
     assert_eq!(code, 0);
     assert!(version.starts_with("justrust "), "{version}");
+    assert_eq!(std::fs::metadata(&lock).unwrap().ino(), inode);
+    assert_eq!(std::fs::metadata(&lock).unwrap().mode() & 0o7777, 0o600);
+    assert_eq!(std::fs::read(&lock).unwrap(), b"legacy inode");
     drop(agent.w.take());
     assert!(agent.child.wait().unwrap().success());
     let output = Command::new(env!("CARGO_BIN_EXE_justrust"))

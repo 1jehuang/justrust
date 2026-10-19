@@ -26,6 +26,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[path = "remote_evict_registry.rs"]
 mod durable;
 
+#[cfg(test)]
+#[path = "remote_evict_lock_tests.rs"]
+mod lock_tests;
+
 /// Keep free space at least this fraction of the disk, or this many bytes,
 /// whichever is larger.
 pub const LOW_FRACTION: f64 = 0.15;
@@ -245,8 +249,7 @@ impl Registry {
         self.roots.entry(root.to_path_buf()).or_default();
         #[cfg(unix)]
         if let Some(store) = &self.store {
-            let _lock = build_lock(root)
-                .ok_or_else(|| std::io::Error::other("cannot lock source registration"))?;
+            let _lock = build_lock(root)?;
             store.register(root)?;
             self.roots
                 .entry(root.to_path_buf())
@@ -340,8 +343,10 @@ impl Registry {
         if self.roots.get(root).is_some_and(|s| s.leases != 0) {
             return Ok(());
         }
-        let Some(_lock) = evict_lock(root) else {
-            return Ok(());
+        let _lock = match evict_lock(root) {
+            Ok(lock) => lock,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return Ok(()),
+            Err(e) => return Err(e),
         };
         if let Some(store) = &self.store {
             store.finish(root)?;
@@ -354,24 +359,34 @@ impl Registry {
 /// never starts on a half-deleted `target/`.
 pub struct RootLock(#[allow(dead_code)] std::fs::File);
 
-fn lock_path(root: &Path) -> Option<PathBuf> {
-    let name = format!("{:016x}.lock", fxhash(root.as_os_str().as_encoded_bytes()));
-    let dir = crate::remote::dir().ok()?.join("evict-locks");
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&dir)
-        .ok()?;
-    let meta = std::fs::symlink_metadata(&dir).ok()?;
+fn validate_lock_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(dir)?;
     if !meta.is_dir()
         || meta.uid() != unsafe { libc::geteuid() }
         || meta.mode() & 0o022 != 0
-        || dir.canonicalize().ok()? != dir
+        || dir.canonicalize()? != dir
     {
-        return None;
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("unsafe source-root lock directory {}", dir.display()),
+        ));
     }
-    Some(dir.join(name))
+    Ok(())
+}
+
+fn lock_path(root: &Path) -> std::io::Result<PathBuf> {
+    let name = format!("{:016x}.lock", fxhash(root.as_os_str().as_encoded_bytes()));
+    let dir = crate::remote::dir()
+        .map_err(std::io::Error::other)?
+        .join("evict-locks");
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)?;
+    validate_lock_dir(&dir)?;
+    Ok(dir.join(name))
 }
 
 fn fxhash(bytes: &[u8]) -> u64 {
@@ -383,49 +398,80 @@ fn fxhash(bytes: &[u8]) -> u64 {
     h
 }
 
+fn validate_lock_inode(meta: &std::fs::Metadata, uid: u32) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    if !meta.is_file() || meta.uid() != uid || meta.nlink() != 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "lock is not an owned regular single-link inode",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
-fn flock(root: &Path, exclusive: bool, blocking: bool) -> Option<RootLock> {
+fn flock_at(path: &Path, exclusive: bool, blocking: bool) -> std::io::Result<RootLock> {
     use std::os::fd::AsRawFd;
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-    let path = lock_path(root)?;
-    let f = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(path)
-        .ok()?;
-    let meta = f.metadata().ok()?;
-    if !meta.is_file()
-        || meta.uid() != unsafe { libc::geteuid() }
-        || meta.mode() & 0o022 != 0
-        || meta.nlink() != 1
-    {
-        return None;
-    }
-    let mut op = if exclusive {
-        libc::LOCK_EX
-    } else {
-        libc::LOCK_SH
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+    let acquire = || {
+        validate_lock_dir(
+            path.parent()
+                .ok_or_else(|| std::io::Error::other("lock has no parent"))?,
+        )?;
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+            .open(path)?;
+        let meta = f.metadata()?;
+        validate_lock_inode(&meta, unsafe { libc::geteuid() })?;
+        // Old agents created these with mode 0666 & umask (usually 0664).
+        // Tighten the SAME verified descriptor. Never unlink/recreate or drop
+        // another process's flock: existing shared holders remain authoritative.
+        if meta.mode() & 0o7777 != 0o600 {
+            f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            f.sync_all()?;
+        }
+        let mut op = if exclusive {
+            libc::LOCK_EX
+        } else {
+            libc::LOCK_SH
+        };
+        if !blocking {
+            op |= libc::LOCK_NB;
+        }
+        loop {
+            // SAFETY: owned open descriptor, flock released only on its drop.
+            if unsafe { libc::flock(f.as_raw_fd(), op) } == 0 {
+                return Ok(RootLock(f));
+            }
+            let error = std::io::Error::last_os_error();
+            if blocking && error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
     };
-    if !blocking {
-        op |= libc::LOCK_NB;
-    }
-    // SAFETY: flock on an owned, open descriptor; released when `f` drops.
-    (unsafe { libc::flock(f.as_raw_fd(), op) } == 0).then_some(RootLock(f))
+    acquire().map_err(|e| {
+        std::io::Error::new(
+            e.kind(),
+            format!("source-root lock {}: {e}", path.display()),
+        )
+    })
 }
 
 /// Held by a build for its whole duration (blocks while eviction runs).
 #[cfg(unix)]
-pub fn build_lock(root: &Path) -> Option<RootLock> {
-    flock(root, false, true)
+pub fn build_lock(root: &Path) -> std::io::Result<RootLock> {
+    flock_at(&lock_path(root)?, false, true)
 }
 
-/// Taken by eviction; fails immediately if any build holds the root.
+/// Taken by eviction; WouldBlock means an existing build still holds this inode.
 #[cfg(unix)]
-pub fn evict_lock(root: &Path) -> Option<RootLock> {
-    flock(root, true, false)
+pub fn evict_lock(root: &Path) -> std::io::Result<RootLock> {
+    flock_at(&lock_path(root)?, true, false)
 }
 
 /// Delete a planned target, re-checking path authority under the lock.
@@ -578,9 +624,17 @@ fn collect_report(
         let Some(root) = e.target.parent() else {
             continue;
         };
-        let Some(_lock) = evict_lock(root) else {
-            log(format!("evict: skip {} (build holds lock)", root.display()));
-            continue;
+        let _lock = match evict_lock(root) {
+            Ok(lock) => lock,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                log(format!("evict: skip {} (build holds lock)", root.display()));
+                continue;
+            }
+            Err(e) => {
+                failed = true;
+                log(format!("evict: failed root lock {}: {e}", root.display()));
+                continue;
+            }
         };
         // A different agent can finish a build between planning and flock.
         // Reload authenticated durable activity while holding exclusive access.
@@ -714,7 +768,7 @@ mod tests {
         }
     }
 
-    fn scratch(tag: &str) -> PathBuf {
+    pub(super) fn scratch(tag: &str) -> PathBuf {
         let base = std::env::var_os("JCODE_SCRATCH_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir);
@@ -854,7 +908,7 @@ mod tests {
         let a = mirrored(&base, "a");
         let held = build_lock(&a).expect("build lock");
         assert!(
-            evict_lock(&a).is_none(),
+            evict_lock(&a).is_err(),
             "eviction must not proceed during a build"
         );
         drop(held);

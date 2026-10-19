@@ -423,9 +423,8 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                         let Some(root) = &root else {
                             return Ok(None);
                         };
-                        let lock = crate::remote_evict::build_lock(root).ok_or_else(|| {
-                            anyhow::anyhow!("cannot acquire source-root build lock")
-                        })?;
+                        let lock = crate::remote_evict::build_lock(root)
+                            .context("cannot acquire source-root build lock")?;
                         roots
                             .lock()
                             .map_err(|_| anyhow::anyhow!("activity registry poisoned"))?

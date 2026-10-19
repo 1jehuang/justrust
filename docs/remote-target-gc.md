@@ -15,7 +15,13 @@ paths, active leases, process cwd/open descriptors, and activity within two hour
 are excluded. External `CARGO_TARGET_DIR` paths are not candidates. Manifestless
 source roots are supported, including monorepos whose Cargo projects are nested.
 
-Every run holds a shared per-root flock. Enrollment and build start/end update
+Every run holds a shared per-root flock. Legacy 0664 lock files are tightened to
+0600 through the same verified open owned regular single-link inode, without
+unlinking, recreating, truncating, or releasing another process's existing flock.
+No-follow opens and canonical owned safe-parent checks still reject aliases,
+foreign ownership, hardlinks, and unsafe directories. Acquisition failures report
+the exact path and underlying OS error, distinct from ordinary lock contention.
+Enrollment and build start/end update
 and fsync receipt metadata. A persistent uncertainty marker is set before a run
 starts and cleared only under an exclusive flock after all agents release their
 build locks. A crash or failed end update therefore stays protected across an

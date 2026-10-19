@@ -1,5 +1,40 @@
 # Findings: where agent build time goes
 
+## 2026-10-19: Correct the durable-GC rollout's legacy lock-mode regression
+
+The initial durable registry change (`68b0dddec`) rejected group-writable lock
+inodes without migrating locks created by older shipping agents. Those agents
+used `OpenOptions::create` without an explicit mode, so a normal umask of 002
+left 0664 files. Existing fresh-lock fixtures missed this upgrade boundary.
+At 17:53:01 UTC read-only inspection confirmed the hosted lock directory was
+canonical, owned by UID 1000, and 0755, but most existing lock files were 0664.
+The exact tigress source root `/home/jeremy/.jcode/scratch/tigress-algorithms-final`
+uses `8a8d5dd8f03721c3.lock`, inode 1864977, UID 1000, single link, mode 0664.
+The new guard failed before flock; this was not ENOSPC, an active-holder refusal,
+or evidence that leases should be bypassed.
+
+Repair the upgrade in place: validate the canonical owned non-group/world-writable
+lock directory, open with no-follow/close-on-exec/nonblocking flags, require an
+owned regular single-link inode, then fchmod that same open descriptor to 0600
+and fsync it. Never unlink, recreate, truncate, or forcibly unlock the file.
+Existing shared holders therefore continue excluding exclusive GC on the exact
+same inode. Foreign ownership, symlinks, hardlinks and unsafe parents still fail
+closed. Lock acquisition now preserves path, error kind and OS error text instead
+of collapsing all failures to a generic `None`; actual contention remains
+`WouldBlock`, separate from unsafe paths or I/O failures.
+
+Regression fixtures reproduce an old 0664 shared holder and eight simultaneous
+migrators, verify unchanged device/inode/content, exclusive GC exclusion until
+that holder exits, unsafe-parent/symlink/hardlink rejection without chmod, and a
+foreign-principal metadata check. The actual native agent integration now starts
+with a legacy 0664 inode, performs authenticated Synced and an enrolled Run, and
+checks that the same inode became 0600 before process-restart dry GC. There was
+no host blanket chmod, lock deletion, forced unlock, or tenant guard relaxation.
+Local outage-bootstrap validation reused the existing stable target: `justrust
+check -j1`, all 743 tests passed (0 failed, 3 ignored), `justrust clippy -j1
+--all-targets -- -D warnings`, and `cargo fmt -- --check` all passed before
+installing the repaired stable client.
+
 ## 2026-10-19: Durable authenticated target-GC authority across agent upgrades
 
 The mirrored-target collector previously kept its only registry in an agent's
