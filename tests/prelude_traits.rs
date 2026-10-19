@@ -195,6 +195,64 @@ fn main() {
 }
 
 #[test]
+fn source_projection_nested_enum_inside_struct_requires_authoritative_remint() {
+    fixture(
+        r#"
+struct Envelope<T> { payload: T }
+enum Choice<T> { Value(T), Empty }
+trait Read { type Item; fn read(&self) -> Envelope<Choice<Self::Item>>; }
+struct Source { value: i32 }
+impl Read for Source {
+    type Item = i32;
+    fn read(&self) -> Envelope<Choice<Self::Item>> {
+        Envelope { payload: Choice::Value(self.value) }
+    }
+}
+fn main() {
+    let source = Source { value: 17 };
+    match source.read().payload {
+        Choice::Value(value) => println!("{}", value),
+        Choice::Empty => println!("empty"),
+    }
+}
+"#,
+        Some("residual associated type projection"),
+    );
+}
+
+#[test]
+fn source_projection_nested_struct_inside_enum_requires_authoritative_remint() {
+    fixture(
+        r#"
+struct Payload<T> { value: T }
+enum Reply<T> { Present(T), Absent }
+trait Take { type Item; fn take(&mut self) -> Reply<Payload<Self::Item>>; }
+struct Source { value: i32 }
+impl Take for Source {
+    type Item = i32;
+    fn take(&mut self) -> Reply<Payload<Self::Item>> {
+        let value = self.value;
+        self.value = self.value + 1;
+        Reply::Present(Payload { value })
+    }
+}
+fn main() {
+    let mut source = Source { value: 23 };
+    match <Source as Take>::take(&mut source) {
+        Reply::Present(payload) => println!("{}", payload.value),
+        Reply::Absent => println!("absent"),
+    }
+    match source.take() {
+        Reply::Present(payload) => println!("{}", payload.value),
+        Reply::Absent => println!("absent"),
+    }
+}
+"#,
+        Some("residual associated type projection"),
+    );
+}
+
+#[test]
 fn exact_deref_relaxed_target_is_an_explicit_boundary() {
     fixture(
         "mod contracts { pub trait Deref { type Target: ?Sized; fn deref(&self) -> &Self::Target; } } fn main() {}",
