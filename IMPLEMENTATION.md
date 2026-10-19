@@ -560,6 +560,14 @@ host macro and compiles its generated target source.
 - [ ] Implement allocation/deallocation, startup/termination, panic abort/unwind,
       cleanup/personality support, TLS, threads, atomics/memory ordering, intrinsics,
       target features and inline/global assembly for the declared target contract.
+- [x] First Linux x86-64 heap foundation: exact unsafe raw syscall ABI primitive,
+      ordinary per-file Rust-source native_heap library with checked byte-address
+      arithmetic/null helpers, bounded mmap layout/error policy and private
+      non-Copy allocation ownership with consuming munmap. Real mapping-boundary
+      scalar access tests require native memory widths rather than qword local
+      carriers. See NATIVE-HEAP.md. This does not close allocation compatibility:
+      general layouts, pointer methods, realloc, automatic Drop, Box/Vec/String
+      and full alloc/core/std remain open.
 - [ ] Provide debug/source information and runtime failure/exit diagnostics.
       Expand architectures/OSes only with target-specific executable evidence.
 

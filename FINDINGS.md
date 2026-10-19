@@ -1,5 +1,40 @@
 # Findings: where agent build time goes
 
+## 2026-10-18: Rust-source native heap foundation
+
+- Native `__justrust_linux_syscall6!` is an exact unsafe Linux x86-64 ABI
+  primitive, not an allocator or collection hook. The ordinary per-file
+  `libraries/prelude/native_heap.rs` graph input implements mmap layout/error
+  policy, generic null helpers, checked byte-address arithmetic and a private
+  non-Copy owning handle consumed by munmap. NATIVE-HEAP.md records boundaries.
+- Real executable page-end u8 accesses exposed qword raw-pointer memory
+  transport, fixed with scalar-width dereferenced loads/stores. Tests include
+  neighbor sentinels, signed narrow values, Unicode, floats, u128 and independent
+  mincore ENOMEM proof that release actually unmapped the allocation.
+- Embedding non-generic library functions exposed inconsistent closed-root
+  inventories: `compute_closed_roots` included prelude bodies excluded by the
+  instance planner, assigning unrelated library bodies to demanded symbols.
+  The frozen graph-native root inventory now uses the same prelude exclusion.
+- Final hosted stable check `20261018-193740851-832554`, heap/authority/unchanged
+  graph gate `20261018-193746077-840673` (22 passed), strict all-target clippy
+  `20261018-193752668-853011` pass. Earlier integrated prelude/primitive/format
+  coverage `20261018-193238009-450116` passed 31 tests. Final required local
+  stock oracle `20261018-193816682-887080` passed 15 tests, including six positive
+  programs at stock opt-level 0/2 and native workers 1/8, plus stock E0204 for
+  user Copy on the owning type and a positive legitimate Copy control.
+- Complete hosted test attempt `20261018-193311352-498403` passed 1470 tests
+  before four assertions harness failures because /usr/bin/rustc is absent.
+  The subsequent full local no-fail-fast run additionally exposed frozen
+  assertion/debug-assertion graph harnesses treating schema-only prelude
+  callables as executable instance roots (e.g. missing key111/[3]). Reported
+  exact failures to the prelude worker updating dynamic library graph helpers.
+  This is not a full-suite pass; existing associated-bound/equality work is not
+  masked or changed here. Own slim receipts are retained separately in
+  `data/runs/xps14/2026-10-18-native-heap.jsonl`.
+- No compiler performance claim, no graph ratchet changes, no experimental
+  package installation over the stable client. General allocation/layout,
+  raw-pointer methods, automatic Drop and Box/Vec/String remain open.
+
 ## 2026-10-18: `mut` by-value parameters
 
 - Parser accepts `mut name: T` parameters; the checker marks those locals

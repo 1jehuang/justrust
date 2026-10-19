@@ -219,7 +219,9 @@ pub(super) fn preflight_clone_node(
             }
             Expr::Apply { path, .. } => clone_path(path, budget)?,
             Expr::Borrow { place, .. } => clone_place(place, budget)?,
-            Expr::Array(fields) | Expr::Tuple(fields) => clone_vector(fields, budget)?,
+            Expr::NativeSyscall(fields) | Expr::Array(fields) | Expr::Tuple(fields) => {
+                clone_vector(fields, budget)?
+            }
             Expr::EnumVariant { name, fields, .. } => {
                 clone_ast_path(name, budget)?;
                 clone_vector(fields, budget)?;

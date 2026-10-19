@@ -7,3 +7,4 @@
 
 pub mod option;
 pub mod prelude;
+pub mod native_heap;
