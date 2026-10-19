@@ -3,7 +3,7 @@
 use super::{ParseError, ParserTokenKind, Token, TokenPart};
 use crate::compiler::expansion_budget::Storage;
 use crate::compiler::expansion_span::{SpanId, SyntheticReason};
-use crate::compiler::lexer::{LexError, LexedEvent, LexedTokens, decode_normal_string};
+use crate::compiler::lexer::{DocComment, LexError, LexedEvent, LexedTokens, decode_normal_string};
 use crate::compiler::semantic_scope::ExpansionTokenAdmission;
 use crate::compiler::source::PreparedLexInput;
 use crate::compiler::source::{SourceError, SourceErrorKind};
@@ -508,7 +508,7 @@ impl NativeParserInput {
 
     fn new_with_purpose(
         lexed: LexedTokens,
-        session: TokenSession,
+        mut session: TokenSession,
         owner: crate::compiler::token_session::SessionOwnerCap,
         projection: &PreparedLexInput<'_>,
         inactive: bool,
@@ -570,18 +570,17 @@ impl NativeParserInput {
             }
         }
         let macro_source = if macro_bearing {
-            if let Some(doc) = lexed.docs().first() {
-                return Err(expanded_error(
-                    &session,
-                    doc.span,
-                    SourceErrorKind::Unsupported,
-                    "documentation comments in macro-bearing input require token-tree doc lowering",
-                ));
-            }
             let mut events =
                 BudgetVec::new(&budget, Storage::Temporary).map_err(transport_error)?;
+            let mut docs = lexed.docs().iter().peekable();
             for event in lexed.events() {
+                while let Some(doc) = docs.next_if(|doc| doc.prepared.start <= event.prepared.start) {
+                    lower_doc_comment(&mut session, projection, doc, &mut events)?;
+                }
                 events.push(event.token).map_err(transport_error)?;
+            }
+            for doc in docs {
+                lower_doc_comment(&mut session, projection, doc, &mut events)?;
             }
             Some(
                 crate::compiler::token_tree::group(
@@ -1232,6 +1231,105 @@ impl NativeParserInput {
         }
         Ok(())
     }
+}
+
+fn lower_doc_comment(
+    session: &mut TokenSession,
+    projection: &PreparedLexInput<'_>,
+    doc: &DocComment,
+    out: &mut BudgetVec<InputToken>,
+) -> Result<(), ParseError> {
+    let spelling = projection
+        .text()
+        .get(doc.body.clone())
+        .ok_or_else(|| simple_error(SourceErrorKind::Contract, "invalid doc comment body range"))?;
+    let literal = doc_string_literal(spelling);
+    let hash = session
+        .synthetic_span(doc.span, SyntheticReason::DocumentationAttribute)
+        .map_err(transport_error)?;
+    let bang = session
+        .synthetic_span(doc.span, SyntheticReason::DocumentationAttribute)
+        .map_err(transport_error)?;
+    let open = session
+        .synthetic_span(doc.span, SyntheticReason::DocumentationAttribute)
+        .map_err(transport_error)?;
+    let name = session
+        .synthetic_span(doc.span, SyntheticReason::DocumentationAttribute)
+        .map_err(transport_error)?;
+    let equals = session
+        .synthetic_span(doc.span, SyntheticReason::DocumentationAttribute)
+        .map_err(transport_error)?;
+    let value = session
+        .synthetic_span(doc.span, SyntheticReason::DocumentationAttribute)
+        .map_err(transport_error)?;
+    let close = session
+        .synthetic_span(doc.span, SyntheticReason::DocumentationAttribute)
+        .map_err(transport_error)?;
+    let doc_symbol = session.intern_symbol("doc").map_err(transport_error)?;
+    let literal_symbol = session.intern_symbol(&literal).map_err(transport_error)?;
+    out.push(InputToken::Leaf(crate::compiler::token::Token {
+        kind: TokenKind::Punct {
+            ch: '#',
+            spacing: Spacing::Joint,
+        },
+        span: hash,
+    }))
+    .map_err(transport_error)?;
+    if doc.inner {
+        out.push(InputToken::Leaf(crate::compiler::token::Token {
+            kind: TokenKind::Punct {
+                ch: '!',
+                spacing: Spacing::Joint,
+            },
+            span: bang,
+        }))
+        .map_err(transport_error)?;
+    }
+    out.push(InputToken::Open {
+        kind: crate::compiler::token::Delimiter::Bracket,
+        span: open,
+    })
+    .map_err(transport_error)?;
+    out.push(InputToken::Leaf(crate::compiler::token::Token {
+        kind: TokenKind::Ident(crate::compiler::token::Ident {
+            symbol: doc_symbol,
+            raw: false,
+            context: session.root_context(),
+        }),
+        span: name,
+    }))
+    .map_err(transport_error)?;
+    out.push(InputToken::Leaf(crate::compiler::token::Token {
+        kind: TokenKind::Punct {
+            ch: '=',
+            spacing: Spacing::Alone,
+        },
+        span: equals,
+    }))
+    .map_err(transport_error)?;
+    out.push(InputToken::Leaf(crate::compiler::token::Token {
+        kind: TokenKind::Literal {
+            kind: crate::compiler::token::LiteralKind::String,
+            spelling: literal_symbol,
+        },
+        span: value,
+    }))
+    .map_err(transport_error)?;
+    out.push(InputToken::Close {
+        kind: crate::compiler::token::Delimiter::Bracket,
+        span: close,
+    })
+    .map_err(transport_error)
+}
+
+fn doc_string_literal(text: &str) -> String {
+    let mut literal = String::with_capacity(text.len() + 2);
+    literal.push('"');
+    for ch in text.chars() {
+        literal.extend(ch.escape_default());
+    }
+    literal.push('"');
+    literal
 }
 
 pub(super) fn original(
@@ -1999,17 +2097,45 @@ mod tests {
         assert!(!stream.children(&session, &roots).unwrap().is_empty());
     }
 
+    fn tree_texts(
+        session: &crate::compiler::token_session::TokenSession,
+        stream: &crate::compiler::token_tree::TokenStream,
+        range: &crate::compiler::token_tree::TreeRange,
+        out: &mut Vec<String>,
+    ) {
+        for child in stream.children(session, range).unwrap() {
+            match stream.node(session, *child).unwrap() {
+                crate::compiler::token_tree::Node::Leaf(token) => match token.kind {
+                    crate::compiler::token::TokenKind::Ident(ident) => out
+                        .push(session.symbol(ident.symbol).unwrap().to_string()),
+                    crate::compiler::token::TokenKind::Literal { spelling, .. } => {
+                        out.push(session.symbol(spelling).unwrap().to_string())
+                    }
+                    crate::compiler::token::TokenKind::Punct { ch, .. } => out.push(ch.to_string()),
+                    crate::compiler::token::TokenKind::Opaque(_) => out.push("<opaque>".into()),
+                    crate::compiler::token::TokenKind::DollarCrate(_) => out.push("$crate".into()),
+                },
+                crate::compiler::token_tree::Node::Delimited { children, .. } => {
+                    tree_texts(session, stream, children, out)
+                }
+            }
+        }
+    }
+
     #[test]
-    fn macro_inventory_never_silently_drops_doc_audit_records() {
+    fn macro_inventory_lowers_doc_comments_into_macro_source() {
         for text in [
             "/// audit\nmacro_rules! m {()=>{1};}",
             "macro_rules! m {()=>{/** audit */1};}",
         ] {
-            let error = super::super::lex(text).unwrap_err();
-            assert_eq!(error.kind, SourceErrorKind::Unsupported);
-            assert!(error.message.contains("doc lowering"));
-            assert!(error.primary.is_some());
-            assert!(!error.has_location);
+            let input = super::super::lex(text).unwrap();
+            let (buffer, session, _session_cap) = input.into_parts();
+            let stream = buffer.macro_source().unwrap();
+            let roots = stream.roots(&session).unwrap();
+            let mut seen = Vec::new();
+            tree_texts(&session, stream, &roots, &mut seen);
+            assert!(seen.iter().any(|token| token == "doc"), "{seen:?}");
+            assert!(seen.iter().any(|token| token.contains("audit")), "{seen:?}");
         }
         assert!(super::super::lex("/// audit\nfn main(){}").is_ok());
         // Complete lexical validation precedes the legal unsupported doc gate.
