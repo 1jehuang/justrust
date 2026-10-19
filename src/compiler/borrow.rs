@@ -4386,6 +4386,46 @@ fn target_payload_bytes_with_growth(
     )
 }
 
+/// A direct owned root requires no heap allocation. Indirect and projected
+/// resolution keeps the existing paid vector representation unchanged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum ResolvedTargets {
+    Inline(Target),
+    Heap(Vec<Target>),
+}
+impl ResolvedTargets {
+    pub fn as_slice(&self) -> &[Target] {
+        match self {
+            Self::Inline(target) => std::slice::from_ref(target),
+            Self::Heap(targets) => targets,
+        }
+    }
+}
+impl std::ops::Deref for ResolvedTargets {
+    type Target = [Target];
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+impl IntoIterator for ResolvedTargets {
+    type Item = Target;
+    type IntoIter = std::iter::Chain<std::option::IntoIter<Target>, std::vec::IntoIter<Target>>;
+    fn into_iter(self) -> Self::IntoIter {
+        let (inline, heap) = match self {
+            Self::Inline(target) => (Some(target), Vec::new()),
+            Self::Heap(targets) => (None, targets),
+        };
+        inline.into_iter().chain(heap)
+    }
+}
+impl<'a> IntoIterator for &'a ResolvedTargets {
+    type Item = &'a Target;
+    type IntoIter = std::slice::Iter<'a, Target>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter()
+    }
+}
+
 impl Plan {
     pub fn build_validated(
         f: &Arc<cfg::Function>,
@@ -4690,8 +4730,21 @@ impl Plan {
         statement: Option<usize>,
         phase: Phase,
         budget: &mut Budget,
-    ) -> Result<Result<Vec<Target>, Problem>, Exhausted> {
+    ) -> Result<Result<ResolvedTargets, Problem>, Exhausted> {
         let (origins, _) = self.point(block, statement, phase);
+        if place.projection.is_empty() && self.original_locals.get(place.local.0).is_some() {
+            // No dereference means no provenance-cell traversal. This is the
+            // exact singleton resolve_cells would construct, kept on the stack.
+            budget.spend(1)?;
+            return Ok(Ok(ResolvedTargets::Inline(Target {
+                place: CanonicalPlace {
+                    root: CanonicalRoot::Owned(place.local),
+                    projection: Vec::new(),
+                },
+                precision: TargetPrecision::Exact,
+                authority: Vec::new(),
+            })));
+        }
         let (targets, _, failure) = resolve_cells(
             &self.original_locals,
             &self.cells,
@@ -4706,7 +4759,7 @@ impl Plan {
                 "reference lacks a complete original typed cell cover",
             )))
         } else {
-            Ok(Ok(targets))
+            Ok(Ok(ResolvedTargets::Heap(targets)))
         }
     }
     pub fn call_write_targets(
@@ -5199,6 +5252,174 @@ mod parameter_equality_tests {
             panic!("expected genuine source publication")
         };
         cfg::lower_source_template(&publication, &budget).unwrap()
+    }
+
+    #[test]
+    fn inline_root_resolution_matches_full_resolver_without_heap_or_byte_admission() {
+        let template = source_template("fn probe<T>(p:&(i32,i32))->i32{(*p).0} fn main(){}", 0);
+        let mut plan = Plan::build_validated(
+            template.function(),
+            template.facts(),
+            None,
+            &mut Budget::new(32_000_000),
+            128 * 1024 * 1024,
+        )
+        .unwrap();
+        assert!(plan.problems.is_empty(), "{:?}", plan.problems);
+        let block = template.function().entry;
+        for index in 0..plan.original_locals.len() {
+            let place = Place {
+                local: LocalId(index),
+                projection: vec![],
+            };
+            let (origins, _) = plan.point(block, None, Phase::Read);
+            let (expected, trace, failure) = resolve_cells(
+                &plan.original_locals,
+                &plan.cells,
+                &plan.cell_index,
+                &plan.targets,
+                |index| &origins[index],
+                &place,
+                &mut Budget::new(32_000_000),
+            )
+            .unwrap();
+            assert!(trace.is_empty());
+            assert!(failure.is_none());
+            let actual = plan
+                .resolve(&place, block, None, Phase::Read, &mut Budget::new(1))
+                .unwrap()
+                .unwrap();
+            assert!(matches!(actual, ResolvedTargets::Inline(_)));
+            assert_eq!(actual.as_slice(), expected.as_slice());
+            assert_eq!(actual.clone().into_iter().collect::<Vec<_>>(), expected);
+        }
+        let root = Place {
+            local: template.function().params[0],
+            projection: vec![],
+        };
+        let ledger = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: 0,
+            work: 1024,
+            ..ir::PlanLimits::default()
+        });
+        let mut budget = Budget::for_plan(1024, Some(&ledger));
+        for _ in 0..1024 {
+            let resolved = plan
+                .resolve(&root, block, None, Phase::Read, &mut budget)
+                .unwrap()
+                .unwrap();
+            assert!(matches!(resolved, ResolvedTargets::Inline(_)));
+            assert!(resolved[0].place.projection.is_empty());
+            assert!(resolved[0].authority.is_empty());
+        }
+        let usage = ledger.usage_snapshot();
+        assert_eq!(usage.work, 1024);
+        assert_eq!(usage.bytes, 0);
+        assert_eq!(usage.reservations.cumulative_bytes, 0);
+        assert_eq!(budget.reserved_bytes(), 0);
+        assert!(
+            plan.resolve(&root, block, None, Phase::Read, &mut budget)
+                .is_err()
+        );
+
+        let projected = Place {
+            local: root.local,
+            projection: vec![Projection::Deref, Projection::Field(0)],
+        };
+        let ledger = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: 0,
+            ..ir::PlanLimits::default()
+        });
+        assert!(
+            plan.resolve(
+                &projected,
+                block,
+                Some(0),
+                Phase::Read,
+                &mut Budget::for_plan(32_000_000, Some(&ledger))
+            )
+            .is_err()
+        );
+        let resolved = plan
+            .resolve(
+                &projected,
+                block,
+                Some(0),
+                Phase::Read,
+                &mut Budget::new(32_000_000),
+            )
+            .unwrap()
+            .unwrap();
+        assert!(matches!(resolved, ResolvedTargets::Heap(_)));
+        for origins in &mut plan.targets {
+            origins.clear();
+        }
+        assert!(
+            plan.resolve(
+                &projected,
+                block,
+                Some(0),
+                Phase::Read,
+                &mut Budget::new(32_000_000)
+            )
+            .unwrap()
+            .is_err()
+        );
+        // The reference handle's owned root still exists, but no pointee is
+        // invented after its checked issued provenance is removed.
+        assert!(matches!(
+            plan.resolve(&root, block, None, Phase::Read, &mut Budget::new(1))
+                .unwrap()
+                .unwrap(),
+            ResolvedTargets::Inline(_)
+        ));
+    }
+
+    #[test]
+    fn inline_raw_pointer_root_matches_paid_full_resolution() {
+        let template = source_template("fn probe<T>(p:*const i32)->*const i32{p} fn main(){}", 0);
+        let plan = Plan::build_validated(
+            template.function(),
+            template.facts(),
+            None,
+            &mut Budget::new(32_000_000),
+            128 * 1024 * 1024,
+        )
+        .unwrap();
+        let root = Place {
+            local: template.function().params[0],
+            projection: vec![],
+        };
+        let block = template.function().entry;
+        let (origins, _) = plan.point(block, None, Phase::Read);
+        let (expected, trace, failure) = resolve_cells(
+            &plan.original_locals,
+            &plan.cells,
+            &plan.cell_index,
+            &plan.targets,
+            |index| &origins[index],
+            &root,
+            &mut Budget::new(32_000_000),
+        )
+        .unwrap();
+        assert!(trace.is_empty());
+        assert!(failure.is_none());
+        let actual = plan
+            .resolve(&root, block, None, Phase::Read, &mut Budget::new(1))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(actual, ResolvedTargets::Inline(_)));
+        assert_eq!(actual.as_slice(), expected.as_slice());
+        let raw = Place {
+            local: root.local,
+            projection: vec![Projection::Deref],
+        };
+        let actual = plan
+            .resolve(&raw, block, None, Phase::Read, &mut Budget::new(2))
+            .unwrap()
+            .unwrap();
+        assert!(matches!(actual, ResolvedTargets::Heap(_)));
+        assert!(actual.is_empty());
     }
 
     #[test]
