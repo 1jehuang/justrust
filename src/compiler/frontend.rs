@@ -274,14 +274,20 @@ mod canonical_source_replay_tests {
                     "{}",
                     failure.error
                 );
-                assert!(
-                    failure
-                        .report
-                        .unwrap()
-                        .node_evaluations
-                        .iter()
-                        .all(|(key, _)| key.kind != 103)
-                );
+                let report = failure.report.unwrap();
+                assert!(report.capture_complete);
+                // BUILD may demand an object before instance planning finishes,
+                // but this rejected body must never publish code or a binary.
+                assert!(!report.published_kind(103));
+                assert!(!report.published_kind(105));
+                if check {
+                    assert!(
+                        report
+                            .node_evaluations
+                            .iter()
+                            .all(|(key, _)| key.kind != 103)
+                    );
+                }
             }
         }
         for source in [
