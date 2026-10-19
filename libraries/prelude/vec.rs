@@ -215,3 +215,22 @@ impl<T> Vec<T> {
 
 // TODO(drop): enable `impl<T> Drop for Vec<T>` (truncate + raw_free) once
 // aggregates containing Drop owners get drop glue. Until then Vec leaks.
+
+/// `vec![elem; n]` expansion target.
+pub fn from_elem<T: Clone>(elem: T, n: usize) -> Vec<T> {
+    let mut v: Vec<T> = Vec::with_capacity(n);
+    let mut i = 0usize;
+    while i < n {
+        v.push(elem.clone());
+        i += 1usize;
+    }
+    v
+}
+
+/// `vec![a, b, ...]` expansion seed: the first element fixes `T`, the
+/// remaining elements are pushed in source order by the expansion.
+pub fn __jr_vec_seed<T>(first: T, capacity: usize) -> Vec<T> {
+    let mut v: Vec<T> = Vec::with_capacity(capacity);
+    v.push(first);
+    v
+}
