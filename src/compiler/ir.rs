@@ -3089,7 +3089,13 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
                     "unsupported: residual associated type projection in generic argument".into(),
                 );
             }
-            Ty::Ref { .. } => return Err("reference generic arguments are unsupported".into()),
+            // References as generic/trait actuals and aggregate fields carry
+            // loans checked by ownership analysis (G3). Unsized referents
+            // behind a reference are fine; bare slices are not actuals.
+            Ty::Ref { referent, .. } => match referent.as_ref() {
+                Ty::Str | Ty::Slice { .. } | Ty::Dyn(_) => {}
+                other => walk(other, budget, depth + 1)?,
+            },
             Ty::Slice { .. } | Ty::Str => {
                 return Err("slice generic arguments are unsupported".into());
             }
