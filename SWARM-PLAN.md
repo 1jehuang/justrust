@@ -20,8 +20,8 @@ oracle stdout) and by feature tags disappearing from it, not by slice docs.
 5. Put new code in new files/modules where possible. Keep edits to the big
    shared files (`frontend.rs`, `ir.rs`, `type_check.rs`, `cfg.rs`,
    `ownership.rs`, `traits.rs`, `backend.rs`) to small hooks. Commit small,
-   `git pull --rebase` and push to `main` often (at least every hour of work)
-   so others see your hooks. Resolve conflicts, never discard others' work.
+   fetch and push to `main` often using the private-index protocol below.
+   Never discard others' work.
 6. Unsupported constructs must still produce an explicit diagnostic. Never
    miscompile silently.
 7. Before pushing: `cargo fmt`, `justrust check`, the tests for your area,
@@ -33,16 +33,16 @@ oracle stdout) and by feature tags disappearing from it, not by slice docs.
 8. No worktrees, no branches. Work in `~/justrust-clean-room` on `main`.
 9. The checkout is shared: files you edit may also hold other agents'
    uncommitted hunks. Never `git add` a whole shared file blindly. Stage only
-   your hunks (`git add -p`, or a private `GIT_INDEX_FILE` built from HEAD),
-   check `git diff --cached`, and verify the staged tree compiles in isolation
-   (e.g. `git stash`-free: export the index with `git checkout-index -a
-   --prefix=$JCODE_SCRATCH_DIR/verify/` and `cargo test --no-run` there) before
-   pushing. Commit your WIP often so other agents' commits can't depend on it.
-10. Before every commit, `git pull --rebase` FIRST, then build your index from
-   the new HEAD, then run `git diff --stat HEAD --cached` and confirm it lists
-   ONLY files you meant to change, with no deletions or reversions of code
-   you didn't write. Several commits today silently reverted other agents'
-   work (vec!, MAX/MIN hook, format macros) because of a stale index.
+   your hunks in a unique private `GIT_INDEX_FILE` built from captured HEAD,
+   inspect its diff against that parent and validate its isolated export with
+   `justrust test --no-run`. Reuse one validation target. Commit often.
+10. Shared checkout: fetch only. Do not pull/rebase/autostash/stash-pop or
+   reset/read-tree the default index. Capture exact parent P, build a unique
+   private index from P, apply ONLY your patch and inspect every diff for
+   unrelated reversions. Validate, commit-tree with parent P, then atomic
+   update-ref comparing expected-old P. If HEAD or remote moved, coordinate
+   and reapply only your patch to the new parent and rerun affected checks.
+   Never reparent stale trees, force-push or overwrite concurrent staging.
 
 ## Streams
 
@@ -52,7 +52,7 @@ oracle stdout) and by feature tags disappearing from it, not by slice docs.
 | patterns | or/@/range/slice/ref patterns, guards, match ergonomics, range indexing and subslices, `?` operator, labeled control flow, place-expression assignment generality | tags or-pat, match-ergonomics, try, slice (syntax side) gone |
 | traits | generic traits/methods, where clauses, associated types, operator traits (ops-traits, ref-ops), autoderef/Deref, `dyn Trait`, unsizing, `Box<dyn>`, generic bounds, coherence basics | tags ops-traits, ref-ops, autoderef, dyn, unsize, generic-bounds gone |
 | closures | closures with all capture modes, `move`, Fn/FnMut/FnOnce, function pointers, `impl Trait` arg/return, closures passed to generics | tags closure, fn-traits, impl-trait gone |
-| runtime | heap allocator, Box lowering, drop glue/Drop elaboration with drop flags, panic (message + exit 101), bounds/overflow checks, real calling convention for aggregates | tags box gone; heap types usable by library agent |
+| runtime | heap allocator, Box lowering, drop glue/Drop elaboration with drop flags, panic (stock-compatible messages and panic=abort behavior), bounds/overflow checks, real calling convention for aggregates | tags box gone; heap types usable by library agent |
 | library | our own std written in Rust source compiled by our compiler: Option/Result + methods, Vec, String/&str methods, slices methods, Iterator + adapters + collect, HashMap/BTreeMap, Rc/RefCell, fmt (Display/Debug/Formatter, width/precision/fmt-spec, float printing), primitive methods/consts, `std::` paths | tags vec, iter, string, str, option-result, hashmap, rc-refcell, fmt-*, prim-*, std-paths, array-iter gone |
 | projects | Cargo.toml/workspaces/targets/profiles, multi-crate builds, `extern crate`/dependency resolution between our crates, `#[test]` discovery and runner, `cfg(test)`, integration tests | a real multi-crate workspace with tests checks/builds/tests natively |
 | consts | const/static items, const fn evaluation, const generics, array length expressions, promoted constants, `const` blocks; plus unsafe/raw pointers/unions basics | tag const gone, 06 past its boundary |
