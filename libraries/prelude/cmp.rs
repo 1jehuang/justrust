@@ -582,3 +582,19 @@ impl<A: Ord, B: Ord, C: Ord, D: Ord> Ord for (A, B, C, D) {
         Ordering::Equal
     }
 }
+
+/// `std::cmp::max`: the second argument when equal, like std.
+pub fn max<T: Ord>(a: T, b: T) -> T {
+    match a.cmp(&b) {
+        Ordering::Greater => a,
+        _ => b,
+    }
+}
+
+/// `std::cmp::min`: the first argument when equal, like std.
+pub fn min<T: Ord>(a: T, b: T) -> T {
+    match a.cmp(&b) {
+        Ordering::Greater => b,
+        _ => a,
+    }
+}

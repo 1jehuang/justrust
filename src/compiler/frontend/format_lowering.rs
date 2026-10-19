@@ -84,7 +84,8 @@ impl Checker<'_> {
                 "Debug"
             };
             return Err(format!(
-                "E0277: `{referent:?}` doesn't implement `std::fmt::{wanted}`"
+                "E0277: `{}` doesn't implement `std::fmt::{wanted}`",
+                rust_ty_name(referent)
             ));
         };
         let int = |magnitude: u128, ty: ir::IntTy| {
@@ -363,5 +364,45 @@ impl Checker<'_> {
     /// str, floats, scalars with specs). Final acceptance is trait selection.
     fn library_formattable(&self, ty: &ir::Ty) -> bool {
         !matches!(ty, ir::Ty::Never | ir::Ty::Tuple(_) | ir::Ty::Array { .. })
+    }
+}
+
+/// Source-like spelling of a type for diagnostics.
+pub(super) fn rust_ty_name(ty: &ir::Ty) -> String {
+    let strip = |name: &str| -> String {
+        let name = name.strip_prefix("crate::").unwrap_or(name);
+        let std = crate::compiler::source::source_prelude::PRELUDE_MODULE;
+        match name.strip_prefix(std) {
+            Some(rest) => format!("std{rest}"),
+            None => name.to_owned(),
+        }
+    };
+    let args = |args: &[ir::Ty]| -> String {
+        if args.is_empty() {
+            String::new()
+        } else {
+            let parts: Vec<String> = args.iter().map(rust_ty_name).collect();
+            format!("<{}>", parts.join(", "))
+        }
+    };
+    match ty {
+        ir::Ty::Struct(t) => format!("{}{}", strip(&t.def().name), args(&t.def().type_args)),
+        ir::Ty::Enum(t) => format!("{}{}", strip(&t.def().name), args(&t.def().type_args)),
+        ir::Ty::Ref { kind, referent } => format!(
+            "&{}{}",
+            if *kind == ir::BorrowKind::Mut { "mut " } else { "" },
+            rust_ty_name(referent)
+        ),
+        ir::Ty::Slice { element } => format!("[{}]", rust_ty_name(element)),
+        ir::Ty::Array { element, len } => format!("[{}; {len}]", rust_ty_name(element)),
+        ir::Ty::Tuple(fields) => {
+            let parts: Vec<String> = fields.iter().map(rust_ty_name).collect();
+            format!("({})", parts.join(", "))
+        }
+        ir::Ty::Str => "str".into(),
+        ir::Ty::Unit => "()".into(),
+        ir::Ty::Bool => "bool".into(),
+        ir::Ty::Char => "char".into(),
+        other => format!("{other:?}"),
     }
 }

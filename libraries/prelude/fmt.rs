@@ -1109,3 +1109,13 @@ impl StrDebugArg for str {
         print_formatter(f, fd);
     }
 }
+
+impl Debug for super::cmp::Ordering {
+    fn fmt(&self, f: &mut Formatter) -> Result {
+        f.write_str(match self {
+            super::cmp::Ordering::Less => "Less",
+            super::cmp::Ordering::Equal => "Equal",
+            super::cmp::Ordering::Greater => "Greater",
+        })
+    }
+}

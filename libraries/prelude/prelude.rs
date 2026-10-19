@@ -9,4 +9,6 @@ pub mod v1 {
     pub use super::super::boxed::Box;
     pub use super::super::string::{StrToString, String, ToString};
     pub use super::super::ptr::{ConstPtr, MutPtr};
+    pub use super::super::cmp::{Eq, Ord, PartialEq, PartialOrd};
+    pub use super::super::default::Default;
 }
