@@ -1644,6 +1644,7 @@ pub(super) struct Checker<'a> {
     pub(super) scopes: Vec<HashMap<LocalKey, ir::LocalId>>,
     pub(super) lexical_scope: Option<super::super::semantic_scope::ScopeId>,
     pub(super) checked_closures: Vec<closures::check::CheckedClosure>,
+    closure_signature_hints: HashMap<PathKey, ir::Signature>,
     pub(super) capture_bindings: std::collections::HashSet<LocalKey>,
     pub(super) capture_parent_scope: Option<super::super::semantic_scope::ScopeId>,
     pub(super) pending_references: Vec<PendingReferenceDecl>,
@@ -3587,6 +3588,7 @@ impl<'a> Checker<'a> {
             scopes: vec![HashMap::new()],
             lexical_scope: None,
             checked_closures: Vec::new(),
+            closure_signature_hints: HashMap::new(),
             capture_bindings: std::collections::HashSet::new(),
             capture_parent_scope: None,
             inferred_closure_result: false,
@@ -6326,7 +6328,9 @@ impl<'a> Checker<'a> {
         b: &Block,
         expectation: Expectation<'_>,
     ) -> Result<(ir::Block, Flow), String> {
-        let literal_hints = local_literals::hints(self, b, expectation.hard())?;
+        let hints = local_literals::hints(self, b, expectation.hard())?;
+        self.closure_signature_hints.extend(hints.closures);
+        let literal_hints = hints.locals;
         let entered_reachable = self.reachable;
         let pending_start = self.pending_references.len();
         let temporaries_start = self.borrow_temporaries.len();
@@ -6878,7 +6882,9 @@ impl<'a> Checker<'a> {
         expectation: Expectation<'_>,
     ) -> Result<ir::ExprId, String> {
         if let Expr::Var(path) = e {
-            if let Some(value) = self.check_stored_closure(path, None)? {
+            let key = self.path_key(path, Namespace::Value)?;
+            let signature = self.closure_signature_hints.get(&key).cloned();
+            if let Some(value) = self.check_stored_closure(path, signature.as_ref())? {
                 return Ok(value);
             }
         }

@@ -7,6 +7,9 @@ use super::*;
 #[path = "local_literals/iteration.rs"]
 mod iteration;
 
+#[path = "local_literals/callable.rs"]
+mod callable;
+
 #[path = "local_literals/positional_pattern.rs"]
 mod positional_pattern;
 
@@ -26,6 +29,7 @@ enum Domain {
     RawPtr(ir::BorrowKind, Term),
     Array(Term, usize),
     Slice(Term),
+    Callable(callable::CallableTerm),
 }
 struct Variable {
     parent: Term,
@@ -44,7 +48,7 @@ struct Projection {
     field: FieldSelector,
     result: Term,
 }
-struct Solver<'a, 'b, 's> {
+struct Solver<'a: 's, 'b: 's, 's> {
     checker: &'a Checker<'b>,
     variables: Vec<Variable>,
     scopes: Vec<HashMap<LocalKey, Term>>,
@@ -57,13 +61,22 @@ struct Solver<'a, 'b, 's> {
     patterns: Vec<(&'s Pattern, Term, HashMap<LocalKey, Term>)>,
     pattern_bindings: Option<HashMap<LocalKey, Term>>,
     replaying_pattern: bool,
+    closure_terms: Vec<(PathKey, Term)>,
+    local_context: Option<Option<super::super::super::semantic_scope::ScopeId>>,
+    return_terms: Vec<Term>,
+    unit_defaults: Vec<Term>,
+}
+
+pub(super) struct Hints {
+    pub locals: HashMap<usize, ir::Ty>,
+    pub closures: HashMap<PathKey, ir::Signature>,
 }
 
 pub(super) fn hints(
     checker: &Checker<'_>,
     block: &Block,
     expected: Option<&ir::Ty>,
-) -> Result<HashMap<usize, ir::Ty>, String> {
+) -> Result<Hints, String> {
     let mut solver = Solver {
         checker,
         variables: Vec::new(),
@@ -77,7 +90,13 @@ pub(super) fn hints(
         patterns: Vec::new(),
         pattern_bindings: None,
         replaying_pattern: false,
+        closure_terms: Vec::new(),
+        local_context: None,
+        return_terms: Vec::new(),
+        unit_defaults: Vec::new(),
     };
+    let return_term = solver.fixed(checker.result.clone())?;
+    solver.return_terms.push(return_term);
     let mut outer = HashMap::new();
     for scope in &checker.scopes {
         for (key, local) in scope {
@@ -92,6 +111,13 @@ pub(super) fn hints(
         solver.coerce(result, expected)?;
     }
     solver.solve()?;
+    for term in solver.unit_defaults.clone() {
+        if matches!(solver.domain(term), Domain::Unknown) {
+            let unit = solver.fixed(ir::Ty::Unit)?;
+            solver.unify(term, unit)?;
+        }
+    }
+    let closures = solver.closure_hints()?;
     let mut hints = HashMap::new();
     for (site, term) in solver.sites.clone() {
         if let Some(ty) = solver.resolve(term, 0)? {
@@ -102,7 +128,10 @@ pub(super) fn hints(
             ));
         }
     }
-    Ok(hints)
+    Ok(Hints {
+        locals: hints,
+        closures,
+    })
 }
 
 impl<'s> Solver<'_, '_, 's> {
@@ -247,6 +276,18 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 Ok(false)
             }
+            Domain::Callable(callable) => {
+                for term in callable
+                    .params
+                    .iter()
+                    .chain(std::iter::once(&callable.result))
+                {
+                    if self.occurs(needle, *term, depth + 1)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
             Domain::Ref(_, t) | Domain::RawPtr(_, t) | Domain::Array(t, _) | Domain::Slice(t) => {
                 self.occurs(needle, *t, depth + 1)
             }
@@ -312,6 +353,13 @@ impl<'s> Solver<'_, '_, 's> {
                 self.unify_at(*x, *y, depth + 1)?;
                 Domain::Array(*x, *n)
             }
+            (Domain::Callable(x), Domain::Callable(y)) if x.key == y.key => {
+                for (x, y) in x.params.iter().zip(&y.params) {
+                    self.unify_at(*x, *y, depth + 1)?;
+                }
+                self.unify_at(x.result, y.result, depth + 1)?;
+                Domain::Callable(x.clone())
+            }
             (Domain::Slice(x), Domain::Slice(y)) => {
                 self.unify_at(*x, *y, depth + 1)?;
                 Domain::Slice(*x)
@@ -335,7 +383,7 @@ impl<'s> Solver<'_, '_, 's> {
     fn resolve(&self, term: Term, depth: usize) -> Result<Option<ir::Ty>, String> {
         self.checker.infer_work(depth)?;
         Ok(Some(match self.domain(term) {
-            Domain::Unknown => return Ok(None),
+            Domain::Unknown | Domain::Callable(_) => return Ok(None),
             Domain::Integer => ir::Ty::Int(ir::IntTy::I32),
             Domain::Float => ir::Ty::Float(ir::FloatTy::F64),
             Domain::Fixed(ty) => ty,
@@ -398,7 +446,7 @@ impl<'s> Solver<'_, '_, 's> {
         }))
     }
     fn lookup(&mut self, name: &impl LocalInput) -> Result<Term, String> {
-        if let Some(key) = self.checker.local_key(name, false)? {
+        if let Some(key) = self.inference_key(name, false)? {
             for scope in self.scopes.iter().rev() {
                 if let Some(term) = scope.get(&key) {
                     return Ok(*term);
@@ -408,7 +456,7 @@ impl<'s> Solver<'_, '_, 's> {
         self.fresh()
     }
     fn bind(&mut self, name: &impl LocalInput, term: Term) -> Result<(), String> {
-        if let Some(key) = self.checker.local_key(name, true)? {
+        if let Some(key) = self.inference_key(name, true)? {
             if let Some(previous) = self
                 .pattern_bindings
                 .as_ref()
@@ -466,6 +514,7 @@ impl<'s> Solver<'_, '_, 's> {
             let formal = self.schema(formal, &params, 0)?;
             self.coerce(*arg, formal)?;
         }
+        self.callable_bounds(decl, &params)?;
         self.schema(&signature.result, &params, 0)
     }
     fn coerce(&mut self, actual: Term, expected: Term) -> Result<(), String> {
@@ -530,6 +579,13 @@ impl<'s> Solver<'_, '_, 's> {
             let mut progress = false;
             let mut pending = Vec::new();
             for method in methods {
+                if let Some(result) =
+                    self.callable_method_application(method.receiver, method.name, &method.args)?
+                {
+                    self.unify(result, method.result)?;
+                    progress = true;
+                    continue;
+                }
                 let receiver = self.peel_refs(method.receiver);
                 if let Domain::Nominal(decl, _) = self.domain(receiver) {
                     if let Some(candidate) = self.candidate(decl, method.name)? {
@@ -740,7 +796,7 @@ impl<'s> Solver<'_, '_, 's> {
         self.checker.infer_work(0)?;
         match pattern {
             Pattern::Binding { name, .. } => {
-                if let Some(key) = self.checker.local_key(name, true)? {
+                if let Some(key) = self.inference_key(name, true)? {
                     let term = match bindings.get(&key) {
                         Some(term) => *term,
                         None => self.fresh()?,
@@ -1006,7 +1062,10 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 Stmt::Return(Some(expr)) => {
                     let value = self.expr(expr, depth + 1)?;
-                    let result = self.fixed(self.checker.result.clone())?;
+                    let result = *self
+                        .return_terms
+                        .last()
+                        .ok_or("missing inference return context")?;
                     self.coerce(value, result)?;
                 }
                 Stmt::While {
@@ -1045,6 +1104,7 @@ impl<'s> Solver<'_, '_, 's> {
         }
         let result = match &block.tail {
             Some(tail) => self.expr(tail, depth + 1)?,
+            None if block.statements.is_empty() => self.fixed(ir::Ty::Unit)?,
             None => self.fresh()?,
         };
         self.scopes.pop();
@@ -1120,13 +1180,18 @@ impl<'s> Solver<'_, '_, 's> {
             Expr::Char(_) => self.fixed(ir::Ty::Char),
             Expr::Str(_) => self.fixed(ir::Ty::shared_str_ty()),
             Expr::ByteStr(bytes) => self.fixed(ir::Ty::byte_string_ty(bytes.len())),
-            Expr::Var(path)
+            Expr::Var(path) => {
+                if let Some(term) = self.stored_callable(path, depth + 1)? {
+                    return Ok(term);
+                }
                 if matches!(
                     (path.anchor(), path.segments()),
                     (PathAnchor::Relative, [_]) | (PathAnchor::SelfModule, [])
-                ) =>
-            {
-                self.lookup(path)
+                ) {
+                    self.lookup(path)
+                } else {
+                    self.fresh()
+                }
             }
             Expr::Unary { value, .. } => self.expr(value, depth + 1),
             Expr::Binary {
@@ -1170,7 +1235,13 @@ impl<'s> Solver<'_, '_, 's> {
                     .copied();
                 match declaration {
                     Some(id) => self.callable(id, &args, None, &[]),
-                    None => self.fresh(),
+                    None => {
+                        let callee = self.lookup(name)?;
+                        match self.callable_application(callee, &args)? {
+                            Some(result) => Ok(result),
+                            None => self.fresh(),
+                        }
+                    }
                 }
             }
             Expr::AssociatedCall {
@@ -1220,6 +1291,9 @@ impl<'s> Solver<'_, '_, 's> {
                     .iter()
                     .map(|a| self.source_ty(a))
                     .collect::<Result<Vec<_>, _>>()?;
+                if let Some(result) = self.callable_method_application(receiver, *name, &args)? {
+                    return Ok(result);
+                }
                 let owner = self.peel_refs(receiver);
                 if let Domain::Nominal(decl, _) = self.domain(owner) {
                     if let Some(candidate) = self.candidate(decl, *name)? {

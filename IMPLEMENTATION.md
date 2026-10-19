@@ -401,8 +401,15 @@ missing-file changes invalidate only justified consumers without stale lookup.
       constraints preserve owned, shared and
       mutable binding modes, and resolved non-array receivers request the canonical
       IntoIterator::Item projection. Adapter execution and full-program 08 still
-      depend on the ordinary iterator lowering/library activation. Closure
-      constraints and general iterator-item projections remain follow-up work.
+      depend on the ordinary iterator lowering/library activation. Scalar/unit
+      stored callable parameters and results now share body-local constraints from
+      later calls, expected results and canonical callable bounds, with lexical
+      binding identities preserved through nested blocks and shadowing. Solved
+      signatures remain hints, not source-written coercion or receiver authority
+      (`tests/callable_inference.rs`, `LOCAL-INFERENCE.md`). Reference-bearing
+      result carriers have explicit early Unsupported admission with no image;
+      reference-parameter invocation, result transport, direct generic closure
+      arguments and general iterator-item projections remain open.
 
 **Next:** enumerate remaining type/pattern forms and freeze one end-to-end slice,
 such as general slice metadata or nested patterns, with resource accounting.
