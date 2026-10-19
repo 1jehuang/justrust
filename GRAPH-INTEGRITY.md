@@ -139,7 +139,11 @@ Limits, stated rather than claimed away:
   internally (for example `std::sync::mpsc`) is not followed.
 - Roots come from `src/compiler/mod.rs` call shapes. A fact read through a new
   helper with an unrecognized shape is not a root; the test fails if fewer
-  than 8 roots are found, so the API change is noticed.
+  than 8 roots are found, so the API change is noticed. A recorded root that
+  stops being discovered while its carriers still hold mutable state fails
+  the test even under `GRAPH_INTEGRITY_SHRINK`: lost coverage is never
+  recorded as progress. Only removing a carrier's mutable field shrinks the
+  inventory.
 - `Cell`/`RefCell` are omitted because `publish_fact` requires `Send + Sync`.
 
 Treat it as a structural tripwire with explicit, inspectable witnesses, not a

@@ -13,6 +13,7 @@ use std::sync::Arc;
 mod associated_types;
 mod catalog;
 mod equality;
+mod nominal_normalization;
 mod normal_drop;
 mod parameter_equality;
 mod projected_methods;
@@ -455,6 +456,24 @@ pub trait SchemaCx {
         budget: &PlanBudget,
     ) -> Result<InstantiatedSchema>;
     fn validate_nominal(&self, ty: &Ty, env: &GenericEnv, budget: &PlanBudget) -> Result<()>;
+    /// Remint an application from its authoritative source schema after the
+    /// caller normalizes actual arguments with checked projection evidence.
+    /// Implementations must validate the original canonical application and
+    /// preserve its source declaration and nominal kind. Field rewriting or
+    /// reusing its application ID for changed actuals is not permitted.
+    fn reapply_nominal(
+        &self,
+        original: &Ty,
+        arguments: &[Ty],
+        env: &GenericEnv,
+        budget: &PlanBudget,
+    ) -> Result<Ty> {
+        let _ = (original, arguments, env);
+        Err(FactsError::unsupported(
+            budget,
+            "unsupported: canonical nominal reapplication is unavailable",
+        ))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
