@@ -1,0 +1,596 @@
+{
+  "binary_sha256": "22d9921c9ee8e8971f38905537502f80d5d7b107c8c626f7dcf8ba6f1eff0ddf",
+  "cells": [
+    {
+      "case": "01_hello",
+      "exit": 0,
+      "expected_accept": true,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "01_hello",
+      "exit": 0,
+      "expected_accept": true,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "01_hello",
+      "exit": 0,
+      "expected_accept": true,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "01_hello",
+      "exit": 0,
+      "expected_accept": true,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "02_fizzbuzz",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "02_fizzbuzz",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "02_fizzbuzz",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "02_fizzbuzz",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "03_collatz",
+      "exit": 0,
+      "expected_accept": true,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "03_collatz",
+      "exit": 0,
+      "expected_accept": true,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "03_collatz",
+      "exit": 0,
+      "expected_accept": true,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "03_collatz",
+      "exit": 0,
+      "expected_accept": true,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "04_primes_sieve",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "04_primes_sieve",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "04_primes_sieve",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "04_primes_sieve",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "05_gcd_fib",
+      "exit": 0,
+      "expected_accept": true,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "05_gcd_fib",
+      "exit": 0,
+      "expected_accept": true,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "05_gcd_fib",
+      "exit": 0,
+      "expected_accept": true,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "05_gcd_fib",
+      "exit": 0,
+      "expected_accept": true,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "06_matrix",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "06_matrix",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "06_matrix",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "06_matrix",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "07_bank_account",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "07_bank_account",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "07_bank_account",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "07_bank_account",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "08_enum_state_machine",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "08_enum_state_machine",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "08_enum_state_machine",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "08_enum_state_machine",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "09_vec_stack",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "09_vec_stack",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "09_vec_stack",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "09_vec_stack",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "10_string_processing",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "10_string_processing",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "10_string_processing",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "10_string_processing",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "11_closures_iterators",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "11_closures_iterators",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "11_closures_iterators",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "11_closures_iterators",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "12_linked_list",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "12_linked_list",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "12_linked_list",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "12_linked_list",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "13_trait_objects",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "13_trait_objects",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "13_trait_objects",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "13_trait_objects",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "14_generic_container",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "14_generic_container",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "14_generic_container",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "14_generic_container",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "15_error_handling",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "15_error_handling",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "15_error_handling",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "15_error_handling",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "16_sorting",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "16_sorting",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "16_sorting",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "16_sorting",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "17_hashmap_word_count",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "17_hashmap_word_count",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "17_hashmap_word_count",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "17_hashmap_word_count",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "18_tokenizer_calculator",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "18_tokenizer_calculator",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "18_tokenizer_calculator",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "18_tokenizer_calculator",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "19_operator_overloading",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "19_operator_overloading",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "19_operator_overloading",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "19_operator_overloading",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "20_inventory_system",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "20_inventory_system",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "20_inventory_system",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "20_inventory_system",
+      "exit": 1,
+      "expected_accept": false,
+      "mode": "build",
+      "workers": 8
+    },
+    {
+      "case": "dyn_drop_owner",
+      "exit": 0,
+      "expected_accept": true,
+      "mode": "check",
+      "workers": 1
+    },
+    {
+      "case": "dyn_drop_owner",
+      "exit": 0,
+      "expected_accept": true,
+      "mode": "build",
+      "workers": 1
+    },
+    {
+      "case": "dyn_drop_owner",
+      "exit": 0,
+      "expected_accept": true,
+      "mode": "check",
+      "workers": 8
+    },
+    {
+      "case": "dyn_drop_owner",
+      "exit": 0,
+      "expected_accept": true,
+      "mode": "build",
+      "workers": 8
+    }
+  ],
+  "scope": "public CLI acceptance replay, not a before/after speed benchmark",
+  "source_commit": "8550f407a66b4f3d05fb65c568bc74cb8935c960",
+  "stock_positive_controls": 4
+}
