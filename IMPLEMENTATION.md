@@ -80,8 +80,13 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       `tests/loops.rs` compares stock execution and invalid type/scope/control
       cases with native check/build at one and eight workers. By-value Copy-array
       iteration snapshots its iterable once, advances before the body, and supports
-      existing irrefutable scalar/tuple/array patterns. Non-Copy elements, borrowed
-      iterable arrays, adapters and expression-position for loops remain open.
+      existing irrefutable scalar/tuple/array patterns. Referenced fixed arrays
+      (`&array` and `&mut array`) now yield genuine scalar/unit element loans
+      through typed runtime Place projections, with one source body and canonical
+      whole-array overlap/initialization authority. FOR-LOANS.md records the
+      contract and explicit boundaries. Structured referenced elements, runtime
+      slices, SCC-born item loans retained across backedges, non-Copy by-value
+      elements, adapters and expression-position for loops remain open.
 - [x] Genuine let-else with old-frontier initializer/else validation, dedicated
       persistent-binding IR and checked failure divergence. LET-ELSE.md records
       stock33/native132 cells per bootstrap profile,26 public authority controls
@@ -396,6 +401,8 @@ cleanup failures.
 - [ ] Complete closures and capture modes, callable traits, function values,
       iterator/for desugaring, async/await/Future state machines and pinning.
       Include capture lifetimes, suspension-safe moves, cancellation and Drop.
+      Immediate explicitly typed noncapturing callables are a foundation only
+      (CLOSURES.md), not completion of this item.
 - [ ] Extend monomorphization/recursive instance planning to the new forms while
       retaining universal checks, binder-qualified substitution and sealed native
       instances. Optimization must not bypass unused-body validation.

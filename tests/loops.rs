@@ -668,10 +668,156 @@ fn copy_array_for_invalid_scope_mutability_refutability_and_unit_obligations() {
 }
 
 #[test]
+fn referenced_array_for_uses_real_shared_and_mutable_elements() {
+    let source = r#"
+fn main(){
+    let mut values=[1,2,3];
+    let mut sum=0;
+    for x in &values {sum=sum+*x;}
+    if sum==6 {println!("shared ok");}
+    for x in &mut values {*x=*x+10;}
+    if values[0]==11 && values[1]==12 && values[2]==13 {println!("mutation ok");}
+    let mut sum=0;
+    for x in &values {if *x==12 {continue;}sum=sum+*x;}
+    if sum==24 {println!("continue ok");}
+    for x in &mut values {*x=5;break;}
+    values[2]=7;
+    if values[0]==5 && values[2]==7 {println!("last use ok");}
+}
+"#;
+    let expected = "shared ok\nmutation ok\ncontinue ok\nlast use ok\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn referenced_array_for_keeps_once_only_control() {
+    let source = r#"
+fn update(a:&mut [i32;3])->i32 {
+    for x in a {*x=*x+1;if *x==3 {return *x;}}
+    0
+}
+fn main(){
+    let mut values=[1,2,3];
+    let mut hits=0;
+    for x in ({hits=hits+1;&mut values}) {*x=*x+1;}
+    if hits==1 && values[2]==4 {println!("source once ok");}
+    let mut count=0;
+    'outer: for x in &mut values {
+        *x=*x+1;
+        for y in [0,1] {if y==1 {continue 'outer;}count=count+1;}
+    }
+    if count==3 && values[2]==5 {println!("labels ok");}
+    let mut more=[1,2,3];
+    if update(&mut more)==3 && more[0]==2 && more[1]==3 && more[2]==3 {println!("return ok");}
+}
+"#;
+    let expected = "source once ok\nlabels ok\nreturn ok\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn referenced_array_for_empty_and_singleton_keep_body_types() {
+    let source = r#"
+fn main(){
+    let mut empty:[i32;0]=[];
+    for x in &empty {let n=*x;println!("bad");}
+    for x in &mut empty {*x=7;println!("bad");}
+    let mut one=[8];
+    for x in &mut one {*x=*x+1;}
+    if one[0]==9 {println!("empty singleton ok");}
+}
+"#;
+    stock(source, Some("empty singleton ok\n"));
+    runs(source, "empty singleton ok\n");
+}
+
+#[test]
+fn referenced_array_for_preserves_body_identity_and_captured_addresses() {
+    let source = r#"
+fn identity<'a>(x:&'a mut i32)->&'a mut i32 {x}
+fn main(){
+    let mut values=[1;40];
+    let mut count=0;
+    for x in &mut values {let before=*x;let y=identity(x);*y=before+count;count=count+1;}
+    if count==40 && values[0]==1 && values[39]==40 {println!("single body identity ok");}
+    let mut last=&values[0];
+    for x in &values {last=x;break;}
+    if *last==1 {println!("captured address ok");}
+    values[39]=99;
+    if values[39]==99 {println!("escaped last use ok");}
+    let units=[(),(),()];
+    let mut count=0;
+    for x in &units {let unit=*x;count=count+1;}
+    if count==3 {println!("unit elements ok");}
+}
+"#;
+    let expected =
+        "single body identity ok\ncaptured address ok\nescaped last use ok\nunit elements ok\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn referenced_array_for_scalar_widths_and_drop_exits_match_stock() {
+    let source = r#"
+struct Token {id:i32}
+impl Drop for Token {fn drop(&mut self){if self.id==1 {println!("drop one");}else{println!("drop two");}}}
+fn early(a:&[i32;2]) {for x in a {let token=Token{id:*x};return;}}
+fn main(){
+    let mut bytes=[255u8,254u8];
+    for x in &mut bytes {*x=*x-1u8;}
+    let mut signed=[-128i8,-2i8];
+    for x in &mut signed {*x=*x+1i8;}
+    let mut wide=[170141183460469231731687303715884105726i128];
+    for x in &mut wide {*x=*x+1i128;}
+    let mut floats=[1.5f32,2.5f32];
+    for x in &mut floats {*x=*x+1.0f32;}
+    let mut flags=[true,false];
+    for x in &mut flags {*x=!*x;}
+    let mut chars=['a','b'];
+    for x in &mut chars {*x='z';}
+    if bytes[0]==254u8 && bytes[1]==253u8 && signed[0]==-127i8 && signed[1]==-1i8 && wide[0]==170141183460469231731687303715884105727i128 && floats[0]==2.5f32 && floats[1]==3.5f32 && !flags[0] && flags[1] && chars[1]=='z' {println!("scalar layouts ok");}
+    let values=[1,2];
+    for x in &values {let token=Token{id:*x};if *x==1 {continue;}break;}
+    early(&values);
+    println!("exits done");
+}
+"#;
+    let expected = "scalar layouts ok\ndrop one\ndrop two\ndrop one\nexits done\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn referenced_array_for_rejects_aliasing_mutability_and_escape() {
+    for source in [
+        "fn main(){let a=[1,2];for x in &a {*x=3;}}",
+        "fn main(){let a=[1,2];for x in &mut a {*x=3;}}",
+        "fn main(){let mut a=[1,2];for x in &a {a[0]=3;let n=*x;}}",
+        "fn main(){let mut a=[1,2];for x in &mut a {let n=a[0];*x=n;}}",
+        "fn main(){let mut a=[1,2];for x in &mut a {let y=&*x;*x=3;let n=*y;}}",
+        "fn main(){let mut a=[1,2];for x in &mut a {let y=&mut *x;*x=3;*y=4;}}",
+        "fn main(){let a=[1,2];for x in &a {} let n=*x;}",
+        "fn main(){let mut a=[1,2];let r=&a;for x in &mut a {*x=3;} let n=(*r)[0];}",
+        "fn main(){let mut a=[1,2];let r=&mut a;for x in r {*x=3;}for x in r {*x=4;}}",
+        "fn bad<'a>()->&'a i32{let a=[1,2];for x in &a {return x;}loop{}}fn main(){}",
+        "fn main(){let a:[i32;0]=[];for x in &a {*x=3;}}",
+        "fn main(){let a=[1,2];for x in &a {true}}",
+    ] {
+        stock(source, None);
+        rejects("invalid referenced-array element loan", source);
+    }
+}
+
+#[test]
 fn array_iteration_unsupported_boundaries_are_stock_valid_not_invalid_claims() {
     for source in [
         "struct Item{x:i32} fn main(){for item in [Item{x:1},Item{x:2}] {}}",
-        "fn main(){let values=[1,2];for x in &values {}}",
+        "struct Item{x:i32} fn main(){let a=[Item{x:1},Item{x:2}];for x in &a {let n=x.x;}}",
+        "fn main(){let a=[1,2];let mut last=&a[0];for x in &a {last=x;}let n=*last;}",
+        "fn scan(a:&[i32]){for x in a {let n=*x;}}fn main(){let a=[1,2];scan(&a);}",
         "fn main(){for x in [1,2].iter() {}}",
         "fn main(){for x in [1,2].into_iter() {}}",
     ] {

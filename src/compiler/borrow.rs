@@ -66,7 +66,58 @@ struct CellKey {
 pub(super) struct CarrierEffects {
     writes: Arc<[super::ir::CarrierWriteEnvelope]>,
     must_overwrite: Arc<[super::ir::InputCarrier]>,
+    /// Strictly ordered by block and occurrence-validated before publication.
     bindings: Arc<[CallCarrierBinding]>,
+}
+
+fn call_binding_subject_matches(
+    binding: &CallCarrierBinding,
+    f: &cfg::Function,
+    function: Option<&Arc<cfg::Function>>,
+    facts: Option<&Arc<super::traits::ValidatedFacts>>,
+) -> bool {
+    Arc::ptr_eq(&binding.source, binding.evidence.source())
+        && binding.call == binding.evidence.call()
+        && f.blocks
+            .get(binding.block.0)
+            .and_then(|block| block.terminator.origin)
+            == Some(binding.call)
+        && function.is_some_and(|function| Arc::ptr_eq(function, &binding.function))
+        && facts.is_some_and(|facts| Arc::ptr_eq(facts, &binding.facts))
+}
+
+fn ordered_call_bindings(
+    bindings: &[CallCarrierBinding],
+    budget: &mut Budget,
+) -> Result<bool, Exhausted> {
+    for pair in bindings.windows(2) {
+        budget.spend(1)?;
+        if pair[0].block.0 >= pair[1].block.0 {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The diagnostic pass visits blocks in ascending order, and publication
+/// rejects duplicates or reordered rows. Search only that immutable table,
+/// charging before every comparison, including failed/absent-key probes.
+fn call_binding_index(
+    bindings: &[CallCarrierBinding],
+    block: BlockId,
+    budget: &mut Budget,
+) -> Result<Option<usize>, Exhausted> {
+    let (mut low, mut high) = (0, bindings.len());
+    while low < high {
+        let middle = low + (high - low) / 2;
+        budget.spend(1)?;
+        match bindings[middle].block.0.cmp(&block.0) {
+            std::cmp::Ordering::Less => low = middle + 1,
+            std::cmp::Ordering::Equal => return Ok(Some(middle)),
+            std::cmp::Ordering::Greater => high = middle,
+        }
+    }
+    Ok(None)
 }
 
 pub(super) fn fixed_location(position: ReferencePosition) -> CarrierLocation {
@@ -3723,27 +3774,17 @@ impl CarrierBuilder<'_, '_> {
                 mul(self.bindings.len(), size_of::<CallCarrierBinding>())?,
                 self.bindings.len(),
             )?;
-            let mut invalid_binding = false;
+            let mut invalid_binding = !ordered_call_bindings(&self.bindings, self.budget)?;
             for binding in &self.bindings {
                 self.budget.spend(
                     binding.entry.len() + binding.destinations.len() + binding.regions.len() + 1,
                 )?;
-                invalid_binding |= !Arc::ptr_eq(&binding.source, binding.evidence.source())
-                    || binding.call != binding.evidence.call()
-                    || self
-                        .f
-                        .blocks
-                        .get(binding.block.0)
-                        .and_then(|block| block.terminator.origin)
-                        != Some(binding.call)
-                    || !self
-                        .function
-                        .as_ref()
-                        .is_some_and(|function| Arc::ptr_eq(function, &binding.function))
-                    || !self
-                        .authority
-                        .as_ref()
-                        .is_some_and(|facts| Arc::ptr_eq(facts, &binding.facts));
+                invalid_binding |= !call_binding_subject_matches(
+                    binding,
+                    self.f,
+                    self.function.as_ref(),
+                    self.authority.as_ref(),
+                );
                 if let Err(error) = binding.contract.validate_for(&binding.facts) {
                     if error.is_resource() {
                         return Err(Exhausted);
@@ -4173,7 +4214,13 @@ fn overlap(a: &CanonicalPlace, b: &CanonicalPlace, budget: &mut Budget) -> Resul
     }
     for (a, b) in a.projection.iter().zip(&b.projection) {
         // Safe Rust's ordinary indexed borrows overlap the entire array in B1.
-        if matches!(a, Projection::ConstantIndex(_)) || matches!(b, Projection::ConstantIndex(_)) {
+        if matches!(
+            a,
+            Projection::ConstantIndex(_) | Projection::DynamicIndex(_)
+        ) || matches!(
+            b,
+            Projection::ConstantIndex(_) | Projection::DynamicIndex(_)
+        ) {
             return Ok(true);
         }
         if a != b {
@@ -4670,14 +4717,10 @@ impl Plan {
         let Some(effects) = &self.effects else {
             return Ok(Vec::new());
         };
-        budget.spend(effects.bindings.len())?;
-        let Some(binding) = effects
-            .bindings
-            .iter()
-            .find(|binding| binding.block == block)
-        else {
+        let Some(index) = call_binding_index(&effects.bindings, block, budget)? else {
             return Ok(Vec::new());
         };
+        let binding = &effects.bindings[index];
         let mut bytes = mul(binding.actual_writes.len(), size_of::<Target>())?;
         for target in &binding.actual_writes {
             bytes = add(
@@ -5156,6 +5199,100 @@ mod parameter_equality_tests {
             panic!("expected genuine source publication")
         };
         cfg::lower_source_template(&publication, &budget).unwrap()
+    }
+
+    #[test]
+    fn call_binding_lookup_is_ordered_exact_and_logarithmically_metered() {
+        let template = source_template(
+            "fn id<T>(x:T)->T{x} fn probe<T>(x:T)->T{id::<T>(id::<T>(x))} fn main(){}",
+            1,
+        );
+        let mut build_budget = Budget::new(32_000_000);
+        let plan = Plan::build_validated(
+            template.function(),
+            template.facts(),
+            None,
+            &mut build_budget,
+            128 * 1024 * 1024,
+        )
+        .unwrap();
+        assert!(plan.problems.is_empty(), "{:?}", plan.problems);
+        let effects = plan.effects().unwrap();
+        let original = &effects.bindings;
+        assert_eq!(original.len(), 2);
+        let subject_ok = |binding: &CallCarrierBinding| {
+            call_binding_subject_matches(
+                binding,
+                template.function(),
+                Some(template.function()),
+                Some(template.facts()),
+            )
+        };
+        assert!(original.iter().all(subject_ok));
+        let mut stale = original[0].clone();
+        stale.block = original[1].block;
+        assert!(!subject_ok(&stale));
+        stale.block = BlockId(usize::MAX);
+        assert!(!subject_ok(&stale));
+        let mut stale_call = original[0].clone();
+        stale_call.call = original[1].call;
+        assert!(!subject_ok(&stale_call));
+        let cloned_function = Arc::new(template.function().as_ref().clone());
+        assert!(!call_binding_subject_matches(
+            &original[0],
+            &cloned_function,
+            Some(&cloned_function),
+            Some(template.facts())
+        ));
+        assert!(!call_binding_subject_matches(
+            &original[0],
+            template.function(),
+            Some(template.function()),
+            None
+        ));
+        assert!(ordered_call_bindings(original, &mut Budget::new(1)).unwrap());
+        for (index, binding) in original.iter().enumerate() {
+            assert_eq!(
+                call_binding_index(original, binding.block, &mut Budget::new(2)).unwrap(),
+                Some(index)
+            );
+        }
+        assert_eq!(
+            call_binding_index(original, BlockId(usize::MAX), &mut Budget::new(2)).unwrap(),
+            None
+        );
+        assert_eq!(
+            call_binding_index(&[], BlockId(0), &mut Budget::new(0)).unwrap(),
+            None
+        );
+        let duplicates = vec![original[0].clone(), original[0].clone()];
+        assert!(!ordered_call_bindings(&duplicates, &mut Budget::new(1)).unwrap());
+        let reversed = vec![original[1].clone(), original[0].clone()];
+        assert!(!ordered_call_bindings(&reversed, &mut Budget::new(1)).unwrap());
+        assert!(ordered_call_bindings(original, &mut Budget::new(0)).is_err());
+        // Build adversarial sparse keys from a genuine binding, without
+        // publishing the altered occurrence rows as compiler facts.
+        for count in [1usize, 2, 3, 4, 7, 8, 31, 32, 1024] {
+            let rows: Vec<_> = (0..count)
+                .map(|index| {
+                    let mut row = original[0].clone();
+                    row.block = BlockId(index * 2 + 1);
+                    row
+                })
+                .collect();
+            let bound = (usize::BITS - count.leading_zeros()) as usize;
+            assert!(ordered_call_bindings(&rows, &mut Budget::new(count - 1)).unwrap());
+            for key in [0, 1, count, count * 2 - 1, count * 2, usize::MAX] {
+                let expected = rows.iter().position(|row| row.block == BlockId(key));
+                assert_eq!(
+                    call_binding_index(&rows, BlockId(key), &mut Budget::new(bound)).unwrap(),
+                    expected
+                );
+            }
+            // The leftmost failed probe consumes exactly floor(log2(n))+1
+            // comparisons, not a rounded estimate paid after the search.
+            assert!(call_binding_index(&rows, BlockId(0), &mut Budget::new(bound - 1)).is_err());
+        }
     }
 
     #[test]

@@ -7251,18 +7251,24 @@ impl<'a> Checker<'a> {
             });
             let value = self.expr_expected(source, expected.as_ref())?;
             let flow = self.flow(value);
-            let ir::Ty::Array { element, len } = &flow.ty else {
-                return Err(
-                    "for currently requires an integer range or a by-value Copy array".into(),
-                );
+            let (element, len, borrowed) = match &flow.ty {
+                ir::Ty::Array { element, len } => {
+                    if !self.facts().must_copy(element)? {
+                        return Err(
+                            "unsupported: by-value for array iteration requires Copy elements"
+                                .into(),
+                        );
+                    }
+                    (element.as_ref().clone(), *len, None)
+                }
+                ir::Ty::Ref { kind, referent } => {
+                    let ir::Ty::Array { element, len } = referent.as_ref() else {
+                        return Err("unsupported: for iteration requires an array element-place authority; runtime slices are not supported".into());
+                    };
+                    (element.as_ref().clone(), *len, Some(*kind))
+                }
+                _ => return Err("for currently requires an integer range or an array".into()),
             };
-            if !self.facts().must_copy(element)? {
-                return Err(
-                    "unsupported: by-value for array iteration requires Copy elements".into(),
-                );
-            }
-            let element = element.as_ref().clone();
-            let len = *len;
             self.charge_node(std::mem::size_of::<ir::Stmt>() * 7)?;
             let array = self.temporary("$for_array", flow.ty.clone(), false)?;
             let index_ty = ir::Ty::Int(ir::IntTy::Usize);
@@ -7322,21 +7328,34 @@ impl<'a> Checker<'a> {
                     },
                 },
             )?;
-            let base = self.for_expr(flow.ty.clone(), ir::ExprKind::Local(array))?;
-            let item_index = self.for_expr(index_ty, ir::ExprKind::Local(saved_index))?;
-            let item = self.for_expr(
-                element,
-                ir::ExprKind::DynamicIndex {
-                    base,
-                    index: item_index,
-                },
-            )?;
             let id = self.enter_loop(false);
             let key = self.label_key(label)?;
             let frame = self.loops.last_mut().unwrap();
             frame.label = key;
             frame.checking_condition = false;
             self.reachable = true;
+            let item = if let Some(kind) = borrowed {
+                self.borrow_expression(
+                    kind,
+                    ir::Place {
+                        local: array,
+                        projection: vec![
+                            ir::Projection::Deref,
+                            ir::Projection::DynamicIndex(saved_index),
+                        ],
+                    },
+                )?
+            } else {
+                let base = self.for_expr(flow.ty.clone(), ir::ExprKind::Local(array))?;
+                let item_index = self.for_expr(index_ty, ir::ExprKind::Local(saved_index))?;
+                self.for_expr(
+                    element,
+                    ir::ExprKind::DynamicIndex {
+                        base,
+                        index: item_index,
+                    },
+                )?
+            };
             let (kind, body_flow) = self.lower_match_value(
                 item,
                 [BorrowedMatchArm {

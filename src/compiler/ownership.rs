@@ -1025,7 +1025,7 @@ pub(super) struct Budget {
 }
 impl Budget {
     #[cfg(test)]
-    fn new(remaining: usize) -> Self {
+    pub(super) fn new(remaining: usize) -> Self {
         Self {
             remaining,
             work_limit: remaining,
@@ -1390,6 +1390,12 @@ fn preflight_with_plan(
                     if *index >= *len {
                         return Ok(());
                     }
+                    element
+                }
+                Projection::DynamicIndex(_) => {
+                    let Ty::Array { element, .. } = ty else {
+                        return Ok(());
+                    };
                     element
                 }
                 Projection::Downcast(variant) => {
@@ -2003,6 +2009,9 @@ impl Paths {
                 Projection::Deref => {
                     unreachable!("deref must be resolved through canonical loan provenance")
                 }
+                // A runtime element has a whole-array initialization
+                // footprint. Never select or initialize one guessed child.
+                Projection::DynamicIndex(_) => return node,
                 Projection::Field(index) | Projection::ConstantIndex(index) => *index,
                 Projection::Downcast(variant) => {
                     let Some(Projection::Field(index)) = projection.next() else {
@@ -2283,6 +2292,18 @@ impl Transfer<'_> {
         Ok(())
     }
     fn carrier_read(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
+        self.budget.spend(place.projection.len())?;
+        for projection in &place.projection {
+            if let Projection::DynamicIndex(local) = projection {
+                self.read(
+                    state,
+                    &Place {
+                        local: *local,
+                        projection: vec![],
+                    },
+                )?;
+            }
+        }
         let limit = self
             .raw_deref(place)
             .map_or(place.projection.len(), |index| index + 1);
@@ -2419,6 +2440,9 @@ impl Transfer<'_> {
                 Projection::Deref => {
                     unreachable!("deref must be canonicalized before authorization")
                 }
+                // A runtime element has a whole-array initialization
+                // footprint. Never select or initialize one guessed child.
+                Projection::DynamicIndex(_) => return Ok(true),
                 Projection::Field(index) | Projection::ConstantIndex(index) => *index,
                 Projection::Downcast(variant) => {
                     if let Some(report) = &mut self.report {
@@ -2486,6 +2510,18 @@ impl Transfer<'_> {
         state.may_init.range(node, end, value, self.budget)
     }
     fn read_raw(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
+        self.budget.spend(place.projection.len())?;
+        for projection in &place.projection {
+            if let Projection::DynamicIndex(local) = projection {
+                self.read_raw(
+                    state,
+                    &Place {
+                        local: *local,
+                        projection: vec![],
+                    },
+                )?;
+            }
+        }
         self.read_canonical(state, &CanonicalPlace::owned(place))
     }
     fn read_canonical(
@@ -2627,6 +2663,16 @@ impl Transfer<'_> {
         self.read(state, &root_place(self.f.return_local))
     }
     fn write_raw(&mut self, state: &mut State, place: &Place) -> Result<(), Exhausted> {
+        self.budget.spend(place.projection.len())?;
+        if place
+            .projection
+            .iter()
+            .any(|part| matches!(part, Projection::DynamicIndex(_)))
+        {
+            // An unknown element write is never proof that the entire array
+            // has become initialized. Require its conservative read first.
+            self.read_raw(state, place)?;
+        }
         self.budget.spend(1)?;
         if let Some(report) = &mut self.report {
             report.stats.writes += 1;
@@ -6608,6 +6654,99 @@ mod tests {
         f.validate().unwrap();
         let result = analyze(&f);
         assert!(result.passed(), "{:?}", result.diagnostics);
+    }
+
+    #[test]
+    fn runtime_element_loan_requires_initialized_index_and_whole_array() {
+        for source in [
+            "fn f(){let mut a=[1,2];let index:usize;let r=&mut a[0];*r=3;}",
+            "fn f(){let mut a:[i32;2];let index=0usize;let r=&mut a[0];*r=3;}",
+        ] {
+            let mut f = borrowed_source(source);
+            let index = LocalId(
+                f.locals
+                    .iter()
+                    .position(|local| local.name == "index")
+                    .unwrap(),
+            );
+            let loan = f
+                .loan_sites
+                .iter_mut()
+                .find(|site| site.place.projection == [Projection::ConstantIndex(0)])
+                .unwrap();
+            loan.place.projection = vec![Projection::DynamicIndex(index)];
+            f.validate().unwrap();
+            let result = analyze(&f);
+            assert!(result.complete, "{:?}", result.diagnostics);
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.kind == ErrorKind::ReadNotDefinitelyInitialized),
+                "{:?}",
+                result.diagnostics
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_element_loan_rejects_invalid_index_local_metadata() {
+        let f = borrowed_source("fn f(){let mut a=[1,2];let index=0usize;let r=&mut a[0];*r=3;}");
+        for index in [
+            LocalId(usize::MAX),
+            LocalId(f.locals.iter().position(|local| local.name == "a").unwrap()),
+        ] {
+            let mut invalid = f.clone();
+            let loan = invalid
+                .loan_sites
+                .iter_mut()
+                .find(|site| site.place.projection == [Projection::ConstantIndex(0)])
+                .unwrap();
+            loan.place.projection = vec![Projection::DynamicIndex(index)];
+            assert!(
+                invalid
+                    .validate()
+                    .unwrap_err()
+                    .contains("valid usize local")
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_element_loans_do_not_prove_distinct_indices_disjoint() {
+        let mut f = borrowed_source(
+            "fn f(){let mut a=[1,2];let first=0usize;let second=1usize;let x=&mut a[0];let y=&mut a[1];*x=3;*y=4;}",
+        );
+        let first = LocalId(
+            f.locals
+                .iter()
+                .position(|local| local.name == "first")
+                .unwrap(),
+        );
+        let second = LocalId(
+            f.locals
+                .iter()
+                .position(|local| local.name == "second")
+                .unwrap(),
+        );
+        for site in &mut f.loan_sites {
+            if site.place.projection == [Projection::ConstantIndex(0)] {
+                site.place.projection = vec![Projection::DynamicIndex(first)];
+            } else if site.place.projection == [Projection::ConstantIndex(1)] {
+                site.place.projection = vec![Projection::DynamicIndex(second)];
+            }
+        }
+        f.validate().unwrap();
+        let result = analyze(&f);
+        assert!(result.complete);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| matches!(diagnostic.kind, ErrorKind::BorrowConflict(_))),
+            "{:?}",
+            result.diagnostics
+        );
     }
 
     #[test]

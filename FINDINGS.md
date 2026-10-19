@@ -31,6 +31,22 @@
 - Generic/aggregate Drop glue, contained-owner partial moves, general layout and
   Box<T> remain open. No graph baseline/ceiling changed and no speed claim made.
 
+## 2026-10-18: Immutable call-effect lookup removes repeated scans
+
+- Rejection tracing identified `borrow::Plan::call_write_targets` scanning all
+  bindings per call, repeated in ownership dataflow and diagnostic replay.
+  Strict publication-order/uniqueness checks now allow a paid binary lookup,
+  preserving canonical occurrence and facts authority. Adversarial tests charge
+  every actual comparison and reject stale/duplicate/reordered subjects.
+- At 996 generated leaves, total metered planning work fell from 59,274,638
+  (`20261018-195603130-1437967`) to 51,380,253
+  (`20261018-195724476-1493292`) on the same source base and generator.
+  This is a scoped work-count comparison, not a compile-time speed claim.
+- Integrated graph acceptance `20261018-200200106-1768689` confirms adjacent
+  1165 compiling / 1166 failing at unchanged Work 32,000,000. No budget increase,
+  full scalability claim, or debt-baseline increase. Exact controls, limits,
+  proposed input-cost design and exported receipts: `data/runs/graph-recovery/LOOKUP.md`.
+
 ## 2026-10-18: Recover sparse ownership byte accounting
 
 - Replaced stale dense selection charges with two-usize sparse entries per
