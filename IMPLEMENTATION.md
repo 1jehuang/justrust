@@ -321,6 +321,8 @@ missing-file changes invalidate only justified consumers without stale lookup.
       discriminants, recursive types, alignment/layout and repr attributes.
       Bounded nongeneric unit and nonempty tuple forms are delivered under
       UNIT-STRUCTS.md and TUPLE-STRUCTS.md, not full aggregate compatibility.
+      Positional-pattern inference now distinguishes canonical tuple-struct
+      declarations from enum variant owners before propagating field types.
 - [x] General typed shared `&[T]` parameters/locals, exact array unsizing,
       element-count len and authoritative Copy reads, including rigid generic,
       wide and Copy aggregate elements, under TYPED-SLICES.md. Checked native

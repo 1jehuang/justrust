@@ -4,6 +4,9 @@
 //! back through arbitrary nesting rather than defaulting a binding prematurely.
 use super::*;
 
+#[path = "local_literals/positional_pattern.rs"]
+mod positional_pattern;
+
 type Term = usize;
 #[derive(Clone, Debug)]
 enum Domain {
@@ -777,12 +780,11 @@ impl<'s> Solver<'_, '_, 's> {
         }
         match pattern {
             Pattern::Variant { name, fields, .. } => {
-                let (owner, variant) = self.checker.split_variant(name)?;
                 let fields = fields
                     .iter()
                     .map(|(field, p)| (field.clone(), p))
                     .collect::<Vec<_>>();
-                self.nominal_pattern(&owner, Some(variant), &fields, term)
+                self.positional_pattern(name, &fields, term)
             }
             Pattern::Struct { name, fields, .. } => {
                 let fields = fields

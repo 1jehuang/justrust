@@ -10,6 +10,14 @@ source bytes, order or output. The initial milestone evidence below is historica
 The accepted nominal unit-struct milestone is `e6e9386fd`, documented in
 `UNIT-STRUCTS.md`. This milestone must preserve that contract and its tests.
 
+## Positional inference regression repair (2026-10-19)
+
+Body-local inference resolves the full canonical nominal path before treating a
+positional pattern as an enum variant. Tuple-struct patterns retain their own
+declaration identity, including qualified paths and nested transported values.
+The authoritative checker still enforces shape, arity, visibility and nominal
+identity, and invalid patterns in unused functions must still be rejected.
+
 ## Source and semantic authority
 
 Admit nonempty, nongeneric original tuple-struct declarations with explicit
