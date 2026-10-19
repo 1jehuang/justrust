@@ -500,7 +500,7 @@ impl PlanState {
             Type::Never => ir::Ty::Never,
             Type::Infer => {
                 return Err(
-                    "signature types cannot be inferred; generic argument inference is unsupported"
+                    "signature types cannot be inferred (E0121): `_` is not allowed in item signatures"
                         .into(),
                 );
             }

@@ -53,16 +53,29 @@ fn run(image: &Path) -> Output {
     Command::new(image).output().expect("run native image")
 }
 
-fn stock_available() -> bool {
-    Command::new("rustc")
+fn stock_available(compiler: &Path) -> bool {
+    let Ok(output) = Command::new(compiler)
+        .env_remove("RUSTC_BOOTSTRAP")
         .arg("-vV")
         .output()
-        .is_ok_and(|output| output.status.success())
+    else {
+        return false;
+    };
+    eprintln!(
+        "stock oracle executable: {}\n{}",
+        compiler.display(),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    output.status.success()
 }
 
 /// Run every case against jr-rust (and stock rustc when installed).
 pub fn check(tag: &str, cases: &[Case]) {
-    let stock = stock_available();
+    // Bypass the recording shim: one exact compiler must own every case.
+    let compiler = std::env::var_os("JUSTRUST_REAL_RUSTC")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("rustc"));
+    let stock = stock_available(&compiler);
     let mut failures = Vec::new();
     for case in cases {
         let scratch = Scratch::new(tag);
@@ -70,7 +83,7 @@ pub fn check(tag: &str, cases: &[Case]) {
         fs::write(&source, case.source).unwrap();
         if stock {
             let image = scratch.path("stock");
-            let output = Command::new("rustc")
+            let output = Command::new(&compiler)
                 .env_remove("RUSTC_BOOTSTRAP")
                 .args(["--edition=2024", "-Cpanic=abort", "--color=never"])
                 .args(["--crate-name=oracle", "-Awarnings"])

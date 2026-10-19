@@ -415,12 +415,12 @@ fn main(){run();}
 }
 
 #[test]
-fn rejects_partial_explicit_type_hole() {
-    rejects(
-        "legalunsupported: partial_explicit_type_hole",
+fn accepts_partial_explicit_type_hole() {
+    runs(
         r###"fn id<T>(x:T)->T{x}fn run()->i32{id::<_>(7)}
 fn main(){if run()==7{println!("inference oracle ok");}}
 "###,
+        "inference oracle ok\n",
     );
 }
 

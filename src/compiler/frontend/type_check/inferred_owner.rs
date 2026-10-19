@@ -6,13 +6,7 @@ use super::*;
 
 /// True when the associated owner carries inferred actuals.
 pub(super) fn has_inferred_owner(owner: &Type) -> bool {
-    match owner {
-        Type::Apply(path) => path
-            .segments
-            .iter()
-            .any(|segment| segment.args.iter().any(|arg| matches!(arg, Type::Infer))),
-        _ => false,
-    }
+    matches!(owner, Type::Apply(_)) && partial_annotation::has_nested_infer(owner)
 }
 
 impl Checker<'_> {
@@ -74,6 +68,9 @@ impl Checker<'_> {
         }
         let impl_env = plan.param_env(associated.impl_decl)?;
         let mut solver = Inference::new(self, impl_env.clone())?;
+        let formal_owner = solver.schema(&associated.self_pattern, 0)?;
+        let written_owner = self.partial_type_term(owner, 0)?;
+        solver.constrain(&formal_owner, &written_owner, 0)?;
         if let Some(expected) = expected {
             let formal = solver.schema(&schema.signature.result, 0)?;
             let evidence = self.infer_type_term(expected, None, 0)?;
@@ -128,6 +125,16 @@ impl Checker<'_> {
         name: &AstIdent,
         args: &[Expr],
     ) -> Result<Option<Vec<ir::Ty>>, String> {
+        self.infer_method_type_args_partial(receiver, name, args, &[], None)
+    }
+    pub(super) fn infer_method_type_args_partial(
+        &self,
+        receiver: &ir::Ty,
+        name: &AstIdent,
+        args: &[Expr],
+        explicit: &[Type],
+        expected: Option<&ir::Ty>,
+    ) -> Result<Option<Vec<ir::Ty>>, String> {
         let plan = self.signatures.plan()?;
         let mut root = receiver;
         while let ir::Ty::Ref { referent, .. } = root {
@@ -168,6 +175,25 @@ impl Checker<'_> {
             _ => return Ok(None),
         };
         let mut solver = Inference::new(self, info.param_env.clone())?;
+        if !explicit.is_empty() {
+            let anonymous = plan
+                .registry
+                .source_callable(id)
+                .map_or(0, |f| f.impl_params);
+            if explicit.len() + anonymous != info.param_env.arity() {
+                return Err("E0107: wrong number of method generic arguments".into());
+            }
+            for (slot, ty) in explicit.iter().enumerate() {
+                let formal = self.infer_node(InferKind::Slot(slot))?;
+                let actual = self.partial_type_term(ty, 0)?;
+                solver.constrain(&formal, &actual, 0)?;
+            }
+        }
+        if let Some(expected) = expected {
+            let formal = solver.schema(&schema.signature.result, 0)?;
+            let actual = self.infer_type_term(expected, None, 0)?;
+            solver.constrain(&formal, &actual, 0)?;
+        }
         for (formal, expr) in formals.iter().zip(args) {
             // Arguments that do not mention a method parameter carry no
             // evidence; skip them (they are checked normally afterwards).

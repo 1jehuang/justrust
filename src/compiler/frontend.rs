@@ -4283,9 +4283,45 @@ pub(super) fn replay_source_body(
         view.validate_for(facts)?;
         if let Some(path) = &site.application {
             let checker = Checker::new(&signatures, ir::Ty::Unit, caller_context.module);
-            checker
-                .push_application(path, Namespace::Value)
+            let (_, written) = path.application().map_err(|e| source_error(budget, &e))?;
+            let anonymous = original
+                .plan
+                .registry
+                .source_callable(expected_decl)
+                .map_or(0, |f| f.impl_params);
+            if anonymous > 0
+                || written
+                    .iter()
+                    .any(type_check::partial_annotation::has_nested_infer)
+            {
+                if written.len() + anonymous != target.type_args.len() {
+                    return Err(FactsError::invalid(
+                        budget,
+                        "partial source actual count changed",
+                    ));
+                }
+                for (written, actual) in written.iter().zip(target.type_args.iter()) {
+                    type_check::partial_annotation::matches_partial(written, actual, &signatures)
+                        .map_err(|e| source_error(budget, &e))?;
+                }
+                let key = name_scope::path_key(
+                    original.plan.program.names.as_ref(),
+                    name,
+                    Namespace::Value,
+                )
                 .map_err(|e| source_error(budget, &e))?;
+                let regions = checker
+                    .type_actual_regions(written, 0)
+                    .map_err(|e| source_error(budget, &e))?;
+                checker
+                    .applications
+                    .borrow_mut()
+                    .push((key, target.type_args.to_vec(), regions));
+            } else {
+                checker
+                    .push_application(path, Namespace::Value)
+                    .map_err(|e| source_error(budget, &e))?;
+            }
             let application = checker.applications.borrow_mut().pop().ok_or_else(|| {
                 FactsError::invalid(budget, "explicit source application vanished")
             })?;
@@ -9003,10 +9039,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.alias_target && self.is("_") {
             return Err(self.error("E0121: placeholder _ is not allowed in type alias signatures"));
         }
-        if self.is("_") || self.is("!") {
-            return Err(
-                self.unsupported("inferred and never source type annotations are unsupported")
-            );
+        if self.eat("_") {
+            return Ok(Type::Infer);
+        }
+        if self.eat("!") {
+            return Ok(Type::Never);
         }
         if self.eat("&") {
             let region = if self.token().is_lifetime()
@@ -15214,14 +15251,12 @@ impl DeclRegistry {
             return Ok(());
         }
         let explicit = function.type_params.len() - function.impl_params;
-        if written > explicit {
+        if written != explicit {
             return Err(format!(
                 "E0107: function takes {explicit} generic arguments but {written} were supplied"
             ));
         }
-        // Stock accepts explicit arguments for the written parameters and infers
-        // the anonymous ones; that needs partial inference, not yet native.
-        Err("unsupported: explicit generic arguments on a function with argument-position `impl Trait` (partial inference)".into())
+        Ok(())
     }
     fn source_type_context(&self, declaration: ir::DeclId) -> Result<SourceTypeContext, String> {
         let info = self.declaration(declaration)?;

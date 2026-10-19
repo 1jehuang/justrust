@@ -342,6 +342,12 @@ missing-file changes invalidate only justified consumers without stale lookup.
 - [ ] Extend bidirectional/local inference, coercion sites, partial type holes,
       omitted method arguments and control-flow joins, preserving rigid universal
       parameters and diagnostics for unresolved constraints.
+      Delivered source `_` holes in nested local annotations and explicit
+      free/inherent method type arguments retain their concrete written constraints
+      and canonical nominal identities (`tests/partial_annotations.rs`), while
+      item-signature holes get E0121. Named generic arguments coexist with inferred
+      anonymous argument-position `impl Trait` parameters. Source never types
+      retain their distinct semantic representation under the pinned stock oracle.
       Delivered body-local structural union-find constraints: later inherent
       receiver uses, assignments and call parameters solve nested generic local
       bindings before lowering, with i32/f64 defaults and E0282 for unresolved

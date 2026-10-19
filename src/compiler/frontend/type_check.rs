@@ -3,10 +3,14 @@ use super::*;
 
 #[path = "format_lowering.rs"]
 mod format_lowering;
+#[path = "type_check/generic_placeholders.rs"]
+mod generic_placeholders;
 #[path = "type_check/inferred_owner.rs"]
 mod inferred_owner;
 #[path = "local_literals.rs"]
 mod local_literals;
+#[path = "type_check/partial_annotation.rs"]
+pub(super) mod partial_annotation;
 #[path = "try_operator.rs"]
 mod try_operator;
 #[path = "type_check/unsafety.rs"]
@@ -1161,13 +1165,19 @@ impl<'s> Checker<'s> {
                 }
             }
             Expr::Apply { path, value } => {
-                let (_, args) = plan.application(
-                    path,
-                    application_namespace(value)?,
-                    &self.signatures.params,
-                    self.facts(),
-                    &plan.budget,
-                )?;
+                let (_, args) = if let Some(application) =
+                    self.partial_call_application(path, value, None, true)?
+                {
+                    application
+                } else {
+                    plan.application(
+                        path,
+                        application_namespace(value)?,
+                        &self.signatures.params,
+                        self.facts(),
+                        &plan.budget,
+                    )?
+                };
                 let ty = match value.as_ref() {
                     Expr::Call { name, .. } => {
                         let declaration = *plan
@@ -1176,7 +1186,7 @@ impl<'s> Checker<'s> {
                             .get(&self.path_key(name, Namespace::Value)?)
                             .ok_or("unresolved function declaration in inference")?;
                         plan.registry
-                            .check_explicit_impl_params(declaration, args.len())?;
+                            .check_explicit_impl_params(declaration, path.application()?.1.len())?;
                         plan.instantiate_signature(
                             &ir::CallTarget {
                                 declaration,
@@ -1306,12 +1316,23 @@ impl<'s> Checker<'s> {
         expected: Option<&ir::Ty>,
         fallback: bool,
     ) -> Result<Option<Vec<ir::Ty>>, String> {
+        self.infer_call_args_with_partial(declaration, args, expected, fallback, None)
+    }
+    pub(super) fn infer_call_args_with_partial(
+        &self,
+        declaration: ir::DeclId,
+        args: &[Expr],
+        expected: Option<&ir::Ty>,
+        fallback: bool,
+        explicit: Option<&[Type]>,
+    ) -> Result<Option<Vec<ir::Ty>>, String> {
         let plan = self
             .signatures
             .plan
             .as_ref()
             .ok_or("inference requires planning context")?;
-        if let Some(cap) = self.canonical
+        if explicit.is_none()
+            && let Some(cap) = self.canonical
             && let Some(actual) = cap.shared_actual(declaration, args, expected, self)?
         {
             self.infer_storage(1)?;
@@ -1330,6 +1351,20 @@ impl<'s> Checker<'s> {
             return Err("generic function argument count mismatch".into());
         }
         let mut solver = Inference::new(self, schema.env.scopes()[0].clone())?;
+        if let Some(explicit) = explicit {
+            let anonymous = plan
+                .registry
+                .source_callable(declaration)
+                .map_or(0, |f| f.impl_params);
+            if explicit.len() + anonymous != schema.env.scopes()[0].arity() {
+                return Err("E0107: wrong number of generic arguments".into());
+            }
+            for (slot, ty) in explicit.iter().enumerate() {
+                let formal = self.infer_node(InferKind::Slot(slot))?;
+                let actual = self.partial_type_term(ty, 0)?;
+                solver.constrain(&formal, &actual, 0)?;
+            }
+        }
         if let Some(expected) = expected {
             let formal = solver.schema(&schema.signature.result, 0)?;
             let evidence = self.infer_type_term(expected, None, 0)?;
@@ -4355,17 +4390,8 @@ impl<'a> Checker<'a> {
                         .plan
                         .as_ref()
                         .ok_or("missing associated registry")?;
-                    self.infer_storage(type_args.len())?;
-                    let mut args = type_args
-                        .iter()
-                        .map(|t| self.checked_type_actual(t))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    if args.is_empty()
-                        && let Some(inferred) =
-                            self.infer_method_type_args(&owner, name, call_args)?
-                    {
-                        args = inferred;
-                    }
+                    let args =
+                        self.resolved_method_actuals(&owner, name, type_args, call_args, None)?;
                     Some(
                         plan.select_method(
                             &owner,
@@ -6225,6 +6251,9 @@ impl<'a> Checker<'a> {
                     ty,
                     value,
                 } => {
+                    let partial = partial_annotation::has_nested_infer(ty);
+                    let written = ty;
+                    let ty = if partial { &Type::Infer } else { ty };
                     let annotation = if matches!(ty, Type::Infer) {
                         literal_hints.get(&(s as *const Stmt as usize)).cloned()
                     } else {
@@ -6244,6 +6273,9 @@ impl<'a> Checker<'a> {
                         self.require(&f, &ty)?;
                         ty
                     };
+                    if partial {
+                        partial_annotation::matches_partial(written, &t, self.signatures)?;
+                    }
                     let local = self.local(name, t, *mutable)?;
                     if let Some(cap) = self.canonical {
                         cap.record_binding(s, local)?;
@@ -6257,6 +6289,9 @@ impl<'a> Checker<'a> {
                     else_block,
                 } => self.let_else_statement(pattern, ty, value, else_block)?,
                 Stmt::LetPattern { pattern, ty, value } => {
+                    let partial = partial_annotation::has_nested_infer(ty);
+                    let written = ty;
+                    let ty = if partial { &Type::Infer } else { ty };
                     // Resolve/check every initializer against the complete old scope.
                     let annotation = if matches!(ty, Type::Infer) {
                         None
@@ -6282,6 +6317,9 @@ impl<'a> Checker<'a> {
                         self.require(&flow, &ty)?;
                         ty
                     };
+                    if partial {
+                        partial_annotation::matches_partial(written, &seed, self.signatures)?;
+                    }
                     let ty = self.pattern_ty(pattern, &seed)?;
                     self.require(&flow, &ty)?;
                     self.accessible(&ty)?;
@@ -7231,7 +7269,14 @@ impl<'a> Checker<'a> {
     ) -> Result<ir::ExprId, String> {
         if let Expr::Apply { path, value } = e {
             let previous = self.applications.borrow().len();
-            self.push_application(path, application_namespace(value)?)?;
+            if let Some((key, args)) =
+                self.partial_call_application(path, value, expectation.hard(), true)?
+            {
+                let regions = self.type_actual_regions(path.application()?.1, 0)?;
+                self.applications.borrow_mut().push((key, args, regions));
+            } else {
+                self.push_application(path, application_namespace(value)?)?;
+            }
             let result = self.expr_with_expectation(value, expectation);
             self.applications.borrow_mut().truncate(previous);
             return result;
@@ -7560,6 +7605,7 @@ impl<'a> Checker<'a> {
         name: &AstIdent,
         type_args: &[Type],
         args: &[Expr],
+        expected: Option<&ir::Ty>,
     ) -> Result<ir::ExprId, String> {
         let plan = self
             .signatures
@@ -7569,16 +7615,7 @@ impl<'a> Checker<'a> {
         let ty = self
             .method_receiver_hint(receiver)?
             .ok_or("unsupported unresolved receiver type")?;
-        self.infer_storage(type_args.len())?;
-        let mut actuals = type_args
-            .iter()
-            .map(|t| self.checked_type_actual(t))
-            .collect::<Result<Vec<_>, _>>()?;
-        if actuals.is_empty()
-            && let Some(inferred) = self.infer_method_type_args(&ty, name, args)?
-        {
-            actuals = inferred;
-        }
+        let actuals = self.resolved_method_actuals(&ty, name, type_args, args, expected)?;
         let selected = plan.select_method(
             &ty,
             name,
@@ -7776,7 +7813,7 @@ impl<'a> Checker<'a> {
             args,
         } = expression
         {
-            return self.method_expression(receiver, name, type_args, args);
+            return self.method_expression(receiver, name, type_args, args, expected);
         }
         let plan = self
             .signatures
@@ -7828,10 +7865,14 @@ impl<'a> Checker<'a> {
             _ => return Err("not an associated call".into()),
         };
         self.infer_storage(type_args.len() + args.len() + 1)?;
-        let actuals = type_args
-            .iter()
-            .map(|t| self.checked_type_actual(t))
-            .collect::<Result<Vec<_>, _>>()?;
+        let actuals = if matches!(expression, Expr::AssociatedCall { .. }) {
+            self.resolved_method_actuals(&owner, name, type_args, args, expected)?
+        } else {
+            type_args
+                .iter()
+                .map(|t| self.checked_type_actual(t))
+                .collect::<Result<Vec<_>, _>>()?
+        };
         let (target, signature, mode) = if let Expr::TraitCall { trait_path, .. } = expression {
             let trait_ref = plan.resolve_trait_use(
                 &owner,
@@ -10049,8 +10090,6 @@ impl<'a> Checker<'a> {
                     .is_some_and(|(owner, _, _)| owner == &key)
                 {
                     let (_, args, regions) = self.applications.borrow_mut().pop().unwrap();
-                    plan.registry
-                        .check_explicit_impl_params(declaration, args.len())?;
                     (args, regions)
                 } else if plan.param_env(declaration)?.arity() > 0 {
                     (self.infer_call_args(declaration,args,expected,true)?.ok_or("unsupported generic inference: insufficient evidence; explicit type arguments required")?, Arc::from([]))
