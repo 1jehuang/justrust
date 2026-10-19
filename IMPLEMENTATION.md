@@ -169,6 +169,12 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       retained constness with universally checked forwarding-only bodies and
       scalar-root shared/mutable inference replay under CORE-IDENTITY.md. This
       is not CTFE, a library crate artifact or whole-core compilation.
+- [x] Rough-draft consts (tests/const_items.rs): const and immutable static
+      items of any type (non-scalar ones inlined at each use, still checked when
+      unused), `const fn` with ordinary bodies (E0015 for non-const calls),
+      inline `const { }` blocks, const-item expressions as array lengths.
+      Open: const generics, static mut, unsafe/raw-pointer ops, unions,
+      extern "C", constant patterns, real CTFE of non-scalar values.
 - [x] Immutable production parser cursor over the existing lexer, exact type-only
       punctuation views and checked restoration, without macro admission
       (CURSOR-MIGRATION.md).

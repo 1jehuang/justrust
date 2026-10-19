@@ -19,7 +19,7 @@
 03_collatz	pass
 04_primes_sieve	fail	fmt-display,for,vec,iter,match-ergonomics
 05_gcd_fib	pass
-06_matrix	fail	fmt-display,for,const,autoderef,vec,iter,closure,string
+06_matrix	fail	fmt-display,for,autoderef,vec,iter,closure,string
 07_bank_account	fail	fmt-display,fmt-debug,str,string,vec
 08_enum_state_machine	fail	fmt-display,fmt-debug,derive,for,iter,match-ergonomics
 09_vec_stack	fail	fmt-display,fmt-debug,str,vec,option-result,for,iter,or-pat,array-iter
