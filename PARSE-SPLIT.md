@@ -85,10 +85,26 @@ IMPLEMENTATION.md G9 asks for.
 
 ## Diagnostics and ordering contract
 
-Sequential loading reports the first error in source order. Per-file parsing
-may find errors out of order. Each error fact carries its (file ordinal, byte
-offset) position, and CHECK reports the minimum. Tests in `external_modules.rs`,
-`source_configuration_graph.rs` and the macro suites pin this order already.
+Measured and pinned in `tests/source_error_order.rs` (workers 1 and 8, check
+and build):
+
+1. Every file is prepared (delimiter balance, child loading, size limits)
+   before anything parses. Any preparation error beats every parser error,
+   even a parser error earlier in the parent. A child's preparation error
+   beats a parent parser error before `mod child;`.
+2. Among preparation errors, a file's own error beats loading its children.
+3. Parser errors follow assembled order: each child is spliced at its
+   `mod child;` site, so a child's error precedes parent text after the
+   declaration, a grandchild precedes later text at every ancestor level, and
+   siblings follow declaration order rather than file name.
+
+So the order is not min(file ordinal, offset). The per-file pipeline keeps it
+explicitly: each error fact carries (phase, assembled position), where the
+assembled position is the canonical child-ordinal path plus byte offset,
+compared as the depth-first splice order (a child sorts at its parent's
+declaration offset). CHECK reports the minimum by (phase, assembled position),
+with preparation before parse. That ordering is structural over ordinals, never
+a hash or a file-name sort.
 
 ## Increments, each independently mergeable
 
@@ -109,6 +125,17 @@ number, and before/after `graph_integrity` leaf-closure and work-growth numbers
 recorded in FINDINGS.md.
 
 ## Coordination
+
+- Kind ids reserved by cricket: 121 `PARSE_FILE`, 122 `MODULE_INDEX`,
+  123 `RESOLVE_IMPORT`, 124 `RESOLVE_ITEM`. 114 stays retired. 116/117 are
+  lexical/capture, 118-120 are reserved for const work.
+- Owner ids must be collision-free by construction: the canonical
+  child-ordinal ancestry path under a per-engine snapshot nonce. Never a hash
+  used as authority.
+- Every `ExpansionBudget`/`PlanBudget` handle reachable from a `NameStore`,
+  `ModuleArena` or session is dropped or frozen before a file fact is
+  published. `fact_reachable_state.debt` must not grow.
+- Increment 1 lands only after the full `*_authority.rs` suites pass on it.
 
 - The parse entry and `Program` hunk is shared with koala (captures),
   dromedary (const collections) and hog (item macro parser). Changes to
