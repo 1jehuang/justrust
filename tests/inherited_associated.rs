@@ -27,6 +27,16 @@ fn main() { let mut p = P { v: 4 }; let r = p.index_mut(0); *r = 7; println!("{}
 }
 
 #[test]
+fn supertrait_diamond_preserves_one_owner() {
+    let source = "trait A { type Item; } trait B: A {} trait C: A {} trait D: B + C { fn get(&self) -> &Self::Item; } struct S { v: i32 } impl A for S { type Item = i32; } impl B for S {} impl C for S {} impl D for S { fn get(&self) -> &i32 { &self.v } } fn main() {}";
+    for workers in [1, 8] {
+        compiler::compile(source.into(), workers, true).unwrap();
+    }
+    let ambiguous = "trait A { type Item; } trait C { type Item; } trait D: A + C { fn get(&self) -> &Self::Item; } fn main() {}";
+    assert!(compiler::compile(ambiguous.into(), 1, true).is_err());
+}
+
+#[test]
 fn inherited_projection_still_checks_return_type() {
     let source = "trait A { type Output; } trait B: A { fn get(&self) -> &Self::Output; } struct S { v: bool } impl A for S { type Output = i32; } impl B for S { fn get(&self) -> &bool { &self.v } } fn main() {}";
     assert!(compiler::compile(source.into(), 1, true).is_err());

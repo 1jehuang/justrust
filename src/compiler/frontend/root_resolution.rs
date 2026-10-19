@@ -189,7 +189,9 @@ impl Resolver<'_> {
         trait_index: usize,
         item: AstIdent,
     ) -> Result<(), String> {
-        self.check_inherited_associated_member(trait_index, item, &mut Vec::new())
+        self.check_inherited_associated_member(trait_index, item, &mut Vec::new())?
+            .map(|_| ())
+            .ok_or_else(|| "no associated type in the exact owning trait".into())
     }
 
     fn check_inherited_associated_member(
@@ -197,7 +199,7 @@ impl Resolver<'_> {
         trait_index: usize,
         item: AstIdent,
         active: &mut Vec<usize>,
-    ) -> Result<(), String> {
+    ) -> Result<Option<usize>, String> {
         self.alias_budget.check_depth(active.len())?;
         if active.contains(&trait_index) {
             return Err("cyclic supertrait associated lookup".into());
@@ -211,33 +213,27 @@ impl Resolver<'_> {
         for associated in &declaration.associated_types {
             self.alias_budget.charge_work(1)?;
             if self.ident_key(associated.name, LookupClass::Member)? == key {
-                return Ok(());
+                return Ok(Some(trait_index));
             }
         }
         let module = declaration.module;
         let parents = declaration.supertraits.clone();
         active.push(trait_index);
-        let mut found = false;
+        let mut found = None;
         for parent in parents {
             if matches!(parent, TraitPath::Builtin(_)) {
                 continue;
             }
             let index = self.source_trait_index(&parent, module)?;
-            if self
-                .check_inherited_associated_member(index, item, active)
-                .is_ok()
-            {
-                if found {
+            if let Some(owner) = self.check_inherited_associated_member(index, item, active)? {
+                if found.is_some_and(|previous| previous != owner) {
                     return Err("ambiguous associated type in supertraits".into());
                 }
-                found = true;
+                found = Some(owner);
             }
         }
         active.pop();
-        if found {
-            return Ok(());
-        }
-        Err("no associated type in the exact owning trait".into())
+        Ok(found)
     }
 
     #[inline(never)]

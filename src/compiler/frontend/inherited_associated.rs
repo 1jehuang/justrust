@@ -17,8 +17,10 @@ impl PlanState {
         if active.contains(&goal.declaration) {
             return Err("cyclic supertrait associated lookup".into());
         }
-        if let Ok(id) = registry.associated_type_item(goal.declaration, item, budget) {
-            return Ok(Some((goal, id)));
+        match registry.associated_type_item(goal.declaration, item, budget) {
+            Ok(id) => return Ok(Some((goal, id))),
+            Err(error) if error == "extra or unknown associated type item" => {}
+            Err(error) => return Err(error),
         }
         let info = registry.declaration(goal.declaration)?;
         if info.kind != ir::DeclKind::Trait {
@@ -56,7 +58,10 @@ impl PlanState {
                 budget,
                 active,
             )? {
-                if found.is_some() {
+                if found
+                    .as_ref()
+                    .is_some_and(|previous| previous != &candidate)
+                {
                     return Err("ambiguous associated type in supertraits".into());
                 }
                 found = Some(candidate);
