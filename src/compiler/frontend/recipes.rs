@@ -325,6 +325,7 @@ pub(super) fn inventory(
                 generic_path(path, ds, b, depth)?;
                 pattern(child, ds, b, depth + 1)?;
             }
+            Pattern::Ref { pattern: child, .. } => pattern(child, ds, b, depth + 1)?,
             Pattern::Tuple(children) | Pattern::Array(children) => {
                 b.charge_work(children.len())?;
                 for child in children {
@@ -536,6 +537,7 @@ pub(super) fn inventory(
                 expr(value, ds, b, d + 1)?;
             }
             Expr::Deref { value }
+            | Expr::BorrowValue { value, .. }
             | Expr::Unary { value, .. }
             | Expr::Field { base: value, .. }
             | Expr::Index { base: value, .. } => expr(value, ds, b, d + 1)?,

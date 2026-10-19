@@ -243,7 +243,7 @@ fn cases() -> Vec<Case> {
             source: r#"enum Choice{Some(i32),None}fn main(){let value=Choice::Some(42);let Choice::Some(ref x)=value else{return;};if *x==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "or_boundary",
@@ -439,7 +439,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (23, 10));
-    assert_eq!(partition, (20, 10, 3));
+    assert_eq!(partition, (21, 10, 2));
 }
 #[test]
 fn stock_let_else_mapping_ownership_and_valid_unsupported_oracle_edition2024() {
@@ -651,7 +651,7 @@ fn checked_let_else_has_persistent_success_locals_and_never_typed_failure() {
         counts.0 += 1;
         counts.1 += plans;
     }
-    assert_eq!(counts, (19, 19));
+    assert_eq!(counts, (20, 20));
 }
 #[test]
 fn source_grammar_else_scope_divergence_and_moves_remain_ordinary_invalid() {
@@ -690,7 +690,7 @@ fn valid_closed_let_else_patterns_pin_actual_parser_and_checker_phases() {
         )
         .unwrap();
         let parsed = frontend::parse_prepared(&prepared);
-        if matches!(case.name, "reference_binding_boundary" | "or_boundary") {
+        if matches!(case.name, "or_boundary") {
             let error = match parsed {
                 Err(e) => e,
                 Ok(_) => panic!("{} parser boundary admitted", case.name),
@@ -718,7 +718,7 @@ fn valid_closed_let_else_patterns_pin_actual_parser_and_checker_phases() {
             counts.1 += 1;
         }
     }
-    assert_eq!(counts, (2, 1));
+    assert_eq!(counts, (1, 1));
 }
 #[test]
 fn native_let_else_workers1_8_check_build_no_compiler_fallback() {
@@ -806,7 +806,7 @@ fn native_let_else_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 132);
-    assert_eq!(modes, (40, 40, 20, 20, 6, 6));
+    assert_eq!(modes, (42, 42, 20, 20, 4, 4));
     eprintln!(
         "NATIVE LET-ELSE:132 cells, modes{modes:?};40 main images (four deliberately empty executions for two exact Never-initializer controls, divergent functions unexecuted);12 stock-valid Unsupported cells are boundaries, not Rust-invalid parity or full Rust support"
     );

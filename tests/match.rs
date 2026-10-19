@@ -380,13 +380,12 @@ fn main() { if run() == 1 { println!("match oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_ref_binding() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "ref_binding",
+fn accepts_ref_binding() {
+    runs(
         r#"enum E { A, B, C } fn run()->i32 { let e=E::A; match e { ref x=>1 } }
 fn main() { if run() == 1 { println!("match oracle ok"); } }
 "#,
+        "match oracle ok\n",
     );
 }
 

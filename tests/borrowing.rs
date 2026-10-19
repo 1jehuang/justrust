@@ -472,13 +472,12 @@ fn main() { if run() == 7 { println!("borrow oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_rvalue_borrow() {
-    // Stock accepts and runs this fixture, outside this bounded B1 slice.
-    rejects(
-        "rvalue_borrow",
+fn accepts_lifetime_extended_rvalue_borrow() {
+    runs(
         r#"fn run()->i32{let r=&7;*r}
 fn main() { if run() == 7 { println!("borrow oracle ok"); } }
 "#,
+        "borrow oracle ok\n",
     );
 }
 

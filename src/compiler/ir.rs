@@ -5682,6 +5682,22 @@ pub const MAX_PATTERN_PROJECTION_WORK: usize = 1_000_000;
 pub struct PatternBinding {
     pub local: LocalId,
     pub projection: Vec<Projection>,
+    /// `None` binds the selected place by value (Copy or move). `Some(kind)`
+    /// is a `ref`/`ref mut` or default-binding-mode borrow of that place; the
+    /// local then has type `&kind T` and lowering issues a genuine loan.
+    pub borrow: Option<BorrowKind>,
+}
+impl PatternBinding {
+    /// The binding local's type for a selected place of type `selected`.
+    pub fn local_ty(&self, selected: &Ty) -> Ty {
+        match self.borrow {
+            None => selected.clone(),
+            Some(kind) => Ty::Ref {
+                kind,
+                referent: Arc::new(selected.clone()),
+            },
+        }
+    }
 }
 
 fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String> {
@@ -6778,7 +6794,18 @@ impl CheckedFunction {
                     Ty::Struct(_) => true,
                     Ty::Tuple(fields) => !fields.is_empty(),
                     Ty::Array { len, .. } => *len > 0 && *len <= MAX_ARRAY_LEN,
-                    _ => false,
+                    // A matched reference is selected through: some binding
+                    // must dereference it (a binding-free match is a wildcard).
+                    Ty::Ref { .. } => aggregate_bindings
+                        .iter()
+                        .any(|binding| binding.projection.first() == Some(&Projection::Deref)),
+                    // A whole-value `ref` binding of a scalar place.
+                    _ => {
+                        !aggregate_bindings.is_empty()
+                            && aggregate_bindings.iter().all(|binding| {
+                                binding.borrow.is_some() && binding.projection.is_empty()
+                            })
+                    }
                 };
                 if !aggregate {
                     return Err(
@@ -6788,9 +6815,14 @@ impl CheckedFunction {
                 }
                 self.validate_pattern_bindings_with_params(domain, aggregate_bindings, parameters)?;
                 for binding in aggregate_bindings {
-                    if binding.projection.is_empty()
+                    if (binding.projection.is_empty() && binding.borrow.is_none())
                         || binding.projection.iter().any(|step| {
-                            !matches!(step, Projection::Field(_) | Projection::ConstantIndex(_))
+                            !matches!(
+                                step,
+                                Projection::Field(_)
+                                    | Projection::ConstantIndex(_)
+                                    | Projection::Deref
+                            )
                         })
                     {
                         return Err(
@@ -6878,7 +6910,7 @@ impl CheckedFunction {
         Self::decision_work(work, path.len())?;
         for (index, step) in path.iter().enumerate() {
             match step {
-                Projection::Field(_) | Projection::ConstantIndex(_) => {}
+                Projection::Field(_) | Projection::ConstantIndex(_) | Projection::Deref => {}
                 Projection::Downcast(variant) => {
                     let mut authorized = false;
                     for test in earlier {
@@ -6899,11 +6931,6 @@ impl CheckedFunction {
                         return Err("pattern decision downcast lacks earlier exact tag test".into());
                     }
                 }
-                _ => {
-                    return Err(
-                        "pattern decision requires typed field, index or downcast paths".into(),
-                    );
-                }
             }
         }
         // This independently checks owner, shape and physical bounds at every
@@ -6920,7 +6947,13 @@ impl CheckedFunction {
         parameters: &std::collections::HashSet<LocalId>,
     ) -> Result<(), String> {
         let admitted = match domain {
-            Ty::Bool | Ty::Int(_) | Ty::Char | Ty::Unit | Ty::Struct(_) | Ty::Enum(_) => true,
+            Ty::Bool
+            | Ty::Int(_)
+            | Ty::Char
+            | Ty::Unit
+            | Ty::Struct(_)
+            | Ty::Enum(_)
+            | Ty::Ref { .. } => true,
             Ty::Tuple(fields) => !fields.is_empty(),
             Ty::Array { len, .. } => *len > 0 && *len <= MAX_ARRAY_LEN,
             _ => false,
@@ -7059,8 +7092,8 @@ impl CheckedFunction {
             if !locals.insert(binding.local) || parameters.contains(&binding.local) {
                 return Err("pattern binding locals must be distinct fresh locals".into());
             }
-            let projected = projected_ty(ty, &binding.projection)?;
-            if !pattern_types_equal(&local.ty, projected, work)? {
+            let projected = binding.local_ty(projected_ty(ty, &binding.projection)?);
+            if !pattern_types_equal(&local.ty, &projected, work)? {
                 return Err("pattern binding local type mismatch".into());
             }
             paths.push(binding.projection.as_slice());
@@ -12136,10 +12169,12 @@ mod tests {
             PatternBinding {
                 local: LocalId(2),
                 projection: vec![0].into_iter().map(Projection::Field).collect(),
+                borrow: None,
             },
             PatternBinding {
                 local: LocalId(1),
                 projection: vec![1].into_iter().map(Projection::Field).collect(),
+                borrow: None,
             },
         ];
         function.body.statements = vec![Stmt::LetPattern {
@@ -12207,6 +12242,7 @@ mod tests {
         let binding = PatternBinding {
             local: LocalId(1),
             projection: vec![],
+            borrow: None,
         };
         let oversized = vec![binding.clone(); MAX_PATTERN_BINDINGS + 1];
         assert!(
@@ -12218,6 +12254,7 @@ mod tests {
         let deep = PatternBinding {
             local: LocalId(1),
             projection: vec![Projection::Field(0); MAX_PATTERN_PROJECTION_DEPTH + 1],
+            borrow: None,
         };
         assert!(
             function
@@ -12242,6 +12279,7 @@ mod tests {
             bindings.push(PatternBinding {
                 local: LocalId(index + 1),
                 projection: vec![Projection::Field(0); MAX_PATTERN_PROJECTION_DEPTH],
+                borrow: None,
             });
         }
         assert!(
@@ -12267,6 +12305,7 @@ mod tests {
         let bindings = [PatternBinding {
             local: LocalId(1),
             projection: vec![],
+            borrow: None,
         }];
         assert!(
             function
@@ -12534,6 +12573,7 @@ mod tests {
                         bindings: vec![PatternBinding {
                             local: LocalId(1),
                             projection: vec![Projection::Field(0)],
+                            borrow: None,
                         }],
                     },
                     body: ExprId(1),
@@ -12974,6 +13014,7 @@ mod tests {
             bindings: vec![PatternBinding {
                 local: LocalId(1),
                 projection: vec![old, Projection::Field(0)],
+                borrow: None,
             }],
         };
         let budget = PlanBudget::default();

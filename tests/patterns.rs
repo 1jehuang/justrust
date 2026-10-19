@@ -598,11 +598,10 @@ fn rejects_legal_unsupported_at_binding_pattern() {
 }
 
 #[test]
-fn rejects_legal_unsupported_reference_binding_pattern() {
-    // Legal stock Rust, deliberately outside this let-pattern milestone.
-    rejects(
-        "reference_binding_pattern",
-        r#"fn run() -> i32 { let (ref a, _) = (1, 2); *a } fn main() { run(); }"#,
+fn accepts_reference_binding_pattern() {
+    runs(
+        r#"fn run() -> i32 { let (ref a, _) = (1, 2); *a } fn main() { if run() == 1 { println!("ok"); } }"#,
+        "ok\n",
     );
 }
 

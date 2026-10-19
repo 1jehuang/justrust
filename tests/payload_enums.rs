@@ -586,13 +586,12 @@ fn main() { if run() == 7 { println!("payload oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_payload_reference_binding() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "payload_reference_binding",
+fn accepts_payload_reference_binding() {
+    runs(
         r#"enum E{A(i32)} fn run()->i32{let e=E::A(7);match e{E::A(ref n)=>*n}}
 fn main() { if run() == 7 { println!("payload oracle ok"); } }
 "#,
+        "payload oracle ok\n",
     );
 }
 

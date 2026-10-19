@@ -627,6 +627,38 @@ struct SourceInventory {
     scopes: Vec<HashMap<LocalKey, sr::SourceNode>>,
     root_block_pointer: usize,
 }
+/// Static local-rooted place syntax for `&place`, or None for value operands.
+fn borrow_place(mut expr: &Expr) -> Option<Place> {
+    let mut fields = Vec::new();
+    loop {
+        match expr {
+            Expr::Var(path) => {
+                let local = if path.anchor() == PathAnchor::SelfModule && path.is_empty() {
+                    LocalName::Receiver
+                } else if path.anchor() == PathAnchor::Relative {
+                    LocalName::Named(path.single()?)
+                } else {
+                    return None;
+                };
+                fields.reverse();
+                return Some(Place { local, fields });
+            }
+            Expr::Deref { value } => {
+                fields.push(FieldSelector::Deref);
+                expr = value;
+            }
+            Expr::Field { base, field } => {
+                fields.push(field.clone());
+                expr = base;
+            }
+            Expr::Index { base, index } => {
+                fields.push(FieldSelector::ConstantIndex(*index));
+                expr = base;
+            }
+            _ => return None,
+        }
+    }
+}
 fn source_local_name(path: &AstPath, names: &NameStore) -> Result<LocalName, String> {
     path.check(names).map_err(native_adapter::name_diagnostic)?;
     match (path.anchor(), path.segments()) {
@@ -1216,7 +1248,7 @@ impl SourceInventory {
                     self.bind(name, node.clone(), None, None, None, budget)?;
                 }
             }
-            Pattern::Apply { pattern, .. } => {
+            Pattern::Apply { pattern, .. } | Pattern::Ref { pattern, .. } => {
                 self.shadow_pattern(pattern, node, budget, depth + 1)?
             }
             Pattern::Tuple(fields) | Pattern::Array(fields) => {
@@ -1605,6 +1637,7 @@ impl SourceInventory {
             }
             Expr::Cast { value, .. }
             | Expr::Deref { value }
+            | Expr::BorrowValue { value, .. }
             | Expr::Repeat { value, .. }
             | Expr::Unary { value, .. } => self.expr(
                 value,
@@ -4729,6 +4762,14 @@ pub enum Pattern {
     Binding {
         name: AstIdent,
         mutable: bool,
+        /// Explicit `ref`/`ref mut` binding mode. Default binding modes
+        /// through references are inferred by the checker, not the parser.
+        by_ref: Option<ir::BorrowKind>,
+    },
+    /// Explicit `&pat` / `&mut pat` reference pattern.
+    Ref {
+        kind: ir::BorrowKind,
+        pattern: Box<Pattern>,
     },
     Tuple(Vec<Pattern>),
     TupleRest(PositionalRest),
@@ -5197,6 +5238,13 @@ pub enum Expr {
     Borrow {
         kind: ir::BorrowKind,
         place: Place,
+    },
+    /// Borrow of a value expression that is not a static place, such as
+    /// `&P { .. }`, `&f()` or `&a[i]`. The operand is evaluated into a
+    /// temporary whose scope follows Rust's temporary lifetime rules.
+    BorrowValue {
+        kind: ir::BorrowKind,
+        value: Box<Expr>,
     },
     Deref {
         value: Box<Expr>,
@@ -7409,7 +7457,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                             .map_err(native_adapter::transport_error)?;
                     }
                 }
-                Pattern::Apply { pattern, .. } => pending
+                Pattern::Apply { pattern, .. } | Pattern::Ref { pattern, .. } => pending
                     .push(pattern)
                     .map_err(native_adapter::transport_error)?,
                 _ => {}
@@ -9617,6 +9665,16 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.nesting -= 1;
         result
     }
+    /// The operand of a reference pattern binds tighter than `|` and `@`.
+    fn pattern_no_alternatives(&mut self) -> Result<Pattern, ParseError> {
+        if self.nesting >= 128 {
+            return Err(self.limit("pattern nesting exceeds limit 128"));
+        }
+        self.nesting += 1;
+        let result = self.pattern_inner();
+        self.nesting -= 1;
+        result
+    }
     fn pattern(&mut self) -> Result<Pattern, ParseError> {
         if self.nesting >= 128 {
             return Err(self.limit("pattern nesting exceeds limit 128"));
@@ -9830,6 +9888,43 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         Err(self.error("expected a literal or range pattern"))
     }
+    /// `ref`/`ref mut` bindings and `&pat`/`&mut pat`, kept out of
+    /// `pattern_inner` so the recursive parser frame stays small.
+    #[inline(never)]
+    fn reference_pattern(&mut self) -> Result<Pattern, ParseError> {
+        if self.eat("ref") {
+            let kind = if self.eat("mut") {
+                ir::BorrowKind::Mut
+            } else {
+                ir::BorrowKind::Shared
+            };
+            return Ok(Pattern::Binding {
+                name: self.ident()?,
+                mutable: false,
+                by_ref: Some(kind),
+            });
+        }
+        let double = self.is("&&");
+        self.cursor.bump();
+        let kind = if self.eat("mut") {
+            ir::BorrowKind::Mut
+        } else {
+            ir::BorrowKind::Shared
+        };
+        let inner = self.pattern_no_alternatives()?;
+        let pattern = Pattern::Ref {
+            kind,
+            pattern: Box::new(inner),
+        };
+        Ok(if double {
+            Pattern::Ref {
+                kind: ir::BorrowKind::Shared,
+                pattern: Box::new(pattern),
+            }
+        } else {
+            pattern
+        })
+    }
     fn pattern_inner(&mut self) -> Result<Pattern, ParseError> {
         if self.is("..=") || self.is("..") || self.range_bound_start() {
             return self.scalar_pattern();
@@ -9837,13 +9932,8 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.token().string {
             return Err(self.unsupported("string literal patterns are unsupported"));
         }
-        if self.is("ref") {
-            return Err(self.unsupported("reference binding patterns are unsupported"));
-        }
-        if self.is("&") || self.is("&&") {
-            return Err(
-                self.unsupported("reference patterns and match ergonomics are unsupported in B1")
-            );
+        if self.is("ref") || self.is("&") || self.is("&&") {
+            return self.reference_pattern();
         }
         if self.eat("true") {
             return Ok(Pattern::Bool(true));
@@ -9898,6 +9988,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Ok(Pattern::Binding {
                 name: self.ident()?,
                 mutable: true,
+                by_ref: None,
             });
         }
         let generic_path = self.generic_path(false)?;
@@ -9960,6 +10051,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     .single()
                     .ok_or_else(|| self.error("expected local binding name"))?,
                 mutable: false,
+                by_ref: None,
             });
         }
         let mut fields = Vec::new();
@@ -9972,21 +10064,33 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
                 break;
             }
-            let mutable = self.eat("mut");
+            let by_ref = if self.eat("ref") {
+                Some(if self.eat("mut") {
+                    ir::BorrowKind::Mut
+                } else {
+                    ir::BorrowKind::Shared
+                })
+            } else {
+                None
+            };
+            let mutable = by_ref.is_none() && self.eat("mut");
             let token = self.token();
             if token.matches(token.text) && token.text.starts_with(|c: char| c.is_ascii_digit()) {
                 return Err(self.unsupported("numeric braced constructor patterns are unsupported"));
             }
             let field = self.ident()?;
             let pattern = if self.eat(":") {
-                if mutable {
-                    return Err(self.error("mut must apply to a binding, not a field selector"));
+                if mutable || by_ref.is_some() {
+                    return Err(
+                        self.error("mut or ref must apply to a binding, not a field selector")
+                    );
                 }
                 self.pattern()?
             } else {
                 Pattern::Binding {
                     name: field,
                     mutable,
+                    by_ref,
                 }
             };
             fields.push((field, pattern));
@@ -10105,7 +10209,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                     ) {
                         return Err(self.error("refutable literal pattern in let binding"));
                     }
-                    let Pattern::Binding { name, mutable } = pattern else {
+                    let Pattern::Binding {
+                        name,
+                        mutable,
+                        by_ref: None,
+                    } = pattern
+                    else {
                         return Err(
                             self.unsupported("deferred pattern declarations are unsupported")
                         );
@@ -10158,7 +10267,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                 self.expect(";")?;
                 self.bind_pattern_lexical(&pattern)?;
                 let ty = annotation.unwrap_or(Type::Infer);
-                if let Pattern::Binding { name, mutable } = pattern {
+                if let Pattern::Binding {
+                    name,
+                    mutable,
+                    by_ref: None,
+                } = pattern
+                {
                     statements.push(Stmt::Let {
                         name: BindingName::Named(name),
                         mutable,
@@ -10621,8 +10735,13 @@ impl<'input, 'names> Parser<'input, 'names> {
                 ir::BorrowKind::Shared
             };
             let value = self.expr(11)?;
-            let place=self.assignment_place(value).map_err(|_|self.unsupported("borrowing requires a local-root static place; rvalues and runtime indexed borrows are unsupported"))?;
-            Expr::Borrow { kind, place }
+            match borrow_place(&value) {
+                Some(place) => Expr::Borrow { kind, place },
+                None => Expr::BorrowValue {
+                    kind,
+                    value: Box::new(value),
+                },
+            }
         } else if self.eat("*") {
             Expr::Deref {
                 value: Box::new(self.expr(11)?),
@@ -11525,24 +11644,9 @@ mod inactive_item_syntax_tests {
     }
 
     #[test]
-    fn aggregate_ref_binding_is_typed_unsupported_at_the_original_keyword() {
+    fn aggregate_ref_binding_parses_as_a_borrowing_binding() {
         let source = "struct Pair(i32,i32);fn main(){match Pair(40,2){Pair(ref a,b)=>*a+b};}";
-        let error = parse_syntax_unprepared(source).unwrap_err();
-        assert_eq!(
-            error.kind,
-            super::super::source::SourceErrorKind::Unsupported
-        );
-        let at = source.find("ref").unwrap();
-        assert_eq!(error.bytes, at..at + 3);
-        assert_eq!(&source[error.bytes.clone()], "ref");
-        let primary = error.primary.unwrap();
-        assert_eq!(primary.lo as usize, at);
-        assert_eq!(primary.hi as usize, at + 3);
-        assert!(
-            error
-                .message
-                .starts_with("reference binding patterns are unsupported")
-        );
+        parse_syntax_unprepared(source).unwrap();
     }
 
     #[test]
@@ -12624,6 +12728,7 @@ fn walk_depth_inspecting(
                             push(DepthNode::Pattern(pattern))?;
                         }
                     }
+                    Pattern::Ref { pattern, .. } => push(DepthNode::Pattern(pattern))?,
                     _ => {}
                 }
             }
@@ -12703,7 +12808,9 @@ fn walk_depth_inspecting(
                         push(DepthNode::Expr(e))?;
                     }
                 }
-                Expr::Deref { value } => push(DepthNode::Expr(value))?,
+                Expr::Deref { value } | Expr::BorrowValue { value, .. } => {
+                    push(DepthNode::Expr(value))?
+                }
                 Expr::Repeat { value, .. } => push(DepthNode::Expr(value))?,
                 Expr::DynamicIndex { base, index } => {
                     push(DepthNode::Expr(base))?;
@@ -13611,6 +13718,9 @@ pub struct PlanCtx {
     /// Previously each body copied every signature, which made checking
     /// quadratic in program size in both time and retained bytes.
     shared_env: Option<Arc<SharedTypeEnv>>,
+    /// Callable indices of nongeneric Source callables in callable order:
+    /// exactly the root slots `instances::build` enumerates first.
+    closed_roots: Arc<[usize]>,
     pub budget: ir::PlanBudget,
 }
 /// Shared read-only part of a [`TypeEnv`].
@@ -15084,11 +15194,32 @@ impl PlanCtx {
             registry,
             state: Arc::new(Mutex::new(state)),
             shared_env: None,
+            closed_roots: Arc::from([]),
             budget: budget.clone(),
         };
         plan.validate_inherent_overlaps(budget)?;
         plan.publish_trait_world(program)?;
+        plan.closed_roots = plan.compute_closed_roots()?;
         Ok(plan)
+    }
+    fn compute_closed_roots(&self) -> Result<Arc<[usize]>, String> {
+        let mut roots = Vec::new();
+        for index in 0..self.callable_count() {
+            self.budget.charge_work(1)?;
+            let declaration = self.callable_decl(index)?;
+            if matches!(
+                self.callable_provider(declaration)?,
+                CallableProvider::Source { .. }
+            ) && !self.callable_env(declaration)?.is_generic()
+            {
+                roots.push(index);
+            }
+        }
+        Ok(roots.into())
+    }
+    /// Nongeneric Source callable indices in callable order (plan roots).
+    pub fn closed_roots(&self) -> &[usize] {
+        &self.closed_roots
     }
     fn publish_trait_world(&mut self, program: &Program) -> Result<(), String> {
         let budget = &self.budget;
@@ -16385,6 +16516,7 @@ impl SchemaAdapter {
             world: None,
             validated: Arc::new(HashMap::new()),
             shared_env: None,
+            closed_roots: Arc::from([]),
         })
     }
     fn error(&self, e: String) -> tr::FactsError {

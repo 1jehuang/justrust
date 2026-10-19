@@ -35,5 +35,9 @@ Hard rules:
   The aim is breadth toward real programs. Keep correctness, but don't spend hours on
   ceremony documents. A short `<FEATURE>.md` plus tests and a line in IMPLEMENTATION.md is enough.
 - Full-suite regressions: run `justrust test` before pushing (hosted is fine).
+- Server restarts happen often and stop idle workers. Commit to your worktree
+  (even WIP commits, `git commit -m "WIP: ..."`) at least every ~20 minutes so a
+  replacement can pick up from history. Squash or clean up before pushing if needed.
+- Hosted disk can fill up. If you see "No space left on device", use `--local`.
 - Report progress to cricket with swarm dm (to_session cricket) when you push a
   milestone or are blocked. When finished, give a final report with commits.

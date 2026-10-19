@@ -11650,3 +11650,40 @@ removed internal ordering. They now assert the external contract: no `BUILD`
 artifact is published (`Report::published_kind(105)`). Check-only runs still
 assert no OBJECT is demanded. Barrier-order tests now assert per-instance
 order: each object publishes after its own proof. 3259 tests pass.
+
+### Effects-per-callee plus root-instance split remove the hidden MONO_PLAN debt (2026-10-18)
+
+The pending per-callee effects branch is now merged together with a root-instance
+split for MONO_PLAN. Nongeneric Source roots no longer read the whole-program
+instance plan in BODY, LOWER, ANALYZE, or OBJECT. Those nodes derive their root
+instance directly from SIGNATURES (`PlanCtx.closed_roots`), and OBJECT derives
+callee symbols from the target alone (`instances::symbol_of`). MONO_PLAN is now
+read only for demanded generic instances and for cleanup validation on CFGs that
+actually contain `Drop` terminators.
+
+That removes the fixed +16 TEMPLATE_BODY/MONO_PLAN baggage from independent leaf
+closures. `graph_integrity` now reports leaf closure growth 16->32 of exactly
+1.000 for `object[0]` (8 -> 8 nodes), so the ratchet was tightened from 1.23 to
+1.02. Targeted suites covering graph shape and instance planning all pass:
+`graph_integrity`, `compiler`, `modules`, `tuples`, `external_modules`, and
+`generic_carriers_graph` (run `20261018-181803117-2893679`). Hosted full-suite
+validation is currently blocked by unrelated tests that hard-code `/usr/bin/rustc`
+on this machine, but strict clippy passes and the targeted graph/workflow suites
+cover the changed boundaries.
+
+### Universal admission is per-caller, not a root join (2026-10-18)
+
+The remaining whole-program `effects_ready` node was only enforcing the
+reference-actual admission rule for universal bodies. Kind 115 is now one fact
+per universal callable instead of a root join. Each admission fact reads that
+caller's own `UNIVERSAL_ANALYZE` proof and only the universal callees actually
+needed by reference-actual calls. `CHECK` now waits on `TEMPLATE_BODY` for every
+callable plus the per-caller 115 facts for universal bodies, rather than one
+global join.
+
+This removes `effects_ready` from `WHOLE_PROGRAM_DEBT` and keeps the graph
+honest: the remaining root joins in this lane are no longer pretending to be
+item-local. Targeted graph suites all pass with the new shape (`graph_integrity`,
+`compiler`, `external_modules`, `generic_carriers_graph`, `generics_graph`,
+`modules`, `tuples`, `canonical_copy_graph`, run `20261018-182437837-2935726`),
+and strict clippy stays clean on hosted (`20261018-182437813-2935601`).

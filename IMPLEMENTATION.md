@@ -277,6 +277,8 @@ missing-file changes invalidate only justified consumers without stale lookup.
 - [ ] Complete nested/or/range/ref/@/slice patterns, guards, match ergonomics,
       exhaustiveness/usefulness, conditional pattern forms beyond delivered
       IF-LET.md/WHILE-LET.md/LET-ELSE.md slices and destructuring assignment.
+      Delivered: match ergonomics (default binding modes, `ref`/`ref mut`,
+      `&pat`, enum matches through dereferences), see MATCH-ERGONOMICS.md.
 - [ ] Extend bidirectional/local inference, coercion sites, partial type holes,
       omitted method arguments and control-flow joins, preserving rigid universal
       parameters and diagnostics for unresolved constraints.

@@ -171,7 +171,7 @@ fn cases() -> Vec<Case> {
             source: r#"fn main(){let value=[40,2];let answer=match &value{[a,b]=>*a+*b};if answer==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "refutable_child_boundary",
@@ -213,7 +213,7 @@ fn cases() -> Vec<Case> {
             source: r#"fn main(){let value=[40,2];let [ref a,b]=value;if *a+b==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
     ]
 }
@@ -381,7 +381,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (22, 5));
-    assert_eq!(partition, (14, 5, 8));
+    assert_eq!(partition, (16, 5, 6));
 }
 #[test]
 fn stock_array_patterns_mapping_ownership_and_valid_unsupported_oracle_edition2024() {
@@ -415,7 +415,17 @@ fn source_array_patterns_publish_exact_constant_indexes_without_omitted_bindings
     let mut counts = (0, 0);
     for case in cases()
         .into_iter()
-        .filter(|c| c.outcome == Outcome::Runtime && !matches!(c.name, "refutable_child_boundary"))
+        // Promoted ergonomic/ref-binding cases bind by reference through
+        // Deref paths. Their plans are covered by MATCH-ERGONOMICS tests.
+        .filter(|c| {
+            c.outcome == Outcome::Runtime
+                && !matches!(
+                    c.name,
+                    "refutable_child_boundary"
+                        | "reference_array_boundary"
+                        | "ref_binding_boundary"
+                )
+        })
     {
         let program = frontend::parse(case.source)
             .unwrap_or_else(|e| panic!("{} parse/resolve:{e}", case.name));
@@ -495,7 +505,6 @@ fn array_pattern_closed_boundaries_reject_at_their_actual_frontend_phase() {
                 | "or_boundary"
                 | "tail_binding_boundary"
                 | "parameter_pattern_boundary"
-                | "ref_binding_boundary"
         ) {
             let error = match parsed {
                 Err(e) => e,
@@ -518,9 +527,6 @@ fn array_pattern_closed_boundaries_reject_at_their_actual_frontend_phase() {
                     "non-Copy bindings through array patterns are unsupported"
                 }
                 "empty_array_boundary" => "zero-length array patterns are unsupported",
-                "reference_array_boundary" => {
-                    "reference patterns and implicit match ergonomics are unsupported in B1"
-                }
                 "refutable_child_boundary" => "unsupported: refutable aggregate match leaf",
                 _ => unreachable!(),
             };
@@ -532,7 +538,7 @@ fn array_pattern_closed_boundaries_reject_at_their_actual_frontend_phase() {
             counts.1 += 1;
         }
     }
-    assert_eq!(counts, (5, 3));
+    assert_eq!(counts, (4, 2));
 }
 #[test]
 fn native_array_patterns_workers1_8_check_build_no_compiler_fallback() {
@@ -619,9 +625,9 @@ fn native_array_patterns_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 108);
-    assert_eq!(modes, (28, 28, 10, 10, 16, 16));
+    assert_eq!(modes, (32, 32, 10, 10, 12, 12));
     eprintln!(
-        "NATIVE ARRAY PATTERNS:108 cells, modes{modes:?};28 executed native images;32 stock-valid Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
+        "NATIVE ARRAY PATTERNS:108 cells, modes{modes:?};32 executed native images;24 stock-valid Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
     );
 }
 

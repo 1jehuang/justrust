@@ -807,6 +807,7 @@ impl<'a> Validator<'a> {
                 }
                 Expr::Borrow { place, .. } => self.push(Visit::Place(place))?,
                 Expr::Deref { value }
+                | Expr::BorrowValue { value, .. }
                 | Expr::Repeat { value, .. }
                 | Expr::Index { base: value, .. }
                 | Expr::Unary { value, .. } => self.push(Visit::Expr(value))?,
@@ -926,6 +927,7 @@ impl<'a> Validator<'a> {
                     self.push(Visit::GenericPath(path))?;
                     self.push(Visit::Pattern(pattern))?;
                 }
+                Pattern::Ref { pattern, .. } => self.push(Visit::Pattern(pattern))?,
                 Pattern::Variant { name, fields, .. } => {
                     self.push(Visit::Path(name))?;
                     self.pattern_fields(fields)?;
@@ -1569,6 +1571,7 @@ mod tests {
                 Pattern::Binding {
                     name,
                     mutable: false,
+                    by_ref: None,
                 },
             ]),
             ty: Type::Unit,
@@ -1670,6 +1673,7 @@ mod tests {
                     **pattern = Pattern::Binding {
                         name: foreign_name,
                         mutable: false,
+                        by_ref: None,
                     }
                 }
                 1 => *ty = Type::Param(foreign_name),
@@ -1758,6 +1762,7 @@ mod tests {
                     **pattern = Pattern::Binding {
                         name: foreign_name,
                         mutable: false,
+                        by_ref: None,
                     }
                 }
                 2 => **scrutinee = Expr::Var(foreign_path.clone()),
@@ -1979,6 +1984,7 @@ mod tests {
                         **pattern = Pattern::Binding {
                             name: foreign_name,
                             mutable: false,
+                            by_ref: None,
                         }
                     }
                     1 => **scrutinee = Expr::Var(foreign_path.clone()),
@@ -2036,6 +2042,7 @@ mod tests {
                 *target = Pattern::Binding {
                     name: foreign_name,
                     mutable: false,
+                    by_ref: None,
                 };
                 assert!(validate_program_names(&malformed).is_err());
                 assert!(
@@ -2091,6 +2098,7 @@ mod tests {
                 target[0] = Pattern::Binding {
                     name: foreign_name,
                     mutable: false,
+                    by_ref: None,
                 };
                 assert!(validate_program_names(&malformed).is_err());
                 assert!(

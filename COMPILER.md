@@ -254,13 +254,13 @@ implemented boundary. Semantic coverage must be expanded explicitly.
   signatures (operation 110). Generic source bodies and every recipe, including
   zero-arity recipes, lower universally (111) and pass the same move/dataflow
   solver (112), including unused declarations.
-- Join all body typing (110) and required generic-Source/all-Recipe universal
-  proofs (111/112) at `UNIVERSAL_EFFECTS_READY` (115), publishing one immutable
-  `CarrierEffectTable` from exact successful templates before instance planning
-  (113). Universal analysis uses conservative declaration envelopes, not this
-  table. Nongeneric Source bodies remain closed-only and supply no early body
-  summary. Operation 115 depends on neither closed analysis (109) nor the final
-  concrete barrier (114), avoiding a caller/body-summary dependency cycle.
+- Every universal body has its own admission fact at kind 115. It reads that
+  body's exact universal proof (112) plus only the universal callees needed for
+  reference-actual admission, then validates the rule without a whole-program
+  join. Nongeneric Source bodies remain closed-only and supply no early body
+  summary. Closed analysis uses direct callee proof reads, not a global table,
+  so kind 115 depends on neither closed analysis (109) nor the final concrete
+  barrier (114), avoiding a caller/body-summary dependency cycle.
 - Seal a bounded deduplicated instance frontier seeded by every nongeneric
   source function, with recipe instances admitted only on demand.
   Concrete bodies (102) reuse nongeneric facts or instantiate verified
@@ -272,9 +272,10 @@ implemented boundary. Semantic coverage must be expanded explicitly.
 - Analyze each CFG once (operation 109), validating structure and running bounded
   definite-initialization, storage-lifetime, move-path, loan-origin and bounded
   signature-region dataflow to fixed points.
-  Closed analysis can use selected-body effect refinements from 115 only after
-  exact target, template, substitution and facts validation. Missing summaries
-  retain conservative declaration envelopes, not a fabricated family proof.
+  Closed analysis can use selected-body effect refinements only after exact
+  target, template, substitution and facts validation against its callees'
+  proofs. Missing summaries retain conservative declaration envelopes, not a
+  fabricated family proof.
   Both check and emission require this successful immutable analysis fact.
 - Join all concrete analyses in one cached publication barrier (114) before
   requesting any native object. Unused invalid nongeneric bodies therefore
