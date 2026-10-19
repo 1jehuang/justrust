@@ -276,7 +276,9 @@ fn attribute_blocked(case: &Case) -> bool {
     )
 }
 fn native_accepted(case: &Case) -> bool {
-    case.category == "positive" && !attribute_blocked(case) && !path_blocked(case)
+    (case.category == "positive" || case.path == "unsupported/borrow.rs")
+        && !attribute_blocked(case)
+        && !path_blocked(case)
 }
 /// Unqualified `module::Trait::method` / `Trait::method` paths are existing
 /// resolver boundaries unrelated to Drop. Frozen qualified variants carry the
@@ -495,7 +497,7 @@ fn frozen_stock_before_native_normal_drop() {
     );
     assert_eq!(
         cases.iter().filter(|case| native_accepted(case)).count(),
-        26
+        27
     );
     assert_eq!(
         cases.iter().filter(|case| attribute_blocked(case)).count(),

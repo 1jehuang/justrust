@@ -42,11 +42,14 @@ for Rust's allocator API. All allocation, layout and error policy is Rust source
 - `allocate` uses anonymous private read/write mmap. Linux x86-64 page alignment
   satisfies the admitted alignments. Invalid layouts and raw kernel errors
   produce an empty null handle with zero length. Successful mappings are zeroed.
-- `Allocation` has private address/length and a private non-Copy ownership marker.
-  The marker also blocks user Copy implementations in the bootstrap module
-  representation. `pointer` and `len` inspect a shared handle. `release` consumes
-  it and reports munmap success. Releasing an empty handle succeeds without IO.
-  There is no automatic Drop yet: abandoning a handle leaks its mapping.
+- `Allocation` has private address/length and an ordinary canonical source
+  `impl Drop`. Canonical Copy/Drop exclusion makes it non-Copy, without a
+  compiler special case or a private marker. `pointer` and `len` inspect a
+  shared handle. `release` consumes it and reports munmap success. Explicit
+  release and automatic normal-path destruction call the same source helper,
+  which clears address/length before attempting munmap, preventing double free.
+  Empty handles succeed without IO. Normal scope exit, moves, early returns,
+  conditional ownership and replacement reuse canonical cleanup flags.
 
 Only the actual syscall ABI is backend-specific. There are no compiler cases
 for allocation functions, Allocation, Box, Vec, String or their methods.
@@ -67,15 +70,18 @@ The actual mapping-boundary regression caught that bug, rather than a synthetic
 backend byte fixture.
 
 General public aggregate layout, size_of/align_of, raw pointer methods,
-over-aligned and zero-sized allocation, realloc, allocator traits, automatic
-Drop and owning collections remain follow-up work. Existing private aggregate
-layout limits still apply. Unsafe users remain responsible for valid addresses,
+over-aligned and zero-sized allocation, realloc, allocator traits, generic and
+aggregate Drop glue and owning collections remain follow-up work. Existing
+private aggregate layout limits still apply. SCC-born loans live across a loop
+backedge remain an explicit unsupported boundary; the cleanup conflict control
+requires a real BorrowConflict as well, not just that boundary. Unsafe users
+remain responsible for valid addresses,
 initialized scalar values, alignment and live allocation bounds.
 
 ## Validation
 
 `tests/heap.rs` runs real native executables at workers 1 and 8 and checks
-check/build agreement. The six new positive differential programs exercise:
+check/build agreement. Positive differential programs exercise:
 
 1. mmap, zeroing, aligned u64 write/read, first/interior/last byte operations,
    consuming free, and an independent mincore ENOMEM check proving unmapping.
@@ -86,7 +92,17 @@ check/build agreement. The six new positive differential programs exercise:
 5. Adjacent signed/unsigned narrow scalars, bool, Unicode char, floats and u128,
    sentinel-byte preservation and 1/2/4-byte accesses ending at a page boundary.
 6. A legitimate scalar-field Copy/Clone implementation, ensuring the owning
-   handle's private marker does not blanket-reject ordinary Copy types.
+   handle's canonical Drop does not blanket-reject ordinary Copy types.
+7. Real mapping presence before moves and absence after normal/early-return
+   cleanup, plus preserved consuming explicit release.
+8. Ordinary shared/mutable owner borrows and legal Copy field reads.
+9. A raw-pointer-field source destructor counting exact-once calls across moves,
+   conditional moves, loop continue, replacement and self-move.
+
+A panic=abort native/stock control requires no destructor marker during abort.
+Escaping owner borrows and replacement with later-use loans reject in both
+compilers. Nested/partial-move owner shapes and Drop-carrying generic functions
+remain explicit unsupported boundaries, not silent no-op destruction.
 
 The stock oracle compiles the same Rust policy and program with a test-only
 inline-assembly syscall adapter, at stock opt-level 0 and 2. That adapter is
@@ -96,7 +112,7 @@ Local oracle runs are necessary because hosted lacks /usr/bin/rustc.
 
 Negative controls cover unsafe admission in used/unused bodies, primitive
 signature, private handle forgery, double release and a user Copy implementation
-(stock E0204). `tests/native_heap_authority.rs` checks ten used/unused malformed
+(stock E0184). `tests/native_heap_authority.rs` checks ten used/unused malformed
 IR variants and two malformed CFG variants. `tests/graph_integrity.rs` remains
 a mandatory unchanged gate. Validation receipts are recorded in FINDINGS.md.
 No compile-time speedup claim is made.

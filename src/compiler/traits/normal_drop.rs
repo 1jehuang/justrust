@@ -136,7 +136,12 @@ impl ValidatedFacts {
                 || s.def().fields.iter().any(|f| {
                     !matches!(
                         f.ty,
-                        Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char | Ty::Unit
+                        Ty::Int(_)
+                            | Ty::Float(_)
+                            | Ty::Bool
+                            | Ty::Char
+                            | Ty::Unit
+                            | Ty::RawPtr { .. }
                     )
                 })
             {

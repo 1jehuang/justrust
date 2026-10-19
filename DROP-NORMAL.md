@@ -162,6 +162,46 @@ For D17 the version-1 scalar-field owner cannot itself exercise a non-Copy field
 * Unsupported shape closure: generic/tuple/array/enum/wrapper/reference-bearing routes and dead syntax cannot hide a Drop owner from admission. Distinguish unsupported Rust-valid input from language-invalid input.
 * Regression gate: preserve historical scalar field reads/writes, canonical versus shadow Drop identity, Copy+Drop rejection, ordinary source call capsule checks and existing non-Drop reference/loop behavior.
 
+## Source allocator extension (2026-10-19)
+
+The ordinary embedded `Allocation` now implements canonical source Drop using
+existing cleanup authorization and runtime flags. Raw pointers are nonowning
+scalar fields, admitted alongside integers in both the trait-world and exact
+normal-drop descriptor gates. The blanket reference-to-owner exclusion is
+removed: ordinary shared/mutable borrows use the same source loan analysis and
+the cleanup operation's exclusive receiver access, not a library exemption.
+The previously frozen `unsupported/borrow.rs` fixture is now native-positive;
+its original stock receipt and source remain unchanged (27 native positives).
+
+`tests/heap.rs` checks mapping presence/absence across returned/moved owners and
+early returns, explicit-release disarming, raw-pointer destructor exact-once
+counters for conditional moves/loop continue/replacement/self-move, shared and
+mutable owner helpers, and stock/native borrow escape, move and replacement
+conflicts. A panic=abort control requires no user cleanup output. Generic and
+aggregate owners, partial moves of non-Copy fields, nested owning fields and
+unwinding remain excluded. This does not implement Box<T> or generic Drop glue.
+
+## Next prerequisite: concrete generic cleanup
+
+The next implementation increment must preserve universal source proof while
+re-lowering each demanded closed instance before capturing its generated CFG
+shape. Start with generic functions carrying the already supported nongeneric
+owner, not a new Box-specific cleanup path. The existing rejection in both
+`cfg/drop_normal.rs::admit` and the instance frontier is a compatibility boundary,
+not permission to erase ownership: replace it only with exact concrete cleanup
+and per-instance canonical destructor demand, including ordinary analysis and
+object dependencies for every generated target. Universal unresolved Drop is
+not evidence of trivial destruction.
+
+Then admit generic pointer-field owners through canonical trait resolution of
+closed owner arguments. Layout and `drop_in_place` need typed graph facts keyed
+by the closed type, never process-global reflection or unvalidated backend
+calls. A source `Box<T>` must destroy its pointee before freeing its allocation,
+transfer/disarm allocation ownership exactly once, and preserve nested-owner,
+projection, partial-move, borrow and abort controls. A Copy-only or manually
+released container is not completion of this prerequisite. Exact Deref remains
+separate until its associated `Target: ?Sized` contract is supported.
+
 ## Approved integration constraints; concrete API refinement
 
 Prefer integrating semantic drop elaboration inside the canonical lowering publication, so existing exact shape proof naturally captures the final graph. If source-call replay makes synthetic calls impossible there, add an explicit cleanup evidence variant rather than weakening replay. Assign one owner to shared cfg/ir/ownership proof interfaces. Traits/instance discovery and oracle work can proceed in parallel only after those types are agreed.

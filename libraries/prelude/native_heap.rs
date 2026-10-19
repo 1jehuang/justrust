@@ -5,14 +5,15 @@
 //! Allocation owns a distinct anonymous mapping. Release consumes the handle.
 //! No allocator state, metadata table, or compiler collection special cases.
 
-// A private non-Copy field also prevents user-side Copy implementations while
-// the bootstrap library is represented as a module rather than a crate artifact.
-struct Ownership;
-
 pub struct Allocation {
     address: *mut u8,
     size: usize,
-    ownership: Ownership,
+}
+
+impl Drop for Allocation {
+    fn drop(&mut self) {
+        let _ = deallocate(self);
+    }
 }
 
 pub fn null<T>() -> *mut T {
@@ -55,7 +56,6 @@ pub fn allocate(size: usize, align: usize) -> Allocation {
         return Allocation {
             address: null::<u8>(),
             size: 0usize,
-            ownership: Ownership,
         };
     }
     // mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0).
@@ -76,13 +76,11 @@ pub fn allocate(size: usize, align: usize) -> Allocation {
         return Allocation {
             address: null::<u8>(),
             size: 0usize,
-            ownership: Ownership,
         };
     }
     Allocation {
         address: result as *mut u8,
         size,
-        ownership: Ownership,
     }
 }
 
@@ -94,8 +92,18 @@ pub fn len(allocation: &Allocation) -> usize {
     allocation.size
 }
 
-pub fn release(allocation: Allocation) -> bool {
-    if is_null::<u8>(allocation.address as *const u8) {
+pub fn release(mut allocation: Allocation) -> bool {
+    deallocate(&mut allocation)
+}
+
+fn deallocate(allocation: &mut Allocation) -> bool {
+    let address = allocation.address;
+    let size = allocation.size;
+    // Disarm before the syscall. Explicit release and automatic Drop share
+    // this path, so the consumed handle's final cleanup cannot free twice.
+    allocation.address = null::<u8>();
+    allocation.size = 0usize;
+    if is_null::<u8>(address as *const u8) {
         return true;
     }
     // Fields are private and Allocation is not Copy. Only allocate constructs
@@ -103,8 +111,8 @@ pub fn release(allocation: Allocation) -> bool {
     let result = unsafe {
         __justrust_linux_syscall6!(
             11usize,
-            allocation.address as usize,
-            allocation.size,
+            address as usize,
+            size,
             0usize,
             0usize,
             0usize,
