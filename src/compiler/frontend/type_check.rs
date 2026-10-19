@@ -5612,7 +5612,13 @@ impl<'a> Checker<'a> {
                     source,
                     body,
                     ..
-                } => self.for_range_statement(*label, pattern, source, body)?,
+                } => self.for_range_statement(
+                    *label,
+                    pattern,
+                    source,
+                    body,
+                    literal_hints.get(&(s as *const Stmt as usize)),
+                )?,
                 Stmt::WhileLet {
                     label,
                     pattern,
@@ -6980,6 +6986,7 @@ impl<'a> Checker<'a> {
         pattern: &Pattern,
         source: &ForSource,
         body: &Block,
+        item_hint: Option<&ir::Ty>,
     ) -> Result<(ir::Stmt, bool), String> {
         if !source.adapters.is_empty() {
             return Err("for iterator adapters are not supported yet".into());
@@ -6993,7 +7000,7 @@ impl<'a> Checker<'a> {
             let ForIterable::Value(value) = &source.iterable else {
                 unreachable!()
             };
-            return self.for_array_statement(label, pattern, value, body);
+            return self.for_array_statement(label, pattern, value, body, item_hint);
         };
         let loop_depth = self.loops.len();
         let scope_depth = self.scopes.len();
@@ -7001,9 +7008,12 @@ impl<'a> Checker<'a> {
         let result = (|| {
             // Bounds are ordinary expressions evaluated before entering the loop.
             // They can target an enclosing loop but cannot see this loop's binder.
-            let hint = self
-                .scalar_hint(start)?
+            let hint = item_hint
                 .filter(|ty| matches!(ty, ir::Ty::Int(_)))
+                .cloned()
+                .or(self
+                    .scalar_hint(start)?
+                    .filter(|ty| matches!(ty, ir::Ty::Int(_))))
                 .or(self
                     .scalar_hint(end)?
                     .filter(|ty| matches!(ty, ir::Ty::Int(_))));
@@ -7216,12 +7226,26 @@ impl<'a> Checker<'a> {
         pattern: &Pattern,
         source: &Expr,
         body: &Block,
+        item_hint: Option<&ir::Ty>,
     ) -> Result<(ir::Stmt, bool), String> {
         let loop_depth = self.loops.len();
         let scope_depth = self.scopes.len();
         let outer_reachable = self.reachable;
         let result = (|| {
-            let value = self.expr(source)?;
+            // Only written array/repeat literals have a known shape here.
+            // Other iterable forms retain their ordinary independent checking.
+            let expected = item_hint.and_then(|item| {
+                let len = match source {
+                    Expr::Array(elements) => elements.len(),
+                    Expr::Repeat { len, .. } => *len,
+                    _ => return None,
+                };
+                Some(ir::Ty::Array {
+                    element: Arc::new(item.clone()),
+                    len,
+                })
+            });
+            let value = self.expr_expected(source, expected.as_ref())?;
             let flow = self.flow(value);
             let ir::Ty::Array { element, len } = &flow.ty else {
                 return Err(

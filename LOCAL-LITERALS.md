@@ -61,6 +61,45 @@ Final validation on composed `ae799cafd` plus this change:
 Only these four task-owned exported receipts were appended to `data/runs/`.
 These are correctness gates under contention, not speed measurements.
 
+## Bidirectional iterable item increment
+
+The next concrete blocker was unchanged `05_gcd_fib.rs`: the `lcm` call requires
+its unsuffixed range binder to be u64, and the `fib` call requires the items of
+its written numeric array to be u32. Previously the iterable was defaulted
+before the body was checked, despite sufficient later evidence.
+
+The same body-local solver now retains an item class for every for statement.
+Simple ranges equate their endpoint classes with the binder. Direct array
+literals equate all element classes, and repeat literals use their written
+initializer class. Numeric constraints from the body resolve the item class
+before checking bounds or array elements. Array shape/length comes only from
+the actual written literal. No iterable or literal is rewritten or evaluated
+by the solver. Normal checking still validates every suffix, range/sign error,
+call, pattern, borrow, move and element. Bounds/elements retain source order and
+repeat initializers execute exactly once, including length zero.
+
+`tests/iterable_literals.rs` adds 27 stock-differential cases including unchanged
+GCD/Fibonacci exact frozen stdout, range/array/repeat item evidence, float array
+items, loop/initializer shadowing, evaluated-once ordering, constrained empty
+arrays, fixed annotation/suffix conflicts, conflicting uses and overflow. An
+independent stock-negative ambiguity control confirms unconstrained empty array
+iteration still rejects without publishing an executable. Its legacy native
+error remains an explicit unsupported empty-array-inference boundary rather
+than guessing an element type.
+
+Final composition `520819783` plus this increment passes hosted check,
+1,412 selected library/compiler/loop/inference/corpus/prelude tests, all five
+unchanged graph gates, strict all-target clippy, formatting and diff checks.
+Local stock inference/iterable/formatting suites pass all five tests. Exact
+commands and four exported task-owned receipts are retained in
+`data/runs/inference-validation/`. Local oracle execution is necessary because
+hosted workers lack stock rustc. Stable installations remain untouched.
+
+The corpus now has three passing programs. This is narrowly expected-type
+propagation into known literal shapes, not a general structured solver:
+nonliteral array locals, tuple/nominal iteration patterns, reference/slice item
+inference and generic/method-call evidence remain separate work.
+
 ## Boundaries
 
 This does not add general structured inference, future-use reference inference,

@@ -106,7 +106,10 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Scoped local numeric literal constraints from later scalar uses, returns,
       assignments and monomorphic calls, before existing peer-aware fallback.
       `LOCAL-LITERALS.md` records 28 stock-differential witnesses and unchanged
-      Collatz exact native check/build/run acceptance. General structured and
+      Collatz exact native check/build/run acceptance. A further 27 iterable
+      differential cases plus an empty-array ambiguity control propagate loop
+      item evidence into range bounds and direct array/repeat literals,
+      unlocking unchanged GCD/Fibonacci exact output. General structured and
       reference inference remain open, with no new graph kinds or ratchet changes.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
 - [x] Payload enums, typed downcasts, bounded selection proofs and native tagged values.
