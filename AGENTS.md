@@ -1,5 +1,15 @@
 # Agent Instructions for justrust
 
+## Branch layout (2026-10-19)
+
+This checkout (`~/justrust`) is the `stable` branch: the shipping justrust
+client, `server/`, `toolchain/` and the release pipeline. The clean-room
+compiler rewrite became `main` on 2026-10-19 and lives in
+`~/justrust-clean-room`. Releases (`v*` tags) are cut from `stable` until the
+rewrite can replace the client. Fixes to the shipping client go to `stable`,
+not `main`. Do not merge `stable` and `main` into each other. The old `main`
+tip is also preserved as the tag `pre-cleanroom-main-2026-10-19`.
+
 justrust is Rust compile as a service for coding agents. Every change should make
 the agent edit, check, and test loop faster or more informative, and be
 backed by measurements.
@@ -131,7 +141,10 @@ billing, private caches) and never weaken the security invariants in
 
 ## Git workflow
 
-- Work directly on `main`. No feature branches.
+- Work directly on `stable` in this checkout. No feature branches, no git
+  worktrees (see the global rule in ~/AGENTS.md).
+- Tag releases from `stable` (`git tag vX && git push origin vX`). Never tag
+  `main`: it is the clean-room rewrite and does not contain this client.
 - **Commit and push as you go.** Each working improvement gets its own commit,
   pushed right away. Do not batch up a session of changes into one push.
 - Commit only your own changes.
