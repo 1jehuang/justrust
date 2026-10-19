@@ -16,6 +16,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 fn fixture(source: &str, unsupported: Option<&str>) {
+    fixture_case(source, unsupported, None);
+}
+
+fn fixture_case(source: &str, unsupported: Option<&str>, stock_invalid: Option<&str>) {
     let base = std::env::var_os("JCODE_SCRATCH_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
@@ -40,15 +44,34 @@ fn fixture(source: &str, unsupported: Option<&str>) {
         .arg(&stock)
         .output()
         .expect("stock rustc source-trait oracle must be installed");
-    assert!(
-        output.status.success(),
-        "stock rejected source: {}\n{source}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let expected = Command::new(&stock).output().unwrap();
-    assert!(expected.status.success());
+    let stock_stderr = String::from_utf8_lossy(&output.stderr);
+    let expected = if let Some(diagnostic) = stock_invalid {
+        assert!(!output.status.success(), "stock admitted invalid source");
+        assert!(stock_stderr.contains(diagnostic), "{stock_stderr}");
+        None
+    } else {
+        assert!(
+            output.status.success(),
+            "stock rejected source: {stock_stderr}\n{source}"
+        );
+        let expected = Command::new(&stock).output().unwrap();
+        assert!(expected.status.success());
+        Some(expected)
+    };
     for workers in [1, 8] {
         for check in [true, false] {
+            if stock_invalid.is_some() {
+                let failure = compiler::compile_observed(source.into(), workers, check)
+                    .err()
+                    .expect("native admitted stock-invalid source");
+                let diagnostic = failure.error.to_string();
+                assert!(!diagnostic.contains("unsupported:"), "{diagnostic}");
+                let report = failure.report.unwrap();
+                assert!(report.capture_complete);
+                assert!(report.failures > 0);
+                assert!(!report.published_kind(105));
+                continue;
+            }
             let result = compiler::compile(source.into(), workers, check);
             if let Some(boundary) = unsupported {
                 let error = result.err().expect("unsupported source contract admitted");
@@ -65,6 +88,7 @@ fn fixture(source: &str, unsupported: Option<&str>) {
                 fs::write(&native, executable).unwrap();
                 fs::set_permissions(&native, fs::Permissions::from_mode(0o700)).unwrap();
                 let actual = Command::new(&native).output().unwrap();
+                let expected = expected.as_ref().unwrap();
                 assert_eq!(actual.status.code(), expected.status.code());
                 assert_eq!(actual.stdout, expected.stdout);
                 assert_eq!(actual.stderr, expected.stderr);
@@ -225,5 +249,24 @@ fn projected_reference_results_are_not_admitted_by_receiver_support() {
     fixture(
         "trait Read { type Item; fn read(&self) -> &Self::Item; } struct S { value: i32 } impl Read for S { type Item = i32; fn read(&self) -> &Self::Item { &self.value } } fn main() {}",
         Some("reference-bearing projected method signature"),
+    );
+}
+
+#[test]
+fn projected_receiver_calls_preserve_mutable_alias_and_returned_loan_rejection() {
+    const SOURCE: &str = "trait Take { type Item; fn take(&mut self) -> Self::Item; } struct Counter { value: i32 } impl Take for Counter { type Item = i32; fn take(&mut self) -> Self::Item { self.value } } ";
+    fixture_case(
+        &format!(
+            "{SOURCE} fn main() {{ let mut counter = Counter {{ value: 1 }}; let first = &mut counter; let second = &mut counter; println!(\"{{}}\", first.take()); println!(\"{{}}\", second.take()); }}"
+        ),
+        None,
+        Some("error[E0499]"),
+    );
+    fixture_case(
+        &format!(
+            "{SOURCE} fn escape<'a>(input: &'a mut Counter) -> &'a mut Counter {{ let mut counter = Counter {{ value: 1 }}; counter.take(); &mut counter }} fn main() {{}}"
+        ),
+        None,
+        Some("error[E0515]"),
     );
 }

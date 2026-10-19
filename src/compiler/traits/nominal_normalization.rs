@@ -162,6 +162,17 @@ mod tests {
         let Ty::Struct(value) = &applications[1] else {
             panic!("source fixture is not a struct");
         };
+        let Ty::Struct(other) = &applications[2] else {
+            panic!("source fixture is not a struct");
+        };
+        let mut rebound = value.def().clone();
+        rebound.source_decl = other.def().source_decl;
+        let rebound = Ty::Struct(ir::StructTy::new(rebound));
+        assert!(
+            world
+                .validate_reapplied_nominal(&applications[0], &[Ty::Bool], &rebound, &env, 0)
+                .is_err()
+        );
         let mut rewritten = value.def().clone();
         rewritten.fields = Arc::from([ir::FieldDef {
             name: "0".into(),
