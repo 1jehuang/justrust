@@ -12,6 +12,9 @@
 //! nested_tuple now matches stock exactly; binding_scope rejects unresolved local x.
 //! moved_scrutinee remains a non-Copy guard boundary, not move-diagnostic parity.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
+use stock_rustc::stock_rustc;
 #[path = "support/native_prelude.rs"]
 mod native_prelude;
 
@@ -522,7 +525,8 @@ fn stock_all() {
 }
 fn stock_all_uncached() {
     let scratch = Scratch::new();
-    let rustc = "/usr/bin/rustc";
+    let rustc = stock_rustc();
+    let rustc = rustc.as_str();
     let version = capture(
         Command::new(rustc).env_remove("RUSTC_BOOTSTRAP").arg("-vV"),
         &scratch,

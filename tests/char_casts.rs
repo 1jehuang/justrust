@@ -5,6 +5,9 @@
 //! Receipt SHA256: 8f08e56b4ba29908641f980bc5894c1b490be79a18e4d723b0daee42e3b024ab
 //! All native rejection expectations are type errors, never unsupported feature passes.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
+use stock_rustc::stock_rustc;
 #[path = "support/native_prelude.rs"]
 mod native_prelude;
 
@@ -850,7 +853,7 @@ fn stock_all() {
                     format!("{}  {}\n", case.sha256, input.display())
                 );
                 let result = capture(
-                    Command::new("/usr/bin/rustc")
+                    Command::new(stock_rustc())
                         .env_remove("RUSTC_BOOTSTRAP")
                         .arg(&input)
                         .args(["--edition=2024", "-A", "warnings"])

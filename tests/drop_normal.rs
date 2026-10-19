@@ -2,6 +2,9 @@
 //! program counts as language conformance. Run this same target in bootstrap
 //! debug and release profiles; the native compiler never delegates to rustc.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
+use stock_rustc::stock_rustc;
 
 use justrust_engine::compiler;
 use std::fs::{self, OpenOptions};
@@ -16,7 +19,14 @@ const INDEX: &str = include_str!("fixtures/drop_normal/receipts-v9/fixture-index
 const MANIFEST_HASH: &str = "afc7b27b95496aa84316d9e21485fb7c4f2c18d57701251bcffc152593aee7fe";
 const INDEX_HASH: &str = "213e1c312094ffb078cd49c04e508721188e4b0308b1c990b939ce3af5b585e7";
 const RECEIPT_HASH: &str = "a35fe212113376b84ed3b011f149b72a15001d2c78c76e3d38acd5e6427c45c1";
-const RUSTC_HASH: &str = "c916a85b7d4f52d9650399eebd15c672377933e6c2d8e98215757ab0b9b37136";
+/// Byte hash of the exact stock rustc 1.98.1 (commit 48a229cea) binaries the
+/// receipts were measured with: the Arch Linux package build and the official
+/// rustup x86_64-unknown-linux-gnu build installed on hosted build machines.
+/// Both report the same version, commit and LLVM 22.1.8.
+const RUSTC_HASHES: &[&str] = &[
+    "c916a85b7d4f52d9650399eebd15c672377933e6c2d8e98215757ab0b9b37136",
+    "859254978c0a0402c32f949f6de0d99aee73be8d15f45aac00ae1448aac51e74",
+];
 const CHILD: &str = "JR_DROP_NORMAL_VERIFIED_STOCK_CHILD";
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -219,7 +229,7 @@ fn stock(case: &Case) {
     let scratch = fixture(case);
     for check in [true, false] {
         let output = scratch.path(if check { "stock.rmeta" } else { "stock" });
-        let mut command = Command::new("/usr/bin/rustc");
+        let mut command = Command::new(stock_rustc());
         command
             .arg(scratch.path("main.rs"))
             .args([
@@ -532,8 +542,14 @@ fn frozen_stock_before_native_normal_drop() {
         &scratch,
     );
     check_hash(&root.join("receipts-v9/stock.json"), RECEIPT_HASH, &scratch);
-    check_hash(Path::new("/usr/bin/rustc"), RUSTC_HASH, &scratch);
-    let version = capture(Command::new("/usr/bin/rustc").arg("-Vv"), &scratch, 10);
+    let rustc_hash = capture(Command::new("sha256sum").arg(stock_rustc()), &scratch, 10);
+    successful(&rustc_hash, "stock compiler content hash");
+    let rustc_hash = String::from_utf8(rustc_hash.stdout).unwrap();
+    assert!(
+        RUSTC_HASHES.contains(&rustc_hash.split_whitespace().next().unwrap_or("")),
+        "unrecognized stock rustc build: {rustc_hash}"
+    );
+    let version = capture(Command::new(stock_rustc()).arg("-Vv"), &scratch, 10);
     successful(&version, "stock compiler identity");
     assert!(
         String::from_utf8_lossy(&version.stdout)

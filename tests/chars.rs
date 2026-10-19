@@ -4,6 +4,9 @@
 //! Receipt SHA256: 7bc819a16b51543c63923f0f0f6f54de9b9820fd7519789e2e7c09f4c5b12e53
 //! No char formatting, casts, literal patterns or range patterns are claimed.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
+use stock_rustc::stock_rustc;
 #[path = "support/native_prelude.rs"]
 mod native_prelude;
 
@@ -836,7 +839,7 @@ fn stock_all() {
                     format!("{}  {}\n", case.sha256, input.display())
                 );
                 let result = capture(
-                    Command::new("/usr/bin/rustc")
+                    Command::new(stock_rustc())
                         .env_remove("RUSTC_BOOTSTRAP")
                         .arg(&input)
                         .args(["--edition=2024", "-A", "warnings"])

@@ -2,6 +2,9 @@
 //! `python3 experiments/leading_zeros_oracle.py --output-dir NEW --freeze-dir NEW`.
 //! Legal unsupported syntax is classified by stock but is not called invalid.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
+use stock_rustc::stock_rustc;
 
 use justrust_engine::compiler;
 use std::fs::{self, OpenOptions};
@@ -246,7 +249,7 @@ fn stock(case: &Case) {
     }
     let accepted = case.category != "invalid";
     for check in [true, false] {
-        let mut command = Command::new("/usr/bin/rustc");
+        let mut command = Command::new(stock_rustc());
         command
             .current_dir(&scratch.0)
             .args(["--edition=2024", "main.rs", "-o"]);
@@ -379,7 +382,7 @@ fn frozen_stock_before_native() {
         return;
     }
     let scratch = Scratch::new();
-    let version = capture(Command::new("/usr/bin/rustc").arg("-Vv"), &scratch, 10);
+    let version = capture(Command::new(stock_rustc()).arg("-Vv"), &scratch, 10);
     successful(&version, "stock rustc version");
     assert!(
         String::from_utf8(version.stdout)

@@ -4,6 +4,9 @@
 //! Native: 16 live, 4 unsupported/invalid. Stock: 16 pass, 4 reject.
 //! Retained sources immutable. Author ran stock only. Root owns debug/release gates.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
+use stock_rustc::stock_rustc;
 #[path = "support/native_prelude.rs"]
 mod native_prelude;
 
@@ -683,7 +686,8 @@ fn stock_all() {
 }
 fn stock_all_uncached() {
     let scratch = Scratch::new();
-    let rustc = "/usr/bin/rustc";
+    let rustc = stock_rustc();
+    let rustc = rustc.as_str();
     let version = capture(
         Command::new(rustc).env_remove("RUSTC_BOOTSTRAP").arg("-vV"),
         &scratch,

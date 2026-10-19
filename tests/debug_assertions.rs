@@ -5,6 +5,9 @@
 //! /usr/bin/rustc 1.98.1, edition2024, panic=abort. Native gates were not run to freeze this corpus.
 //! Default panic meaning is required, not stock expression/value rendering.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
+use stock_rustc::stock_rustc;
 #[path = "support/native_prelude.rs"]
 mod native_prelude;
 
@@ -2369,7 +2372,7 @@ fn stock_all() {
     STOCK.get_or_init(|| {
         let scratch = Scratch::new();
         let version = capture(
-            Command::new("/usr/bin/rustc")
+            Command::new(stock_rustc())
                 .env_remove("RUSTC_BOOTSTRAP")
                 .arg("-vV"),
             &scratch,
@@ -2390,7 +2393,7 @@ fn stock_all() {
                     let image = scratch.path("stock");
                     let frozen = case.stock(enabled);
                     let result = capture(
-                        Command::new("/usr/bin/rustc")
+                        Command::new(stock_rustc())
                             .env_remove("RUSTC_BOOTSTRAP")
                             .env("RUST_BACKTRACE", "0")
                             .env("LC_ALL", "C")
