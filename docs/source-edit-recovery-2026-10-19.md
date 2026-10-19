@@ -33,6 +33,17 @@ Until that fix is rolled into the runtime, use exact replacement or the
 context-validated Codex patch format, not the unsafe unified fallback.
 Never transfer a large file from an unchecked command preview.
 
+A second use of the still-unpatched unified fallback damaged 21 bounded spans
+in five shared files at about 17:29 UTC. The owner preserved damaged bytes
+and the complete input, then reversed only those exact splices. Nineteen
+removed spans agreed between committed and indexed beforeimages; the other
+two parser spans were independently confirmed from worker snapshots and
+committed lifetime-parser sources. No whole file was replaced. An inverse
+splice audit reconstructed all five files exactly. At 17:36:07 UTC the
+coordinator independently matched their full SHA-256 hashes and parsed each
+with rustfmt without writing it. Shared edits resumed after verification.
+This is preservation and syntax evidence, not full compiler acceptance.
+
 ## Recurrent hosted ENOSPC
 
 At 17:13 UTC the hosted root filesystem had no available bytes. Read-only
@@ -55,12 +66,31 @@ Only bounded tests using existing artifacts were readmitted. Broad all-target
 link campaigns and additional large mirrors remain inappropriate at this
 capacity. Completed acceptance must remain separate from ENOSPC failures.
 
+At 17:20:55 UTC the owner explicitly authorized removal of the inactive hosted
+`duckling-placeholder-stage/verify/target`, with no future jobs until handback.
+The coordinator first performed a dry-run, then acquired the same exclusive
+per-root FNV lock used by native eviction, checked all relevant process
+cwd/exe/fd/maps references, and verified canonical same-filesystem generated
+Cargo target markers. Both scans found no live references. Only that hosted
+target was removed at 17:21:41 UTC. The source manifest was byte-checked and the
+source tree preserved. Private indices, patches and the separate local target
+were untouched. Available bytes changed from 7,692,972,032 to 26,286,813,184.
+The owner was notified before bounded hosted work was readmitted.
+An independent read-only host measurement at 17:43:54 UTC still found
+26,277,695,488 available bytes. Build-error reports must be checked against
+their actual event time and destination, not assumed to prove current ENOSPC.
+
 ## Compatibility status
 
-Noncapturing stored closures, mutable slice parameters, root slice returns
-and declaration-owned nominal lifetime rows have separately committed,
-feature-specific acceptance evidence. Capturing closures, universal Iterator
-projection authority, raw/static literals, registry consumers and native C
-ABI remain active work. The last complete unchanged committed corpus
-measurement is still 5/20. No full-Rust, global-test-pass or speed claim follows
-from these milestones or from the source recovery.
+Noncapturing stored closures, mutable slice parameters, root slice returns,
+nominal lifetime rows, rich dyn identities, raw/byte static literals and raw
+slice constructors have separately committed feature-specific evidence.
+Capturing closures, universal Iterator projections, opaque returns, registry
+feature integration and native C ABI remain active work. An unchanged cached
+`utf8-width 0.1.8` dependency has native check/build/run evidence, not a general
+registry compatibility claim. The last complete unchanged committed corpus
+measurement remains 5/20. A subsequent fixture-14 hang was independently
+traced to nominal interning re-entering the same PlanState mutex. Its focused
+repair is separately validated, not evidence of complete language support.
+No full-Rust, global-test-pass or speed claim follows from these milestones
+or from source recovery.
