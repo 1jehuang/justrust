@@ -301,8 +301,6 @@ impl ValidatedTraitWorld {
                 }
                 child(element)?;
             }
-            Ty::ParamArray { element, .. } => child(element)?,
-            Ty::ConstValue(_) => {}
             Ty::Ref { referent, .. }
             | Ty::RawPtr {
                 pointee: referent, ..

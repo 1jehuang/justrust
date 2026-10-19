@@ -12,9 +12,9 @@ pub(super) fn has_nested_alternatives(pattern: &Pattern, root: bool) -> bool {
         Pattern::Alternatives(rows) => {
             !root || rows.iter().any(|row| has_nested_alternatives(row, false))
         }
-        Pattern::Apply { pattern, .. }
-        | Pattern::Ref { pattern, .. }
-        | Pattern::At { pattern, .. } => has_nested_alternatives(pattern, false),
+        Pattern::Apply { pattern, .. } | Pattern::Ref { pattern, .. } => {
+            has_nested_alternatives(pattern, false)
+        }
         Pattern::Variant { fields, .. } => fields
             .iter()
             .any(|(_, p)| has_nested_alternatives(p, false)),
@@ -105,20 +105,6 @@ pub(super) fn flatten(pattern: &Pattern, budget: &ir::PlanBudget) -> Result<Vec<
             .into_iter()
             .map(|pattern| Pattern::Ref {
                 kind: *kind,
-                pattern: Box::new(pattern),
-            })
-            .collect(),
-        Pattern::At {
-            name,
-            mutable,
-            by_ref,
-            pattern,
-        } => flatten(pattern, budget)?
-            .into_iter()
-            .map(|pattern| Pattern::At {
-                name: *name,
-                mutable: *mutable,
-                by_ref: *by_ref,
                 pattern: Box::new(pattern),
             })
             .collect(),

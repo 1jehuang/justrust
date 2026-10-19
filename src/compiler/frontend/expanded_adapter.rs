@@ -301,6 +301,13 @@ fn push_logical(
                             "raw and non-ASCII identifiers are unsupported",
                         ));
                     }
+                    if text == "self" {
+                        return Err(failure(
+                            session,
+                            token.span,
+                            "expanded receiver self is unsupported",
+                        ));
+                    }
                     output.push_expanded(
                         session,
                         text,

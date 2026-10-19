@@ -26,13 +26,6 @@ fn allocator_json() -> String {
 }
 
 fn main() {
-    // Cargo-style project commands on the manifest at or above the cwd.
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if let Some(command) = args.first()
-        && matches!(command.as_str(), "check" | "build" | "test" | "run")
-    {
-        std::process::exit(justrust_engine::project::cli::main(command, &args[1..]));
-    }
     if let Err(error) = run() {
         eprintln!("jr-rust: {error}");
         std::process::exit(1);
@@ -88,23 +81,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
             Some("--check") => check = true,
-            Some("--lib") => source_options.library = true,
-            Some("--test") => {
-                source_options.cfg.names.insert("test".into());
-            }
-            Some("--extern") => {
-                let spec = args.next().ok_or("missing --extern NAME=PATH")?;
-                let spec = spec.to_str().ok_or("--extern must be UTF-8")?;
-                let (name, path) = spec.split_once('=').ok_or("--extern expects NAME=PATH")?;
-                if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                    return Err(format!("invalid extern crate name `{name}`").into());
-                }
-                source_options.externs.push(compiler::source::ExternCrate {
-                    name: name.into(),
-                    root: path.into(),
-                    cfg: compiler::source::CfgSet::native_x86_64_linux(),
-                });
-            }
             Some("--opt") => {
                 let value = args.next().ok_or("missing optimizer mode")?;
                 source_options.opt = compiler::ssa::OptMode::parse(

@@ -24,8 +24,8 @@ impl Parser<'_, '_> {
 
     pub(super) fn vec_expression(&mut self) -> Result<Expr, ParseError> {
         let token_site = self.token().span;
-        let site = panic_callsite(self.names.session(), token_site)
-            .map_err(native_adapter::transport_error)?;
+        let site =
+            panic_callsite(self.names.session(), token_site).map_err(native_adapter::transport_error)?;
         self.ident()?;
         self.expect("!")?;
         let close = if self.eat("(") {

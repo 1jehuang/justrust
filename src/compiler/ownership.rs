@@ -483,7 +483,7 @@ pub fn verify_template(template: cfg::TemplateCfg) -> Result<VerifiedTemplateCfg
     let mut candidate_effects = None;
     let analysis = analyze_with_context(
         template.function(),
-        Limits::default().scaled_for(template.function()),
+        Limits::default(),
         FactsCtx::Validated(template.facts()),
         Some(template.budget()),
         (Some(template.function()), Some(template.facts())),
@@ -590,7 +590,7 @@ fn analyze_closed_context(
     let mut candidate_effects = None;
     let analysis = analyze_with_context(
         closed.function(),
-        Limits::default().scaled_for(closed.function()),
+        Limits::default(),
         FactsCtx::Validated(closed.facts()),
         Some(closed.budget()),
         (Some(closed.function()), Some(closed.facts())),
@@ -732,32 +732,6 @@ impl Default for Limits {
             state_bytes: 128 * 1024 * 1024,
             work: 32 * 1024 * 1024,
             diagnostics: 256,
-        }
-    }
-}
-/// Fixed per-task work units granted per unit of a function's own input size
-/// (blocks, statements, locals). Limits scale with the analyzed function, never
-/// with the rest of the program.
-const WORK_PER_INPUT_UNIT: usize = 16 * 1024;
-impl Limits {
-    /// Scale work limits to this one function's input. The analyzing task's
-    /// engine meter gets the same allowance, so a large function is limited by
-    /// its own size, and library or sibling items never count against it.
-    fn scaled_for(self, f: &cfg::Function) -> Self {
-        let statements: usize = f.blocks.iter().map(|block| block.statements.len()).sum();
-        let input = f
-            .blocks
-            .len()
-            .saturating_add(statements)
-            .saturating_add(f.locals.len());
-        let scaled = input.saturating_mul(WORK_PER_INPUT_UNIT);
-        crate::engine::scale_task_work(u64::try_from(scaled).unwrap_or(u64::MAX));
-        Self {
-            work: self.work.max(scaled),
-            operations: self.operations.max(scaled / 32),
-            // Same allowance the engine meter grants this task's live bytes.
-            state_bytes: self.state_bytes.max(scaled.saturating_mul(8)),
-            ..self
         }
     }
 }
@@ -1807,9 +1781,7 @@ impl<'a> MoveShape<'a> {
                 }
                 Self::OpaqueParam
             }
-            // A symbolic-length array moves as one opaque generic value.
-            Ty::ParamArray { .. } => Self::OpaqueParam,
-            Ty::AssociatedType(_) | Ty::ConstValue(_) => return Err(Exhausted),
+            Ty::AssociatedType(_) => return Err(Exhausted),
             Ty::Never => Self::Never,
             Ty::Tuple(fields) => Self::Product {
                 ty,
