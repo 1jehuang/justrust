@@ -11650,3 +11650,17 @@ removed internal ordering. They now assert the external contract: no `BUILD`
 artifact is published (`Report::published_kind(105)`). Check-only runs still
 assert no OBJECT is demanded. Barrier-order tests now assert per-instance
 order: each object publishes after its own proof. 3259 tests pass.
+
+### Pending: per-callee effects vs. leaf-closure ratio gate (2026-10-18)
+
+Branch `effects-per-callee-pending` makes ANALYZE read only its direct
+universal callees' UNIVERSAL_ANALYZE proofs and moves the program-wide
+UNIVERSAL_EFFECTS_READY admission join to gate only CHECK. All affected graph
+suites pass. It halves an independent leaf's dependency closure (body[2]:
+78 -> 41 nodes at 16 functions, 94 -> 57 at 32), but the graph_integrity
+leaf-closure gate is a ratio, so it reads 1.390 (> 1.23). Both sizes still
+carry the same +16 TEMPLATE_BODY nodes through MONO_PLAN, while the
+denominator shrank. That is a measurement artifact, not a regression. Merging
+it means either splitting MONO_PLAN into demand-driven per-instance keys first
+(which removes the +16), or having the user approve restating the gate in
+absolute terms. Not merged.
