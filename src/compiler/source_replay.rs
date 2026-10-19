@@ -424,6 +424,13 @@ impl CallInferenceState {
                     self.constrain(referent, actual, depth + 1)
                 }
                 InferKind::Unknown(_) => self.constrain(referent, evidence, depth + 1),
+                InferKind::Rigid(ir::Ty::Ref {
+                    kind: actual_kind,
+                    referent: actual,
+                }) if kind == actual_kind => {
+                    let actual = InferTerm::new(InferKind::Rigid(actual.as_ref().clone()));
+                    self.constrain(referent, &actual, depth + 1)
+                }
                 _ => Err(FactsError::invalid(
                     &self.budget,
                     "generic reference inference kind or shape mismatch",

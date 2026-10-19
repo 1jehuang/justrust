@@ -1355,6 +1355,7 @@ mod tests {
             bounds: vec![TypeBound {
                 parameter,
                 traits: vec![bound],
+                maybe_unsized: false,
             }],
             supertraits: vec![parent],
             name,

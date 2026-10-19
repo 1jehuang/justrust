@@ -5037,6 +5037,8 @@ pub enum TraitPath {
 pub struct TypeBound {
     pub parameter: AstIdent,
     pub traits: Vec<TraitPath>,
+    /// Written `?Sized`: the parameter has no implicit `Sized` predicate.
+    pub maybe_unsized: bool,
 }
 #[derive(Clone, Debug)]
 pub struct TraitDecl {
@@ -8845,6 +8847,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         bounds.push(TypeBound {
             parameter: name,
             traits,
+            maybe_unsized: false,
         });
         self.pending_bounds = bounds;
         Ok(Type::Param(name))
@@ -9017,10 +9020,15 @@ impl<'input, 'names> Parser<'input, 'names> {
             params.push(name);
             if self.eat(":") {
                 let mut traits = Vec::new();
+                let mut maybe_unsized = false;
                 loop {
-                    let path = self.trait_path()?;
-                    self.reserve_parser_items(&mut traits, 1)?;
-                    traits.push(path);
+                    if self.relaxed_sized()? {
+                        maybe_unsized = true;
+                    } else {
+                        let path = self.trait_path()?;
+                        self.reserve_parser_items(&mut traits, 1)?;
+                        traits.push(path);
+                    }
                     if traits.len() > 256 {
                         return Err(self.limit("predicate limit exceeded"));
                     }
@@ -9033,6 +9041,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 bounds.push(TypeBound {
                     parameter: name,
                     traits,
+                    maybe_unsized,
                 });
                 self.pending_bounds = bounds;
             }
@@ -9051,6 +9060,17 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         self.close_angle()?;
         Ok(params)
+    }
+    /// `?Sized` in a bound list. Any other `?Trait` is rejected like stock.
+    fn relaxed_sized(&mut self) -> Result<bool, ParseError> {
+        if !self.is("?") {
+            return Ok(false);
+        }
+        self.cursor.bump();
+        if !self.eat("Sized") {
+            return Err(self.error("relaxing a default bound only does something for `?Sized`"));
+        }
+        Ok(true)
     }
     #[inline(never)]
     fn trait_path(&mut self) -> Result<TraitPath, ParseError> {
@@ -9764,6 +9784,11 @@ impl<'input, 'names> Parser<'input, 'names> {
                     let mut associated_bounds = Vec::new();
                     if self.eat(":") {
                         loop {
+                            if self.is("?") {
+                                return Err(self.unsupported(
+                                    "unsupported token \"?\": relaxed associated type bounds",
+                                ));
+                            }
                             if associated_bounds.len() >= 256 {
                                 return Err(self.limit("associated type bound limit exceeded"));
                             }
@@ -10320,9 +10345,14 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         self.expect(":")?;
         let mut traits = Vec::new();
+        let mut maybe_unsized = false;
         while !(self.is(",") || self.is("{") || self.is(";")) {
-            if self.is("?") {
-                return Err(self.unsupported("relaxed ?Sized bounds are unsupported"));
+            if self.relaxed_sized()? {
+                maybe_unsized = true;
+                if !self.eat("+") {
+                    break;
+                }
+                continue;
             }
             if self.token().is_lifetime() {
                 return Err(self.unsupported("type outlives bounds are unsupported"));
@@ -10341,7 +10371,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Err(self.limit("predicate limit exceeded"));
         }
         self.reserve_parser_items(bounds, 1)?;
-        bounds.push(TypeBound { parameter, traits });
+        bounds.push(TypeBound {
+            parameter,
+            traits,
+            maybe_unsized,
+        });
         Ok(())
     }
     fn function(&mut self) -> Result<Function, ParseError> {
@@ -10465,13 +10499,18 @@ impl<'input, 'names> Parser<'input, 'names> {
                 params.push(name);
                 if self.eat(":") {
                     let mut traits = Vec::new();
+                    let mut maybe_unsized = false;
                     loop {
                         if traits.len() >= 256 {
                             return Err(self.limit("predicate limit exceeded"));
                         }
-                        let path = self.trait_path()?;
-                        self.reserve_parser_items(&mut traits, 1)?;
-                        traits.push(path);
+                        if self.relaxed_sized()? {
+                            maybe_unsized = true;
+                        } else {
+                            let path = self.trait_path()?;
+                            self.reserve_parser_items(&mut traits, 1)?;
+                            traits.push(path);
+                        }
                         if !self.eat("+") {
                             break;
                         }
@@ -10481,6 +10520,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     bounds.push(TypeBound {
                         parameter: name,
                         traits,
+                        maybe_unsized,
                     });
                     self.pending_bounds = bounds;
                 }
@@ -18017,6 +18057,18 @@ fn append_source_bounds(
         let ty = bindings
             .get(&registry.parameter_key(row.parameter)?)
             .ok_or("bound parameter outside declaration")?;
+        if row.maybe_unsized {
+            // `T: ?Sized` drops the implicit `T: Sized` row.
+            let sized = *registry
+                .traits
+                .get(&TraitLookupKey::Builtin(BuiltinTrait::Sized))
+                .ok_or("missing canonical Sized identity")?;
+            budget.charge_work(out.len())?;
+            out.retain(|predicate| {
+                !matches!(predicate, ir::Predicate::Implements(goal)
+                    if goal.declaration == sized && goal.self_ty == *ty)
+            });
+        }
         for path in &row.traits {
             budget.charge_work(1)?;
             if out.len() >= tr::MAX_PREDICATES {
