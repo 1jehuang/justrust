@@ -7715,3 +7715,60 @@ local instead of a cargo I/O error.
 - Repo: jcode. Run started ~09:59 PT, produced no output, left several `[justrust] <defunct>` children.
 - Same command with `--local` finished in 58.5s (137 tests). Hosted `-p jcode-base` run just before was fine (21.8s).
 - Suspect: hosted client never reaped/terminated after the remote side stalled; needs a stall timeout + fallback.
+
+## 2026-10-19 15:00 UTC: hosted disk refusal recovered without touching source or caches
+
+Cause: duplicate isolated verification exports each retained their own generated
+Cargo target tree. Several compiler snapshots had roughly 17 GiB targets, with
+additional old scratch and benchmark outputs on the same 484 GiB root filesystem.
+The reported 0.1 GiB free caused admission refusal and an incremental ENOSPC.
+Inodes were only 3% used. This was byte capacity, not inode exhaustion.
+
+Read both repository AGENTS.md files, remote command help, the previous hosted
+recovery documentation, and `src/remote_evict.rs`/`src/remote_agent.rs` before
+maintenance. Existing GC is dry by default, with per-root flock coordination,
+process-use checks, canonical target authority, and a two-hour idle grace.
+No GC policy, client binary, daemon, billing or isolation setting was changed.
+
+- Mizaru independently removed its completed `vm/target`, `parent-range/target`
+  and `staged-range/target` under `/home/jeremy/.jcode/scratch/` at 15:01:28 UTC,
+  before receiving coordination. Owner reported about 18.5 GiB reclaimed.
+  This investigation independently measured 19,497,697,280 bytes free afterward.
+- Rose authorized only inactive generated targets for further cleanup. Puppy
+  explicitly confirmed hosted `realloc-verify/target` disposable while retaining
+  the source snapshot and its separate local validation. Departed-owner
+  `budget1/target` had no active references and its newest artifact was 9,605
+  seconds old, exceeding the two-hour grace.
+- At 15:04:55-57 UTC, removed only those two hosted target directories under
+  `/home/jeremy/.jcode/scratch/`. Used an incident-scoped dry-run/apply helper
+  following the stable GC's exact FNV per-root lock convention, acquired both
+  exclusive locks, checked canonical real paths, same filesystem, Cargo output
+  markers and absence of process cwd/fd/executable/maps references. Only the
+  individually identified boot-time systemd, sd-pam and sshd control processes
+  had unreadable references, treated consistently with existing GC behavior.
+  No unknown unreadable process was ignored. Source manifests and src directories
+  remained present and target directories were independently confirmed absent.
+- Free bytes immediately before/after this cleanup: **8,196,980,736 ->
+  33,567,416,320**, a net **25,370,435,584 bytes (23.63 GiB)** recovered.
+  At 15:05:28 UTC, free space was **61,288,054,784 bytes (57.08 GiB)**.
+  The later increase includes other or unexplained releases, not this cleanup.
+  Active hm-verify, tigress-verify, staged-rev and old running test outputs were
+  preserved. No source, account data, private/shared cache or uncertain directory
+  was deleted. No worktrees were created and no compiler was installed.
+
+Real authenticated hosted acceptance used a small dependency-free scratch crate:
+`check --remote` run `20261019-080256232-1442462` and `test --remote --lib` run
+`20261019-080257422-1442533` passed after the owner's initial recovery. After the
+two-target cleanup, an edited source forced fresh compilation: check
+`20261019-080525656-1460678` and test `20261019-080527350-1460875` both exited 0,
+the latter with one test passed. Both `justrust show` reports explicitly said
+`where remote on hosted` and reported rebuilding the edited `src/lib.rs`.
+Only these four exported run summaries are retained in
+`data/runs/xps14-hosted-recovery-20261019/2026-10.jsonl`.
+
+Rose accepted recovery. Resume one substantial hosted validation at a time,
+reuse a coordinated target rather than spawning fresh full target trees per
+verification export, and get owner confirmation before retiring generated
+outputs. Additional owner-cleared staged-rev output was deliberately left alone
+once capacity was sufficient. This is incident recovery, not an automatic GC
+promotion or a compiler correctness/performance claim.
