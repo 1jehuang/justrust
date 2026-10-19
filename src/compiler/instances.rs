@@ -247,6 +247,20 @@ impl Encoder<'_> {
         self.budget.check_depth(depth)?;
         self.budget.charge_work(1)?;
         match ty {
+            ir::Ty::Closure(closure) => {
+                self.append(b"C")?;
+                self.declaration(closure.owner())?;
+                self.count(closure.site() as usize)?;
+                self.declaration(closure.provider())?;
+                self.count(closure.owner_args().len())?;
+                self.count(closure.params().len())?;
+                self.count(closure.captures().len())?;
+                self.append(&[closure.kind() as u8])?;
+                for ty in closure.types() {
+                    self.pattern(ty, env, depth + 1)?;
+                }
+                Ok(())
+            }
             ir::Ty::Param(param) => {
                 if !env.contains(*param) {
                     return Err("associated instance pattern has foreign parameter".into());
@@ -331,6 +345,20 @@ impl Encoder<'_> {
         self.budget.check_depth(depth)?;
         self.budget.charge_work(1)?;
         match ty {
+            ir::Ty::Closure(closure) => {
+                self.append(b"C")?;
+                self.declaration(closure.owner())?;
+                self.count(closure.site() as usize)?;
+                self.declaration(closure.provider())?;
+                self.count(closure.owner_args().len())?;
+                self.count(closure.params().len())?;
+                self.count(closure.captures().len())?;
+                self.append(&[closure.kind() as u8])?;
+                for ty in closure.types() {
+                    self.ty(ty, depth + 1)?;
+                }
+                Ok(())
+            }
             ir::Ty::Int(integer) => {
                 self.append(b"i")?;
                 self.text(integer.name())
@@ -487,6 +515,11 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
         // Cover the bounded group of Hash/Eq operations following this walk.
         budget.charge_work(5)?;
         match value {
+            ir::Ty::Closure(closure) => {
+                for ty in closure.types() {
+                    walk(ty, depth + 1, budget)?;
+                }
+            }
             ir::Ty::Tuple(fields) => {
                 for field in fields.iter() {
                     walk(field, depth + 1, budget)?;

@@ -488,6 +488,10 @@ cleanup failures.
       Immediate explicitly typed noncapturing callables and shared/mutable scalar
       parent-parameter captures are foundations only (CLOSURES.md), not
       completion of this item.
+      Stored noncapturing closures are checked in their parent body and published
+      as immutable per-parent executable facts, with direct and generic Fn calls
+      (`tests/stored_closures.rs`). Captured stored environments, opaque returns
+      and iterator integration remain open.
 - [ ] Extend monomorphization/recursive instance planning to the new forms while
       retaining universal checks, binder-qualified substitution and sealed native
       instances. Optimization must not bypass unused-body validation.

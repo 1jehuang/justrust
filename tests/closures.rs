@@ -165,7 +165,6 @@ fn shared_scalar_parameter_captures_match_stock() {
 #[test]
 fn unsupported_closure_values_and_inference_fail_explicitly() {
     for source in [
-        "fn main() { let f = |x: i32| -> i32 { x }; }",
         "fn main() { let f = (|x: i32| -> i32 { x }); }",
         "fn main() { (|x: i32| { x })(1); }",
         "fn main() { (|x| -> i32 { x })(1); }",

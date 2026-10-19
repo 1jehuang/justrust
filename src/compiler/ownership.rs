@@ -1783,6 +1783,10 @@ impl<'a> MoveShape<'a> {
             }
             Ty::AssociatedType(_) => return Err(Exhausted),
             Ty::Never => Self::Never,
+            Ty::Closure(closure) => Self::Product {
+                ty,
+                fields: closure.captures().len(),
+            },
             Ty::Tuple(fields) => Self::Product {
                 ty,
                 fields: fields.len(),

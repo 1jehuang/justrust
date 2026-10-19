@@ -1,0 +1,49 @@
+//! Resolve a stored closure's syntax in its parent's lexical environment.
+use super::*;
+
+impl Resolver<'_> {
+    pub(super) fn stored_closure_value(
+        &mut self,
+        name: &AstPath,
+        module: ModuleId,
+        locals: &mut Vec<std::collections::HashSet<LocalKey>>,
+    ) -> Result<bool, String> {
+        if !closures::anonymous_path(name, self.names())? {
+            return Ok(false);
+        }
+        let key = self.key(name)?;
+        let Some(mut source) = self.program.closure_sources.get(&key).cloned() else {
+            return Ok(false);
+        };
+        let Some(syntax) = &mut source.stored else {
+            return Ok(false);
+        };
+        let previous_scope = self.lexical_function;
+        let previous_anonymous = self.anonymous_closure_body;
+        self.lexical_function = syntax.lexical_scope;
+        self.anonymous_closure_body = false;
+        let previous_depth = locals.len();
+        let result = (|| {
+            let mut parameters = std::collections::HashSet::new();
+            for (name, ty) in &mut syntax.params {
+                if !matches!(ty, Type::Infer) {
+                    self.ty(ty, module)?;
+                }
+                if let BindingName::Named(name) = name {
+                    self.local_insert(&mut parameters, *name)?;
+                }
+            }
+            if !matches!(syntax.result, Type::Infer) {
+                self.ty(&mut syntax.result, module)?;
+            }
+            locals.push(parameters);
+            self.block(&mut syntax.body, module, locals)
+        })();
+        locals.truncate(previous_depth);
+        self.lexical_function = previous_scope;
+        self.anonymous_closure_body = previous_anonymous;
+        result?;
+        self.resolved_closures.insert(key, source);
+        Ok(true)
+    }
+}

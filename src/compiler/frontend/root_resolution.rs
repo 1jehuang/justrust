@@ -7,6 +7,7 @@ use super::*;
 mod capture_resolution;
 mod const_inline;
 mod const_pattern;
+mod stored_closures;
 
 #[derive(Clone, Debug)]
 enum ResolvedPath {
@@ -3081,6 +3082,11 @@ impl Resolver<'_> {
         module: ModuleId,
         locals: &mut Vec<std::collections::HashSet<LocalKey>>,
     ) -> Result<(), String> {
+        if let Expr::Var(name) = expr
+            && self.stored_closure_value(name, module, locals)?
+        {
+            return Ok(());
+        }
         // Anonymous closure paths can only be minted by the parser's private
         // declaration issuer. They do not exist in module/import lookup.
         if let Expr::Call { name, args } = expr
@@ -3112,11 +3118,19 @@ impl Resolver<'_> {
                 let method = self.callable_call_ident()?;
                 let receiver = Expr::Var(name.clone());
                 let args = std::mem::take(args);
+                let arguments = if args.is_empty() {
+                    Expr::Block(Block {
+                        statements: Vec::new(),
+                        tail: None,
+                    })
+                } else {
+                    Expr::Tuple(args)
+                };
                 *expr = Expr::MethodCall {
                     receiver: Box::new(receiver),
                     name: method,
                     type_args: Vec::new(),
-                    args: vec![Expr::Tuple(args)],
+                    args: vec![arguments],
                 };
                 self.expr(expr, module, locals)
             } else {

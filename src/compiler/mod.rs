@@ -215,7 +215,11 @@ enum Input {
 /// its canonical publication.
 struct TemplateBodyFact {
     checked: Arc<ir::CheckedFunction>,
+    closure: Option<frontend::closures::check::CheckedClosure>,
     publication: Option<Arc<source_replay::CanonicalSourcePublication>>,
+}
+struct ClosureBodiesFact {
+    bodies: Arc<[frontend::closures::check::CheckedClosure]>,
 }
 struct BodyLexicalFact {
     lexical: frontend::closures::graph_facts::LexicalBody,
@@ -406,7 +410,13 @@ impl CompilerProvider {
     ) -> Result<Arc<ir::CheckedFunction>, Error> {
         let source = &template.checked;
         let declaration = types.callable_decl(index).map_err(Error::new)?;
-        let facts = if let Some(publication) = &template.publication {
+        let facts = if let Some(closure) = &template.closure {
+            types
+                .trait_world()
+                .map_err(Error::new)?
+                .closure_callable_facts(closure.ty.clone())
+                .map_err(|e| source_fact_error(e, &self.0.budget))?
+        } else if let Some(publication) = &template.publication {
             publication.facts().clone()
         } else {
             types.callable_facts(declaration).map_err(Error::new)?
@@ -466,7 +476,7 @@ impl CompilerProvider {
 impl Provider for CompilerProvider {
     fn outputs(&self, key: &Key) -> usize {
         match key.kind {
-            UNIVERSAL_ANALYZE | ANALYZE | CONST_BODY => 2,
+            UNIVERSAL_ANALYZE | ANALYZE | CONST_BODY | TEMPLATE_BODY => 2,
             PARSE => PARSE_OUTPUTS,
             _ => 1,
         }
@@ -633,6 +643,49 @@ impl Provider for CompilerProvider {
                 TEMPLATE_BODY => {
                     let index = item_index(&key, "missing declaration index")?;
                     let types = facts.types().await?;
+                    if let Some((owner, site)) = types
+                        .stored_closure_owner(types.callable_decl(index).map_err(Error::new)?)
+                        .map_err(Error::new)?
+                    {
+                        let owner_index = types.callable_index(owner).map_err(Error::new)?;
+                        let bodies: Arc<ClosureBodiesFact> = cx
+                            .read_fact(cx.request(function(TEMPLATE_BODY, owner_index)).get(1))
+                            .await?;
+                        let declaration = types.callable_decl(index).map_err(Error::new)?;
+                        let closure = bodies
+                            .bodies
+                            .iter()
+                            .find(|body| {
+                                body.ty.provider() == declaration
+                                    && body.ty.owner() == owner
+                                    && body.ty.site() == site
+                            })
+                            .ok_or_else(|| {
+                                Error::new("closure body absent from its canonical parent fact")
+                            })?
+                            .clone();
+                        let closure_facts = types
+                            .trait_world()
+                            .map_err(Error::new)?
+                            .closure_callable_facts(closure.ty.clone())
+                            .map_err(|e| source_fact_error(e, &this.0.budget))?;
+                        ir::validate_call_evidence(&closure.body, &closure_facts, &this.0.budget)
+                            .map_err(Error::new)?;
+                        cx.publish_fact(
+                            1,
+                            ClosureBodiesFact {
+                                bodies: Arc::from([]),
+                            },
+                        )?;
+                        return cx.publish_fact(
+                            0,
+                            TemplateBodyFact {
+                                checked: closure.body.clone(),
+                                publication: None,
+                                closure: Some(closure),
+                            },
+                        );
+                    }
                     for owner in types
                         .closure_graph_owners(index, &this.0.budget)
                         .map_err(Error::new)?
@@ -706,12 +759,8 @@ impl Provider for CompilerProvider {
                     let constants = types
                         .seal_body_constants(prepared, values, &this.0.budget)
                         .map_err(|error| source_fact_error(error, &this.0.budget))?;
-                    let body = types
-                        .publish_callable_body_with_constants(
-                            declaration,
-                            constants,
-                            &this.0.budget,
-                        )
+                    let (body, closures) = types
+                        .publish_callable_body_with_closures(declaration, constants, &this.0.budget)
                         .map_err(|error| source_fact_error(error, &this.0.budget))?;
                     let fact = match body {
                         frontend::PublishedCallableBody::Source(publication) => {
@@ -731,6 +780,7 @@ impl Provider for CompilerProvider {
                                 .map_err(|error| source_fact_error(error, &this.0.budget))?;
                             TemplateBodyFact {
                                 checked: publication.source().clone(),
+                                closure: None,
                                 publication: Some(publication),
                             }
                         }
@@ -746,10 +796,17 @@ impl Provider for CompilerProvider {
                             }
                             TemplateBodyFact {
                                 checked,
+                                closure: None,
                                 publication: None,
                             }
                         }
                     };
+                    cx.publish_fact(
+                        1,
+                        ClosureBodiesFact {
+                            bodies: closures.into(),
+                        },
+                    )?;
                     cx.publish_fact(0, fact)
                 }
                 UNIVERSAL_LOWER => {
@@ -757,7 +814,15 @@ impl Provider for CompilerProvider {
                     let types = facts.types().await?;
                     let template = facts.template(index).await?;
                     let declaration = types.callable_decl(index).map_err(Error::new)?;
-                    let callable = types.callable_facts(declaration).map_err(Error::new)?;
+                    let callable = if let Some(closure) = &template.closure {
+                        types
+                            .trait_world()
+                            .map_err(Error::new)?
+                            .closure_callable_facts(closure.ty.clone())
+                            .map_err(|e| source_fact_error(e, &this.0.budget))?
+                    } else {
+                        types.callable_facts(declaration).map_err(Error::new)?
+                    };
                     if !Self::universal_body(&types, declaration)? {
                         return Err(Error::new(
                             "universal lowering requires a generic source or registered recipe",
@@ -886,6 +951,11 @@ impl Provider for CompilerProvider {
                     let types = facts.types().await?;
                     let (instance_target, instance_source) = facts.instance(index).await?;
                     let template = facts.template(instance_source).await?;
+                    if let Some(closure) = &template.closure {
+                        types
+                            .validate_closure_instance(closure, &instance_target)
+                            .map_err(Error::new)?;
+                    }
                     let source = this.validated_body(&types, instance_source, &template)?;
                     let fact = if !Self::universal_body(&types, instance_target.declaration)? {
                         let publication = template.publication.as_ref().ok_or_else(|| {

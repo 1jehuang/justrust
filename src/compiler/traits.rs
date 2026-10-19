@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 
 mod associated_types;
 mod catalog;
+mod closures;
 mod equality;
 mod generic_methods;
 mod impl_constraints;
@@ -439,6 +440,14 @@ pub trait SchemaCx {
     fn core_catalog(&self) -> &Arc<CoreCatalog>;
     fn declaration_info(&self, id: DeclId) -> Result<SchemaDecl>;
     fn declaration_schema(&self, id: DeclId) -> Result<GenericSchema>;
+    fn closure_trait_kind(&self, declaration: DeclId) -> Result<Option<ir::ClosureKind>> {
+        let _ = declaration;
+        Ok(None)
+    }
+    fn closure_owner_site(&self, provider: DeclId) -> Result<Option<(DeclId, u32)>> {
+        let _ = provider;
+        Ok(None)
+    }
     fn associated_type_bounds(&self, associated: DeclId) -> Result<Arc<[DeclId]>> {
         let _ = associated;
         Ok(Arc::from([]))
@@ -518,6 +527,7 @@ pub struct ValidatedFacts {
     subject: FactsSubject,
     predicates: Arc<PredicateEnv>,
     requirements: Arc<[ProofEvidence]>,
+    closure: Option<Arc<ir::ClosureTy>>,
 }
 
 /// An original header lookup, not an executable instantiation or body proof.
@@ -778,6 +788,9 @@ impl ValidatedFacts {
     /// caller flag. Registry source ordinals remain the frontend's authority.
     pub(super) fn is_source_callable(&self, declaration: DeclId) -> Result<bool> {
         self.world.check_original_context(self)?;
+        if self.world.schema.closure_owner_site(declaration)?.is_some() {
+            return Ok(false);
+        }
         let info = self.world.info(declaration)?;
         self.world.callable_header(declaration)?;
         self.world.ensure_provider(declaration)?;
@@ -929,6 +942,9 @@ impl ValidatedFacts {
 }
 #[derive(Clone, Debug)]
 enum ProofOrigin {
+    Closure {
+        kind: ir::ClosureKind,
+    },
     ProjectedSubject {
         evidence: ProofEvidence,
         reductions: Arc<[NormalizedAssociatedType]>,
@@ -1907,6 +1923,12 @@ impl ValidatedTraitWorld {
             Ok(())
         };
         match ty {
+            Ty::Closure(closure) => {
+                self.validate_closure_metadata(closure, env)?;
+                for ty in closure.types() {
+                    child(ty, TypeUse::Root)?;
+                }
+            }
             Ty::AssociatedType(_) => {
                 return Err(FactsError::unsupported(
                     &self.budget,
@@ -2421,6 +2443,7 @@ impl ValidatedTraitWorld {
                 && a.trait_ref.declaration == b.trait_ref.declaration
                 && self.eq_ty(&a.trait_ref.self_ty, &b.trait_ref.self_ty, depth + 1)?
                 && self.eq_types(&a.trait_ref.args, &b.trait_ref.args, depth + 1)?),
+            (Ty::Closure(a), Ty::Closure(b)) => a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1)),
             (Ty::Param(a), Ty::Param(b)) => Ok(a == b),
             (Ty::Int(a), Ty::Int(b)) => Ok(a == b),
             (Ty::Float(a), Ty::Float(b)) => Ok(a == b),
@@ -3293,6 +3316,15 @@ impl ValidatedTraitWorld {
         }
         let result_subject = self.equality_result_subject(subject, facts)?;
         let (declaration, arguments, signature) = match subject {
+            SignatureSubject::Body if facts.closure.is_some() => {
+                let closure = facts.closure.as_ref().expect("guarded closure facts");
+                (
+                    closure.provider(),
+                    self.closure_body_arguments(facts)?
+                        .expect("closure arguments"),
+                    self.closure_body_signature(facts)?,
+                )
+            }
             SignatureSubject::Body => match &facts.subject {
                 FactsSubject::UniversalCallable(declaration) => {
                     let raw = &self.callable_header(*declaration)?.schema;
@@ -4916,6 +4948,7 @@ impl ValidatedTraitWorld {
             subject: FactsSubject::SchemaItem(item),
             predicates,
             requirements: Arc::from([]),
+            closure: None,
         }))
     }
     pub fn callable_facts(self: &Arc<Self>, decl: DeclId) -> Result<Arc<ValidatedFacts>> {
@@ -4928,6 +4961,7 @@ impl ValidatedTraitWorld {
             subject: FactsSubject::UniversalCallable(decl),
             predicates,
             requirements: Arc::from([]),
+            closure: None,
         }))
     }
     pub fn instance_facts(self: &Arc<Self>, target: &CallTarget) -> Result<Arc<ValidatedFacts>> {
@@ -4938,6 +4972,7 @@ impl ValidatedTraitWorld {
             subject: FactsSubject::ClosedInstance(target.clone()),
             predicates: self.empty.clone(),
             requirements: Arc::from([]),
+            closure: None,
         };
         let proof = self.discharge_direct(target, &facts)?;
         facts.requirements = proof.evidence;
@@ -6089,6 +6124,9 @@ impl ValidatedTraitWorld {
         let Predicate::Implements(goal) = predicate else {
             return Ok(None);
         };
+        if let Some(proof) = self.prove_closure(predicate, context)? {
+            return Ok(Some(proof));
+        }
         let item = if goal.declaration == self.catalog.id(CatalogItem::Sized) {
             CatalogItem::Sized
         } else if goal.declaration == self.catalog.id(CatalogItem::Clone) {
@@ -6100,6 +6138,12 @@ impl ValidatedTraitWorld {
         };
         let mut children: Vec<&Ty> = Vec::new();
         let known = match &goal.self_ty {
+            Ty::Closure(closure) => {
+                for ty in closure.captures() {
+                    push(&self.budget, &mut children, ty)?;
+                }
+                true
+            }
             Ty::Param(_) => return Ok(Some(ProofOutcome::NotProven)),
             Ty::Struct(t) if item == CatalogItem::Sized => {
                 for f in t.def().fields.iter() {
@@ -6217,6 +6261,7 @@ impl ValidatedTraitWorld {
         context: ProofContext<'_>,
     ) -> Result<DirectCallProof> {
         self.ensure_provider(target.declaration)?;
+        self.validate_closure_direct(target, context)?;
         let schema = self.callable_schema(target.declaration)?;
         let instantiated = self.instantiate_in(
             &schema,
@@ -6341,6 +6386,9 @@ impl TraitCx for ValidatedTraitWorld {
     ) -> Result<()> {
         self.check_facts(facts, true)?;
         let expected = match subject {
+            SignatureSubject::Body if facts.closure.is_some() => {
+                self.closure_body_signature(facts)?
+            }
             SignatureSubject::Body => match &facts.subject {
                 FactsSubject::UniversalCallable(declaration) => {
                     let signature = &self.callable_header(*declaration)?.schema.signature;
@@ -6477,7 +6525,15 @@ impl TraitCx for ValidatedTraitWorld {
             ));
         }
         let mut target = None;
-        if let ProofOrigin::Implementation {
+        if let ProofOrigin::Closure { kind } = &evidence.0.origin {
+            let Ty::Closure(closure) = &call.trait_ref.self_ty else {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "closure proof lost its environment type",
+                ));
+            };
+            target = Some(self.closure_target(closure, *kind)?);
+        } else if let ProofOrigin::Implementation {
             declaration,
             arguments,
         } = &evidence.0.origin

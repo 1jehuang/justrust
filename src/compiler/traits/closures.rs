@@ -1,0 +1,208 @@
+//! Builtin callable evidence is keyed by the source closure's canonical owner,
+//! ordered owner actuals, site and immutable checked signature.
+use super::*;
+
+impl ValidatedTraitWorld {
+    pub(in crate::compiler) fn closure_trait_kind(
+        &self,
+        declaration: DeclId,
+    ) -> Result<Option<ir::ClosureKind>> {
+        self.schema.closure_trait_kind(declaration)
+    }
+    pub(super) fn validate_closure_metadata(
+        &self,
+        closure: &ir::ClosureTy,
+        env: &GenericEnv,
+    ) -> Result<()> {
+        if self.schema.closure_owner_site(closure.provider())?
+            != Some((closure.owner(), closure.site()))
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "closure type changed its original parent or source site",
+            ));
+        }
+        let owner = self.info(closure.owner())?;
+        if owner.env.total_arity() != closure.owner_args().len() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "closure owner instantiation arity mismatch",
+            ));
+        }
+        if self
+            .callable_header(closure.provider())?
+            .schema
+            .env
+            .total_arity()
+            != 3
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "closure adapter binder arity mismatch",
+            ));
+        }
+        for ty in closure.types() {
+            self.validate_ty_metadata_in(ty, env, 0)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn closure_arguments(&self, closure: &ir::ClosureTy) -> Result<Ty> {
+        retain::<Ty>(&self.budget, closure.params().len())?;
+        Ok(if closure.params().is_empty() {
+            Ty::Unit
+        } else {
+            Ty::Tuple(closure.params().into())
+        })
+    }
+
+    pub(super) fn prove_closure(
+        &self,
+        predicate: &Predicate,
+        context: ProofContext<'_>,
+    ) -> Result<Option<ProofOutcome>> {
+        let Predicate::Implements(goal) = predicate else {
+            return Ok(None);
+        };
+        let Ty::Closure(closure) = &goal.self_ty else {
+            return Ok(None);
+        };
+        let Some(kind) = self.schema.closure_trait_kind(goal.declaration)? else {
+            return Ok(None);
+        };
+        self.validate_closure_metadata(closure, context.env())?;
+        if !closure.supports(kind)
+            || goal.args.len() != 1
+            || !self.eq_ty(&goal.args[0], &self.closure_arguments(closure)?, 0)?
+        {
+            return Ok(Some(ProofOutcome::NotProven));
+        }
+        Ok(Some(self.evidence(
+            predicate,
+            context,
+            ProofOrigin::Closure { kind },
+        )?))
+    }
+
+    pub(super) fn closure_target(
+        &self,
+        closure: &Arc<ir::ClosureTy>,
+        kind: ir::ClosureKind,
+    ) -> Result<CallTarget> {
+        let receiver = match kind {
+            ir::ClosureKind::Fn => Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: Arc::new(Ty::Closure(closure.clone())),
+            },
+            ir::ClosureKind::FnMut => Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent: Arc::new(Ty::Closure(closure.clone())),
+            },
+            ir::ClosureKind::FnOnce => Ty::Closure(closure.clone()),
+        };
+        Ok(CallTarget {
+            declaration: closure.provider(),
+            type_args: Arc::from([
+                receiver,
+                self.closure_arguments(closure)?,
+                closure.result().clone(),
+            ]),
+        })
+    }
+
+    pub(super) fn validate_closure_direct(
+        &self,
+        target: &CallTarget,
+        context: ProofContext<'_>,
+    ) -> Result<()> {
+        let Some((owner, site)) = self.schema.closure_owner_site(target.declaration)? else {
+            return Ok(());
+        };
+        let [receiver, arguments, result] = target.type_args.as_ref() else {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "closure adapter actual arity mismatch",
+            ));
+        };
+        let (ty, kind) = match receiver {
+            Ty::Ref { kind, referent } => (
+                referent.as_ref(),
+                if *kind == ir::BorrowKind::Shared {
+                    ir::ClosureKind::Fn
+                } else {
+                    ir::ClosureKind::FnMut
+                },
+            ),
+            other => (other, ir::ClosureKind::FnOnce),
+        };
+        let Ty::Closure(closure) = ty else {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "closure adapter receiver is not its checked environment",
+            ));
+        };
+        self.validate_closure_metadata(closure, context.env())?;
+        if closure.provider() != target.declaration
+            || closure.owner() != owner
+            || closure.site() != site
+            || !closure.supports(kind)
+            || !self.eq_ty(arguments, &self.closure_arguments(closure)?, 0)?
+            || !self.eq_ty(result, closure.result(), 0)?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "closure adapter actuals differ from its checked signature or capability",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(in crate::compiler) fn closure_callable_facts(
+        self: &Arc<Self>,
+        closure: Arc<ir::ClosureTy>,
+    ) -> Result<Arc<ValidatedFacts>> {
+        let mut facts = self.callable_facts(closure.provider())?.as_ref().clone();
+        self.validate_closure_metadata(&closure, facts.env())?;
+        facts.closure = Some(closure);
+        retain::<ValidatedFacts>(&self.budget, 1)?;
+        Ok(Arc::new(facts))
+    }
+
+    pub(in crate::compiler) fn closure_body_signature(
+        &self,
+        facts: &ValidatedFacts,
+    ) -> Result<Signature> {
+        let closure = facts.closure.as_ref().ok_or_else(|| {
+            FactsError::invalid(&self.budget, "missing checked closure body metadata")
+        })?;
+        let arguments = self
+            .closure_body_arguments(facts)?
+            .ok_or_else(|| FactsError::invalid(&self.budget, "missing closure body arguments"))?;
+        let header = self.callable_header(closure.provider())?;
+        Ok(self
+            .instantiate_in(
+                &header.schema,
+                &arguments,
+                ProofContext::from_facts(facts),
+                Some(closure.provider()),
+            )?
+            .signature)
+    }
+
+    pub(super) fn closure_body_arguments(
+        &self,
+        facts: &ValidatedFacts,
+    ) -> Result<Option<Arc<[Ty]>>> {
+        let Some(closure) = &facts.closure else {
+            return Ok(None);
+        };
+        let parameter = facts.env().ordered_params().next().ok_or_else(|| {
+            FactsError::invalid(&self.budget, "closure adapter has no receiver binder")
+        })?;
+        Ok(Some(Arc::from([
+            Ty::Param(parameter),
+            self.closure_arguments(closure)?,
+            closure.result().clone(),
+        ])))
+    }
+}

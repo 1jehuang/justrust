@@ -10,6 +10,9 @@ use std::sync::Arc;
 /// Combined explicit loan sites and formal reference-parameter origins.
 pub const MAX_LOAN_SITES: usize = 4096;
 use std::sync::atomic::{AtomicU64, Ordering};
+#[path = "ir/closure.rs"]
+mod closure;
+pub use closure::{ClosureKind, ClosureTy};
 #[path = "ir/intrinsics.rs"]
 mod intrinsics;
 #[cfg(test)]
@@ -438,6 +441,11 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
             Ok(())
         };
         match ty {
+            Ty::Closure(closure) => {
+                for ty in closure.captures() {
+                    child(ty)?;
+                }
+            }
             Ty::AssociatedType(_) => {
                 return Err("unsupported: residual associated type projection in carrier".into());
             }
@@ -582,6 +590,11 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                     result
                 };
                 match ty {
+                    Ty::Closure(closure) => {
+                        for (index, ty) in closure.captures().iter().enumerate() {
+                            child(CarrierStep::Field(index), ty)?;
+                        }
+                    }
                     Ty::AssociatedType(_) => {
                         return Err(
                             "unsupported: residual associated type projection in carrier".into(),
@@ -1164,6 +1177,7 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
                 len: bn,
             },
         ) => an == bn && Arc::ptr_eq(a, b),
+        (Ty::Closure(a), Ty::Closure(b)) => Arc::ptr_eq(a, b),
         (Ty::AssociatedType(a), Ty::AssociatedType(b)) => Arc::ptr_eq(a, b),
         (Ty::Tuple(a), Ty::Tuple(b)) => Arc::ptr_eq(a, b),
         (Ty::Struct(a), Ty::Struct(b)) => std::ptr::eq(a.def(), b.def()),
@@ -2403,6 +2417,15 @@ fn substitute_ty_walk(
     budget.charge_work(1)?;
     budget.charge_nodes(1)?;
     Ok(match ty {
+        Ty::Closure(closure) => {
+            budget.retain_bytes(
+                std::mem::size_of::<ClosureTy>()
+                    + closure.types().count() * std::mem::size_of::<Ty>(),
+            )?;
+            Ty::Closure(Arc::new(closure.try_map(|ty| {
+                substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1)
+            })?))
+        }
         Ty::AssociatedType(projection) => {
             if projection.trait_ref.args.len() > 32 {
                 return Err("trait argument limit exceeded".into());
@@ -3088,6 +3111,11 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
         }
         budget.charge_work(1)?;
         match ty {
+            Ty::Closure(closure) => {
+                for ty in closure.types() {
+                    walk(ty, budget, depth + 1)?;
+                }
+            }
             Ty::AssociatedType(_) => {
                 return Err(
                     "unsupported: residual associated type projection in generic argument".into(),
@@ -4108,6 +4136,7 @@ pub struct LoopId(pub usize);
 /// Tuple structure is immutable and shared cheaply across checked facts.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
+    Closure(Arc<ClosureTy>),
     AssociatedType(Arc<AssociatedTypeProjection>),
     Param(ParamId),
     Int(IntTy),
@@ -4303,6 +4332,7 @@ fn type_metadata_walk(
             budget.check_depth(depth)?;
         }
         let key = match ty {
+            Ty::Closure(closure) => (8, Arc::as_ptr(closure) as usize),
             Ty::AssociatedType(value) => {
                 if value.trait_ref.args.len() > 32 {
                     return Err("trait argument limit exceeded".into());
@@ -4393,6 +4423,11 @@ fn type_metadata_walk(
             Ok(())
         };
         match ty {
+            Ty::Closure(closure) => {
+                for ty in closure.types() {
+                    child(ty)?;
+                }
+            }
             Ty::AssociatedType(projection) => {
                 if projection.trait_ref.args.len() > 32 {
                     return Err("trait argument limit exceeded".into());
@@ -4592,6 +4627,11 @@ impl Ty {
         let mut seen = std::collections::HashSet::new();
         while let Some(ty) = pending.pop() {
             match ty {
+                Self::Closure(closure) => {
+                    if seen.insert(Arc::as_ptr(closure) as usize) {
+                        pending.extend(closure.captures());
+                    }
+                }
                 Self::AssociatedType(projection) => {
                     if seen.insert(Arc::as_ptr(projection) as usize) {
                         pending.push(&projection.trait_ref.self_ty);
@@ -4643,6 +4683,7 @@ impl Ty {
 
     pub fn field_count(&self) -> Option<usize> {
         match self {
+            Self::Closure(closure) => Some(closure.captures().len()),
             Self::Tuple(fields) => Some(fields.len()),
             Self::Struct(ty) => Some(ty.def().fields.len()),
             _ => None,
@@ -4651,6 +4692,7 @@ impl Ty {
 
     pub fn field_ty(&self, index: usize) -> Option<&Ty> {
         match self {
+            Self::Closure(closure) => closure.captures().get(index),
             Self::Tuple(fields) => fields.get(index),
             Self::Struct(ty) => ty.def().fields.get(index).map(|field| &field.ty),
             _ => None,
@@ -4674,7 +4716,7 @@ impl Ty {
             | Self::Str
             | Self::Dyn(_)
             | Self::Slice { .. } => false,
-            Self::Tuple(_) | Self::Array { .. } => {
+            Self::Closure(_) | Self::Tuple(_) | Self::Array { .. } => {
                 let mut pending = vec![self];
                 let mut seen = std::collections::HashSet::new();
                 let mut arrays = std::collections::HashSet::new();
@@ -4691,6 +4733,11 @@ impl Ty {
                         | Self::Str
                         | Self::Slice { .. } => {
                             return false;
+                        }
+                        Self::Closure(closure)
+                            if seen.insert(Arc::as_ptr(closure).cast::<Ty>()) =>
+                        {
+                            pending.extend(closure.captures());
                         }
                         Self::Tuple(fields) if seen.insert(fields.as_ptr()) => {
                             pending.extend(fields.iter());
@@ -5605,6 +5652,11 @@ fn ref_type_walk(
             Ok(())
         };
         match ty {
+            Ty::Closure(closure) => {
+                for ty in closure.captures() {
+                    child(ty)?;
+                }
+            }
             Ty::AssociatedType(_) => {
                 return Err(
                     "unsupported: residual associated type projection in reference contract".into(),
@@ -5712,6 +5764,7 @@ fn ref_types_equal(
             Ok(equal)
         };
         let equal = match (left, right) {
+            (Ty::Closure(a), Ty::Closure(b)) => a.try_eq(b, &mut child)?,
             (Ty::AssociatedType(a), Ty::AssociatedType(b)) => {
                 if a.trait_ref.args.len() > 32 || b.trait_ref.args.len() > 32 {
                     return Err("trait argument limit exceeded".into());
@@ -6267,6 +6320,14 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
             return Err("pattern type comparison depth exceeds limit 128".into());
         }
         match (a, b) {
+            (Ty::Closure(a), Ty::Closure(b)) => {
+                if !a.try_eq(b, |a, b| {
+                    pending.push((a, b, depth + 1));
+                    Ok::<bool, String>(true)
+                })? {
+                    return Ok(false);
+                }
+            }
             (Ty::AssociatedType(_), _) | (_, Ty::AssociatedType(_)) => {
                 return Err(
                     "unsupported: residual associated type projection in executable pattern".into(),

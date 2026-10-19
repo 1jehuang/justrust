@@ -1,6 +1,10 @@
 //! Immediate closures are separate callable declarations, never substituted bodies.
 use super::*;
+pub(in crate::compiler) mod check;
 mod fn_sugar;
+pub(super) mod stored;
+mod trait_source;
+pub(super) use stored::StoredClosureSyntax;
 pub(in crate::compiler) mod graph_facts;
 
 #[derive(Clone, Debug)]
@@ -25,6 +29,7 @@ pub(super) struct ClosureSource {
     pub parent: Option<ClosureParent>,
     pub by_move: bool,
     pub captures: Vec<SourceCapture>,
+    pub stored: Option<StoredClosureSyntax>,
 }
 
 pub(super) fn anonymous_path(path: &AstPath, names: &NameStore) -> Result<bool, String> {
@@ -187,6 +192,7 @@ impl Parser<'_, '_> {
             parent,
             by_move,
             captures: Vec::new(),
+            stored: None,
         });
         self.lexical.closure_sources = sources;
         Ok(Expr::Call { name, args })

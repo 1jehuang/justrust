@@ -1623,6 +1623,7 @@ pub(super) struct Checker<'a> {
     pub(super) canonical: Option<&'a CanonicalSourceCapability>,
     pub(super) scopes: Vec<HashMap<LocalKey, ir::LocalId>>,
     lexical_scope: Option<super::super::semantic_scope::ScopeId>,
+    pub(super) checked_closures: Vec<closures::check::CheckedClosure>,
     pub(super) pending_references: Vec<PendingReferenceDecl>,
     pub(super) locals: Vec<ir::LocalDecl>,
     pub(super) exprs: Vec<ir::TypedExpr>,
@@ -3566,6 +3567,7 @@ impl<'a> Checker<'a> {
             signatures,
             scopes: vec![HashMap::new()],
             lexical_scope: None,
+            checked_closures: Vec::new(),
             pending_references: Vec::new(),
             locals: Vec::new(),
             exprs: Vec::new(),
@@ -3878,7 +3880,7 @@ impl<'a> Checker<'a> {
         }
         Ok(index)
     }
-    fn install_lexical_scope(
+    pub(super) fn install_lexical_scope(
         &mut self,
         scope: Option<super::super::semantic_scope::ScopeId>,
     ) -> Result<(), String> {
@@ -6822,6 +6824,11 @@ impl<'a> Checker<'a> {
         e: &Expr,
         expectation: Expectation<'_>,
     ) -> Result<ir::ExprId, String> {
+        if let Expr::Var(path) = e {
+            if let Some(value) = self.check_stored_closure(path, None)? {
+                return Ok(value);
+            }
+        }
         if let Some(id) = self.builtin_leading_zeros(e)? {
             if let Some(cap) = self.canonical {
                 cap.record_builtin_leading_zeros(e, id, &self.exprs)?;
@@ -8248,7 +8255,11 @@ impl<'a> Checker<'a> {
     }
     #[inline(never)]
     /// Construct only checked storage, never synthetic source occurrences.
-    fn for_expr(&mut self, ty: ir::Ty, kind: ir::ExprKind) -> Result<ir::ExprId, String> {
+    pub(super) fn for_expr(
+        &mut self,
+        ty: ir::Ty,
+        kind: ir::ExprKind,
+    ) -> Result<ir::ExprId, String> {
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         let id = ir::ExprId(self.exprs.len());
         self.exprs.push(ir::TypedExpr {
@@ -10799,6 +10810,16 @@ pub(super) fn type_callable_source(
     budget: &ir::PlanBudget,
     canonical: Option<&CanonicalSourceCapability>,
 ) -> Result<ir::CheckedFunction, String> {
+    type_callable_source_and_closures(program, declaration, plan, budget, canonical)
+        .map(|(body, _)| body)
+}
+pub(super) fn type_callable_source_and_closures(
+    program: &Program,
+    declaration: ir::DeclId,
+    plan: &PlanCtx,
+    budget: &ir::PlanBudget,
+    canonical: Option<&CanonicalSourceCapability>,
+) -> Result<(ir::CheckedFunction, Vec<closures::check::CheckedClosure>), String> {
     plan.check_budget(budget)?;
     budget.charge_work(1)?;
     if !Arc::ptr_eq(&program.names, &plan.program.names)
@@ -10825,7 +10846,9 @@ pub(super) fn type_callable_source(
             type_args: env.ordered_params().map(ir::Ty::Param).collect(),
         };
         let facts = plan.callable_facts(declaration)?;
-        return plan.checked_body(&target, &facts, budget);
+        return plan
+            .checked_body(&target, &facts, budget)
+            .map(|body| (body, Vec::new()));
     }
     let f = plan.callable_body(program, declaration)?;
     plan.validate_callable_associated_bounds(program, declaration, budget)?;
@@ -10956,13 +10979,15 @@ pub(super) fn type_callable_source(
         body_substitution: None,
         body,
     };
+    let closures = c.checked_closures;
     if canonical.is_some() {
-        return Ok(checked);
+        return Ok((checked, closures));
     }
     let facts = plan.callable_facts(declaration)?;
     ir::validate_call_evidence(&checked, &facts, budget)?;
     let mut cx = plan.clone();
     ir::canonicalize_checked_calls(&checked, &facts, &mut cx, budget)
+        .map(|body| (body, closures))
         .map_err(|e| e.into_legacy_diagnostic(budget))
 }
 pub fn type_function_with_plan(

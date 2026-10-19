@@ -186,7 +186,9 @@ fn indirect(ty: &ir::Ty) -> Result<bool, String> {
         return Ok(true);
     }
     match ty {
-        ir::Ty::Tuple(_) | ir::Ty::Struct(_) | ir::Ty::Array { .. } => Ok(true),
+        ir::Ty::Closure(_) | ir::Ty::Tuple(_) | ir::Ty::Struct(_) | ir::Ty::Array { .. } => {
+            Ok(true)
+        }
         ir::Ty::Enum(ty) => Ok(ty.has_payload()),
         ir::Ty::Int(_)
         | ir::Ty::Float(_)
@@ -221,6 +223,11 @@ fn value_size(ty: &ir::Ty) -> Result<i32, String> {
     }
     if ty.contains_slice() {
         return Err(SLICE_UNSUPPORTED.into());
+    }
+    if matches!(ty, ir::Ty::Closure(closure) if closure.captures().is_empty()) {
+        // Closure environments use product storage, including an owned dummy
+        // word for an empty environment in the private ABI.
+        return Ok(8);
     }
     if let ir::Ty::Struct(structure) = ty
         && structure.def().fields.is_empty()

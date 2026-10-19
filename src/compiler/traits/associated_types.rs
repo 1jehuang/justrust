@@ -252,6 +252,13 @@ impl ValidatedTraitWorld {
             Ok(())
         };
         match ty {
+            Ty::Closure(closure) => {
+                self.info(closure.owner())?;
+                self.info(closure.provider())?;
+                for ty in closure.types() {
+                    child(ty)?;
+                }
+            }
             Ty::Param(parameter) => {
                 if !env.contains(*parameter) {
                     return Err(FactsError::invalid(
@@ -1151,6 +1158,31 @@ impl ValidatedTraitWorld {
             predicates: &self.empty,
             phase: FactsPhase::Closed,
         };
+        if let Some(ProofOutcome::Proved(membership)) = self.prove_closure(
+            &Predicate::Implements(selected_goal.clone()),
+            selection_context,
+        )? {
+            let Ty::Closure(closure) = &selected_goal.self_ty else {
+                unreachable!()
+            };
+            let raw_rhs = closure.result().clone();
+            let normal =
+                self.normalize_type_in(&raw_rhs, context, stack, &mut child_dependencies, 0)?;
+            retain::<NormalizationEvidence>(&self.budget, 1)?;
+            let evidence = Arc::new(NormalizationEvidence {
+                world: self.id,
+                key,
+                membership,
+                selected_goal: selected_goal.clone(),
+                implementation: closure.provider(),
+                arguments: closure.owner_args().into(),
+                raw_rhs,
+                normal,
+                dependencies: child_dependencies.into(),
+            });
+            self.validate_normalization_evidence(&evidence, context)?;
+            return Ok(evidence);
+        }
         let membership = match self.prove_implementation_in(
             &Predicate::Implements(selected_goal.clone()),
             selection_context,
@@ -1467,6 +1499,35 @@ impl ValidatedTraitWorld {
                 &self.budget,
                 "associated normalization evidence lost world/environment/phase authority",
             ));
+        }
+        if let ProofOrigin::Closure { kind } = &evidence.membership.0.origin {
+            let Ty::Closure(closure) = &evidence.selected_goal.self_ty else {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "closure normalization lost environment metadata",
+                ));
+            };
+            self.validate_closure_metadata(closure, context.proof.env())?;
+            if self
+                .schema
+                .closure_trait_kind(evidence.selected_goal.declaration)?
+                != Some(*kind)
+                || !closure.supports(*kind)
+                || evidence.implementation != closure.provider()
+                || !self.eq_types(&evidence.arguments, closure.owner_args(), 0)?
+                || !self.eq_ty(&evidence.raw_rhs, closure.result(), 0)?
+                || !self.eq_ty(&evidence.normal, closure.result(), 0)?
+                || self
+                    .associated_header(evidence.key.projection.item)?
+                    .trait_decl
+                    != evidence.selected_goal.declaration
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "closure Output normalization differs from checked metadata",
+                ));
+            }
+            return Ok(());
         }
         match &evidence.membership.0.origin {
             ProofOrigin::Implementation {

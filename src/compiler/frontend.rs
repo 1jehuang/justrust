@@ -4624,9 +4624,18 @@ impl PlanCtx {
     pub(super) fn publish_callable_body_with_constants(
         &self,
         declaration: ir::DeclId,
-        mut constants: const_inputs::SealedBodyConstants,
+        constants: const_inputs::SealedBodyConstants,
         budget: &ir::PlanBudget,
     ) -> Result<PublishedCallableBody, FactsError> {
+        self.publish_callable_body_with_closures(declaration, constants, budget)
+            .map(|(body, _)| body)
+    }
+    pub(super) fn publish_callable_body_with_closures(
+        &self,
+        declaration: ir::DeclId,
+        mut constants: const_inputs::SealedBodyConstants,
+        budget: &ir::PlanBudget,
+    ) -> Result<(PublishedCallableBody, Vec<closures::check::CheckedClosure>), FactsError> {
         if constants.declaration != declaration {
             return Err(FactsError::invalid(
                 budget,
@@ -4674,7 +4683,7 @@ impl PlanCtx {
                     .checked_body(&target, &facts, budget)
                     .map_err(|e| source_error(budget, &e))?;
                 sr::retain(budget, std::mem::size_of::<ir::CheckedFunction>() + 32)?;
-                Ok(PublishedCallableBody::Recipe(Arc::new(checked)))
+                Ok((PublishedCallableBody::Recipe(Arc::new(checked)), Vec::new()))
             }
             CallableProvider::UnavailableProvided { .. } => Err(FactsError::unsupported(
                 budget,
@@ -4711,7 +4720,7 @@ impl PlanCtx {
                     emissions: Default::default(),
                     error: Default::default(),
                 };
-                let checked = match type_callable_source(
+                let (checked, closures) = match type_check::type_callable_source_and_closures(
                     &self.program,
                     declaration,
                     self,
@@ -4762,7 +4771,7 @@ impl PlanCtx {
                 let source = Arc::new(final_payload);
                 let publication =
                     sr::publish_canonical_source(cap, source, original, facts, budget)?;
-                Ok(PublishedCallableBody::Source(publication))
+                Ok((PublishedCallableBody::Source(publication), closures))
             }
         }
     }
@@ -10791,7 +10800,7 @@ impl<'input, 'names> Parser<'input, 'names> {
     ) -> Result<(Function, ReceiverKind), ParseError> {
         let (head, receiver) = self.function_head(inherited, associated)?;
         let previous_parent = self.lexical.closure_parent.take();
-        if !associated && head.type_params.is_empty() {
+        if !associated {
             self.lexical.closure_parent = Some(closures::ClosureParent {
                 name: self.closure_path(head.name)?,
                 params: head.params.clone(),
@@ -12279,7 +12288,7 @@ impl<'input, 'names> Parser<'input, 'names> {
     #[inline(never)]
     fn ordinary_expr_prefix(&mut self, statement: bool) -> Result<Expr, ParseError> {
         if self.is("|") || self.is("||") || self.is("move") {
-            return Err(self.unsupported("stored closures and capture environments are unsupported; use an explicitly typed immediate noncapturing closure"));
+            return self.stored_closure();
         }
         if self.is("while")
             && self
@@ -18651,6 +18660,18 @@ impl SchemaAdapter {
     }
 }
 impl tr::SchemaCx for SchemaAdapter {
+    fn closure_trait_kind(
+        &self,
+        declaration: ir::DeclId,
+    ) -> Result<Option<ir::ClosureKind>, tr::FactsError> {
+        self.source_closure_trait_kind(declaration)
+    }
+    fn closure_owner_site(
+        &self,
+        provider: ir::DeclId,
+    ) -> Result<Option<(ir::DeclId, u32)>, tr::FactsError> {
+        self.source_closure_owner_site(provider)
+    }
     fn core_catalog(&self) -> &Arc<tr::CoreCatalog> {
         &self.catalog
     }
@@ -19445,6 +19466,9 @@ impl PlanCtx {
         module: &ModuleId,
         budget: &ir::PlanBudget,
     ) -> Result<MethodSelection, String> {
+        if let Some(selection) = self.closure_method_selection(receiver, name, caller)? {
+            return Ok(selection);
+        }
         let mut root = receiver;
         for depth in 0..=2 {
             budget.charge_work(1)?;

@@ -1040,7 +1040,10 @@ impl ValidatedTraitWorld {
             },
             &mut Vec::new(),
         )?;
-        if !matches!(&selection.0.origin, ProofOrigin::Implementation { .. }) {
+        if !matches!(
+            &selection.0.origin,
+            ProofOrigin::Implementation { .. } | ProofOrigin::Closure { .. }
+        ) {
             return Err(FactsError::invalid(
                 &self.budget,
                 "projected method requires an exact implementation selection",
@@ -1152,6 +1155,30 @@ impl ValidatedTraitWorld {
                 "projected carrier selection changed exact goal authority",
             ));
         }
+        if let ProofOrigin::Closure { .. } = &evidence.selection.0.origin {
+            let schema = GenericSchema {
+                env: self.empty.env.clone(),
+                signature: evidence.signature.clone(),
+                predicates: Arc::from([]),
+            };
+            let source_regions = self.validate_source_regions(evidence.item, &schema.signature)?;
+            let origin = charged(
+                &self.budget,
+                ir::derive_signature_origin_schema(&schema.signature, &schema.env, &self.budget),
+            )?;
+            let (contract, regions) = self.derive_carriers(&schema.signature, &source_regions)?;
+            return Ok(ProjectedCarrierBase {
+                schema,
+                arguments: Arc::from([]),
+                origin,
+                retained: DeclarationCarriers {
+                    declaration: evidence.item,
+                    contract,
+                    regions,
+                    source_regions,
+                },
+            });
+        }
         let ProofOrigin::Implementation {
             declaration,
             arguments,
@@ -1259,6 +1286,8 @@ impl ValidatedTraitWorld {
             &evidence.selection.0.origin,
             &application.evidence.selection.0.origin,
         ) {
+            (ProofOrigin::Closure { kind: left }, ProofOrigin::Closure { kind: right })
+                if left == right => {}
             (
                 ProofOrigin::Implementation {
                     declaration: left,
