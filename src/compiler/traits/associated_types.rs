@@ -362,11 +362,27 @@ impl ValidatedTraitWorld {
         &self,
         declaration: DeclId,
     ) -> Result<GenericSchema> {
-        for callable in self.normalized_callables.iter() {
+        self.check_normalization_budget()?;
+        // Carrier construction and replay call this for every direct call.
+        // Reuse the immutable normalized index rather than walking all source
+        // callables again. A miss still consults the original schema authority,
+        // including required trait items absent from executable callables.
+        let mut start = 0;
+        let mut end = self.normalized_callable_index.len();
+        while start < end {
             charged(&self.budget, self.budget.charge_work(1))?;
-            if callable.declaration == declaration {
-                return clone_schema(&callable.schema, &self.budget);
+            let middle = start + (end - start) / 2;
+            if self.normalized_callable_index[middle].0 < declaration {
+                start = middle + 1;
+            } else {
+                end = middle;
             }
+        }
+        charged(&self.budget, self.budget.charge_work(1))?;
+        if let Some((id, position)) = self.normalized_callable_index.get(start)
+            && *id == declaration
+        {
+            return clone_schema(&self.normalized_callables[*position].schema, &self.budget);
         }
         self.schema.declaration_schema(declaration)
     }
@@ -1568,6 +1584,100 @@ mod tests {
             .unwrap()
             .trait_world()
             .unwrap()
+    }
+
+    #[test]
+    fn normalized_schema_lookup_is_indexed_and_replays_exact_source_authority() {
+        let source = (0..128)
+            .map(|index| format!("fn f{index}(x:i32)->i32{{x}}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let program = frontend::parse(&format!("{source}\nfn main(){{}}")).unwrap();
+        let plan = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
+        let world = plan.trait_world().unwrap();
+        // build() rejects duplicate declarations before the sole private
+        // construction site enumerates and sorts this exact normalized vector.
+        assert_eq!(
+            world.normalized_callable_index.len(),
+            world.normalized_callables.len()
+        );
+        assert!(
+            world
+                .normalized_callable_index
+                .windows(2)
+                .all(|pair| pair[0].0 < pair[1].0)
+        );
+        for (declaration, position) in &world.normalized_callable_index {
+            assert_eq!(
+                world
+                    .normalized_callables
+                    .get(*position)
+                    .unwrap()
+                    .declaration,
+                *declaration
+            );
+        }
+        for header in &world.normalized_callables {
+            let before = world.budget.usage_snapshot().work;
+            let schema = world
+                .normalized_declaration_schema(header.declaration)
+                .unwrap();
+            let work = world.budget.usage_snapshot().work - before;
+            // One unit for each binary-search comparison and the final probe,
+            // plus the unchanged parameter-clone work. No source-count scan.
+            let comparisons = usize::BITS - world.normalized_callable_index.len().leading_zeros();
+            assert!(work <= comparisons as usize + 1 + header.schema.signature.params.len());
+            assert!(Arc::ptr_eq(&schema.env, &header.schema.env));
+            assert!(
+                world
+                    .eq_signature(&schema.signature, &header.schema.signature)
+                    .unwrap()
+            );
+            assert!(Arc::ptr_eq(&schema.predicates, &header.schema.predicates));
+        }
+        let foreign = fixture();
+        let foreign_decl = foreign.normalized_callables.last().unwrap().declaration;
+        assert!(world.normalized_declaration_schema(foreign_decl).is_err());
+        let missing = DeclId {
+            snapshot: world.registry,
+            index: u32::MAX,
+        };
+        assert!(world.normalized_declaration_schema(missing).is_err());
+    }
+
+    #[test]
+    fn normalized_schema_index_does_not_bypass_poisoned_work_authority() {
+        let world = fixture();
+        let declaration = world.normalized_callables.last().unwrap().declaration;
+        assert!(world.budget.charge_work(usize::MAX).is_err());
+        let failure = world
+            .normalized_declaration_schema(declaration)
+            .unwrap_err();
+        assert!(failure.is_resource());
+    }
+
+    #[test]
+    fn normalized_schema_index_miss_preserves_required_item_authority() {
+        let program = frontend::parse("trait Has{fn get(x:i32)->i32;}fn main(){}").unwrap();
+        let plan = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
+        let world = plan.trait_world().unwrap();
+        let item = world.headers.items.last().unwrap();
+        assert!(
+            !world
+                .normalized_callable_index
+                .iter()
+                .any(|(id, _)| *id == item.declaration)
+        );
+        let schema = world
+            .normalized_declaration_schema(item.declaration)
+            .unwrap();
+        let authoritative = world.schema.declaration_schema(item.declaration).unwrap();
+        assert!(Arc::ptr_eq(&schema.env, &authoritative.env));
+        assert!(
+            world
+                .eq_signature(&schema.signature, &authoritative.signature)
+                .unwrap()
+        );
     }
 
     fn assignment(world: &ValidatedTraitWorld) -> (usize, AssociatedTypeValue) {
