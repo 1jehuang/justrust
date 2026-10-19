@@ -616,6 +616,7 @@ impl NativeParserInput {
                                 | crate::compiler::token::LiteralKind::Float
                                 | crate::compiler::token::LiteralKind::String
                                 | crate::compiler::token::LiteralKind::Char
+                                | crate::compiler::token::LiteralKind::Byte
                         ) || event
                             .literal
                             .as_ref()
@@ -741,13 +742,17 @@ impl NativeParserInput {
                                     &[native_part(event)?],
                                 )?;
                             }
-                            LiteralKind::Char => {
+                            LiteralKind::Char | LiteralKind::Byte => {
                                 input.push_range(
                                     projection,
                                     event.prepared.clone(),
                                     event.line,
                                     event.column,
-                                    ParserTokenKind::Char,
+                                    if kind == LiteralKind::Byte {
+                                        ParserTokenKind::Byte
+                                    } else {
+                                        ParserTokenKind::Char
+                                    },
                                     None,
                                     &[native_part(event)?],
                                 )?;
@@ -759,7 +764,7 @@ impl NativeParserInput {
                                 return Err(event_error(
                                     event,
                                     SourceErrorKind::Unsupported,
-                                    "raw, byte and C literals are unsupported",
+                                    "raw, byte string and C literals are unsupported",
                                 ));
                             }
                         }
@@ -1533,12 +1538,17 @@ mod tests {
             }
             cursor.bump();
         }
-        // Char now has a native semantic token rather than deferred syntax.
-        assert!(count >= 7);
+        // Char and byte now have native semantic tokens rather than deferred syntax.
+        assert!(count >= 6);
         assert!(
             buffer
                 .iter()
                 .any(|token| token.kind == ParserTokenKind::Char)
+        );
+        assert!(
+            buffer
+                .iter()
+                .any(|token| token.kind == ParserTokenKind::Byte)
         );
     }
 
@@ -1909,12 +1919,18 @@ mod tests {
 
     #[test]
     fn richer_lexical_classes_are_rejected_before_string_named_ast_lowering() {
+        let input = super::super::lex("b'x'").unwrap();
+        let view = super::super::TokenCursor::new(&input).current();
+        assert!(view.is_byte());
+        assert_eq!(view.text, "b'x'");
+        assert!(!view.is_char());
+        assert!(!view.matches("b'x'"));
+        assert!(view.name.is_none());
         for text in [
             "\u{feff}fn f(){}",
             "#!/bin/native\nfn f(){}",
             "r#name",
             "水",
-            "b'x'",
             "b\"x\"",
             "r\"x\"",
             "c\"x\"",

@@ -278,7 +278,15 @@ fn escape(
 ) -> Result<(usize, Option<char>, bool), LiteralError> {
     let mut at = slash + 1;
     let Some(ch) = text[at..].chars().next() else {
-        return Err(fault(text, at, "unsupported string escape"));
+        return Err(fault(
+            text,
+            at,
+            if byte {
+                "incomplete byte escape"
+            } else {
+                "unsupported string escape"
+            },
+        ));
     };
     work(budget, ch.len_utf8())?;
     let decoded = match ch {
@@ -356,7 +364,24 @@ fn escape(
             }
             char::from_u32(value).ok_or_else(|| fault(text, at, "invalid unicode scalar"))?
         }
-        _ => return Err(fault(text, at, "unsupported string escape")),
+        'u' if byte => {
+            return Err(fault(
+                text,
+                at,
+                "Unicode escapes are not allowed in byte literals",
+            ));
+        }
+        _ => {
+            return Err(fault(
+                text,
+                at,
+                if byte {
+                    "unknown byte escape"
+                } else {
+                    "unsupported string escape"
+                },
+            ));
+        }
     };
     if c_string && decoded == '\0' {
         return Err(fault(text, at, "nul in C string literal"));

@@ -65,9 +65,95 @@ pub(super) fn parse_char_literal(text: &str) -> Result<char, &'static str> {
     Ok(scalar)
 }
 
+/// Decode a byte without ever truncating a Unicode scalar. Expanded and
+/// original spellings use the same checked path, including suffix rejection.
+pub(super) fn parse_byte_literal(text: &str) -> Result<u8, &'static str> {
+    let body = text
+        .strip_prefix("b'")
+        .and_then(|s| s.strip_suffix('\''))
+        .ok_or("byte literal suffix or delimiter is invalid")?;
+    let mut bytes = body.bytes();
+    let first = bytes.next().ok_or("byte literal is empty")?;
+    let value = if first == b'\\' {
+        match bytes.next().ok_or("incomplete byte escape")? {
+            b'n' => b'\n',
+            b'r' => b'\r',
+            b't' => b'\t',
+            b'0' => 0,
+            b'\\' => b'\\',
+            b'\'' => b'\'',
+            b'"' => b'"',
+            b'x' => {
+                let mut value = 0;
+                for _ in 0..2 {
+                    let digit = bytes
+                        .next()
+                        .and_then(|b| (b as char).to_digit(16))
+                        .ok_or("byte hex escape requires two ASCII hex digits")?;
+                    value = value * 16 + digit as u8;
+                }
+                value
+            }
+            b'u' => return Err("Unicode escapes are not allowed in byte literals"),
+            _ => return Err("unknown byte escape"),
+        }
+    } else {
+        if !first.is_ascii() || matches!(first, b'\'' | b'\n' | b'\r' | b'\t') {
+            return Err("byte literal requires one ASCII byte or byte escape");
+        }
+        first
+    };
+    if bytes.next().is_some() {
+        return Err("byte literal contains extra bytes");
+    }
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn byte_decoding_is_exact_and_never_truncates_unicode() {
+        for value in 0..=u8::MAX {
+            assert_eq!(parse_byte_literal(&format!("b'\\x{value:02x}'")), Ok(value));
+            assert_eq!(parse_byte_literal(&format!("b'\\x{value:02X}'")), Ok(value));
+        }
+        for (source, value) in [
+            ("b'a'", b'a'),
+            (r"b'\n'", b'\n'),
+            (r"b'\r'", b'\r'),
+            (r"b'\t'", b'\t'),
+            (r"b'\0'", 0),
+            (r"b'\\'", b'\\'),
+            (r"b'\''", b'\''),
+            ("b'\\\"'", b'"'),
+        ] {
+            assert_eq!(parse_byte_literal(source), Ok(value), "{source}");
+        }
+        for source in [
+            "b''",
+            "b'ab'",
+            "b'é'",
+            "b'水'",
+            "b'🦀'",
+            "b'\n'",
+            "b'\r'",
+            "b'\t'",
+            r"b'\u{41}'",
+            r"b'\x0'",
+            r"b'\xGG'",
+            r"b'\x１２'",
+            r"b'\x000'",
+            r"b'\q'",
+            "b'a'u8",
+            "b'a'_",
+            "'a'",
+            "b'\\'",
+        ] {
+            assert!(parse_byte_literal(source).is_err(), "{source}");
+        }
+    }
+
     #[test]
     fn scalar_and_escape_decoding() {
         for (source, expected) in [
