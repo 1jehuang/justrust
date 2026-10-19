@@ -1213,7 +1213,7 @@ impl SourceInventory {
                     self.bind(name, node.clone(), None, None, None, budget)?;
                 }
             }
-            Pattern::Apply { pattern, .. } => {
+            Pattern::Apply { pattern, .. } | Pattern::Ref { pattern, .. } => {
                 self.shadow_pattern(pattern, node, budget, depth + 1)?
             }
             Pattern::Tuple(fields) | Pattern::Array(fields) => {
@@ -4537,6 +4537,14 @@ pub enum Pattern {
     Binding {
         name: AstIdent,
         mutable: bool,
+        /// Explicit `ref`/`ref mut` binding mode. Default binding modes
+        /// through references are inferred by the checker, not the parser.
+        by_ref: Option<ir::BorrowKind>,
+    },
+    /// Explicit `&pat` / `&mut pat` reference pattern.
+    Ref {
+        kind: ir::BorrowKind,
+        pattern: Box<Pattern>,
     },
     Tuple(Vec<Pattern>),
     TupleRest(PositionalRest),
@@ -7217,7 +7225,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                             .map_err(native_adapter::transport_error)?;
                     }
                 }
-                Pattern::Apply { pattern, .. } => pending
+                Pattern::Apply { pattern, .. } | Pattern::Ref { pattern, .. } => pending
                     .push(pattern)
                     .map_err(native_adapter::transport_error)?,
                 _ => {}
@@ -9425,6 +9433,16 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.nesting -= 1;
         result
     }
+    /// The operand of a reference pattern binds tighter than `|` and `@`.
+    fn pattern_no_alternatives(&mut self) -> Result<Pattern, ParseError> {
+        if self.nesting >= 128 {
+            return Err(self.limit("pattern nesting exceeds limit 128"));
+        }
+        self.nesting += 1;
+        let result = self.pattern_inner();
+        self.nesting -= 1;
+        result
+    }
     fn pattern(&mut self) -> Result<Pattern, ParseError> {
         if self.nesting >= 128 {
             return Err(self.limit("pattern nesting exceeds limit 128"));
@@ -9638,6 +9656,43 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         Err(self.error("expected a literal or range pattern"))
     }
+    /// `ref`/`ref mut` bindings and `&pat`/`&mut pat`, kept out of
+    /// `pattern_inner` so the recursive parser frame stays small.
+    #[inline(never)]
+    fn reference_pattern(&mut self) -> Result<Pattern, ParseError> {
+        if self.eat("ref") {
+            let kind = if self.eat("mut") {
+                ir::BorrowKind::Mut
+            } else {
+                ir::BorrowKind::Shared
+            };
+            return Ok(Pattern::Binding {
+                name: self.ident()?,
+                mutable: false,
+                by_ref: Some(kind),
+            });
+        }
+        let double = self.is("&&");
+        self.cursor.bump();
+        let kind = if self.eat("mut") {
+            ir::BorrowKind::Mut
+        } else {
+            ir::BorrowKind::Shared
+        };
+        let inner = self.pattern_no_alternatives()?;
+        let pattern = Pattern::Ref {
+            kind,
+            pattern: Box::new(inner),
+        };
+        Ok(if double {
+            Pattern::Ref {
+                kind: ir::BorrowKind::Shared,
+                pattern: Box::new(pattern),
+            }
+        } else {
+            pattern
+        })
+    }
     fn pattern_inner(&mut self) -> Result<Pattern, ParseError> {
         if self.is("..=") || self.is("..") || self.range_bound_start() {
             return self.scalar_pattern();
@@ -9645,13 +9700,8 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.token().string {
             return Err(self.unsupported("string literal patterns are unsupported"));
         }
-        if self.is("ref") {
-            return Err(self.unsupported("reference binding patterns are unsupported"));
-        }
-        if self.is("&") || self.is("&&") {
-            return Err(
-                self.unsupported("reference patterns and match ergonomics are unsupported in B1")
-            );
+        if self.is("ref") || self.is("&") || self.is("&&") {
+            return self.reference_pattern();
         }
         if self.eat("true") {
             return Ok(Pattern::Bool(true));
@@ -9706,6 +9756,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Ok(Pattern::Binding {
                 name: self.ident()?,
                 mutable: true,
+                by_ref: None,
             });
         }
         let generic_path = self.generic_path(false)?;
@@ -9768,6 +9819,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     .single()
                     .ok_or_else(|| self.error("expected local binding name"))?,
                 mutable: false,
+                by_ref: None,
             });
         }
         let mut fields = Vec::new();
@@ -9780,21 +9832,33 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
                 break;
             }
-            let mutable = self.eat("mut");
+            let by_ref = if self.eat("ref") {
+                Some(if self.eat("mut") {
+                    ir::BorrowKind::Mut
+                } else {
+                    ir::BorrowKind::Shared
+                })
+            } else {
+                None
+            };
+            let mutable = by_ref.is_none() && self.eat("mut");
             let token = self.token();
             if token.matches(token.text) && token.text.starts_with(|c: char| c.is_ascii_digit()) {
                 return Err(self.unsupported("numeric braced constructor patterns are unsupported"));
             }
             let field = self.ident()?;
             let pattern = if self.eat(":") {
-                if mutable {
-                    return Err(self.error("mut must apply to a binding, not a field selector"));
+                if mutable || by_ref.is_some() {
+                    return Err(
+                        self.error("mut or ref must apply to a binding, not a field selector")
+                    );
                 }
                 self.pattern()?
             } else {
                 Pattern::Binding {
                     name: field,
                     mutable,
+                    by_ref,
                 }
             };
             fields.push((field, pattern));
@@ -9913,7 +9977,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                     ) {
                         return Err(self.error("refutable literal pattern in let binding"));
                     }
-                    let Pattern::Binding { name, mutable } = pattern else {
+                    let Pattern::Binding {
+                        name,
+                        mutable,
+                        by_ref: None,
+                    } = pattern
+                    else {
                         return Err(
                             self.unsupported("deferred pattern declarations are unsupported")
                         );
@@ -9966,7 +10035,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                 self.expect(";")?;
                 self.bind_pattern_lexical(&pattern)?;
                 let ty = annotation.unwrap_or(Type::Infer);
-                if let Pattern::Binding { name, mutable } = pattern {
+                if let Pattern::Binding {
+                    name,
+                    mutable,
+                    by_ref: None,
+                } = pattern
+                {
                     statements.push(Stmt::Let {
                         name: BindingName::Named(name),
                         mutable,
@@ -11333,24 +11407,9 @@ mod inactive_item_syntax_tests {
     }
 
     #[test]
-    fn aggregate_ref_binding_is_typed_unsupported_at_the_original_keyword() {
+    fn aggregate_ref_binding_parses_as_a_borrowing_binding() {
         let source = "struct Pair(i32,i32);fn main(){match Pair(40,2){Pair(ref a,b)=>*a+b};}";
-        let error = parse_syntax_unprepared(source).unwrap_err();
-        assert_eq!(
-            error.kind,
-            super::super::source::SourceErrorKind::Unsupported
-        );
-        let at = source.find("ref").unwrap();
-        assert_eq!(error.bytes, at..at + 3);
-        assert_eq!(&source[error.bytes.clone()], "ref");
-        let primary = error.primary.unwrap();
-        assert_eq!(primary.lo as usize, at);
-        assert_eq!(primary.hi as usize, at + 3);
-        assert!(
-            error
-                .message
-                .starts_with("reference binding patterns are unsupported")
-        );
+        parse_syntax_unprepared(source).unwrap();
     }
 
     #[test]
@@ -12432,6 +12491,7 @@ fn walk_depth_inspecting(
                             push(DepthNode::Pattern(pattern))?;
                         }
                     }
+                    Pattern::Ref { pattern, .. } => push(DepthNode::Pattern(pattern))?,
                     _ => {}
                 }
             }

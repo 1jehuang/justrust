@@ -229,7 +229,7 @@ fn f(p:(bool,bool))->i32{match p{(true,_)=>1,(true,false)=>2,(false,_)=>3}}fn ma
             source: r#"fn f(p:(bool,bool))->i32{match p{(ref a,_)=>1}}fn main(){if f((false,true))==1{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "plainlet_boundary",
@@ -426,7 +426,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (24, 8));
-    assert_eq!(partition, (21, 6, 3, 2));
+    assert_eq!(partition, (22, 6, 2, 2));
 }
 #[test]
 fn stock_nested_pattern_usefulness_oracle_edition2024_actual_toolchain() {
@@ -543,7 +543,8 @@ fn checked_product_rows_preserve_real_domains_predicates_and_universal_ownership
     let mut decisions = 0;
     for case in cases()
         .into_iter()
-        .filter(|c| c.outcome == Outcome::Runtime)
+        // `(ref a, _)` is an irrefutable borrowing aggregate, not a decision.
+        .filter(|c| c.outcome == Outcome::Runtime && c.name != "reference_boundary")
     {
         let prepared = source::prepare_text(
             "usefulness.rs",
@@ -668,7 +669,7 @@ fn closed_parser_lint_and_plain_let_boundaries_keep_distinct_stock_classificatio
             counts.2 += 1;
         }
     }
-    assert_eq!(counts, (1, 1, 3));
+    assert_eq!(counts, (1, 1, 2));
 }
 #[test]
 fn native_pattern_usefulness_workers1_8_check_build_no_compiler_fallback() {
@@ -760,7 +761,7 @@ fn native_pattern_usefulness_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 128);
-    assert_eq!(modes, (42, 42, 12, 12, 6, 6, 4, 4));
+    assert_eq!(modes, (44, 44, 12, 12, 4, 4, 4, 4));
     eprintln!(
         "NATIVE PATTERN USEFULNESS:128 cells, modes{modes:?};42 nonempty-output main images;12 stock-valid Unsupported cells and8 stock-invalid/native-Unsupported cells are distinct boundaries, not ordinary-invalid parity or full Rust support"
     );

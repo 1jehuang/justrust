@@ -179,9 +179,11 @@ pub(super) struct LoopFrame {
 }
 pub(super) struct PatternLocal {
     pub(super) name: AstIdent,
+    /// The binding local's own type: `&kind T` for a borrowing binding.
     pub(super) ty: ir::Ty,
     pub(super) mutable: bool,
     pub(super) projection: Vec<ir::Projection>,
+    pub(super) borrow: Option<ir::BorrowKind>,
 }
 
 struct PendingPatternBinding {
@@ -307,6 +309,18 @@ pub(super) struct PatternLocalInput<'p> {
     ty: &'p ir::Ty,
     mutable: bool,
     path: &'p [ir::Projection],
+    borrow: Option<ir::BorrowKind>,
+}
+impl PatternLocalInput<'_> {
+    fn local_ty(&self) -> ir::Ty {
+        match self.borrow {
+            None => self.ty.clone(),
+            Some(kind) => ir::Ty::Ref {
+                kind,
+                referent: Arc::new(self.ty.clone()),
+            },
+        }
+    }
 }
 pub(super) trait PatternLocalSink {
     fn len(&self) -> usize;
@@ -332,9 +346,10 @@ impl PatternLocalSink for Vec<PatternLocal> {
         }
         self.push(PatternLocal {
             name: input.name,
-            ty: input.ty.clone(),
+            ty: input.local_ty(),
             mutable: input.mutable,
             projection: input.path.to_vec(),
+            borrow: input.borrow,
         });
         Ok(())
     }
@@ -360,9 +375,10 @@ impl PatternLocalSink for PendingPatternBindings {
             .push(PendingPatternBinding {
                 local: PatternLocal {
                     name: input.name,
-                    ty: input.ty.clone(),
+                    ty: input.local_ty(),
                     mutable: input.mutable,
                     projection,
+                    borrow: input.borrow,
                 },
                 key: input.key,
                 _projection_lease: lease,
@@ -1452,6 +1468,10 @@ pub(super) struct Checker<'a> {
     /// Nesting depth of enclosing `unsafe` blocks; raw pointer dereference
     /// requires at least one (E0133).
     pub(super) unsafe_depth: usize,
+    /// Default binding mode of the pattern position being checked. `None` is
+    /// move mode; implicit dereferences of matched references switch it to a
+    /// borrow. Always restored after each implicit dereference.
+    pub(super) binding_mode: std::cell::Cell<Option<ir::BorrowKind>>,
 }
 #[derive(Clone, Copy)]
 pub(super) enum Expectation<'a> {
@@ -2387,8 +2407,18 @@ impl<'a> Checker<'a> {
         }
         self.infer_work(0)?;
         self.accessible(ty)?;
+        if Self::implicitly_dereferenced(pattern, ty) {
+            return self.implicit_deref(ty, &mut Vec::new(), |this, referent, _| {
+                this.validate_aggregate_pattern(pattern, referent, depth + 1, work, binders)
+            });
+        }
         let pattern = self.pattern_source(pattern, ty)?;
         match pattern {
+            Pattern::Ref { kind, pattern } => {
+                self.explicit_deref(*kind, ty, &mut Vec::new(), |this, referent, _| {
+                    this.validate_aggregate_pattern(pattern, referent, depth + 1, work, binders)
+                })
+            }
             Pattern::Array(fields) => {
                 let (element, _) = self.array_pattern_type(pattern, ty)?;
                 for field in fields {
@@ -2641,13 +2671,18 @@ impl<'a> Checker<'a> {
             path.len().checked_add(1).ok_or("decision path overflow")?,
         )?;
         self.accessible(ty)?;
-        if matches!(ty, ir::Ty::Ref { .. })
-            && !matches!(pattern, Pattern::Wildcard | Pattern::Binding { .. })
-        {
-            return Err(self.reference_pattern_unsupported());
+        if Self::implicitly_dereferenced(pattern, ty) {
+            return self.implicit_deref(ty, path, |this, referent, path| {
+                this.collect_decision(pattern, referent, path, pending, depth + 1)
+            });
         }
         let pattern = self.pattern_source(pattern, ty)?;
         match pattern {
+            Pattern::Ref { kind, pattern } => {
+                self.explicit_deref(*kind, ty, path, |this, referent, path| {
+                    this.collect_decision(pattern, referent, path, pending, depth + 1)
+                })?;
+            }
             Pattern::Wildcard => {}
             Pattern::Binding { .. } => self.pattern_locals(
                 pattern,
@@ -2935,15 +2970,16 @@ impl<'a> Checker<'a> {
         pattern: &Pattern,
         domain: &ir::Ty,
     ) -> Result<PendingPatternPlan, String> {
-        if matches!(domain, ir::Ty::Ref { .. })
-            && !matches!(pattern, Pattern::Wildcard | Pattern::Binding { .. })
-        {
-            return Err(self.reference_pattern_unsupported());
+        if Self::implicitly_dereferenced(pattern, domain) {
+            return self.collect_complex_pattern(pattern, domain);
         }
         let pattern = self.pattern_source(pattern, domain)?;
         let mut bindings = self.pending_pattern_bindings()?;
         let test = match pattern {
             Pattern::Wildcard => PatternTest::Wildcard,
+            Pattern::Binding {
+                by_ref: Some(_), ..
+            } => return self.collect_complex_pattern(pattern, domain),
             Pattern::Binding { .. } => {
                 self.pattern_locals(
                     pattern,
@@ -3022,13 +3058,22 @@ impl<'a> Checker<'a> {
             let mut projection = self.retained_pattern_vec(binding.projection.len())?;
             projection.extend_from_slice(&binding.projection);
             let local = self.local(binding.name, binding.ty.clone(), binding.mutable)?;
-            bindings.push(ir::PatternBinding { local, projection });
+            bindings.push(ir::PatternBinding {
+                local,
+                projection,
+                borrow: binding.borrow,
+            });
         }
         Ok(match plan.test {
             PatternTest::Wildcard => ir::MatchPattern::Wildcard,
             PatternTest::Bool(value) => ir::MatchPattern::Bool(value),
             PatternTest::Int(value) => ir::MatchPattern::Int(value),
             PatternTest::Unit => ir::MatchPattern::Unit,
+            // Selecting through a reference without binding anything reads
+            // nothing: it is exactly an irrefutable wildcard.
+            PatternTest::Aggregate(ir::Ty::Ref { .. }) if bindings.is_empty() => {
+                ir::MatchPattern::Wildcard
+            }
             PatternTest::Aggregate(ty) => ir::MatchPattern::Aggregate { ty, bindings },
             PatternTest::EnumVariant { ty, variant } => ir::MatchPattern::EnumVariant {
                 ty,
@@ -3162,6 +3207,7 @@ impl<'a> Checker<'a> {
             applications: std::cell::RefCell::new(Vec::new()),
             inference_evidence_cache: std::cell::RefCell::new(HashMap::new()),
             unsafe_depth: 0,
+            binding_mode: std::cell::Cell::new(None),
             canonical: None,
         }
     }
@@ -4241,16 +4287,75 @@ impl<'a> Checker<'a> {
         self.accessible(&projected)?;
         Ok((index, projected))
     }
-    fn reference_pattern_unsupported(&self) -> String {
-        super::super::source::SourceError {
-            kind: super::super::source::SourceErrorKind::Unsupported,
-            primary: None,
-            message: "reference patterns and implicit match ergonomics are unsupported in B1"
-                .into(),
-            _diagnostic_lease: None,
-            location: None,
+    /// A non-reference pattern matched against a reference implicitly
+    /// dereferences it (RFC 2005 default binding modes, edition 2024 rules).
+    pub(super) fn implicitly_dereferenced(pattern: &Pattern, ty: &ir::Ty) -> bool {
+        matches!(ty, ir::Ty::Ref { .. })
+            && !matches!(
+                pattern,
+                Pattern::Wildcard | Pattern::Binding { .. } | Pattern::Ref { .. }
+            )
+    }
+    /// Check `pattern` against the referent of `ty` with the default binding
+    /// mode switched to a borrow, recording the dereference in `path`.
+    pub(super) fn implicit_deref<R>(
+        &self,
+        ty: &ir::Ty,
+        path: &mut Vec<ir::Projection>,
+        f: impl FnOnce(&Self, &ir::Ty, &mut Vec<ir::Projection>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let ir::Ty::Ref { kind, referent } = ty else {
+            return Err("contract: implicit dereference of a non-reference".into());
+        };
+        if path.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+            return Err("pattern projection depth exceeds limit".into());
         }
-        .to_string()
+        let previous = self.binding_mode.get();
+        let mode = match (previous, kind) {
+            (Some(ir::BorrowKind::Shared), _) | (_, ir::BorrowKind::Shared) => {
+                ir::BorrowKind::Shared
+            }
+            _ => ir::BorrowKind::Mut,
+        };
+        self.binding_mode.set(Some(mode));
+        path.push(ir::Projection::Deref);
+        let result = f(self, referent, path);
+        path.pop();
+        self.binding_mode.set(previous);
+        result
+    }
+    /// An explicit `&pat`/`&mut pat` dereference, only valid in move mode.
+    pub(super) fn explicit_deref<R>(
+        &self,
+        kind: ir::BorrowKind,
+        ty: &ir::Ty,
+        path: &mut Vec<ir::Projection>,
+        f: impl FnOnce(&Self, &ir::Ty, &mut Vec<ir::Projection>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        if self.binding_mode.get().is_some() {
+            return Err(
+                "cannot explicitly dereference within an implicitly-borrowing pattern".into(),
+            );
+        }
+        let ir::Ty::Ref {
+            kind: actual,
+            referent,
+        } = ty
+        else {
+            return Err(format!(
+                "mismatched types: reference pattern against {ty:?}"
+            ));
+        };
+        if *actual != kind {
+            return Err("mismatched types: reference pattern mutability differs".into());
+        }
+        if path.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+            return Err("pattern projection depth exceeds limit".into());
+        }
+        path.push(ir::Projection::Deref);
+        let result = f(self, referent, path);
+        path.pop();
+        result
     }
     /// True when dropping a value of `ty` runs no user destructor.
     pub(super) fn trivially_dropped(&self, ty: &ir::Ty) -> Result<bool, String> {
@@ -4283,12 +4388,19 @@ impl<'a> Checker<'a> {
         {
             return Err("unsupported: destructuring a normal Drop owner".into());
         }
-        if matches!(ty, ir::Ty::Ref { .. })
-            && !matches!(pattern, Pattern::Wildcard | Pattern::Binding { .. })
-        {
-            return Err(self.reference_pattern_unsupported());
+        if Self::implicitly_dereferenced(pattern, ty) {
+            self.implicit_deref(ty, &mut Vec::new(), |this, referent, _| {
+                this.pattern_ty(pattern, referent)
+            })?;
+            return Ok(ty.clone());
         }
         match pattern {
+            Pattern::Ref { kind, pattern: inner } => {
+                self.explicit_deref(*kind, ty, &mut Vec::new(), |this, referent, _| {
+                    this.pattern_ty(inner, referent)
+                })?;
+                Ok(ty.clone())
+            }
             Pattern::Path(name) | Pattern::Variant { name,.. } | Pattern::VariantRest { name, .. } => {
                 if let Some(tuple) = self.tuple_pattern_type(pattern, ty)? { return Ok(ir::Ty::Struct(tuple)); }
                 let expected = if let ir::Ty::Enum(enumeration) = ty {
@@ -4350,7 +4462,17 @@ impl<'a> Checker<'a> {
         if path.len() > ir::MAX_PATTERN_PROJECTION_DEPTH {
             return Err("pattern projection depth exceeds limit".into());
         }
+        if Self::implicitly_dereferenced(pattern, ty) {
+            return self.implicit_deref(ty, path, |this, referent, path| {
+                this.pattern_locals(pattern, referent, path, names, pending, work)
+            });
+        }
         match pattern {
+            Pattern::Ref { kind, pattern } => {
+                return self.explicit_deref(*kind, ty, path, |this, referent, path| {
+                    this.pattern_locals(pattern, referent, path, names, pending, work)
+                });
+            }
             Pattern::Apply { .. } => {
                 return self.pattern_locals(
                     self.pattern_source(pattern, ty)?,
@@ -4467,10 +4589,38 @@ impl<'a> Checker<'a> {
             Pattern::Bool(_) | Pattern::Int { .. } | Pattern::Char(_) | Pattern::Range { .. } => {
                 return Err(Self::nested_refutable_literal_unsupported());
             }
-            Pattern::Binding { name, mutable } => {
-                if path
-                    .iter()
-                    .any(|step| matches!(step, ir::Projection::ConstantIndex(_)))
+            Pattern::Binding {
+                name,
+                mutable,
+                by_ref,
+            } => {
+                let mode = self.binding_mode.get();
+                let borrow = match (by_ref, mode) {
+                    (Some(_), Some(_)) => {
+                        return Err(
+                            "cannot explicitly borrow within an implicitly-borrowing pattern"
+                                .into(),
+                        );
+                    }
+                    (Some(kind), None) => Some(*kind),
+                    (None, Some(_)) if *mutable => {
+                        return Err(
+                            "cannot mutably bind by value within an implicitly-borrowing pattern"
+                                .into(),
+                        );
+                    }
+                    (None, mode) => mode,
+                };
+                if borrow.is_none()
+                    && path.contains(&ir::Projection::Deref)
+                    && !self.facts().must_copy(ty)?
+                {
+                    return Err("cannot move a non-Copy value out of a reference".into());
+                }
+                if borrow.is_none()
+                    && path
+                        .iter()
+                        .any(|step| matches!(step, ir::Projection::ConstantIndex(_)))
                     && !self.facts().must_copy(ty)?
                 {
                     return Err(Self::array_pattern_unsupported(
@@ -4499,6 +4649,7 @@ impl<'a> Checker<'a> {
                         ty,
                         mutable: *mutable,
                         path,
+                        borrow,
                     },
                     names,
                 )?;
@@ -4964,6 +5115,7 @@ impl<'a> Checker<'a> {
                         bindings.push(ir::PatternBinding {
                             local,
                             projection: binding.projection,
+                            borrow: binding.borrow,
                         });
                     }
                     (
@@ -6589,15 +6741,6 @@ impl<'a> Checker<'a> {
             }
         }
         self.accessible(&domain)?;
-        if matches!(domain, ir::Ty::Ref { .. })
-            && arms.clone().any(|arm| {
-                arm.pattern.is_some_and(|pattern| {
-                    !matches!(pattern, Pattern::Wildcard | Pattern::Binding { .. })
-                })
-            })
-        {
-            return Err(self.reference_pattern_unsupported());
-        }
         let mut matrix = super::pattern_usefulness::CoverageMatrix::new(
             domain.clone(),
             self.facts(),

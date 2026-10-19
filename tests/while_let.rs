@@ -211,7 +211,7 @@ fn cases() -> Vec<Case> {
             source: r#"enum Choice{Some(i32),None}fn main(){let value=Choice::Some(42);while let Choice::Some(ref x)=value{if *x==42{println!("ok");}break;}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "or_boundary",
@@ -444,7 +444,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (23, 10));
-    assert_eq!(partition, (19, 10, 4));
+    assert_eq!(partition, (20, 10, 3));
 }
 #[test]
 fn stock_while_let_mapping_ownership_and_valid_unsupported_oracle_edition2024() {
@@ -617,7 +617,7 @@ fn real_iteration_plans_have_owned_downcasts_and_false_breaks_to_the_actual_loop
         counts.1 += loops;
         counts.2 += enums;
     }
-    assert_eq!(counts, (18, 19, 12));
+    assert_eq!(counts, (19, 20, 13));
 }
 #[test]
 fn ordinary_scope_loopback_body_and_source_unit_failures_never_become_unsupported() {
@@ -656,10 +656,7 @@ fn valid_closed_while_let_patterns_keep_precise_parser_and_checker_phases() {
         )
         .unwrap();
         let parsed = frontend::parse_prepared(&prepared);
-        if matches!(
-            case.name,
-            "let_chain_boundary" | "reference_binding_boundary" | "or_boundary"
-        ) {
+        if matches!(case.name, "let_chain_boundary" | "or_boundary") {
             let error = match parsed {
                 Err(e) => e,
                 Ok(_) => panic!("{} parser boundary unexpectedly admitted", case.name),
@@ -687,7 +684,7 @@ fn valid_closed_while_let_patterns_keep_precise_parser_and_checker_phases() {
             counts.1 += 1;
         }
     }
-    assert_eq!(counts, (3, 1));
+    assert_eq!(counts, (2, 1));
 }
 #[test]
 fn native_while_let_workers1_8_check_build_no_compiler_fallback() {
@@ -775,7 +772,7 @@ fn native_while_let_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 132);
-    assert_eq!(modes, (38, 38, 20, 20, 8, 8));
+    assert_eq!(modes, (40, 40, 20, 20, 6, 6));
     eprintln!(
         "NATIVE WHILE-LET:132 cells, modes{modes:?};38 executed native main images (six deliberately empty main executions for the three exact completion controls, never execution of divergent value functions);16 stock-valid Unsupported cells are boundaries, not Rust-invalid parity or full Rust support"
     );

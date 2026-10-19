@@ -15,6 +15,7 @@ fn binding(local: usize, field: usize) -> PatternBinding {
     PatternBinding {
         local: LocalId(local),
         projection: vec![Projection::Field(field)],
+        borrow: None,
     }
 }
 
@@ -338,6 +339,7 @@ fn aggregate_binding_paths_cannot_overlap_parent_and_nested_field() {
         PatternBinding {
             local: LocalId(3),
             projection: vec![Projection::Field(0), Projection::Field(0)],
+            borrow: None,
         },
     ];
     reject(function);
@@ -365,7 +367,7 @@ fn aggregate_binding_admits_checked_field_then_constant_index_projection() {
 }
 
 #[test]
-fn aggregate_binding_cannot_import_deref_projection() {
+fn aggregate_binding_deref_projection_requires_exact_referent_type() {
     let mut function = fixture();
     let domain = Ty::Tuple(
         vec![
@@ -381,7 +383,15 @@ fn aggregate_binding_cannot_import_deref_projection() {
     function.exprs[0].ty = domain.clone();
     let (ty, bindings) = pattern(&mut function);
     *ty = domain;
+    // A by-value binding of a Copy referent is an explicit `(&x, _)` pattern.
+    // It is admitted only with the referent's exact type, never the carrier's.
     bindings[0].projection = vec![Projection::Field(0), Projection::Deref];
+    function.validate().unwrap();
+    let local = pattern(&mut function).1[0].local.0;
+    function.locals[local].ty = Ty::Ref {
+        kind: BorrowKind::Shared,
+        referent: Arc::new(Ty::Int(IntTy::I32)),
+    };
     reject(function);
 }
 

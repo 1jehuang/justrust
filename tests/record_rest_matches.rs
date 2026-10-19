@@ -207,7 +207,7 @@ fn cases() -> Vec<Case> {
             source: r#"struct Pair{a:i32,b:i32}fn main(){let value=Pair{a:40,b:2};let answer=match value{Pair{a:ref a,b,..}=>*a+b};if answer==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "macro_captured_binding_rest",
@@ -382,7 +382,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (19, 8));
-    assert_eq!(partition, (15, 8, 4));
+    assert_eq!(partition, (16, 8, 3));
 }
 #[test]
 fn stock_record_rest_privacy_ownership_oracle_edition2024() {
@@ -480,7 +480,9 @@ fn source_record_rest_ir_retains_only_selected_plain_field_bindings() {
         }
         let expected = match case.name {
             "all_rest_no_move" | "selected_wildcard_no_move" | "enum_rest_boundary" => 0,
-            "renamed_reordered_fields" | "nested_tuple_without_tuple_rest" => 2,
+            "renamed_reordered_fields"
+            | "nested_tuple_without_tuple_rest"
+            | "ref_binding_boundary" => 2,
             _ => 1,
         };
         assert_eq!(
@@ -492,7 +494,7 @@ fn source_record_rest_ir_retains_only_selected_plain_field_bindings() {
         counts.0 += 1;
         counts.1 += seen.len();
     }
-    assert_eq!(counts, (14, 13));
+    assert_eq!(counts, (15, 15));
 }
 
 #[test]
@@ -508,10 +510,7 @@ fn record_rest_closed_domains_reject_in_their_actual_frontend_phase() {
             &source::SourceOptions::default(),
         )
         .and_then(|prepared| frontend::parse_prepared(&prepared));
-        if matches!(
-            case.name,
-            "guard_boundary" | "or_boundary" | "ref_binding_boundary"
-        ) {
+        if matches!(case.name, "guard_boundary" | "or_boundary") {
             let error = match parsed {
                 Err(error) => error,
                 Ok(_) => panic!("{} must reject as explicit parser Unsupported", case.name),
@@ -550,7 +549,7 @@ fn record_rest_closed_domains_reject_in_their_actual_frontend_phase() {
             counts.1 += 1;
         }
     }
-    assert_eq!(counts, (3, 1));
+    assert_eq!(counts, (2, 1));
 }
 #[test]
 fn native_record_rest_workers1_8_check_build_no_compiler_fallback() {
@@ -637,7 +636,7 @@ fn native_record_rest_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 108);
-    assert_eq!(modes, (30, 30, 16, 16, 8, 8));
+    assert_eq!(modes, (32, 32, 16, 16, 6, 6));
     eprintln!(
         "NATIVE RECORD REST MATCHES:108 cells, modes{modes:?};30 executed native images;16 Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
     );

@@ -21,6 +21,7 @@ fn binding(local: usize, index: usize) -> PatternBinding {
     PatternBinding {
         local: LocalId(local),
         projection: vec![Projection::ConstantIndex(index)],
+        borrow: None,
     }
 }
 
@@ -152,10 +153,12 @@ fn array_tuple_nested_path_uses_constant_index_then_field() {
         PatternBinding {
             local: LocalId(1),
             projection: vec![Projection::ConstantIndex(0), Projection::Field(0)],
+            borrow: None,
         },
         PatternBinding {
             local: LocalId(2),
             projection: vec![Projection::ConstantIndex(1), Projection::Field(1)],
+            borrow: None,
         },
     ];
     accept(&function);
@@ -169,10 +172,12 @@ fn nested_fixed_array_path_preserves_two_independent_index_steps() {
         PatternBinding {
             local: LocalId(1),
             projection: vec![Projection::ConstantIndex(0), Projection::ConstantIndex(2)],
+            borrow: None,
         },
         PatternBinding {
             local: LocalId(2),
             projection: vec![Projection::ConstantIndex(1), Projection::ConstantIndex(0)],
+            borrow: None,
         },
     ];
     accept(&function);
@@ -273,10 +278,12 @@ fn array_pattern_bindings_cannot_overlap_nested_parent_and_child() {
         PatternBinding {
             local: LocalId(1),
             projection: vec![Projection::ConstantIndex(0)],
+            borrow: None,
         },
         PatternBinding {
             local: LocalId(2),
             projection: vec![Projection::ConstantIndex(0), Projection::Field(0)],
+            borrow: None,
         },
     ];
     reject(&function);
@@ -362,7 +369,7 @@ fn array_projection_cannot_continue_indexing_scalar_element() {
 }
 
 #[test]
-fn array_projection_cannot_import_deref_even_for_reference_element() {
+fn array_deref_projection_requires_the_referent_binding_type() {
     let mut function = fixture();
     replace_domain(
         &mut function,
@@ -376,7 +383,14 @@ fn array_projection_cannot_import_deref_even_for_reference_element() {
     );
     let bindings = pattern(&mut function).1;
     bindings.truncate(1);
+    // `[&x, ..]` legitimately binds the Copy referent; the binding local
+    // must then have the referent type, never the reference element type.
     bindings[0].projection = vec![Projection::ConstantIndex(0), Projection::Deref];
+    let local = bindings[0].local.0;
+    function.locals[local].ty = Ty::Ref {
+        kind: ir::BorrowKind::Shared,
+        referent: Arc::new(Ty::Int(IntTy::I32)),
+    };
     reject(&function);
 }
 
@@ -482,6 +496,7 @@ fn structural_ir_admission_does_not_grant_noncopy_indexed_move_permission() {
                         bindings: vec![PatternBinding {
                             local: selected,
                             projection: vec![Projection::ConstantIndex(0)],
+                            borrow: None,
                         }],
                     },
                     body: ExprId(1),

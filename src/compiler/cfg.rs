@@ -2724,6 +2724,44 @@ impl Lowerer<'_> {
         })
     }
 
+    /// Initialize one pattern binding from its selected source place. A
+    /// borrowing binding issues a fresh immediate loan of exactly that place,
+    /// so borrow and ownership analysis see a genuine reference, never a copy.
+    fn bind_selected(
+        &mut self,
+        binding: &ir::PatternBinding,
+        selected: Place,
+        origin: ExprId,
+    ) -> Result<(), String> {
+        let Some(kind) = binding.borrow else {
+            let operand = self.consume(selected)?;
+            self.assign(place(binding.local), Rvalue::Use(operand), Some(origin));
+            return Ok(());
+        };
+        if self.result.loan_sites.len() >= ir::MAX_LOAN_SITES || self.origins >= ir::MAX_LOAN_SITES
+        {
+            return Err("CFG loan site limit exceeded".into());
+        }
+        if !self.allocate(
+            1,
+            std::mem::size_of::<LoanSite>()
+                + selected.projection.len() * std::mem::size_of::<Projection>(),
+        ) {
+            return Err(self.resource_error.clone().unwrap());
+        }
+        self.origins += 1;
+        let loan = LoanId(self.result.loan_sites.len());
+        self.result.loan_sites.push(LoanSite {
+            kind,
+            place: selected,
+            origin: Some(origin),
+            timing: LoanTiming::Immediate,
+        });
+        self.used_loans.insert(loan);
+        self.assign(place(binding.local), Rvalue::Borrow(loan), Some(origin));
+        Ok(())
+    }
+
     /// Storage belongs to the caller's active scope. Match arms open a fresh
     /// arm scope; let-else success deliberately keeps the enclosing scope.
     fn initialize_pattern_bindings(
@@ -2763,11 +2801,7 @@ impl Lowerer<'_> {
                         selected.projection.extend_from_slice(&binding.projection);
                         selected
                     };
-                    self.assign(
-                        place(binding.local),
-                        Rvalue::Use(self.consume(selected)?),
-                        Some(id),
-                    );
+                    self.bind_selected(binding, selected, id)?;
                 }
             }
         }
@@ -3275,8 +3309,7 @@ impl Lowerer<'_> {
                         if completes {
                             let mut selected = source.clone();
                             selected.projection.extend_from_slice(&binding.projection);
-                            let operand = self.consume(selected)?;
-                            self.assign(place(binding.local), Rvalue::Use(operand), Some(*value));
+                            self.bind_selected(binding, selected, *value)?;
                         }
                     }
                     // Wildcard/rest have no bindings, loads, moves or storage
@@ -8591,6 +8624,7 @@ mod tests {
                                     bindings: vec![ir::PatternBinding {
                                         local: LocalId(1),
                                         projection: vec![projection],
+                                        borrow: None,
                                     }],
                                 },
                                 body: ExprId(1),
@@ -9416,6 +9450,7 @@ mod tests {
                                     bindings: vec![ir::PatternBinding {
                                         local: LocalId(1),
                                         projection: vec![Projection::Field(0)],
+                                        borrow: None,
                                     }],
                                 },
                                 body: ExprId(1),
@@ -9529,6 +9564,7 @@ mod tests {
                     bindings: vec![ir::PatternBinding {
                         local: LocalId(1),
                         projection: vec![Projection::Field(0)],
+                        borrow: None,
                     }],
                 },
                 ir::Stmt::Expr(ExprId(1)),

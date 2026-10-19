@@ -2150,6 +2150,7 @@ impl Resolver<'_> {
                 self.generic_path(path, module)?;
                 self.pattern(pattern, module, names)?;
             }
+            Pattern::Ref { pattern, .. } => self.pattern(pattern, module, names)?,
             Pattern::Variant { name, fields, .. } if name.anchor() == PathAnchor::SelfType => {
                 if !self.self_allowed {
                     return Err("Self outside impl".into());
@@ -2201,10 +2202,14 @@ impl Resolver<'_> {
                     .ok_or("unresolved zero-field constructor pattern")?;
                 *pattern = self.constructor_pattern(&item, name, false)?;
             }
-            Pattern::Binding { name, mutable } => {
+            Pattern::Binding {
+                name,
+                mutable,
+                by_ref,
+            } => {
                 let path = self.single_path(*name)?;
                 if let Some(item) = self.zero_constructor(&path, module)? {
-                    if *mutable {
+                    if *mutable || by_ref.is_some() {
                         return Err(format!(
                             "binding {} cannot shadow an enum variant",
                             self.ident_display(*name)?
