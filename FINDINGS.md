@@ -1,5 +1,24 @@
 # Findings: where agent build time goes
 
+## 2026-10-19: Trait fact mutation removed, PlanCtx authority still pending
+
+- Shared trait membership/projection memo and declared equality reduction locks
+  are replaced by invocation-local search scratch and prepublication immutable
+  reductions. The reachable-state audit shrinks by exactly 22 rows, with no
+  new whole-program kind or enlarged gate.
+- Recursive generic instance admission now borrows an explicit world-bound local
+  proof session. This preserves exact binder/assumption keys and restores the
+  original depth-limit failure instead of exhausting 4096 search obligations
+  through repeated tuple-prefix proofs. Actual work remains metered.
+- Forced-hosted run `20261018-201329287-2197770` passes 80 trait tests, including
+  independent graph readers and cross-world rejection. Strict all-target clippy
+  passes in `20261018-201343178-2204079`. Receipts and the earlier failed full
+  run are retained in `data/runs/semantic-facts/`, not hidden or called green.
+- `PlanCtx.state` remains shared mutable nominal authority. Its sealed immutable
+  application migration and a new complete composed acceptance run are still
+  required. This checkpoint is not full graph-integrity completion and makes
+  no compile-time speed claim.
+
 ## 2026-10-18: Immutable call-effect lookup removes repeated scans
 
 - Rejection tracing identified `borrow::Plan::call_write_targets` scanning all
