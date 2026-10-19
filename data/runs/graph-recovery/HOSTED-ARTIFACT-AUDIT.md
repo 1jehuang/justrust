@@ -65,3 +65,50 @@ or local build outputs were removed. All nine original stashes remain intact.
 No source change, install, push or main edit/build occurred. This disk recovery
 is not validation of the hosted build path or a compilation speed claim.
 Further cleanup requires separate authorization and fresh activity checks.
+
+## Second separately authorized generated-unit cleanup
+
+At 04:32:14 UTC the coordinator authorized only this additional hosted path:
+
+`/home/jeremy/.jcode/scratch/jr-graph/target/debug/build/justrust-engine`
+
+Read-only inventory found 369 `out` and 368 `fingerprint` directories beneath
+hexadecimal unit IDs, generated `.rmeta`, `.d` and test executable artifacts,
+and no `.rs`/`.md` files or symlinks. The newest generated file was dated
+04:10:18 UTC, matching the completed receipt validation. Its allocated `du`
+size was 9,697,107,968 bytes. This lane and dragon remained paused.
+
+An initial attempt at 04:32:49 UTC aborted before SSH or deletion because the
+fresh sync label was `connected to hosted, 0 roots mirrored, 0 files pushed`,
+not literal `idle`. The coordinator subsequently clarified that this represents
+quiescent transport only when independently supported by no own jobs, no
+Cargo/rustc/rsync process, no own-path live references and both lane pauses.
+The guard was not silently relaxed. A fresh check confirmed those conditions
+before proceeding, scanning fd/cwd/exe references for the entire own workspace.
+Unrelated hosted test processes were left alone.
+
+At 04:34:17 UTC, the final guarded command removed only the additional exact
+path. Realpath, non-symlink, Cargo tag, hex unit IDs, out/fingerprint-only child
+markers, absence of source files/symlinks, process and live-reference checks
+all passed immediately before removal. The command verified the candidate was
+absent afterward and the sibling `unicode-ident` build directory, compiler
+source and Cargo manifest still existed. No other `debug/build` path was
+removed.
+
+| Second-cleanup observation | Before | After |
+| --- | ---: | ---: |
+| Filesystem block size | 4,096 bytes | 4,096 bytes |
+| Total blocks | 126,692,793 | 126,692,793 |
+| Free blocks | 623,128 | 2,958,671 |
+| Available blocks | 619,032 | 2,954,575 |
+| Available bytes | 2,535,555,072 | 12,101,939,200 |
+
+The measured available-space increase was 9,566,384,128 bytes, distinct from
+the candidate's allocated `du` size. Available capacity afterward was about
+11.27 GiB. Small intervening filesystem changes between the first and second
+cleanup observations are not attributed to this lane.
+
+Cleanup stopped after this operation. No further path is authorized. Builds
+remain paused pending coordinator release; restored capacity alone is not
+permission for a full rebuild. Local git/source status remained clean before
+this documentation update, and all nine original stashes remain preserved.
