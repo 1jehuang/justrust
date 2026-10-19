@@ -62,6 +62,14 @@ with one and eight workers:
   bounds and associated equalities on associated declarations. Dropping the
   bound would admit invalid implementations.
 
+Projection-bearing source methods can use ordinary shared or mutable receivers
+when the receiver type is projection-free. Their value results use existing
+associated-assignment proof and source-region authority. Reference-bearing
+results and projected-reference parameters remain unsupported; accepting a
+borrowed receiver does not manufacture a returned-reference origin contract.
+Stock/native fixtures cover shared calls, mutable reborrows, and the unchanged
+reference-result boundary.
+
 The fixtures are stock acceptance evidence and native limitations, not claims
 of Iterator, dereference operators, adapters, or `for` desugaring support.
 
