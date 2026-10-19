@@ -968,6 +968,32 @@ fn matching(code: &[u8], open: usize) -> Option<usize> {
     None
 }
 
+/// Type-name references in one type expression. `dyn Trait` becomes the
+/// pseudo-declaration `dyn Trait`, which references every implementor.
+fn type_refs(ty: &str) -> Vec<String> {
+    let words = identifiers(ty);
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < words.len() {
+        if words[i] == "dyn" && i + 1 < words.len() {
+            // Path segments: `dyn tr::SchemaCx` takes the last segment before
+            // a non-path boundary. identifiers() splits on `::`, so walk while
+            // the source has `::` between words; approximate with next word
+            // that starts uppercase.
+            let mut j = i + 1;
+            while j + 1 < words.len() && words[j].starts_with(|c: char| c.is_ascii_lowercase()) {
+                j += 1;
+            }
+            out.push(format!("dyn {}", words[j]));
+            i = j + 1;
+            continue;
+        }
+        out.push(words[i].to_string());
+        i += 1;
+    }
+    out
+}
+
 /// Split `text` at top-level `sep`, ignoring separators nested in `()`, `[]`,
 /// `{}` or `<>`. `->` and `=>` do not close an angle bracket.
 fn split_top(text: &str, sep: u8) -> Vec<&str> {
@@ -1037,7 +1063,7 @@ fn field_type_refs(inner: &str, named: bool, refs: &mut BTreeSet<String>) {
         } else {
             piece
         };
-        refs.extend(identifiers(ty).into_iter().map(String::from));
+        refs.extend(type_refs(ty));
     }
 }
 
@@ -1122,11 +1148,7 @@ fn parse_type_decls(code: &[u8], file: &str, out: &mut BTreeMap<String, TypeDecl
                     let rhs_end = (k..bytes.len())
                         .find(|&e| bytes[e] == b';')
                         .unwrap_or(bytes.len());
-                    refs.extend(
-                        identifiers(&text[k + 1..rhs_end])
-                            .into_iter()
-                            .map(String::from),
-                    );
+                    refs.extend(type_refs(&text[k + 1..rhs_end]));
                     end = rhs_end + 1;
                     break;
                 }
@@ -1155,6 +1177,56 @@ fn parse_type_decls(code: &[u8], file: &str, out: &mut BTreeMap<String, TypeDecl
         }
         entry.refs.extend(refs);
         i = end.min(bytes.len()).max(i + 1);
+    }
+}
+
+/// `impl [path::]Trait[<..>] for Type` edges: a `dyn Trait` field reaches every
+/// implementing type, since any of them may sit behind the trait object.
+/// Recorded as a pseudo-declaration named `dyn Trait` referencing implementors.
+fn parse_trait_impls(code: &[u8], out: &mut BTreeMap<String, TypeDecl>, file: &str) {
+    let text = String::from_utf8_lossy(code);
+    for line in text.lines() {
+        let l = line.trim_start();
+        let Some(rest) = l.strip_prefix("impl") else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let rest = if rest.starts_with('<') {
+            match matching(rest.as_bytes(), 0) {
+                Some(close) => &rest[close + 1..],
+                None => continue,
+            }
+        } else {
+            rest
+        };
+        let Some(for_at) = rest.find(" for ") else {
+            continue;
+        };
+        let trait_part = &rest[..for_at];
+        let trait_name = trait_part
+            .split('<')
+            .next()
+            .unwrap_or("")
+            .rsplit("::")
+            .next()
+            .unwrap_or("")
+            .trim();
+        let ty_part = rest[for_at + 5..].trim();
+        let ty_name = ty_part
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == ':'))
+            .next()
+            .unwrap_or("")
+            .rsplit("::")
+            .next()
+            .unwrap_or("");
+        if trait_name.is_empty() || ty_name.is_empty() || trait_name.starts_with('!') {
+            continue;
+        }
+        let entry = out.entry(format!("dyn {trait_name}")).or_default();
+        if entry.file.is_empty() {
+            entry.file = file.to_string();
+        }
+        entry.refs.insert(ty_name.to_string());
     }
 }
 
@@ -1310,6 +1382,7 @@ fn scanned_type_decls() -> (BTreeMap<String, TypeDecl>, String) {
             .to_string_lossy()
             .to_string();
         parse_type_decls(&scan.code, &relative, &mut decls);
+        parse_trait_impls(&scan.code, &mut decls, &relative);
     }
     (decls, mod_rs)
 }
@@ -1607,6 +1680,14 @@ struct UsesGeneric { g: Generic<Leaf> }
 struct Cycle { next: Option<Box<Cycle>>, leaf: Leaf }
 struct Clean { a: Arc<[u8]>, b: Box<Leaf>, f: fn(u8) -> u8 }
 struct Budget { lock: std::sync::Mutex<u8> }
+trait Schema { fn get(&self) -> u8; }
+struct Adapter { state: std::sync::Arc<std::sync::Mutex<u8>> }
+impl tr::Schema for Adapter { fn get(&self) -> u8 { 0 } }
+struct PureSchema { n: u8 }
+impl<'a> Schema for PureSchema { fn get(&self) -> u8 { self.n } }
+struct World { schema: Arc<dyn tr::Schema + Send + Sync> }
+trait Unused {}
+struct NoImpls { u: Box<dyn Unused> }
 struct BudgetFailure { n: u32 }
 enum TokenError { Budget(BudgetFailure), Exhausted = 3, Named { why: Leaf } }
 struct HoldsError { error: TokenError, Guarded: u8 }
@@ -1634,6 +1715,8 @@ const S: &str = "struct InString { m: Mutex<u8> }";
         "HoldsError",
         "Bounded",
         "Attributed",
+        "World",
+        "NoImpls",
     ]
     .into_iter()
     .map(String::from)

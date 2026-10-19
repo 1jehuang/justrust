@@ -142,10 +142,13 @@ Limits, stated rather than claimed away:
 - Types are matched by identifier, not resolved path. Same-named types
   (`State`, `Function`, `Program`) merge conservatively, which can add false
   positives but not hide a real one with the same name.
+- `dyn Trait` fields reach every non-test `impl Trait for Type` in scope
+  (pending approval, branch `graph-integrity-dyn-pending-approval`). This
+  exposed `ValidatedTraitWorld.schema: Arc<dyn SchemaCx>` -> `SchemaAdapter.state`,
+  the same `PlanState` mutex as `PlanCtx`, under 10 more fact roots.
 - Generic parameters are not substituted. `Wrapper<T>` with `T = Mutex<_>` at
   a use site is caught only when the use site names `Mutex`, which a field type
-  does. A primitive hidden behind a trait object (`Arc<dyn SchemaCx>`), a
-  `fn`/closure capture, or a type from another crate or `std` that wraps a lock
+  does. A `fn`/closure capture, or a type from another crate or `std` that wraps a lock
   internally (for example `std::sync::mpsc`) is not followed.
 - Roots come from `src/compiler/mod.rs` call shapes. A fact read through a new
   helper with an unrecognized shape is not a root; the test fails if fewer
