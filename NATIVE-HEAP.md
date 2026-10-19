@@ -70,8 +70,11 @@ The actual mapping-boundary regression caught that bug, rather than a synthetic
 backend byte fixture.
 
 General public aggregate layout, size_of/align_of, raw pointer methods,
-over-aligned and zero-sized allocation, realloc, allocator traits, generic and
-aggregate Drop glue and owning collections remain follow-up work. Existing
+over-aligned and zero-sized allocation, realloc, allocator traits, nested and
+aggregate Drop glue and owning collections remain follow-up work. Bounded
+generic scalar/raw-pointer-field owners now resolve concrete canonical Drop
+instances, as described in DROP-NORMAL.md. This does not provide pointee
+`drop_in_place` or source Box. Existing
 private aggregate layout limits still apply. SCC-born loans live across a loop
 backedge remain an explicit unsupported boundary; the cleanup conflict control
 requires a real BorrowConflict as well, not just that boundary. Unsafe users

@@ -124,30 +124,22 @@ impl ValidatedFacts {
                 }
             }
         }
-        if let Some(h) = implementation {
+        if implementation.is_some() {
             let Ty::Struct(s) = ty else {
                 return Err(FactsError::unsupported(
                     self.budget(),
                     "unsupported: normal Drop requires a scalar-field struct",
                 ));
             };
-            if h.schema_env.is_generic()
-                || !s.def().type_args.is_empty()
-                || s.def().fields.iter().any(|f| {
-                    !matches!(
-                        f.ty,
-                        Ty::Int(_)
-                            | Ty::Float(_)
-                            | Ty::Bool
-                            | Ty::Char
-                            | Ty::Unit
-                            | Ty::RawPtr { .. }
-                    )
-                })
-            {
+            if s.def().fields.iter().any(|f| {
+                !matches!(
+                    f.ty,
+                    Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char | Ty::Unit | Ty::RawPtr { .. }
+                )
+            }) {
                 return Err(FactsError::unsupported(
                     self.budget(),
-                    "unsupported: normal Drop requires a nongeneric scalar-field struct",
+                    "unsupported: normal Drop requires a scalar-field struct",
                 ));
             }
             let call = TraitCall {
@@ -161,6 +153,12 @@ impl ValidatedFacts {
             };
             let resolved = self.world.resolve_trait_call(&call, self)?;
             let Callee::Direct(target) = resolved.callee() else {
+                if self.phase() == FactsPhase::Universal {
+                    // Canonical trait resolution succeeded, but the generic
+                    // owner has no concrete destructor target yet. Every closed
+                    // instance must resolve and demand it before executable CFG.
+                    return Ok(NormalDropPlan::Unresolved);
+                }
                 return Err(FactsError::unsupported(
                     self.budget(),
                     "unsupported: unresolved normal Drop",

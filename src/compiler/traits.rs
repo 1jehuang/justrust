@@ -1464,12 +1464,43 @@ impl ValidatedTraitWorld {
             let Ty::Struct(owner) = &h.trait_ref.self_ty else {
                 return Err(FactsError::unsupported(
                     budget,
-                    "unsupported: normal Drop requires a nongeneric scalar-field struct",
+                    "unsupported: normal Drop requires a scalar-field struct",
                 ));
             };
-            if h.schema_env.is_generic()
-                || !owner.def().type_args.is_empty()
-                || owner.def().fields.is_empty()
+            // Drop must cover the complete nominal parameter space, never a
+            // specialization such as Owner<i32> or Owner<(T,T)>.
+            if h.schema_env.total_arity() != owner.def().type_args.len() {
+                return Err(FactsError::invalid(
+                    budget,
+                    "canonical Drop cannot specialize owner arguments",
+                ));
+            }
+            for (index, argument) in owner.def().type_args.iter().enumerate() {
+                charged(budget, budget.charge_work(index + 1))?;
+                if !matches!(argument, Ty::Param(param) if h.schema_env.contains(*param))
+                    || owner.def().type_args[..index].contains(argument)
+                {
+                    return Err(FactsError::invalid(
+                        budget,
+                        "canonical Drop requires distinct owner parameters",
+                    ));
+                }
+            }
+            for predicate in h.predicates.iter() {
+                charged(budget, budget.charge_work(1))?;
+                if !matches!(predicate,
+                    Predicate::Implements(trait_ref)
+                        if trait_ref.declaration == world.catalog.id(CatalogItem::Sized)
+                            && trait_ref.args.is_empty()
+                            && matches!(trait_ref.self_ty, Ty::Param(param) if h.schema_env.contains(param)))
+                {
+                    return Err(FactsError::unsupported(
+                        budget,
+                        "unsupported: generic Drop with additional owner predicates",
+                    ));
+                }
+            }
+            if owner.def().fields.is_empty()
                 || owner
                     .def()
                     .fields
@@ -1489,7 +1520,7 @@ impl ValidatedTraitWorld {
             {
                 return Err(FactsError::unsupported(
                     budget,
-                    "unsupported: normal Drop requires a nongeneric scalar-field struct",
+                    "unsupported: normal Drop requires a scalar-field struct",
                 ));
             }
         }

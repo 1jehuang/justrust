@@ -197,6 +197,119 @@ fn generic_functions_drop_concrete_owning_roots() {
 }
 
 #[test]
+fn generic_pointer_field_owners_drop_concrete_instances() {
+    heap_case("generic_guard", &fixture("generic_guard.rs"));
+}
+
+#[test]
+fn generic_owner_semantic_controls_reject() {
+    let prefix = "struct Guard<T>{pointer:*mut T}impl<T> Drop for Guard<T>{fn drop(&mut self){}}";
+    let stock = Command::new("rustc")
+        .arg("-vV")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    assert!(stock || std::env::var_os("JUSTRUST_HEAP_STOCK_REQUIRED").is_none());
+    for (body, needle, stock_code) in [
+        (
+            "impl<T> Copy for Guard<T>{}impl<T> Clone for Guard<T>{fn clone(&self)->Self{*self}}fn main(){}",
+            "Copy and Drop",
+            "E0184",
+        ),
+        (
+            "fn main(){let mut owner=Guard::<u8>{pointer:0usize as *mut u8};owner.drop();}",
+            "explicit canonical destructor",
+            "E0040",
+        ),
+        (
+            "fn consume<T>(owner:Guard<T>){}fn main(){let owner=Guard::<u8>{pointer:0usize as *mut u8};consume::<u8>(owner);consume::<u8>(owner);}",
+            "",
+            "E0382",
+        ),
+        (
+            "fn observe<T>(owner:&Guard<T>){}fn main(){let mut owner=Guard::<u8>{pointer:0usize as *mut u8};let loan=&owner;owner=Guard::<u8>{pointer:0usize as *mut u8};observe::<u8>(loan);}",
+            "",
+            "E0506",
+        ),
+    ] {
+        let source = format!("{prefix}{body}");
+        rejects_source("drop_borrow_escape", &source, needle);
+        if stock {
+            let scratch = Scratch::new();
+            let input = scratch.source(&source);
+            let result = capture(
+                Command::new("rustc")
+                    .args(["--edition=2024", "-Cpanic=abort"])
+                    .arg(input)
+                    .arg("-o")
+                    .arg(scratch.path("invalid-generic-owner")),
+                &scratch,
+                60,
+            );
+            assert!(!result.status.success(), "{source}: {result:?}");
+            assert!(
+                String::from_utf8_lossy(&result.stderr).contains(stock_code),
+                "{source}: {result:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn generic_drop_specialization_and_extra_constraints_reject() {
+    let stock = Command::new("rustc")
+        .arg("-vV")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    assert!(stock || std::env::var_os("JUSTRUST_HEAP_STOCK_REQUIRED").is_none());
+    for (source, needle, stock_code) in [
+        (
+            "struct Guard<T>{pointer:*mut T}impl Drop for Guard<i32>{fn drop(&mut self){}}fn main(){}",
+            "cannot specialize",
+            "E0366",
+        ),
+        (
+            "struct Guard<A,B>{a:*mut A,b:*mut B}impl<T> Drop for Guard<T,T>{fn drop(&mut self){}}fn main(){}",
+            "cannot specialize",
+            "E0366",
+        ),
+        (
+            "struct Guard<T>{pointer:*mut T}impl<T:Copy> Drop for Guard<T>{fn drop(&mut self){}}fn main(){}",
+            "unsupported: generic Drop with additional owner predicates",
+            "E0367",
+        ),
+        (
+            "struct Guard<T:Copy>{pointer:*mut T}impl<T:Copy> Drop for Guard<T>{fn drop(&mut self){}}fn main(){}",
+            "bounds on nominal declarations",
+            "",
+        ),
+    ] {
+        rejects_source("generic_drop_admission", source, needle);
+        if stock {
+            let scratch = Scratch::new();
+            let input = scratch.source(source);
+            let result = capture(
+                Command::new("rustc")
+                    .args(["--edition=2024", "-Cpanic=abort"])
+                    .arg(input)
+                    .arg("-o")
+                    .arg(scratch.path("stock-generic-boundary")),
+                &scratch,
+                60,
+            );
+            assert_eq!(
+                result.status.success(),
+                stock_code.is_empty(),
+                "{source}: {result:?}"
+            );
+            assert!(
+                String::from_utf8_lossy(&result.stderr).contains(stock_code),
+                "{source}: {result:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn generic_functions_drop_real_allocations() {
     heap_case("generic_allocation", &fixture("generic_allocation.rs"));
 }
