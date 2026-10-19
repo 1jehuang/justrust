@@ -724,6 +724,16 @@ pub fn lower(
     Ok(Lowering::Lowered(Box::new(owned)))
 }
 
+/// One paid push onto the comparison stack: one unit of work per push.
+fn push<'t>(
+    stack: &mut meter::Buf<(&'t ir::Ty, &'t ir::Ty, usize)>,
+    meter: &Meter<'_>,
+    entry: (&'t ir::Ty, &'t ir::Ty, usize),
+) -> Result<(), String> {
+    meter.work(1)?;
+    stack.push_growing(meter, entry)
+}
+
 /// `CallTarget` equality identical to the derived `PartialEq`, computed
 /// iteratively on paid scratch. One unit of work per type node visited, and
 /// the semantic depth of each node is checked through the caller's
@@ -742,8 +752,11 @@ fn call_target_eq(
         return Ok(false);
     }
     let mut stack = meter.buf::<(&Ty, &Ty, usize)>(a.type_args.len())?;
-    for (x, y) in a.type_args.iter().zip(b.type_args.iter()) {
-        stack.push_growing(meter, (x, y, 1))?;
+    // Setup pushes are charged as they happen (one unit each), like child
+    // pushes below and pops/visits in the loop. Pushed in reverse so the
+    // first argument pair is compared first.
+    for (x, y) in a.type_args.iter().zip(b.type_args.iter()).rev() {
+        push(&mut stack, meter, (x, y, 1))?;
     }
     while let Some(&(x, y, depth)) = stack.last() {
         let len = stack.len();
@@ -759,9 +772,13 @@ fn call_target_eq(
                 {
                     return Ok(false);
                 }
-                stack.push_growing(meter, (&p.trait_ref.self_ty, &q.trait_ref.self_ty, child))?;
+                push(
+                    &mut stack,
+                    meter,
+                    (&p.trait_ref.self_ty, &q.trait_ref.self_ty, child),
+                )?;
                 for (u, v) in p.trait_ref.args.iter().zip(q.trait_ref.args.iter()) {
-                    stack.push_growing(meter, (u, v, child))?;
+                    push(&mut stack, meter, (u, v, child))?;
                 }
             }
             (
@@ -787,24 +804,24 @@ fn call_target_eq(
                 if k != l {
                     return Ok(false);
                 }
-                stack.push_growing(meter, (u, v, child))?;
+                push(&mut stack, meter, (u, v, child))?;
             }
             (Ty::Tuple(u), Ty::Tuple(v)) => {
                 if u.len() != v.len() {
                     return Ok(false);
                 }
                 for (p, q) in u.iter().zip(v.iter()) {
-                    stack.push_growing(meter, (p, q, child))?;
+                    push(&mut stack, meter, (p, q, child))?;
                 }
             }
             (Ty::Array { element: u, len: m }, Ty::Array { element: v, len: n }) => {
                 if m != n {
                     return Ok(false);
                 }
-                stack.push_growing(meter, (u, v, child))?;
+                push(&mut stack, meter, (u, v, child))?;
             }
             (Ty::Slice { element: u }, Ty::Slice { element: v }) => {
-                stack.push_growing(meter, (u, v, child))?;
+                push(&mut stack, meter, (u, v, child))?;
             }
             (Ty::Param(_), _)
             | (Ty::Int(_), _)

@@ -379,9 +379,13 @@ fn allocate(
     let mut changed = true;
     while changed {
         changed = false;
-        // One round visits every block row plus every successor row.
-        meter.work2(count, words)?;
         for block in (0..count).rev() {
+            // Literal visits per block per round, each over `words` words:
+            // clear `out` (1), compute `inn` from generated/out/defined (1),
+            // compare `inn` and `out` against the stored rows (2), and the
+            // conditional copy of both rows (2). Successor unions are charged
+            // per successor below.
+            meter.work2(6, words)?;
             let row = block * words..(block + 1) * words;
             out.iter_mut().for_each(|word| *word = 0);
             for target in function.blocks[block].term.targets() {
@@ -732,10 +736,13 @@ pub fn emit(
         traps: meter.buf(bound.traps)?,
         meter: *meter,
     };
+    // `symbols` pays the call symbol strings inside `calls` and the panic
+    // payloads inside `strings`. It is declared BEFORE them so that on any
+    // early return (locals drop in reverse order) the payload buffers are
+    // destroyed before the lease that pays for their contents refunds.
+    let mut symbols = meter.lease(0)?;
     let mut calls = meter.buf::<(usize, String)>(bound.calls)?;
     let mut strings = meter.buf::<(usize, Vec<u8>)>(bound.panic_texts)?;
-    // Call symbol strings: admitted before each allocation (`clone_string`).
-    let mut symbols = meter.lease(0)?;
     asm.bytes(&[0x55, 0x48, 0x89, 0xe5])?; // push rbp; mov rbp, rsp
     if layout.frame > 0 {
         asm.bytes(&[0x48, 0x81, 0xec])?;
@@ -945,7 +952,7 @@ pub fn emit(
                     .get(*index as usize)
                     .ok_or("missing SSA panic message")?;
                 // The paid sink writes the sequence straight into the paid
-                // code buffer (growth pays the old+new peak) and admits the
+                // code buffer (growth reserves the old+new ledger peak) and admits the
                 // diagnostic before allocating it; the payload is moved into
                 // `strings`, so it is paid exactly once. On error the whole
                 // emission fails and every lease refunds (transactional).
@@ -1036,15 +1043,43 @@ pub fn emit(
     }
     let mut stats = layout.stats;
     stats.code_bytes = asm.code.len();
-    let Asm { code, traps, .. } = asm;
-    let (code, mut lease) = code.into_parts();
-    let (_traps, traps_lease) = traps.into_parts();
-    let (calls, calls_lease) = calls.into_parts();
-    let (strings, strings_lease) = strings.into_parts();
-    lease.absorb(meter, calls_lease)?;
-    lease.absorb(meter, strings_lease)?;
-    lease.absorb(meter, symbols)?;
-    // The trap table is scratch: its storage is freed here (refunded below).
+    let Asm {
+        mut code, traps, ..
+    } = asm;
+    // The trap table is scratch (data then lease).
+    drop(traps);
+    // Every output stays a coupled Buf (Vec + its lease) until all fallible
+    // merges finished. `symbols` pays the call symbol strings inside `calls`
+    // and the panic payloads inside `strings`, so on any failure those
+    // buffers (and everything they own) are destroyed before `symbols`, and
+    // extracted vectors before the lease that now pays for them.
+    if let Err((symbols, error)) = calls.lease_mut().try_absorb(meter, symbols) {
+        drop(calls);
+        drop(strings);
+        drop(symbols);
+        drop(code);
+        return Err(error);
+    }
+    let calls = match code.absorb_from(meter, calls) {
+        Ok(calls) => calls,
+        Err((calls, error)) => {
+            drop(calls);
+            drop(strings);
+            drop(code);
+            return Err(error);
+        }
+    };
+    let strings = match code.absorb_from(meter, strings) {
+        Ok(strings) => strings,
+        Err((strings, error)) => {
+            drop(calls);
+            drop(strings);
+            drop(code);
+            return Err(error);
+        }
+    };
+    // All merges done: only infallible moves remain before reconciliation.
+    let (code, lease) = code.into_parts();
     let object = Object {
         code,
         calls,
@@ -1052,10 +1087,15 @@ pub fn emit(
         vtables: Vec::new(),
         receipt: None,
     };
-    drop(_traps);
-    drop(traps_lease);
     // Reconcile to the real retained capacity (the bound was an estimate).
-    let actual = object_bytes(&object)?;
+    let actual = match object_bytes(&object) {
+        Ok(actual) => actual,
+        Err(error) => {
+            drop(object);
+            drop(lease);
+            return Err(error);
+        }
+    };
     let owned = store::Owned::adopt(lease, object, actual, meter)?;
     Ok((owned, stats))
 }

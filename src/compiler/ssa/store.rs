@@ -135,6 +135,11 @@ pub fn lowered_capacity_bytes(lowered: &Lowered) -> Result<usize, String> {
 
 /// A value under construction or held as an intermediate, with the lease
 /// paying for its storage. Dropping it refunds; `seal` produces the receipt.
+///
+/// Payload before refund: `value` is declared before `lease`, so dropping an
+/// `Owned` (including during unwinding) destroys the payload first. Every
+/// fallible operation below keeps the payload and its lease coupled and, on
+/// failure, explicitly drops the payload before the lease.
 #[derive(Debug)]
 pub struct Owned<T> {
     pub value: T,
@@ -152,9 +157,19 @@ impl<T> Owned<T> {
         measure: impl FnOnce(&T) -> Result<usize, String>,
     ) -> Result<Self, String> {
         let mut lease = meter.lease(preflight)?;
-        let value = build()?;
-        let actual = measure(&value)?;
-        lease.resize(meter, actual)?;
+        let value = match build() {
+            Ok(value) => value,
+            Err(error) => {
+                drop(lease);
+                return Err(error);
+            }
+        };
+        let reconciled = measure(&value).and_then(|actual| lease.resize(meter, actual));
+        if let Err(error) = reconciled {
+            drop(value);
+            drop(lease);
+            return Err(error);
+        }
         Ok(Self { value, lease })
     }
 
@@ -172,8 +187,18 @@ impl<T> Owned<T> {
         (self.value, self.lease)
     }
 
+    /// Seal the lease into a receipt. On failure the payload is destroyed
+    /// first, then whatever lease remains (still charged until then) drops.
     pub fn seal(self, meter: &Meter<'_>) -> Result<(T, Receipt), String> {
-        Ok((self.value, self.lease.seal(meter)?))
+        let Owned { value, lease } = self;
+        match lease.try_seal(meter) {
+            Ok(receipt) => Ok((value, receipt)),
+            Err((remaining, error)) => {
+                drop(value);
+                drop(remaining);
+                Err(error)
+            }
+        }
     }
 
     /// Wrap a value built under an already-admitted lease, reconciling the
@@ -184,7 +209,11 @@ impl<T> Owned<T> {
         actual: usize,
         meter: &Meter<'_>,
     ) -> Result<Self, String> {
-        lease.resize(meter, actual)?;
+        if let Err(error) = lease.resize(meter, actual) {
+            drop(value);
+            drop(lease);
+            return Err(error);
+        }
         Ok(Self { value, lease })
     }
 
@@ -204,7 +233,14 @@ impl<T> Owned<T> {
             value: b,
             lease: other,
         } = second;
-        lease.absorb(meter, other)?;
+        if let Err((other, error)) = lease.try_absorb(meter, other) {
+            // Both payloads before either lease (both still charged).
+            drop(a);
+            drop(b);
+            drop(other);
+            drop(lease);
+            return Err(error);
+        }
         Ok(Owned {
             value: join(a, b),
             lease,

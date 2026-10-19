@@ -1891,6 +1891,17 @@ impl Drop for PlanReservation {
         }
     }
 }
+#[cfg(test)]
+impl PlanBudget {
+    pub(crate) fn poison_ledger_for_tests(&self) {
+        let usage = self.usage.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = usage.lock().unwrap();
+            panic!("intentional ledger poison (test)");
+        })
+        .join();
+    }
+}
 impl Default for PlanBudget {
     fn default() -> Self {
         Self::new(PlanLimits::default())

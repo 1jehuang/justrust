@@ -7,10 +7,17 @@
 //!   capacity is reconciled: any surplus is admitted too, or the producer fails.
 //! - Scratch (`Table`, `List`) holds a lease that refunds on drop, success or
 //!   failure, and lives exactly as long as its buffer.
-//! - Published outputs carry an immutable `ir::RetainedStorage` receipt, sealed
-//!   only after the output is complete. No mutable budget is stored in a fact.
+//! - Published outputs carry an immutable `Receipt`, sealed only after the
+//!   output is complete. No mutable budget is stored in a fact.
 //! - Work is charged per real element, round, hop or byte visited, with checked
 //!   arithmetic. Resource failures stay sticky in the ledger.
+//! - Payload before refund: on every failure path the paid payload is
+//!   destroyed before the lease paying for it refunds (`Owned`, `Buf`,
+//!   `try_seal`, `try_absorb`).
+//! - DIAGNOSTIC ALLOCATION DEBT: error-message `String`s built on failure
+//!   paths are not admitted to the ledger. They are labeled debt, not paid.
+//! - Peak statements are about ledger-reserved (requested/admitted) bytes,
+//!   never about physical allocator peak or allocator-internal rounding.
 use crate::compiler::ir::{PlanAuthority, PlanBudget, PlanReservation};
 
 /// Task-local view of the planning budget. Never stored in a published fact.
@@ -173,7 +180,9 @@ struct Chunk {
 /// paid by `book` (the requested capacity, plus any allocator surplus as a
 /// second reservation). When `extra` reallocates, the full new vector is
 /// reserved while the old reservation (already charged) is still held, and
-/// the old one is released afterwards: the ledger peak is exactly old + new.
+/// the old one is released afterwards: the ledger-reserved peak is old +
+/// new requested/admitted bytes (ledger accounting, not a physical allocator
+/// peak claim).
 ///
 /// `total` caches the data bytes, so `bytes()` is O(1). Shrinking pops each
 /// chunk it empties, so every chunk is visited by a shrink at most once over
@@ -217,7 +226,10 @@ impl Lease {
     }
 
     /// Ensure room for `more` chunks in `extra`, paying the exact old + new
-    /// reallocation peak. Transactional: on failure nothing changed.
+    /// ledger-reserved reallocation peak. Transactional: on failure `extra`,
+    /// `book` and the ledger byte fields (`bytes`, `current_reservations`,
+    /// `cumulative_bytes`) are as before; work, peak and sticky-failure
+    /// telemetry may have advanced.
     fn room(&mut self, meter: &Meter<'_>, more: usize) -> Result<(), String> {
         let needed = add(self.extra.len(), more)?;
         if needed <= self.extra.capacity() {
@@ -305,18 +317,31 @@ impl Lease {
     }
 
     /// Absorb another lease of the same authority without re-admitting it.
-    /// Rejected before any change unless both leases belong to the meter's
-    /// authority and the ledger is live. On a later failure `other` drops
-    /// and refunds to its own ledger; `self` is unchanged.
+    ///
+    /// Non-consuming on failure: every fallible step (authority, sticky state,
+    /// overflow, work, chunk-vector room) runs before anything moves, and on
+    /// error `other` is returned unchanged with every reservation still
+    /// charged, so the caller can destroy the payload it pays for first.
+    /// `self` is unchanged on error except for possibly having grown its
+    /// paid chunk-vector room.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the error returns the intact paid lease by value; boxing it would allocate unpaid storage on the failure path"
+    )]
     #[track_caller]
-    pub fn absorb(&mut self, meter: &Meter<'_>, other: Lease) -> Result<(), String> {
-        self.check(meter)?;
-        other.check(meter)?;
-        let moved = add(other.extra.len(), 1)?;
-        add(self.total, other.total)?;
-        meter.work(moved)?;
-        self.room(meter, moved)?;
-        // Commit: pure moves into reserved room.
+    pub fn try_absorb(&mut self, meter: &Meter<'_>, other: Lease) -> Result<(), (Lease, String)> {
+        let pre = (|| -> Result<(), String> {
+            self.check(meter)?;
+            other.check(meter)?;
+            let moved = add(other.extra.len(), 1)?;
+            add(self.total, other.total)?;
+            meter.work(moved)?;
+            self.room(meter, moved)
+        })();
+        if let Err(error) = pre {
+            return Err((other, error));
+        }
+        // Commit: pure moves into reserved room, nothing below can fail.
         let Lease {
             first, extra, book, ..
         } = other;
@@ -330,28 +355,74 @@ impl Lease {
         Ok(())
     }
 
-    /// Seal into an immutable receipt. Same authority and no sticky failure
-    /// required; the lease is consumed only on success.
-    pub fn seal(self, meter: &Meter<'_>) -> Result<Receipt, String> {
-        self.check(meter)?;
-        // Retaining is charged per chunk before anything is consumed.
-        meter.work(add(self.extra.len(), 1)?)?;
+    /// Seal into an immutable receipt.
+    ///
+    /// Two phases. Precommit (authority, sticky state, per-chunk work) can
+    /// fail and then returns the whole lease unchanged as
+    /// `Err((Some(lease), error))`, every reservation still charged, so the
+    /// caller destroys the payload before the lease refunds.
+    ///
+    /// Commit converts chunks with `PlanReservation::retain`, last chunk
+    /// first. At this checkpoint retain is infallible on the metered path,
+    /// and on the unmetered path fails only when the ledger mutex is poisoned.
+    /// Its destructor then retries the same poisoned mutex and refunds only on
+    /// success, and nothing in this repository clears ledger poison, so the
+    /// failing chunk stays charged (conservative, never under-charged). The
+    /// chunks not yet converted come back as `Some(remaining)`, still
+    /// charged, for the caller to drop after the payload. Chunks already
+    /// converted are permanently retained.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the error returns the intact paid lease by value; boxing it would allocate unpaid storage on the failure path"
+    )]
+    pub fn try_seal(self, meter: &Meter<'_>) -> Result<Receipt, (Option<Lease>, String)> {
+        let pre = self
+            .check(meter)
+            .and_then(|()| meter.work(add(self.extra.len(), 1)?));
+        if let Err(error) = pre {
+            return Err((Some(self), error));
+        }
         let bytes = self.total;
+        let mut lease = self;
+        // Convert `extra` from the tail: popping never reallocates, and the
+        // remaining lease stays a well-formed lease at every step.
+        while let Some(chunk) = lease.extra.pop() {
+            lease.total -= chunk.bytes;
+            if let Err(error) = chunk.reservation.retain() {
+                // Poisoned ledger: the failing chunk stays charged (above).
+                return Err((Some(lease), error));
+            }
+        }
         let Lease {
             authority,
             first,
             extra,
             book,
-            ..
-        } = self;
-        // Retained reservations stay charged for the task's lifetime. The
-        // `extra` vector is freed right here, so its bookkeeping refunds.
-        drop(first.reservation.retain()?);
-        for chunk in extra {
-            drop(chunk.reservation.retain()?);
+            total: _,
+        } = lease;
+        if let Err(error) = first.reservation.retain() {
+            // Poisoned ledger: nothing left unconverted except bookkeeping,
+            // which the destructors below refund only if the ledger allows.
+            drop(extra);
+            drop(book);
+            return Err((None, error));
         }
+        // The `extra` vector is freed here, so its bookkeeping refunds.
+        drop(extra);
         drop(book);
         Ok(Receipt { authority, bytes })
+    }
+
+    /// Consuming seal for callers that hold no payload (envelope-only
+    /// receipts); a failure refunds immediately, which is correct there.
+    pub fn seal(self, meter: &Meter<'_>) -> Result<Receipt, String> {
+        self.try_seal(meter).map_err(|(_, error)| error)
+    }
+
+    /// Consuming absorb for callers whose payload is already destroyed or
+    /// absent.
+    pub fn absorb(&mut self, meter: &Meter<'_>, other: Lease) -> Result<(), String> {
+        self.try_absorb(meter, other).map_err(|(_, error)| error)
     }
 }
 
@@ -465,14 +536,19 @@ impl<T> std::ops::DerefMut for List<T> {
 }
 
 /// Growable output buffer with an independently paid logical `limit`.
+/// `data` is declared before `lease`, so a dropped buffer destroys its
+/// contents before refunding.
 ///
 /// Appends check the limit before writing. Growth is the only way to raise
 /// the limit, and it is transactional: authority and sticky state are checked
 /// before any change (fast path included), the full new buffer is reserved
-/// while the old one (already charged) is still held, so the ledger peak is
-/// exactly old + new, the copy is charged as work, and the new buffer and
+/// while the old one (already charged) is still held, so the ledger-reserved
+/// peak is old + new requested/admitted bytes (not a physical allocator peak
+/// claim), the copy is charged as work, and the new buffer and
 /// lease replace the old pair only after every fallible step succeeded. On
-/// any failure the data, pointer, capacity, limit and ledger are unchanged.
+/// any failure the data, pointer, capacity, limit, lease and the ledger byte
+/// fields (`bytes`, `current_reservations`, `cumulative_bytes`) are
+/// unchanged; work, peak and sticky-failure telemetry may have advanced.
 #[derive(Debug)]
 pub struct Buf<T> {
     data: Vec<T>,
@@ -522,7 +598,8 @@ impl<T> Buf<T> {
         let requested = mul(new_limit, element)?;
         // Copy work, charged before allocating.
         meter.work(self.data.len())?;
-        // New lease while the old one is still held: peak = old + new.
+        // New lease while the old one is still held: ledger-reserved peak is
+        // old + new admitted bytes.
         let mut lease = meter.lease(requested)?;
         let mut next: Vec<T> = Vec::new();
         next.try_reserve_exact(new_limit)
@@ -578,6 +655,30 @@ impl<T> Buf<T> {
 
     pub fn into_parts(self) -> (Vec<T>, Lease) {
         (self.data, self.lease)
+    }
+
+    /// Mutable access to the paying lease (to absorb other leases into it).
+    pub fn lease_mut(&mut self) -> &mut Lease {
+        &mut self.lease
+    }
+
+    /// Move `other`'s payment into this buffer's lease and hand back its
+    /// data, now paid by `self`. Non-consuming on failure: `other` comes back
+    /// coupled (data with its own unchanged lease).
+    #[allow(
+        clippy::result_large_err,
+        reason = "the error returns the intact paid lease by value; boxing it would allocate unpaid storage on the failure path"
+    )]
+    pub fn absorb_from<U>(
+        &mut self,
+        meter: &Meter<'_>,
+        other: Buf<U>,
+    ) -> Result<Vec<U>, (Buf<U>, String)> {
+        let Buf { data, limit, lease } = other;
+        match self.lease.try_absorb(meter, lease) {
+            Ok(()) => Ok(data),
+            Err((lease, error)) => Err((Buf { data, limit, lease }, error)),
+        }
     }
 }
 

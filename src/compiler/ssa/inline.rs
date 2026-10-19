@@ -449,8 +449,15 @@ fn build(
         }
     }
     let mut out_callees = try_vec(kept as usize)?;
+    meter.work(lowered.callees.len())?;
     for (index, callee) in lowered.callees.iter().enumerate() {
         if used[index] {
+            // Copy work: the symbol bytes and parameter entries actually
+            // copied (their storage is in the byte preflight).
+            meter.work(meter::add(
+                callee.symbol.len(),
+                callee.signature.params.len(),
+            )?)?;
             out_callees.push(SsaCallee {
                 symbol: store::try_string(&callee.symbol)?,
                 target: callee.target.clone(),
