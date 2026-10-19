@@ -487,6 +487,18 @@ fn check_decision(
     pattern: &ir::MatchPattern,
     case: &Case,
 ) -> usize {
+    if let ir::MatchPattern::Alternatives { ty, rows } = pattern {
+        assert_eq!(case.name, "or_boundary");
+        assert_eq!(*ty, ir::Ty::Tuple(vec![ir::Ty::Bool, ir::Ty::Bool].into()));
+        assert_eq!(rows.len(), 2);
+        for (row, expected) in rows.iter().zip([true, false]) {
+            assert_eq!(row.len(), 1);
+            assert_eq!(row[0].projection, [ir::Projection::Field(0)]);
+            assert_eq!(row[0].kind, ir::PatternTestKind::Bool(expected));
+            assert_eq!(projected_type(ty, &row[0].projection, &[]), ir::Ty::Bool);
+        }
+        return rows.len();
+    }
     let ir::MatchPattern::Decision {
         ty,
         tests,
@@ -586,8 +598,8 @@ fn checked_product_rows_preserve_real_domains_predicates_and_universal_ownership
         decisions += own;
         count += 1;
     }
-    assert_eq!(count, 21);
-    assert!(decisions >= 21);
+    assert_eq!(count, 22);
+    assert!(decisions >= 23);
 }
 #[test]
 fn actual_holes_and_dead_body_obligations_are_ordinary_invalid_not_capability_boundaries() {

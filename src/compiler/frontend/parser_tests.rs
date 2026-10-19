@@ -95,7 +95,8 @@ fn builtin_matches_bounded_grammar_and_late_invalid() {
         check(&program).is_err(),
         "bool tail must not become unit main"
     );
-    for (args, diagnostic) in [("1,x @ _", "unsupported token \"@\"")] {
+    {
+        let (args, diagnostic) = ("1,x @ _", "unsupported token \"@\"");
         let error = parse(&format!("fn main(){{matches!({args})}}")).unwrap_err();
         assert!(error.contains(diagnostic), "{error}");
     }
