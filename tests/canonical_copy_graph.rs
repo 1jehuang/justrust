@@ -163,6 +163,11 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                             }
                         }
                     }
+                    // Embedded native library files are independent SOURCE facts.
+                    expected.extend(
+                        [vec![1], vec![1, 0], vec![1, 0, 0], vec![1, 0, 1]]
+                            .map(|ordinal| Key::new(107, ordinal)),
+                    );
                     assert_eq!(report.node_evaluations.len(), expected.len());
                     for key in expected {
                         let entries: Vec<_> = report

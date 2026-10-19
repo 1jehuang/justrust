@@ -4203,6 +4203,12 @@ pub struct Program {
     pub impls: Vec<ImplDecl>,
     pub traits: Vec<TraitDecl>,
     pub trait_imports: Vec<(ModuleId, TraitPath)>,
+    /// Hidden crate-root module holding the embedded native prelude library,
+    /// when loaded. `std::`/`core::` paths and prelude names resolve into it.
+    pub prelude_module: Option<ModuleId>,
+    /// The `prelude::v1` module inside the prelude library. Its public names
+    /// (types, variants, traits) are in scope in every module unless shadowed.
+    pub prelude_scope: Option<ModuleId>,
     // Resolver-issued source authority. Shared unchanged by public AST clones.
     associated_bound_sources: Arc<[AssociatedBoundSource]>,
 }
@@ -4232,6 +4238,8 @@ struct ProgramDeclarations {
     impls: Vec<ImplDecl>,
     traits: Vec<TraitDecl>,
     trait_imports: Vec<(ModuleId, TraitPath)>,
+    prelude_module: Option<ModuleId>,
+    prelude_scope: Option<ModuleId>,
 }
 struct ParsedDeclarations {
     program: ProgramDeclarations,
@@ -4257,6 +4265,8 @@ impl ProgramDeclarations {
             impls: self.impls,
             traits: self.traits,
             trait_imports: self.trait_imports,
+            prelude_module: self.prelude_module,
+            prelude_scope: self.prelude_scope,
             associated_bound_sources: Arc::from([]),
         }
     }
@@ -4384,6 +4394,8 @@ impl ProgramBuilder {
             impls: self.impls,
             traits: self.traits,
             trait_imports: self.trait_imports,
+            prelude_module: None,
+            prelude_scope: None,
         }
         .publish(names, modules, self.symbols, None);
         program.validate_name_handles()?;
@@ -4391,6 +4403,24 @@ impl ProgramBuilder {
     }
 }
 impl Program {
+    fn in_prelude(&self, module: ModuleId) -> bool {
+        self.prelude_module
+            .is_some_and(|prelude| self.modules.is_descendant(module, prelude).unwrap_or(false))
+    }
+    /// User-crate struct count, excluding the embedded prelude library.
+    pub fn user_structs(&self) -> usize {
+        self.structs
+            .iter()
+            .filter(|s| !self.in_prelude(s.module))
+            .count()
+    }
+    /// User-crate enum count, excluding the embedded prelude library.
+    pub fn user_enums(&self) -> usize {
+        self.enums
+            .iter()
+            .filter(|e| !self.in_prelude(e.module))
+            .count()
+    }
     fn validate_name_handles(&self) -> Result<(), String> {
         name_validation::validate_program_names(self)
     }
@@ -8832,6 +8862,38 @@ impl<'input, 'names> Parser<'input, 'names> {
                     .modules
                     .intern_child(self.names, module, name)
                     .map_err(module_parse_error)?;
+                if module == self.modules.source_root().map_err(module_parse_error)?
+                    && self
+                        .names
+                        .spelling(name)
+                        .map_err(native_adapter::name_error)?
+                        == super::source::source_prelude::PRELUDE_MODULE
+                {
+                    if parsed.program.prelude_module.is_some() {
+                        return Err(self.error("duplicate native prelude module"));
+                    }
+                    parsed.program.prelude_module = Some(child);
+                }
+                if let Some(prelude) = parsed.program.prelude_module {
+                    let spelling = self
+                        .names
+                        .spelling(name)
+                        .map_err(native_adapter::name_error)?;
+                    let parent = self.modules.parent(module).map_err(module_parse_error)?;
+                    if spelling == "v1"
+                        && parent == Some(prelude)
+                        && self
+                            .modules
+                            .name(module)
+                            .map_err(module_parse_error)?
+                            .map(|ident| self.names.spelling(ident).map(|s| s == "prelude"))
+                            .transpose()
+                            .map_err(native_adapter::name_error)?
+                            == Some(true)
+                    {
+                        parsed.program.prelude_scope = Some(child);
+                    }
+                }
                 if self.eat(";") {
                     return Err(
                         self.unsupported("external module files are unsupported; use inline mod")
@@ -14685,6 +14747,8 @@ impl PlanCtx {
                 .schemas
                 .insert(id, Arc::new(NominalSchema::Enum(d.clone())));
         }
+        // User callables keep their indices; native prelude callables follow.
+        let mut prelude_callables: Vec<(ir::DeclId, CallableSource)> = Vec::new();
         for (index, f) in program.functions.iter().enumerate() {
             let item = *f
                 .name
@@ -14699,8 +14763,12 @@ impl PlanCtx {
                 ir::DeclKind::Function,
                 index,
             )?;
-            registry.function_ids.push(id);
-            registry.callable_sources.push(CallableSource::Free(index));
+            if program.in_prelude(f.module) {
+                prelude_callables.push((id, CallableSource::Free(index)));
+            } else {
+                registry.function_ids.push(id);
+                registry.callable_sources.push(CallableSource::Free(index));
+            }
         }
         for (index, declaration) in program.traits.iter().enumerate() {
             let item = *declaration
@@ -14744,13 +14812,16 @@ impl PlanCtx {
                         ir::DeclKind::AssociatedFunction,
                         item,
                     )?;
-                    registry.function_ids.push(id);
-                    registry
-                        .callable_sources
-                        .push(CallableSource::TraitDefault {
-                            trait_index: index,
-                            item,
-                        });
+                    let source = CallableSource::TraitDefault {
+                        trait_index: index,
+                        item,
+                    };
+                    if program.in_prelude(declaration.module) {
+                        prelude_callables.push((id, source));
+                    } else {
+                        registry.function_ids.push(id);
+                        registry.callable_sources.push(source);
+                    }
                 }
             }
             let mut associated_types = Vec::new();
@@ -14819,14 +14890,23 @@ impl PlanCtx {
                     ir::DeclKind::AssociatedFunction,
                     item,
                 )?;
-                registry.function_ids.push(id);
-                registry.callable_sources.push(CallableSource::Associated {
+                let source = CallableSource::Associated {
                     implementation,
                     item,
-                });
+                };
+                if program.in_prelude(block.module) {
+                    prelude_callables.push((id, source));
+                } else {
+                    registry.function_ids.push(id);
+                    registry.callable_sources.push(source);
+                }
                 ids.push(id);
             }
             registry.associated_ids.push(ids);
+        }
+        for (id, source) in prelude_callables {
+            registry.function_ids.push(id);
+            registry.callable_sources.push(source);
         }
         for entry in catalog_builder.base_declarations() {
             if entry.info.kind != ir::DeclKind::Trait {
@@ -14864,9 +14944,13 @@ impl PlanCtx {
             )?];
             registry.declarations[id.index as usize].visibility = declaration.visibility.clone();
         }
-        for (index, function) in program.functions.iter().enumerate() {
+        for (position, source) in registry.callable_sources.iter().enumerate() {
+            let CallableSource::Free(index) = *source else {
+                continue;
+            };
+            let function = &program.functions[index];
             clone_visibility(&function.visibility, budget)?;
-            let id = registry.function_ids[index];
+            let id = registry.function_ids[position];
             registry.declarations[id.index as usize].visibility = function.visibility.clone();
         }
         for (index, declaration) in program.traits.iter().enumerate() {
@@ -15878,6 +15962,19 @@ impl PlanCtx {
             .catalog
             .declaration(id)
             .map_or(tr::DeclOrigin::Source, |d| d.origin))
+    }
+    /// Whether a declaration lives in the embedded native prelude library.
+    /// Prelude items are library code: not user telemetry, and nongeneric
+    /// prelude bodies are instantiated only on demand.
+    pub fn is_prelude_decl(&self, id: ir::DeclId) -> Result<bool, String> {
+        let Some(prelude) = self.program.prelude_module else {
+            return Ok(false);
+        };
+        let module = self.declaration(id)?.path.module;
+        self.program
+            .modules
+            .is_descendant(module, prelude)
+            .map_err(module_diagnostic)
     }
     pub fn callable_provider(&self, id: ir::DeclId) -> Result<CallableProvider, String> {
         self.declaration(id)?;
