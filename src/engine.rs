@@ -25,6 +25,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::task::{Context as PollContext, Poll, Wake, Waker};
 use std::time::Instant;
 
+mod cycle;
+pub use cycle::{DependencyCycle, DependencyCycleEdge};
+
 const SHARDS: usize = 64;
 const EVENT_CAPACITY: usize = 65_536;
 type PendingWaits = (u64, u64, HashSet<(u64, usize)>);
@@ -160,6 +163,7 @@ pub struct Event {
 /// They are monotonic-clock measurements, not sampled CPU time.
 #[derive(Clone, Debug, Default)]
 pub struct Report {
+    dependency_cycle: Option<DependencyCycle>,
     pub nodes: usize,
     pub intern_hits: usize,
     pub tasks: usize,
@@ -199,6 +203,11 @@ pub struct Engine {
 }
 
 impl Report {
+    /// Live quiescence evidence, independent of event capture. No witness is
+    /// produced for external waits, allocation failure, or infrastructure abort.
+    pub fn dependency_cycle(&self) -> Option<&DependencyCycle> {
+        self.dependency_cycle.as_ref()
+    }
     /// Whether any node with key kind `kind` published an output, from the
     /// captured events. Requires `capture_complete` to be meaningful.
     pub fn published_kind(&self, kind: u32) -> bool {
@@ -628,7 +637,11 @@ impl Engine {
             .map(|node| node.meter.nodes.load(Ordering::Relaxed))
             .fold(0u64, u64::saturating_add);
         accounting.report.node_errors = node_errors;
-        let report = accounting.report.clone();
+        // Move the already admitted witness rather than infallibly cloning its
+        // key vectors while materializing the final report.
+        let witness = accounting.report.dependency_cycle.take();
+        let mut report = accounting.report.clone();
+        report.dependency_cycle = witness;
         drop(accounting);
         if let Some(error) = infrastructure_error {
             Err(error)
@@ -1289,6 +1302,7 @@ impl Shared {
                             .collect();
                         drop(scheduler);
                         if !pending.is_empty() {
+                            self.capture_dependency_cycle(&pending);
                             self.terminate_quiescent(Self::quiescence_error(&pending), false);
                         }
                         self.ready.notify_all();

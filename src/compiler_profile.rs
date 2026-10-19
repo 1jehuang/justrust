@@ -207,6 +207,7 @@ mod tests {
     use super::*;
     use justrust_engine::{Event, Key};
     #[test]
+    #[allow(clippy::field_reassign_with_default)] // The cycle witness is private engine authority.
     fn profile_intervals_keep_task_identity_and_escape_errors() {
         let event = |at_ns, kind: &str, task, node| Event {
             at_ns,
@@ -216,19 +217,17 @@ mod tests {
             demand: None,
             detail: String::new(),
         };
-        let report = Report {
-            node_ids: vec![3, 7],
-            node_evaluations: vec![(Key::new(109, vec![2]), 1), (Key::new(108, vec![2]), 1)],
-            events: vec![
-                event(10, "running", 1, 3),
-                event(12, "running", 2, 7),
-                event(20, "suspended", 1, 3),
-                event(25, "task-done", 2, 7),
-                event(30, "running", 1, 3),
-                event(40, "task-done", 1, 3),
-            ],
-            ..Report::default()
-        };
+        let mut report = Report::default();
+        report.node_ids = vec![3, 7];
+        report.node_evaluations = vec![(Key::new(109, vec![2]), 1), (Key::new(108, vec![2]), 1)];
+        report.events = vec![
+            event(10, "running", 1, 3),
+            event(12, "running", 2, 7),
+            event(20, "suspended", 1, 3),
+            event(25, "task-done", 2, 7),
+            event(30, "running", 1, 3),
+            event(40, "task-done", 1, 3),
+        ];
         let mut out = Vec::new();
         write_graph(&mut out, &report).unwrap();
         let text = String::from_utf8(out).unwrap();
