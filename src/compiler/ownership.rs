@@ -1552,6 +1552,11 @@ fn preflight_with_plan(
                             operand(field, &mut budget)?;
                         }
                     }
+                    Rvalue::Intrinsic { args, .. } => {
+                        for arg in args {
+                            operand(arg, &mut budget)?;
+                        }
+                    }
                     Rvalue::EnumVariant { ty, fields, .. } => {
                         preflight_ty(&Ty::Enum(ty.clone()), 0, &mut budget)?;
                         for field in fields {
@@ -2753,6 +2758,7 @@ impl Transfer<'_> {
             }
             Rvalue::Aggregate { fields, .. }
             | Rvalue::EnumVariant { fields, .. }
+            | Rvalue::Intrinsic { args: fields, .. }
             | Rvalue::Format {
                 arguments: fields, ..
             } => {

@@ -1796,6 +1796,56 @@ impl<'a> Emitter<'a> {
         ]);
         Ok(())
     }
+    /// Native primitive-method kernels. The CFG expands every other
+    /// intrinsic into checked comparisons and arithmetic before emission.
+    fn intrinsic(&mut self, intrinsic: ir::Intrinsic, args: &[cfg::Operand]) -> Result<(), String> {
+        use ir::IntrinsicOp::*;
+        for arg in args {
+            if self.function().operand_ty(arg)? == ir::Ty::Never {
+                // A diverged operand already ended this path.
+                return Ok(());
+            }
+        }
+        let ir::ScalarTy::Float(ty) = intrinsic.receiver else {
+            return Err("primitive method has no native kernel for its receiver".into());
+        };
+        let [value] = args else {
+            return Err("native primitive method arity mismatch".into());
+        };
+        self.operand(value)?;
+        let sign = match ty {
+            ir::FloatTy::F64 => 63,
+            ir::FloatTy::F32 => 31,
+        };
+        match intrinsic.op {
+            Sqrt => {
+                self.float_operands(ty);
+                // sqrts? xmm0, xmm0: IEEE correctly rounded, as stock.
+                let prefix = if ty == ir::FloatTy::F64 { 0xf2 } else { 0xf3 };
+                self.bytes(&[prefix, 0x0f, 0x51, 0xc0]);
+                self.float_result(ty);
+            }
+            FloatAbs => {
+                if ty == ir::FloatTy::F64 {
+                    self.bytes(&[0x48, 0x0f, 0xba, 0xf0, sign]); // btr rax, 63
+                } else {
+                    self.bytes(&[0x0f, 0xba, 0xf0, sign]); // btr eax, 31
+                }
+            }
+            IsSignNegative | IsSignPositive => {
+                if ty == ir::FloatTy::F64 {
+                    self.bytes(&[0x48, 0xc1, 0xe8, sign]); // shr rax, 63
+                } else {
+                    self.bytes(&[0xc1, 0xe8, sign]); // shr eax, 31
+                }
+                if intrinsic.op == IsSignPositive {
+                    self.bytes(&[0x83, 0xf0, 0x01]); // xor eax, 1
+                }
+            }
+            _ => return Err("primitive method has no native kernel".into()),
+        }
+        Ok(())
+    }
     fn rvalue(&mut self, value: &cfg::Rvalue) -> Result<(), String> {
         match value {
             cfg::Rvalue::Use(operand) => self.operand(operand)?,
@@ -1834,6 +1884,7 @@ impl<'a> Emitter<'a> {
                 // Wide endpoints use limbs, never the legacy word kernel.
                 self.integer_cast(value, *to)?;
             }
+            cfg::Rvalue::Intrinsic { intrinsic, args } => self.intrinsic(*intrinsic, args)?,
             cfg::Rvalue::LeadingZeros { value } => {
                 let ty = self.function().operand_ty(value)?;
                 if ty == ir::Ty::Never {

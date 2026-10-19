@@ -2108,6 +2108,9 @@ pub(super) fn coerces(got: &ir::Ty, want: &ir::Ty) -> bool {
         _ => false,
     }
 }
+/// Reference layers peeled from a primitive-method receiver.
+const MAX_INTRINSIC_AUTODEREF: usize = 8;
+
 impl<'a> Checker<'a> {
     pub(super) fn names(&self) -> Result<&NameStore, String> {
         let names = &self.signatures.plan()?.program.names;
@@ -4016,6 +4019,10 @@ impl<'a> Checker<'a> {
             {
                 Some(ir::Ty::Int(ir::IntTy::U32))
             }
+            Expr::MethodCall { .. } if self.intrinsic_target(e)?.is_some() => self
+                .intrinsic_target(e)?
+                .and_then(ir::Intrinsic::signature)
+                .map(|signature| signature.result),
             Expr::MethodCall { receiver, .. }
                 if slice_len_candidate(e, self.names()?)?
                     && self
@@ -5714,6 +5721,12 @@ impl<'a> Checker<'a> {
             }
             return Ok(id);
         }
+        if let Some(id) = self.builtin_intrinsic(e)? {
+            if let Some(cap) = self.canonical {
+                cap.record_builtin_intrinsic(e, id, &self.exprs)?;
+            }
+            return Ok(id);
+        }
         let result = self.expr_with_expectation_inner(e, expectation)?;
         let result = self.record_original_call(e, result)?;
         match expectation.hard() {
@@ -5862,6 +5875,117 @@ impl<'a> Checker<'a> {
         self.exprs.push(ir::TypedExpr {
             ty: ir::Ty::Int(ir::IntTy::U32),
             kind: ir::ExprKind::LeadingZeros { value },
+            completion,
+        });
+        Ok(Some(id))
+    }
+
+    /// Resolve `receiver.name(args)` to an inherent primitive method only when
+    /// the receiver is independently known to be an exact scalar by value.
+    /// Other receivers keep ordinary method resolution.
+    fn intrinsic_target(&self, e: &Expr) -> Result<Option<ir::Intrinsic>, String> {
+        let Expr::MethodCall {
+            receiver,
+            name,
+            type_args,
+            ..
+        } = e
+        else {
+            return Ok(None);
+        };
+        if !type_args.is_empty() {
+            return Ok(None);
+        }
+        let spelling = self
+            .names()?
+            .spelling(*name)
+            .map_err(native_adapter::name_diagnostic)?;
+        if !ir::IntrinsicOp::candidate_name(spelling) {
+            return Ok(None);
+        }
+        // Method autoderef: `&T`/`&mut T` receivers (to bounded depth) reach
+        // the scalar's by-value inherent method, as in stock resolution.
+        let mut hint = self.scalar_hint(receiver)?;
+        for _ in 0..MAX_INTRINSIC_AUTODEREF {
+            match hint {
+                Some(ir::Ty::Ref { referent, .. }) => hint = Some(referent.as_ref().clone()),
+                _ => break,
+            }
+        }
+        let Some(scalar) = hint.as_ref().and_then(ir::ScalarTy::of) else {
+            return Ok(None);
+        };
+        Ok(ir::Intrinsic::resolve(scalar, spelling))
+    }
+
+    pub(super) fn builtin_intrinsic(&mut self, e: &Expr) -> Result<Option<ir::ExprId>, String> {
+        let Some(intrinsic) = self.intrinsic_target(e)? else {
+            return Ok(None);
+        };
+        let Expr::MethodCall { receiver, args, .. } = e else {
+            return Ok(None);
+        };
+        if let Some(reason) = intrinsic.unsupported_reason() {
+            return Err(format!("unsupported: {reason}"));
+        }
+        let signature = intrinsic
+            .signature()
+            .ok_or("primitive method signature invariant")?;
+        if args.len() + 1 != signature.params.len() {
+            return Err(format!(
+                "E0061: primitive method takes {} argument(s) but {} were supplied",
+                signature.params.len() - 1,
+                args.len()
+            ));
+        }
+        // The hint grants no type authority. Check the receiver, then each
+        // argument once, in source order against the exact signature.
+        let mut checked = Vec::with_capacity(signature.params.len());
+        let mut value = self.expr(receiver)?;
+        for _ in 0..MAX_INTRINSIC_AUTODEREF {
+            let ir::Ty::Ref { referent, .. } = &self.exprs[value.0].ty else {
+                break;
+            };
+            let ty = referent.as_ref().clone();
+            let completion = self.exprs[value.0].completion;
+            self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+            let id = ir::ExprId(self.exprs.len());
+            self.exprs.push(ir::TypedExpr {
+                ty,
+                kind: ir::ExprKind::Deref { value },
+                completion,
+            });
+            value = id;
+        }
+        if self.exprs[value.0].ty != signature.params[0] {
+            return Err("primitive method receiver must be an exactly typed scalar".into());
+        }
+        checked.push(value);
+        for (arg, param) in args.iter().zip(&signature.params[1..]) {
+            let id = self.expr_expected(arg, Some(param))?;
+            let flow = self.flow(id);
+            self.require(&flow, param)?;
+            checked.push(id);
+        }
+        let completion = if checked
+            .iter()
+            .all(|id| self.exprs[id.0].completion == ir::Completion::Returns)
+        {
+            ir::Completion::Returns
+        } else {
+            ir::Completion::Never
+        };
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(
+            std::mem::size_of::<ir::TypedExpr>()
+                + checked.len() * std::mem::size_of::<ir::ExprId>(),
+        )?;
+        self.exprs.push(ir::TypedExpr {
+            ty: signature.result,
+            kind: ir::ExprKind::Intrinsic {
+                intrinsic,
+                args: checked,
+            },
             completion,
         });
         Ok(Some(id))

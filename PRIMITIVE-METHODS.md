@@ -1,0 +1,35 @@
+# Primitive methods
+
+Recovered implementation from `4b0e5b624`, with the preserved receiver-autoderef
+checkpoint. This is a supported subset, not full standard-library support.
+
+The closed scalar/signature table in `src/compiler/ir/intrinsics.rs` owns method
+selection and types. Typed intrinsic expressions are checked by existing graph
+outputs and source-authority replay. CFG expansion uses existing typed arithmetic,
+comparisons and branches. Only float sqrt, abs and sign-bit queries need native
+backend kernels. No graph node kinds, side state or ratchets are added.
+
+Supported methods:
+
+- Integers: signed abs/signum/is_positive/is_negative, pow with u32 exponent,
+  min/max, wrapping_add/sub/mul, signed wrapping_neg, saturating_add/sub,
+  count_ones/count_zeros/trailing_zeros, unsigned is_power_of_two.
+- Characters: ASCII classification and ASCII case mapping, is_whitespace and
+  is_control. Unicode whitespace/control sets are explicit scalar ranges.
+- f32/f64: sqrt, abs, min/max, is_nan/is_finite/is_infinite,
+  is_sign_positive/is_sign_negative. A NaN on either side of min/max yields
+  the other operand. Both NaN yields NaN. Equal signed zeros may select either.
+
+Current boundaries: wrapping/saturating methods reject 128-bit receivers with an
+explicit unsupported diagnostic. Receiver autoderef is bounded at eight layers.
+Other primitive methods and general standard-library method resolution remain
+outside this increment. Integer overflow follows the compiler's existing checked
+arithmetic path, not an independently implemented release-overflow mode.
+
+`justrust test --local --test primitive_methods` requires installed stock rustc
+and compares execution/exit status and invalid-input rejection using edition 2024
+and panic=abort. Cases cover all supported operations, reference receivers,
+wide integers, bit boundaries, Unicode/ASCII distinctions, NaN operand ordering,
+and receiver/argument evaluation order. Run oracle tests locally because hosted
+test environments cannot spawn stock rustc. Graph gates and strict clippy run
+hosted. No speed or full Rust compatibility claim is made.

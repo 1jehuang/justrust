@@ -4148,6 +4148,7 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
         }
         Rvalue::Aggregate { fields, .. }
         | Rvalue::EnumVariant { fields, .. }
+        | Rvalue::Intrinsic { args: fields, .. }
         | Rvalue::Format {
             arguments: fields, ..
         } => {
