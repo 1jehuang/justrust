@@ -37,6 +37,29 @@ constraints, including bidirectional range/array item evidence
 until their remaining features land. This is not full formatting or full Rust
 support. See `FORMAT-SCALARS.md`.
 
+## Current first rejection boundaries
+
+Measured on `40feb23c8` by the native corpus gate, run
+`20261018-204121969-2792890`: both harness tests pass and the unchanged programs
+01, 03 and 05 match their frozen stdout. The other 17 programs reject explicitly:
+
+| Programs | First reported boundary |
+|---|---|
+| 02, 07 | unresolved type |
+| 04, 13 | unknown local macro invocation |
+| 06 | const items / constant evaluation |
+| 08, 12, 14, 15, 18, 19, 20 | unsupported `derive` attribute |
+| 09 | or-pattern / `@` pattern support |
+| 10 | stored closure / capture-environment form |
+| 11 | generic-argument parsing at a function-trait bound |
+| 16 | range indexing / subslice support |
+| 17 | local-rooted assignment restriction |
+
+These are the first diagnostics, not an exhaustive feature inventory or evidence
+that fixing one diagnostic makes the program pass. In particular, most remaining
+programs still need reusable library types, trait dispatch and iterator machinery.
+Only stock-matching CHECK, BUILD and execution can promote a manifest entry.
+
 ## Historical feature-demand matrix
 
 The counts below describe features required by the original 20 programs, before
