@@ -572,10 +572,12 @@ fn resolve_cells<'a>(
                     failure = Some(ResolutionFailure::EmptyOrigins);
                 }
                 for origin in origins(cell).members() {
-                    if origins_targets[origin].is_empty() && cells[cell].ty.is_shared_str() {
+                    if origins_targets[origin].is_empty() {
                         // A `&str` origin that resolved to no storage (for
                         // example a call result derived from a literal) is
-                        // `'static` program data, never a dangling loan.
+                        // `'static` program data, and a reborrow of storage
+                        // behind a raw pointer has unbounded provenance that
+                        // the unsafe contract delegates to the programmer.
                         static_referent = true;
                     }
                     budget.spend(add(trace.len(), 1)?)?;

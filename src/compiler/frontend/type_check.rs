@@ -3997,14 +3997,17 @@ impl<'a> Checker<'a> {
         let first = args
             .first()
             .ok_or("unsupported: trait path call without arguments needs `<T as Trait>::`")?;
-        let ty = match first {
-            Expr::Borrow { .. } | Expr::BorrowValue { .. } => {
-                match self.method_receiver_hint(first)? {
-                    Some(ir::Ty::Ref { referent, .. }) => Some(referent.as_ref().clone()),
-                    other => other,
+        let ty = match self.method_receiver_hint(first)? {
+            // `&self`/`&mut self` receivers: Self is the referent.
+            Some(ir::Ty::Ref { referent, .. }) => Some(referent.as_ref().clone()),
+            Some(other) => Some(other),
+            None => match first {
+                Expr::Borrow { place, .. } => {
+                    let source = place.clone();
+                    self.checked_place(&source).ok().map(|(_, ty, _)| ty)
                 }
-            }
-            _ => self.method_receiver_hint(first)?,
+                _ => None,
+            },
         };
         ty.ok_or_else(|| {
             "unsupported: cannot infer Self type of trait path call; use `<T as Trait>::`".into()
@@ -4154,7 +4157,7 @@ impl<'a> Checker<'a> {
                 receiver,
                 name,
                 type_args,
-                ..
+                args: call_args,
             } => {
                 if let Some(owner) = self.method_receiver_hint(receiver)? {
                     let plan = self
@@ -4163,10 +4166,16 @@ impl<'a> Checker<'a> {
                         .as_ref()
                         .ok_or("missing associated registry")?;
                     self.infer_storage(type_args.len())?;
-                    let args = type_args
+                    let mut args = type_args
                         .iter()
                         .map(|t| self.checked_type_actual(t))
                         .collect::<Result<Vec<_>, _>>()?;
+                    if args.is_empty()
+                        && let Some(inferred) =
+                            self.infer_method_type_args(&owner, name, call_args)?
+                    {
+                        args = inferred;
+                    }
                     Some(
                         plan.select_method(
                             &owner,
@@ -6862,10 +6871,15 @@ impl<'a> Checker<'a> {
             .method_receiver_hint(receiver)?
             .ok_or("unsupported unresolved receiver type")?;
         self.infer_storage(type_args.len())?;
-        let actuals = type_args
+        let mut actuals = type_args
             .iter()
             .map(|t| self.checked_type_actual(t))
             .collect::<Result<Vec<_>, _>>()?;
+        if actuals.is_empty()
+            && let Some(inferred) = self.infer_method_type_args(&ty, name, args)?
+        {
+            actuals = inferred;
+        }
         let selected = plan.select_method(
             &ty,
             name,

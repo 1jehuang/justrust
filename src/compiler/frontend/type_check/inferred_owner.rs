@@ -116,3 +116,67 @@ impl Checker<'_> {
         plan.intern_nominal(decl, &concrete, self.facts(), &plan.budget)
     }
 }
+
+impl Checker<'_> {
+    /// `recv.method(args)` on a generic inherent method with omitted method
+    /// type arguments: infer them from the arguments against the unique
+    /// candidate's schema. None when there is no such unique candidate or the
+    /// evidence is insufficient (the caller then reports its usual error).
+    pub(super) fn infer_method_type_args(
+        &self,
+        receiver: &ir::Ty,
+        name: &AstIdent,
+        args: &[Expr],
+    ) -> Result<Option<Vec<ir::Ty>>, String> {
+        let plan = self.signatures.plan()?;
+        let mut root = receiver;
+        while let ir::Ty::Ref { referent, .. } = root {
+            root = referent;
+        }
+        let Some((nominal, _)) = nominal_parts(root) else {
+            return Ok(None);
+        };
+        let mut candidate = None;
+        for id in &plan.registry.function_ids {
+            plan.budget.charge_work(1)?;
+            let info = plan.declaration(*id)?;
+            let Some(associated) = &info.path.associated else {
+                continue;
+            };
+            if associated.trait_decl.is_some()
+                || associated.nominal != nominal
+                || !plan.registry.source_member_equal(info.path.item, *name)?
+            {
+                continue;
+            }
+            if candidate.replace(*id).is_some() {
+                return Ok(None);
+            }
+        }
+        let Some(id) = candidate else {
+            return Ok(None);
+        };
+        let info = plan.declaration(id)?;
+        if info.param_env.arity() == 0 {
+            return Ok(None);
+        }
+        let schema = plan.function_schema(id)?;
+        let params = &schema.signature.params;
+        let formals = match params.len().checked_sub(args.len()) {
+            Some(0) => &params[..],
+            Some(1) => &params[1..],
+            _ => return Ok(None),
+        };
+        let mut solver = Inference::new(self, info.param_env.clone())?;
+        for (formal, expr) in formals.iter().zip(args) {
+            let evidence = self.inference_evidence(expr, 0)?;
+            let Ok(formal) = solver.schema(formal, 0) else {
+                return Ok(None);
+            };
+            if solver.constrain(&formal, &evidence, 0).is_err() {
+                return Ok(None);
+            }
+        }
+        Ok(solver.finish(true).ok().flatten())
+    }
+}

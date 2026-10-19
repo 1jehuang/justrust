@@ -373,7 +373,7 @@ impl Resolver<'_> {
         args: &mut Vec<Expr>,
         module: ModuleId,
     ) -> Result<Option<Expr>, String> {
-        if true || name.len() < 2 || name.anchor() == PathAnchor::SelfType {
+        if name.len() < 2 || name.anchor() == PathAnchor::SelfType {
             return Ok(None);
         }
         let prefix = name
