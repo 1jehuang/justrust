@@ -7969,3 +7969,6 @@ connection, so it does **not** establish that the old live connection replayed
 its outstanding failed writes. That exact, same-agent ENOSPC recovery and
 fail-closed behavior is established by the regressions above. No additional
 build or daemon restart was launched for this acceptance record.
+
+## 2026-10-19: hosted test run hung with no output
+`justrust test -p jcode-base -p jcode-provider-openai-runtime -p jcode-app-core -p jcode-tui --lib` (hosted, jcode) printed nothing for 30+ minutes and had to be cancelled. The same tests with `--local` finished in 28s and 55s. Run id unknown (not in `justrust log`). Investigate a remote hang or missing timeout or heartbeat.
