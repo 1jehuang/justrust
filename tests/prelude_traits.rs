@@ -1,7 +1,13 @@
 //! Source trait contracts, not compiler-recognized method names or desugaring.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
+#[path = "support/native_prelude.rs"]
+mod native_prelude;
+
+use justrust_engine::Key;
 use justrust_engine::compiler;
+use justrust_engine::compiler::frontend::{CallableProvider, PlanCtx};
+use justrust_engine::compiler::ir::PlanBudget;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
@@ -54,6 +60,7 @@ fn fixture(source: &str, unsupported: Option<&str>) {
             let compiled = result.unwrap_or_else(|error| panic!("{error}\n{source}"));
             assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
             assert_eq!(compiled.executable.is_none(), check);
+            assert_graph_authority(source, &compiled, check);
             if let Some(executable) = compiled.executable {
                 fs::write(&native, executable).unwrap();
                 fs::set_permissions(&native, fs::Permissions::from_mode(0o700)).unwrap();
@@ -65,6 +72,66 @@ fn fixture(source: &str, unsupported: Option<&str>) {
         }
     }
     fs::remove_dir_all(dir).unwrap();
+}
+
+fn assert_graph_authority(source: &str, compiled: &compiler::Compilation, check: bool) {
+    let program = native_prelude::parse(source).unwrap();
+    let plan = PlanCtx::from_program(&program, &PlanBudget::default()).unwrap();
+    let report = &compiled.report;
+    assert!(report.capture_complete);
+    assert_eq!(report.events_dropped, 0);
+    assert_eq!(report.failures, 0);
+    assert_eq!(compiled.source_bytes, source.len());
+    assert_eq!(compiled.source_files, 1);
+    let evaluated_once = |key: &Key| {
+        let evaluations: Vec<_> = report
+            .node_evaluations
+            .iter()
+            .filter(|(seen, _)| seen == key)
+            .collect();
+        assert_eq!(evaluations.len(), 1, "missing or duplicated {key:?}");
+        assert_eq!(evaluations[0].1, 1, "repeated {key:?}");
+    };
+    for index in 0..plan.callable_count() {
+        let declaration = plan.callable_decl(index).unwrap();
+        evaluated_once(&Key::new(110, vec![index as u64]));
+        let universal = match plan.callable_provider(declaration).unwrap() {
+            CallableProvider::Source { .. } => plan.callable_env(declaration).unwrap().is_generic(),
+            CallableProvider::Recipe { .. } => true,
+            CallableProvider::UnavailableProvided { .. } => panic!("unavailable callable"),
+        };
+        if universal {
+            for kind in [111, 112, 115] {
+                evaluated_once(&Key::new(kind, vec![index as u64]));
+            }
+        }
+    }
+    for key in native_prelude::library_source_keys() {
+        evaluated_once(&key);
+    }
+    let published = |key: &Key| {
+        let spelling = format!("{key:?}");
+        let node = report
+            .events
+            .iter()
+            .find(|event| event.kind == "discovered" && event.detail == spelling)
+            .unwrap()
+            .node
+            .unwrap();
+        report
+            .events
+            .iter()
+            .find(|event| event.kind == "publish" && event.node == Some(node))
+            .unwrap()
+            .at_ns
+    };
+    for (key, _) in &report.node_evaluations {
+        if key.kind == 103 {
+            assert!(!check, "check must not emit objects");
+            let proof = Key::new(109, key.params.clone());
+            assert!(published(&proof) <= published(key));
+        }
+    }
 }
 
 #[test]
@@ -116,5 +183,47 @@ fn exact_into_iterator_bound_is_an_explicit_boundary() {
     fixture(
         "mod contracts { pub trait Iterator { type Item; fn next(&mut self) -> Option<Self::Item>; } pub trait IntoIterator { type Item; type IntoIter: Iterator<Item = Self::Item>; fn into_iter(self) -> Self::IntoIter; } } fn main() {}",
         Some("associated"),
+    );
+}
+
+#[test]
+fn projected_value_results_allow_shared_and_mutable_receivers() {
+    fixture(
+        r#"
+trait Read { type Item; fn read(&self) -> Self::Item; }
+trait Take { type Item; fn take(&mut self) -> Self::Item; }
+struct Counter { value: i32 }
+impl Read for Counter {
+    type Item = i32;
+    fn read(&self) -> Self::Item { self.value }
+}
+impl Take for Counter {
+    type Item = i32;
+    fn take(&mut self) -> Self::Item {
+        let old = self.value;
+        self.value = self.value + 1;
+        old
+    }
+}
+fn main() {
+    let mut counter = Counter { value: 5 };
+    println!("{}", <Counter as Read>::read(&counter));
+    {
+        let carrier = &mut counter;
+        println!("{}", carrier.take());
+        println!("{}", <Counter as Take>::take(carrier));
+    }
+    println!("{}", counter.read());
+}
+"#,
+        None,
+    );
+}
+
+#[test]
+fn projected_reference_results_are_not_admitted_by_receiver_support() {
+    fixture(
+        "trait Read { type Item; fn read(&self) -> &Self::Item; } struct S { value: i32 } impl Read for S { type Item = i32; fn read(&self) -> &Self::Item { &self.value } } fn main() {}",
+        Some("reference-bearing projected method signature"),
     );
 }
