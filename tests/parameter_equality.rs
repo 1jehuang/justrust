@@ -1434,6 +1434,7 @@ fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, chec
 fn all_body_graph() {
     let mut failures = CellFailures::default();
     let mut modes = [[0; 2]; 4];
+    let mut unused_failures = 0;
     for case in cases() {
         for workers in [1, 8] {
             for check in [true, false] {
@@ -1507,6 +1508,7 @@ fn all_body_graph() {
                                     "{}: genuinely unused universal bad body still rejected",
                                     case.name
                                 );
+                                unused_failures += 1;
                             }
                         }
                     },
@@ -1516,9 +1518,12 @@ fn all_body_graph() {
         }
     }
     assert_eq!(modes, [[12, 12], [12, 12], [42, 42], [24, 24]]);
+    failures.check("native graph unused universal rejection count", || {
+        assert_eq!(unused_failures, 4)
+    });
     failures.finish();
     eprintln!(
-        "NATIVE PARAMETER EQUALITY ALL-BODY GRAPH:180 cells,modes{modes:?}; all positive universal binders retained"
+        "NATIVE PARAMETER EQUALITY ALL-BODY GRAPH:180 cells,modes{modes:?},4 unused universal bad-body rejection cells; all positive universal binders retained"
     );
 }
 #[test]
