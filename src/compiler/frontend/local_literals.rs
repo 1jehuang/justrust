@@ -12,7 +12,6 @@ mod callable;
 
 #[path = "local_literals/positional_pattern.rs"]
 mod positional_pattern;
-
 #[path = "local_literals/projection_call.rs"]
 mod projection_call;
 
@@ -75,6 +74,7 @@ struct Solver<'a: 's, 'b: 's, 's> {
     associated_equalities: Vec<(Term, Term)>,
     operators: Vec<operators::Operation>,
     projection_defaults: bool,
+    opaque_return: Option<Term>,
 }
 
 pub(super) struct Hints {
@@ -107,8 +107,9 @@ pub(super) fn hints(
         associated_equalities: Vec::new(),
         operators: Vec::new(),
         projection_defaults: false,
+        opaque_return: None,
     };
-    let return_term = solver.fixed(checker.result.clone())?;
+    let return_term = solver.return_expected(&checker.result.clone())?;
     solver.return_terms.push(return_term);
     let mut outer = HashMap::new();
     for scope in &checker.scopes {
@@ -120,7 +121,7 @@ pub(super) fn hints(
     solver.scopes.push(outer);
     let result = solver.block(block, 0)?;
     if let Some(expected) = expected {
-        let expected = solver.fixed(expected.clone())?;
+        let expected = solver.return_expected(expected)?;
         solver.coerce(result, expected)?;
     }
     solver.solve()?;
@@ -172,6 +173,18 @@ impl<'s> Solver<'_, '_, 's> {
     }
     fn fresh(&mut self) -> Result<Term, String> {
         self.node(Domain::Unknown)
+    }
+    fn return_expected(&mut self, ty: &ir::Ty) -> Result<Term, String> {
+        if matches!(ty, ir::Ty::Opaque(opaque) if self.checker.declaration == Some(opaque.owner()))
+        {
+            if let Some(term) = self.opaque_return {
+                return Ok(term);
+            }
+            let term = self.fresh()?;
+            self.opaque_return = Some(term);
+            return Ok(term);
+        }
+        self.fixed(ty.clone())
     }
     fn fixed(&mut self, ty: ir::Ty) -> Result<Term, String> {
         self.schema(&ty, &HashMap::new(), 0)
@@ -1071,7 +1084,9 @@ impl<'s> Solver<'_, '_, 's> {
                     let value = self.expr(value, depth + 1)?;
                     self.coerce(value, target)?;
                 }
-                Stmt::AssignOp { place, op, value, .. } => {
+                Stmt::AssignOp {
+                    place, op, value, ..
+                } => {
                     let target = self.place(place)?;
                     let value = self.expr(value, depth + 1)?;
                     self.operator_assignment(*op, target, value)?;

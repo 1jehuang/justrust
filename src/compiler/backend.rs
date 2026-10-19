@@ -200,6 +200,9 @@ pub(super) fn indirect(ty: &ir::Ty) -> Result<bool, String> {
         | ir::Ty::Never
         | ir::Ty::Ref { .. }
         | ir::Ty::RawPtr { .. } => Ok(false),
+        ir::Ty::Opaque(_) => {
+            Err("opaque return representation requires its defining body fact".into())
+        }
         ir::Ty::Param(_) => Err("type parameter has no native ABI".into()),
         ir::Ty::AssociatedType(_) => Err("unresolved associated type has no native ABI".into()),
         ir::Ty::Slice { .. } | ir::Ty::Str => Err(SLICE_UNSUPPORTED.into()),
@@ -384,9 +387,29 @@ fn vtable_slot_offset(slot: usize) -> Result<i32, String> {
         .ok_or_else(|| "vtable slot offset exceeds private limit".into())
 }
 
+#[derive(Clone, Copy)]
+enum NativeConcrete<'a> {
+    Ordinary(&'a ownership::ConcreteCfg),
+    Physical(&'a ownership::PhysicalConcrete<'a>),
+}
+impl<'a> NativeConcrete<'a> {
+    fn function(self) -> &'a std::sync::Arc<cfg::Function> {
+        match self {
+            Self::Ordinary(value) => value.function(),
+            Self::Physical(value) => value.function(),
+        }
+    }
+    fn facts(self) -> &'a std::sync::Arc<super::traits::ValidatedFacts> {
+        match self {
+            Self::Ordinary(value) => value.facts(),
+            Self::Physical(value) => value.facts(),
+        }
+    }
+}
+
 struct Emitter<'a> {
     object: Object,
-    concrete: &'a ownership::ConcreteCfg,
+    concrete: NativeConcrete<'a>,
     resolve: &'a dyn Fn(&ir::CallTarget) -> Result<String, String>,
     locals: Vec<i32>,
     drop_flags: Vec<Option<i32>>,
@@ -2489,6 +2512,12 @@ impl Emitter<'_> {
                 self.i32(base.checked_add(8).ok_or("raw slice descriptor offset")?);
                 self.address(base);
             }
+            cfg::Rvalue::OpaquePack { .. } => {
+                return Err(
+                    "unsupported: opaque pack requires graph-authorized physical normalization"
+                        .into(),
+                );
+            }
             cfg::Rvalue::NativeSyscall(arguments) => {
                 if arguments.len() != 7 {
                     return Err("native syscall requires number and six arguments".into());
@@ -3192,6 +3221,21 @@ impl Emitter<'_> {
 /// Every local and lowering temporary has stable invocation-owned frame storage.
 pub fn emit_cfg_function(
     concrete: &ownership::ConcreteCfg,
+    resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
+) -> Result<Object, String> {
+    emit_native_cfg(NativeConcrete::Ordinary(concrete), resolve)
+}
+
+pub(super) fn emit_physical_cfg_function(
+    concrete: &ownership::PhysicalConcrete<'_>,
+    resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
+) -> Result<Object, String> {
+    concrete.validate()?;
+    emit_native_cfg(NativeConcrete::Physical(concrete), resolve)
+}
+
+fn emit_native_cfg(
+    concrete: NativeConcrete<'_>,
     resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
 ) -> Result<Object, String> {
     let function = concrete.function().as_ref();
@@ -4343,7 +4387,7 @@ mod tests {
                 exports: Vec::new(),
                 receipt: None,
             },
-            concrete: &concrete,
+            concrete: NativeConcrete::Ordinary(&concrete),
             resolve: &resolve,
             drop_flags: Vec::new(),
             path_flags: Vec::new(),
@@ -4413,7 +4457,7 @@ mod tests {
                 exports: Vec::new(),
                 receipt: None,
             },
-            concrete: &concrete,
+            concrete: NativeConcrete::Ordinary(&concrete),
             resolve: &resolve,
             drop_flags: Vec::new(),
             path_flags: Vec::new(),
@@ -4467,7 +4511,7 @@ mod tests {
                 exports: Vec::new(),
                 receipt: None,
             },
-            concrete: &concrete,
+            concrete: NativeConcrete::Ordinary(&concrete),
             resolve: &resolve,
             drop_flags: Vec::new(),
             path_flags: Vec::new(),
@@ -4939,7 +4983,7 @@ mod tests {
                 exports: Vec::new(),
                 receipt: None,
             },
-            concrete: &concrete,
+            concrete: NativeConcrete::Ordinary(&concrete),
             resolve: &resolve,
             drop_flags: Vec::new(),
             path_flags: Vec::new(),
@@ -5085,7 +5129,7 @@ mod tests {
                 exports: Vec::new(),
                 receipt: None,
             },
-            concrete: &concrete,
+            concrete: NativeConcrete::Ordinary(&concrete),
             resolve: &resolve,
             drop_flags: Vec::new(),
             path_flags: Vec::new(),
@@ -7417,7 +7461,7 @@ mod tests {
                 exports: Vec::new(),
                 receipt: None,
             },
-            concrete: &concrete,
+            concrete: NativeConcrete::Ordinary(&concrete),
             resolve: &|_| Err("physical fixture has no instance calls".into()),
             drop_flags: Vec::new(),
             path_flags: Vec::new(),
@@ -7679,7 +7723,7 @@ mod tests {
                     exports: Vec::new(),
                     receipt: None,
                 },
-                concrete: &concrete,
+                concrete: NativeConcrete::Ordinary(&concrete),
                 resolve: &|_| Err("physical fixture has no instance calls".into()),
                 drop_flags: Vec::new(),
                 path_flags: Vec::new(),
@@ -7771,7 +7815,7 @@ mod tests {
                 exports: Vec::new(),
                 receipt: None,
             },
-            concrete: &concrete,
+            concrete: NativeConcrete::Ordinary(&concrete),
             resolve: &|_| Err("physical fixture has no instance calls".into()),
             drop_flags: Vec::new(),
             path_flags: Vec::new(),

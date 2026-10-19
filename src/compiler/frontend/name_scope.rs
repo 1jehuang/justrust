@@ -90,6 +90,13 @@ fn validate_type_names(ty: &Type, names: &impl NameAccess) -> Result<(), String>
     while let Some(ty) = pending.pop() {
         work(names, 1)?;
         match ty {
+            Type::Opaque(opaque) => {
+                opaque.validate_names(names)?;
+                for ty in opaque.types() {
+                    work(names, 1)?;
+                    pending.push(ty).map_err(transport)?;
+                }
+            }
             Type::Projection(projection) => {
                 let item = match projection.as_ref() {
                     SourceProjection::Qualified {
@@ -227,6 +234,12 @@ impl Type {
         while let Some((left, right)) = pending.pop() {
             work(names, 1)?;
             match (left, right) {
+                (Type::Opaque(a), Type::Opaque(b)) => {
+                    equal &= a.semantic_compare(b, names, |a, b| {
+                        work(names, 1)?;
+                        pending.push((a, b)).map_err(transport)
+                    })?;
+                }
                 (Type::Projection(a), Type::Projection(b)) => match (a.as_ref(), b.as_ref()) {
                     (
                         SourceProjection::Qualified {

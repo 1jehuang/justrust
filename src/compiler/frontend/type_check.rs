@@ -26,6 +26,8 @@ mod local_literals;
 mod method_argument_hint;
 #[path = "type_check/method_owner.rs"]
 mod method_owner;
+#[path = "type_check/opaque_returns.rs"]
+mod opaque_returns;
 #[path = "type_check/partial_annotation.rs"]
 pub(super) mod partial_annotation;
 mod primitive_actuals;
@@ -1677,6 +1679,7 @@ pub(super) struct Checker<'a> {
     closure_signature_hints: HashMap<PathKey, ir::Signature>,
     pub(super) capture_bindings: std::collections::HashSet<LocalKey>,
     pub(super) capture_parent_scope: Option<super::super::semantic_scope::ScopeId>,
+    pub(super) opaque_hidden: Vec<ir::OpaqueHiddenType>,
     pub(super) pending_references: Vec<PendingReferenceDecl>,
     pub(super) locals: Vec<ir::LocalDecl>,
     pub(super) exprs: Vec<ir::TypedExpr>,
@@ -2359,6 +2362,7 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
                 .or_else(|| env.enums.get(&key).cloned().map(ir::Ty::Enum))
                 .ok_or_else(|| "unknown nominal type".into())
         }
+        Type::Opaque(_) => Err("unsupported: opaque return requires canonical declaration schema".into()),
         Type::Infer => Err("signature types cannot be inferred".into()),
     }
 }
@@ -3626,6 +3630,7 @@ impl<'a> Checker<'a> {
             capture_bindings: std::collections::HashSet::new(),
             capture_parent_scope: None,
             inferred_closure_result: false,
+            opaque_hidden: Vec::new(),
             pending_references: Vec::new(),
             locals: Vec::new(),
             exprs: Vec::new(),
@@ -6894,6 +6899,13 @@ impl<'a> Checker<'a> {
         expectation: Expectation<'_>,
     ) -> Result<ir::ExprId, String> {
         self.prepare_callable_arguments(e, 0)?;
+        if let Some(ir::Ty::Opaque(opaque)) = expectation.coercion() {
+            let opaque = opaque.clone();
+            if self.declaration == Some(opaque.owner()) {
+                let value = self.expr_with_expectation(e, Expectation::None)?;
+                return self.coerce_opaque_return(value, &opaque);
+            }
+        }
         if let Expr::Var(path) = e {
             let key = self.path_key(path, Namespace::Value)?;
             let signature = self.closure_signature_hints.get(&key).cloned();
@@ -10915,6 +10927,23 @@ pub(super) fn type_callable_source_and_closures(
     budget: &ir::PlanBudget,
     canonical: Option<&CanonicalSourceCapability>,
 ) -> Result<(ir::CheckedFunction, Vec<closures::check::CheckedClosure>), String> {
+    type_callable_source_outputs(program, declaration, plan, budget, canonical)
+        .map(|(body, closures, _)| (body, closures))
+}
+pub(super) fn type_callable_source_outputs(
+    program: &Program,
+    declaration: ir::DeclId,
+    plan: &PlanCtx,
+    budget: &ir::PlanBudget,
+    canonical: Option<&CanonicalSourceCapability>,
+) -> Result<
+    (
+        ir::CheckedFunction,
+        Vec<closures::check::CheckedClosure>,
+        Vec<ir::OpaqueHiddenType>,
+    ),
+    String,
+> {
     plan.check_budget(budget)?;
     budget.charge_work(1)?;
     if !Arc::ptr_eq(&program.names, &plan.program.names)
@@ -10943,7 +10972,7 @@ pub(super) fn type_callable_source_and_closures(
         let facts = plan.callable_facts(declaration)?;
         return plan
             .checked_body(&target, &facts, budget)
-            .map(|body| (body, Vec::new()));
+            .map(|body| (body, Vec::new(), Vec::new()));
     }
     let f = plan.callable_body(program, declaration)?;
     plan.validate_callable_associated_bounds(program, declaration, budget)?;
@@ -11060,6 +11089,7 @@ pub(super) fn type_callable_source_and_closures(
         .map_err(|e| format!("in callable {:?}: {e}", f.name))?;
     c.require(&flow, &c.result)?;
     validate_shift_counts(&c.exprs, &c.count_queries)?;
+    c.finalize_opaque_returns()?;
     let checked = ir::CheckedFunction {
         runtime_sites: ir::RuntimeSites::from_source(c.runtime_sites)?,
         name: f
@@ -11077,14 +11107,15 @@ pub(super) fn type_callable_source_and_closures(
         body,
     };
     let closures = c.checked_closures;
+    let hidden = c.opaque_hidden;
     if canonical.is_some() {
-        return Ok((checked, closures));
+        return Ok((checked, closures, hidden));
     }
     let facts = plan.callable_facts(declaration)?;
     ir::validate_call_evidence(&checked, &facts, budget)?;
     let mut cx = plan.clone();
     ir::canonicalize_checked_calls(&checked, &facts, &mut cx, budget)
-        .map(|body| (body, closures))
+        .map(|body| (body, closures, hidden))
         .map_err(|e| e.into_legacy_diagnostic(budget))
 }
 pub fn type_function_with_plan(

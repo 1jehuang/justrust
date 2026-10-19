@@ -12,6 +12,45 @@ impl CarrierContractView {
             ir::CarrierFamily::Parameter(parameter) => {
                 Ok(self.parameter_actual(*parameter)?.map(|(_, ty)| ty.clone()))
             }
+            ir::CarrierFamily::Opaque(opaque) => {
+                let mut found = false;
+                for location in self
+                    .original_contract
+                    .inputs
+                    .iter()
+                    .map(|input| &input.location)
+                    .chain(
+                        self.original_contract
+                            .results
+                            .iter()
+                            .map(|result| &result.location),
+                    )
+                {
+                    charged(&self.budget, self.budget.charge_work(1))?;
+                    if let Some(ir::CarrierFamily::Opaque(candidate)) = location.channel.family() {
+                        if facts.world.eq_ty(
+                            &Ty::Opaque(candidate),
+                            &Ty::Opaque(opaque.clone()),
+                            0,
+                        )? {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if !found {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "opaque family is absent from exact original carrier contract",
+                    ));
+                }
+                Ok(Some(facts.world.realize_opaque_family(
+                    opaque,
+                    &self.original_env,
+                    &self.arguments,
+                    facts,
+                )?))
+            }
             ir::CarrierFamily::Projection(projection) => {
                 let mut found = false;
                 for input in self.original_contract.inputs.iter() {

@@ -2116,6 +2116,11 @@ impl Resolver<'_> {
     }
     fn ty_inner(&mut self, ty: &mut Type, module: ModuleId) -> Result<(), String> {
         match ty {
+            Type::Opaque(opaque) => {
+                for bound in &mut opaque.bounds {
+                    self.trait_path(bound, module)?;
+                }
+            }
             Type::Projection(projection) => self.projection(projection, module)?,
             Type::Apply(path) => {
                 self.generic_path(path, module)?;

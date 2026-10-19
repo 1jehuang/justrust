@@ -13,6 +13,9 @@ use super::ir::{CheckedFunction, ExprId, FactsCtx, GenericEnv, LocalId, Place, P
 use super::traits::{FactsError, FactsPhase, ValidatedFacts};
 use std::collections::VecDeque;
 use std::sync::Arc;
+#[path = "ownership/physical.rs"]
+mod physical;
+pub(super) use physical::{PhysicalConcrete, analyze_physical};
 #[cfg(test)]
 #[path = "ownership/projection_tests.rs"]
 mod projection_tests;
@@ -506,6 +509,7 @@ pub fn verify_template(template: cfg::TemplateCfg) -> Result<VerifiedTemplateCfg
         (Some(template.function()), Some(template.facts())),
         None,
         &mut candidate_effects,
+        None,
     );
     if !analysis.passed() {
         return Err(analysis);
@@ -613,6 +617,7 @@ fn analyze_closed_context(
         (Some(closed.function()), Some(closed.facts())),
         effects,
         &mut candidate_effects,
+        None,
     );
     if !analysis.passed() {
         return Err(analysis);
@@ -1590,7 +1595,8 @@ fn preflight_with_plan(
                         preflight_ty(&to.ty(), 0, &mut budget)?;
                         operand(value, &mut budget)?;
                     }
-                    Rvalue::Use(op)
+                    Rvalue::OpaquePack { value: op, .. }
+                    | Rvalue::Use(op)
                     | Rvalue::LeadingZeros { value: op }
                     | Rvalue::Unary { value: op, .. }
                     | Rvalue::ArrayToSlice { reference: op }
@@ -1861,7 +1867,7 @@ impl<'a> MoveShape<'a> {
             Ty::Str => Self::Scalar,
             // An unsized trait object referent is one opaque leaf: dyn
             // places are only reached through method receivers, never moved.
-            Ty::Dyn(_) => Self::Scalar,
+            Ty::Opaque(_) | Ty::Dyn(_) => Self::Scalar,
             Ty::Ref { referent, .. } if referent.contains_slice() => return Err(Exhausted),
             Ty::Int(_)
             | Ty::Float(_)
@@ -2880,7 +2886,8 @@ impl Transfer<'_> {
                 self.operand(state, index)?;
                 self.read(state, array)?;
             }
-            Rvalue::Use(op)
+            Rvalue::OpaquePack { value: op, .. }
+            | Rvalue::Use(op)
             | Rvalue::LeadingZeros { value: op }
             | Rvalue::Unary { value: op, .. }
             | Rvalue::CharToInt { value: op, .. }
@@ -3308,7 +3315,7 @@ fn analyze_with_facts(
     facts: FactsCtx<'_>,
     plan: Option<&super::ir::PlanBudget>,
 ) -> Analysis {
-    analyze_with_context(f, limits, facts, plan, (None, None), None, &mut None)
+    analyze_with_context(f, limits, facts, plan, (None, None), None, &mut None, None)
 }
 fn analyze_with_context(
     f: &cfg::Function,
@@ -3318,6 +3325,7 @@ fn analyze_with_context(
     exact: (Option<&Arc<cfg::Function>>, Option<&Arc<ValidatedFacts>>),
     effect_table: Option<&Arc<CarrierEffectTable>>,
     effect_output: &mut Option<Arc<borrow::CarrierEffects>>,
+    physical: Option<&super::opaque_physical::PhysicalValidation<'_>>,
 ) -> Analysis {
     let (exact_function, exact_facts) = exact;
     if let FactsCtx::Validated(authority) = facts {
@@ -3356,7 +3364,13 @@ fn analyze_with_context(
         });
         budget.state_limit = state_bytes;
         let verification_scratch = budget.scratch(scratch)?;
-        if let Err(error) = f.validate_with_facts(facts) {
+        let cfg_validation =
+            if let (Some(physical), FactsCtx::Validated(authority)) = (physical, facts) {
+                f.validate_physical(authority, physical)
+            } else {
+                f.validate_with_facts(facts)
+            };
+        if let Err(error) = cfg_validation {
             let resource = plan.map_or_else(
                 || {
                     ["limit", "exhaust", "resource", "overflow", "poison"]
@@ -3400,13 +3414,24 @@ fn analyze_with_context(
         budget.reserve_bytes(bytes)?;
         let mut seed = State::new(f.locals.len(), paths.nodes.len());
         let loans = if let (Some(function), Some(authority)) = (exact_function, exact_facts) {
-            Some(borrow::Plan::build_validated(
-                function,
-                authority,
-                effect_table,
-                &mut budget,
-                limits.state_bytes - bytes,
-            )?)
+            Some(if let Some(physical) = physical {
+                borrow::Plan::build_physical(
+                    function,
+                    authority,
+                    physical,
+                    effect_table,
+                    &mut budget,
+                    limits.state_bytes - bytes,
+                )?
+            } else {
+                borrow::Plan::build_validated(
+                    function,
+                    authority,
+                    effect_table,
+                    &mut budget,
+                    limits.state_bytes - bytes,
+                )?
+            })
         } else {
             Some(borrow::Plan::build_with_facts(
                 f,

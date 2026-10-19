@@ -574,7 +574,8 @@ impl NativeParserInput {
                 BudgetVec::new(&budget, Storage::Temporary).map_err(transport_error)?;
             let mut docs = lexed.docs().iter().peekable();
             for event in lexed.events() {
-                while let Some(doc) = docs.next_if(|doc| doc.prepared.start <= event.prepared.start) {
+                while let Some(doc) = docs.next_if(|doc| doc.prepared.start <= event.prepared.start)
+                {
                     lower_doc_comment(&mut session, projection, doc, &mut events)?;
                 }
                 events.push(event.token).map_err(transport_error)?;
@@ -2112,8 +2113,9 @@ mod tests {
         for child in stream.children(session, range).unwrap() {
             match stream.node(session, *child).unwrap() {
                 crate::compiler::token_tree::Node::Leaf(token) => match token.kind {
-                    crate::compiler::token::TokenKind::Ident(ident) => out
-                        .push(session.symbol(ident.symbol).unwrap().to_string()),
+                    crate::compiler::token::TokenKind::Ident(ident) => {
+                        out.push(session.symbol(ident.symbol).unwrap().to_string())
+                    }
                     crate::compiler::token::TokenKind::Literal { spelling, .. } => {
                         out.push(session.symbol(spelling).unwrap().to_string())
                     }

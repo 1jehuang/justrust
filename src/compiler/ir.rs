@@ -32,6 +32,11 @@ pub use closure::{CaptureKind, CaptureSource, ClosureKind, ClosureRecipeId, Clos
 #[path = "ir/type_alignment.rs"]
 mod type_alignment;
 pub use type_alignment::TypeAlignmentQuery;
+#[path = "ir/opaque.rs"]
+mod opaque;
+pub use opaque::{
+    OpaqueBound, OpaqueBoundArg, OpaqueDefinitionProof, OpaqueHiddenType, OpaquePackProof, OpaqueTy,
+};
 #[path = "ir/intrinsics.rs"]
 mod intrinsics;
 #[cfg(test)]
@@ -434,11 +439,17 @@ pub enum CarrierChannel {
         projection: Arc<AssociatedTypeProjection>,
         prefix: u8,
     },
+    /// One declaration-owned opaque capture family, never a hidden field path.
+    OpaqueTail {
+        opaque: Arc<OpaqueTy>,
+        prefix: u8,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CarrierFamily {
     Parameter(ParamId),
     Projection(Arc<AssociatedTypeProjection>),
+    Opaque(Arc<OpaqueTy>),
 }
 impl CarrierChannel {
     pub fn family(&self) -> Option<CarrierFamily> {
@@ -448,12 +459,15 @@ impl CarrierChannel {
             Self::ProjectionTail { projection, .. } => {
                 Some(CarrierFamily::Projection(projection.clone()))
             }
+            Self::OpaqueTail { opaque, .. } => Some(CarrierFamily::Opaque(opaque.clone())),
         }
     }
     pub fn prefix(&self) -> u8 {
         match self {
             Self::Fixed(position) => position.depth,
-            Self::ParamTail { prefix, .. } | Self::ProjectionTail { prefix, .. } => *prefix,
+            Self::ParamTail { prefix, .. }
+            | Self::ProjectionTail { prefix, .. }
+            | Self::OpaqueTail { prefix, .. } => *prefix,
         }
     }
 }
@@ -488,7 +502,10 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
             budget.check_depth(depth.checked_add(height).ok_or("carrier depth overflow")?)?;
             return Ok((has, height));
         }
-        let mut has = matches!(ty, Ty::Ref { .. } | Ty::Param(_) | Ty::AssociatedType(_));
+        let mut has = matches!(
+            ty,
+            Ty::Ref { .. } | Ty::Param(_) | Ty::AssociatedType(_) | Ty::Opaque(_)
+        );
         let mut height = 0;
         let mut child = |ty: &Ty| -> Result<(), String> {
             let (found, h) = present(ty, budget, depth + 1, memo)?;
@@ -497,6 +514,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
             Ok(())
         };
         match ty {
+            Ty::Opaque(_) => {}
             Ty::Closure(closure) => {
                 for ty in closure.captures() {
                     child(ty)?;
@@ -623,6 +641,15 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                     memo,
                 )?;
             }
+            Ty::Opaque(opaque) => emit(
+                CarrierChannel::OpaqueTail {
+                    opaque: opaque.clone(),
+                    prefix,
+                },
+                path,
+                output,
+                budget,
+            )?,
             Ty::AssociatedType(projection) => emit(
                 CarrierChannel::ProjectionTail {
                     projection: projection.clone(),
@@ -653,6 +680,11 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                     result
                 };
                 match ty {
+                    Ty::Opaque(_) => {
+                        return Err(
+                            "unsupported: opaque carrier requires its defining body fact".into(),
+                        );
+                    }
                     Ty::Closure(closure) => {
                         for (index, ty) in closure.captures().iter().enumerate() {
                             child(CarrierStep::Field(index), ty)?;
@@ -760,7 +792,8 @@ pub fn carrier_at<'a>(
     let count = match &location.channel {
         CarrierChannel::Fixed(position) => position.depth,
         CarrierChannel::ParamTail { prefix, .. }
-        | CarrierChannel::ProjectionTail { prefix, .. } => *prefix,
+        | CarrierChannel::ProjectionTail { prefix, .. }
+        | CarrierChannel::OpaqueTail { prefix, .. } => *prefix,
     };
     for _ in 0..count {
         budget.charge_work(1)?;
@@ -774,6 +807,9 @@ pub fn carrier_at<'a>(
         (CarrierChannel::ProjectionTail { projection, .. }, Ty::AssociatedType(actual))
             if projection == actual =>
         {
+            Ok(ty)
+        }
+        (CarrierChannel::OpaqueTail { opaque, .. }, Ty::Opaque(actual)) if opaque == actual => {
             Ok(ty)
         }
         (CarrierChannel::ParamTail { parameter, .. }, Ty::Param(actual)) if parameter == actual => {
@@ -812,6 +848,9 @@ pub enum CarrierRegionTerm {
     },
     ProjectionFamily {
         projection: Arc<AssociatedTypeProjection>,
+    },
+    OpaqueFamily {
+        opaque: Arc<OpaqueTy>,
     },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1330,6 +1369,7 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
                 len: bn,
             },
         ) => an == bn && Arc::ptr_eq(a, b),
+        (Ty::Opaque(a), Ty::Opaque(b)) => Arc::ptr_eq(a, b),
         (Ty::Closure(a), Ty::Closure(b)) => Arc::ptr_eq(a, b),
         (Ty::AssociatedType(a), Ty::AssociatedType(b)) => Arc::ptr_eq(a, b),
         (Ty::Tuple(a), Ty::Tuple(b)) => Arc::ptr_eq(a, b),
@@ -2593,6 +2633,15 @@ fn substitute_ty_walk(
     budget.charge_work(1)?;
     budget.charge_nodes(1)?;
     Ok(match ty {
+        Ty::Opaque(opaque) => {
+            budget.retain_bytes(
+                std::mem::size_of::<OpaqueTy>()
+                    + opaque.types().count() * std::mem::size_of::<Ty>(),
+            )?;
+            Ty::Opaque(Arc::new(opaque.try_map(|ty| {
+                substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1)
+            })?))
+        }
         Ty::Closure(closure) => {
             budget.retain_bytes(
                 std::mem::size_of::<ClosureTy>()
@@ -2925,6 +2974,12 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
                     super::const_eval::ScalarValue::Int(value) => ExprKind::Int(value),
                     super::const_eval::ScalarValue::Bool(value) => ExprKind::Bool(value),
                 };
+            }
+            ExprKind::OpaqueWrap { opaque, .. } => {
+                let Ty::Opaque(mapped) = visitor.ty(&Ty::Opaque(opaque.clone()))? else {
+                    return Err("opaque substitution changed canonical type kind".into());
+                };
+                *opaque = mapped;
             }
             ExprKind::Borrow { place, .. } | ExprKind::BoundsCheck { array: place, .. } => {
                 visitor.path(&mut place.projection)?
@@ -3378,6 +3433,11 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
         }
         budget.charge_work(1)?;
         match ty {
+            Ty::Opaque(opaque) => {
+                for ty in opaque.types() {
+                    walk(ty, budget, depth + 1)?;
+                }
+            }
             Ty::Closure(closure) => {
                 for ty in closure.types() {
                     walk(ty, budget, depth + 1)?;
@@ -4406,6 +4466,7 @@ pub struct LoopId(pub usize);
 /// Tuple structure is immutable and shared cheaply across checked facts.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
+    Opaque(Arc<OpaqueTy>),
     Closure(Arc<ClosureTy>),
     AssociatedType(Arc<AssociatedTypeProjection>),
     Param(ParamId),
@@ -4612,6 +4673,7 @@ fn type_metadata_walk(
             budget.check_depth(depth)?;
         }
         let key = match ty {
+            Ty::Opaque(opaque) => (9, Arc::as_ptr(opaque) as usize),
             Ty::Closure(closure) => (8, Arc::as_ptr(closure) as usize),
             Ty::AssociatedType(value) => {
                 if value.trait_ref.args.len() > 32 {
@@ -4697,6 +4759,11 @@ fn type_metadata_walk(
             Ok(())
         };
         match ty {
+            Ty::Opaque(opaque) => {
+                for ty in opaque.types() {
+                    child(ty)?;
+                }
+            }
             Ty::Closure(closure) => {
                 for ty in closure.types() {
                     child(ty)?;
@@ -4916,6 +4983,11 @@ impl Ty {
         let mut seen = std::collections::HashSet::new();
         while let Some(ty) = pending.pop() {
             match ty {
+                Self::Opaque(opaque) => {
+                    if seen.insert(Arc::as_ptr(opaque) as usize) {
+                        pending.extend(opaque.types());
+                    }
+                }
                 Self::Closure(closure) => {
                     if seen.insert(Arc::as_ptr(closure) as usize) {
                         pending.extend(closure.captures());
@@ -4998,7 +5070,8 @@ impl Ty {
             | Self::Unit
             | Self::Never
             | Self::RawPtr { .. } => true,
-            Self::AssociatedType(_)
+            Self::Opaque(_)
+            | Self::AssociatedType(_)
             | Self::Struct(_)
             | Self::Enum(_)
             | Self::Param(_)
@@ -5015,7 +5088,8 @@ impl Ty {
                             kind: BorrowKind::Mut,
                             ..
                         } => return false,
-                        Self::AssociatedType(_)
+                        Self::Opaque(_)
+                        | Self::AssociatedType(_)
                         | Self::Struct(_)
                         | Self::Enum(_)
                         | Self::Param(_)
@@ -5957,6 +6031,7 @@ fn ref_type_walk(
         let mut opaque = matches!(
             ty,
             Ty::Param(_)
+                | Ty::Opaque(_)
                 | Ty::AssociatedType(_)
                 | Ty::Dyn(_)
                 | Ty::Slice { .. }
@@ -5970,6 +6045,7 @@ fn ref_type_walk(
             Ok(())
         };
         match ty {
+            Ty::Opaque(_) => {}
             Ty::Closure(closure) => {
                 for ty in closure.captures() {
                     child(ty)?;
@@ -6078,6 +6154,7 @@ fn ref_types_equal(
             Ok(equal)
         };
         let equal = match (left, right) {
+            (Ty::Opaque(a), Ty::Opaque(b)) => a.try_eq(b, &mut child)?,
             (Ty::Closure(a), Ty::Closure(b)) => a.try_eq(b, &mut child)?,
             (Ty::AssociatedType(a), Ty::AssociatedType(b)) => {
                 if a.trait_ref.args.len() > 32 || b.trait_ref.args.len() > 32 {
@@ -6643,6 +6720,14 @@ fn pattern_types_equal_with_facts(
             return Err("pattern type comparison depth exceeds limit 128".into());
         }
         match (a, b) {
+            (Ty::Opaque(a), Ty::Opaque(b)) => {
+                if !a.try_eq(b, |a, b| {
+                    pending.push((a, b, depth + 1));
+                    Ok::<bool, String>(true)
+                })? {
+                    return Ok(false);
+                }
+            }
             (Ty::Closure(a), Ty::Closure(b)) => {
                 if !a.try_eq(b, |a, b| {
                     pending.push((a, b, depth + 1));
@@ -7178,6 +7263,12 @@ pub struct LiteralOutput {
 pub enum ExprKind {
     /// Universally typed member use, replaced only by graph-sealed closed CTFE.
     AssociatedConst(Arc<AssociatedConstOperand>),
+    /// A defining return seals a value behind its canonical opaque identity.
+    /// Physical lowering requires the matching immutable defining-body fact.
+    OpaqueWrap {
+        opaque: Arc<OpaqueTy>,
+        value: ExprId,
+    },
     /// Linux syscall number followed by its six usize ABI arguments.
     NativeSyscall(Vec<ExprId>),
     TypeAlignment(TypeAlignmentQuery),
@@ -7940,6 +8031,9 @@ impl CheckedFunction {
         for expression in &self.exprs {
             facts.validate_value_ty_with_budget(&expression.ty, budget)?;
             match &expression.kind {
+                ExprKind::OpaqueWrap { opaque, .. } => {
+                    facts.validate_ty_with_budget(&Ty::Opaque(opaque.clone()), budget)?;
+                }
                 ExprKind::Borrow { place, .. } | ExprKind::BoundsCheck { array: place, .. } => {
                     path(&place.projection, budget)?
                 }
@@ -8610,6 +8704,19 @@ impl CheckedFunction {
             .map_or(&fallback_budget, |authority| authority.budget());
         for (borrow_index, value) in self.exprs.iter().enumerate() {
             match &value.kind {
+                ExprKind::OpaqueWrap {
+                    opaque,
+                    value: source,
+                } => {
+                    expr(*source)?;
+                    let source = &self.exprs[source.0];
+                    if value.ty != Ty::Opaque(opaque.clone())
+                        || value.completion != source.completion
+                    {
+                        return Err("opaque wrapper changed canonical type or completion".into());
+                    }
+                    opaque::validate_wrap(opaque, &source.ty, facts)?;
+                }
                 ExprKind::CharToInt { value: source, to } => {
                     expr(*source)?;
                     let source = &self.exprs[source.0];

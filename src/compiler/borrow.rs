@@ -163,6 +163,9 @@ fn family_region_term(family: &ir::CarrierFamily) -> ir::CarrierRegionTerm {
         ir::CarrierFamily::Projection(projection) => ir::CarrierRegionTerm::ProjectionFamily {
             projection: projection.clone(),
         },
+        ir::CarrierFamily::Opaque(opaque) => ir::CarrierRegionTerm::OpaqueFamily {
+            opaque: opaque.clone(),
+        },
     }
 }
 fn family_channel(family: &ir::CarrierFamily, prefix: u8) -> CarrierChannel {
@@ -173,6 +176,10 @@ fn family_channel(family: &ir::CarrierFamily, prefix: u8) -> CarrierChannel {
         },
         ir::CarrierFamily::Projection(projection) => CarrierChannel::ProjectionTail {
             projection: projection.clone(),
+            prefix,
+        },
+        ir::CarrierFamily::Opaque(opaque) => CarrierChannel::OpaqueTail {
+            opaque: opaque.clone(),
             prefix,
         },
     }
@@ -193,7 +200,8 @@ fn value_projection(location: &CarrierLocation) -> Vec<Projection> {
     let depth = match location.channel {
         CarrierChannel::Fixed(position) => position.depth,
         CarrierChannel::ParamTail { prefix, .. }
-        | CarrierChannel::ProjectionTail { prefix, .. } => prefix,
+        | CarrierChannel::ProjectionTail { prefix, .. }
+        | CarrierChannel::OpaqueTail { prefix, .. } => prefix,
     };
     path.extend(std::iter::repeat_n(Projection::Deref, usize::from(depth)));
     path
@@ -483,7 +491,8 @@ fn read_cell_cover(
         let depth = match location.channel {
             CarrierChannel::Fixed(position) => position.depth,
             CarrierChannel::ParamTail { prefix, .. }
-            | CarrierChannel::ProjectionTail { prefix, .. } => prefix,
+            | CarrierChannel::ProjectionTail { prefix, .. }
+            | CarrierChannel::OpaqueTail { prefix, .. } => prefix,
         };
         let length = add(mul(location.path.0.len(), 2)?, usize::from(depth))?;
         budget.reserve_bytes(mul(length, size_of::<Projection>())?)?;
@@ -698,6 +707,9 @@ fn key_channel(ty: &Ty) -> Option<CellChannel> {
         Ty::Param(parameter) => Some(CellChannel::Family(ir::CarrierFamily::Parameter(
             *parameter,
         ))),
+        Ty::Opaque(opaque) => Some(CellChannel::Family(ir::CarrierFamily::Opaque(
+            opaque.clone(),
+        ))),
         Ty::AssociatedType(projection) => Some(CellChannel::Family(ir::CarrierFamily::Projection(
             projection.clone(),
         ))),
@@ -756,6 +768,7 @@ fn body_signature(f: &cfg::Function, budget: &mut Budget) -> Result<ir::Signatur
 /// The sole cell-state builder feeds the existing Plan queries, conflict and
 /// activation logic. Families are value relations, never fabricated loans.
 struct CarrierBuilder<'a, 'b> {
+    physical: Option<&'a super::opaque_physical::PhysicalValidation<'a>>,
     f: &'a cfg::Function,
     facts: FactsCtx<'a>,
     ledger: ir::PlanBudget,
@@ -809,7 +822,11 @@ impl CarrierBuilder<'_, '_> {
         {
             return Ok(());
         }
-        function.validate_provenance(facts, &self.ledger)?;
+        if let Some(physical) = self.physical {
+            physical.validate_cfg(function, facts)?;
+        } else {
+            function.validate_provenance(facts, &self.ledger)?;
+        }
         self.validated_provenance = Some((function.clone(), facts.clone()));
         Ok(())
     }
@@ -834,12 +851,26 @@ impl CarrierBuilder<'_, '_> {
             return Ok(None);
         };
         self.budget.spend(function.call_evidence.len())?;
-        let Some(evidence) = function
-            .call_evidence
-            .iter()
-            .find(|evidence| evidence.call() == call)
-            .cloned()
-        else {
+        let evidence = if let Some(physical) = self.physical {
+            match physical.original_call_evidence(&function, &facts, block) {
+                Ok(evidence) => Some(evidence),
+                Err(message) => {
+                    if super::traits::FactsError::from_message(&self.ledger, &message).is_resource()
+                    {
+                        return Err(Exhausted);
+                    }
+                    self.problem(block, None, Problem::Invalid(message))?;
+                    return Ok(None);
+                }
+            }
+        } else {
+            function
+                .call_evidence
+                .iter()
+                .find(|evidence| evidence.call() == call)
+                .cloned()
+        };
+        let Some(evidence) = evidence else {
             self.problem(
                 block,
                 None,
@@ -876,7 +907,11 @@ impl CarrierBuilder<'_, '_> {
                 && Arc::ptr_eq(proof.template().facts(), capsule_facts)
                 && facts.phase() == super::traits::FactsPhase::Closed
         });
-        if !same_context && !bridge {
+        // In this branch `evidence` was obtained only by the strict borrowed
+        // original_call_evidence replay above. The physical view itself is
+        // independently rederived below before any carrier rows are consumed.
+        let physical_bridge = self.physical.is_some();
+        if !same_context && !bridge && !physical_bridge {
             self.problem(
                 block,
                 None,
@@ -895,7 +930,14 @@ impl CarrierBuilder<'_, '_> {
             self.problem(block, None, Problem::Invalid(message))?;
             return Ok(None);
         }
-        if let Err(error) = view.validate_for(&facts) {
+        let view_validation = if let Some(physical) = self.physical {
+            physical
+                .validate_carrier_view(&function, &facts, Some(call), view)
+                .map_err(|message| super::traits::FactsError::from_message(&self.ledger, &message))
+        } else {
+            view.validate_for(&facts)
+        };
+        if let Err(error) = view_validation {
             if error.is_resource() {
                 return Err(Exhausted);
             }
@@ -1359,6 +1401,13 @@ impl CarrierBuilder<'_, '_> {
                     parameter,
                     prefix: prefix.checked_add(inner).ok_or(Exhausted)?,
                 },
+                CarrierChannel::OpaqueTail {
+                    opaque,
+                    prefix: inner,
+                } => CarrierChannel::OpaqueTail {
+                    opaque,
+                    prefix: prefix.checked_add(inner).ok_or(Exhausted)?,
+                },
                 CarrierChannel::ProjectionTail {
                     projection,
                     prefix: inner,
@@ -1390,10 +1439,10 @@ impl CarrierBuilder<'_, '_> {
                 .parameter_actual(*parameter)
                 .map_err(|_| Exhausted)?
                 .is_none()),
-            ir::CarrierFamily::Projection(_) => {
+            ir::CarrierFamily::Projection(_) | ir::CarrierFamily::Opaque(_) => {
                 let facts = self.authority.as_ref().ok_or(Exhausted)?;
                 match view.family_actual(family, facts).map_err(|_| Exhausted)? {
-                    Some(Ty::AssociatedType(_)) => Ok(true),
+                    Some(Ty::AssociatedType(_)) | Some(Ty::Opaque(_)) => Ok(true),
                     Some(_) => Ok(false),
                     None => Err(Exhausted),
                 }
@@ -1408,7 +1457,9 @@ impl CarrierBuilder<'_, '_> {
     ) -> Result<Vec<(InputCarrier, Option<CarrierLocation>)>, Exhausted> {
         let mut result = Vec::new();
         match &input.location.channel {
-            CarrierChannel::ParamTail { .. } | CarrierChannel::ProjectionTail { .. } => {
+            CarrierChannel::ParamTail { .. }
+            | CarrierChannel::ProjectionTail { .. }
+            | CarrierChannel::OpaqueTail { .. } => {
                 let family = input.location.channel.family().ok_or(Exhausted)?;
                 for mapping in view
                     .component_mappings()
@@ -1623,10 +1674,14 @@ impl CarrierBuilder<'_, '_> {
                 Ok(vec![(None, self.regions.node(key, self.budget)?)])
             }
             ir::CarrierRegionTerm::Family { .. }
-            | ir::CarrierRegionTerm::ProjectionFamily { .. } => {
+            | ir::CarrierRegionTerm::ProjectionFamily { .. }
+            | ir::CarrierRegionTerm::OpaqueFamily { .. } => {
                 let family = match term {
                     ir::CarrierRegionTerm::Family { parameter } => {
                         ir::CarrierFamily::Parameter(*parameter)
+                    }
+                    ir::CarrierRegionTerm::OpaqueFamily { opaque } => {
+                        ir::CarrierFamily::Opaque(opaque.clone())
                     }
                     ir::CarrierRegionTerm::ProjectionFamily { projection } => {
                         ir::CarrierFamily::Projection(projection.clone())
@@ -1945,6 +2000,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
         ledger: ir::PlanBudget,
         budget: &'b mut Budget,
         max_bytes: usize,
+        physical: Option<&'a super::opaque_physical::PhysicalValidation<'a>>,
     ) -> Result<Self, Exhausted> {
         let allocation_start = budget.reserved_bytes();
         // Closed layouts do not grant new read-cover authority. Retain only
@@ -2028,7 +2084,9 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                         reference_inputs.push((input, ReferenceOriginId(kinds.len())));
                         kinds.push(*kind);
                     }
-                    CarrierChannel::ParamTail { .. } | CarrierChannel::ProjectionTail { .. } => {
+                    CarrierChannel::ParamTail { .. }
+                    | CarrierChannel::ProjectionTail { .. }
+                    | CarrierChannel::OpaqueTail { .. } => {
                         ledger.charge_nodes(1).map_err(|_| Exhausted)?;
                         ledger
                             .retain_bytes(4 * size_of::<FamilyOrigin>())
@@ -2150,6 +2208,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
         let mut builder = Self {
             f,
             facts,
+            physical,
             ledger,
             budget,
             max_bytes,
@@ -2271,7 +2330,9 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                             },
                         )?;
                     }
-                    CarrierChannel::ParamTail { .. } | CarrierChannel::ProjectionTail { .. } => {
+                    CarrierChannel::ParamTail { .. }
+                    | CarrierChannel::ProjectionTail { .. }
+                    | CarrierChannel::OpaqueTail { .. } => {
                         builder.budget.spend(1)?;
                         if builder
                             .family_inputs
@@ -2295,7 +2356,17 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
         builder.initial.overwritten = Set::new(builder.cells.len());
         if let FactsCtx::Validated(authority) = facts {
             let signature = body_signature(f, builder.budget)?;
-            match authority.carrier_contract(ir::SignatureSubject::Body) {
+            let body_view = if let Some(physical) = physical {
+                physical
+                    .body_carriers(f, authority)
+                    .and_then(|boundary| boundary.realize())
+                    .map_err(|message| {
+                        super::traits::FactsError::from_message(authority.budget(), &message)
+                    })
+            } else {
+                authority.carrier_contract(ir::SignatureSubject::Body)
+            };
+            match body_view {
                 Ok(view) => {
                     let mut valid = true;
                     for result in view.contract().results.iter() {
@@ -2330,7 +2401,20 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                     target, signature, ..
                 } = &block.terminator.value
                 {
-                    match authority.carrier_contract(ir::SignatureSubject::Call(target)) {
+                    let call_view = if let Some(physical) = physical {
+                        physical
+                            .call_carriers(f, authority, BlockId(index))
+                            .and_then(|boundary| boundary.realize())
+                            .map_err(|message| {
+                                super::traits::FactsError::from_message(
+                                    authority.budget(),
+                                    &message,
+                                )
+                            })
+                    } else {
+                        authority.carrier_contract(ir::SignatureSubject::Call(target))
+                    };
+                    match call_view {
                         Ok(view) => {
                             let mut valid = true;
                             for result in view.contract().results.iter() {
@@ -2626,6 +2710,22 @@ impl CarrierBuilder<'_, '_> {
                     fixed_location(ReferencePosition { depth: 0 }),
                     origins,
                 )])
+            }
+            Rvalue::OpaquePack { value, .. } => {
+                // CFG validation replays the defining-owner proof and checks
+                // that this exact operand has no carriers. Still evaluate the
+                // operand's move/read effects rather than erasing its use.
+                let carriers = self.operand_value(state, value)?;
+                if !carriers.is_empty() {
+                    self.problem(
+                        block,
+                        Some(statement),
+                        Problem::Invalid(
+                            "opaque carrier-empty pack received carrier origins".into(),
+                        ),
+                    )?;
+                }
+                Ok(Vec::new())
             }
             Rvalue::Use(operand) => self.operand_value(state, operand),
             // The slice handle carries exactly the input reference's origins
@@ -4091,7 +4191,21 @@ impl CarrierBuilder<'_, '_> {
                     self.function.as_ref(),
                     self.authority.as_ref(),
                 );
-                if let Err(error) = binding.contract.validate_for(&binding.facts) {
+                let binding_validation = if let Some(physical) = self.physical {
+                    physical
+                        .validate_carrier_view(
+                            self.f,
+                            &binding.facts,
+                            Some(binding.call),
+                            &binding.contract,
+                        )
+                        .map_err(|message| {
+                            super::traits::FactsError::from_message(&self.ledger, &message)
+                        })
+                } else {
+                    binding.contract.validate_for(&binding.facts)
+                };
+                if let Err(error) = binding_validation {
                     if error.is_resource() {
                         return Err(Exhausted);
                     }
@@ -4143,6 +4257,7 @@ impl CarrierBuilder<'_, '_> {
                                 region.schema,
                                 ir::CarrierRegionTerm::Family { .. }
                                     | ir::CarrierRegionTerm::ProjectionFamily { .. }
+                                    | ir::CarrierRegionTerm::OpaqueFamily { .. }
                             ));
                 }
             }
@@ -4564,7 +4679,8 @@ fn visit_operand(op: &Operand, mut visit: impl FnMut(&Place, bool)) {
 fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place, bool)) {
     match value {
         Rvalue::Borrow(id) => visit(&f.loan_sites[id.0].place, false),
-        Rvalue::Use(op)
+        Rvalue::OpaquePack { value: op, .. }
+        | Rvalue::Use(op)
         | Rvalue::LeadingZeros { value: op }
         | Rvalue::Unary { value: op, .. }
         | Rvalue::Repeat { value: op, .. }
@@ -4798,6 +4914,31 @@ fn target_payload_bytes_with_growth(
 }
 
 impl Plan {
+    pub(super) fn build_physical<'a>(
+        f: &'a Arc<cfg::Function>,
+        facts: &'a Arc<super::traits::ValidatedFacts>,
+        physical: &'a super::opaque_physical::PhysicalValidation<'a>,
+        table: Option<&Arc<super::ownership::CarrierEffectTable>>,
+        budget: &mut Budget,
+        max_bytes: usize,
+    ) -> Result<Self, Exhausted> {
+        if physical.validate_cfg(f, facts).is_err() {
+            return Err(Exhausted);
+        }
+        let mut builder = CarrierBuilder::new(
+            f,
+            FactsCtx::Validated(facts),
+            facts.budget().clone(),
+            budget,
+            max_bytes,
+            Some(physical),
+        )?;
+        builder.function = Some(f.clone());
+        builder.authority = Some(facts.clone());
+        builder.effect_table = table.cloned();
+        builder.initialize_regions()?;
+        builder.solve()
+    }
     pub fn build_validated(
         f: &Arc<cfg::Function>,
         facts: &Arc<super::traits::ValidatedFacts>,
@@ -4811,6 +4952,7 @@ impl Plan {
             facts.budget().clone(),
             budget,
             max_bytes,
+            None,
         )?;
         builder.function = Some(f.clone());
         builder.authority = Some(facts.clone());
@@ -4842,7 +4984,7 @@ impl Plan {
                 .cloned()
                 .unwrap_or_else(|| ir::PlanBudget::new(ir::PlanLimits::default())),
         };
-        CarrierBuilder::new(f, facts, ledger, budget, max_bytes)?.solve()
+        CarrierBuilder::new(f, facts, ledger, budget, max_bytes, None)?.solve()
     }
     fn check_backedges(
         &mut self,

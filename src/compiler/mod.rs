@@ -3,6 +3,8 @@ mod associated_constant_graph;
 pub mod backend;
 mod borrow;
 pub mod c_abi;
+#[cfg(test)]
+mod canonical_instance_tests;
 pub mod cfg;
 mod const_check;
 mod const_diagnostics;
@@ -25,6 +27,16 @@ pub mod macro_rules;
 mod macro_transcribe;
 mod memory_layout;
 pub mod module_identity;
+#[cfg(test)]
+mod opaque_authority_tests;
+mod opaque_dispatch;
+#[cfg(test)]
+mod opaque_dispatch_tests;
+mod opaque_instances;
+mod opaque_object;
+mod opaque_physical;
+#[cfg(test)]
+mod opaque_source_tests;
 pub mod owner_path;
 pub mod ownership;
 mod resource_accounting;
@@ -182,6 +194,7 @@ const PARSE: u32 = 100;
 const SIGNATURES: u32 = 101;
 const BODY: u32 = 102;
 const OBJECT: u32 = 103;
+const SOURCE_ADMISSION: u32 = 128;
 const CHECK: u32 = 104;
 const BUILD: u32 = 105;
 const RESOLVE: u32 = 106;
@@ -202,6 +215,10 @@ const CONST_DECL: u32 = 118;
 const CONST_BODY: u32 = 119;
 const CONST_VALUE: u32 = 120;
 const ROOT_CLEANUP_DEMAND: u32 = 125;
+/// Canonical target-keyed body. BODY(index) is only a legacy slot alias.
+const CANONICAL_BODY: u32 = 126;
+const OPAQUE_REPRESENTATION: u32 = 127;
+const OPAQUE_CALL_DISPATCH: u32 = 140;
 /// Optimizer nodes (OPTIMIZATION.md section 8). Per instance index; only BUILD
 /// (through OBJECT) demands them, and never when the mode is `Off`.
 const SSA: u32 = 130;
@@ -230,6 +247,23 @@ struct TemplateBodyFact {
 struct ClosureBodiesFact {
     bodies: Arc<[frontend::closures::publication::PublishedClosure]>,
     publication: Option<frontend::closures::publication::ClosurePublicationProof>,
+}
+/// Final immutable hidden representations owned by this declaration's body.
+struct OpaqueHiddenTypesFact {
+    representations: Arc<[ir::OpaqueHiddenType]>,
+}
+/// Exact closed hidden record. Reading this fact grants no source-level trait
+/// information and does not itself authorize carrier-erasing physical lowering.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "source-only opaque admission tests representation authority before physical consumers are wired"
+    )
+)]
+struct OpaqueRepresentationFact {
+    record: ir::OpaqueHiddenType,
+    definition: ir::OpaqueDefinitionProof,
 }
 struct BodyLexicalFact {
     lexical: frontend::closures::graph_facts::LexicalBody,
@@ -544,9 +578,10 @@ impl Provider for CompilerProvider {
             UNIVERSAL_ANALYZE
             | ANALYZE
             | CONST_BODY
-            | TEMPLATE_BODY
             | ASSOCIATED_CONST_HEADER
-            | ASSOCIATED_CONST_SELECT => 2,
+            | ASSOCIATED_CONST_SELECT
+            | OPAQUE_CALL_DISPATCH => 2,
+            TEMPLATE_BODY => 3,
             PARSE => PARSE_OUTPUTS,
             _ => 1,
         }
@@ -558,6 +593,7 @@ impl Provider for CompilerProvider {
             let root = Facts::root;
             let function = Facts::item;
             match key.kind {
+                OPAQUE_CALL_DISPATCH => opaque_dispatch::produce(&this, &cx, &key).await,
                 CONST_DECL | CONST_BODY | CONST_VALUE => this.constant_node(&cx, &key).await,
                 ASSOCIATED_CONST_HEADER => this.associated_constant_header_node(&cx, &key).await,
                 ASSOCIATED_CONST_SELECT | ASSOCIATED_CONST_VALUE => {
@@ -771,6 +807,12 @@ impl Provider for CompilerProvider {
                                 publication: None,
                             },
                         )?;
+                        cx.publish_fact(
+                            2,
+                            OpaqueHiddenTypesFact {
+                                representations: Arc::from([]),
+                            },
+                        )?;
                         return cx.publish_fact(
                             0,
                             TemplateBodyFact {
@@ -893,8 +935,8 @@ impl Provider for CompilerProvider {
                             &this.0.budget,
                         )
                         .map_err(|error| source_fact_error(error, &this.0.budget))?;
-                    let (body, closures) = types
-                        .publish_callable_body_with_closures(declaration, constants, &this.0.budget)
+                    let (body, closures, hidden) = types
+                        .publish_callable_body_outputs(declaration, constants, &this.0.budget)
                         .map_err(|error| source_fact_error(error, &this.0.budget))?;
                     let fact = match body {
                         frontend::PublishedCallableBody::Source(publication) => {
@@ -982,6 +1024,12 @@ impl Provider for CompilerProvider {
                             publication: closure_publication,
                         },
                     )?;
+                    cx.publish_fact(
+                        2,
+                        OpaqueHiddenTypesFact {
+                            representations: hidden.into(),
+                        },
+                    )?;
                     cx.publish_fact(0, fact)
                 }
                 UNIVERSAL_LOWER => {
@@ -1005,9 +1053,13 @@ impl Provider for CompilerProvider {
                     } else {
                         types.callable_facts(declaration).map_err(Error::new)?
                     };
-                    if !Self::universal_body(&types, declaration)? {
+                    if !Self::universal_body(&types, declaration)?
+                        && !template.publication.as_ref().is_some_and(|publication| {
+                            publication.facts().phase() == traits::FactsPhase::Universal
+                        })
+                    {
                         return Err(Error::new(
-                            "universal lowering requires a generic source or registered recipe",
+                            "universal lowering requires an abstract source publication or registered recipe",
                         ));
                     }
                     let source = this.validated_body(&types, index, &template)?;
@@ -1065,7 +1117,12 @@ impl Provider for CompilerProvider {
                     let (index, _) = closure_body_index(&key)?;
                     let types = facts.types().await?;
                     let declaration = types.callable_decl(index).map_err(Error::new)?;
-                    if !Self::universal_body(&types, declaration)? {
+                    let template = facts.template(index).await?;
+                    if !Self::universal_body(&types, declaration)?
+                        && !template.publication.as_ref().is_some_and(|publication| {
+                            publication.facts().phase() == traits::FactsPhase::Universal
+                        })
+                    {
                         return Err(Error::new("non-universal callable has no admission fact"));
                     }
                     let proof: Arc<UniversalProofFact> = facts
@@ -1130,10 +1187,82 @@ impl Provider for CompilerProvider {
                         .map_err(Error::new)?;
                     cx.publish_fact(0, PlanFact { plan })
                 }
-                BODY => {
-                    let index = item_index(&key, "missing instance index")?;
+                OPAQUE_REPRESENTATION => {
                     let types = facts.types().await?;
-                    let (instance_target, instance_source) = facts.instance(index).await?;
+                    let opaque =
+                        instances::graph_key::decode_opaque(&key.params, &types, &this.0.budget)
+                            .map_err(Error::new)?;
+                    let source = types.callable_index(opaque.owner()).map_err(Error::new)?;
+                    let request = cx.request(function(TEMPLATE_BODY, source));
+                    let template_handle = request.get(0);
+                    let hidden_handle = request.get(2);
+                    let template: Arc<TemplateBodyFact> = cx.read_fact(template_handle).await?;
+                    let hidden: Arc<OpaqueHiddenTypesFact> = cx.read_fact(hidden_handle).await?;
+                    this.validated_body(&types, source, &template)?;
+                    let publication = template.publication.as_ref().ok_or_else(|| {
+                        Error::new(
+                            "opaque representation requires its canonical defining publication",
+                        )
+                    })?;
+                    let mut found = None;
+                    for record in hidden.representations.iter() {
+                        if record.opaque().owner() == opaque.owner()
+                            && record.opaque().site() == opaque.site()
+                        {
+                            if found.replace(record).is_some() {
+                                return Err(Error::new(
+                                    "opaque body published duplicate hidden occurrences",
+                                ));
+                            }
+                        }
+                    }
+                    let record = found.ok_or_else(|| {
+                        Error::new("unsupported: opaque return has no final hidden representation")
+                    })?;
+                    let definition = ir::OpaqueDefinitionProof::seal(
+                        publication.clone(),
+                        record,
+                        &this.0.budget,
+                    )
+                    .map_err(Error::new)?;
+                    let mut context = types.as_ref().clone();
+                    let record = definition
+                        .instantiate(&opaque, publication, &mut context, &this.0.budget)
+                        .map_err(Error::new)?;
+                    cx.publish_fact(0, OpaqueRepresentationFact { record, definition })
+                }
+                BODY | CANONICAL_BODY => {
+                    let types = facts.types().await?;
+                    let (instance_target, instance_source) = if key.kind == CANONICAL_BODY {
+                        let target =
+                            instances::graph_key::decode(&key.params, &types, &this.0.budget)
+                                .map_err(Error::new)?;
+                        let source = types
+                            .callable_index(target.declaration)
+                            .map_err(Error::new)?;
+                        (target, source)
+                    } else {
+                        let index = item_index(&key, "missing instance index")?;
+                        let (target, source) = facts.instance(index).await?;
+                        // First migration: nongeneric roots share exactly one
+                        // canonical producer independently of the global plan.
+                        // Generic closure actuals still use the existing path
+                        // until their parent metadata key replay is available.
+                        if target.type_args.is_empty() {
+                            let params = instances::graph_key::encode(&target, &this.0.budget)
+                                .map_err(Error::new)?;
+                            let canonical: Arc<InstanceBodyFact> =
+                                facts.get(Key::new(CANONICAL_BODY, params)).await?;
+                            return cx.publish_fact(
+                                0,
+                                InstanceBodyFact {
+                                    facts: canonical.facts.clone(),
+                                    checked: canonical.checked.clone(),
+                                },
+                            );
+                        }
+                        (target, source)
+                    };
                     let mut template = facts.template(instance_source).await?;
                     let mut proof_key = function(UNIVERSAL_ANALYZE, instance_source);
                     if let Some(closure) = &template.closure {
@@ -1374,6 +1503,9 @@ impl Provider for CompilerProvider {
                 }
                 OBJECT => {
                     let index = item_index(&key, "missing instance index")?;
+                    if let Some(object) = opaque_object::produce(&this, &cx, index).await? {
+                        return cx.publish_fact(0, object);
+                    }
                     // Only this instance's own proof is required. Executable
                     // publication is gated on every check by BUILD (via CHECK),
                     // so object code for a ready function overlaps unrelated
@@ -1607,12 +1739,125 @@ impl Provider for CompilerProvider {
                     drop(merged);
                     cx.publish_fact(0, SsaFact::publish(optimized, inlined, &meter)?)
                 }
+                SOURCE_ADMISSION => {
+                    let index = item_index(&key, "missing source admission declaration")?;
+                    let types = facts.types().await?;
+                    let template = facts.template(index).await?;
+                    let declaration = types.callable_decl(index).map_err(Error::new)?;
+                    let abstract_source =
+                        template.publication.as_ref().is_some_and(|publication| {
+                            publication.facts().phase() == traits::FactsPhase::Universal
+                        });
+                    if abstract_source || Self::universal_body(&types, declaration)? {
+                        cx.read(cx.request(function(UNIVERSAL_EFFECTS_READY, index)).get(0))
+                            .await?;
+                    } else {
+                        let publication = template.publication.as_ref().ok_or_else(|| {
+                            Error::new("closed source admission omitted its canonical publication")
+                        })?;
+                        let lowered = cfg::lower_source_closed(publication, &this.0.budget)
+                            .map_err(|error| source_fact_error(error, &this.0.budget))?;
+                        scale_task_work_by_cfg(&lowered);
+                        let closed = cfg::close(
+                            Arc::new(lowered),
+                            publication.facts().clone(),
+                            &this.0.budget,
+                        )
+                        .map_err(Error::new)?;
+                        let mut callees = Vec::new();
+                        for block in &closed.function().blocks {
+                            this.0.budget.charge_work(1).map_err(Error::new)?;
+                            if let cfg::Terminator::Call {
+                                target: ir::Callee::Direct(target),
+                                ..
+                            } = &block.terminator.value
+                            {
+                                if Self::universal_body(&types, target.declaration)? {
+                                    callees.push(
+                                        types
+                                            .callable_index(target.declaration)
+                                            .map_err(Error::new)?,
+                                    );
+                                }
+                            }
+                        }
+                        callees.sort_unstable();
+                        callees.dedup();
+                        let handles: Vec<_> = callees
+                            .iter()
+                            .map(|callee| cx.request(function(UNIVERSAL_ANALYZE, *callee)).get(0))
+                            .collect();
+                        let mut proofs = Vec::with_capacity(handles.len());
+                        for handle in handles {
+                            let proof: Arc<UniversalProofFact> = cx.read_fact(handle).await?;
+                            proofs.push(proof.verified.clone());
+                        }
+                        let effects =
+                            ownership::CarrierEffectTable::for_callees(&proofs, &this.0.budget)
+                                .map_err(Error::new)?;
+                        ownership::analyze_closed_with_effects(closed, &effects).map_err(
+                            |analysis| {
+                                Error::new(analysis_diagnostic(
+                                    &this.0.budget,
+                                    "source declaration",
+                                    index,
+                                    &analysis,
+                                ))
+                            },
+                        )?;
+                    }
+                    cx.publish(0, 1)
+                }
                 CHECK | BUILD => {
                     // Closed source roots have stable slots from SIGNATURES.
                     // Demand them before sealing the additional generic frontier:
                     // otherwise MONO_PLAN becomes a scheduling barrier even
                     // though these pipelines do not depend on its output.
                     let types = facts.types().await?;
+                    if key.kind == CHECK {
+                        let count = types
+                            .constant_count()
+                            .checked_add(types.callable_count())
+                            .ok_or_else(|| {
+                                Error::new("source admission frontier limit exceeded")
+                            })?;
+                        let (mut handles, _handles_storage) = this.scratch_vec(count)?;
+                        for index in 0..types.constant_count() {
+                            let declaration = types.constant_decl(index).map_err(Error::new)?;
+                            handles.push(
+                                cx.request(function(CONST_VALUE, declaration.index as usize))
+                                    .get(0),
+                            );
+                        }
+                        for index in 0..types.callable_count() {
+                            handles.push(cx.request(function(SOURCE_ADMISSION, index)).get(0));
+                        }
+                        let (mut associated_handles, _associated_handles_storage) =
+                            this.scratch_vec(types.associated_constant_count())?;
+                        for declaration in types.associated_constant_declarations() {
+                            associated_handles.push((
+                                declaration,
+                                cx.request(Key::new(
+                                    ASSOCIATED_CONST_HEADER,
+                                    vec![
+                                        declaration.snapshot.graph_word(),
+                                        u64::from(declaration.index),
+                                    ],
+                                ))
+                                .get(1),
+                            ));
+                        }
+                        for handle in handles {
+                            cx.read(handle).await?;
+                        }
+                        for (declaration, handle) in associated_handles {
+                            let checked: Arc<
+                                associated_constant_graph::AssociatedConstantCheckedFact,
+                            > = cx.read_fact(handle).await?;
+                            checked.validate(&types, declaration, &this.0.budget)?;
+                        }
+                        return cx.publish(0, 1);
+                    }
                     let root_count = types.closed_roots().len();
                     let (mut constant_handles, _constant_handles_storage) =
                         this.scratch_vec(types.constant_count())?;

@@ -129,6 +129,36 @@ fn ty(
             declaration(words, value.principal);
             15
         }
+        ir::Ty::Opaque(value) => {
+            declaration(words, value.owner());
+            words.push(u64::from(value.site()));
+            types(words, value.owner_args(), budget, depth + 1)?;
+            words.push(value.captured_regions().len() as u64);
+            for region in value.captured_regions() {
+                declaration(words, region.declaration);
+                words.push(u64::from(region.index));
+            }
+            words.push(value.bounds().len() as u64);
+            for bound in value.bounds() {
+                declaration(words, bound.declaration());
+                words.push(bound.args().len() as u64);
+                for arg in bound.args() {
+                    match arg {
+                        ir::OpaqueBoundArg::SelfType => words.push(0),
+                        ir::OpaqueBoundArg::Type(value) => {
+                            words.push(1);
+                            ty(words, value, budget, depth + 1)?;
+                        }
+                    }
+                }
+                words.push(bound.equalities().len() as u64);
+                for (item, value) in bound.equalities() {
+                    declaration(words, *item);
+                    ty(words, value, budget, depth + 1)?;
+                }
+            }
+            16
+        }
         ir::Ty::Closure(_) => {
             return Err(
                 "unsupported: canonical closure graph key requires parent metadata replay".into(),
@@ -182,6 +212,56 @@ pub(in crate::compiler) fn decode(
     }
     Ok(target)
 }
+pub(in crate::compiler) fn encode_opaque(
+    opaque: &Arc<ir::OpaqueTy>,
+    budget: &ir::PlanBudget,
+) -> Result<Vec<u64>, String> {
+    let mut words = vec![VERSION];
+    declaration(&mut words, opaque.owner());
+    ty(&mut words, &ir::Ty::Opaque(opaque.clone()), budget, 0)?;
+    budget.charge_work(words.len())?;
+    budget.retain_bytes(
+        words
+            .len()
+            .checked_mul(16)
+            .ok_or("opaque key size overflow")?,
+    )?;
+    Ok(words)
+}
+
+pub(in crate::compiler) fn decode_opaque(
+    words: &[u64],
+    context: &frontend::PlanCtx,
+    budget: &ir::PlanBudget,
+) -> Result<Arc<ir::OpaqueTy>, String> {
+    budget.charge_work(words.len())?;
+    let mut reader = Reader {
+        words,
+        at: 0,
+        context,
+        budget,
+    };
+    if reader.word()? != VERSION {
+        return Err("unsupported opaque graph key version".into());
+    }
+    let owner = reader.declaration()?;
+    let facts = context.callable_facts(owner)?;
+    let ir::Ty::Opaque(opaque) = reader.ty(ir::FactsCtx::from_validated(&facts), 0)? else {
+        return Err("opaque graph key is not an opaque type".into());
+    };
+    if reader.at != words.len() || opaque.owner() != owner {
+        return Err("opaque graph key changed its owner or extent".into());
+    }
+    context.instance_facts(&ir::CallTarget {
+        declaration: owner,
+        type_args: Arc::from(opaque.owner_args()),
+    })?;
+    if encode_opaque(&opaque, budget)?.as_slice() != words {
+        return Err("noncanonical opaque graph key".into());
+    }
+    Ok(opaque)
+}
+
 struct Reader<'a> {
     words: &'a [u64],
     at: usize,
@@ -325,9 +405,49 @@ impl Reader<'_> {
                 associated_types: Arc::from([]),
             })),
             16 => {
-                return Err(
-                    "unsupported: opaque instance graph key requires owner metadata replay".into(),
-                );
+                let owner = self.declaration()?;
+                let site = u32::try_from(self.word()?).map_err(|_| "opaque site key overflow")?;
+                let args = self.types(facts, depth + 1)?;
+                let region_count = self.count()?;
+                let mut regions = Vec::new();
+                for _ in 0..region_count {
+                    regions.push(ir::SourceRegionId {
+                        declaration: self.declaration()?,
+                        index: u16::try_from(self.word()?)
+                            .map_err(|_| "opaque capture key overflow")?,
+                    });
+                }
+                let count = self.count()?;
+                let mut bounds = Vec::new();
+                for _ in 0..count {
+                    let declaration = self.declaration()?;
+                    let count = self.count()?;
+                    let mut arguments = Vec::new();
+                    for _ in 0..count {
+                        arguments.push(match self.word()? {
+                            0 => ir::OpaqueBoundArg::SelfType,
+                            1 => ir::OpaqueBoundArg::Type(self.ty(facts, depth + 1)?),
+                            _ => return Err("invalid opaque self argument tag".into()),
+                        });
+                    }
+                    let count = self.count()?;
+                    let mut equalities = Vec::new();
+                    for _ in 0..count {
+                        equalities.push((self.declaration()?, self.ty(facts, depth + 1)?));
+                    }
+                    bounds.push(ir::OpaqueBound::new(
+                        declaration,
+                        arguments.into(),
+                        equalities.into(),
+                    ));
+                }
+                ir::Ty::Opaque(Arc::new(ir::OpaqueTy::new(
+                    owner,
+                    args.into(),
+                    site,
+                    bounds.into(),
+                    regions.into(),
+                )))
             }
             _ => return Err("unsupported instance graph type tag".into()),
         };
@@ -435,11 +555,7 @@ mod tests {
         assert!(decode(&foreign_nominal, &context, &budget).is_err());
         let mut opaque = encode(&target(ir::Ty::Bool), &budget).unwrap();
         opaque[4] = 16;
-        assert!(
-            decode(&opaque, &context, &budget)
-                .unwrap_err()
-                .contains("opaque")
-        );
+        assert!(decode(&opaque, &context, &budget).is_err());
     }
     #[test]
     fn tags_boundaries_and_order_are_injective() {
@@ -458,6 +574,47 @@ mod tests {
         assert_ne!(
             encode(&original, &budget).unwrap(),
             encode(&other, &budget).unwrap()
+        );
+    }
+    #[test]
+    fn opaque_owner_site_actuals_and_captures_are_part_of_key() {
+        let budget = ir::PlanBudget::default();
+        let base = target(Vec::new());
+        let opaque = |site, args: Vec<ir::Ty>, regions: Vec<ir::SourceRegionId>| {
+            ir::Ty::Opaque(Arc::new(ir::OpaqueTy::new(
+                base.declaration,
+                args.into(),
+                site,
+                Arc::from([]),
+                regions.into(),
+            )))
+        };
+        let key = |value| {
+            encode(
+                &ir::CallTarget {
+                    declaration: base.declaration,
+                    type_args: Arc::from([value]),
+                },
+                &budget,
+            )
+            .unwrap()
+        };
+        let first = key(opaque(0, vec![ir::Ty::Bool], vec![]));
+        assert_ne!(first, key(opaque(1, vec![ir::Ty::Bool], vec![])));
+        assert_ne!(
+            first,
+            key(opaque(0, vec![ir::Ty::Int(ir::IntTy::U8)], vec![]))
+        );
+        assert_ne!(
+            first,
+            key(opaque(
+                0,
+                vec![ir::Ty::Bool],
+                vec![ir::SourceRegionId {
+                    declaration: base.declaration,
+                    index: 0
+                }]
+            ))
         );
     }
 }

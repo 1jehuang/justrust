@@ -237,7 +237,7 @@ mod tests {
                 exports: Vec::new(),
                 receipt: None,
             },
-            concrete: &concrete,
+            concrete: NativeConcrete::Ordinary(&concrete),
             resolve: &resolve,
             drop_flags: Vec::new(),
             path_flags: Vec::new(),

@@ -27,7 +27,9 @@ mod impl_constraints;
 mod inherent_constants;
 mod nominal_normalization;
 mod normal_drop;
+mod opaque;
 mod parameter_equality;
+mod physical_carriers;
 mod predicate_subjects;
 mod projected_methods;
 mod symbolic_equalities;
@@ -1043,6 +1045,7 @@ impl ValidatedFacts {
 }
 #[derive(Clone, Debug)]
 enum ProofOrigin {
+    OpaqueDeclared,
     Closure {
         kind: ir::ClosureKind,
     },
@@ -1185,8 +1188,9 @@ struct SignatureTopologyProof {
 
 /// Structural declaration transport only. Actual loans and occurrence-local
 /// region solutions belong to the borrow plan, never this world-owned view.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CarrierContractView {
+    physical: Option<super::opaque_physical::PhysicalCarrierIdentity>,
     world: WorldId,
     registry: SnapshotId,
     environment: usize,
@@ -1254,6 +1258,12 @@ impl CarrierContractView {
         &self.original_env
     }
     pub fn validate_for(&self, facts: &ValidatedFacts) -> Result<()> {
+        if self.physical.is_some() {
+            return Err(FactsError::invalid(
+                facts.budget(),
+                "physical carrier rows require borrowed normalization replay",
+            ));
+        }
         facts.world.check_facts(facts, false)?;
         facts.world.check_context(ProofContext::from_facts(facts))?;
         if self.world != facts.world.id
@@ -1317,6 +1327,7 @@ struct TypeWalk {
     visits: usize,
     maybe_unsized: Option<ParamId>,
     has_parameters: bool,
+    has_opaque: bool,
 }
 impl TypeWalk {
     fn growth_slots(len: usize, capacity: usize) -> Option<usize> {
@@ -2037,6 +2048,13 @@ impl ValidatedTraitWorld {
             Ok(())
         };
         match ty {
+            Ty::Opaque(opaque) => {
+                self.validate_opaque_metadata(opaque, env)?;
+                for ty in opaque.types() {
+                    child(ty, TypeUse::Root)?;
+                }
+                walk.has_opaque = true;
+            }
             Ty::Closure(closure) => {
                 self.validate_closure_metadata(closure, env)?;
                 for ty in closure.types() {
@@ -2561,6 +2579,7 @@ impl ValidatedTraitWorld {
                 && a.trait_ref.declaration == b.trait_ref.declaration
                 && self.eq_ty(&a.trait_ref.self_ty, &b.trait_ref.self_ty, depth + 1)?
                 && self.eq_types(&a.trait_ref.args, &b.trait_ref.args, depth + 1)?),
+            (Ty::Opaque(a), Ty::Opaque(b)) => a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1)),
             (Ty::Closure(a), Ty::Closure(b)) => a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1)),
             (Ty::Param(a), Ty::Param(b)) => Ok(a == b),
             (Ty::Int(a), Ty::Int(b)) => Ok(a == b),
@@ -3667,7 +3686,10 @@ impl ValidatedTraitWorld {
                     .map(|write| &write.destination.location),
             )
         {
-            if let Some(family @ ir::CarrierFamily::Projection(_)) = location.channel.family() {
+            if let Some(
+                family @ (ir::CarrierFamily::Projection(_) | ir::CarrierFamily::Opaque(_)),
+            ) = location.channel.family()
+            {
                 charged(&self.budget, self.budget.charge_work(families.len()))?;
                 if !families.contains(&family) {
                     push(&self.budget, &mut families, family)?;
@@ -3688,6 +3710,9 @@ impl ValidatedTraitWorld {
                             )
                         })?;
                     arguments[index].clone()
+                }
+                ir::CarrierFamily::Opaque(opaque) => {
+                    self.realize_opaque_family(opaque, &raw.env, &arguments, facts)?
                 }
                 ir::CarrierFamily::Projection(projection) => {
                     self.realize_projection_family(projection, &raw.env, &arguments, facts)?
@@ -3718,6 +3743,12 @@ impl ValidatedTraitWorld {
                                 ir::CarrierFamily::Parameter(parameter) => {
                                     ir::CarrierChannel::ParamTail {
                                         parameter: *parameter,
+                                        prefix: relative.channel.prefix(),
+                                    }
+                                }
+                                ir::CarrierFamily::Opaque(opaque) => {
+                                    ir::CarrierChannel::OpaqueTail {
+                                        opaque: opaque.clone(),
                                         prefix: relative.channel.prefix(),
                                     }
                                 }
@@ -3896,6 +3927,7 @@ impl ValidatedTraitWorld {
         let projected_subject = projected.as_ref().map(|proof| proof.goal().clone());
         let fixed = signature.ref_contract.clone();
         let view = CarrierContractView {
+            physical: None,
             result_signature: signature,
             result_subject,
             equality_results: None,
@@ -4028,9 +4060,14 @@ impl ValidatedTraitWorld {
                     },
                 )?;
             }
-            ir::CarrierChannel::ParamTail { .. } | ir::CarrierChannel::ProjectionTail { .. } => {
+            ir::CarrierChannel::ParamTail { .. }
+            | ir::CarrierChannel::ProjectionTail { .. }
+            | ir::CarrierChannel::OpaqueTail { .. } => {
                 let prefix = location.channel.prefix();
                 let actual = match &location.channel {
+                    ir::CarrierChannel::OpaqueTail { opaque, .. } => {
+                        self.realize_opaque_family(opaque, env, args, facts)?
+                    }
                     ir::CarrierChannel::ProjectionTail { projection, .. } => {
                         self.realize_projection_family(projection, env, args, facts)?
                     }
@@ -4084,6 +4121,17 @@ impl ValidatedTraitWorld {
                                     )
                                 })?,
                             },
+                            ir::CarrierChannel::OpaqueTail { opaque, prefix: p } => {
+                                ir::CarrierChannel::OpaqueTail {
+                                    opaque: opaque.clone(),
+                                    prefix: prefix.checked_add(*p).ok_or_else(|| {
+                                        FactsError::resource(
+                                            &self.budget,
+                                            "opaque carrier prefix overflow",
+                                        )
+                                    })?,
+                                }
+                            }
                             ir::CarrierChannel::ProjectionTail {
                                 projection,
                                 prefix: p,
@@ -4611,6 +4659,11 @@ impl ValidatedTraitWorld {
                                     ir::CarrierFamily::Parameter(parameter) => {
                                         ir::CarrierRegionTerm::Family {
                                             parameter: *parameter,
+                                        }
+                                    }
+                                    ir::CarrierFamily::Opaque(opaque) => {
+                                        ir::CarrierRegionTerm::OpaqueFamily {
+                                            opaque: opaque.clone(),
                                         }
                                     }
                                     ir::CarrierFamily::Projection(projection) => {
@@ -6288,6 +6341,9 @@ impl ValidatedTraitWorld {
         facts: ProofContext<'_>,
         active: &mut Vec<GoalKey>,
     ) -> Result<ProofOutcome> {
+        if let Some(outcome) = self.prove_opaque(predicate, facts)? {
+            return Ok(outcome);
+        }
         if let Predicate::ProjectionEq { projection, ty } = predicate {
             return self.prove_projection_equality(projection, ty, facts, active);
         }
@@ -6509,6 +6565,7 @@ impl ValidatedTraitWorld {
         };
         let mut children: Vec<&Ty> = Vec::new();
         let known = match &goal.self_ty {
+            Ty::Opaque(_) => return Ok(Some(ProofOutcome::NotProven)),
             Ty::Closure(closure) => {
                 for ty in closure.captures() {
                     push(&self.budget, &mut children, ty)?;
@@ -6659,7 +6716,7 @@ impl ValidatedTraitWorld {
         for ty in goal.args.iter() {
             self.validate_ty_inner(ty, env, 0, TypeUse::Actual, &mut walk)?;
         }
-        Ok(!walk.has_parameters)
+        Ok(!walk.has_parameters && !walk.has_opaque)
     }
     fn match_head(
         &self,

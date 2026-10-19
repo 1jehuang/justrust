@@ -2,10 +2,7 @@
 //! Local declaration/application IDs are lookup handles, never persistent keys.
 use super::{frontend, ir, traits};
 use std::sync::Arc;
-#[expect(
-    dead_code,
-    reason = "shared codec prerequisite; remove when graph consumers land"
-)]
+#[path = "instances/graph_key.rs"]
 pub(super) mod graph_key;
 
 const SEMANTICS: &[u8] =
@@ -253,6 +250,16 @@ impl Encoder<'_> {
         self.budget.check_depth(depth)?;
         self.budget.charge_work(1)?;
         match ty {
+            ir::Ty::Opaque(opaque) => {
+                self.append(b"O")?;
+                self.declaration(opaque.owner())?;
+                self.count(opaque.site() as usize)?;
+                self.count(opaque.owner_args().len())?;
+                for ty in opaque.owner_args() {
+                    self.pattern(ty, env, depth + 1)?;
+                }
+                Ok(())
+            }
             ir::Ty::Closure(closure) => {
                 self.append(b"C")?;
                 self.declaration(closure.owner())?;
@@ -361,6 +368,16 @@ impl Encoder<'_> {
         self.budget.check_depth(depth)?;
         self.budget.charge_work(1)?;
         match ty {
+            ir::Ty::Opaque(opaque) => {
+                self.append(b"O")?;
+                self.declaration(opaque.owner())?;
+                self.count(opaque.site() as usize)?;
+                self.count(opaque.owner_args().len())?;
+                for ty in opaque.owner_args() {
+                    self.ty(ty, depth + 1)?;
+                }
+                Ok(())
+            }
             ir::Ty::Closure(closure) => {
                 self.append(b"C")?;
                 self.declaration(closure.owner())?;
@@ -541,6 +558,11 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
         // Cover the bounded group of Hash/Eq operations following this walk.
         budget.charge_work(5)?;
         match value {
+            ir::Ty::Opaque(opaque) => {
+                for ty in opaque.types() {
+                    walk(ty, depth + 1, budget)?;
+                }
+            }
             ir::Ty::Closure(closure) => {
                 for ty in closure.types() {
                     walk(ty, depth + 1, budget)?;
@@ -928,6 +950,15 @@ pub(super) fn build(
             }
             // --- end trait objects ---
             if let ir::ExprKind::Call { target: callee, .. } = &expression.kind {
+                if let ir::Callee::TraitItem(call) = callee
+                    && matches!(call.trait_ref.self_ty, ir::Ty::Opaque(_))
+                {
+                    // The immutable original TraitItem expression is the deferred
+                    // edge. OBJECT reads that exact occurrence and operation 140
+                    // replays its publication and hidden-representation authority.
+                    // No copied side inventory or physical target is queued here.
+                    continue;
+                }
                 let resolved = ir::substitute_callee(
                     callee,
                     &env,

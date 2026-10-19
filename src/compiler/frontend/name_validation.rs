@@ -641,6 +641,10 @@ impl<'a> Validator<'a> {
                 }
             }
             Visit::Type(ty) => match ty {
+                Type::Opaque(opaque) => {
+                    self.many(&opaque.bounds, Visit::TraitPath)?;
+                    self.many(&opaque.regions, |region| Visit::Region(*region))?;
+                }
                 Type::Param(name) => self.push(Visit::Ident(*name, LookupClass::TypeParameter))?,
                 Type::Named(path) => self.push(Visit::Path(path))?,
                 Type::Apply(path) => self.push(Visit::GenericPath(path))?,

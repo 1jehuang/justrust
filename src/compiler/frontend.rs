@@ -76,7 +76,9 @@ mod iterator_traits;
 mod nominal_bounds;
 #[cfg(test)]
 mod nominal_intern_tests;
+mod opaque;
 mod operators;
+pub use opaque::SourceOpaqueType;
 mod panic_format;
 mod param_projection;
 mod runtime_sites;
@@ -862,6 +864,14 @@ fn compare_source_type_work(
     sr::depth(budget, at)?;
     sr::work(budget, 1)?;
     match ty {
+        Type::Opaque(opaque) => {
+            for bound in &opaque.bounds {
+                sr::work(budget, 1)?;
+                if let TraitPath::Source(path) = bound {
+                    compare_source_path_work(path, budget, at + 1)?;
+                }
+            }
+        }
         Type::Apply(path) => compare_source_path_work(path, budget, at + 1)?,
         Type::Projection(projection) => {
             sr::work(budget, 1)?;
@@ -1049,6 +1059,7 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
     sr::depth(budget, at)?;
     sr::work(budget, 1)?;
     Ok(match ty {
+        Type::Opaque(opaque) => Type::Opaque(Box::new(opaque.copy(budget, at + 1)?)),
         Type::Apply(path) => Type::Apply(copy_source_path(path, budget, at + 1)?),
         Type::Projection(projection) => {
             let projection = match projection.as_ref() {
@@ -1156,6 +1167,7 @@ fn retain_source_type(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resul
     sr::work(budget, 1)?;
     sr::retain(budget, 2 * std::mem::size_of::<Type>() + 32)?;
     match ty {
+        Type::Opaque(opaque) => opaque.retain(budget, depth + 1)?,
         Type::Apply(path) => retain_source_path(path, budget, depth + 1)?,
         Type::Projection(projection) => {
             sr::retain(budget, 2 * std::mem::size_of::<SourceProjection>() + 32)?;
@@ -1206,6 +1218,13 @@ fn source_type_mentions_self(
     budget.check_depth(depth)?;
     budget.charge_work(1)?;
     Ok(match ty {
+        Type::Opaque(opaque) => {
+            let mut found = false;
+            for ty in opaque.types() {
+                found |= source_type_mentions_self(ty, budget, depth + 1)?;
+            }
+            found
+        }
         Type::SelfType => true,
         Type::Projection(projection) => match projection.as_ref() {
             SourceProjection::SelfItem { .. } => false,
@@ -4758,9 +4777,25 @@ impl PlanCtx {
     pub(super) fn publish_callable_body_with_closures(
         &self,
         declaration: ir::DeclId,
-        mut constants: const_inputs::SealedBodyConstants,
+        constants: const_inputs::SealedBodyConstants,
         budget: &ir::PlanBudget,
     ) -> Result<(PublishedCallableBody, Vec<closures::check::CheckedClosure>), FactsError> {
+        self.publish_callable_body_outputs(declaration, constants, budget)
+            .map(|(body, closures, _)| (body, closures))
+    }
+    pub(super) fn publish_callable_body_outputs(
+        &self,
+        declaration: ir::DeclId,
+        mut constants: const_inputs::SealedBodyConstants,
+        budget: &ir::PlanBudget,
+    ) -> Result<
+        (
+            PublishedCallableBody,
+            Vec<closures::check::CheckedClosure>,
+            Vec<ir::OpaqueHiddenType>,
+        ),
+        FactsError,
+    > {
         if constants.declaration != declaration {
             return Err(FactsError::invalid(
                 budget,
@@ -4808,14 +4843,24 @@ impl PlanCtx {
                     .checked_body(&target, &facts, budget)
                     .map_err(|e| source_error(budget, &e))?;
                 sr::retain(budget, std::mem::size_of::<ir::CheckedFunction>() + 32)?;
-                Ok((PublishedCallableBody::Recipe(Arc::new(checked)), Vec::new()))
+                Ok((
+                    PublishedCallableBody::Recipe(Arc::new(checked)),
+                    Vec::new(),
+                    Vec::new(),
+                ))
             }
             CallableProvider::UnavailableProvided { .. } => Err(FactsError::unsupported(
                 budget,
                 "unavailable canonical body",
             )),
             CallableProvider::Source { .. } => {
-                let facts = if env.is_generic() {
+                let inventory = constants.inventory.take().ok_or_else(|| {
+                    FactsError::invalid(budget, "sealed source inventory missing")
+                })?;
+                let abstract_source = self
+                    .source_inventory_uses_opaque(declaration, &inventory, budget)
+                    .map_err(|e| source_error(budget, &e))?;
+                let facts = if env.is_generic() || abstract_source {
                     self.callable_facts(declaration)
                 } else {
                     self.instance_facts(&ir::CallTarget {
@@ -4824,9 +4869,6 @@ impl PlanCtx {
                     })
                 }
                 .map_err(|e| source_error(budget, &e))?;
-                let inventory = constants.inventory.take().ok_or_else(|| {
-                    FactsError::invalid(budget, "sealed source inventory missing")
-                })?;
                 let identity = inventory.owner.clone();
                 let mut cap = CanonicalSourceCapability {
                     runtime_sites: Default::default(),
@@ -4848,7 +4890,7 @@ impl PlanCtx {
                     emissions: Default::default(),
                     error: Default::default(),
                 };
-                let (checked, closures) = match type_check::type_callable_source_and_closures(
+                let (checked, closures, hidden) = match type_check::type_callable_source_outputs(
                     &self.program,
                     declaration,
                     self,
@@ -4901,7 +4943,7 @@ impl PlanCtx {
                 let source = Arc::new(final_payload);
                 let publication =
                     sr::publish_canonical_source(cap, source, original, facts, budget)?;
-                Ok((PublishedCallableBody::Source(publication), closures))
+                Ok((PublishedCallableBody::Source(publication), closures, hidden))
             }
         }
     }
@@ -5637,6 +5679,7 @@ impl GenericPath {
 }
 #[derive(Clone, Debug)]
 pub enum Type {
+    Opaque(Box<SourceOpaqueType>),
     SelfType,
     Apply(GenericPath),
     /// Exact written projection syntax, never a fabricated parameter or alias.
@@ -7251,6 +7294,7 @@ struct Parser<'input, 'names> {
     /// Anonymous parameters minted for argument-position `impl Trait` while a
     /// function parameter list is parsed. `None` forbids `impl Trait` (E0562).
     impl_trait_params: Option<Vec<AstIdent>>,
+    opaque_return_sites: Option<u32>,
     cursor: TokenCursor<'input>,
     nesting: usize,
     allow_struct: bool,
@@ -7431,6 +7475,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             impl_regions: RegionDecls::default(),
             visible_bounds: Vec::new(),
             impl_trait_params: None,
+            opaque_return_sites: None,
             cursor: TokenCursor::new(&buffer),
             nesting: self.nesting,
             allow_struct: true,
@@ -8775,6 +8820,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             impl_regions: RegionDecls::default(),
             visible_bounds: Vec::new(),
             impl_trait_params: None,
+            opaque_return_sites: None,
             cursor: TokenCursor::new(buffer),
             nesting: self.nesting,
             allow_struct: self.allow_struct,
@@ -9165,6 +9211,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             impl_regions: RegionDecls::default(),
             visible_bounds: Vec::new(),
             impl_trait_params: None,
+            opaque_return_sites: None,
             cursor: TokenCursor::new(tokens),
             nesting: 0,
             allow_struct: true,
@@ -9384,7 +9431,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             return self.qualified_type_projection();
         }
         if self.is("impl") {
-            return self.impl_trait_param();
+            return if self.opaque_return_sites.is_some() {
+                self.opaque_return_type()
+            } else {
+                self.impl_trait_param()
+            };
         }
         if self.eat("dyn") {
             if self.token().is_lifetime() || self.is("?") || self.is("(") {
@@ -9654,7 +9705,10 @@ impl<'input, 'names> Parser<'input, 'names> {
                 && self.cursor.peek(1).is_some_and(|token| token.matches("("));
             let name = self.ident()?;
             let (region_args, args, associated_types) = if callable_sugar {
-                let (args, associated_types) = self.callable_sugar_arguments(sugar_site)?;
+                let opaque_context = self.opaque_return_sites.take();
+                let sugar = self.callable_sugar_arguments(sugar_site);
+                self.opaque_return_sites = opaque_context;
+                let (args, associated_types) = sugar?;
                 (Vec::new(), args, associated_types)
             } else if type_context && (self.is("<") || self.is("<<")) {
                 self.path_arguments()?
@@ -11471,15 +11525,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.reserve_parser_items(&mut bounds, impl_bounds.len())?;
         bounds.extend(impl_bounds);
         self.expect(")")?;
-        let result = if self.eat("->") {
-            if self.eat("!") {
-                Type::Never
-            } else {
-                self.ty()?
-            }
-        } else {
-            Type::Unit
-        };
+        let result = self.opaque_function_result()?;
         if self.eat("where") {
             loop {
                 if self.token().is_lifetime() {
@@ -14977,6 +15023,14 @@ fn walk_depth_inspecting(
                     }
                 }
             }
+            DepthNode::Type(Type::Opaque(opaque)) => {
+                if let Some(names) = names {
+                    opaque.validate_names(names)?;
+                }
+                for ty in opaque.types() {
+                    push(DepthNode::Type(ty))?;
+                }
+            }
             DepthNode::Type(Type::Projection(projection)) => {
                 if let Some(names) = names {
                     let item = match projection.as_ref() {
@@ -15514,6 +15568,7 @@ fn exact_source_type(
                 pointee: b,
             },
         ) => exact_source_type(names, a, b, budget, depth + 1)? && ak == bk,
+        (Type::Opaque(a), Type::Opaque(b)) => a.exact(b, names, budget, depth + 1)?,
         (Type::Dyn(a), Type::Dyn(b)) => match (a.as_ref(), b.as_ref()) {
             (TraitPath::Builtin(a), TraitPath::Builtin(b)) => a == b,
             (TraitPath::Source(a), TraitPath::Source(b)) => {
@@ -16278,6 +16333,30 @@ fn source_type_storage(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resu
         Ok(())
     };
     match ty {
+        Type::Opaque(opaque) => {
+            add(std::mem::size_of::<SourceOpaqueType>())?;
+            add(opaque.bounds.len() * std::mem::size_of::<TraitPath>())?;
+            add(opaque.regions.len() * std::mem::size_of::<RegionName>())?;
+            for bound in &opaque.bounds {
+                if let TraitPath::Source(path) = bound {
+                    budget.charge_work(path.segments.len())?;
+                    for segment in &path.segments {
+                        add(std::mem::size_of::<PathSegment>())?;
+                        add(segment.region_args.len() * std::mem::size_of::<RegionName>())?;
+                        for argument in segment.args.iter().chain(
+                            segment
+                                .associated_types
+                                .iter()
+                                .map(|binding| &binding.value),
+                        ) {
+                            add(source_type_storage(argument, budget, depth + 1)?)?;
+                        }
+                        add(segment.associated_types.len()
+                            * std::mem::size_of::<AssociatedTypeBinding>())?;
+                    }
+                }
+            }
+        }
         Type::Projection(projection) => {
             add(std::mem::size_of::<SourceProjection>())?;
             match projection.as_ref() {
@@ -20448,6 +20527,12 @@ fn collect_source_params(
     budget.check_depth(depth)?;
     budget.charge_work(1)?;
     match ty {
+        Type::Opaque(opaque) => {
+            opaque.validate_names(names)?;
+            for ty in opaque.types() {
+                collect_source_params(names, ty, used, budget, depth + 1)?;
+            }
+        }
         Type::Projection(projection) => match projection.as_ref() {
             SourceProjection::Qualified {
                 self_ty,

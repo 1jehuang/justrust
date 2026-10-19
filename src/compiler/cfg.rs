@@ -74,6 +74,7 @@ pub struct BasicBlock {
 /// only the original verified template, so these guards have no output backedge.
 #[derive(Clone, Debug)]
 pub struct GeneratedCfgShape {
+    physical: Option<std::sync::Arc<super::opaque_physical::PhysicalNormalizationProof>>,
     runtime_sites: CfgRuntimeSites,
     name: String,
     params: std::sync::Arc<[LocalId]>,
@@ -119,6 +120,7 @@ impl GeneratedCfgShape {
         )?;
         budget.charge_work(f.call_evidence.len())?;
         Ok(Self {
+            physical: None,
             runtime_sites: f.runtime_sites.clone(),
             name: f.name.clone(),
             params: f.params.clone().into(),
@@ -146,6 +148,11 @@ impl GeneratedCfgShape {
         facts: &super::traits::ValidatedFacts,
         budget: &ir::PlanBudget,
     ) -> Result<(), String> {
+        if self.physical.is_some() {
+            return Err(
+                "physical CFG requires borrowed original and representation replay context".into(),
+            );
+        }
         f.preflight_plan(ir::FactsCtx::from_validated(facts), budget)?;
         f.snapshot_storage(budget)?;
         if let Some(publication) = &self.original_publication {
@@ -329,6 +336,16 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
         (Rvalue::RawSlice { kind: a, args: aa }, Rvalue::RawSlice { kind: b, args: bb }) => {
             Ok(a == b && same_operand_list(aa, bb, budget)?)
         }
+        (
+            Rvalue::OpaquePack {
+                value: a,
+                proof: aa,
+            },
+            Rvalue::OpaquePack {
+                value: b,
+                proof: bb,
+            },
+        ) => Ok(aa == bb && same_operand_types(a, b, budget)?),
         (Rvalue::Use(a), Rvalue::Use(b))
         | (Rvalue::ArrayToSlice { reference: a }, Rvalue::ArrayToSlice { reference: b })
         | (Rvalue::RefToDyn { reference: a, .. }, Rvalue::RefToDyn { reference: b, .. })
@@ -511,6 +528,11 @@ pub enum Operand {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rvalue {
     TypeAlignment(ir::TypeAlignmentQuery),
+    /// Defining-body ownership transport, never an executable representation cast.
+    OpaquePack {
+        value: Operand,
+        proof: std::sync::Arc<ir::OpaquePackProof>,
+    },
     NativeSyscall(Vec<Operand>),
     RawSlice {
         kind: ir::BorrowKind,
@@ -665,7 +687,8 @@ impl Rvalue {
         visit: &mut impl FnMut(&Operand) -> Result<(), String>,
     ) -> Result<(), String> {
         match self {
-            Self::Use(value)
+            Self::OpaquePack { value, .. }
+            | Self::Use(value)
             | Self::CharToInt { value, .. }
             | Self::U8ToChar { value }
             | Self::PtrCast { value, .. }
@@ -1314,6 +1337,22 @@ impl Function {
                 }
             }
         }
+        for block in &self.blocks {
+            for statement in &block.statements {
+                if let Statement::Assign {
+                    value: Rvalue::OpaquePack { proof, .. },
+                    ..
+                } = &statement.value
+                {
+                    let publication = self
+                        .lowering_proof
+                        .as_ref()
+                        .and_then(|shape| shape.original_publication.as_ref())
+                        .ok_or("opaque pack CFG lacks its exact defining source publication")?;
+                    proof.validate_occurrence(publication, statement.origin, budget)?;
+                }
+            }
+        }
         if let Some(shape) = &self.lowering_proof {
             shape.validate(self, facts, budget)?;
         } else if self.body_substitution.is_some() || !self.call_evidence.is_empty() {
@@ -1760,7 +1799,8 @@ impl Function {
                     Statement::Assign { destination, value } => {
                         path(destination, budget)?;
                         match value {
-                            Rvalue::Use(value)
+                            Rvalue::OpaquePack { value, .. }
+                            | Rvalue::Use(value)
                             | Rvalue::CharToInt { value, .. }
                             | Rvalue::U8ToChar { value }
                             | Rvalue::PtrCast { value, .. }
@@ -1904,7 +1944,7 @@ impl Function {
     pub fn operand_ty(&self, operand: &Operand) -> Result<Ty, String> {
         self.operand_ty_with_facts(operand, ir::FactsCtx::Concrete)
     }
-    fn operand_ty_with_facts(
+    pub(super) fn operand_ty_with_facts(
         &self,
         operand: &Operand,
         facts: ir::FactsCtx<'_>,
@@ -2309,6 +2349,14 @@ impl Function {
                 ty.validate()?;
                 Ok(Ty::Int(IntTy::I32))
             }
+            Rvalue::OpaquePack { value, proof } => {
+                let hidden = self.operand_ty_with_facts(value, facts)?;
+                let authority = facts
+                    .validated()
+                    .ok_or("opaque pack requires canonical caller facts")?;
+                proof.validate_shape(&hidden, facts, authority.budget())?;
+                Ok(Ty::Opaque(proof.opaque().clone()))
+            }
             Rvalue::Use(operand) => self.operand_ty_with_facts(operand, facts),
             Rvalue::ArrayToSlice { reference } => {
                 let source = self.slice_operand_ty(reference, facts)?;
@@ -2484,7 +2532,62 @@ impl Function {
     pub fn validate(&self) -> Result<(), String> {
         self.validate_with_facts(ir::FactsCtx::Concrete)
     }
+    pub(super) fn seal_physical_shape(
+        &mut self,
+        facts: &super::traits::ValidatedFacts,
+        proof: std::sync::Arc<super::opaque_physical::PhysicalNormalizationProof>,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        require_facts(facts, super::traits::FactsPhase::Closed, budget)?;
+        let mut shape = GeneratedCfgShape::capture(self, facts, budget)?;
+        shape.physical = Some(proof);
+        self.lowering_proof = Some(std::sync::Arc::new(shape));
+        Ok(())
+    }
+
+    pub(super) fn validate_physical_shape(
+        &self,
+        proof: &super::opaque_physical::PhysicalNormalizationProof,
+        facts: &super::traits::ValidatedFacts,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        let shape = self
+            .lowering_proof
+            .as_ref()
+            .ok_or("physical CFG has no sealed shape")?;
+        if !shape
+            .physical
+            .as_ref()
+            .is_some_and(|sealed| std::ptr::eq(sealed.as_ref(), proof))
+        {
+            return Err("physical CFG has another normalization proof".into());
+        }
+        // Mapping authorization was replayed by the borrowed context before
+        // this snapshot check. The ordinary shape checker still verifies all
+        // immutable subject, world, type and instruction correspondence.
+        let mut snapshot = shape.as_ref().clone();
+        snapshot.physical = None;
+        snapshot.validate(self, facts, budget)
+    }
+
     pub fn validate_with_facts(&self, facts: ir::FactsCtx<'_>) -> Result<(), String> {
+        self.validate_with_facts_mode(facts, None)
+    }
+
+    pub(super) fn validate_physical(
+        &self,
+        facts: &super::traits::ValidatedFacts,
+        physical: &super::opaque_physical::PhysicalValidation<'_>,
+    ) -> Result<(), String> {
+        physical.validate_cfg(self, facts)?;
+        self.validate_with_facts_mode(ir::FactsCtx::from_validated(facts), Some(physical))
+    }
+
+    fn validate_with_facts_mode(
+        &self,
+        facts: ir::FactsCtx<'_>,
+        physical: Option<&super::opaque_physical::PhysicalValidation<'_>>,
+    ) -> Result<(), String> {
         if let Some(authority) = facts.validated()
             && authority.phase() == super::traits::FactsPhase::Schema
         {
@@ -2507,7 +2610,11 @@ impl Function {
         };
         block(self.entry)?;
         if let Some(authority) = facts.validated() {
-            self.validate_provenance(authority, authority.budget())?;
+            if let Some(physical) = physical {
+                physical.validate_cfg(self, authority)?;
+            } else {
+                self.validate_provenance(authority, authority.budget())?;
+            }
         } else {
             for local in &self.locals {
                 validate_type(&local.ty, 0)?;
@@ -2525,7 +2632,11 @@ impl Function {
         if facts.validated().is_none() {
             self.ref_contract.validate(&parameter_types, &self.result)?;
         }
-        if let Some(authority) = facts.validated() {
+        if physical.is_some() {
+            // Exact header mapping was replayed above; this separately checks
+            // the resulting concrete carrier contract, never a public alias.
+            self.ref_contract.validate(&parameter_types, &self.result)?;
+        } else if let Some(authority) = facts.validated() {
             ir::validate_body_signature(
                 &ir::Signature {
                     ref_contract: self.ref_contract.clone(),
@@ -2724,7 +2835,11 @@ impl Function {
                     {
                         return Err("canonical destructor invocation requires an authorized cleanup operation".into());
                     }
-                    ir::validate_callee(target, signature, facts)?;
+                    if let Some(physical) = physical {
+                        physical.validate_call(item.terminator.origin, target, signature)?;
+                    } else {
+                        ir::validate_callee(target, signature, facts)?;
+                    }
                     if target.type_arguments().len() > 32 {
                         return Err("generic call argument limit exceeded".into());
                     }
@@ -2861,6 +2976,7 @@ struct LoopTarget {
 }
 
 struct Lowerer<'a> {
+    publication: Option<&'a std::sync::Arc<super::source_replay::CanonicalSourcePublication>>,
     facts: ir::FactsCtx<'a>,
     budget: Option<&'a ir::PlanBudget>,
     resource_error: Option<String>,
@@ -4211,6 +4327,29 @@ impl Lowerer<'_> {
         self.live(destination.local, Some(id));
         let origin = Some(id);
         match &expression.kind {
+            ir::ExprKind::OpaqueWrap { opaque, value } => {
+                let value = self.expression(*value)?;
+                let hidden = self.result.operand_ty_with_facts(&value, self.facts)?;
+                let budget = self
+                    .budget
+                    .ok_or("opaque pack requires canonical lowering budget")?;
+                let publication = self.publication.ok_or(
+                    "unsupported: opaque pack requires canonical defining source publication",
+                )?;
+                let proof = ir::OpaquePackProof::seal(publication.clone(), id, budget)?;
+                proof.validate_shape(&hidden, self.facts, budget)?;
+                if proof.opaque() != opaque {
+                    return Err("opaque lowering changed defining wrapper identity".into());
+                }
+                self.assign(
+                    destination.clone(),
+                    Rvalue::OpaquePack {
+                        value,
+                        proof: std::sync::Arc::new(proof),
+                    },
+                    origin,
+                );
+            }
             // The operand is evaluated exactly once into its own snapshot. The
             // slice result is a Copy of that shared reference plus metadata.
             ir::ExprKind::ArrayToSlice { reference } => {
@@ -5037,6 +5176,7 @@ fn lower_internal(
     lower_internal_with_source(source, facts, budget, SourceLowering::Legacy)
 }
 
+#[derive(Clone, Copy)]
 enum SourceLowering<'a> {
     Legacy,
     Original(&'a std::sync::Arc<super::source_replay::CanonicalSourcePublication>),
@@ -5204,6 +5344,10 @@ fn lower_internal_with_source(
         mutable: true,
     });
     let mut lowerer = Lowerer {
+        publication: match authority {
+            SourceLowering::Original(publication) => Some(publication),
+            SourceLowering::Legacy => None,
+        },
         facts,
         budget,
         resource_error: None,
@@ -5582,6 +5726,7 @@ mod panic_terminal_tests {
             + payload.location.len();
         let statement_bytes = std::mem::size_of::<Located<Statement>>();
         let mut lowerer = Lowerer {
+            publication: Some(&publication),
             facts: ir::FactsCtx::from_validated(publication.facts()),
             budget: Some(&budget),
             resource_error: None,
@@ -8693,6 +8838,7 @@ mod tests {
                 .contains("lowering depth resource")
         );
         let mut budget = Lowerer {
+            publication: None,
             facts: ir::FactsCtx::Concrete,
             budget: None,
             resource_error: None,
@@ -9933,6 +10079,7 @@ mod tests {
         terminators: Vec<Option<Terminator>>,
     ) -> Lowerer<'a> {
         Lowerer {
+            publication: None,
             facts: ir::FactsCtx::Concrete,
             budget: Some(budget),
             resource_error: None,
@@ -11734,7 +11881,8 @@ mod tests {
                                 live_operand(index, &live);
                                 assert!(live[array.local.0], "dynamic index reads dead array");
                             }
-                            Rvalue::Use(value)
+                            Rvalue::OpaquePack { value, .. }
+                            | Rvalue::Use(value)
                             | Rvalue::CharToInt { value, .. }
                             | Rvalue::U8ToChar { value }
                             | Rvalue::PtrCast { value, .. }

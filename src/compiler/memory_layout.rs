@@ -25,6 +25,10 @@ fn walk_alignment(
         return Ok(Some(alignment));
     }
     match ty {
+        ir::Ty::Opaque(_) => Err(
+            "unsupported: opaque target alignment requires graph-authorized physical normalization"
+                .into(),
+        ),
         ir::Ty::Param(_) => Ok(None),
         ir::Ty::Char => Ok(Some(4)),
         ir::Ty::Unit | ir::Ty::Bool | ir::Ty::Int(_) | ir::Ty::Float(_) => {

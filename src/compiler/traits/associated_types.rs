@@ -258,6 +258,12 @@ impl ValidatedTraitWorld {
             Ok(())
         };
         match ty {
+            Ty::Opaque(opaque) => {
+                self.validate_opaque_metadata(opaque, env)?;
+                for ty in opaque.types() {
+                    child(ty)?;
+                }
+            }
             Ty::Closure(closure) => {
                 self.info(closure.owner())?;
                 self.info(closure.provider())?;
@@ -1477,6 +1483,17 @@ impl ValidatedTraitWorld {
             self.validate_rhs_substitution(left, right, env, arguments, depth + 1)
         };
         match (raw, actual) {
+            (Ty::Opaque(left), Ty::Opaque(right)) => {
+                if !left.try_eq(right, |left, right| {
+                    child(left, right)?;
+                    Ok::<_, FactsError>(true)
+                })? {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "opaque substitution changed declaration identity",
+                    ));
+                }
+            }
             (Ty::AssociatedType(left), Ty::AssociatedType(right))
                 if left.item == right.item
                     && left.trait_ref.declaration == right.trait_ref.declaration

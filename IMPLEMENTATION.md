@@ -395,6 +395,19 @@ missing-file changes invalidate only justified consumers without stale lookup.
       retain their distinct semantic representation under the pinned stock oracle.
       Deferred written annotation holes reuse solved declaration facts; anonymous
       `impl Trait` parameter identities cannot collide with source-spellable names.
+      Return-position opaque identities, declared-bound source calls and defining
+      hidden-type agreement have an isolated source-CHECK implementation
+      (OPAQUE-RETURNS.md). Owner-local admission checks unused declarations without
+      demanding MONO_PLAN, hidden representation or code generation. Sealed CFG
+      packs reject unproved reference-carrier transport. A first nongeneric,
+      carrier-empty nominal `impl Read` return and bound call now passes actual
+      hosted stock-differential CHECK/BUILD/link/run at workers 1 and 8. Exact
+      per-call graph authorization gates physical CFG replay, ownership and the
+      existing emitter, without a hidden MONO map or closed-facts relabel.
+      Current-parent all-test compilation, representation/physical authority,
+      unused associated admission and unchanged graph gates pass. Generic/closure-backed
+      opaque values, reference-bearing hidden representations and realized
+      destructor dependencies remain unsupported, not approximated.
       Partial method inference substitutes canonical enclosing impl bindings.
       Delivered body-local structural union-find constraints: later inherent
       receiver uses, assignments and call parameters solve nested generic local

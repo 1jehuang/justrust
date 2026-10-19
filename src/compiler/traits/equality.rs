@@ -495,6 +495,7 @@ impl ValidatedTraitWorld {
         retain::<CarrierContractView>(&self.budget, 1)?;
         let fixed = signature.ref_contract.clone();
         let mut view = CarrierContractView {
+            physical: None,
             result_signature: signature,
             result_subject: super::parameter_equality::EqualityResultSubject::Required(
                 call.clone(),

@@ -135,6 +135,9 @@ impl PlanState {
         budget.charge_work(1)?;
         budget.charge_nodes(1)?;
         Ok(match ty {
+            Type::Opaque(opaque) => {
+                self.source_opaque_type(registry, opaque, bindings, caller, budget, depth + 1)?
+            }
             Type::Projection(projection) => {
                 let context = self
                     .source_context
