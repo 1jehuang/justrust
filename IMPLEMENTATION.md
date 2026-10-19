@@ -485,7 +485,9 @@ cleanup failures.
       provided methods under UNIVERSAL-PROJECTIONS.md: exact declared membership,
       opaque ownership/carrier identity, sealed pattern comparison and closed
       normalization replay. Identity and Iterator `last` match stock CHECK/BUILD/run
-      at workers 1/8; full Iterator adapter integration remains a separate gate.
+      at workers 1/8. The canonical blanket `IntoIterator for I: Iterator`
+      assignment and concrete `for` consumer also pass stock/native 1/8;
+      applied associated declaration bounds and full adapters remain open.
 - [x] Impl parameters determined by associated output equalities use a
       dependency-ordered fixed point, then canonical closed normalization to
       infer missing output actuals. Unused and cyclic unconstrained impls are

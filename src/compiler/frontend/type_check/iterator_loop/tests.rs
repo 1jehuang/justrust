@@ -24,6 +24,34 @@ fn main() {
 }
 "#;
 
+const LIBRARY: &str = r#"
+mod std {
+    pub mod option { pub enum Option<T> { None, Some(T) } }
+    pub mod iter {
+        use super::option::Option;
+        pub trait Iterator {
+            type Item;
+            fn next(&mut self) -> Option<Self::Item>;
+        }
+        pub trait IntoIterator {
+            type Item;
+            type IntoIter;
+            fn into_iter(self) -> Self::IntoIter;
+        }
+        impl<I: Iterator> IntoIterator for I {
+            type Item = <I as Iterator>::Item;
+            type IntoIter = I;
+            fn into_iter(self) -> I { self }
+        }
+    }
+}
+"#;
+
+#[test]
+fn blanket_into_iterator_for_calls_match_stock() {
+    stock_matching_loop(LIBRARY, USER, "blanket", b"make\n4\n");
+}
+
 const EXPLICIT_LIBRARY: &str = r#"
 mod std {
     pub mod option { pub enum Option<T> { None, Some(T) } }

@@ -118,6 +118,60 @@ mod tests {
     }
 
     #[test]
+    fn projection_assignment_normal_form_requires_exact_universal_authority() {
+        let (world, facts, call) = fixture();
+        let (application, _) = world
+            .instantiate_universal_required_item(&call, &facts)
+            .unwrap();
+        let normal = &application.signature.result;
+        let context = ProofContext::from_facts(&facts);
+        world
+            .validate_associated_normal_form(normal, facts.env(), context, &mut Vec::new())
+            .unwrap();
+        for phase in [FactsPhase::Schema, FactsPhase::Closed] {
+            assert!(
+                world
+                    .validate_associated_normal_form(
+                        normal,
+                        facts.env(),
+                        ProofContext {
+                            predicates: &facts.predicates,
+                            phase
+                        },
+                        &mut Vec::new(),
+                    )
+                    .is_err()
+            );
+        }
+        let (_, foreign, _) = fixture();
+        assert!(
+            world
+                .validate_associated_normal_form(
+                    normal,
+                    foreign.env(),
+                    ProofContext::from_facts(&foreign),
+                    &mut Vec::new(),
+                )
+                .is_err()
+        );
+        let Ty::AssociatedType(projection) = normal else {
+            panic!("rigid projection required")
+        };
+        let mut forged = projection.as_ref().clone();
+        forged.trait_ref.args = Arc::from([Ty::Bool, Ty::Int(ir::IntTy::I32)]);
+        assert!(
+            world
+                .validate_associated_normal_form(
+                    &Ty::AssociatedType(Arc::new(forged)),
+                    facts.env(),
+                    context,
+                    &mut Vec::new(),
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
     fn universal_required_method_rejects_forged_arguments_signature_and_caller() {
         let (world, facts, call) = fixture();
         let (_, evidence) = world

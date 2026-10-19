@@ -1618,11 +1618,19 @@ impl ValidatedTraitWorld {
         context: ProofContext<'_>,
         active: &mut Vec<GoalKey>,
     ) -> Result<()> {
+        self.check_context(context)?;
         if self.type_contains_projection(normal, 0)? {
-            return Err(FactsError::invalid(
-                &self.budget,
-                "associated type normal form retains a projection",
-            ));
+            // An owning generic impl can assign an exact rigid family from its
+            // declared bounds. This is not a closed normal form or permission
+            // to emit a residual projection. Keep the same immutable caller
+            // environment and replay membership for every projected child.
+            if context.phase != FactsPhase::Universal || !self.same_env(env, context.env())? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "associated type normal form retains a projection",
+                ));
+            }
+            self.validate_universal_projection_type(normal, env, 0)?;
         }
         self.validate_actual(normal, env)?;
         charged(&self.budget, ir::reject_references(normal, &self.budget))?;

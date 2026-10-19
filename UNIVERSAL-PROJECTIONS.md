@@ -38,5 +38,12 @@ Focused projection tests cover family identity, open versus closed carrier
 realization, wrong ordered actuals, foreign item/trait/world/caller authority,
 pattern admission, ownership and prior closed-projection regressions. Graph
 integrity and full-program gates remain mandatory and may not be loosened.
-Real library map/filter/collect and blanket IntoIterator consumers are separate
+Real library map/filter/collect and generic IntoIterator consumers are separate
 integration gates, not implied by the minimal provided-method acceptance.
+
+The ordinary `impl<I: Iterator> IntoIterator for I` assignment
+`type Item = <I as Iterator>::Item` now preserves an authenticated universal
+family. The unchanged concrete loop oracle passes stock/native CHECK, BUILD and
+execution at workers 1 and 8. Assignment validation rejects residual projections
+in Schema/Closed contexts and rejects foreign worlds and changed ordered actuals.
+Applied associated declaration bounds in a generic loop remain a separate gate.
