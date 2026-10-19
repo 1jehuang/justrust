@@ -4597,6 +4597,7 @@ mod const_source_tests;
 mod leading_zero_tests;
 #[cfg(test)]
 mod name_tests;
+mod or_patterns;
 mod recipes;
 #[cfg(test)]
 mod slice_tests;
@@ -10690,9 +10691,25 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         self.nesting += 1;
         let result = self.pattern_inner();
+        let result = result.and_then(|first| {
+            // Nested or-patterns; the checker flattens them into root rows.
+            if !self.is("|") {
+                return Ok(first);
+            }
+            let mut rows = vec![first];
+            while self.eat("|") {
+                self.names
+                    .budget()
+                    .charge(super::expansion_budget::Counter::Work, 1)
+                    .map_err(|error| native_adapter::transport_error(error.into()))?;
+                self.reserve_rest_patterns(&mut rows, 1)?;
+                rows.push(self.pattern_inner()?);
+            }
+            Ok(Pattern::Alternatives(rows))
+        });
         let result = result.and_then(|pattern| {
-            if self.is("|") || self.is("@") {
-                Err(self.unsupported("or-patterns and @ patterns are unsupported"))
+            if self.is("@") {
+                Err(self.unsupported("@ patterns are unsupported"))
             } else if self.is("..=") || self.is("..") {
                 // Literal endpoints were consumed by pattern_inner already.
                 Err(self.unsupported("path and constant range pattern bounds are unsupported"))

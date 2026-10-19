@@ -2404,15 +2404,31 @@ impl Resolver<'_> {
                 }
             }
             Pattern::Alternatives(fields) => {
-                let mut binds = false;
+                // Every alternative must bind exactly the same names (E0408).
+                let mut first: Option<std::collections::HashSet<_>> = None;
                 for field in fields {
                     self.alias_budget.charge_work(1)?;
                     let mut row_names = std::collections::HashSet::new();
                     self.pattern(field, module, &mut row_names)?;
-                    binds |= !row_names.is_empty();
+                    match &first {
+                        None => first = Some(row_names),
+                        Some(expected)
+                            if self.lexical_function.is_none() && *expected != row_names =>
+                        {
+                            return Err(
+                                "E0408: variable is not bound in all patterns of an or-pattern"
+                                    .into(),
+                            );
+                        }
+                        Some(_) => {}
+                    }
                 }
-                if binds {
-                    return Err("unsupported: or-pattern bindings are unsupported".into());
+                for name in first.unwrap_or_default() {
+                    if !names.insert(name) {
+                        return Err(
+                            "E0416: identifier bound more than once in the same pattern".into()
+                        );
+                    }
                 }
             }
             Pattern::Tuple(fields) => {

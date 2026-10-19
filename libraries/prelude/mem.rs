@@ -61,3 +61,13 @@ pub fn raw_free(address: usize, bytes: usize) {
         __justrust_linux_syscall6!(11usize, address, bytes, 0usize, 0usize, 0usize, 0usize)
     };
 }
+
+// Write a runtime panic message to stderr. Callers follow it with `panic!`,
+// which reports the location and exits with the panic status.
+pub fn panic_message(msg: &str) {
+    let (p, n) = super::string::str_parts(msg);
+    let _ = unsafe { __justrust_linux_syscall6!(1usize, 2usize, p, n, 0usize, 0usize, 0usize) };
+    let _ = unsafe {
+        __justrust_linux_syscall6!(1usize, 2usize, super::string::str_parts("\n").0, 1usize, 0usize, 0usize, 0usize)
+    };
+}

@@ -196,13 +196,13 @@ Case { name: r###"or_pattern"###, source: r###"fn main(){ if matches!(2, 1 | 2 i
 "###, source_bytes: 63, source_fingerprint: 3432924276943927410, source_sha256: r###"b95c2072702910516131ea2eb026d4f76585c62c600401f353bed7fb7857e52e"###, native: Native::Unsupported, boundary: r###"guards on or-patterns are unsupported"###, phase: r###"parse"###, stock_compile_code: 0, stock_code: Some(0), stock_signal: None, stock_stdout: r###"or
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""### },
 Case { name: r###"at_pattern"###, source: r###"fn main(){ if matches!(2, x @ 2 if x == 2) { println!("at"); } }
-"###, source_bytes: 65, source_fingerprint: 13653741935893286849, source_sha256: r###"9182deb4c379fdcd4de38542fefb0e73082ca1ac51fadf59d7e8fd64b1bfbcae"###, native: Native::Unsupported, boundary: r###"unsupported token"###, phase: r###"parse"###, stock_compile_code: 0, stock_code: Some(0), stock_signal: None, stock_stdout: r###"at
+"###, source_bytes: 65, source_fingerprint: 13653741935893286849, source_sha256: r###"9182deb4c379fdcd4de38542fefb0e73082ca1ac51fadf59d7e8fd64b1bfbcae"###, native: Native::Unsupported, boundary: r###"@ patterns are unsupported"###, phase: r###"parse"###, stock_compile_code: 0, stock_code: Some(0), stock_signal: None, stock_stdout: r###"at
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""### },
 Case { name: r###"range_pattern"###, source: r###"fn main(){ if matches!(2, 1..=3 if true) { println!("range"); } }
 "###, source_bytes: 66, source_fingerprint: 18395706359714326618, source_sha256: r###"0e2ee45cdcb8a4a03748ef3cda4b21ad07ba8708092a9e47a8117869554e3e36"###, native: Native::Live, boundary: r###""###, phase: r###"check"###, stock_compile_code: 0, stock_code: Some(0), stock_signal: None, stock_stdout: r###"range
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""### },
 Case { name: r###"ordinary_guard"###, source: r###"fn main(){ match 1 { x if x == 1 => println!("ordinary"), _ => () } }
-"###, source_bytes: 70, source_fingerprint: 7241983642770566222, source_sha256: r###"710afcfefcec6c25be050920549d708f02246b4a12830425687b8f0444a36f42"###, native: Native::Unsupported, boundary: r###"match guards, or-patterns and @ patterns are unsupported"###, phase: r###"parse"###, stock_compile_code: 0, stock_code: Some(0), stock_signal: None, stock_stdout: r###"ordinary
+"###, source_bytes: 70, source_fingerprint: 7241983642770566222, source_sha256: r###"710afcfefcec6c25be050920549d708f02246b4a12830425687b8f0444a36f42"###, native: Native::Live, boundary: r###""###, phase: r###"check"###, stock_compile_code: 0, stock_code: Some(0), stock_signal: None, stock_stdout: r###"ordinary
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""### },
 Case { name: r###"moved_scrutinee"###, source: r###"struct S { value:i32 } fn main(){ let s=S { value:1 }; let _hit=matches!(s, x if x.value == 1); println!("{}", s.value); }
 "###, source_bytes: 123, source_fingerprint: 17245422516474392823, source_sha256: r###"6509c35e96c03042aaf2abd9560440602163a2d2b3e8a247891a043355789194"###, native: Native::Unsupported, boundary: r###"guarded matches with non-Copy bindings are unsupported"###, phase: r###"check"###, stock_compile_code: 1, stock_code: None, stock_signal: None, stock_stdout: r###""###, stock_stderr: r###""###, stock_compile_stderr: r###"error[E0382]: borrow of moved value: `s`
@@ -515,8 +515,9 @@ fn frozen_guarded_matches_sources_and_strict_phases() {
             assert!(matches!(case.phase, "parse" | "check"));
         });
     }
-    // range_pattern became Live with SCALAR-PATTERNS.md (sources unchanged).
-    assert_eq!(partition, [12, 5, 6, 0]);
+    // range_pattern became Live with SCALAR-PATTERNS.md and ordinary_guard
+    // with general match guards (sources unchanged).
+    assert_eq!(partition, [13, 4, 6, 0]);
     failures.finish();
 }
 fn stock_all() {

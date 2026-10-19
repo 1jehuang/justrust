@@ -3109,6 +3109,7 @@ impl Lowerer<'_> {
             }
             self.push_scope()?;
             self.initialize_pattern_bindings(id, &source, &arm.pattern, completes)?;
+            let mut guard_fallthrough = None;
             if let Some(guard) = arm.guard {
                 let condition = self.expression(guard)?;
                 let pass = self.block();
@@ -3121,9 +3122,11 @@ impl Lowerer<'_> {
                     },
                     Some(id),
                 )?;
+                let after = self.block();
+                guard_fallthrough = Some(after);
                 self.current = fail;
                 self.cleanup(self.scopes.len() - 1, Some(id));
-                self.terminate(Terminator::Goto(next), Some(id))?;
+                self.terminate(Terminator::Goto(after), Some(id))?;
                 self.current = pass;
             }
             let value = self.expression(arm.body)?;
@@ -3136,6 +3139,10 @@ impl Lowerer<'_> {
             self.current = next;
             for local in test_scope.iter().rev() {
                 self.end_storage(*local, Some(id));
+            }
+            if let Some(after) = guard_fallthrough {
+                self.terminate(Terminator::Goto(after), Some(id))?;
+                self.current = after;
             }
         }
         self.terminate(Terminator::Unreachable, Some(id))?;

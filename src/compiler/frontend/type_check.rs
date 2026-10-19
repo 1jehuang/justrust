@@ -3135,6 +3135,26 @@ impl<'a> Checker<'a> {
             PatternTest::Binding => return Err("contract: whole binding publication".into()),
         })
     }
+    fn or_rows_need_expansion(
+        &self,
+        rows: &[Pattern],
+        domain: &ir::Ty,
+        guarded: bool,
+    ) -> Result<bool, String> {
+        if guarded
+            || *domain == ir::Ty::Never
+            || ir::validate_alternative_domain(domain, Some(&self.signatures.plan()?.budget))
+                .is_err()
+        {
+            return Ok(true);
+        }
+        for row in rows {
+            if !self.alternative_leaf(row, 0)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
     fn alternative_leaf(&self, pattern: &Pattern, depth: usize) -> Result<bool, String> {
         let budget = &self.signatures.plan()?.budget;
         budget.check_depth(depth)?;
@@ -8069,6 +8089,44 @@ impl<'a> Checker<'a> {
             return Err("match arm count exceeds limit 4096".into());
         }
         let source = self.flow(scrutinee);
+        // Or-patterns outside the binder-free scalar row domain are checked as
+        // one arm per alternative sharing the source body (and guard).
+        let budget = self.signatures.plan()?.budget.clone();
+        let mut flattened: Vec<Option<Pattern>> = Vec::with_capacity(arms.len());
+        for arm in arms.clone() {
+            flattened.push(match arm.pattern {
+                Some(pattern) if super::or_patterns::has_nested_alternatives(pattern, true) => {
+                    Some(Pattern::Alternatives(super::or_patterns::flatten(
+                        pattern, &budget,
+                    )?))
+                }
+                _ => None,
+            });
+        }
+        let mut expanded = Vec::with_capacity(arms.len());
+        for (arm, flat) in arms.zip(&flattened) {
+            let arm = BorrowedMatchArm {
+                pattern: flat.as_ref().or(arm.pattern),
+                ..arm
+            };
+            if let Some(Pattern::Alternatives(rows)) = arm.pattern
+                && self.or_rows_need_expansion(rows, &source.ty, arm.guard.is_some())?
+            {
+                self.signatures.plan()?.budget.charge_work(rows.len())?;
+                for row in rows {
+                    expanded.push(BorrowedMatchArm {
+                        pattern: Some(row),
+                        ..arm
+                    });
+                }
+            } else {
+                expanded.push(arm);
+            }
+        }
+        if expanded.len() > 4096 {
+            return Err("match arm count exceeds limit 4096".into());
+        }
+        let arms = expanded.iter().copied();
         let mut domain = source.ty.clone();
         // A divergent operand can coerce to the concrete type named by
         // a pattern without inventing a general inference variable.
