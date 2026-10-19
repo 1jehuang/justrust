@@ -51,6 +51,7 @@ mod format_macros;
 pub use format_macros::SourceFormatInto;
 mod format_spec;
 mod inherited_associated;
+mod nominal_bounds;
 mod operators;
 mod panic_format;
 mod trait_selection;
@@ -5333,6 +5334,8 @@ pub struct StructDecl {
     pub shape: StructShape,
     pub module: ModuleId,
     pub type_params: Vec<AstIdent>,
+    /// Declared bounds, as for [`StructDecl::bounds`].
+    pub bounds: Vec<TypeBound>,
     pub name: AstPath,
     pub visibility: ir::Visibility,
     pub fields: Vec<FieldDecl>,
@@ -5347,6 +5350,9 @@ pub enum StructShape {
 pub struct EnumDecl {
     pub module: ModuleId,
     pub type_params: Vec<AstIdent>,
+    /// Declared bounds (`struct S<T: Ord>` / `where T: Ord`), proven for
+    /// every concrete application built by a constructor.
+    pub bounds: Vec<TypeBound>,
     pub name: AstPath,
     pub visibility: ir::Visibility,
     pub variants: Vec<VariantDecl>,
@@ -10257,10 +10263,8 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else if self.eat("enum") {
             let name = self.ident()?;
             let type_params = self.type_parameters()?;
-            if !self.pending_bounds.is_empty() {
-                return Err(self.unsupported("bounds on nominal declarations are unsupported"));
-            }
             self.type_params = type_params.clone();
+            let bounds = self.nominal_bounds()?;
             self.expect("{")?;
             let mut variants: Vec<VariantDecl> = Vec::new();
             while !self.is("}") {
@@ -10351,6 +10355,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             parsed.program.enums.push(EnumDecl {
                 module,
                 type_params,
+                bounds,
                 name: module_path
                     .push(self.names, name)
                     .map_err(native_adapter::name_error)?,
@@ -10361,10 +10366,8 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else if self.eat("struct") {
             let name = self.ident()?;
             let type_params = self.type_parameters()?;
-            if !self.pending_bounds.is_empty() {
-                return Err(self.unsupported("bounds on nominal declarations are unsupported"));
-            }
             self.type_params = type_params.clone();
+            let mut bounds = self.nominal_bounds()?;
             let mut fields = Vec::new();
             let shape = if self.eat(";") {
                 StructShape::Unit
@@ -10385,6 +10388,8 @@ impl<'input, 'names> Parser<'input, 'names> {
                     }
                 }
                 self.expect(")")?;
+                // Tuple structs put `where` after the field list.
+                bounds.extend(self.nominal_bounds()?);
                 self.expect(";")?;
                 StructShape::Tuple
             } else {
@@ -10412,6 +10417,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 shape,
                 module,
                 type_params,
+                bounds,
                 name: module_path
                     .push(self.names, name)
                     .map_err(native_adapter::name_error)?,
@@ -10728,6 +10734,25 @@ impl<'input, 'names> Parser<'input, 'names> {
     /// One `T: Trait + Other` where predicate whose subject is a visible type
     /// parameter. Bounds join the same predicate rows as inline bounds, so
     /// the trait world sees one authoritative environment for both spellings.
+    /// Inline parameter bounds plus an optional `where` clause on a struct
+    /// or enum declaration.
+    fn nominal_bounds(&mut self) -> Result<Vec<TypeBound>, ParseError> {
+        let mut bounds = std::mem::take(&mut self.pending_bounds);
+        if self.eat("where") {
+            loop {
+                if self.token().is_lifetime() {
+                    return Err(self.unsupported(
+                        "lifetime where predicates on nominal declarations are unsupported",
+                    ));
+                }
+                self.where_type_predicate(&mut bounds)?;
+                if !self.eat(",") || self.is("{") || self.is(";") {
+                    break;
+                }
+            }
+        }
+        Ok(bounds)
+    }
     fn where_type_predicate(&mut self, bounds: &mut Vec<TypeBound>) -> Result<(), ParseError> {
         if self.is("for") {
             return Err(self.unsupported("higher-ranked where predicates are unsupported"));

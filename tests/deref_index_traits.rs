@@ -75,3 +75,31 @@ fn main() { let b = Box::new(N { v: 7 }); let bb = Box::new(Box::new(N { v: 2 })
         "7 2 7\n",
     );
 }
+
+#[test]
+fn bounds_on_structs_and_enums() {
+    run(
+        "use std::fmt::Display;
+struct Sorted<T: Ord> { v: T }
+enum E<T> where T: Copy { A(T), B }
+impl<T: Ord + Display> Sorted<T> { fn show(&self) -> &T { &self.v } }
+fn main() { let s = Sorted { v: 3 }; let e: E<i32> = E::A(4); let n = match e { E::A(x) => x, E::B => 0 }; println!(\"{} {}\", s.show(), n); }",
+        "3 4\n",
+    );
+    let bad = "struct S<T: Ord> { v: T }\nstruct F(f64);\nfn main() { let s = S { v: F(1.0) }; let _ = s; }";
+    let error = compiler::compile(bad.into(), 1, true)
+        .err()
+        .expect("accepted");
+    assert!(error.to_string().contains("E0277"), "{error}");
+    let copy_bad = "struct S<T: Copy> { v: T } struct F { v: i32 } fn main() { let s = S { v: F { v: 1 } }; let _ = s; }";
+    let error = compiler::compile(copy_bad.into(), 1, true)
+        .err()
+        .expect("accepted missing Copy bound");
+    assert!(error.to_string().contains("E0277"), "{error}");
+    let unused =
+        "struct S<T: Copy> { v: T } struct F { v: i32 } fn unused(x: &S<F>) {} fn main() {}";
+    let error = compiler::compile(unused.into(), 1, true)
+        .err()
+        .expect("accepted unused ill-formed signature");
+    assert!(error.to_string().contains("E0277"), "{error}");
+}

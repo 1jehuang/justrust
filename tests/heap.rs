@@ -279,7 +279,7 @@ fn generic_drop_specialization_and_extra_constraints_reject() {
         ),
         (
             "struct Guard<T:Copy>{pointer:*mut T}impl<T:Copy> Drop for Guard<T>{fn drop(&mut self){}}fn main(){}",
-            "bounds on nominal declarations",
+            "generic Drop with additional owner predicates",
             "",
         ),
     ] {

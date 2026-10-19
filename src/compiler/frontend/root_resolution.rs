@@ -4040,6 +4040,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     }
     for enumeration in &mut program.enums {
         resolver.type_params = enumeration.type_params.clone();
+        resolver.bounds(&mut enumeration.bounds, enumeration.module)?;
         for variant in &mut enumeration.variants {
             for field in &mut variant.fields {
                 validate_depth(DepthNode::Type(&field.ty))?;
@@ -4049,6 +4050,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
     }
     for structure in &mut program.structs {
         resolver.type_params = structure.type_params.clone();
+        resolver.bounds(&mut structure.bounds, structure.module)?;
         for field in &mut structure.fields {
             validate_depth(DepthNode::Type(&field.ty))?;
             resolver.ty(&mut field.ty, structure.module)?;

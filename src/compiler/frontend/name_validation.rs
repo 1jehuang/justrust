@@ -490,6 +490,7 @@ impl<'a> Validator<'a> {
                 // The worklist is LIFO: all field and name checks precede
                 // shape integrity, including malformed caller-mutated ASTs.
                 self.push(Visit::StructShape(declaration))?;
+                self.many(&declaration.bounds, Visit::Bound)?;
                 self.visibility(&declaration.visibility, declaration.module)?;
                 self.declaration_path(&declaration.name, declaration.module)?;
                 self.identifiers(&declaration.type_params, LookupClass::TypeParameter)?;
@@ -520,6 +521,7 @@ impl<'a> Validator<'a> {
             }
             Visit::Enum(declaration) => {
                 self.enter_scope(None, declaration.module)?;
+                self.many(&declaration.bounds, Visit::Bound)?;
                 self.visibility(&declaration.visibility, declaration.module)?;
                 self.declaration_path(&declaration.name, declaration.module)?;
                 self.identifiers(&declaration.type_params, LookupClass::TypeParameter)?;
@@ -1147,6 +1149,28 @@ mod tests {
     use crate::compiler::expansion_budget::ExpansionBudget;
 
     #[test]
+    fn nominal_bound_parameters_reject_foreign_name_handles() {
+        let valid = super::super::parse_unresolved(
+            "trait Mark {} struct S<T: Mark> { v: T } enum E<T: Mark> { A(T) } fn main() {}",
+        )
+        .unwrap()
+        .program;
+        validate_program_names(&valid).unwrap();
+        let mut foreign = builder();
+        let foreign_name = foreign.ident("T").unwrap();
+        let _foreign = foreign.finish().unwrap();
+        for site in 0..2 {
+            let mut malformed = valid.clone();
+            if site == 0 {
+                malformed.structs[0].bounds[0].parameter = foreign_name;
+            } else {
+                malformed.enums[0].bounds[0].parameter = foreign_name;
+            }
+            assert!(validate_program_names(&malformed).is_err());
+        }
+    }
+
+    #[test]
     fn unused_associated_sources_validate_every_name_owner_and_projection_child() {
         let parsed = super::super::parse_unresolved(
             "mod inner{trait Family<T>{type Out;fn unused()->Self::Out;}\
@@ -1675,6 +1699,7 @@ mod tests {
             module,
             shape: StructShape::Record,
             type_params: Vec::new(),
+            bounds: Vec::new(),
             name: path,
             visibility: ir::Visibility::Public,
             fields: vec![FieldDecl {
@@ -1694,6 +1719,7 @@ mod tests {
             module,
             shape: StructShape::Unit,
             type_params: Vec::new(),
+            bounds: Vec::new(),
             name,
             visibility: ir::Visibility::Public,
             fields: Vec::new(),
@@ -2208,6 +2234,7 @@ mod tests {
             module,
             shape: StructShape::Tuple,
             type_params: Vec::new(),
+            bounds: Vec::new(),
             name,
             visibility: ir::Visibility::Public,
             fields: (0..2)

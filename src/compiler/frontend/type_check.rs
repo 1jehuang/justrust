@@ -2329,7 +2329,10 @@ impl<'a> Checker<'a> {
             .copied()
             .ok_or_else(|| "unknown nominal declaration".into())
     }
-    fn nominal_source(&self, declaration: ir::DeclId) -> Result<Arc<NominalSchema>, String> {
+    pub(super) fn nominal_source(
+        &self,
+        declaration: ir::DeclId,
+    ) -> Result<Arc<NominalSchema>, String> {
         let plan = self.signatures.plan()?;
         plan.budget.charge_work(1)?;
         plan.state
@@ -3963,6 +3966,7 @@ impl<'a> Checker<'a> {
         name: impl LocalInput,
         ty: ir::Ty,
     ) -> Result<ir::LocalId, String> {
+        self.prove_nominal_bounds(&ty)?;
         let names = &self.signatures.plan()?.program.names;
         if let Some(key) = self.local_key(&name, true)?
             && self.scopes.last().unwrap().contains_key(&key)
@@ -5426,6 +5430,17 @@ impl<'a> Checker<'a> {
         result
     }
     pub(super) fn constructor_type(
+        &self,
+        name: &AstPath,
+        variant: Option<AstIdent>,
+        fields: &[(InferField<'_>, &Expr)],
+        expected: Option<&ir::Ty>,
+    ) -> Result<ir::Ty, String> {
+        let ty = self.constructor_type_unchecked(name, variant, fields, expected)?;
+        self.prove_nominal_bounds(&ty)?;
+        Ok(ty)
+    }
+    fn constructor_type_unchecked(
         &self,
         name: &AstPath,
         variant: Option<AstIdent>,
@@ -10641,6 +10656,7 @@ pub(super) fn type_callable_source(
     walk_depth_checked(DepthNode::Block(&f.body), None, Some(&program.names))?;
     let module = context.module;
     let mut c = Checker::new(&signatures, signature.result.clone(), module);
+    c.prove_nominal_bounds(&signature.result)?;
     c.install_lexical_scope(f.lexical_scope)?;
     c.declaration = Some(declaration);
     c.canonical = canonical;
@@ -10760,6 +10776,7 @@ pub fn type_function_with_env(
         ));
     }
     let mut c = Checker::new(signatures, signature.result.clone(), f.module);
+    c.prove_nominal_bounds(&signature.result)?;
     c.install_lexical_scope(f.lexical_scope)?;
     c.unsafe_depth = usize::from(f.unsafety);
     let mut params = Vec::with_capacity(f.params.len());

@@ -442,6 +442,10 @@ cleanup failures.
       declaration and ordered actuals. Generic `IndexMut<I>: Index<I>` implementations
       normalize inherited `Output` using an independently proved superclass impl,
       with CHECK/BUILD/native-run tests at workers 1 and 8 (`inherited_associated`).
+- [x] Struct and enum type-parameter bounds and `where` clauses are retained and
+      resolved in their declaration scope. Constructors and function signature
+      applications prove user and builtin obligations, including nested nominal
+      actuals and unused functions (`deref_index_traits`).
 - [ ] Add trait type/lifetime/const parameters, generic methods, where clauses,
       associated types/constants, projection normalization, GATs, defaults and
       supertrait obligations beyond the bounded delivered source-default slice.

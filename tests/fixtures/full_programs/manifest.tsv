@@ -27,7 +27,7 @@
 11_closures_iterators	fail	fmt-display,fmt-debug,vec,iter,closure,fn-traits,impl-trait,prim-methods,prim-consts,option-result,slice,ref-ops
 12_linked_list	fail	fmt-display,fmt-debug,derive,for,vec,closure,box,option-result,match-ergonomics,ref-ops
 13_trait_objects	fail	fmt-display,fmt-spec,fmt-float,str,string,for,vec,iter,closure,dyn,unsize,box,format-macro,prim-methods,option-result,slice,autoderef
-14_generic_container	fail	fmt-display,fmt-debug,str,string,for,vec,iter,closure,derive,std-paths,generic-bounds,impl-trait,format-macro,option-result,slice,array-iter
+14_generic_container	fail	fmt-display,fmt-debug,str,string,for,vec,iter,closure,derive,std-paths,impl-trait,format-macro,option-result,slice,array-iter
 15_error_handling	fail	fmt-display,fmt-debug,str,string,for,iter,closure,derive,std-paths,user-fmt,option-result,try,prim-methods,slice,array-iter,match-ergonomics,autoderef
 16_sorting	fail	fmt-display,fmt-debug,fmt-float,str,for,vec,iter,closure,generic-bounds,prim-methods,slice
 17_hashmap_word_count	fail	fmt-display,fmt-debug,str,string,for,vec,iter,closure,std-paths,hashmap,option-result
