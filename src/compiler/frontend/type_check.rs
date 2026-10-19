@@ -1655,6 +1655,7 @@ pub(super) struct Checker<'a> {
     pub(super) next_loop: usize,
     pub(super) reachable: bool,
     pub(super) result: ir::Ty,
+    pub(super) inferred_closure_result: bool,
     pub(super) module: ModuleId,
     pub(super) count_queries: Vec<(ir::IntTy, ir::ExprId)>,
     pub(super) field_indices:
@@ -3588,6 +3589,7 @@ impl<'a> Checker<'a> {
             checked_closures: Vec::new(),
             capture_bindings: std::collections::HashSet::new(),
             capture_parent_scope: None,
+            inferred_closure_result: false,
             pending_references: Vec::new(),
             locals: Vec::new(),
             exprs: Vec::new(),
@@ -6724,7 +6726,14 @@ impl<'a> Checker<'a> {
                     let result_ty = self.result.clone();
                     let value = e
                         .as_ref()
-                        .map(|e| self.expr_expected(e, Some(&result_ty)))
+                        .map(|e| {
+                            let expectation = if self.inferred_closure_result {
+                                Expectation::Inferred(&result_ty)
+                            } else {
+                                Expectation::HasType(&result_ty)
+                            };
+                            self.expr_with_expectation(e, expectation)
+                        })
                         .transpose()?;
                     let f = value.map_or(Flow::value(ir::Ty::Unit), |e| self.flow(e));
                     self.require(&f, &self.result)?;

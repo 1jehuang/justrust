@@ -1,5 +1,5 @@
 //! Parent-local closure inference, capture checking and final value construction.
-use super::super::type_check::{Checker, LocalKey, checked_ty};
+use super::super::type_check::{Checker, Expectation, LocalKey, checked_ty};
 use super::check::{CheckedClosure, CheckedClosureBody};
 use super::*;
 use std::collections::{BTreeMap, HashMap};
@@ -69,6 +69,7 @@ impl Checker<'_> {
             self.module,
         );
         child.declaration = Some(provider);
+        child.inferred_closure_result = matches!(syntax.result, Type::Infer);
         child.install_lexical_scope(syntax.lexical_scope)?;
         child.capture_parent_scope = self.lexical_scope;
         let receiver = child.temporary("closure self", ir::Ty::Unit, false)?;
@@ -113,8 +114,16 @@ impl Checker<'_> {
             let value = child.for_expr(ty.clone(), ir::ExprKind::Field { base, index })?;
             prefix.push(ir::Stmt::Let { local, value });
         }
-        let (mut body, flow) = child.block_expected(&syntax.body, result_hint.as_ref())?;
+        let expectation = match result_hint.as_ref() {
+            Some(ty) if matches!(syntax.result, Type::Infer) => Expectation::Inferred(ty),
+            Some(ty) => Expectation::HasType(ty),
+            None => Expectation::None,
+        };
+        let (mut body, flow) = child.block_with_expectation(&syntax.body, expectation)?;
         let result = result_hint.unwrap_or(flow.ty.clone());
+        if !ir::carrier_locations(&result, &plan.budget)?.is_empty() {
+            return Err("unsupported: closure reference results require checked capture carrier contracts".into());
+        }
         child.require(&flow, &result)?;
         prefix.append(&mut body.statements);
         body.statements = prefix;
