@@ -1,5 +1,5 @@
 // Native Vec<T>: a growable heap buffer written in ordinary Rust source.
-use super::mem::{raw_alloc, raw_free, size_of};
+use super::mem::{raw_realloc, size_of};
 use super::option::Option;
 
 pub struct Vec<T> {
@@ -109,17 +109,11 @@ impl<T> Vec<T> {
         }
         let size = size_of::<T>();
         let bytes = cap * size;
-        let fresh = raw_alloc(if bytes == 0usize { 8usize } else { bytes }) as *mut T;
-        let mut i = 0usize;
-        while i < self.len {
-            let src = slot(self.ptr, i);
-            let dst = slot(fresh, i);
-            unsafe {
-                *dst = *src;
-            }
-            i += 1usize;
+        let old_bytes = if self.cap == 0usize { 0usize } else if size == 0usize { 8usize } else { self.cap * size };
+        let fresh = raw_realloc(self.ptr as usize, old_bytes, if bytes == 0usize { 8usize } else { bytes }) as *mut T;
+        if fresh as usize == 0usize {
+            panic!("memory allocation failed");
         }
-        raw_free(self.ptr as usize, self.cap * size);
         self.ptr = fresh;
         self.cap = cap;
     }

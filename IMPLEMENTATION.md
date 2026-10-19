@@ -639,8 +639,13 @@ host macro and compiles its generated target source.
       non-Copy allocation ownership with consuming munmap. Real mapping-boundary
       scalar access tests require native memory widths rather than qword local
       carriers. See NATIVE-HEAP.md. This does not close allocation compatibility:
-      general layouts, pointer methods, realloc, Box/Vec/String
+      general layouts, pointer methods, full Box/Vec/String behavior
       and full alloc/core/std remain open.
+- [x] Bootstrap raw mapping realloc uses Linux mremap with relocation allowed,
+      preserves old storage on failure, and drives Vec/String capacity growth.
+      Stock-differential page-crossing scalar and owning-element growth runs at
+      workers 1 and 8 (`tests/runtime_realloc.rs`). Allocation exhaustion now
+      diagnoses before installing a null backing pointer.
 - [x] Ordinary source `Allocation` Drop reuses canonical normal-path cleanup,
       disarming the handle before shared munmap policy so explicit release does
       not free twice. Raw-pointer scalar fields and ordinary owner borrows use

@@ -1,6 +1,6 @@
 // Native String: owned UTF-8 bytes in a Vec<u8>, ordinary Rust source.
 use super::option::Option;
-use super::mem::{raw_alloc, raw_free};
+use super::mem::raw_realloc;
 
 pub struct String {
     ptr: usize,
@@ -74,13 +74,10 @@ impl String {
         if cap < needed {
             cap = needed;
         }
-        let fresh = raw_alloc(cap);
-        let mut i = 0usize;
-        while i < self.len {
-            write_u8(fresh + i, read_u8(self.ptr + i));
-            i += 1usize;
+        let fresh = raw_realloc(self.ptr, self.cap, cap);
+        if fresh == 0usize {
+            panic!("memory allocation failed");
         }
-        raw_free(self.ptr, self.cap);
         self.ptr = fresh;
         self.cap = cap;
     }

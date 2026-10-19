@@ -62,6 +62,27 @@ pub fn raw_free(address: usize, bytes: usize) {
     };
 }
 
+// Resize an owned raw mapping. Linux preserves the complete old prefix even
+// when MREMAP_MAYMOVE relocates it. Failure leaves the original mapping live.
+// Like raw_alloc, a zero result denotes allocation failure, except that a
+// zero-sized request consumes the old mapping and intentionally returns zero.
+pub fn raw_realloc(address: usize, old_bytes: usize, new_bytes: usize) -> usize {
+    if new_bytes == 0usize {
+        raw_free(address, old_bytes);
+        return 0usize;
+    }
+    if address == 0usize || old_bytes == 0usize {
+        return raw_alloc(new_bytes);
+    }
+    let result = unsafe {
+        __justrust_linux_syscall6!(25usize, address, old_bytes, new_bytes, 1usize, 0usize, 0usize)
+    };
+    if result >= 18446744073709547521usize {
+        return 0usize;
+    }
+    result
+}
+
 // Write a runtime panic message to stderr. Callers follow it with `panic!`,
 // which reports the location and exits with the panic status.
 pub fn panic_message(msg: &str) {
