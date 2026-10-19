@@ -406,6 +406,20 @@ impl Encoder<'_> {
     }
 }
 
+/// The exact symbol `Plan::symbol` returns for `target`, derived from the
+/// target alone. Lets an object reference callees without reading the
+/// whole-program plan; the link step still rejects any unplanned symbol.
+pub(super) fn symbol_of(
+    target: &ir::CallTarget,
+    context: &frontend::PlanCtx,
+    budget: &ir::PlanBudget,
+) -> Result<String, String> {
+    if context.is_entry_decl(target.declaration)? && target.type_args.is_empty() {
+        return Ok("main".into());
+    }
+    Ok(identity(target, context, budget)?.symbol)
+}
+
 pub(super) fn identity(
     target: &ir::CallTarget,
     context: &frontend::PlanCtx,

@@ -119,14 +119,93 @@ pub(super) struct CarrierEffectProof {
     effects: Arc<borrow::CarrierEffects>,
 }
 
-/// Published only by the root's acyclic universal-effects join. Absence is
-/// conservative declaration authority, never a successful family proof.
+/// Published only by exact universal proof readers. Absence is conservative
+/// declaration authority, never a successful family proof.
 #[derive(Clone, Debug)]
 pub(super) struct CarrierEffectTable {
     templates: Arc<[VerifiedTemplateCfg]>,
     budget: super::ir::PlanBudget,
 }
 impl CarrierEffectTable {
+    fn validate_template(
+        template: &VerifiedTemplateCfg,
+        budget: &super::ir::PlanBudget,
+    ) -> Result<(), String> {
+        if !template.budget().same_authority(budget)
+            || template.facts().phase() != FactsPhase::Universal
+            || !template.analysis().passed()
+        {
+            return Err("carrier effect table contains foreign or unsuccessful template".into());
+        }
+        if let Some(proof) = template.carrier_effects()
+            && (!Arc::ptr_eq(&proof.source, template.source())
+                || !Arc::ptr_eq(&proof.function, template.function())
+                || !Arc::ptr_eq(&proof.facts, template.facts())
+                || !Arc::ptr_eq(&proof.analysis, template.analysis()))
+        {
+            return Err("carrier effect proof changed its exact verified inputs".into());
+        }
+        Ok(())
+    }
+    fn validate_pair(
+        previous: &VerifiedTemplateCfg,
+        template: &VerifiedTemplateCfg,
+    ) -> Result<(), String> {
+        if !Arc::ptr_eq(previous.facts().world(), template.facts().world()) {
+            return Err("carrier effect table mixes canonical worlds".into());
+        }
+        if previous.facts().declaration() == template.facts().declaration()
+            && (!Arc::ptr_eq(previous.source(), template.source())
+                || !Arc::ptr_eq(previous.function(), template.function())
+                || !Arc::ptr_eq(previous.analysis(), template.analysis())
+                || !Arc::ptr_eq(previous.facts(), template.facts())
+                || !match (previous.carrier_effects(), template.carrier_effects()) {
+                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                    (None, None) => true,
+                    _ => false,
+                })
+        {
+            return Err("carrier effect table has conflicting provider proof identities".into());
+        }
+        Ok(())
+    }
+    fn validate_reference_actual_calls(
+        caller: &VerifiedTemplateCfg,
+        templates: &[VerifiedTemplateCfg],
+        budget: &super::ir::PlanBudget,
+    ) -> Result<(), String> {
+        for expression in &caller.source().exprs {
+            budget.charge_work(1)?;
+            let super::ir::ExprKind::Call { target, .. } = &expression.kind else {
+                continue;
+            };
+            let actuals = match target {
+                super::ir::Callee::Direct(target) => target.type_args.as_ref(),
+                super::ir::Callee::TraitItem(call)
+                | super::ir::Callee::Virtual(super::ir::VirtualCall { call }) => {
+                    call.method_args.as_ref()
+                }
+            };
+            budget.charge_work(actuals.len())?;
+            if !actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. })) {
+                continue;
+            }
+            let super::ir::Callee::Direct(target) = target else {
+                return Err("unsupported abstract method reference-actual body admission".into());
+            };
+            budget.charge_work(templates.len())?;
+            let callee = std::iter::once(caller)
+                .chain(templates.iter())
+                .find(|candidate| candidate.facts().declaration() == target.declaration)
+                .ok_or("reference-actual call has no canonical universal body")?;
+            if callee.carrier_effects().is_none() {
+                return Err(
+                    "unsupported reference-actual call requires its callee's complete universal family proof".into(),
+                );
+            }
+        }
+        Ok(())
+    }
     /// `caller_validated` is true only when the borrow plan already validated
     /// this exact caller CFG against these exact facts. Otherwise the caller
     /// provenance is checked here as before.
@@ -207,9 +286,36 @@ impl CarrierEffectTable {
         }
         Ok(None)
     }
-    pub(super) fn from_verified(
+    /// A table of only the universal proofs one closed instance's calls need.
+    /// Identity and world consistency are checked exactly as in
+    /// [`Self::from_verified`]. The program-wide admission rule for
+    /// reference-actual calls is checked once by the CHECK root, not here.
+    pub(super) fn for_callees(
         templates: &[VerifiedTemplateCfg],
         budget: &super::ir::PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        Self::validated(templates, budget, false)
+    }
+    pub(super) fn admit_reference_actual_calls(
+        caller: &VerifiedTemplateCfg,
+        templates: &[VerifiedTemplateCfg],
+        budget: &super::ir::PlanBudget,
+    ) -> Result<(), String> {
+        Self::validate_template(caller, budget)?;
+        for (index, template) in templates.iter().enumerate() {
+            Self::validate_template(template, budget)?;
+            budget.charge_work(index)?;
+            Self::validate_pair(caller, template)?;
+            for previous in &templates[..index] {
+                Self::validate_pair(previous, template)?;
+            }
+        }
+        Self::validate_reference_actual_calls(caller, templates, budget)
+    }
+    fn validated(
+        templates: &[VerifiedTemplateCfg],
+        budget: &super::ir::PlanBudget,
+        admit_reference_calls: bool,
     ) -> Result<Arc<Self>, String> {
         // Both the table and its retained slice have independent Arc control
         // blocks, including the empty-table case. The caller's source slice
@@ -225,79 +331,18 @@ impl CarrierEffectTable {
             .ok_or("carrier effect table size overflow")?;
         budget.retain_bytes(bytes)?;
         for (index, template) in templates.iter().enumerate() {
-            if !template.budget().same_authority(budget)
-                || template.facts().phase() != FactsPhase::Universal
-                || !template.analysis().passed()
-            {
-                return Err(
-                    "carrier effect table contains foreign or unsuccessful template".into(),
-                );
-            }
+            Self::validate_template(template, budget)?;
             budget.charge_work(index)?;
             for previous in &templates[..index] {
-                if !Arc::ptr_eq(previous.facts().world(), template.facts().world()) {
-                    return Err("carrier effect table mixes canonical worlds".into());
-                }
-                if previous.facts().declaration() == template.facts().declaration()
-                    && (!Arc::ptr_eq(previous.source(), template.source())
-                        || !Arc::ptr_eq(previous.function(), template.function())
-                        || !Arc::ptr_eq(previous.analysis(), template.analysis())
-                        || !Arc::ptr_eq(previous.facts(), template.facts())
-                        || !match (previous.carrier_effects(), template.carrier_effects()) {
-                            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                            (None, None) => true,
-                            _ => false,
-                        })
-                {
-                    return Err(
-                        "carrier effect table has conflicting provider proof identities".into(),
-                    );
-                }
-            }
-            if let Some(proof) = template.carrier_effects()
-                && (!Arc::ptr_eq(&proof.source, template.source())
-                    || !Arc::ptr_eq(&proof.function, template.function())
-                    || !Arc::ptr_eq(&proof.facts, template.facts())
-                    || !Arc::ptr_eq(&proof.analysis, template.analysis()))
-            {
-                return Err("carrier effect proof changed its exact verified inputs".into());
+                Self::validate_pair(previous, template)?;
             }
         }
         // Universal analysis assumes declaration envelopes, never another
         // body's summary. Once every universal proof exists, independently
         // check new ordinary reference-actual calls even in unused/dead source
         // metadata. A reference-free-only callee proof is not sufficient.
-        for caller in templates {
-            for expression in &caller.source().exprs {
-                budget.charge_work(1)?;
-                let super::ir::ExprKind::Call { target, .. } = &expression.kind else {
-                    continue;
-                };
-                let actuals = match target {
-                    super::ir::Callee::Direct(target) => target.type_args.as_ref(),
-                    super::ir::Callee::TraitItem(call)
-                    | super::ir::Callee::Virtual(super::ir::VirtualCall { call }) => {
-                        call.method_args.as_ref()
-                    }
-                };
-                budget.charge_work(actuals.len())?;
-                if !actuals.iter().any(|ty| matches!(ty, Ty::Ref { .. })) {
-                    continue;
-                }
-                let super::ir::Callee::Direct(target) = target else {
-                    return Err(
-                        "unsupported abstract method reference-actual body admission".into(),
-                    );
-                };
-                budget.charge_work(templates.len())?;
-                let callee = templates
-                    .iter()
-                    .find(|candidate| candidate.facts().declaration() == target.declaration)
-                    .ok_or("reference-actual call has no canonical universal body")?;
-                if callee.carrier_effects().is_none() {
-                    return Err("unsupported reference-actual call requires its callee's complete universal family proof".into());
-                }
-            }
+        for caller in templates.iter().filter(|_| admit_reference_calls) {
+            Self::validate_reference_actual_calls(caller, templates, budget)?;
         }
         Ok(Arc::new(Self {
             templates: Arc::from(templates),
@@ -3959,7 +4004,7 @@ mod tests {
             bytes: 0,
             ..super::super::ir::PlanLimits::default()
         });
-        assert!(CarrierEffectTable::from_verified(&[], &exhausted).is_err());
+        assert!(CarrierEffectTable::for_callees(&[], &exhausted).is_err());
     }
 
     #[test]

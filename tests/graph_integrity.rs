@@ -622,7 +622,7 @@ fn kind_name(kind: u32) -> String {
         112 => "universal_analyze",
         113 => "mono_plan",
         114 => "concrete_proofs",
-        115 => "effects_ready",
+        115 => "universal_admission",
         _ => return format!("kind{kind}"),
     }
     .to_string()
@@ -635,19 +635,13 @@ const PERMANENT_WHOLE_PROGRAM: &[&str] = &["check", "build"];
 
 /// Whole-program nodes that exist today and must be split into per-file or
 /// per-item facts. This list may only shrink.
-const WHOLE_PROGRAM_DEBT: &[&str] = &[
-    "parse",
-    "resolve",
-    "signatures",
-    "effects_ready",
-    "mono_plan",
-];
+const WHOLE_PROGRAM_DEBT: &[&str] = &["parse", "resolve", "signatures", "mono_plan"];
 
 /// Ceiling on how much the transitive dependency closure of an independent leaf
 /// function grows when the program doubles from 16 to 32 functions. A value
 /// above 1.0 means unrelated functions are hidden or explicit prerequisites,
 /// which is a whole-program barrier. Target: 1.0. May only go down.
-const LEAF_CLOSURE_GROWTH_CEILING: f64 = 1.23;
+const LEAF_CLOSURE_GROWTH_CEILING: f64 = 1.02;
 
 /// Ceiling on planning work growth from 16 to 32 functions. Linear compilation
 /// is about 2.0; quadratic is 4.0. Target: at most 2.2. May only go down.
