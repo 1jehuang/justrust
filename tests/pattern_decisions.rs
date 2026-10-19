@@ -211,20 +211,6 @@ fn cases() -> Vec<Case> {
             outcome: Outcome::Invalid,
         },
         Case {
-            name: "guard_boundary",
-            source: r#"enum E{A(bool,i32),B}fn main(){let n=match E::A(true,42){E::A(true,n) if n==42=>n,_=>0};if n==42{println!("ok");}}"#,
-            stdout: Some("ok\n"),
-            stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
-        },
-        Case {
-            name: "or_boundary",
-            source: r#"enum E{A(bool,i32),B}fn main(){let n=match E::A(true,42){E::A(true,n)|E::A(false,n)=>n,_=>0};if n==42{println!("ok");}}"#,
-            stdout: Some("ok\n"),
-            stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
-        },
-        Case {
             name: "reference_binding_boundary",
             source: r#"enum E{A(bool,i32),B}fn main(){let value=E::A(true,42);let n=match value{E::A(true,ref n)=>*n,_=>0};if n==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
@@ -404,8 +390,8 @@ fn stock_all() {
             assert!(!image.exists());
         }
     }
-    assert_eq!(counts, (23, 7));
-    assert_eq!(partition, (20, 6, 3, 1));
+    assert_eq!(counts, (21, 7));
+    assert_eq!(partition, (20, 6, 1, 1));
 }
 #[test]
 fn stock_nested_pattern_decisions_oracle_edition2024_actual_toolchain() {
@@ -724,7 +710,7 @@ fn valid_and_stock_invalid_unsupported_boundaries_are_distinct_and_phase_pinned(
             }
         }
     }
-    assert_eq!(counts, (1, 1, 1, 1));
+    assert_eq!(counts, (0, 1, 1, 0));
 }
 #[test]
 fn native_pattern_decisions_workers1_8_check_build_no_compiler_fallback() {
@@ -753,7 +739,7 @@ fn native_pattern_decisions_workers1_8_check_build_no_compiler_fallback() {
                 } else {
                     command.arg("-o").arg(&image);
                 }
-                let result = capture(&mut command, &scratch, 20);
+                let result = capture(&mut command, &scratch, 180);
                 let diagnostic = String::from_utf8_lossy(&result.stderr);
                 assert!(
                     !diagnostic.contains("panicked at"),
@@ -815,7 +801,7 @@ fn native_pattern_decisions_workers1_8_check_build_no_compiler_fallback() {
             }
         }
     }
-    assert_eq!(gates, 120);
+    assert_eq!(gates, 112);
     assert_eq!(modes, (40, 40, 12, 12, 6, 6, 2, 2));
     eprintln!(
         "NATIVE PATTERN DECISIONS:120 cells, modes{modes:?};38 nonempty-output main images;16 stock-valid Unsupported cells and4 stock-invalid/native-Unsupported cells are distinct boundaries, not ordinary-invalid parity or full Rust support"

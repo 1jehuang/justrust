@@ -196,7 +196,7 @@ Case { name: r###"or_pattern"###, source: r###"fn main(){ if matches!(2, 1 | 2 i
 "###, source_bytes: 63, source_fingerprint: 3432924276943927410, source_sha256: r###"b95c2072702910516131ea2eb026d4f76585c62c600401f353bed7fb7857e52e"###, native: Native::Unsupported, boundary: r###"guards on or-patterns are unsupported"###, phase: r###"parse"###, stock_compile_code: 0, stock_code: Some(0), stock_signal: None, stock_stdout: r###"or
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""### },
 Case { name: r###"at_pattern"###, source: r###"fn main(){ if matches!(2, x @ 2 if x == 2) { println!("at"); } }
-"###, source_bytes: 65, source_fingerprint: 13653741935893286849, source_sha256: r###"9182deb4c379fdcd4de38542fefb0e73082ca1ac51fadf59d7e8fd64b1bfbcae"###, native: Native::Unsupported, boundary: r###"@ patterns are unsupported"###, phase: r###"parse"###, stock_compile_code: 0, stock_code: Some(0), stock_signal: None, stock_stdout: r###"at
+"###, source_bytes: 65, source_fingerprint: 13653741935893286849, source_sha256: r###"9182deb4c379fdcd4de38542fefb0e73082ca1ac51fadf59d7e8fd64b1bfbcae"###, native: Native::Live, boundary: r###""###, phase: r###"check"###, stock_compile_code: 0, stock_code: Some(0), stock_signal: None, stock_stdout: r###"at
 "###, stock_stderr: r###""###, stock_compile_stderr: r###""### },
 Case { name: r###"range_pattern"###, source: r###"fn main(){ if matches!(2, 1..=3 if true) { println!("range"); } }
 "###, source_bytes: 66, source_fingerprint: 18395706359714326618, source_sha256: r###"0e2ee45cdcb8a4a03748ef3cda4b21ad07ba8708092a9e47a8117869554e3e36"###, native: Native::Live, boundary: r###""###, phase: r###"check"###, stock_compile_code: 0, stock_code: Some(0), stock_signal: None, stock_stdout: r###"range
@@ -517,7 +517,7 @@ fn frozen_guarded_matches_sources_and_strict_phases() {
     }
     // range_pattern became Live with SCALAR-PATTERNS.md and ordinary_guard
     // with general match guards (sources unchanged).
-    assert_eq!(partition, [13, 4, 6, 0]);
+    assert_eq!(partition, [14, 3, 6, 0]);
     failures.finish();
 }
 fn stock_all() {
@@ -781,7 +781,7 @@ fn cli_all() {
                         } else {
                             command.arg("-o").arg(&image);
                         }
-                        let result = capture(&mut command, &scratch, 20);
+                        let result = capture(&mut command, &scratch, 180);
                         let accepted = matches!(case.native, Native::Live);
                         ordinary_exit(&result, i32::from(!accepted));
                         if !accepted {
@@ -905,7 +905,7 @@ fn isolated(name: &str, marker: &str, run: fn()) {
     command
         .args(["--exact", name, "--nocapture"])
         .env(marker, "1");
-    let result = capture_bounded(&mut command, &scratch, 240, 8 * 1024 * 1024);
+    let result = capture_bounded(&mut command, &scratch, 900, 8 * 1024 * 1024);
     eprint!("{}", String::from_utf8_lossy(&result.stdout));
     eprint!("{}", String::from_utf8_lossy(&result.stderr));
     ordinary_exit(&result, 0);

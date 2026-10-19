@@ -38,6 +38,13 @@ pub struct SourceOptions {
     /// Optimizer mode (OPTIMIZATION.md section 6). An explicit compile input:
     /// the compiler never reads `JR_OPT` itself.
     pub opt: super::ssa::OptMode,
+    /// Dependency crates compiled with this crate, each mounted as a hidden
+    /// root module `__justrust_extern_<name>` and nameable as `<name>::`.
+    /// Order is attachment order; the graph keys them as SOURCE `[2 + i]`.
+    pub externs: Vec<ExternCrate>,
+    /// Library target: no `main` is required. A check/build of the library
+    /// gets an inert entry; under `cfg(test)` the harness is the entry.
+    pub library: bool,
 }
 impl Default for SourceOptions {
     fn default() -> Self {
@@ -45,8 +52,54 @@ impl Default for SourceOptions {
             cfg: CfgSet::native_x86_64_linux(),
             prelude: true,
             opt: super::ssa::OptMode::default(),
+            externs: Vec::new(),
+            library: false,
         }
     }
+}
+/// One dependency crate: its extern name, root source file, and own cfg.
+#[derive(Clone, Debug)]
+pub struct ExternCrate {
+    pub name: String,
+    pub root: PathBuf,
+    pub cfg: CfgSet,
+}
+/// Hidden root module prefix of a mounted dependency crate.
+pub const EXTERN_PREFIX: &str = "__justrust_extern_";
+impl SourceOptions {
+    /// Options for the source file at graph ordinal `ordinal`: dependency
+    /// crates (`[2 + i, ...]`) use their own cfg and never `cfg(test)`.
+    pub fn for_ordinal(&self, ordinal: &[u64]) -> std::borrow::Cow<'_, SourceOptions> {
+        match ordinal.first() {
+            Some(&first) if first >= 2 => match self.externs.get(first as usize - 2) {
+                Some(krate) => {
+                    let mut options = self.clone();
+                    options.cfg = krate.cfg.clone();
+                    options.cfg.set_debug_assertions(self.cfg.debug_assertions());
+                    options.cfg.names.remove("test");
+                    options.library = true;
+                    std::borrow::Cow::Owned(options)
+                }
+                None => std::borrow::Cow::Borrowed(self),
+            },
+            _ => std::borrow::Cow::Borrowed(self),
+        }
+    }
+}
+/// Root unit of dependency crate `index` (graph ordinal `[2 + index]`).
+pub fn prepare_extern_unit(
+    options: &SourceOptions,
+    index: usize,
+    budget: &super::expansion_budget::ExpansionBudget,
+) -> UnitResult {
+    let Some(krate) = options.externs.get(index) else {
+        return Err(UnitFailure {
+            error: Loader::error(SourceErrorKind::Contract, None, "unknown dependency crate"),
+            anchored: false,
+        });
+    };
+    let options = options.for_ordinal(&[2 + index as u64]);
+    prepare_root_unit(&krate.root, &options, budget)
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceErrorKind {
@@ -253,6 +306,9 @@ fn prepare_with_reader_budget(
             AssemblyStep::Done(prepared) => return Ok(*prepared),
             AssemblyStep::Need(need) => {
                 let unit = match need.parent.as_deref() {
+                    None if need.ordinal[0] >= 2 => {
+                        prepare_extern_unit(options, need.index, budget)
+                    }
                     None => prepare_prelude_unit(options, budget),
                     Some(parent) if parent.path.starts_with(source_prelude::PRELUDE_DIR) => {
                         prepare_child_unit(parent, need.index, options, budget)
@@ -281,6 +337,9 @@ pub fn prepare_text(
             AssemblyStep::Done(prepared) => return Ok(*prepared),
             AssemblyStep::Need(need) => {
                 let unit = match need.parent.as_deref() {
+                    None if need.ordinal[0] >= 2 => {
+                        prepare_extern_unit(options, need.index, &budget)
+                    }
                     None => prepare_prelude_unit(options, &budget),
                     Some(parent) if parent.path.starts_with(source_prelude::PRELUDE_DIR) => {
                         prepare_child_unit(parent, need.index, options, &budget)
@@ -583,7 +642,8 @@ fn snapshot_unit<'a>(
 pub struct NeedUnit {
     /// Graph identity of the child file: `[0, i, j, ...]` child ordinals.
     pub ordinal: Vec<u64>,
-    /// `None` for the prelude attachment unit (ordinal `[1]`).
+    /// `None` for crate attachment units: the prelude (ordinal `[1]`) and
+    /// dependency crates (`[2 + index]`).
     pub parent: Option<Arc<FileUnit>>,
     pub index: usize,
 }
@@ -606,6 +666,11 @@ pub struct SourceAssembler {
     in_prelude: bool,
     /// `cfg(test)`: synthesize the native test harness entry after the crate.
     harness: Option<Vec<source_attrs::TestItem>>,
+    /// Library target without a harness: append an inert entry.
+    library: bool,
+    externs: Vec<String>,
+    next_extern: usize,
+    in_extern: bool,
 }
 struct Frame {
     unit: Arc<FileUnit>,
@@ -646,12 +711,17 @@ impl SourceAssembler {
             prelude: options.prelude,
             in_prelude: false,
             harness: options.cfg.names.contains("test").then(Vec::new),
+            library: options.library && !options.cfg.names.contains("test"),
+            externs: options.externs.iter().map(|e| e.name.clone()).collect(),
+            next_extern: 0,
+            in_extern: false,
         }
     }
     /// Assemble only the user crate, without the prelude library.
     pub fn user_only(options: &SourceOptions) -> Self {
         Self {
             prelude: false,
+            externs: Vec::new(),
             ..Self::new(options)
         }
     }
@@ -661,7 +731,7 @@ impl SourceAssembler {
     /// Supply the unit for the root (first call) or the last requested child.
     pub fn provide(&mut self, unit: Arc<UnitResult>) -> Result<AssemblyStep, SourceError> {
         let (ordinal, anchor) = match self.awaiting.take() {
-            Some((ordinal, _)) if ordinal == [1] => (ordinal, None),
+            Some((ordinal, _)) if ordinal.len() == 1 && ordinal[0] >= 1 => (ordinal, None),
             Some((ordinal, anchor)) => (ordinal, Some(anchor)),
             None if !self.started => (vec![0], None),
             None => {
@@ -691,7 +761,21 @@ impl SourceAssembler {
                 format!("source size limit ({MAX_BYTES} bytes) exceeded"),
             )));
         }
-        if !self.in_prelude {
+        if ordinal.len() == 1
+            && ordinal[0] >= 2
+            && let Some(name) = self.externs.get(ordinal[0] as usize - 2)
+        {
+            let anchor = SourceSpan {
+                file: FileId(0),
+                lo: 0,
+                hi: 0,
+            };
+            let open = format!("\npub mod {EXTERN_PREFIX}{name} {{\n");
+            if let Err(error) = append_segment(&mut self.prepared, &open, anchor, true) {
+                return Err(self.fail(error));
+            }
+        }
+        if !self.in_prelude && !self.in_extern {
             self.prepared.source_bytes += unit.contents.len();
             self.prepared.files += 1;
             if let Some(tests) = &mut self.harness {
@@ -751,19 +835,37 @@ impl SourceAssembler {
     fn run(&mut self) -> Result<AssemblyStep, SourceError> {
         loop {
             let Some(frame) = self.frames.last_mut() else {
-                if !self.in_prelude
-                    && let Some(tests) = self.harness.take()
-                {
-                    let anchor = SourceSpan {
-                        file: FileId(0),
-                        lo: 0,
-                        hi: 0,
+                let anchor = SourceSpan {
+                    file: FileId(0),
+                    lo: 0,
+                    hi: 0,
+                };
+                if !self.in_prelude && !self.in_extern {
+                    let entry = match self.harness.take() {
+                        Some(tests) => Some(test_harness(tests)),
+                        None if std::mem::take(&mut self.library) => {
+                            Some("\nfn main() {}\n".to_string())
+                        }
+                        None => None,
                     };
-                    if let Err(error) =
-                        append_segment(&mut self.prepared, &test_harness(tests), anchor, true)
+                    if let Some(entry) = entry
+                        && let Err(error) =
+                            append_segment(&mut self.prepared, &entry, anchor, true)
                     {
                         return Err(self.fail(error));
                     }
+                }
+                if self.next_extern < self.externs.len() {
+                    let index = self.next_extern;
+                    self.next_extern += 1;
+                    self.in_extern = true;
+                    let ordinal = vec![2 + index as u64];
+                    self.awaiting = Some((ordinal.clone(), Loader::span(LOCAL_FILE, 0..0)));
+                    return Ok(AssemblyStep::Need(NeedUnit {
+                        ordinal,
+                        parent: None,
+                        index,
+                    }));
                 }
                 if self.prelude {
                     self.prelude = false;
@@ -831,7 +933,19 @@ impl SourceAssembler {
                 let primary = error.primary.map(|span| remap_span(span, id));
                 return Err(self.fail(copy_error(error, primary)));
             }
-            self.frames.pop();
+            if let Some(frame) = self.frames.pop()
+                && frame.ordinal.len() == 1
+                && frame.ordinal[0] >= 2
+            {
+                let anchor = SourceSpan {
+                    file: FileId(0),
+                    lo: 0,
+                    hi: 0,
+                };
+                if let Err(error) = append_segment(&mut self.prepared, "\n}\n", anchor, true) {
+                    return Err(self.fail(error));
+                }
+            }
         }
     }
 }

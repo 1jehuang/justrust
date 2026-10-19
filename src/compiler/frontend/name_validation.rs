@@ -624,6 +624,11 @@ impl<'a> Validator<'a> {
                     }
                     self.push(Visit::Type(referent))?;
                 }
+                Type::ParamArray(element, name) => {
+                    self.push(Visit::Ident(*name, LookupClass::TypeParameter))?;
+                    self.push(Visit::Type(element))?;
+                }
+                Type::ConstArg(_) => {}
                 Type::Array(element, _)
                 | Type::Slice(element)
                 | Type::RawPtr {
@@ -807,6 +812,9 @@ impl<'a> Validator<'a> {
             },
             Visit::Expr(expression) => match expression {
                 Expr::Try(inner) => self.push(Visit::Expr(inner))?,
+                Expr::ConstParam(name) => {
+                    self.push(Visit::Ident(*name, LookupClass::TypeParameter))?
+                }
                 Expr::UnexpandedMacro(_) => {
                     let mut error = crate::compiler::source::SourceError::syntax(
                         None,
@@ -993,6 +1001,10 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Pattern(pattern))?;
                 }
                 Pattern::Ref { pattern, .. } => self.push(Visit::Pattern(pattern))?,
+                Pattern::At { name, pattern, .. } => {
+                    self.local(*name, true)?;
+                    self.push(Visit::Pattern(pattern))?;
+                }
                 Pattern::Variant { name, fields, .. } => {
                     self.push(Visit::Path(name))?;
                     self.pattern_fields(fields)?;
@@ -1666,6 +1678,7 @@ mod tests {
             module,
             shape: StructShape::Record,
             type_params: Vec::new(),
+            bounds: Vec::new(),
             name: path,
             visibility: ir::Visibility::Public,
             fields: vec![FieldDecl {
@@ -1685,6 +1698,7 @@ mod tests {
             module,
             shape: StructShape::Unit,
             type_params: Vec::new(),
+            bounds: Vec::new(),
             name,
             visibility: ir::Visibility::Public,
             fields: Vec::new(),
@@ -2199,6 +2213,7 @@ mod tests {
             module,
             shape: StructShape::Tuple,
             type_params: Vec::new(),
+            bounds: Vec::new(),
             name,
             visibility: ir::Visibility::Public,
             fields: (0..2)

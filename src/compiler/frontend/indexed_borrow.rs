@@ -6,7 +6,7 @@
 //! element loan as covering the whole array (no disjointness by index).
 use super::*;
 
-enum Step<'e> {
+enum IndexedBorrowStep<'e> {
     Field(&'e FieldSelector),
     Const(usize),
     Deref,
@@ -40,25 +40,28 @@ impl type_check::Checker<'_> {
                     };
                 }
                 Expr::DynamicIndex { base, index } => {
-                    steps.push(Step::Runtime(index));
+                    steps.push(IndexedBorrowStep::Runtime(index));
                     cursor = base;
                 }
                 Expr::Index { base, index } => {
-                    steps.push(Step::Const(*index));
+                    steps.push(IndexedBorrowStep::Const(*index));
                     cursor = base;
                 }
                 Expr::Field { base, field } => {
-                    steps.push(Step::Field(field));
+                    steps.push(IndexedBorrowStep::Field(field));
                     cursor = base;
                 }
                 Expr::Deref { value } => {
-                    steps.push(Step::Deref);
+                    steps.push(IndexedBorrowStep::Deref);
                     cursor = value;
                 }
                 _ => return Ok(None),
             }
         };
-        if !steps.iter().any(|step| matches!(step, Step::Runtime(_))) {
+        if !steps
+            .iter()
+            .any(|step| matches!(step, IndexedBorrowStep::Runtime(_)))
+        {
             return Ok(None);
         }
         steps.reverse();
@@ -88,7 +91,7 @@ impl type_check::Checker<'_> {
                 return Err("place projection nesting exceeds limit128".into());
             }
             match step {
-                Step::Deref => {
+                IndexedBorrowStep::Deref => {
                     if matches!(ty, ir::Ty::RawPtr { .. }) {
                         return Err(
                             "unsupported: borrowing runtime-indexed places behind raw pointers"
@@ -97,7 +100,7 @@ impl type_check::Checker<'_> {
                     }
                     peel(&mut ty, &mut writable, &mut projection)?;
                 }
-                Step::Field(field) => {
+                IndexedBorrowStep::Field(field) => {
                     while matches!(ty, ir::Ty::Ref { .. }) {
                         peel(&mut ty, &mut writable, &mut projection)?;
                     }
@@ -105,14 +108,14 @@ impl type_check::Checker<'_> {
                     projection.push(ir::Projection::Field(index));
                     ty = field_ty;
                 }
-                Step::Const(index) => {
+                IndexedBorrowStep::Const(index) => {
                     while matches!(ty, ir::Ty::Ref { .. }) {
                         peel(&mut ty, &mut writable, &mut projection)?;
                     }
                     ty = self.index_type(&ty, index)?;
                     projection.push(ir::Projection::ConstantIndex(index));
                 }
-                Step::Runtime(index) => {
+                IndexedBorrowStep::Runtime(index) => {
                     while matches!(ty, ir::Ty::Ref { .. }) {
                         peel(&mut ty, &mut writable, &mut projection)?;
                     }

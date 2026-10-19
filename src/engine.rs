@@ -12,6 +12,8 @@
 //! `Report::node_errors` exposes those later failures. Capture buffers are bounded
 //! and overflow makes `capture_complete` false. Structural edges remain retained.
 
+pub const WORKER_STACK_BYTES: usize = 32 * 1024 * 1024;
+
 use std::any::Any;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque, hash_map::DefaultHasher};
@@ -726,6 +728,9 @@ impl Engine {
                 let shared = self.shared.clone();
                 match std::thread::Builder::new()
                     .name(format!("graph-{worker}"))
+                    // Recursive-descent parsing and checking are bounded at
+                    // nesting 128; debug frames need more than the 2 MiB default.
+                    .stack_size(WORKER_STACK_BYTES)
                     .spawn_scoped(scope, move || {
                         match catch_unwind(AssertUnwindSafe(|| shared.worker())) {
                             Ok(()) => Ok(()),

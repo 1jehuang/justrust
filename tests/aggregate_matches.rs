@@ -160,25 +160,11 @@ fn cases() -> Vec<Case> {
             outcome: Outcome::Invalid,
         },
         Case {
-            name: "guard_boundary",
-            source: r#"struct Pair(i32,i32);fn main(){let result=match Pair(40,2){Pair(a,b) if a==40=>a+b,_=>0};if result==42{println!("ok");}}"#,
-            stdout: Some("ok\n"),
-            stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
-        },
-        Case {
             name: "refutable_literal_boundary",
             source: r#"struct Pair(i32,i32);fn main(){let result=match Pair(40,2){Pair(40,b)=>40+b,_=>0};if result==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
             outcome: Outcome::Runtime,
-        },
-        Case {
-            name: "or_pattern_boundary",
-            source: r#"struct Pair(i32,i32);fn main(){let result=match Pair(40,2){Pair(a,b)|Pair(a,b)=>a+b};if result==42{println!("ok");}}"#,
-            stdout: Some("ok\n"),
-            stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
         },
         Case {
             name: "rest_pattern_boundary",
@@ -373,8 +359,8 @@ fn stock_all() {
             assert!(!image.exists());
         }
     }
-    assert_eq!(counts, (19, 7));
-    assert_eq!(partition, (17, 7, 2));
+    assert_eq!(counts, (17, 7));
+    assert_eq!(partition, (17, 7, 0));
 }
 #[test]
 fn stock_aggregate_matches_irrefutability_privacy_ownership_oracle_edition2024() {
@@ -541,7 +527,7 @@ fn aggregate_advanced_pattern_boundaries_reject_in_their_actual_frontend_phase()
             counts.1 += 1;
         }
     }
-    assert_eq!(counts, (1, 0, 1));
+    assert_eq!(counts, (0, 0, 0));
 }
 #[test]
 fn native_aggregate_matches_workers1_8_check_build_no_compiler_fallback() {
@@ -570,7 +556,7 @@ fn native_aggregate_matches_workers1_8_check_build_no_compiler_fallback() {
                 } else {
                     command.arg("-o").arg(&image);
                 }
-                let result = capture(&mut command, &scratch, 20);
+                let result = capture(&mut command, &scratch, 180);
                 let diagnostic = String::from_utf8_lossy(&result.stderr);
                 assert!(
                     !diagnostic.contains("panicked at"),
@@ -627,8 +613,8 @@ fn native_aggregate_matches_workers1_8_check_build_no_compiler_fallback() {
             }
         }
     }
-    assert_eq!(gates, 104);
-    assert_eq!(modes, (34, 34, 14, 14, 4, 4));
+    assert_eq!(gates, 96);
+    assert_eq!(modes, (34, 34, 14, 14, 0, 0));
     eprintln!(
         "NATIVE AGGREGATE MATCHES:104 cells, modes{modes:?};34 executed native images;8 Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
     );

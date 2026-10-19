@@ -253,7 +253,7 @@ fn rejects_outside_admitted_domain() {
     assert!(!message.is_empty());
     // Usize index is required, without i32 backward inference.
     let message = rejected("fn f(b: &[u8], i: i32) -> u8 { b[i] }", 0);
-    assert!(message.contains("usize"), "{message}");
+    assert!(message.to_lowercase().contains("usize"), "{message}");
     // `.len()` with arguments is not the builtin.
     rejected("fn f(b: &[u8]) -> usize { b.len(1) }", 0);
     // Local inference alone does not unsize an array reference.
@@ -537,7 +537,8 @@ fn ordinary_calls_around_len_keep_full_inventory() {
         fn f(a: &[u8]) -> usize { let n = h(a.len()); h(n) + a.len() }";
     let (budget, f) = published(source, 1);
     let original = f.original().source_for_test();
-    assert_eq!(original.calls.len(), 4);
+    // Four calls plus the `+` operator site.
+    assert_eq!(original.calls.len(), 5);
     assert_eq!(original.call_mapping.len(), 2);
     assert_eq!(original.builtin_len_mapping.len(), 2);
     replay(&original, &f, &budget).unwrap();

@@ -95,11 +95,7 @@ fn builtin_matches_bounded_grammar_and_late_invalid() {
         check(&program).is_err(),
         "bool tail must not become unit main"
     );
-    {
-        let (args, diagnostic) = ("1,x @ _", "unsupported token \"@\"");
-        let error = parse(&format!("fn main(){{matches!({args})}}")).unwrap_err();
-        assert!(error.contains(diagnostic), "{error}");
-    }
+    parse("fn main(){let _b=matches!(1,x @ _);}").unwrap();
     for source in [
         "fn main(){matches!(1,true);}",
         "fn main(){return;matches!(1,true);}",
@@ -197,8 +193,7 @@ fn builtin_matches_guards_use_existing_checker_and_binding_scope() {
     ] {
         bad(source);
     }
-    let error = parse("fn main(){match 1 {1 if true=>true,_=>false};}").unwrap_err();
-    assert!(error.contains("match guards, or-patterns and @ patterns are unsupported"));
+    parse("fn main(){match 1 {1 if true=>true,_=>false};}").unwrap();
 }
 
 #[test]
@@ -280,7 +275,6 @@ fn builtin_matches_shadowing_and_source_statement_separation() {
         Some(Expr::Integer(_))
     ));
     for source in [
-        "macro_rules! matches{()=>{42};}fn main(){matches!()}",
         "fn main(){macro_rules! matches{(other)=>{42};}matches!(1,1)}",
         "fn main(){matches!(1,1) let x=1;}",
         "fn main(){matches![1,1] let x=1;}",
@@ -380,9 +374,15 @@ fn literal_output_lexical_shadowing_never_falls_back_to_builtin() {
         let source =
             format!("fn main(){{macro_rules! {name}{{(x)=>{{42}};}}{name}!(\"literal\")}}");
         assert!(parse(&source).is_err(), "{source}");
-        // Module macros remain authoritative even where this slice cannot expand them.
-        let source = format!("macro_rules! {name}{{()=>{{42}};}}fn main(){{{name}!()}}");
-        assert!(parse(&source).is_err(), "{source}");
+        // Module macros are authoritative over the builtin.
+        let shadow = parse(&format!(
+            "macro_rules! {name}{{()=>{{42}};}}fn main(){{{name}!()}}"
+        ))
+        .unwrap();
+        assert!(matches!(
+            shadow.functions[0].body.tail.as_deref(),
+            Some(Expr::Integer(_))
+        ));
     }
 }
 
@@ -585,8 +585,16 @@ fn never_patterns_use_explicit_shape_and_preserve_dead_value_types() {
 
 #[test]
 fn unsupported_patterns_and_pattern_nesting_are_explicit() {
+    std::thread::Builder::new()
+        .stack_size(crate::engine::WORKER_STACK_BYTES)
+        .spawn(unsupported_patterns_and_pattern_nesting_body)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn unsupported_patterns_and_pattern_nesting_body() {
     for source in [
-        "fn main(){let x @ _=1;}",
         "fn main(){let 1=1;}",
         "fn main(){let(mut _)=1;}",
         "struct S{x:i32} fn main(){let S{..,x}=S{x:1};}",
@@ -1493,7 +1501,6 @@ fn bounded_panic_family_shadowing_never_falls_back() {
         ));
         for source in [
             format!("fn main(){{macro_rules! {name}{{(other)=>{{42}};}}{name}!()}}"),
-            format!("macro_rules! {name}{{()=>{{42}};}}fn main(){{{name}!()}}"),
             format!("fn main(){{std::{name}!()}}"),
         ] {
             assert!(parse(&source).is_err(), "{source}");
@@ -1587,7 +1594,6 @@ fn panic_shadowing_and_unsupported_arguments_are_not_builtin_fallbacks() {
         Some(Expr::Integer(_))
     ));
     for source in [
-        "macro_rules! panic{()=>{42};}fn main(){panic!()}",
         "fn main(){macro_rules! panic{(x)=>{42};}panic!()}",
         "fn main(){panic!(42)}",
         "fn main(){panic!(\"{}\", 42)}",
@@ -1761,7 +1767,6 @@ fn builtin_assert_does_not_reinterpret_shadowing_or_unsupported_messages() {
     );
     good("fn main(){macro_rules! panic{()=>{42};}assert!(true);}");
     for source in [
-        "macro_rules! assert{()=>{42};}fn main(){assert!()}",
         "fn main(){macro_rules! assert{(other)=>{42};}assert!(true)}",
         "fn main(){assert!()}",
         "fn main(){assert!(,)}",
@@ -1973,7 +1978,8 @@ fn comparison_assertions_delimiters_messages_and_source_order() {
                 let inventory =
                     SourceInventory::build(&program, &program.functions[2], identity, &budget)
                         .unwrap();
-                assert_eq!(inventory.calls.len(), 2);
+                // Two calls plus the comparison operator site.
+                assert_eq!(inventory.calls.len(), 3);
                 let env = type_env(&program).unwrap();
                 let checked = type_function_with_env(&program, 2, &env).unwrap();
                 assert_eq!(
@@ -2011,10 +2017,9 @@ fn comparison_assertions_shadowing_syntax_and_operand_boundaries() {
             program.functions[0].body.tail.as_deref(),
             Some(Expr::Integer(_))
         ));
-        for source in [
-            format!("macro_rules! {name}{{()=>{{42}};}}fn main(){{{name}!()}}"),
-            format!("fn main(){{macro_rules! {name}{{(other)=>{{42}};}}{name}!(1,1)}}"),
-        ] {
+        for source in [format!(
+            "fn main(){{macro_rules! {name}{{(other)=>{{42}};}}{name}!(1,1)}}"
+        )] {
             assert!(parse(&source).is_err(), "{source}");
         }
         for arguments in ["", "1", "1,", ",1", "1,,2", "1 2", "1,2,,"] {
@@ -2095,9 +2100,10 @@ fn configured_debug_program(source: &str, enabled: bool) -> Result<Program, Stri
 fn debug_assertions_keep_checked_arguments_and_configured_source_shape() {
     for enabled in [false, true] {
         for (name, args, calls) in [
-            ("debug_assert", "left()==1", 1),
-            ("debug_assert_eq", "left(),right()", 2),
-            ("debug_assert_ne", "left(),right()", 2),
+            // Calls plus the one comparison operator site.
+            ("debug_assert", "left()==1", 2),
+            ("debug_assert_eq", "left(),right()", 3),
+            ("debug_assert_ne", "left(),right()", 3),
         ] {
             let source = format!(
                 "fn left()->i32{{1}}fn right()->i32{{2}}fn main(){{\n{name}!({args},\"message\")\n}}"
@@ -2215,4 +2221,9 @@ fn disabled_debug_assertion_storage_denial_releases_all_parser_storage() {
     drop(tokens);
     assert_eq!(budget.snapshot().retained_bytes, 0);
     assert_eq!(budget.snapshot().temporary_bytes, 0);
+}
+#[test]
+fn zz_dump_vec_shape() {
+    let p = parse_unresolved("fn main(){let e:Vec<i32>=std::vec::Vec::new(); let mut t=std::vec::Vec::with_capacity(2usize); t.push(1); let s=std::vec::from_elem(1,2usize);}").unwrap().program;
+    panic!("{:#?}", p.functions.last().unwrap().body);
 }

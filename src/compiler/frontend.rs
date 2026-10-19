@@ -32,6 +32,7 @@ use super::semantic_path::{NameAccess, PathKey};
 use native_adapter::{NativeParserInput, NativeTokenBuffer};
 mod char_literal;
 pub(super) mod closures;
+mod let_chains;
 mod name_scope;
 mod name_validation;
 mod pattern_usefulness;
@@ -43,6 +44,7 @@ use char_literal::{parse_byte_literal, parse_char_literal};
 mod deref_coercion;
 mod format_args;
 mod format_spec;
+mod nominal_bounds;
 mod operators;
 mod panic_format;
 mod trait_selection;
@@ -1025,6 +1027,10 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
         Type::Array(element, len) => {
             Type::Array(Box::new(copy_source_type(element, budget, at + 1)?), *len)
         }
+        Type::ParamArray(element, len) => {
+            Type::ParamArray(Box::new(copy_source_type(element, budget, at + 1)?), *len)
+        }
+        Type::ConstArg(value) => Type::ConstArg(*value),
         Type::Slice(element) => Type::Slice(Box::new(copy_source_type(element, budget, at + 1)?)),
         Type::RawPtr { kind, pointee } => Type::RawPtr {
             kind: *kind,
@@ -1156,10 +1162,12 @@ fn source_type_mentions_self(
         },
         Type::Ref { referent, .. } => source_type_mentions_self(referent, budget, depth + 1)?,
         Type::Array(element, _)
+        | Type::ParamArray(element, _)
         | Type::Slice(element)
         | Type::RawPtr {
             pointee: element, ..
         } => source_type_mentions_self(element, budget, depth + 1)?,
+        Type::ConstArg(_) => false,
         Type::Tuple(fields) => {
             let mut found = false;
             for field in fields {
@@ -1382,6 +1390,10 @@ impl SourceInventory {
         match pattern {
             Pattern::Binding { name, .. } => {
                 self.bind(name, node.clone(), None, None, None, budget)?
+            }
+            Pattern::At { name, pattern, .. } => {
+                self.bind(name, node.clone(), None, None, None, budget)?;
+                self.shadow_pattern(pattern, &node.child(9, 0, budget)?, budget, depth + 1)?
             }
             Pattern::Path(path) => {
                 if let Some(name) = path.single() {
@@ -2272,6 +2284,7 @@ impl SourceInventory {
                 )?;
             }
             Expr::Borrow { .. }
+            | Expr::ConstParam(_)
             | Expr::Integer(_)
             | Expr::Float(_)
             | Expr::Char(_)
@@ -4710,6 +4723,10 @@ pub struct Program {
     /// The `prelude::v1` module inside the prelude library. Its public names
     /// (types, variants, traits) are in scope in every module unless shadowed.
     pub prelude_scope: Option<ModuleId>,
+    /// Hidden crate-root modules holding mounted dependency crates
+    /// (`__justrust_extern_<name>`). `<name>::` paths resolve into them and
+    /// `crate` inside one names its mount.
+    pub extern_mounts: Vec<ModuleId>,
     // Resolver-issued source authority. Shared unchanged by public AST clones.
     associated_bound_sources: Arc<[AssociatedBoundSource]>,
     /// Immutable parser/resolver output, never a mutable callable side slot.
@@ -4745,6 +4762,7 @@ struct ProgramDeclarations {
     trait_imports: Vec<(ModuleId, TraitPath)>,
     prelude_module: Option<ModuleId>,
     prelude_scope: Option<ModuleId>,
+    extern_mounts: Vec<ModuleId>,
     closure_sources: HashMap<PathKey, closures::ClosureSource>,
 }
 struct ParsedDeclarations {
@@ -4774,6 +4792,7 @@ impl ProgramDeclarations {
             trait_imports: self.trait_imports,
             prelude_module: self.prelude_module,
             prelude_scope: self.prelude_scope,
+            extern_mounts: self.extern_mounts,
             associated_bound_sources: Arc::from([]),
             closure_sources: Arc::new(self.closure_sources),
             closure_owners: Arc::new(HashMap::new()),
@@ -4914,6 +4933,7 @@ impl ProgramBuilder {
             trait_imports: self.trait_imports,
             prelude_module: None,
             prelude_scope: None,
+            extern_mounts: Vec::new(),
             closure_sources: HashMap::new(),
         }
         .publish(names, modules, self.symbols, None);
@@ -5207,6 +5227,9 @@ pub struct StructDecl {
     pub shape: StructShape,
     pub module: ModuleId,
     pub type_params: Vec<AstIdent>,
+    /// Declared bounds (`struct S<T: Ord>` / `where T: Ord`), proven for
+    /// every concrete application built by a constructor.
+    pub bounds: Vec<TypeBound>,
     pub name: AstPath,
     pub visibility: ir::Visibility,
     pub fields: Vec<FieldDecl>,
@@ -5221,6 +5244,8 @@ pub enum StructShape {
 pub struct EnumDecl {
     pub module: ModuleId,
     pub type_params: Vec<AstIdent>,
+    /// Declared bounds, as for [`StructDecl::bounds`].
+    pub bounds: Vec<TypeBound>,
     pub name: AstPath,
     pub visibility: ir::Visibility,
     pub variants: Vec<VariantDecl>,
@@ -5313,6 +5338,10 @@ pub enum Type {
         referent: Box<Type>,
     },
     Array(Box<Type>, usize),
+    /// `[T; N]` with `N` a const generic parameter.
+    ParamArray(Box<Type>, AstIdent),
+    /// A const generic argument value (`Buf<5>`, `f::<{ 2 + 2 }>`).
+    ConstArg(u64),
     /// Unsized `[T]`. Admitted values require a checked shared reference.
     Slice(Box<Type>),
     /// `*const T` (Shared) or `*mut T` (Mut).
@@ -5398,6 +5427,13 @@ pub enum Pattern {
         /// Explicit `ref`/`ref mut` binding mode. Default binding modes
         /// through references are inferred by the checker, not the parser.
         by_ref: Option<ir::BorrowKind>,
+    },
+    /// `name @ pattern`: binds the whole matched place and tests `pattern`.
+    At {
+        name: AstIdent,
+        mutable: bool,
+        by_ref: Option<ir::BorrowKind>,
+        pattern: Box<Pattern>,
     },
     /// Explicit `&pat` / `&mut pat` reference pattern.
     Ref {
@@ -5894,6 +5930,8 @@ fn validate_source_site(
 
 #[derive(Clone, Debug)]
 pub enum Expr {
+    /// Use of a `const N: usize` generic parameter as a value.
+    ConstParam(AstIdent),
     /// Bootstrap-only Linux x86-64 ABI primitive, never an allocator policy.
     NativeSyscall(Vec<Expr>),
     UnexpandedMacro(Arc<UnexpandedMacroSyntax>),
@@ -6861,6 +6899,9 @@ struct Parser<'input, 'names> {
     allow_struct: bool,
     condition_purpose: ConditionPurpose,
     type_params: Vec<AstIdent>,
+    /// Every parameter declared `const N: usize` in this file. Name keys are
+    /// lexically unique per declaration, so membership identifies const-ness.
+    const_params: Vec<AstIdent>,
     use_expansions: usize,
     use_expansion_bytes: usize,
 }
@@ -7012,6 +7053,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             &proof,
         )?;
         let mut child = Parser {
+            const_params: self.const_params.clone(),
             debug_assertions: self.debug_assertions,
             input: &buffer,
             names: &mut *self.names,
@@ -8296,6 +8338,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         expansion_depth: u32,
     ) -> Result<Expr, ParseError> {
         let mut child = Parser {
+            const_params: self.const_params.clone(),
             debug_assertions: self.debug_assertions,
             input: buffer,
             names: &mut *self.names,
@@ -8506,6 +8549,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                 })?;
             match pattern {
                 Pattern::Binding { name, .. } => self.bind_lexical(*name)?,
+                Pattern::At { name, pattern, .. } => {
+                    self.bind_lexical(*name)?;
+                    pending
+                        .push(pattern)
+                        .map_err(native_adapter::transport_error)?;
+                }
                 Pattern::Tuple(fields) | Pattern::Alternatives(fields) => {
                     for field in fields {
                         pending
@@ -8695,6 +8744,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             type_params: Vec::new(),
             use_expansions: 0,
             use_expansion_bytes: 0,
+            const_params: Vec::new(),
         })
     }
     fn token(&self) -> TokenView<'input> {
@@ -8828,6 +8878,15 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         Ok(false)
     }
+    /// The current token names an in-scope `const N: usize` parameter.
+    fn current_const_parameter(&mut self) -> Result<Option<AstIdent>, ParseError> {
+        let Some(name) = self.current_type_parameter()? else {
+            return Ok(None);
+        };
+        Ok(self
+            .contains_name(&self.const_params, name, LookupClass::TypeParameter)?
+            .then_some(name))
+    }
     fn current_type_parameter(&mut self) -> Result<Option<AstIdent>, ParseError> {
         if !self.token().is_ident() || self.token().text == "_" || self.type_params.is_empty() {
             return Ok(None);
@@ -8931,6 +8990,13 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return Ok(Type::Slice(Box::new(element)));
             }
             self.expect(";")?;
+            if let Some(name) = self.current_const_parameter()? {
+                if self.cursor.peek(1).is_some_and(|t| t.matches("]")) {
+                    self.cursor.bump();
+                    self.expect("]")?;
+                    return Ok(Type::ParamArray(Box::new(element), name));
+                }
+            }
             let len = self.array_number("array length")?;
             self.expect("]")?;
             Ok(Type::Array(Box::new(element), len))
@@ -9135,7 +9201,11 @@ impl<'input, 'names> Parser<'input, 'names> {
                         self.error("positional type arguments must precede associated equalities")
                     );
                 }
-                let value = self.ty()?;
+                let value = if let Some(value) = self.const_argument()? {
+                    value
+                } else {
+                    self.ty()?
+                };
                 self.reserve_parser_items(&mut args, 1)?;
                 args.push(value);
             }
@@ -9217,8 +9287,27 @@ impl<'input, 'names> Parser<'input, 'names> {
             if params.len() >= 32 {
                 return Err(self.limit("generic parameter resource limit 32"));
             }
-            if self.is("const") {
-                return Err(self.unsupported("const generic parameters are unsupported"));
+            if self.eat("const") {
+                let name = self.predeclared_parameter(&declarations, params.len())?;
+                if self.contains_name(&params, name, LookupClass::TypeParameter)? {
+                    return Err(self.error("duplicate type parameter"));
+                }
+                self.expect(":")?;
+                if !self.eat("usize") {
+                    return Err(self.unsupported(
+                        "const generic parameters other than `usize` are unsupported",
+                    ));
+                }
+                if self.is("=") {
+                    return Err(self.unsupported("const generic defaults are unsupported"));
+                }
+                self.reserve_parser_items(&mut params, 1)?;
+                params.push(name);
+                self.const_params.push(name);
+                if !self.eat(",") || self.token().text.starts_with('>') {
+                    break;
+                }
+                continue;
             }
             if self.token().is_lifetime() {
                 if !params.is_empty() {
@@ -9406,7 +9495,12 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
             if at_parameter {
                 at_parameter = false;
-                if token.is_ident() && !token.matches("const") {
+                if token.matches("const") {
+                    scan.bump();
+                    at_parameter = true;
+                    continue;
+                }
+                if token.is_ident() {
                     if declarations.len() >= 32 {
                         return Err(self.limit("generic parameter resource limit 32"));
                     }
@@ -9677,6 +9771,67 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         Ok(number)
     }
+    /// A const generic argument: an integer literal, a `{ expr }` block, or
+    /// a constant item name, evaluated now; `{ N }` forwards a parameter.
+    fn const_argument(&mut self) -> Result<Option<Type>, ParseError> {
+        let token = self.token();
+        if token.string {
+            return Ok(None);
+        }
+        let starts_digit = token.text.starts_with(|c: char| c.is_ascii_digit());
+        let block = token.matches("{");
+        if !starts_digit && !block {
+            return Ok(None);
+        }
+        let Some(start) = self.cursor.index() else {
+            return Ok(None);
+        };
+        let tokens: &[Token] = self.input;
+        if block {
+            if tokens.get(start + 2).is_some_and(|close| close.text == "}") {
+                let checkpoint = self.cursor.checkpoint();
+                self.cursor.bump();
+                if let Some(name) = self.current_const_parameter()? {
+                    self.cursor.bump();
+                    self.expect("}")?;
+                    return Ok(Some(Type::Param(name)));
+                }
+                assert!(
+                    self.cursor.restore(checkpoint),
+                    "parser checkpoint belongs to this input"
+                );
+            }
+        }
+        // Evaluate up to the matching `>`/`,` at depth zero.
+        let mut depth = 0i32;
+        let mut end = None;
+        for (index, tok) in tokens.iter().enumerate().skip(start) {
+            if tok.kind == ParserTokenKind::Eof {
+                break;
+            }
+            match tok.text.as_str() {
+                "(" | "[" | "{" => depth += 1,
+                ")" | "]" | "}" => depth -= 1,
+                "," | ">" | ">>" if depth == 0 => {
+                    end = Some(index);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let Some(end) = end else {
+            return Err(self.error("unterminated const generic argument"));
+        };
+        let table = array_len::scan(tokens);
+        let value = array_len::evaluate(tokens, &table, start..end)
+            .ok_or_else(|| self.unsupported("const generic argument expression is unsupported"))?;
+        let value =
+            u64::try_from(value).map_err(|_| self.limit("const generic argument exceeds usize"))?;
+        while self.cursor.index().is_some_and(|at| at < end) {
+            self.cursor.bump();
+        }
+        Ok(Some(Type::ConstArg(value)))
+    }
     fn unsupported_array_expression(&mut self, context: &str) -> Result<usize, ParseError> {
         if let Some(start) = self.cursor.index() {
             let tokens: &[Token] = self.input;
@@ -9861,6 +10016,15 @@ impl<'input, 'names> Parser<'input, 'names> {
                         return Err(self.error("duplicate native prelude module"));
                     }
                     parsed.program.prelude_module = Some(child);
+                }
+                if module == self.modules.source_root().map_err(module_parse_error)?
+                    && self
+                        .names
+                        .spelling(name)
+                        .map_err(native_adapter::name_error)?
+                        .starts_with(super::source::EXTERN_PREFIX)
+                {
+                    parsed.program.extern_mounts.push(child);
                 }
                 if let Some(prelude) = parsed.program.prelude_module {
                     let spelling = self
@@ -10101,10 +10265,8 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else if self.eat("enum") {
             let name = self.ident()?;
             let type_params = self.type_parameters()?;
-            if !self.pending_bounds.is_empty() {
-                return Err(self.unsupported("bounds on nominal declarations are unsupported"));
-            }
             self.type_params = type_params.clone();
+            let bounds = self.nominal_bounds()?;
             self.expect("{")?;
             let mut variants: Vec<VariantDecl> = Vec::new();
             while !self.is("}") {
@@ -10195,6 +10357,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             parsed.program.enums.push(EnumDecl {
                 module,
                 type_params,
+                bounds,
                 name: module_path
                     .push(self.names, name)
                     .map_err(native_adapter::name_error)?,
@@ -10205,10 +10368,8 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else if self.eat("struct") {
             let name = self.ident()?;
             let type_params = self.type_parameters()?;
-            if !self.pending_bounds.is_empty() {
-                return Err(self.unsupported("bounds on nominal declarations are unsupported"));
-            }
             self.type_params = type_params.clone();
+            let mut bounds = self.nominal_bounds()?;
             let mut fields = Vec::new();
             let shape = if self.eat(";") {
                 StructShape::Unit
@@ -10229,6 +10390,8 @@ impl<'input, 'names> Parser<'input, 'names> {
                     }
                 }
                 self.expect(")")?;
+                // Tuple structs put `where` after the field list.
+                bounds.extend(self.nominal_bounds()?);
                 self.expect(";")?;
                 StructShape::Tuple
             } else {
@@ -10256,6 +10419,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 shape,
                 module,
                 type_params,
+                bounds,
                 name: module_path
                     .push(self.names, name)
                     .map_err(native_adapter::name_error)?,
@@ -10572,6 +10736,25 @@ impl<'input, 'names> Parser<'input, 'names> {
     /// One `T: Trait + Other` where predicate whose subject is a visible type
     /// parameter. Bounds join the same predicate rows as inline bounds, so
     /// the trait world sees one authoritative environment for both spellings.
+    /// Inline parameter bounds plus an optional `where` clause on a struct
+    /// or enum declaration.
+    fn nominal_bounds(&mut self) -> Result<Vec<TypeBound>, ParseError> {
+        let mut bounds = std::mem::take(&mut self.pending_bounds);
+        if self.eat("where") {
+            loop {
+                if self.token().is_lifetime() {
+                    return Err(self.unsupported(
+                        "lifetime where predicates on nominal declarations are unsupported",
+                    ));
+                }
+                self.where_type_predicate(&mut bounds)?;
+                if !self.eat(",") || self.is("{") || self.is(";") {
+                    break;
+                }
+            }
+        }
+        Ok(bounds)
+    }
     fn where_type_predicate(&mut self, bounds: &mut Vec<TypeBound>) -> Result<(), ParseError> {
         if self.is("for") {
             return Err(self.unsupported("higher-ranked where predicates are unsupported"));
@@ -10642,16 +10825,12 @@ impl<'input, 'names> Parser<'input, 'names> {
             });
         }
         let result = (|| {
-            let (body, lexical_scope) = if let Some(proof) = self.item_expansion {
-                if associated
-                    || !inherited.is_empty()
-                    || !head.type_params.is_empty()
-                    || !head.regions.params.is_empty()
-                {
-                    return Err(
-                        self.unsupported("item macro products must be nongeneric free functions")
-                    );
-                }
+            let simple = !associated
+                && inherited.is_empty()
+                && head.type_params.is_empty()
+                && head.regions.params.is_empty();
+            let generated = self.item_expansion.filter(|_| simple);
+            let (body, lexical_scope) = if let Some(proof) = generated {
                 let scopes = self.lexical.scopes.as_mut().ok_or_else(|| {
                     native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
                 })?;
@@ -10714,13 +10893,30 @@ impl<'input, 'names> Parser<'input, 'names> {
         let mut seen_type = false;
         loop {
             if self.eat("const") {
-                self.ident()?;
+                seen_type = true;
+                if params.len() >= 32 {
+                    return Err(self.limit("generic parameter resource limit32"));
+                }
+                let name = self.predeclared_parameter(&declarations, params.len())?;
+                if self.contains_name(&params, name, LookupClass::TypeParameter)? {
+                    return Err(self.error("duplicate type parameter"));
+                }
                 self.expect(":")?;
-                self.ty()?;
-                if !self.is(">") && !self.is(",") && !self.is("=") {
+                if !self.eat("usize") {
+                    return Err(self.unsupported(
+                        "const generic parameters other than `usize` are unsupported",
+                    ));
+                }
+                if !self.is(">") && !self.is(",") {
                     return Err(self.error("expected const generic parameter delimiter"));
                 }
-                return Err(self.unsupported("const generic parameters are unsupported"));
+                self.reserve_parser_items(&mut params, 1)?;
+                params.push(name);
+                self.const_params.push(name);
+                if !self.eat(",") || self.token().text.starts_with('>') {
+                    break;
+                }
+                continue;
             }
             if self.token().is_lifetime() {
                 if seen_type {
@@ -11336,6 +11532,42 @@ impl<'input, 'names> Parser<'input, 'names> {
         })
     }
     fn pattern_inner(&mut self) -> Result<Pattern, ParseError> {
+        let pattern = self.pattern_atom()?;
+        if !self.is("@") {
+            return Ok(pattern);
+        }
+        let Pattern::Binding {
+            name,
+            mutable,
+            by_ref,
+        } = pattern
+        else {
+            return Err(self.error("left-hand side of `@` must be a binding"));
+        };
+        if self.cursor.peek(1).is_some_and(|token| token.matches("..")) {
+            return Err(self.unsupported("@ rest (subslice) bindings are unsupported"));
+        }
+        self.cursor.bump();
+        let inner = self.pattern_atom()?;
+        let inner = if self.is("|") {
+            // `x @ (A | B)` needs parentheses in Rust; `x @ A | B` is an
+            // alternative of the whole pattern, handled by the caller.
+            inner
+        } else {
+            inner
+        };
+        let pattern = self
+            .names
+            .try_parser_box(inner)
+            .map_err(native_adapter::name_error)?;
+        Ok(Pattern::At {
+            name,
+            mutable,
+            by_ref,
+            pattern,
+        })
+    }
+    fn pattern_atom(&mut self) -> Result<Pattern, ParseError> {
         if self.is("..=") || self.is("..") || self.range_bound_start() {
             return self.scalar_pattern();
         }
@@ -11794,6 +12026,11 @@ impl<'input, 'names> Parser<'input, 'names> {
                     continue;
                 }
                 let condition = self.condition_with(0, ConditionPurpose::Conditional)?;
+                if self.at_chain_let() {
+                    let first = let_chains::ChainCond::Bool(condition);
+                    statements.push(self.while_chain_statement(label, first)?);
+                    continue;
+                }
                 let body = self.block()?;
                 statements.push(Stmt::While {
                     label,
@@ -11929,6 +12166,12 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     #[inline(never)]
     fn ordinary_named_expr(&mut self, println_syntax: bool) -> Result<Expr, ParseError> {
+        if !self.const_params.is_empty() && !self.cursor.peek(1).is_some_and(|t| t.matches("::")) {
+            if let Some(name) = self.current_const_parameter()? {
+                self.cursor.bump();
+                return Ok(Expr::ConstParam(name));
+            }
+        }
         let generic_path = self.generic_path(false)?;
         let name = generic_path
             .checked_path(self.names)
@@ -12351,6 +12594,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             return self.if_let_prefix(statement);
         }
         let condition = Box::new(self.condition_with(0, ConditionPurpose::Conditional)?);
+        if self.at_chain_let() {
+            return self.if_chain(let_chains::ChainCond::Bool(*condition), statement);
+        }
         let then_block = self.block()?;
         let else_block = if self.eat("else") {
             if self.is("if") {
@@ -12388,8 +12634,19 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.expect("=")?;
         // Do not consume a let-chain into the scrutinee or publish its bindings.
         let scrutinee = self.condition_with(3, ConditionPurpose::Conditional)?;
-        if self.is("&&") || self.is("||") {
-            return Err(self.unsupported("if let chains are unsupported"));
+        if self.is("&&") {
+            let first = let_chains::ChainCond::Let(
+                self.names
+                    .try_parser_box(pattern)
+                    .map_err(native_adapter::name_error)?,
+                self.names
+                    .try_parser_box(scrutinee)
+                    .map_err(native_adapter::name_error)?,
+            );
+            return self.if_chain(first, statement);
+        }
+        if self.is("||") {
+            return Err(self.error("`||` operators are not supported in let chain conditions"));
         }
         let pattern = self
             .names
@@ -12609,8 +12866,19 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         self.expect("=")?;
         let scrutinee = self.condition_with(3, ConditionPurpose::Conditional)?;
-        if self.is("&&") || self.is("||") {
-            return Err(self.unsupported("while let chains are unsupported"));
+        if self.is("&&") {
+            let first = let_chains::ChainCond::Let(
+                self.names
+                    .try_parser_box(pattern)
+                    .map_err(native_adapter::name_error)?,
+                self.names
+                    .try_parser_box(scrutinee)
+                    .map_err(native_adapter::name_error)?,
+            );
+            return self.while_chain_statement(label, first);
+        }
+        if self.is("||") {
+            return Err(self.error("`||` operators are not supported in let chain conditions"));
         }
         let pattern = self
             .names
@@ -12834,7 +13102,8 @@ impl<'input, 'names> Parser<'input, 'names> {
                     .peek(1)
                     .is_some_and(|token| token.matches("let"))
             {
-                return Err(self.unsupported("if let chains are unsupported"));
+                // A let-chain operand: the chain parser takes over.
+                break;
             }
             if matches!(
                 op,
@@ -14425,7 +14694,9 @@ fn walk_depth_inspecting(
                             push(DepthNode::Pattern(pattern))?;
                         }
                     }
-                    Pattern::Ref { pattern, .. } => push(DepthNode::Pattern(pattern))?,
+                    Pattern::Ref { pattern, .. } | Pattern::At { pattern, .. } => {
+                        push(DepthNode::Pattern(pattern))?
+                    }
                     _ => {}
                 }
             }
@@ -14788,6 +15059,11 @@ fn exact_source_type(
             exact_source_projection(names, a, b, budget, depth + 1)?
         }
         (Type::Param(a), Type::Param(b)) => exact_source_ident(names, *a, *b)?,
+        (Type::ConstArg(a), Type::ConstArg(b)) => a == b,
+        (Type::ParamArray(a, an), Type::ParamArray(b, bn)) => {
+            exact_source_ident(names, *an, *bn)?
+                && exact_source_type(names, a, b, budget, depth + 1)?
+        }
         (Type::Named(a), Type::Named(b)) => exact_source_path(names, a, b, budget)?,
         (Type::Apply(a), Type::Apply(b)) => {
             exact_source_generic_path(names, a, b, budget, depth + 1)?
@@ -15023,7 +15299,7 @@ struct FrozenAssociatedBounds {
     source_index: Option<usize>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum GenericBindingKey {
+pub(crate) enum GenericBindingKey {
     Param(NameKey),
     SelfType,
 }
@@ -15066,7 +15342,8 @@ impl DeclRegistry {
                 .and_then(|item| item.default.as_ref()),
         }
     }
-    /// Size of one callable's own source input (parameters plus statements).
+    /// Size of one source callable's own input (parameters plus top-level
+    /// body statements), for scaling that callable's per-task limits.
     pub fn source_callable_input_size(&self, decl: ir::DeclId) -> usize {
         self.source_callable(decl).map_or(0, |function| {
             function
@@ -15528,7 +15805,7 @@ impl DeclRegistry {
         }
         Ok(())
     }
-    fn parameter_key(&self, ident: AstIdent) -> Result<GenericBindingKey, String> {
+    pub(crate) fn parameter_key(&self, ident: AstIdent) -> Result<GenericBindingKey, String> {
         Ok(GenericBindingKey::Param(
             self.names
                 .key(ident, LookupClass::TypeParameter)
@@ -17551,6 +17828,7 @@ impl PlanCtx {
     pub fn callable_count(&self) -> usize {
         self.registry.function_ids.len()
     }
+    /// Size of one source callable's own input, for per-task limit scaling.
     pub fn source_callable_input_size(&self, decl: ir::DeclId) -> usize {
         self.registry.source_callable_input_size(decl)
     }
@@ -19595,6 +19873,14 @@ fn collect_source_params(
             for f in fields {
                 collect_source_params(names, f, used, budget, depth + 1)?;
             }
+        }
+        Type::ParamArray(t, n) => {
+            used.insert(
+                names
+                    .key(*n, LookupClass::TypeParameter)
+                    .map_err(native_adapter::name_diagnostic)?,
+            );
+            collect_source_params(names, t, used, budget, depth + 1)?
         }
         Type::Array(t, _)
         | Type::Slice(t)

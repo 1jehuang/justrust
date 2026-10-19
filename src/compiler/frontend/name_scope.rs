@@ -161,6 +161,14 @@ fn validate_type_names(ty: &Type, names: &impl NameAccess) -> Result<(), String>
                     }
                 }
             }
+            Type::ParamArray(element, name) => {
+                names
+                    .key(*name, LookupClass::TypeParameter)
+                    .map_err(native_adapter::name_diagnostic)?;
+                work(names, 1)?;
+                pending.push(element.as_ref()).map_err(transport)?;
+            }
+            Type::ConstArg(_) => {}
             Type::Array(element, _)
             | Type::Slice(element)
             | Type::RawPtr {
@@ -283,6 +291,14 @@ impl Type {
                 },
                 (Type::Param(a), Type::Param(b)) => {
                     equal &= ident_eq(names, *a, *b, LookupClass::TypeParameter)?
+                }
+                (Type::ConstArg(a), Type::ConstArg(b)) => equal &= a == b,
+                (Type::ParamArray(a, an), Type::ParamArray(b, bn)) => {
+                    equal &= ident_eq(names, *an, *bn, LookupClass::TypeParameter)?;
+                    work(names, 1)?;
+                    pending.push((a.as_ref(), b.as_ref())).map_err(|e| {
+                        super::super::source::SourceError::from_token(e).to_string()
+                    })?;
                 }
                 (Type::Named(a), Type::Named(b)) => {
                     equal &=
