@@ -1,5 +1,35 @@
 # Findings: where agent build time goes
 
+## 2026-10-19: keep nonowning cleanup queries structural
+
+- Adding real source Allocation Drop exposed the adjacent program-size work
+  boundary. Task-local diagnosis showed successful ownership completion at
+  31,957,893 work, then scalar carrier classification exhausted the unchanged
+  32,000,000 task limit. Temporary instrumentation was removed.
+- Already checked scalar/reference/raw-pointer outer types cannot own Drop.
+  Cleanup lowering, instance demand and ownership now avoid redundant canonical
+  descriptor walks for those forms. Paid scalar/raw-pointer carrier absence
+  avoids allocating an associated-type traversal memo. Nominal, aggregate and
+  reference carrier proofs retain their ordinary authority paths. A regression
+  compares canonical scalar carrier results, exhausts a one-unit budget, rejects
+  a zero-unit budget and preserves nested-reference requirements.
+- All seven graph gates pass with unchanged 1165 compiling / 1166 failing and
+  unchanged work/byte ceilings (`20261018-201418155-2239079`). The new regression
+  passes (`20261018-201448785-2264093`), all 1367 library tests pass
+  (`20261018-201603411-2311262`), 29 heap/authority/prelude tests pass
+  (`20261018-201458441-2268940`), and strict all-target lint passes
+  (`20261018-201621059-2324201`). Mandatory local stock oracle validation passes
+  all 21 tests, including the frozen 56-source Drop corpus and 20 heap tests
+  (`20261018-201511723-2274044`). Local is required because hosted lacks stock
+  rustc. Final origin-composed check, all 36 focused tests including seven graph
+  gates, and strict lint pass (`20261018-201720241-2363722`,
+  `20261018-201726511-2369245`, `20261018-201744592-2361722`). Receipts:
+  `data/runs/xps14/2026-10-19-native-heap-composition.jsonl`.
+- Budget telemetry preserves the external charging callsite across the engine
+  callback, tested with graph workers 1 and 8. Size-gate failure diagnostics also
+  report the exact task's graph key. No resource limits or ratchets were loosened,
+  and these work-boundary results are not a compile-time speed claim.
+
 ## 2026-10-19: source Allocation Drop, not manual-only ownership
 
 - Ordinary Rust `impl Drop for Allocation` calls a private Rust deallocation
