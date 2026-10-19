@@ -7941,3 +7941,31 @@ These four slim summaries are in
 correctness/recovery change, not a measured build-speed claim. Production
 installation and a single frozen authenticated hosted canary are coordinated
 with the root agent after the fleet is paused and the agent is idle.
+
+Deployment acceptance (2026-10-19, UTC): root approved stable installation after
+an authenticated process audit showed no hosted Cargo/rustc jobs. Commit
+`376ffaea2` was pushed to `stable`, then `cargo install --path . --locked`
+completed from this checkout at 21:01:11. Installed `justrust 0.1.0-alpha.18`
+SHA-256:
+`1c02f47aeee0759678a58f9b14f1f1cb9ac752163c25206df487b661f86deb74`.
+At 21:01:20, the existing graceful version-identity upgrade logged old daemon
+3474503's `shutdown requested` and new daemon 473981's startup. It connected to
+the current authenticated allocation, `35.89.137.204` (host private address
+172.31.32.241), at 21:01:23. No forced kill, source-failure reset command, lease
+change or data/cache deletion was used. The earlier incident handoff's public
+address was stale, so all operations used the authenticated client route.
+
+The root coordinator authorized raccoon's single check of its frozen owned
+`pattern-readyiso` workspace. Run **`20261019-140407801-491668`** exited **0**,
+and `justrust show` explicitly reports **`where remote on hosted`**, with zero
+compiled units and two fresh units (0.04 s remote Cargo wall time). It did not
+fall back locally. The root's authenticated disk measurement at 21:04:41 found
+**24,618,397,696 bytes available**. The canary's slim, privacy-redacted summary
+is appended to the same scoped evidence file, now containing five records.
+
+This live canary verifies installed stable deployment and the actual hosted
+route on an unchanged owned workspace. A graceful upgrade opens a fresh agent
+connection, so it does **not** establish that the old live connection replayed
+its outstanding failed writes. That exact, same-agent ENOSPC recovery and
+fail-closed behavior is established by the regressions above. No additional
+build or daemon restart was launched for this acceptance record.
