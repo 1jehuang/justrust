@@ -20,6 +20,12 @@ cfg.rs, ownership.rs, borrow.rs, backend.rs), so:
     `--autostash` if needed), re-run the relevant tests, then
     `git push origin HEAD:main`.
   - Never reset, stash-drop or checkout over files you did not change.
+  - Forbidden in the shared checkout, because they destroy other agents'
+    uncommitted work: `git checkout -- .`, `git restore .`, `git reset --hard`,
+    `git reset --keep`, `git clean`, `git stash` (any form) and branch switches.
+    To discard only your own edits: `git restore <your exact paths>`. To move
+    your commit off local main: `git push origin HEAD:refs/heads/wip/<label>`,
+    then `git reset --soft origin/main` and `git restore --staged <your paths>`.
 Resolve conflicts by preserving other agents' work. Never force-push. Never rewrite others' commits.
 Use the user's git identity (already configured). Push every working increment.
 
