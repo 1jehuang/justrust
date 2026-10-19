@@ -464,7 +464,7 @@ pub(super) fn inventory(
         b.check_depth(d)?;
         b.charge_work(1)?;
         match e {
-            Expr::Format { arguments, .. } => {
+            Expr::NativeSyscall(arguments) | Expr::Format { arguments, .. } => {
                 for argument in arguments {
                     expr(argument, ds, b, d + 1)?;
                 }

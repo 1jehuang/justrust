@@ -1,5 +1,6 @@
 //! Public literal-output source, retained-plan, IR and CFG authority.
-//! Structural checks do not claim runtime parity or general formatting support.
+//! Literal-output structural authority remains distinct from scalar Format.
+//! Scalar formatting promotion is checked against stock through the public CLI.
 use justrust_engine::compiler::{cfg, frontend, ir, ownership};
 use std::sync::Arc;
 
@@ -289,18 +290,138 @@ fn checked_body_requires_real_matching_callable_and_world_authority() {
 }
 
 #[test]
-fn formatting_and_nonliteral_inputs_do_not_gain_output_capability() {
+fn malformed_formats_and_nonliteral_inputs_do_not_gain_output_capability() {
     for name in ["print", "eprint", "eprintln"] {
-        for arguments in [r#""{}",1i32"#, r#""{value}""#, r#""{:?}""#, "1i32", "value"] {
+        for (arguments, boundary) in [
+            (
+                r#""{value}""#,
+                "only bare {} formatting placeholders are supported",
+            ),
+            (
+                r#""{:?}""#,
+                "only bare {} formatting placeholders are supported",
+            ),
+            (r#""{""#, "unmatched opening brace in format string"),
+            (r#""}""#, "unmatched closing brace in format string"),
+            ("1i32", "nonliteral arguments are unsupported"),
+            ("value", "nonliteral arguments are unsupported"),
+        ] {
             let source = format!("fn main(){{{name}!({arguments})}}");
             let error = frontend::parse(&source).unwrap_err();
-            assert!(
-                error.to_ascii_lowercase().contains("unsupported"),
-                "{source}: {error}"
-            );
+            assert!(error.contains(boundary), "{source}: {error}");
         }
     }
     for name in ["print", "eprint"] {
         assert!(frontend::parse(&format!("fn main(){{{name}!()}}")).is_err());
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn scalar_format_is_distinct_from_literal_output_and_matches_stock() {
+    use std::{fs, path::PathBuf, process::Command};
+
+    struct Scratch(PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let scratch = Scratch(
+        std::env::var_os("JCODE_SCRATCH_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join(format!("jr-output-authority-{}", std::process::id())),
+    );
+    fs::create_dir(&scratch.0).expect("exclusive output-authority scratch");
+
+    // These are the exact formerly unsupported scalar source bytes, not
+    // replacements that avoid formatting. Every other original negative
+    // remains in malformed_formats_and_nonliteral_inputs_do_not_gain_output_capability.
+    for (name, stream, newline, stdout, stderr) in [
+        ("print", ir::OutputStream::Stdout, false, "1", ""),
+        ("eprint", ir::OutputStream::Stderr, false, "", "1"),
+        ("eprintln", ir::OutputStream::Stderr, true, "", "1\n"),
+    ] {
+        let source = format!("fn main(){{{name}!(\"{{}}\",1i32)}}");
+        let path = scratch.0.join("main.rs");
+        fs::write(&path, &source).unwrap();
+        let stock_image = scratch.0.join("stock");
+        let stock = Command::new("rustc")
+            .env_remove("RUSTC_BOOTSTRAP")
+            .args(["--edition=2024", "-Cpanic=abort", "--color=never"])
+            .arg(&path)
+            .arg("-o")
+            .arg(&stock_image)
+            .output()
+            .expect("stock rustc required for this local oracle test");
+        assert!(stock.status.success(), "{source}: {stock:?}");
+        assert!(stock.stderr.is_empty(), "{source}: {stock:?}");
+        let expected = Command::new(&stock_image).output().unwrap();
+        assert!(expected.status.success(), "{source}: {expected:?}");
+        assert_eq!(expected.stdout, stdout.as_bytes(), "{source}");
+        assert_eq!(expected.stderr, stderr.as_bytes(), "{source}");
+
+        let (program, plan) = plan(&source);
+        let id = declaration(&program, &plan, "main");
+        let facts = plan.callable_facts(id).unwrap();
+        let checked =
+            frontend::type_callable_with_plan(&program, id, &plan, facts.budget()).unwrap();
+        checked
+            .validate_with_facts(ir::FactsCtx::Validated(&facts))
+            .unwrap();
+        assert!(outputs(&checked).is_empty(), "Format is not literal Output");
+        let formats: Vec<_> = checked
+            .exprs
+            .iter()
+            .filter_map(|expr| {
+                let ir::ExprKind::Format {
+                    pieces,
+                    arguments,
+                    stream,
+                    newline,
+                } = &expr.kind
+                else {
+                    return None;
+                };
+                assert_eq!(expr.ty, ir::Ty::Unit);
+                assert_eq!(expr.completion, ir::Completion::Returns);
+                Some((pieces, arguments, *stream, *newline))
+            })
+            .collect();
+        assert_eq!(formats.len(), 1, "{source}");
+        assert_eq!(formats[0].0.as_slice(), ["", ""]);
+        assert_eq!(formats[0].1.len(), 1);
+        assert_eq!(formats[0].2, stream);
+        assert_eq!(formats[0].3, newline);
+
+        for workers in [1, 8] {
+            let image = scratch.0.join(format!("native-{name}-{workers}"));
+            let check = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+                .arg(&path)
+                .args(["--check", "--workers", &workers.to_string()])
+                .output()
+                .unwrap();
+            assert!(
+                check.status.success(),
+                "{source} workers={workers}: {check:?}"
+            );
+            assert!(!image.exists(), "CHECK must not publish an image");
+            let build = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+                .arg(&path)
+                .args(["--workers", &workers.to_string()])
+                .arg("-o")
+                .arg(&image)
+                .output()
+                .unwrap();
+            assert!(
+                build.status.success(),
+                "{source} workers={workers}: {build:?}"
+            );
+            let actual = Command::new(&image).output().unwrap();
+            assert_eq!(actual.status.code(), expected.status.code(), "{source}");
+            assert_eq!(actual.stdout, expected.stdout, "{source}");
+            assert_eq!(actual.stderr, expected.stderr, "{source}");
+        }
     }
 }

@@ -36,7 +36,7 @@ mod name_validation;
 mod pattern_usefulness;
 mod program_symbols;
 mod token_cursor;
-use char_literal::parse_char_literal;
+use char_literal::{parse_byte_literal, parse_char_literal};
 mod trait_selection;
 pub use program_symbols::ProgramSymbols;
 mod persistent_path;
@@ -1771,8 +1771,13 @@ impl SourceInventory {
                 budget,
                 depth + 1,
             )?,
-            Expr::Array(fields) | Expr::Tuple(fields) | Expr::TupleStruct { fields, .. } => {
-                let tag = if matches!(expr, Expr::TupleStruct { .. }) {
+            Expr::NativeSyscall(fields)
+            | Expr::Array(fields)
+            | Expr::Tuple(fields)
+            | Expr::TupleStruct { fields, .. } => {
+                let tag = if matches!(expr, Expr::NativeSyscall(_)) {
+                    23
+                } else if matches!(expr, Expr::TupleStruct { .. }) {
                     14
                 } else {
                     12
@@ -5403,6 +5408,8 @@ fn validate_source_site(
 
 #[derive(Clone, Debug)]
 pub enum Expr {
+    /// Bootstrap-only Linux x86-64 ABI primitive, never an allocator policy.
+    NativeSyscall(Vec<Expr>),
     UnexpandedMacro(Arc<UnexpandedMacroSyntax>),
     TraitCall {
         owner: Type,
@@ -5606,6 +5613,7 @@ enum ParserTokenKind {
     Ident,
     Number,
     Char,
+    Byte,
     String,
     Punct,
     Lifetime,
@@ -6680,6 +6688,28 @@ impl<'input, 'names> Parser<'input, 'names> {
             let path = self.path()?;
             self.expect("!")?;
             return Ok(Expr::UnexpandedMacro(self.inactive_invocation(path, span)?));
+        }
+        if self.builtin_macro_ahead("__justrust_linux_syscall6")? {
+            self.ident()?;
+            self.expect("!")?;
+            self.expect("(")?;
+            let mut arguments = Vec::new();
+            for index in 0..7 {
+                if index != 0 {
+                    self.expect(",")?;
+                }
+                let argument = self.expr(0)?;
+                self.names
+                    .retain_parser_text(std::mem::size_of::<Expr>())
+                    .map_err(native_adapter::name_error)?;
+                arguments.try_reserve_exact(1).map_err(|_| {
+                    native_adapter::transport_error(self.names.budget().poison_allocation().into())
+                })?;
+                arguments.push(argument);
+            }
+            self.eat(",");
+            self.expect(")")?;
+            return Ok(Expr::NativeSyscall(arguments));
         }
         for spelling in ["print", "eprint", "eprintln"] {
             if self.builtin_macro_ahead(spelling)? {
@@ -10097,6 +10127,7 @@ impl<'input, 'names> Parser<'input, 'names> {
     fn range_bound_start(&self) -> bool {
         !self.token().string
             && (self.token().is_char()
+                || self.token().is_byte()
                 || self.is("-")
                 || self.token().text.starts_with(|c: char| c.is_ascii_digit())
                 || self.int_limit_start())
@@ -10111,8 +10142,30 @@ impl<'input, 'names> Parser<'input, 'names> {
                 .peek(2)
                 .is_some_and(|t| t.matches("MAX") || t.matches("MIN"))
     }
-    /// One literal range or scalar pattern endpoint: char, or optionally negated integer.
+    /// Bytes reuse the rigid u8 integer path, including inference and patterns.
+    fn byte_integer_literal(&mut self) -> Result<IntegerLiteral, ParseError> {
+        self.names
+            .budget()
+            .charge(
+                super::expansion_budget::Counter::Work,
+                self.token().text.len() as u64,
+            )
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        let value = parse_byte_literal(self.token().text).map_err(|e| self.error(e))?;
+        self.cursor.bump();
+        Ok(IntegerLiteral {
+            magnitude: u128::from(value),
+            suffix: Some(ir::IntTy::U8),
+        })
+    }
+    /// One literal range or scalar pattern endpoint: char, byte, or optionally negated integer.
     fn range_bound(&mut self) -> Result<RangeBound, ParseError> {
+        if self.token().is_byte() {
+            return Ok(RangeBound::Int {
+                literal: self.byte_integer_literal()?,
+                negative: false,
+            });
+        }
         if self.token().is_char() {
             self.names
                 .budget()
@@ -11071,6 +11124,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             let text = self.string_literal_value(self.token().text)?;
             self.cursor.bump();
             Expr::Str(text)
+        } else if self.token().is_byte() {
+            Expr::Integer(self.byte_integer_literal()?)
         } else if self.token().is_char() {
             self.names
                 .budget()
@@ -13307,7 +13362,9 @@ fn walk_depth_inspecting(
                         push(DepthNode::Expr(&arm.body))?;
                     }
                 }
-                Expr::Tuple(fields) | Expr::TupleStruct { fields, .. } => {
+                Expr::NativeSyscall(fields)
+                | Expr::Tuple(fields)
+                | Expr::TupleStruct { fields, .. } => {
                     for field in fields {
                         push(DepthNode::Expr(field))?;
                     }
@@ -15843,6 +15900,7 @@ impl PlanCtx {
                 self.callable_provider(declaration)?,
                 CallableProvider::Source { .. }
             ) && !self.callable_env(declaration)?.is_generic()
+                && !self.is_prelude_decl(declaration)?
             {
                 roots.push(index);
             }

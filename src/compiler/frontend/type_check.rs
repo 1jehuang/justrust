@@ -1,6 +1,9 @@
 //! Source checking, local inference and checked body construction.
 use super::*;
 
+#[path = "local_literals.rs"]
+mod local_literals;
+
 /// Borrowed source bodies and the semantic unit value of an absent else.
 #[derive(Clone, Copy)]
 enum MatchBody<'a> {
@@ -969,6 +972,9 @@ impl<'s> Checker<'s> {
             .as_ref()
             .ok_or("inference requires planning context")?;
         let term = match expr {
+            Expr::NativeSyscall(_) => {
+                self.infer_node(InferKind::Rigid(ir::Ty::Int(ir::IntTy::Usize)))?
+            }
             Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
             Expr::Output(output) => {
                 validate_output_site(output, self.names()?)?;
@@ -3943,6 +3949,7 @@ impl<'a> Checker<'a> {
     }
     pub(super) fn scalar_hint(&self, e: &Expr) -> Result<Option<ir::Ty>, String> {
         Ok(match e {
+            Expr::NativeSyscall(_) => Some(ir::Ty::Int(ir::IntTy::Usize)),
             Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
             Expr::Output(output) => {
                 validate_output_site(output, self.names()?)?;
@@ -5251,6 +5258,7 @@ impl<'a> Checker<'a> {
         b: &Block,
         expectation: Expectation<'_>,
     ) -> Result<(ir::Block, Flow), String> {
+        let literal_hints = local_literals::hints(self, b, expectation.hard())?;
         let entered_reachable = self.reachable;
         let pending_start = self.pending_references.len();
         let temporaries_start = self.borrow_temporaries.len();
@@ -5300,7 +5308,7 @@ impl<'a> Checker<'a> {
                     value,
                 } => {
                     let annotation = if matches!(ty, Type::Infer) {
-                        None
+                        literal_hints.get(&(s as *const Stmt as usize)).cloned()
                     } else {
                         Some(checked_local_ty(ty, self.signatures)?)
                     };
@@ -8542,6 +8550,27 @@ impl<'a> Checker<'a> {
                     ir::ExprKind::Output(output.output.clone()),
                     Flow::value(ir::Ty::Unit),
                 )
+            }
+            Expr::NativeSyscall(arguments) => {
+                if self.unsafe_depth == 0 {
+                    return Err("E0133: native syscall requires unsafe block".into());
+                }
+                if arguments.len() != 7 {
+                    return Err("native syscall requires number and six usize arguments".into());
+                }
+                self.charge_node(7 * std::mem::size_of::<ir::ExprId>())?;
+                let ty = ir::Ty::Int(ir::IntTy::Usize);
+                let mut values = Vec::new();
+                let mut completes = true;
+                for argument in arguments {
+                    let id = self.expr_expected(argument, Some(&ty))?;
+                    if self.exprs[id.0].ty != ty {
+                        return Err("native syscall arguments must be usize".into());
+                    }
+                    completes &= self.flow(id).completes;
+                    values.push(id);
+                }
+                (ir::ExprKind::NativeSyscall(values), Flow { ty, completes })
             }
             Expr::Println(text) => (
                 ir::ExprKind::Println(text.clone()),

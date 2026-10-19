@@ -26,10 +26,12 @@ milestone, not full Rust support (see RUST-COMPATIBILITY.md).
 Landed since bf4ad37: char literal/range patterns (671f9090f), argument-position
 `impl Trait` (8347eaf25), rvalue method receivers (2dcaa3841), char casts.
 
-1/20 pass: `01_hello` now checks, builds and executes with exact stock stdout
-using native shared-str and scalar `{}` formatting. Other programs retain
-explicit rejection diagnostics until their remaining features land. This is
-not full formatting or full Rust support. See `FORMAT-SCALARS.md`.
+2/20 pass: `01_hello` and unchanged `03_collatz` check, build and execute with
+exact frozen stock stdout. Collatz combines native scalar formatting, range
+loops and scoped future-use numeric literal constraints (`LOCAL-LITERALS.md`).
+Other programs retain explicit rejection diagnostics until their remaining
+features land. This is not full formatting or full Rust support. See
+`FORMAT-SCALARS.md`.
 
 ## Ranked blockers (feature -> programs blocked)
 

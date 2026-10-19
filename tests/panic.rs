@@ -6,13 +6,18 @@
 //! Append receipt: panic-append/receipt.json. Both measured with /usr/bin/rustc
 //! 1.98.1 (48a229cea 2026-09-01), --edition=2024, panic=abort except two
 //! separately labeled stock unwind controls. Native expectations are contract
-//! assertions, NOT claims of native observations. Do not auto-freeze native failures.
+//! assertions, with promotions backed by exact stock/native runtime tests.
+//! Do not auto-freeze native failures.
 //! Exact original core16: stock Abort10/Live3/Invalid3; bounded native contract
-//! Abort7/Invalid3/earlier-boundary6. Formatting: 03/04/05/12, eprintln: 15/16.
+//! Abort9/Live1/Invalid3/earlier-boundary3. Named formatting: 03/04/12 remains
+//! unsupported. Scalar formatting promotes 05 after exact stock/native proof.
 //! Exact projected7: Live6 and one rigid-projection boundary. Separate historical controls6: Unsupported6.
 //! Append18: Abort10/Live6/Invalid2, all independently stock-measured first.
 //! Public source/IR mutation and SIGABRT blocked/ignored controls live elsewhere.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/native_prelude.rs"]
+mod native_prelude;
+
 use justrust_engine::compiler::{self, frontend, ir};
 use justrust_engine::{Key, Report};
 use std::fs::{self, OpenOptions};
@@ -105,7 +110,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_fingerprint: 1414309745764810560,
             source_sha256: r###"c3bd04b4e8319558d97ecb6cb55e1523587ef996db5143f29c0b7e01db9159fc"###,
             native: Native::Unsupported,
-            boundary: r###"println! formatting placeholders are unsupported"###,
+            boundary: r###"only bare {} formatting placeholders are supported"###,
             stock_compile_code: 0,
             stock_code: Some(0),
             stock_stdout: r###"42
@@ -125,7 +130,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_fingerprint: 2899173439825184039,
             source_sha256: r###"0057f5f2956c3aeb3b1f30bec6d316b0a11228bbf6a09299ae396d55f39c65c1"###,
             native: Native::Unsupported,
-            boundary: r###"println! formatting placeholders are unsupported"###,
+            boundary: r###"only bare {} formatting placeholders are supported"###,
             stock_compile_code: 0,
             stock_code: Some(-6),
             stock_stdout: r###""###,
@@ -147,8 +152,8 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_bytes: 98,
             source_fingerprint: 12840476451369224194,
             source_sha256: r###"32229db50972251c63a126c47f6ca67558defe79fd32da102ffd351c31965abe"###,
-            native: Native::Unsupported,
-            boundary: r###"println! formatting placeholders are unsupported"###,
+            native: Native::Live,
+            boundary: r###""###,
             stock_compile_code: 0,
             stock_code: Some(0),
             stock_stdout: r###"42
@@ -345,7 +350,7 @@ For more information about this error, try `rustc --explain E0308`.
             source_fingerprint: 13424131026726461316,
             source_sha256: r###"0e466991326ba820709d87c153af6f1d2741a01e774687fcd7440b7a26f691cf"###,
             native: Native::Unsupported,
-            boundary: r###"println! formatting placeholders are unsupported"###,
+            boundary: r###"only bare {} formatting placeholders are supported"###,
             stock_compile_code: 0,
             stock_code: Some(0),
             stock_stdout: r###"false true
@@ -1513,8 +1518,49 @@ fn frozen_panic_source_and_receipt_partitions() {
     assert_eq!(stock_core, [3, 10, 3]);
     assert_eq!(
         native,
-        [[0, 9, 3, 4], [6, 0, 0, 1], [0, 0, 0, 6], [6, 10, 2, 0]]
+        [[1, 9, 3, 3], [6, 0, 0, 1], [0, 0, 0, 6], [6, 10, 2, 0]]
     );
+}
+#[test]
+fn scalar_format_return_live_matches_stock_before_promotion() {
+    let case = cases()
+        .into_iter()
+        .find(|case| case.name == "05_return_live")
+        .unwrap();
+    let scratch = Scratch::new();
+    scratch.write("source.rs", case.source.as_bytes());
+    let source = scratch.path("source.rs");
+    let stock = scratch.path("stock");
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let built = capture(
+        Command::new(rustc)
+            .env_remove("RUSTC_BOOTSTRAP")
+            .args([
+                "--edition=2024",
+                "-Cpanic=abort",
+                "--crate-name=panic_oracle",
+            ])
+            .arg(&source)
+            .arg("-o")
+            .arg(&stock),
+        &scratch,
+        20,
+    );
+    ordinary_exit(&built, 0);
+    runtime(&case, &stock, &source, &scratch, true);
+    for workers in [1, 8] {
+        let native = scratch.path(&format!("native-{workers}"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+        no_compiler_tools(&mut command, &scratch);
+        command
+            .arg(&source)
+            .args(["--workers", &workers.to_string()])
+            .arg("-o")
+            .arg(&native);
+        let built = capture(&mut command, &scratch, 20);
+        ordinary_exit(&built, 0);
+        runtime(&case, &native, &source, &scratch, false);
+    }
 }
 fn stock_all() {
     static STOCK: std::sync::OnceLock<()> = std::sync::OnceLock::new();
@@ -1636,7 +1682,7 @@ fn evaluated_once(report: &Report, kind: u32, index: usize, case: &Case) {
     assert_eq!(nodes[0].1, 1, "{}: repeated {key:?}", case.name);
 }
 fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, check: bool) {
-    let program = frontend::parse(case.source).expect("positive frozen source parses");
+    let program = native_prelude::parse(case.source).expect("positive frozen source parses");
     frontend::check(&program).expect("all bodies checked independent of reachability");
     let plan = frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
     assert_eq!(compiled.source_bytes, case.source.len());
@@ -1651,7 +1697,7 @@ fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, chec
         evaluated_once(&compiled.report, 110, index, case);
         let universal = match plan.callable_provider(declaration).unwrap() {
             frontend::CallableProvider::Source { .. } => {
-                source_bodies += 1;
+                source_bodies += usize::from(!plan.is_prelude_decl(declaration).unwrap());
                 plan.callable_env(declaration).unwrap().is_generic()
             }
             frontend::CallableProvider::Recipe { .. } => true,
@@ -1762,7 +1808,7 @@ fn cli_all() {
         }
     }
     assert_eq!(cells, 188);
-    failures.check("runtime count", || assert_eq!(runtimes, 62));
+    failures.check("runtime count", || assert_eq!(runtimes, 64));
     failures.finish();
 }
 fn graph_all() {
@@ -1822,7 +1868,7 @@ fn graph_all() {
         }
     }
     assert_eq!(cells, 188);
-    failures.check("graph runtime count", || assert_eq!(runtimes, 62));
+    failures.check("graph runtime count", || assert_eq!(runtimes, 64));
     failures.finish();
 }
 fn isolated(name: &str, marker: &str, run: fn()) {

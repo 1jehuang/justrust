@@ -2802,7 +2802,8 @@ impl Resolver<'_> {
                     self.expr(arg, module, locals)?;
                 }
             }
-            Expr::Array(elements)
+            Expr::NativeSyscall(elements)
+            | Expr::Array(elements)
             | Expr::Tuple(elements)
             | Expr::Format {
                 arguments: elements,

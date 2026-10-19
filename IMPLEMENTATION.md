@@ -103,6 +103,11 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       retain conservative coverage; cyclic metadata and resource failures fail
       closed. This is not general Rust pattern grammar or full compatibility.
 - [x] Fieldless nominal enums and scalar/enum match with exhaustive coverage.
+- [x] Scoped local numeric literal constraints from later scalar uses, returns,
+      assignments and monomorphic calls, before existing peer-aware fallback.
+      `LOCAL-LITERALS.md` records 28 stock-differential witnesses and unchanged
+      Collatz exact native check/build/run acceptance. General structured and
+      reference inference remain open, with no new graph kinds or ratchet changes.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
 - [x] Payload enums, typed downcasts, bounded selection proofs and native tagged values.
 - [x] Fixed arrays, repeat effects, literal indexing and private by-value array ABI.
@@ -261,6 +266,7 @@ missing-file changes invalidate only justified consumers without stale lookup.
 - [x] Native i128/u128 scalar arithmetic, numeric casts, transport and exact
       typed constants under INTEGER128.md (not platform ABI or full Rust).
 - [x] Bounded Unicode `char` literals, scalar transport, Copy/Clone/Sized and comparisons (CHARS.md). Character casts `char as int`/`u8 as char` are implemented (CHAR-CASTS.md).
+- [x] Exact ASCII byte literals and byte escapes with rigid `u8` typing, pattern/range and macro forwarding support (BYTE-LITERALS.md). Byte strings remain unsupported.
 - [x] Character literal patterns and integer/char range patterns with exact interval exhaustiveness (SCALAR-PATTERNS.md).
 - [x] Width-correct primitive integer `.leading_zeros()` and unchanged original
       core exponent-estimator module acceptance under LEADING-ZEROS.md. This is
@@ -562,6 +568,14 @@ host macro and compiles its generated target source.
 - [ ] Implement allocation/deallocation, startup/termination, panic abort/unwind,
       cleanup/personality support, TLS, threads, atomics/memory ordering, intrinsics,
       target features and inline/global assembly for the declared target contract.
+- [x] First Linux x86-64 heap foundation: exact unsafe raw syscall ABI primitive,
+      ordinary per-file Rust-source native_heap library with checked byte-address
+      arithmetic/null helpers, bounded mmap layout/error policy and private
+      non-Copy allocation ownership with consuming munmap. Real mapping-boundary
+      scalar access tests require native memory widths rather than qword local
+      carriers. See NATIVE-HEAP.md. This does not close allocation compatibility:
+      general layouts, pointer methods, realloc, automatic Drop, Box/Vec/String
+      and full alloc/core/std remain open.
 - [ ] Provide debug/source information and runtime failure/exit diagnostics.
       Expand architectures/OSes only with target-specific executable evidence.
 
