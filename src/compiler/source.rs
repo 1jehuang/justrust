@@ -1728,6 +1728,66 @@ mod tests {
     }
 
     #[test]
+    fn associated_doc_policy_precedes_child_io_and_keeps_memory_file_parity() {
+        for (root, expected) in [
+            (
+                "trait T{#[doc=]fn f();}mod child;fn main(){}",
+                SourceErrorKind::Syntax,
+            ),
+            (
+                "trait T{#[doc=42]fn f();}mod child;fn main(){}",
+                SourceErrorKind::Unsupported,
+            ),
+            (
+                "#[cfg(any())]trait T{#[doc=]fn f();}mod child;fn main(){}",
+                SourceErrorKind::Syntax,
+            ),
+            (
+                "#[cfg(any())]trait T{#[doc=\"\\q\"]fn f();}mod child;fn main(){}",
+                SourceErrorKind::Syntax,
+            ),
+        ] {
+            let mut reader = RecordingReader {
+                root: root.into(),
+                child: Some("pub fn child(){}".into()),
+                ..Default::default()
+            };
+            let file =
+                prepare_with_reader(Path::new("main.rs"), &SourceOptions::default(), &mut reader)
+                    .unwrap_err();
+            let memory = prepare_text("main.rs", root, &SourceOptions::default()).unwrap_err();
+            assert_eq!(file.kind, expected, "{root}: {file}");
+            assert_eq!(memory.kind, expected, "{root}: {memory}");
+            assert_eq!(file.primary, memory.primary);
+            assert!(
+                reader
+                    .calls
+                    .iter()
+                    .all(|(_, path)| path == Path::new("main.rs")),
+                "{:?}",
+                reader.calls
+            );
+        }
+        let root = "trait T{/// required\nfn f();}#[cfg(any())]mod missing;fn main(){}";
+        let mut reader = RecordingReader {
+            root: root.into(),
+            ..Default::default()
+        };
+        let file =
+            prepare_with_reader(Path::new("main.rs"), &SourceOptions::default(), &mut reader)
+                .unwrap();
+        let memory = prepare_text("main.rs", root, &SourceOptions::default()).unwrap();
+        assert_eq!(file.text, memory.text);
+        assert_eq!(file.files, 1);
+        assert!(
+            reader
+                .calls
+                .iter()
+                .all(|(_, path)| path == Path::new("main.rs"))
+        );
+        assert_eq!(file.attributes.len(), memory.attributes.len());
+    }
+    #[test]
     fn full_original_lexing_precedes_configuration_and_all_child_observations() {
         for root in [
             "#[cfg(any())] fn hidden(){let text=\"\\q\";} mod child; fn main(){}",

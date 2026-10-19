@@ -76,12 +76,14 @@ struct Attr {
     content: Range<usize>,
     inner: bool,
     doc: bool,
+    literal_doc_name: bool,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Owner {
     Crate,
     Module,
     Function,
+    AssociatedFunctionDocs,
     FreeItem,
     Unsupported,
 }
@@ -186,6 +188,7 @@ impl Filter<'_> {
                     content: t.range.clone(),
                     inner,
                     doc: true,
+                    literal_doc_name: true,
                 },
                 i + 1,
             )));
@@ -203,7 +206,7 @@ impl Filter<'_> {
             ));
         }
         let close = self.tokens[bracket].close.unwrap();
-        outer_shape(
+        let literal_doc_name = outer_shape(
             self.text,
             self.tokens[bracket].range.end..self.tokens[close].range.start,
         )?;
@@ -213,6 +216,7 @@ impl Filter<'_> {
                 content: self.tokens[bracket].range.end..self.tokens[close].range.start,
                 inner,
                 doc: false,
+                literal_doc_name,
             },
             close + 1,
         )))
@@ -377,6 +381,19 @@ impl Filter<'_> {
         owner: Owner,
         item: Option<Range<usize>>,
     ) -> Result<bool, AttributeError> {
+        // This owner extension is documentation-only. In particular do not let
+        // expand() activate the free-item cfg/cfg_attr/inline policy here.
+        if owner == Owner::AssociatedFunctionDocs {
+            for attr in attrs {
+                if !attr.literal_doc_name {
+                    return Err(error(
+                        AttributeErrorKind::Unsupported,
+                        attr.range.clone(),
+                        "only literal documentation on associated functions is supported",
+                    ));
+                }
+            }
+        }
         let record_start = self.records.len();
         self.work = self.work.saturating_add(attrs.len());
         if self.work > MAX_WORK {
@@ -663,6 +680,8 @@ impl Filter<'_> {
                             Owner::Module,
                             depth + 1,
                         )?;
+                    } else if matches!(kind, "impl" | "trait") {
+                        self.associated_function_docs(open + 1, close)?;
                     } else if kind != "macro_rules" {
                         self.reject_nested(open + 1, close)?;
                     }
@@ -724,6 +743,92 @@ impl Filter<'_> {
                     "attributes on fields, parameters, associated items, statements, or expressions are unsupported",
                 ));
             }
+        }
+        Ok(())
+    }
+
+    /// Walk only immediate members of one original balanced impl/trait group.
+    /// This recognizes documentation attachment envelopes, not Rust syntax or
+    /// callable authority. The ordinary parser still validates every owner and
+    /// unused body after masking. Never recurse into a member body or macro.
+    fn associated_function_docs(&mut self, start: usize, end: usize) -> Result<(), AttributeError> {
+        let mut i = start;
+        while i < end {
+            self.tick(self.tokens[i].range.clone(), 0)?;
+            if self.tokens[i].text(self.text) == ";" {
+                i += 1;
+                continue;
+            }
+            let mut attrs = Vec::new();
+            while i < end {
+                let Some((attr, next)) = self.attr(i, end)? else {
+                    break;
+                };
+                self.tick(attr.range.clone(), 0)?;
+                if attr.inner {
+                    return Err(error(
+                        AttributeErrorKind::Unsupported,
+                        attr.range,
+                        "inner documentation on associated items is unsupported",
+                    ));
+                }
+                attrs.push(attr);
+                i = next;
+            }
+            if i == end {
+                return Err(error(
+                    AttributeErrorKind::Syntax,
+                    attrs[0].range.clone(),
+                    "outer attribute has no associated function owner",
+                ));
+            }
+            let member = i;
+            let (kind, mut cursor) = self.item_kind(i, end);
+            if !attrs.is_empty() && kind != "fn" {
+                return Err(error(
+                    AttributeErrorKind::Unsupported,
+                    attrs[0].range.clone(),
+                    "documentation at this associated item position is unsupported",
+                ));
+            }
+            let mut body = None;
+            let mut stop = end;
+            while cursor < end {
+                self.tick(self.tokens[cursor].range.clone(), 0)?;
+                match self.tokens[cursor].text(self.text) {
+                    ";" => {
+                        stop = cursor + 1;
+                        break;
+                    }
+                    "{" => {
+                        let close = self.tokens[cursor].close.unwrap();
+                        body = Some((cursor, close));
+                        stop = close + 1;
+                        if stop < end && self.tokens[stop].text(self.text) == ";" {
+                            stop += 1;
+                        }
+                        break;
+                    }
+                    _ => {}
+                }
+                cursor = self.tokens[cursor]
+                    .close
+                    .map_or(cursor + 1, |close| close + 1);
+            }
+            // Headers and bodies keep their previous fail-closed policy. This
+            // also prevents rewriting documentation inside macro token payloads.
+            self.reject_nested(member, body.map_or(stop, |(open, _)| open))?;
+            if let Some((open, close)) = body {
+                self.reject_nested(open + 1, close)?;
+            }
+            if !attrs.is_empty() {
+                self.attributes(
+                    &attrs,
+                    Owner::AssociatedFunctionDocs,
+                    Some(self.tokens[member].range.start..self.tokens[stop - 1].range.end),
+                )?;
+            }
+            i = stop;
         }
         Ok(())
     }
@@ -856,7 +961,9 @@ fn reserved_attribute_ident(name: &str) -> bool {
     )
 }
 
-fn outer_shape(text: &str, range: Range<usize>) -> Result<(), AttributeError> {
+// Return whether the already validated path is exactly `doc`, avoiding a
+// second token-vector scan merely to classify the associated-doc policy.
+fn outer_shape(text: &str, range: Range<usize>) -> Result<bool, AttributeError> {
     let source = &text[range.clone()];
     let ts = scan(source).map_err(|mut e| {
         e.range = range.start + e.range.start..range.start + e.range.end;
@@ -937,8 +1044,9 @@ fn outer_shape(text: &str, range: Range<usize>) -> Result<(), AttributeError> {
     {
         i += 3;
     }
+    let literal_doc_name = i == 1 && ts[0].text(source) == "doc";
     if i == ts.len() {
-        return Ok(());
+        return Ok(literal_doc_name);
     }
     if ts[i].text(source) == "=" {
         if i + 1 == ts.len() {
@@ -958,7 +1066,7 @@ fn outer_shape(text: &str, range: Range<usize>) -> Result<(), AttributeError> {
                         ));
                     }
                 }
-                Ok(())
+                Ok(literal_doc_name)
             }
             Err(e) => {
                 let rhs = &ts[i + 1..];
@@ -984,7 +1092,7 @@ fn outer_shape(text: &str, range: Range<usize>) -> Result<(), AttributeError> {
         };
     }
     if ts[i].text(source) == "(" && ts[i].close == Some(ts.len() - 1) {
-        return Ok(());
+        return Ok(literal_doc_name);
     }
     Err(invalid())
 }
@@ -1310,6 +1418,139 @@ mod tests {
             prep("#[unknown] fn unused() {}").unwrap_err().kind,
             AttributeErrorKind::Syntax
         );
+    }
+    #[test]
+    fn associated_function_docs_mask_only_prefix_and_keep_original_offsets() {
+        let text = "trait T { /// required\n fn f(); /** default */ fn g(){} } impl S { #[doc=\"inherent\"] fn h(){} } impl T for S { #[doc(hidden)] fn f(){} }";
+        let out = prep(text).unwrap();
+        assert_eq!(out.text.len(), text.len());
+        assert_eq!(out.attributes.len(), 4);
+        assert!(
+            out.attributes
+                .iter()
+                .all(|a| a.name == "doc" && a.effective)
+        );
+        let masked_ranges: Vec<_> = out
+            .attributes
+            .iter()
+            .map(|a| {
+                if text[a.range.clone()].starts_with('/') {
+                    a.range.clone()
+                } else {
+                    a.range.start - 2..a.range.end + 1
+                }
+            })
+            .collect();
+        for (offset, (&original, &masked)) in
+            text.as_bytes().iter().zip(out.text.as_bytes()).enumerate()
+        {
+            if masked_ranges.iter().any(|range| range.contains(&offset)) {
+                assert_eq!(
+                    masked,
+                    if matches!(original, b'\n' | b'\r') {
+                        original
+                    } else {
+                        b' '
+                    }
+                );
+            } else {
+                assert_eq!(masked, original);
+            }
+        }
+    }
+    #[test]
+    fn associated_function_docs_do_not_admit_other_owners_or_attribute_families() {
+        for text in [
+            "trait T { //! inner\n fn f(); }",
+            "impl S { #![doc=\"inner\"] fn f(){} }",
+            "trait T { #[doc=\"type\"] type A; }",
+            "trait T { #[doc=\"const\"] const A:u8; }",
+            "impl S { fn f(#[doc=\"param\"] x:i32){} }",
+            "impl S { fn #[doc=\"header\"] f(){} }",
+            "impl S { fn f(){ #[doc=\"statement\"] let x=1; } }",
+            "impl S { m!{#[doc=\"generated\"] fn f(){}} }",
+        ] {
+            assert_eq!(
+                prep(text).unwrap_err().kind,
+                AttributeErrorKind::Unsupported,
+                "{text}"
+            );
+        }
+        for attr in [
+            "inline",
+            "cfg(any())",
+            "cfg_attr(any(),doc=\"hidden\")",
+            "derive(Copy)",
+            "repr(C)",
+            "lang=\"x\"",
+            "target_feature(enable=\"sse2\")",
+            "allow(dead_code)",
+            "deny(warnings)",
+            "forbid(unused)",
+            "expect(unused)",
+            "must_use",
+            "stable(feature=\"x\",since=\"1.0\")",
+            "custom",
+        ] {
+            let text = format!("impl S {{ #[doc=\"prefix\"] #[{attr}] fn f(){{}} }}");
+            assert_eq!(
+                prep(&text).unwrap_err().kind,
+                AttributeErrorKind::Unsupported,
+                "{text}"
+            );
+        }
+    }
+    #[test]
+    fn associated_doc_walk_preserves_empty_and_unannotated_members_and_nested_groups() {
+        for text in [
+            "trait T{} impl S{}",
+            "trait T{type A;const N:u8;fn f()->(i32,[u8;2]);}impl S{const N:u8={1};fn f(){}}",
+            "trait T{#[doc=\"nested return\"]fn f()->Result<(i32,i32),[u8;2]>;}impl S{#[doc(hidden)]fn g()->(i32,i32){(1,2)}}",
+            "impl S{fn f(){let s=\"/// not a doc #[doc=42]\";}}",
+        ] {
+            let out = prep(text).unwrap();
+            assert_eq!(out.text.len(), text.len());
+            if !text.contains("#[doc") || text.contains("let s=") {
+                assert_eq!(out.text, text);
+            }
+        }
+        for text in [
+            "impl S{m!{#[doc=\"not rewritten\"] fn f(){}}}",
+            "impl S{m!(#[doc=\"not rewritten\"] fn f(){});}",
+        ] {
+            assert_eq!(
+                prep(text).unwrap_err().kind,
+                AttributeErrorKind::Unsupported
+            );
+        }
+    }
+    #[test]
+    fn associated_function_doc_syntax_and_inactive_semantics_stay_distinct() {
+        for text in [
+            "trait T { #[doc=] fn f(); }",
+            "trait T { #[doc=\"dangling\"] }",
+        ] {
+            assert_eq!(
+                prep(text).unwrap_err().kind,
+                AttributeErrorKind::Syntax,
+                "{text}"
+            );
+        }
+        // Stock accepts the first two with warnings. Macro-valued metadata is
+        // separately outside the bounded policy, not declared invalid Rust.
+        for doc in ["doc=42", "doc(foo)", "doc=include_str!(\"absent\")"] {
+            let text = format!("trait T {{ #[{doc}] fn f(); }}");
+            assert_eq!(
+                prep(&text).unwrap_err().kind,
+                AttributeErrorKind::Unsupported,
+                "{text}"
+            );
+        }
+        assert!(prep("#[cfg(any())] trait T { #[doc=42] fn f(); }").is_ok());
+        assert!(prep("#[cfg(any())] trait T { #[doc=] fn f(); }").is_err());
+        assert!(prep("#[cfg(any())] trait T { #[doc=\"\\q\"] fn f(); }").is_err());
+        let literal = "impl S { fn f(){let s=\"#[doc=42] fn fake()\";} }";
+        assert_eq!(prep(literal).unwrap().text, literal);
     }
     #[test]
     fn explicit_attachment_positions_fail_closed() {
