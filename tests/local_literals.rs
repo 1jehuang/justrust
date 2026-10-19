@@ -5,6 +5,62 @@ mod oracle;
 use oracle::{Case, Expect};
 
 #[test]
+fn unused_scalar_conflicts_are_user_errors() {
+    let cases = [
+        Case {
+            name: "unused_fixed_width_conflict",
+            source: "fn unused(){let x=1u128+1i128;}fn main(){}",
+            expect: Expect::Invalid("E0308"),
+        },
+        Case {
+            name: "unused_annotation_conflict",
+            source: "fn unused(){let x:u8=1u16;}fn main(){}",
+            expect: Expect::Invalid("E0308"),
+        },
+        Case {
+            name: "unused_float_integer_conflict",
+            source: "fn unused(){let x=1.0f32+1i32;}fn main(){}",
+            expect: Expect::Invalid("E0277"),
+        },
+        Case {
+            name: "unused_assignment_conflict",
+            source: "fn unused(){let mut x=1u8;x=2u16;}fn main(){}",
+            expect: Expect::Invalid("E0308"),
+        },
+        Case {
+            name: "unused_return_conflict",
+            source: "fn unused()->u32{let x=1u64;x}fn main(){}",
+            expect: Expect::Invalid("E0308"),
+        },
+    ];
+    oracle::check("unused-scalar-conflicts", &cases);
+    let domains = [
+        ("Fixed(Int(U128))", "Fixed(Int(I128))"),
+        ("Fixed(Int(U16))", "Fixed(Int(U8))"),
+        ("Fixed(Float(F32))", "Fixed(Int(I32))"),
+        ("Fixed(Int(U8))", "Fixed(Int(U16))"),
+        ("Fixed(Int(U64))", "Fixed(Int(U32))"),
+    ];
+    for (case, (left, right)) in cases.iter().zip(domains) {
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let failure =
+                    justrust_engine::compiler::compile_observed(case.source.into(), workers, check)
+                        .err()
+                        .unwrap();
+                assert!(failure.report.unwrap().capture_complete);
+                let diagnostic = failure.error.to_string();
+                assert!(diagnostic.starts_with("Unproved:"), "{diagnostic}");
+                assert!(diagnostic.contains("does not match"), "{diagnostic}");
+                assert!(!diagnostic.contains("InvalidMetadata"), "{diagnostic}");
+                assert!(diagnostic.contains(left), "{diagnostic}");
+                assert!(diagnostic.contains(right), "{diagnostic}");
+            }
+        }
+    }
+}
+
+#[test]
 fn later_numeric_constraints_match_stock() {
     oracle::check(
         "local-literals",

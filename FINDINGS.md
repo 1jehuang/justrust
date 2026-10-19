@@ -31,6 +31,21 @@
 - Generic/aggregate Drop glue, contained-owner partial moves, general layout and
   Box<T> remain open. No graph baseline/ceiling changed and no speed claim made.
 
+## 2026-10-18: Recover sparse ownership byte accounting
+
+- Replaced stale dense selection charges with two-usize sparse entries per
+  enum path. Exact reservation before insertion prevents Vec minimum/geometric
+  capacity from exceeding that admitted bound. New tests cover retained capacity,
+  non-power-of-two slot counts and checked arithmetic overflow.
+- Hosted graph acceptance `20261018-194603349-1204567` on base `427b5db32`
+  plus the narrow patch compiled 996 generated functions. At 997, the unchanged
+  work limit rejected requested 1994 at used 31999051 / 32000000 in
+  `src/compiler/ir.rs:1941:47`. The size ratchet tightens from 540/570 to
+  adjacent 996/997, not a resource-limit increase or scalability completion.
+- Work growth 1.692 reflects additional fixed native-heap source proofs, not
+  an algorithmic speedup. No compile-time speed claim. Exact commands and
+  nine redacted exported validation records are in `data/runs/graph-recovery/`.
+
 ## 2026-10-18: Rust-source native heap foundation
 
 - Native `__justrust_linux_syscall6!` is an exact unsafe Linux x86-64 ABI

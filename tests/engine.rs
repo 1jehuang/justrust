@@ -436,3 +436,43 @@ fn providers_cannot_inspect_even_completed_foreign_engine_facts() {
         );
     }
 }
+
+struct InspectFinishedDemand(Arc<justrust_engine::Demand>);
+
+impl Provider for InspectFinishedDemand {
+    fn outputs(&self, _: &Key) -> usize {
+        1
+    }
+
+    fn start(&self, cx: Context, _: Key) -> TaskFuture {
+        let demand = self.0.clone();
+        Box::pin(async move {
+            for error in [
+                demand.result(0).unwrap_err(),
+                demand.fact::<Vec<u64>>(0).unwrap_err(),
+                demand.completion().unwrap_err(),
+            ] {
+                if !error.0.contains("unavailable to providers") {
+                    return Err(error);
+                }
+            }
+            cx.publish(0, 1)
+        })
+    }
+}
+
+#[test]
+fn synchronous_demand_inspection_cannot_bypass_provider_edges() {
+    for workers in [1, 8] {
+        let completed = Engine::new(Facts);
+        let demand = Arc::new(completed.request(Key::new(0, vec![7])));
+        completed.run(workers).unwrap();
+        let engine = Engine::new(InspectFinishedDemand(demand.clone()));
+        let root = engine.request(Key::new(0, vec![]));
+        let report = engine.run(workers).unwrap();
+        assert_eq!(report.failures, 0);
+        assert_eq!(root.result(0).unwrap(), 1);
+        assert!(demand.completion().is_ok());
+        assert_eq!(*demand.fact::<Vec<u64>>(0).unwrap(), vec![7; 3]);
+    }
+}
