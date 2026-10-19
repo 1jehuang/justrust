@@ -2,6 +2,9 @@
 
 `libraries/prelude/` is justrust's own library, written in ordinary Rust (not
 Rust's std). It provides `std::`/`core::` paths and the implicit prelude.
+The initial source library contains only `Option<T>` and its `Some`/`None`
+constructors. This is not full std/core support. Methods, iterator traits and
+other library APIs remain follow-up work, not compiler method-name exceptions.
 
 ## Loading (graph inputs)
 
