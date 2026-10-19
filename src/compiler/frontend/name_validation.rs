@@ -586,7 +586,7 @@ impl<'a> Validator<'a> {
                 }
             }
             Visit::Bound(bound) => {
-                self.push(Visit::Ident(bound.parameter, LookupClass::TypeParameter))?;
+                self.push(Visit::Type(&bound.subject))?;
                 self.many(&bound.traits, Visit::TraitPath)?;
             }
             Visit::Regions(regions) => {
@@ -1162,9 +1162,9 @@ mod tests {
         for site in 0..2 {
             let mut malformed = valid.clone();
             if site == 0 {
-                malformed.structs[0].bounds[0].parameter = foreign_name;
+                malformed.structs[0].bounds[0].subject = Type::Param(foreign_name);
             } else {
-                malformed.enums[0].bounds[0].parameter = foreign_name;
+                malformed.enums[0].bounds[0].subject = Type::Param(foreign_name);
             }
             assert!(validate_program_names(&malformed).is_err());
         }
@@ -1400,7 +1400,7 @@ mod tests {
             module,
             type_params: vec![parameter],
             bounds: vec![TypeBound {
-                parameter,
+                subject: Type::Param(parameter),
                 traits: vec![bound],
                 maybe_unsized: false,
             }],
@@ -1421,7 +1421,7 @@ mod tests {
             let declaration = &mut malformed.traits[0];
             match site {
                 0 => declaration.type_params[0] = foreign_name,
-                1 => declaration.bounds[0].parameter = foreign_name,
+                1 => declaration.bounds[0].subject = Type::Param(foreign_name),
                 2 => {
                     let TraitPath::Source(path) = &mut declaration.bounds[0].traits[0] else {
                         unreachable!()

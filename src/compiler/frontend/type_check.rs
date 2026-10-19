@@ -10525,7 +10525,7 @@ fn signature_source_equal(
     }
     for (a, b) in left.bounds.iter().zip(right.bounds) {
         plan.budget.charge_work(a.traits.len().saturating_add(1))?;
-        equal &= name_scope::ident_eq(names, a.parameter, b.parameter, LookupClass::TypeParameter)?;
+        equal &= a.subject.semantic_eq(&b.subject, names)?;
         equal &= a.traits.len() == b.traits.len();
         for (a, b) in a.traits.iter().zip(&b.traits) {
             equal &= plan.resolve_trait_path(a)? == plan.resolve_trait_path(b)?;

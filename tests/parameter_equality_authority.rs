@@ -678,23 +678,28 @@ fn main() {}
 }
 
 #[test]
-fn closed_lhs_nominal_where_syntax_remains_an_explicit_boundary() {
-    // The private world control separately exercises closed-LHS/rigid-RHS
-    // rejection. This source stops earlier at the existing where-clause grammar.
-    let error = frontend::parse(
-        r#"
+fn closed_lhs_nominal_where_reaches_rigid_rhs_semantic_boundary() {
+    let source = r#"
 struct S;
 trait Source:Sized {type Out;}
 impl Source for S {type Out=i32;}
 fn closed<U>() where S:Source<Out=U> {}
 fn main() {}
-"#,
-    )
-    .expect_err("nominal where-clause grammar was unexpectedly admitted");
-    assert!(
-        error.contains("where predicates are supported only on visible type parameters"),
-        "{error}"
-    );
+"#;
+    frontend::parse(source).expect("general where subjects must parse");
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let error = justrust_engine::compiler::compile(source.into(), workers, check)
+                .err()
+                .expect("closed equality must not infer a rigid caller parameter");
+            assert!(
+                error
+                    .to_string()
+                    .contains("closed equality cannot infer a rigid RHS parameter"),
+                "{error}"
+            );
+        }
+    }
 }
 
 #[test]

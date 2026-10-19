@@ -18,6 +18,7 @@ mod impl_constraints;
 mod nominal_normalization;
 mod normal_drop;
 mod parameter_equality;
+mod predicate_subjects;
 mod projected_methods;
 pub use associated_types::NormalizedAssociatedType;
 pub use catalog::{
@@ -928,6 +929,10 @@ impl ValidatedFacts {
 }
 #[derive(Clone, Debug)]
 enum ProofOrigin {
+    ProjectedSubject {
+        evidence: ProofEvidence,
+        reductions: Arc<[NormalizedAssociatedType]>,
+    },
     Assumption,
     DeclaredEquality,
     ClosedEquality {
@@ -1786,7 +1791,9 @@ impl ValidatedTraitWorld {
         }
         for predicate in predicates {
             match predicate {
-                Predicate::Implements(goal) => self.validate_ref_in(goal, env, maybe_unsized)?,
+                Predicate::Implements(goal) => {
+                    self.validate_predicate_ref_in(goal, env, maybe_unsized)?
+                }
                 Predicate::ProjectionEq { projection, ty } => {
                     self.validate_equality_domain(projection, ty, env)?;
                 }
@@ -2745,7 +2752,7 @@ impl ValidatedTraitWorld {
                 )?,
                 None => None,
             };
-            if !self.schema_contains_projection(&callable.schema)? {
+            if !self.signature_contains_projection(&callable.schema.signature)? {
                 self.validate_schema_signature(
                     callable.declaration,
                     &callable.schema.signature,
@@ -4373,7 +4380,7 @@ impl ValidatedTraitWorld {
         }
         for declaration in declarations {
             let raw = self.normalized_declaration_schema(declaration)?;
-            if self.schema_contains_projection(&raw)? {
+            if self.signature_contains_projection(&raw.signature)? {
                 // A projected required declaration is a nonexecuting schema.
                 // Its topology is retained only after an exact application.
                 if self.info(declaration)?.kind != DeclKind::TraitItem {
@@ -5762,7 +5769,9 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_work(1))?;
         self.check_normalization_budget()?;
         match predicate {
-            Predicate::Implements(goal) => self.validate_ref_in(goal, facts.env(), None)?,
+            Predicate::Implements(goal) => {
+                self.validate_predicate_ref_in(goal, facts.env(), None)?
+            }
             Predicate::ProjectionEq { projection, ty } => {
                 self.validate_equality_domain(projection, ty, facts.env())?
             }
@@ -5842,6 +5851,7 @@ impl ValidatedTraitWorld {
         facts: ProofContext<'_>,
         origin: ProofOrigin,
     ) -> Result<ProofOutcome> {
+        self.validate_projected_subject_evidence(predicate, facts, &origin)?;
         if let ProofOrigin::ClosedEquality { normalization } = &origin {
             self.validate_projected_dependency(normalization, facts)?;
             let Predicate::ProjectionEq { ty, .. } = predicate else {
@@ -5879,6 +5889,9 @@ impl ValidatedTraitWorld {
             if self.eq_predicate(assumption, predicate)? {
                 return self.evidence(predicate, facts, ProofOrigin::Assumption);
             }
+        }
+        if let Some(outcome) = self.prove_projected_subject(predicate, facts, active)? {
+            return Ok(outcome);
         }
         if let Some(outcome) = self.prove_builtin(predicate, facts, active)? {
             return Ok(outcome);

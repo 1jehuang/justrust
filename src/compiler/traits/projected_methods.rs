@@ -47,6 +47,14 @@ impl ValidatedTraitWorld {
         // Validate original source-region identity before capability rejection.
         self.validate_source_regions(item.declaration, &item.schema.signature)?;
         self.validate_predicates(&item.schema.predicates, &item.schema.env, None)?;
+        if !self.signature_contains_projection(&item.schema.signature)? {
+            return self.validate_schema_signature(
+                item.declaration,
+                &item.schema.signature,
+                &item.schema.env,
+                None,
+            );
+        }
         if item.default.is_some() {
             return Err(FactsError::unsupported(
                 &self.budget,

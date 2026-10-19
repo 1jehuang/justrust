@@ -1247,9 +1247,7 @@ impl Resolver<'_> {
         let allow_equalities = !matches!(self.source_owner, SourceOwnerContext::Trait { .. });
         let mut boundary = None;
         for bound in bounds {
-            if !self.param_contains(bound.parameter)? {
-                return Err("bound parameter is not in scope".into());
-            }
+            self.ty(&mut bound.subject, module)?;
             for path in &mut bound.traits {
                 match self.trait_application(path, module, allow_equalities) {
                     Err(error) if error.starts_with("unsupported:") => {

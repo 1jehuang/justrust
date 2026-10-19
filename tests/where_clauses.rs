@@ -380,12 +380,12 @@ fn main(){if run()==7{println!("where oracle ok");}}
 }
 
 #[test]
-fn boundary_self_where_predicate() {
-    rejects(
-        "self_where_predicate",
+fn accepts_self_where_predicate() {
+    runs(
         r###"struct S{x:i32}struct W<A>{x:A}trait T{fn v(self)->i32;}trait U{fn u(self)->i32;}impl T for S{fn v(self)->i32{self.x}}impl U for S{fn u(self)->i32{self.x*10}}trait V{fn w(self)->i32 where Self:Sized;}impl V for S{fn w(self)->i32{self.x}}fn run()->i32{S{x:3}.w()}
 fn main(){if run()==3{println!("where oracle ok");}}
 "###,
+        "where oracle ok\n",
     );
 }
 
@@ -400,12 +400,12 @@ fn main(){if run()==3{println!("where oracle ok");}}
 }
 
 #[test]
-fn boundary_concrete_subject_where() {
-    rejects(
-        "concrete_subject_where",
+fn accepts_concrete_subject_where() {
+    runs(
         r###"struct S{x:i32}struct W<A>{x:A}trait T{fn v(self)->i32;}trait U{fn u(self)->i32;}impl T for S{fn v(self)->i32{self.x}}impl U for S{fn u(self)->i32{self.x*10}}fn g()->i32 where S:T{S{x:3}.v()}fn run()->i32{g()}
 fn main(){if run()==3{println!("where oracle ok");}}
 "###,
+        "where oracle ok\n",
     );
 }
 

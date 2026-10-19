@@ -5256,7 +5256,7 @@ pub enum TraitPath {
 }
 #[derive(Clone, Debug)]
 pub struct TypeBound {
-    pub parameter: AstIdent,
+    pub subject: Type,
     pub traits: Vec<TraitPath>,
     /// Written `?Sized`: the parameter has no implicit `Sized` predicate.
     pub maybe_unsized: bool,
@@ -9232,7 +9232,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         let mut bounds = std::mem::take(&mut self.pending_bounds);
         self.reserve_parser_items(&mut bounds, 1)?;
         bounds.push(TypeBound {
-            parameter: name,
+            subject: Type::Param(name),
             traits,
             maybe_unsized: false,
         });
@@ -9461,7 +9461,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 let mut bounds = std::mem::take(&mut self.pending_bounds);
                 self.reserve_parser_items(&mut bounds, 1)?;
                 bounds.push(TypeBound {
-                    parameter: name,
+                    subject: Type::Param(name),
                     traits,
                     maybe_unsized,
                 });
@@ -10755,20 +10755,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.is("for") {
             return Err(self.unsupported("higher-ranked where predicates are unsupported"));
         }
-        if self.is("Self") {
-            return Err(self.unsupported("Self where predicates are unsupported"));
-        }
-        let parameter = self.ident()?;
-        if !self.contains_name(&self.type_params, parameter, LookupClass::TypeParameter)? {
-            return Err(
-                self.error("where predicates are supported only on visible type parameters")
-            );
-        }
-        if !self.is(":") {
-            return Err(
-                self.error("where predicates are supported only on visible type parameters")
-            );
-        }
+        let subject = self.ty()?;
         self.expect(":")?;
         let mut traits = Vec::new();
         let mut maybe_unsized = false;
@@ -10793,12 +10780,15 @@ impl<'input, 'names> Parser<'input, 'names> {
                 break;
             }
         }
+        if maybe_unsized && !matches!(subject, Type::Param(_)) {
+            return Err(self.error("this relaxed bound is not permitted here"));
+        }
         if bounds.len() >= 4096 {
             return Err(self.limit("predicate limit exceeded"));
         }
         self.reserve_parser_items(bounds, 1)?;
         bounds.push(TypeBound {
-            parameter,
+            subject,
             traits,
             maybe_unsized,
         });
@@ -10946,7 +10936,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     let mut bounds = std::mem::take(&mut self.pending_bounds);
                     self.reserve_parser_items(&mut bounds, 1)?;
                     bounds.push(TypeBound {
-                        parameter: name,
+                        subject: Type::Param(name),
                         traits,
                         maybe_unsized,
                     });
@@ -15122,6 +15112,7 @@ fn retained_function_projection(
         found |= retained_type_projection(names, ty, projection, budget)?;
     }
     for bound in &function.bounds {
+        found |= retained_type_projection(names, &bound.subject, projection, budget)?;
         for path in &bound.traits {
             budget.charge_work(1)?;
             if let TraitPath::Source(path) = path {
@@ -15372,6 +15363,9 @@ impl DeclRegistry {
                     budget.charge_work(1)?;
                     found |= retained_type_projection(names, ty, projection, budget)?;
                 }
+                for bound in &head.bounds {
+                    found |= retained_type_projection(names, &bound.subject, projection, budget)?;
+                }
                 found
             }
             ir::DeclKind::Function | ir::DeclKind::AssociatedFunction => {
@@ -15409,6 +15403,7 @@ impl DeclRegistry {
         // including requirements inherited by an implementation callable.
         let mut inspect_bounds = |bounds: &[TypeBound]| -> Result<(), String> {
             for bound in bounds {
+                found |= retained_type_projection(names, &bound.subject, projection, budget)?;
                 for path in &bound.traits {
                     if let TraitPath::Source(path) = path {
                         for segment in &path.segments {
@@ -18582,9 +18577,7 @@ fn append_source_bounds(
 ) -> Result<(), String> {
     for row in bounds {
         budget.charge_work(1)?;
-        let ty = bindings
-            .get(&registry.parameter_key(row.parameter)?)
-            .ok_or("bound parameter outside declaration")?;
+        let ty = state.source_ty(registry, &row.subject, bindings, caller, budget, 0, true)?;
         if row.maybe_unsized {
             // `T: ?Sized` drops the implicit `T: Sized` row.
             let sized = *registry
@@ -18594,7 +18587,7 @@ fn append_source_bounds(
             budget.charge_work(out.len())?;
             out.retain(|predicate| {
                 !matches!(predicate, ir::Predicate::Implements(goal)
-                    if goal.declaration == sized && goal.self_ty == *ty)
+                    if goal.declaration == sized && goal.self_ty == ty)
             });
         }
         for path in &row.traits {
@@ -18604,7 +18597,7 @@ fn append_source_bounds(
             }
             budget.retain_bytes(256)?;
             let application =
-                state.source_trait_application(registry, path, ty, bindings, caller, budget)?;
+                state.source_trait_application(registry, path, &ty, bindings, caller, budget)?;
             if !application.equalities.is_empty() {
                 registry.validate_source_bound_path(
                     state
@@ -20222,8 +20215,11 @@ mod equality_registry_tests {
         let info = plan.declaration(declaration).unwrap();
         let bindings = generic_bindings(&plan.registry, &info.env, &plan.budget).unwrap();
         let bound = &plan.program.functions[0].bounds[0];
+        let Type::Param(parameter) = &bound.subject else {
+            panic!("parameter bound")
+        };
         let owner = bindings
-            .get(&plan.registry.parameter_key(bound.parameter).unwrap())
+            .get(&plan.registry.parameter_key(*parameter).unwrap())
             .unwrap();
         let application = plan
             .state
@@ -20253,8 +20249,11 @@ mod equality_registry_tests {
         let info = plan.declaration(declaration).unwrap();
         let bindings = generic_bindings(&plan.registry, &info.env, &plan.budget).unwrap();
         let bound = &plan.program.functions[0].bounds[0];
+        let Type::Param(parameter) = &bound.subject else {
+            panic!("parameter bound")
+        };
         let owner = bindings
-            .get(&plan.registry.parameter_key(bound.parameter).unwrap())
+            .get(&plan.registry.parameter_key(*parameter).unwrap())
             .unwrap();
         let mut path = bound.traits[0].clone();
         let TraitPath::Source(source) = &mut path else {
@@ -20262,7 +20261,7 @@ mod equality_registry_tests {
         };
         let segment = source.segments.last_mut().unwrap();
         segment.args[0] = plan.program.functions[1].params[0].1.clone();
-        segment.associated_types[1].name = bound.parameter;
+        segment.associated_types[1].name = *parameter;
         let error = plan
             .state
             .lock()

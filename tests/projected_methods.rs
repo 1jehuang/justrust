@@ -9,7 +9,7 @@
 //! Native outcomes are acceptance expectations, not predeclared measured results.
 //! Originals 01-06 expect Runtime with exact ok+LF now that literal panic! is admitted.
 //! Gate 888141ae5r exposes original 07 at the rigid generic projection boundary.
-//! Cases 12/13 retain earlier Self where syntax admission boundaries.
+//! Cases 12/13 now pass Self-where syntax and reach projected-default semantics.
 //! Unsupported below is a corpus category, not necessarily the diagnostic error kind.
 //! Cases 08/09 retain rigid projection boundaries, 10/11 earlier short-projection syntax.
 //! Cases 17/18 stop at nominal lifetime syntax, before projected-reference semantics.
@@ -32,7 +32,8 @@ const BASELINE_STOCK: &str = "rustc 1.98.1;48a229ceaefd4985c50990b14116b6d856af0
 const RIGID_BOUNDARY: &str = "unsupported: rigid generic associated projection";
 const PARSE_PROJECTION_BOUNDARY: &str =
     "unsupported: associated type projections are unsupported, found \"::\"";
-const SELF_WHERE_BOUNDARY: &str = "Self where predicates are unsupported";
+const DEFAULT_PROJECTION_BOUNDARY: &str =
+    "projection-bearing trait default signatures and bodies are unsupported";
 const LIFETIME_BOUNDARY: &str =
     "lifetime parameters on nominal and impl declarations are unsupported";
 
@@ -213,7 +214,7 @@ fn main() { let x: <S as Source>::Out = S.get(); if x != 42 { panic!(); } printl
             source_bytes: 289,
             stock_diagnostic: None,
             outcome: Outcome::Unsupported,
-            native_boundary: Some(SELF_WHERE_BOUNDARY),
+            native_boundary: Some(DEFAULT_PROJECTION_BOUNDARY),
         },
         // Source SHA256 69656a8d3296975e1deaab104e6dbc7b79f0c4fb9f0e138ff407de3dcbde47c0
         Case {
@@ -226,7 +227,7 @@ fn main() { let x: <S as Source>::Out = S.get(); if x != 42 { panic!(); } printl
             source_bytes: 321,
             stock_diagnostic: None,
             outcome: Outcome::Unsupported,
-            native_boundary: Some(SELF_WHERE_BOUNDARY),
+            native_boundary: Some(DEFAULT_PROJECTION_BOUNDARY),
         },
         // Source SHA256 aa4f20274f2330dc143b2f96383a06a59b1c895a5623b7c1afa1e4fb8f9757c2
         Case {
@@ -441,7 +442,7 @@ fn projected_methods_stock_partition_and_frozen_source_metadata() {
     for (index, case) in cases[..18].iter().enumerate() {
         let boundary = match index + 1 {
             1..=6 => None,
-            12 | 13 => Some(SELF_WHERE_BOUNDARY),
+            12 | 13 => Some(DEFAULT_PROJECTION_BOUNDARY),
             7..=9 => Some(RIGID_BOUNDARY),
             10 | 11 => Some(PARSE_PROJECTION_BOUNDARY),
             14..=16 => None,
@@ -756,7 +757,7 @@ fn native_projected_methods_workers1_8_check_build_no_compiler_fallback() {
     assert_eq!(modes, [[24, 24], [6, 6], [12, 12], [6, 6]]);
     assert_eq!(runtimes, 24);
     eprintln!(
-        "NATIVE PROJECTED METHODS:96 CLI cells,modes{modes:?},24 exact-output native images from01-06/19-24;24 stock-valid Unsupported cells (4 rigid projection,8 Self-where,8 associated-bounds,4 nominal-lifetime) and12 stock-invalid Unsupported cells remain separate from12 ordinary-invalid cells;12/13 do not reach projected semantics"
+        "NATIVE PROJECTED METHODS:96 CLI cells,modes{modes:?},24 exact-output native images from01-06/19-24;24 stock-valid Unsupported cells (4 rigid projection,8 projected-default,8 associated-bounds,4 nominal-lifetime) and12 stock-invalid Unsupported cells remain separate from12 ordinary-invalid cells;12/13 now reach projected-default semantics"
     );
 }
 

@@ -454,6 +454,10 @@ cleanup failures.
       resolved in their declaration scope. Constructors and function signature
       applications prove user and builtin obligations, including nested nominal
       actuals and unused functions (`deref_index_traits`).
+- [x] General callable where-predicate subjects retain source types and authoritative
+      obligations, including `Self` and qualified associated projections (`where_subjects`).
+      Higher-ranked predicates, type-outlives bounds and projected subjects in nominal
+      declaration bounds remain unsupported.
 - [ ] Add trait type/lifetime/const parameters, generic methods, where clauses,
       associated types/constants, projection normalization, GATs, defaults and
       supertrait obligations beyond the bounded delivered source-default slice.

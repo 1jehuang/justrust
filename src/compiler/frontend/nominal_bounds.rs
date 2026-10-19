@@ -71,22 +71,28 @@ impl type_check::Checker<'_> {
             .as_deref()
             .ok_or("nominal bounds require validated facts")?;
         for bound in bounds {
-            let key = plan.registry.parameter_key(bound.parameter)?;
-            let mut index = None;
-            for (i, p) in params.iter().enumerate() {
-                if plan.registry.parameter_key(*p)? == key {
-                    index = Some(i);
+            let mut inspect = |node: &DepthNode<'_>, _| {
+                if matches!(node, DepthNode::Type(Type::Projection(_))) {
+                    return Err(
+                        "unsupported: projected subjects in nominal declaration bounds".into(),
+                    );
                 }
-            }
-            let index = index.ok_or("contract: nominal bound names an unknown parameter")?;
-            let owner = &args[index];
+                Ok(())
+            };
+            walk_depth_inspecting(
+                DepthNode::Type(&bound.subject),
+                Some(&plan.budget),
+                None,
+                Some(&mut inspect),
+            )?;
+            let owner = type_check::checked_ty(&bound.subject, &env)?;
             for path in &bound.traits {
                 plan.budget.charge_work(1)?;
                 if matches!(path, TraitPath::Builtin(BuiltinTrait::Sized)) {
                     continue;
                 }
                 let trait_ref =
-                    plan.resolve_trait_use(owner, path, &env, self.facts(), &plan.budget)?;
+                    plan.resolve_trait_use(&owner, path, &env, self.facts(), &plan.budget)?;
                 let goal = ir::Predicate::Implements(trait_ref);
                 match facts
                     .service()
