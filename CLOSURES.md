@@ -1,9 +1,10 @@
 # Closure callable foundation
 
 This is not full closure support or full Rust compatibility.
-The mutable scalar increment below is a private checkpoint pending final corpus
-replay and coordinator-composed full-suite acceptance. Its current scoped and
-infrastructure receipts are in `data/runs/closure-mutable/README.md`.
+The mutable scalar increment below is a private checkpoint with scoped replay
+passed on published `677ea96ab`, pending coordinator-composed full-suite
+acceptance. Its scoped and infrastructure receipts are in
+`data/runs/closure-mutable/README.md`.
 
 The first genuine executable increment admits immediately invoked,
 noncapturing closures with explicit parameter types, an explicit scalar/unit
@@ -81,7 +82,12 @@ Immutable facts 116/117 additionally retain the exact loan mode and verify it
 against the hidden parameter signature. Generated bodies still receive separate
 110/112 checking, including their own move/reborrow and overlapping-loan errors.
 `tests/closures.rs` freezes fifteen mutable-capture whole programs, checking
-stock classification plus native CHECK/BUILD/run at workers 1/8.
+stock classification plus native CHECK/BUILD/run at workers 1/8. A separately
+measured two-program nested probe additionally checks shared-to-mutable mode
+upgrade of an anonymous parent's explicit scalar parameter, including when that
+parent already carries a hidden shared capture field. Transitive hidden-field
+captures and original reference-typed parameter captures remain explicit native
+boundaries, with stock-valid executable controls at workers 1/8 CHECK/BUILD.
 `tests/closures_authority.rs` adds unused-body move/alias/write controls and the
 private graph-fact unit test rejects both forged mode upgrades and downgrades.
 `tests/closures_graph.rs` requires per-owner/per-site immutable facts, separate

@@ -275,8 +275,38 @@ fn mutable_scalar_parent_parameter_captures_match_stock() {
             expect: Expect::Invalid("E0506"),
         },
     ];
-    oracle::check("closure-mut-captures", &cases);
-    for case in &cases {
+    capture_cases_workers("closure-mut-captures", &cases);
+}
+
+#[test]
+fn nested_parent_parameter_shared_to_mutable_upgrade_matches_stock() {
+    capture_cases_workers(
+        "closure-nested-upgrade",
+        &[
+            Case {
+                name: "nested_shared_then_mutable_parameter",
+                source: "fn main(){assert_eq!((|mut n:i32|->i32{(||->i32{let old=n;n+=2;old+n})()})(20),42);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "nested_upgrade_with_parent_environment_offset",
+                source: "fn run(k:i32)->i32{(|mut n:i32|->i32{k+(||->i32{let old=n;n+=2;old+n})()})(20)}fn main(){assert_eq!(run(1),43);}",
+                expect: Expect::Run(""),
+            },
+        ],
+    );
+}
+
+fn capture_cases_workers(tag: &str, cases: &[Case]) {
+    assert!(
+        std::process::Command::new("rustc")
+            .arg("-vV")
+            .output()
+            .is_ok_and(|output| output.status.success()),
+        "stock oracle required"
+    );
+    oracle::check(tag, cases);
+    for case in cases {
         for workers in [1, 8] {
             for check_only in [true, false] {
                 let result = compiler::compile_observed(case.source.into(), workers, check_only);
@@ -320,6 +350,53 @@ fn mutable_scalar_parent_parameter_captures_match_stock() {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+#[test]
+fn nested_hidden_reference_and_reference_parameter_captures_stay_explicit_boundaries() {
+    let sources = [
+        "fn run(mut n:i32)->i32{(||->i32{let old=n;(||->(){n+=1;})();old+n})()}fn main(){assert_eq!(run(20),41);}",
+        "fn run(n:&mut i32)->i32{(||->i32{*n+=1;*n})()}fn main(){let mut n=41;assert_eq!(run(&mut n),42);}",
+    ];
+    for (index, source) in sources.iter().enumerate() {
+        let base = std::env::var_os("JCODE_SCRATCH_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let path = base.join(format!(
+            "jr-capture-boundary-{}-{index}.rs",
+            std::process::id()
+        ));
+        let image = path.with_extension("stock");
+        std::fs::write(&path, source).unwrap();
+        let output = std::process::Command::new("rustc")
+            .env_remove("RUSTC_BOOTSTRAP")
+            .args([
+                "--edition=2024",
+                "--crate-name=closure_boundary",
+                "-Awarnings",
+            ])
+            .arg(&path)
+            .arg("-o")
+            .arg(&image)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "stock boundary must be valid: {output:?}"
+        );
+        let ran = std::process::Command::new(&image).output().unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(&image).unwrap();
+        assert!(ran.status.success(), "stock boundary runtime: {ran:?}");
+        for workers in [1, 8] {
+            for check_only in [true, false] {
+                let failure = compiler::compile_observed((*source).into(), workers, check_only)
+                    .err()
+                    .expect("hidden/transitive reference captures remain unsupported");
+                assert!(failure.to_string().contains("unsupported"), "{failure}");
             }
         }
     }
