@@ -65,7 +65,7 @@ may only move toward the target:
 | Debt | Recorded 2026-10-18 | Target |
 |---|---|---|
 | Out-of-graph state primitives | `out_of_graph_state.baseline` (compiler/mod.rs side slots removed 2026-10-18; global budget mutexes and ID counters remain) | none |
-| Whole-program nodes | `source`, `parse`, `resolve`, `signatures`, `effects_ready`, `mono_plan`, `concrete_proofs` | only `check`, `build` |
+| Whole-program nodes | `parse`, `resolve`, `signatures`, `effects_ready`, `mono_plan`, `concrete_proofs` (`source` split per file 2026-10-18) | only `check`, `build` |
 | Leaf closure growth 16 to 32 | 1.481 (ceiling 1.50) | 1.0 |
 | Work growth 16 to 32 | 1.866 (ceiling 1.92, was 3.807) | about 2.0 |
 | Largest compiling flat program | 540 functions (570 fails: main's dense per-block ownership bitsets exceed its per-task byte limit; was 64/100) | no fixed ceiling |

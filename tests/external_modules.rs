@@ -421,15 +421,19 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                 assert!(result.report.capture_complete);
                 assert_eq!(result.report.events_dropped, 0);
                 assert_eq!(result.report.failures, 0);
-                let source = Key::new(107, vec![]);
-                let entries: Vec<_> = result
-                    .report
-                    .node_evaluations
-                    .iter()
-                    .filter(|(key, _)| *key == source)
-                    .collect();
-                assert_eq!(entries.len(), 1, "source operation must be shared");
-                assert_eq!(entries[0].1, 1, "source operation repeated");
+                // One source node per file: the root and its one child.
+                let source = Key::new(107, vec![0]);
+                let child = Key::new(107, vec![0, 0]);
+                for key in [&source, &child] {
+                    let entries: Vec<_> = result
+                        .report
+                        .node_evaluations
+                        .iter()
+                        .filter(|(seen, _)| seen == key)
+                        .collect();
+                    assert_eq!(entries.len(), 1, "source file operation must be shared");
+                    assert_eq!(entries[0].1, 1, "source file operation repeated");
+                }
                 let mut expected = vec![
                     Key::new(100, vec![]),
                     Key::new(106, vec![]),
@@ -438,6 +442,7 @@ fn external_source_graph_is_shared_and_accounts_for_all_files() {
                     Key::new(113, vec![]),
                     Key::new(115, vec![]),
                     source.clone(),
+                    child.clone(),
                 ];
                 for index in 0..2 {
                     expected.push(Key::new(110, vec![index]));

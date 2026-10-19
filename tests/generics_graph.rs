@@ -96,7 +96,7 @@ fn unused_generic_types_and_nominal_applications_cannot_use_concrete_witnesses()
                     assert_eq!(report.events_dropped, 0);
                     assert_eq!(report.failures, 0);
                     let mut expected = vec![
-                        Key::new(107, vec![]), // Shared configured text/file SOURCE.
+                        Key::new(107, vec![0]), // Root source file unit.
                         Key::new(100, vec![]),
                         Key::new(106, vec![]),
                         Key::new(101, vec![]),

@@ -501,7 +501,7 @@ fn tuple_checked_bodies_are_shared_once_and_check_does_not_demand_codegen() {
                 assert_eq!(report.failures, 0);
                 let mut expected = vec![
                     // Text now uses the same configured SOURCE transport as files.
-                    Key::new(107, vec![]),
+                    Key::new(107, vec![0]),
                     Key::new(100, vec![]),
                     Key::new(106, vec![]),
                     Key::new(101, vec![]),

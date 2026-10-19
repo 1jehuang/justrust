@@ -636,7 +636,6 @@ const PERMANENT_WHOLE_PROGRAM: &[&str] = &["check", "build"];
 /// Whole-program nodes that exist today and must be split into per-file or
 /// per-item facts. This list may only shrink.
 const WHOLE_PROGRAM_DEBT: &[&str] = &[
-    "source",
     "parse",
     "resolve",
     "signatures",

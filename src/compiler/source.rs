@@ -17,7 +17,7 @@ pub mod source_probe;
 pub use source_cfg::CfgSet;
 pub use source_lex::{PreparedLexInput, PreparedMode, PreparedViewId, ProjectedSpan};
 pub use source_map::{FileId, OriginSegment, SourceMap, SourceSpan};
-pub use source_probe::{SourceProbeRecord, SourceProbeRequest, prepare_probe_file};
+pub use source_probe::{SourceProbeRecord, SourceProbeRequest, attach_probe, prepare_probe_file};
 const MAX_FILE_DEPTH: usize = 64;
 const MAX_MODULE_DEPTH: usize = 128;
 pub(super) const MAX_BYTES: usize = 8 * 1024 * 1024;
@@ -224,30 +224,27 @@ fn prepare_with_reader(
         &super::expansion_budget::ExpansionBudget::default(),
     )
 }
+/// Whole-tree convenience driver over the per-file units. The graph runs the
+/// same units as separate nodes; this sequential driver shares one reader and
+/// one lexical authority so direct callers keep their single-call contract.
 fn prepare_with_reader_budget(
     path: &Path,
     options: &SourceOptions,
     reader: &mut dyn SourceReader,
     budget: &super::expansion_budget::ExpansionBudget,
 ) -> Result<PreparedSource, SourceError> {
-    budget
-        .check()
-        .map_err(|error| SourceError::from_token(error.into()))?;
-    options
-        .cfg
-        .validate_native()
-        .map_err(|message| Loader::error(SourceErrorKind::Unsupported, None, message))?;
-    let mut loader = Loader::new(options, Some(reader));
-    loader.lexical_budget = budget.clone();
-    loader
-        .file(
-            path,
-            path.parent().unwrap_or_else(|| Path::new(".")),
-            0,
-            None,
-        )
-        .map_err(|e| e.with_sources(&loader.prepared.sources))?;
-    Ok(loader.prepared)
+    let root = Arc::new(root_unit_with(path, options, Some(&mut *reader), budget));
+    let mut assembler = SourceAssembler::new(options);
+    let mut step = assembler.provide(root)?;
+    loop {
+        match step {
+            AssemblyStep::Done(prepared) => return Ok(*prepared),
+            AssemblyStep::Need(need) => {
+                let unit = child_unit_with(&need.parent, need.index, options, &mut *reader, budget);
+                step = assembler.provide(Arc::new(unit))?;
+            }
+        }
+    }
 }
 /// No filesystem capability exists in text preparation, even for path-like names.
 pub fn prepare_text(
@@ -255,22 +252,510 @@ pub fn prepare_text(
     text: &str,
     options: &SourceOptions,
 ) -> Result<PreparedSource, SourceError> {
-    options
-        .cfg
-        .validate_native()
-        .map_err(|message| Loader::error(SourceErrorKind::Unsupported, None, message))?;
-    if text.len() > MAX_BYTES {
-        return Err(Loader::error(
-            SourceErrorKind::Limit,
+    let unit = Arc::new(prepare_text_unit(name, text, options));
+    match SourceAssembler::new(options).provide(unit)? {
+        AssemblyStep::Done(prepared) => Ok(*prepared),
+        AssemblyStep::Need(_) => Err(Loader::error(
+            SourceErrorKind::Contract,
             None,
-            format!("source size limit ({MAX_BYTES} bytes) exceeded"),
+            "text preparation requested an external module",
+        )),
+    }
+}
+
+/// Placeholder identity of the one file a [`FileUnit`] describes. The
+/// assembler maps it to the file's position in the assembled source map.
+const LOCAL_FILE: FileId = FileId(0);
+
+/// One `mod name;` declaration found in a file, resolved to the child path.
+#[derive(Clone, Debug)]
+pub struct ChildModule {
+    /// Offset in the unit's prepared text where the child's text is spliced.
+    pub at: usize,
+    /// The declaration in this unit's own file.
+    pub decl: SourceSpan,
+    pub path: PathBuf,
+    pub directory: PathBuf,
+    /// Module nesting depth of the child file's top level.
+    pub depth: usize,
+}
+
+/// Prepared form of exactly one source file: original bytes, configured and
+/// module-expanded text with provenance, and the external child modules it
+/// declares. Pure in its explicit inputs (file bytes, options, ancestry).
+/// Spans use [`LOCAL_FILE`] for this file.
+#[derive(Debug)]
+pub struct FileUnit {
+    pub path: PathBuf,
+    pub contents: Arc<str>,
+    /// Canonical paths of the open files from the root to this one, for cycle
+    /// detection in children. Empty for text input.
+    pub chain: Vec<PathBuf>,
+    pub text: String,
+    pub origins: Vec<OriginSegment>,
+    pub attributes: Vec<PreparedAttribute>,
+    pub children: Vec<ChildModule>,
+    /// The first error found in this file, reported after every child that
+    /// precedes it in source order, exactly where sequential loading stopped.
+    pub terminal: Option<SourceError>,
+}
+
+/// A file that could not be read or admitted before its bytes were registered.
+#[derive(Debug)]
+pub struct UnitFailure {
+    pub error: SourceError,
+    /// The error belongs at the declaring `mod name;` in the parent file.
+    pub anchored: bool,
+}
+pub type UnitResult = Result<FileUnit, UnitFailure>;
+
+/// Root unit of a file input, including option validation.
+pub fn prepare_root_unit(
+    path: &Path,
+    options: &SourceOptions,
+    budget: &super::expansion_budget::ExpansionBudget,
+) -> UnitResult {
+    root_unit_with(path, options, Some(&mut FsReader), budget)
+}
+fn root_unit_with(
+    path: &Path,
+    options: &SourceOptions,
+    reader: Option<&mut dyn SourceReader>,
+    budget: &super::expansion_budget::ExpansionBudget,
+) -> UnitResult {
+    let unanchored = |error| UnitFailure {
+        error,
+        anchored: false,
+    };
+    budget
+        .check()
+        .map_err(|error| unanchored(SourceError::from_token(error.into())))?;
+    options.cfg.validate_native().map_err(|message| {
+        unanchored(Loader::error(SourceErrorKind::Unsupported, None, message))
+    })?;
+    let directory = path.parent().unwrap_or_else(|| Path::new("."));
+    file_unit(path, directory, 0, &[], options, reader, budget)
+}
+/// Child `index` of an already prepared parent unit.
+pub fn prepare_child_unit(
+    parent: &FileUnit,
+    index: usize,
+    options: &SourceOptions,
+    budget: &super::expansion_budget::ExpansionBudget,
+) -> UnitResult {
+    child_unit_with(parent, index, options, &mut FsReader, budget)
+}
+fn child_unit_with(
+    parent: &FileUnit,
+    index: usize,
+    options: &SourceOptions,
+    reader: &mut dyn SourceReader,
+    budget: &super::expansion_budget::ExpansionBudget,
+) -> UnitResult {
+    let child = parent.children.get(index).ok_or_else(|| UnitFailure {
+        error: Loader::error(
+            SourceErrorKind::Contract,
+            None,
+            "missing child module declaration",
+        ),
+        anchored: false,
+    })?;
+    file_unit(
+        &child.path,
+        &child.directory,
+        child.depth,
+        &parent.chain,
+        options,
+        Some(reader),
+        budget,
+    )
+}
+/// Unit of an in-memory text input. It has no filesystem capability.
+pub fn prepare_text_unit(
+    name: impl Into<PathBuf>,
+    text: &str,
+    options: &SourceOptions,
+) -> UnitResult {
+    let unanchored = |error| UnitFailure {
+        error,
+        anchored: false,
+    };
+    options.cfg.validate_native().map_err(|message| {
+        unanchored(Loader::error(SourceErrorKind::Unsupported, None, message))
+    })?;
+    snapshot_unit(
+        name.into(),
+        text.to_owned(),
+        Path::new("."),
+        0,
+        Vec::new(),
+        options,
+        None,
+        &super::expansion_budget::ExpansionBudget::default(),
+    )
+}
+fn file_unit(
+    path: &Path,
+    directory: &Path,
+    depth: usize,
+    ancestors: &[PathBuf],
+    options: &SourceOptions,
+    reader: Option<&mut dyn SourceReader>,
+    budget: &super::expansion_budget::ExpansionBudget,
+) -> UnitResult {
+    let anchored = |kind, message: String| UnitFailure {
+        error: Loader::error(kind, None, message),
+        anchored: true,
+    };
+    if ancestors.len() > MAX_FILE_DEPTH {
+        return Err(anchored(
+            SourceErrorKind::Limit,
+            format!("module file depth limit ({MAX_FILE_DEPTH}) exceeded"),
         ));
     }
-    let mut loader = Loader::new(options, None);
-    loader
-        .snapshot(name.into(), text.to_owned(), Path::new("."), 0)
-        .map_err(|e| e.with_sources(&loader.prepared.sources))?;
-    Ok(loader.prepared)
+    let io_error =
+        |e: std::io::Error| anchored(SourceErrorKind::Io, format!("{}: {e}", path.display()));
+    let Some(reader) = reader else {
+        return Err(anchored(
+            SourceErrorKind::Unsupported,
+            "external modules are unsupported in text input".into(),
+        ));
+    };
+    let canonical = reader.canonicalize(path).map_err(io_error)?;
+    if ancestors.contains(&canonical) {
+        return Err(anchored(
+            SourceErrorKind::Cycle,
+            format!(
+                "module inclusion cycle: {} -> {}",
+                ancestors
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(" -> "),
+                canonical.display()
+            ),
+        ));
+    }
+    if !reader.is_file(path).map_err(io_error)? {
+        return Err(anchored(
+            SourceErrorKind::Io,
+            format!("{}: source must be a regular file", path.display()),
+        ));
+    }
+    let bytes = reader.read(path, MAX_BYTES + 1).map_err(io_error)?;
+    let text = String::from_utf8(bytes).map_err(|e| {
+        anchored(
+            SourceErrorKind::Syntax,
+            format!("{}: source is not UTF-8: {e}", path.display()),
+        )
+    })?;
+    let mut chain = Vec::with_capacity(ancestors.len() + 1);
+    chain.extend_from_slice(ancestors);
+    chain.push(canonical);
+    snapshot_unit(
+        path.to_owned(),
+        text,
+        directory,
+        depth,
+        chain,
+        options,
+        Some(reader),
+        budget,
+    )
+}
+#[allow(clippy::too_many_arguments)]
+fn snapshot_unit<'a>(
+    path: PathBuf,
+    text: String,
+    directory: &Path,
+    depth: usize,
+    chain: Vec<PathBuf>,
+    options: &'a SourceOptions,
+    reader: Option<&'a mut dyn SourceReader>,
+    budget: &super::expansion_budget::ExpansionBudget,
+) -> UnitResult {
+    if text.len() > MAX_BYTES {
+        return Err(UnitFailure {
+            error: Loader::error(
+                SourceErrorKind::Limit,
+                None,
+                format!("source size limit ({MAX_BYTES} bytes) exceeded"),
+            ),
+            anchored: false,
+        });
+    }
+    let contents: Arc<str> = text.into();
+    let root = chain.len() <= 1 && depth == 0;
+    let mut builder = Loader::new(options, reader, LOCAL_FILE, contents.clone(), root);
+    builder.lexical_budget = budget.clone();
+    let terminal = builder.snapshot(directory, depth).err();
+    Ok(FileUnit {
+        path,
+        contents,
+        chain,
+        text: builder.text,
+        origins: builder.origins,
+        attributes: builder.attributes,
+        children: builder.children,
+        terminal,
+    })
+}
+
+/// A child unit the assembler needs next, in source order.
+pub struct NeedUnit {
+    /// Graph identity of the child file: `[0, i, j, ...]` child ordinals.
+    pub ordinal: Vec<u64>,
+    pub parent: Arc<FileUnit>,
+    pub index: usize,
+}
+pub enum AssemblyStep {
+    Need(NeedUnit),
+    Done(Box<PreparedSource>),
+}
+/// Splices per-file units into the one prepared source in depth-first source
+/// order. Applies the cross-file limits (total bytes, file count, file depth,
+/// expanded size) and reports the first error in the order sequential loading
+/// would. It never reads files itself.
+pub struct SourceAssembler {
+    prepared: PreparedSource,
+    frames: Vec<Frame>,
+    awaiting: Option<(Vec<u64>, SourceSpan)>,
+    started: bool,
+}
+struct Frame {
+    unit: Arc<FileUnit>,
+    id: FileId,
+    ordinal: Vec<u64>,
+    next_child: usize,
+    segment: usize,
+}
+fn remap_span(span: SourceSpan, id: FileId) -> SourceSpan {
+    SourceSpan {
+        file: if span.file == LOCAL_FILE {
+            id
+        } else {
+            span.file
+        },
+        ..span
+    }
+}
+fn copy_error(error: &SourceError, primary: Option<SourceSpan>) -> SourceError {
+    SourceError {
+        kind: error.kind,
+        primary,
+        message: error.message.clone(),
+        _diagnostic_lease: None,
+        location: None,
+    }
+}
+impl SourceAssembler {
+    pub fn new(options: &SourceOptions) -> Self {
+        Self {
+            prepared: PreparedSource {
+                debug_assertions: options.cfg.debug_assertions(),
+                ..PreparedSource::default()
+            },
+            frames: Vec::new(),
+            awaiting: None,
+            started: false,
+        }
+    }
+    fn fail(&self, error: SourceError) -> SourceError {
+        error.with_sources(&self.prepared.sources)
+    }
+    /// Supply the unit for the root (first call) or the last requested child.
+    pub fn provide(&mut self, unit: Arc<UnitResult>) -> Result<AssemblyStep, SourceError> {
+        let (ordinal, anchor) = match self.awaiting.take() {
+            Some((ordinal, anchor)) => (ordinal, Some(anchor)),
+            None if !self.started => (vec![0], None),
+            None => {
+                return Err(Loader::error(
+                    SourceErrorKind::Contract,
+                    None,
+                    "source assembler received an unrequested unit",
+                ));
+            }
+        };
+        self.started = true;
+        let unit = match unit.as_ref() {
+            Err(failure) => {
+                let primary = if failure.anchored {
+                    anchor
+                } else {
+                    failure.error.primary
+                };
+                return Err(self.fail(copy_error(&failure.error, primary)));
+            }
+            Ok(_) => Arc::new(Self::take(unit)),
+        };
+        if unit.contents.len() > MAX_BYTES - self.prepared.source_bytes {
+            return Err(self.fail(Loader::error(
+                SourceErrorKind::Limit,
+                None,
+                format!("source size limit ({MAX_BYTES} bytes) exceeded"),
+            )));
+        }
+        self.prepared.source_bytes += unit.contents.len();
+        self.prepared.files += 1;
+        let id = self
+            .prepared
+            .sources
+            .add(unit.path.clone(), unit.contents.clone());
+        for attribute in &unit.attributes {
+            self.prepared.attributes.push(PreparedAttribute {
+                span: remap_span(attribute.span, id),
+                name: attribute.name.clone(),
+                effective: attribute.effective,
+            });
+        }
+        self.frames.push(Frame {
+            unit,
+            id,
+            ordinal,
+            next_child: 0,
+            segment: 0,
+        });
+        self.run()
+    }
+    /// Units are immutable shared facts. Assembly reads them through an `Arc`.
+    fn take(unit: Arc<UnitResult>) -> FileUnit {
+        match Arc::try_unwrap(unit) {
+            Ok(Ok(unit)) => unit,
+            Ok(Err(_)) => unreachable!("failures are handled before take"),
+            Err(shared) => {
+                let Ok(unit) = shared.as_ref() else {
+                    unreachable!("failures are handled before take")
+                };
+                FileUnit {
+                    path: unit.path.clone(),
+                    contents: unit.contents.clone(),
+                    chain: unit.chain.clone(),
+                    text: unit.text.clone(),
+                    origins: unit.origins.clone(),
+                    attributes: unit.attributes.clone(),
+                    children: unit.children.clone(),
+                    terminal: unit.terminal.as_ref().map(|e| copy_error(e, e.primary)),
+                }
+            }
+        }
+    }
+    fn run(&mut self) -> Result<AssemblyStep, SourceError> {
+        loop {
+            let Some(frame) = self.frames.last_mut() else {
+                return Ok(AssemblyStep::Done(Box::new(std::mem::take(
+                    &mut self.prepared,
+                ))));
+            };
+            let unit = frame.unit.clone();
+            let id = frame.id;
+            let end = unit
+                .children
+                .get(frame.next_child)
+                .map_or(unit.text.len(), |child| child.at);
+            while let Some(segment) = unit.origins.get(frame.segment)
+                && segment.prepared.end <= end
+            {
+                frame.segment += 1;
+                if let Err(error) = append_segment(
+                    &mut self.prepared,
+                    &unit.text[segment.prepared.clone()],
+                    remap_span(segment.origin, id),
+                    segment.synthetic,
+                ) {
+                    return Err(self.fail(error));
+                }
+            }
+            let frame = self.frames.last_mut().expect("frame checked above");
+            if let Some(child) = unit.children.get(frame.next_child) {
+                let index = frame.next_child;
+                frame.next_child += 1;
+                let mut ordinal = frame.ordinal.clone();
+                ordinal.push(index as u64);
+                let anchor = remap_span(child.decl, id);
+                if self.frames.len() > MAX_FILE_DEPTH {
+                    return Err(self.fail(Loader::error(
+                        SourceErrorKind::Limit,
+                        Some(anchor),
+                        format!("module file depth limit ({MAX_FILE_DEPTH}) exceeded"),
+                    )));
+                }
+                if self.prepared.files >= MAX_FILES {
+                    return Err(self.fail(Loader::error(
+                        SourceErrorKind::Limit,
+                        Some(anchor),
+                        format!("module file limit ({MAX_FILES}) exceeded"),
+                    )));
+                }
+                self.awaiting = Some((ordinal.clone(), anchor));
+                return Ok(AssemblyStep::Need(NeedUnit {
+                    ordinal,
+                    parent: unit,
+                    index,
+                }));
+            }
+            if let Some(error) = &unit.terminal {
+                let primary = error.primary.map(|span| remap_span(span, id));
+                return Err(self.fail(copy_error(error, primary)));
+            }
+            self.frames.pop();
+        }
+    }
+}
+/// Append prepared text with provenance, merging contiguous original bytes.
+fn append_segment(
+    prepared: &mut PreparedSource,
+    text: &str,
+    origin: SourceSpan,
+    synthetic: bool,
+) -> Result<(), SourceError> {
+    append_to(
+        &mut prepared.text,
+        &mut prepared.origins,
+        text,
+        origin,
+        synthetic,
+    )
+}
+fn append_to(
+    out: &mut String,
+    origins: &mut Vec<OriginSegment>,
+    text: &str,
+    origin: SourceSpan,
+    synthetic: bool,
+) -> Result<(), SourceError> {
+    if text.len() > MAX_BYTES - out.len() {
+        return Err(Loader::error(
+            SourceErrorKind::Limit,
+            Some(origin),
+            format!("expanded source size limit ({MAX_BYTES} bytes) exceeded"),
+        ));
+    }
+    let start = out.len();
+    out.push_str(text);
+    if let Some(last) = origins.last_mut()
+        && !synthetic
+        && !last.synthetic
+        && last.prepared.end == start
+        && last.origin.file == origin.file
+        && last.origin.hi == origin.lo
+    {
+        last.prepared.end += text.len();
+        last.origin.hi = origin.hi;
+        return Ok(());
+    }
+    if origins.len() >= MAX_ORIGINS {
+        return Err(Loader::error(
+            SourceErrorKind::Limit,
+            Some(origin),
+            "source provenance segment limit exceeded",
+        ));
+    }
+    origins.push(OriginSegment {
+        prepared: start..start + text.len(),
+        origin,
+        synthetic,
+    });
+    Ok(())
 }
 trait SourceReader {
     fn canonicalize(&mut self, p: &Path) -> std::io::Result<PathBuf>;
@@ -299,24 +784,40 @@ impl SourceReader for FsReader {
         Ok(bytes)
     }
 }
+/// Builds one file's unit: validation, configuration, inline-module expansion
+/// and discovery of external child modules. Child files are never read here.
 struct Loader<'a> {
-    active: Vec<PathBuf>,
     options: &'a SourceOptions,
     reader: Option<&'a mut dyn SourceReader>,
-    prepared: PreparedSource,
     lexical_budget: super::expansion_budget::ExpansionBudget,
+    id: FileId,
+    contents: Arc<str>,
+    /// First contributor to the assembled text (empty-file provenance anchor).
+    root: bool,
+    text: String,
+    origins: Vec<OriginSegment>,
+    attributes: Vec<PreparedAttribute>,
+    children: Vec<ChildModule>,
 }
 impl<'a> Loader<'a> {
-    fn new(options: &'a SourceOptions, reader: Option<&'a mut dyn SourceReader>) -> Self {
+    fn new(
+        options: &'a SourceOptions,
+        reader: Option<&'a mut dyn SourceReader>,
+        id: FileId,
+        contents: Arc<str>,
+        root: bool,
+    ) -> Self {
         Self {
-            active: Vec::new(),
             options,
             reader,
-            prepared: PreparedSource {
-                debug_assertions: options.cfg.debug_assertions(),
-                ..PreparedSource::default()
-            },
             lexical_budget: super::expansion_budget::ExpansionBudget::default(),
+            id,
+            contents,
+            root,
+            text: String::new(),
+            origins: Vec::new(),
+            attributes: Vec::new(),
+            children: Vec::new(),
         }
     }
     fn error(
@@ -339,98 +840,10 @@ impl<'a> Loader<'a> {
             hi: r.end as u32,
         }
     }
-    fn file(
-        &mut self,
-        path: &Path,
-        directory: &Path,
-        depth: usize,
-        anchor: Option<SourceSpan>,
-    ) -> Result<(), SourceError> {
-        if self.active.len() > MAX_FILE_DEPTH {
-            return Err(Self::error(
-                SourceErrorKind::Limit,
-                anchor,
-                format!("module file depth limit ({MAX_FILE_DEPTH}) exceeded"),
-            ));
-        }
-        if self.prepared.files >= MAX_FILES {
-            return Err(Self::error(
-                SourceErrorKind::Limit,
-                anchor,
-                format!("module file limit ({MAX_FILES}) exceeded"),
-            ));
-        }
-        let io_error = |e| {
-            Self::error(
-                SourceErrorKind::Io,
-                anchor,
-                format!("{}: {e}", path.display()),
-            )
-        };
-        let reader = self.reader.as_deref_mut().ok_or_else(|| {
-            Self::error(
-                SourceErrorKind::Unsupported,
-                anchor,
-                "external modules are unsupported in text input",
-            )
-        })?;
-        let canonical = reader.canonicalize(path).map_err(io_error)?;
-        if self.active.contains(&canonical) {
-            return Err(Self::error(
-                SourceErrorKind::Cycle,
-                anchor,
-                format!(
-                    "module inclusion cycle: {} -> {}",
-                    self.active
-                        .iter()
-                        .map(|p| p.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(" -> "),
-                    canonical.display()
-                ),
-            ));
-        }
-        if !reader.is_file(path).map_err(io_error)? {
-            return Err(Self::error(
-                SourceErrorKind::Io,
-                anchor,
-                format!("{}: source must be a regular file", path.display()),
-            ));
-        }
-        let bytes = reader
-            .read(path, MAX_BYTES - self.prepared.source_bytes + 1)
-            .map_err(io_error)?;
-        let text = String::from_utf8(bytes).map_err(|e| {
-            Self::error(
-                SourceErrorKind::Syntax,
-                anchor,
-                format!("{}: source is not UTF-8: {e}", path.display()),
-            )
-        })?;
-        self.active.push(canonical);
-        let result = self.snapshot(path.to_owned(), text, directory, depth);
-        self.active.pop();
-        result
-    }
-    fn snapshot(
-        &mut self,
-        path: PathBuf,
-        text: String,
-        directory: &Path,
-        depth: usize,
-    ) -> Result<(), SourceError> {
-        if text.len() > MAX_BYTES - self.prepared.source_bytes {
-            return Err(Self::error(
-                SourceErrorKind::Limit,
-                None,
-                format!("source size limit ({MAX_BYTES} bytes) exceeded"),
-            ));
-        }
-        self.prepared.source_bytes += text.len();
-        self.prepared.files += 1;
-        let original: Arc<str> = text.into();
-        let id = self.prepared.sources.add(path, original.clone());
-        self.validate_original(id, &original, 0)?;
+    fn snapshot(&mut self, directory: &Path, depth: usize) -> Result<(), SourceError> {
+        let id = self.id;
+        let original = self.contents.clone();
+        self.validate_original(&original, 0)?;
         let filtered = source_attrs::prepare(&original, &self.options.cfg).map_err(|e| {
             Self::error(
                 match e.kind {
@@ -468,20 +881,21 @@ impl<'a> Loader<'a> {
             })?;
         }
         for a in filtered.attributes {
-            self.prepared.attributes.push(PreparedAttribute {
+            self.attributes.push(PreparedAttribute {
                 span: Self::span(id, a.range),
                 name: a.name,
                 effective: a.effective,
             });
         }
-        self.expand(&filtered.text, &original, id, 0, directory, depth)
+        self.expand(&filtered.text, 0, directory, depth)
     }
     /// Lexical validation only, before configuration processing or module IO.
-    /// All original files share this loader's authority. No token input counts
-    /// are charged until the configured lexer actually issues token events.
-    fn validate_original(&self, id: FileId, text: &str, base: usize) -> Result<(), SourceError> {
+    /// No token input counts are charged until the configured lexer actually
+    /// issues token events.
+    fn validate_original(&self, text: &str, base: usize) -> Result<(), SourceError> {
         use super::lexer::{LexError, validate_source};
         use super::token::Edition;
+        let id = self.id;
         validate_source(text, Edition::E2024, &self.lexical_budget).map_err(|error| match error {
             LexError::Source {
                 kind,
@@ -492,16 +906,9 @@ impl<'a> Loader<'a> {
                 let valid = text.get(prepared.clone());
                 let start = base.checked_add(prepared.start);
                 let end = base.checked_add(prepared.end);
-                let raw = start.zip(end).filter(|(lo, hi)| {
-                    valid.is_some()
-                        && self
-                            .prepared
-                            .sources
-                            .files
-                            .get(id.0 as usize)
-                            .and_then(|file| file.contents.get(*lo..*hi))
-                            == valid
-                });
+                let raw = start
+                    .zip(end)
+                    .filter(|(lo, hi)| valid.is_some() && self.contents.get(*lo..*hi) == valid);
                 match raw {
                     Some((lo, hi)) => Self::error(kind, Some(Self::span(id, lo..hi)), message),
                     None => Self::error(
@@ -521,48 +928,11 @@ impl<'a> Loader<'a> {
         origin: SourceSpan,
         synthetic: bool,
     ) -> Result<(), SourceError> {
-        if text.len() > MAX_BYTES - self.prepared.text.len() {
-            return Err(Self::error(
-                SourceErrorKind::Limit,
-                Some(origin),
-                format!("expanded source size limit ({MAX_BYTES} bytes) exceeded"),
-            ));
-        }
-        let start = self.prepared.text.len();
-        self.prepared.text.push_str(text);
-        if let Some(last) = self.prepared.origins.last_mut()
-            && !synthetic
-            && !last.synthetic
-            && last.prepared.end == start
-            && last.origin.file == origin.file
-            && last.origin.hi == origin.lo
-        {
-            last.prepared.end += text.len();
-            last.origin.hi = origin.hi;
-            return Ok(());
-        }
-        if self.prepared.origins.len() >= MAX_ORIGINS {
-            return Err(Self::error(
-                SourceErrorKind::Limit,
-                Some(origin),
-                "source provenance segment limit exceeded",
-            ));
-        }
-        self.prepared.origins.push(OriginSegment {
-            prepared: start..start + text.len(),
-            origin,
-            synthetic,
-        });
-        Ok(())
+        append_to(&mut self.text, &mut self.origins, text, origin, synthetic)
     }
-    fn copy(
-        &mut self,
-        text: &str,
-        original: &str,
-        id: FileId,
-        base: usize,
-        r: Range<usize>,
-    ) -> Result<(), SourceError> {
+    fn copy(&mut self, text: &str, base: usize, r: Range<usize>) -> Result<(), SourceError> {
+        let id = self.id;
+        let original = self.contents.clone();
         let mut start = r.start;
         while start < r.end {
             let synthetic = text.as_bytes()[start] != original.as_bytes()[base + start];
@@ -579,7 +949,7 @@ impl<'a> Loader<'a> {
             )?;
             start = end;
         }
-        if r.is_empty() && self.prepared.origins.is_empty() {
+        if r.is_empty() && self.root && self.origins.is_empty() {
             self.append("", Self::span(id, base + r.start..base + r.end), false)?;
         }
         Ok(())
@@ -587,12 +957,11 @@ impl<'a> Loader<'a> {
     fn expand(
         &mut self,
         text: &str,
-        original: &str,
-        id: FileId,
         base: usize,
         directory: &Path,
         depth: usize,
     ) -> Result<(), SourceError> {
+        let id = self.id;
         let anchor = Some(Self::span(id, base..base + text.len()));
         if depth > MAX_MODULE_DEPTH {
             return Err(Self::error(
@@ -695,9 +1064,15 @@ impl<'a> Loader<'a> {
                             ));
                         }
                     };
-                    self.copy(text, original, id, base, copied..tokens[head + 2].start)?;
+                    self.copy(text, base, copied..tokens[head + 2].start)?;
                     self.append("{\n", decl, true)?;
-                    self.file(&path, &directory.join(name), depth + 1, Some(decl))?;
+                    self.children.push(ChildModule {
+                        at: self.text.len(),
+                        decl,
+                        path,
+                        directory: directory.join(name),
+                        depth: depth + 1,
+                    });
                     self.append("\n}", decl, true)?;
                     copied = tokens[head + 2].end;
                     i = head + 3;
@@ -705,11 +1080,9 @@ impl<'a> Loader<'a> {
                 }
                 if delimiter == "{" {
                     let end = close_group(&tokens, text, head + 2);
-                    self.copy(text, original, id, base, copied..tokens[head + 2].end)?;
+                    self.copy(text, base, copied..tokens[head + 2].end)?;
                     self.expand(
                         &text[tokens[head + 2].end..tokens[end].start],
-                        original,
-                        id,
                         base + tokens[head + 2].end,
                         &directory.join(name),
                         depth + 1,
@@ -735,7 +1108,7 @@ impl<'a> Loader<'a> {
                 }
             }
         }
-        self.copy(text, original, id, base, copied..text.len())
+        self.copy(text, base, copied..text.len())
     }
 }
 fn close_group(tokens: &[Token], text: &str, start: usize) -> usize {
@@ -1671,6 +2044,133 @@ mod tests {
         }
     }
 
+    /// Graph path: every file unit built independently (no shared reader or
+    /// loader state), units prebuilt before assembly and shared through `Arc`,
+    /// equals the sequential whole-tree preparation exactly.
+    fn assemble_independent(path: &Path) -> Result<PreparedSource, SourceError> {
+        use std::collections::HashMap;
+        let options = SourceOptions::default();
+        let budget = super::super::expansion_budget::ExpansionBudget::default();
+        // Prebuild the whole unit tree first, in breadth-first order, as
+        // independent graph nodes would, then assemble from the cache.
+        let mut units: HashMap<Vec<u64>, Arc<UnitResult>> = HashMap::new();
+        let mut queue = vec![vec![0u64]];
+        units.insert(
+            vec![0],
+            Arc::new(prepare_root_unit(path, &options, &budget)),
+        );
+        while let Some(ordinal) = queue.pop() {
+            let unit = units[&ordinal].clone();
+            if let Ok(parent) = unit.as_ref() {
+                for index in 0..parent.children.len() {
+                    let mut child = ordinal.clone();
+                    child.push(index as u64);
+                    units.insert(
+                        child.clone(),
+                        Arc::new(prepare_child_unit(parent, index, &options, &budget)),
+                    );
+                    queue.push(child);
+                }
+            }
+        }
+        let mut assembler = SourceAssembler::new(&options);
+        let mut step = assembler.provide(units[&vec![0]].clone())?;
+        loop {
+            match step {
+                AssemblyStep::Done(prepared) => return Ok(*prepared),
+                AssemblyStep::Need(need) => {
+                    step = assembler.provide(units[&need.ordinal].clone())?;
+                }
+            }
+        }
+    }
+    fn same_prepared(a: &PreparedSource, b: &PreparedSource) {
+        assert_eq!(a.text, b.text);
+        assert_eq!(a.origins, b.origins);
+        assert_eq!(a.files, b.files);
+        assert_eq!(a.source_bytes, b.source_bytes);
+        assert_eq!(a.debug_assertions(), b.debug_assertions());
+        assert_eq!(a.sources.files.len(), b.sources.files.len());
+        for (x, y) in a.sources.files.iter().zip(&b.sources.files) {
+            assert_eq!(x.lexical_path, y.lexical_path);
+            assert_eq!(x.contents, y.contents);
+            assert_eq!(x.line_starts, y.line_starts);
+        }
+        let attrs = |p: &PreparedSource| {
+            p.attributes
+                .iter()
+                .map(|a| (a.span, a.name.clone(), a.effective))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(attrs(a), attrs(b));
+    }
+
+    #[test]
+    fn independent_file_units_assemble_to_the_sequential_preparation() {
+        let tree = Tree::new();
+        tree.put(
+            "main.rs",
+            "#[inline] fn top(){}\nmod a; pub mod b;\nmod inline { mod c; }\nfn main(){}\n",
+        );
+        tree.put(
+            "a.rs",
+            "// α\nmod d;\npub fn a(){}\n#[cfg(any())] mod gone;\n",
+        );
+        tree.put("a/d.rs", "pub fn d(){}");
+        tree.put("b/mod.rs", "");
+        tree.put("inline/c.rs", "#[inline(always)] pub fn c(){} mod e;");
+        tree.put("inline/c/e.rs", "pub fn e(){}");
+        let path = tree.0.join("main.rs");
+        let sequential = prepare_file(&path, &SourceOptions::default()).unwrap();
+        let graph = assemble_independent(&path).unwrap();
+        same_prepared(&sequential, &graph);
+        assert_eq!(graph.files, 6);
+        let start = graph.text.find("pub fn e").unwrap();
+        let span = graph.map_range(start..start + 3).unwrap();
+        assert!(
+            graph.sources.files[span.file.0 as usize]
+                .lexical_path
+                .ends_with("inline/c/e.rs")
+        );
+    }
+
+    #[test]
+    fn independent_units_report_the_sequential_first_error() {
+        let tree = Tree::new();
+        // The child error precedes the parent's later syntax error in source
+        // order, so it must win even though both units are built eagerly.
+        tree.put("main.rs", "mod a; fn main(){ let = ; } fn bad( {}");
+        tree.put("a.rs", "mod missing;");
+        let path = tree.0.join("main.rs");
+        let sequential = prepare_file(&path, &SourceOptions::default()).unwrap_err();
+        let graph = assemble_independent(&path).unwrap_err();
+        assert_eq!(sequential.to_string(), graph.to_string());
+        assert_eq!(sequential.kind, graph.kind);
+        assert_eq!(sequential.primary, graph.primary);
+        for (main, child) in [
+            ("mod a; fn main(){}", "pub fn a( {}"),
+            ("mod a; mod b; fn main(){}", "/*"),
+            ("fn main(){} mod a;", "\u{feff}fn\u{feff} x(){}"),
+        ] {
+            tree.put("main.rs", main);
+            tree.put("a.rs", child);
+            tree.put("b.rs", "");
+            let sequential = prepare_file(&path, &SourceOptions::default()).unwrap_err();
+            let graph = assemble_independent(&path).unwrap_err();
+            assert_eq!(
+                sequential.to_string(),
+                graph.to_string(),
+                "{main} / {child}"
+            );
+            assert_eq!(sequential.primary, graph.primary);
+        }
+        // Missing child files anchor at the declaring `mod name;`.
+        tree.put("main.rs", "fn main(){}\nmod zz;");
+        let graph = assemble_independent(&path).unwrap_err();
+        assert_eq!(graph.kind, SourceErrorKind::Module);
+        assert_eq!(graph.location.unwrap().line, 2);
+    }
+
     #[test]
     fn mixed_layout_preserves_visibility_and_counts() {
         let tree = Tree::new();
@@ -1779,13 +2279,19 @@ fn main(){println!("mod absent; }"); let x = r##"mod raw; {"##; let c = '}';}
         assert_eq!(error.kind, SourceErrorKind::Limit);
         assert!(error.message.contains("size limit"));
         let options = SourceOptions::default();
-        let mut reader = FsReader;
-        let mut loader = Loader::new(&options, Some(&mut reader));
-        loader.prepared.files = MAX_FILES;
+        tree.put("main.rs", "mod a;");
+        let mut assembler = SourceAssembler::new(&options);
+        assembler.prepared.files = MAX_FILES - 1;
+        let root = prepare_root_unit(
+            &tree.0.join("main.rs"),
+            &options,
+            &super::super::expansion_budget::ExpansionBudget::default(),
+        );
         assert!(
-            loader
-                .file(&tree.0.join("main.rs"), &tree.0, 0, None)
-                .unwrap_err()
+            assembler
+                .provide(Arc::new(root))
+                .err()
+                .unwrap()
                 .to_string()
                 .contains("file limit")
         );

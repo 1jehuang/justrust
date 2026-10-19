@@ -180,6 +180,10 @@ struct ConcreteProofFact {
 /// complete analysis, published on success and on failure (before the node
 /// fails), for diagnostics and reporting. Compiler work reads only output 0.
 const ANALYSIS_OUTPUT: usize = 1;
+/// `PARSE` outputs: the parsed program, and the assembled prepared source it
+/// was parsed from (for source accounting and diagnostics).
+const PARSE_OUTPUTS: usize = 2;
+const PREPARED_SOURCE_OUTPUT: usize = 1;
 
 struct Snapshot {
     input: Input,
@@ -286,6 +290,7 @@ impl Provider for CompilerProvider {
     fn outputs(&self, key: &Key) -> usize {
         match key.kind {
             UNIVERSAL_ANALYZE | ANALYZE => 2,
+            PARSE => PARSE_OUTPUTS,
             _ => 1,
         }
     }
@@ -297,30 +302,64 @@ impl Provider for CompilerProvider {
             let function = Facts::item;
             match key.kind {
                 SOURCE => {
-                    let prepared = match &this.0.input {
-                        Input::File(path) => source::prepare_file(path, &this.0.source_options),
-                        Input::ProbeFile(path, request) => {
-                            source::prepare_probe_file(path, &this.0.source_options, request)
-                        }
-                        Input::Text(text) => {
-                            source::prepare_text("<text>", text, &this.0.source_options)
-                        }
-                        Input::Program(_) => {
-                            return Err(Error::new("prepared program has no source input"));
+                    // One node per source file, keyed by its child-ordinal path
+                    // from the root file: [0] is the root, [0, i] its i-th
+                    // external child module, and so on.
+                    let options = &this.0.source_options;
+                    let budget = expansion_budget::ExpansionBudget::default();
+                    let unit = match key.params.as_slice() {
+                        [] => return Err(Error::new("source file key has no ordinal")),
+                        [0] => match &this.0.input {
+                            Input::File(path) | Input::ProbeFile(path, _) => {
+                                source::prepare_root_unit(path, options, &budget)
+                            }
+                            Input::Text(text) => source::prepare_text_unit("<text>", text, options),
+                            Input::Program(_) => {
+                                return Err(Error::new("prepared program has no source input"));
+                            }
+                        },
+                        [_] => return Err(Error::new("source root ordinal must be 0")),
+                        [parent @ .., index] => {
+                            let parent: Arc<source::UnitResult> =
+                                facts.get(Key::new(SOURCE, parent.to_vec())).await?;
+                            let parent = parent.as_ref().as_ref().map_err(|_| {
+                                Error::new("child module requested from a failed source file")
+                            })?;
+                            source::prepare_child_unit(parent, *index as usize, options, &budget)
                         }
                     };
-                    cx.publish_fact(0, prepared.map_err(|error| Error::new(error.to_string()))?)
+                    cx.publish_fact(0, unit)
                 }
                 PARSE => {
                     if matches!(this.0.input, Input::Program(_)) {
+                        cx.publish(1, 1)?;
                         return cx.publish(0, 1);
                     }
-                    let prepared: Arc<source::PreparedSource> = facts.get(root(SOURCE)).await?;
-                    cx.publish_fact(
-                        0,
-                        frontend::parse_prepared(&prepared)
-                            .map_err(|error| Error::new(error.to_string()))?,
-                    )
+                    let mut assembler = source::SourceAssembler::new(&this.0.source_options);
+                    let root_unit: Arc<source::UnitResult> =
+                        facts.get(Key::new(SOURCE, vec![0])).await?;
+                    let mut step = assembler.provide(root_unit);
+                    let prepared = loop {
+                        match step.map_err(|error| Error::new(error.to_string()))? {
+                            source::AssemblyStep::Done(prepared) => break *prepared,
+                            source::AssemblyStep::Need(need) => {
+                                let unit: Arc<source::UnitResult> =
+                                    facts.get(Key::new(SOURCE, need.ordinal)).await?;
+                                step = assembler.provide(unit);
+                            }
+                        }
+                    };
+                    let prepared = match &this.0.input {
+                        Input::ProbeFile(_, request) => {
+                            source::attach_probe(prepared, &this.0.source_options, request)
+                                .map_err(|error| Error::new(error.to_string()))?
+                        }
+                        _ => prepared,
+                    };
+                    let parsed = frontend::parse_prepared(&prepared)
+                        .map_err(|error| Error::new(error.to_string()));
+                    cx.publish_fact(1, prepared)?;
+                    cx.publish_fact(0, parsed?)
                 }
                 RESOLVE => {
                     let program = match &this.0.input {
@@ -987,7 +1026,7 @@ fn compile_input_configured(
         Input::Program(_) => (0, 0),
         Input::Text(_) | Input::File(_) | Input::ProbeFile(_, _) => {
             let loaded = engine
-                .fact_of::<source::PreparedSource>(&Key::new(SOURCE, vec![]), 0)
+                .fact_of::<source::PreparedSource>(&Key::new(PARSE, vec![]), PREPARED_SOURCE_OUTPUT)
                 .ok_or_else(|| failure(Error::new("missing loaded source accounting"), &report))?;
             (loaded.source_bytes, loaded.files)
         }

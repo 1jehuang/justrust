@@ -107,7 +107,35 @@ pub fn prepare_probe_file(
     options.cfg.validate_native().map_err(error)?;
     let verified = verify(request)?;
     let lexical_budget = crate::compiler::expansion_budget::ExpansionBudget::default();
-    let mut prepared = super::prepare_file_with_budget(client, options, &lexical_budget)?;
+    let prepared = super::prepare_file_with_budget(client, options, &lexical_budget)?;
+    attach_verified(prepared, options, request, verified, lexical_budget)
+}
+
+/// Append the reviewed probe item to an already prepared client source. The
+/// graph prepares the client per file and attaches the probe after assembly.
+pub fn attach_probe(
+    prepared: super::PreparedSource,
+    options: &SourceOptions,
+    request: &SourceProbeRequest,
+) -> Result<super::PreparedSource, SourceError> {
+    options.cfg.validate_native().map_err(error)?;
+    let verified = verify(request)?;
+    attach_verified(
+        prepared,
+        options,
+        request,
+        verified,
+        crate::compiler::expansion_budget::ExpansionBudget::default(),
+    )
+}
+
+fn attach_verified(
+    mut prepared: super::PreparedSource,
+    options: &SourceOptions,
+    request: &SourceProbeRequest,
+    verified: VerifiedProvider,
+    lexical_budget: crate::compiler::expansion_budget::ExpansionBudget,
+) -> Result<super::PreparedSource, SourceError> {
     if verified.full_text.len() > super::MAX_BYTES - prepared.source_bytes
         || prepared.files >= super::MAX_FILES
     {
@@ -122,15 +150,16 @@ pub fn prepare_probe_file(
         .add(verified.path, verified.full_text.clone());
     prepared.source_bytes += verified.full_text.len();
     prepared.files += 1;
-    let mut loader = super::Loader {
-        active: Vec::new(),
+    let mut loader = super::Loader::new(
         options,
-        reader: None,
-        prepared,
-        lexical_budget,
-    };
+        None,
+        super::LOCAL_FILE,
+        verified.full_text.clone(),
+        false,
+    );
+    loader.lexical_budget = lexical_budget;
     let result = (|| {
-        loader.validate_original(id, &verified.full_text, 0)?;
+        loader.validate_original(&verified.full_text, 0)?;
         let filtered = super::source_attrs::prepare_verified_identity(
             &verified.context.selected,
             &options.cfg,
@@ -159,11 +188,11 @@ pub fn prepare_probe_file(
         }
         loader.append(
             "\n",
-            super::Loader::span(id, SELECTED.start..SELECTED.start),
+            super::Loader::span(super::LOCAL_FILE, SELECTED.start..SELECTED.start),
             true,
         )?;
         for attribute in filtered.attributes {
-            loader.prepared.attributes.push(super::PreparedAttribute {
+            prepared.attributes.push(super::PreparedAttribute {
                 span: super::Loader::span(
                     id,
                     SELECTED.start + attribute.range.start..SELECTED.start + attribute.range.end,
@@ -172,15 +201,19 @@ pub fn prepare_probe_file(
                 effective: attribute.effective,
             });
         }
-        loader.expand(
-            &filtered.text,
-            &verified.full_text,
-            id,
-            SELECTED.start,
-            Path::new("."),
-            0,
-        )?;
-        loader.prepared.probes.push(SourceProbeRecord {
+        loader.expand(&filtered.text, SELECTED.start, Path::new("."), 0)?;
+        if !loader.children.is_empty() {
+            return Err(error("reviewed identity cannot declare external modules"));
+        }
+        for segment in &loader.origins {
+            super::append_segment(
+                &mut prepared,
+                &loader.text[segment.prepared.clone()],
+                super::remap_span(segment.origin, id),
+                segment.synthetic,
+            )?;
+        }
+        prepared.probes.push(SourceProbeRecord {
             item: ITEM.into(),
             source_revision: REVISION.into(),
             source_sha256: SOURCE_HASH.into(),
@@ -192,8 +225,11 @@ pub fn prepare_probe_file(
         });
         Ok(())
     })();
-    result.map_err(|e: SourceError| e.with_sources(&loader.prepared.sources))?;
-    Ok(loader.prepared)
+    result.map_err(|e: SourceError| {
+        let primary = e.primary.map(|span| super::remap_span(span, id));
+        super::SourceError { primary, ..e }.with_sources(&prepared.sources)
+    })?;
+    Ok(prepared)
 }
 
 fn verify(request: &SourceProbeRequest) -> Result<VerifiedProvider, SourceError> {
