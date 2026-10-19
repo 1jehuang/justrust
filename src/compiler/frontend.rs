@@ -45,6 +45,7 @@ mod deref_coercion;
 mod format_args;
 mod int_consts;
 mod item_module;
+mod let_statement;
 mod format_macros;
 pub use format_macros::SourceFormatInto;
 mod format_spec;
@@ -11827,96 +11828,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 continue;
             }
             if self.eat("let") {
-                let pattern = self.pattern()?;
-                // Local inference is performed by each independent function checker.
-                let annotation = if self.eat(":") {
-                    Some(self.ty()?)
-                } else {
-                    None
-                };
-                if self.eat(";") {
-                    if matches!(
-                        pattern,
-                        Pattern::Bool(_)
-                            | Pattern::Int { .. }
-                            | Pattern::Char(_)
-                            | Pattern::Range { .. }
-                    ) {
-                        return Err(self.error("refutable literal pattern in let binding"));
-                    }
-                    let Pattern::Binding {
-                        name,
-                        mutable,
-                        by_ref: None,
-                    } = pattern
-                    else {
-                        return Err(
-                            self.unsupported("deferred pattern declarations are unsupported")
-                        );
-                    };
-                    let ty = annotation.unwrap_or(Type::Infer);
-                    self.bind_lexical(name)?;
-                    statements.push(Stmt::Declare {
-                        name: BindingName::Named(name),
-                        ty,
-                        mutable,
-                    });
-                    continue;
-                }
-                self.expect("=")?;
-                let initializer = self.cursor.checkpoint();
-                let value = self.expr(0)?;
-                if self.is("else") {
-                    self.validate_let_else_initializer(initializer)?;
-                    self.cursor.bump();
-                    // Neither this pattern nor its declarations exist in the
-                    // initializer or the genuine diverging else block.
-                    let else_block = self.block()?;
-                    self.expect(";")?;
-                    let pattern = self
-                        .names
-                        .try_parser_box(pattern)
-                        .map_err(native_adapter::name_error)?;
-                    let value = self
-                        .names
-                        .try_parser_box(value)
-                        .map_err(native_adapter::name_error)?;
-                    self.bind_pattern_lexical(&pattern)?;
-                    statements.push(Stmt::LetElse {
-                        pattern,
-                        ty: annotation.unwrap_or(Type::Infer),
-                        value,
-                        else_block,
-                    });
-                    continue;
-                }
-                if matches!(
-                    pattern,
-                    Pattern::Bool(_)
-                        | Pattern::Int { .. }
-                        | Pattern::Char(_)
-                        | Pattern::Range { .. }
-                ) {
-                    return Err(self.error("refutable literal pattern in let binding"));
-                }
-                self.expect(";")?;
-                self.bind_pattern_lexical(&pattern)?;
-                let ty = annotation.unwrap_or(Type::Infer);
-                if let Pattern::Binding {
-                    name,
-                    mutable,
-                    by_ref: None,
-                } = pattern
-                {
-                    statements.push(Stmt::Let {
-                        name: BindingName::Named(name),
-                        mutable,
-                        ty,
-                        value,
-                    });
-                } else {
-                    statements.push(Stmt::LetPattern { pattern, ty, value });
-                }
+                statements.push(self.let_statement()?);
             } else if self.eat("return") {
                 let value = if self.is(";") || self.is("}") {
                     None
