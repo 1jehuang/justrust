@@ -1472,7 +1472,12 @@ impl SourceInventory {
                     )?;
                     self.shadow_pattern(pattern, &here, budget, depth + 1)?;
                 }
-                Stmt::AssignDeref { carrier, value } => {
+                Stmt::AssignDeref {
+                    carrier,
+                    index,
+                    value,
+                    ..
+                } => {
                     self.expr(
                         carrier,
                         &here.child(4, 0, budget)?,
@@ -1489,6 +1494,16 @@ impl SourceInventory {
                         budget,
                         depth + 1,
                     )?;
+                    if let Some(index) = index {
+                        self.expr(
+                            index,
+                            &here.child(4, 2, budget)?,
+                            None,
+                            None,
+                            budget,
+                            depth + 1,
+                        )?;
+                    }
                 }
                 Stmt::AssignIndex { index, value, .. }
                 | Stmt::AssignIndexOp { index, value, .. } => {
@@ -5197,8 +5212,15 @@ pub enum Stmt {
         name: LocalName,
         value: Expr,
     },
+    /// Assignment through a reference produced by a genuine call:
+    /// `*call() OP= value`, `call().f OP= value`, `call().a[i] OP= value`.
+    /// Stock evaluates `value`, then `carrier`, then `index`, exactly once.
+    /// `fields` follow the implicit/explicit carrier Deref; `op` is None for `=`.
     AssignDeref {
         carrier: Expr,
+        fields: Vec<FieldSelector>,
+        index: Option<Expr>,
+        op: Option<BinaryOp>,
         value: Expr,
     },
     AssignIndex {
@@ -5876,6 +5898,95 @@ struct Token {
     constituents: [Option<super::expansion_span::SpanId>; 3],
     suffixes: [Option<TokenPart>; 2],
     name: Option<std::num::NonZeroU32>,
+}
+/// Split `*call()`, `call().f`, `(*call()).f`, `call().a[K]` and
+/// `call().a[i]` assignment targets into the genuine call carrier, its
+/// written selectors and an optional runtime index. Any other target is
+/// returned unchanged for the existing local-rooted place grammar.
+fn call_rooted_target(
+    target: Expr,
+    op: Option<BinaryOp>,
+    value: Expr,
+) -> Result<Stmt, Box<(Expr, Expr)>> {
+    fn rooted(mut expr: &Expr) -> bool {
+        for _ in 0..128 {
+            match expr {
+                Expr::Deref { value } => expr = value,
+                Expr::Field { base, .. } | Expr::Index { base, .. } => expr = base,
+                _ => return genuine_call(expr),
+            }
+        }
+        false
+    }
+    let base = match &target {
+        Expr::DynamicIndex { base, .. } => base.as_ref(),
+        other => other,
+    };
+    // A projection-free call is not a place expression.
+    if genuine_call(base) || !rooted(base) {
+        return Err(Box::new((target, value)));
+    }
+    let (mut expr, index) = match target {
+        Expr::DynamicIndex { base, index } => (*base, Some(*index)),
+        other => (other, None),
+    };
+    let mut fields = Vec::new();
+    loop {
+        expr = match expr {
+            Expr::Deref { value: carrier } if genuine_call(&carrier) => {
+                fields.push(FieldSelector::Deref);
+                fields.reverse();
+                return Ok(Stmt::AssignDeref {
+                    carrier: *carrier,
+                    fields,
+                    index,
+                    op,
+                    value,
+                });
+            }
+            Expr::Field { base, field } if genuine_call(&base) => {
+                fields.push(field);
+                fields.reverse();
+                return Ok(Stmt::AssignDeref {
+                    carrier: *base,
+                    fields,
+                    index,
+                    op,
+                    value,
+                });
+            }
+            Expr::Index {
+                base,
+                index: constant,
+            } if genuine_call(&base) => {
+                fields.push(FieldSelector::ConstantIndex(constant));
+                fields.reverse();
+                return Ok(Stmt::AssignDeref {
+                    carrier: *base,
+                    fields,
+                    index,
+                    op,
+                    value,
+                });
+            }
+            Expr::Deref { value } => {
+                fields.push(FieldSelector::Deref);
+                *value
+            }
+            Expr::Field { base, field } => {
+                fields.push(field);
+                *base
+            }
+            Expr::Index {
+                base,
+                index: constant,
+            } => {
+                fields.push(FieldSelector::ConstantIndex(constant));
+                *base
+            }
+            _ => unreachable!("call-rooted target checked above"),
+        };
+    }
 }
 fn compound_operator(token: TokenView<'_>) -> Option<BinaryOp> {
     if token.string {
@@ -10759,9 +10870,41 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.expect("}")?;
         Ok(wrap(Pattern::Struct { name, fields, rest }))
     }
+    /// Parse the remainder of `TARGET = VALUE;`. Kept out of line so the
+    /// recursive block parser frame does not grow with assignment temporaries.
+    #[inline(never)]
+    fn plain_assignment_statement(&mut self, target: Expr) -> Result<Stmt, ParseError> {
+        let value = self.expr(0)?;
+        self.expect(";")?;
+        let (target, value) = match call_rooted_target(target, None, value) {
+            Ok(statement) => return Ok(statement),
+            Err(unchanged) => *unchanged,
+        };
+        if let Expr::DynamicIndex { base, index } = target {
+            return Ok(Stmt::AssignIndex {
+                array: self.assignment_place(*base)?,
+                index: *index,
+                value,
+            });
+        }
+        let place = self.assignment_place(target)?;
+        Ok(if place.fields.is_empty() {
+            Stmt::Assign {
+                name: place.local,
+                value,
+            }
+        } else {
+            Stmt::AssignPlace { place, value }
+        })
+    }
+    #[inline(never)]
     fn compound_statement(&mut self, target: Expr, op: BinaryOp) -> Result<Stmt, ParseError> {
         let value = self.expr(0)?;
         self.expect(";")?;
+        let (target, value) = match call_rooted_target(target, Some(op), value) {
+            Ok(statement) => return Ok(statement),
+            Err(unchanged) => *unchanged,
+        };
         if let Expr::DynamicIndex { base, index } = target {
             return Ok(Stmt::AssignIndexOp {
                 array: self.assignment_place(*base)?,
@@ -10992,38 +11135,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     self.cursor.bump();
                     statements.push(self.compound_statement(expr, op)?);
                 } else if self.eat("=") {
-                    let value = self.expr(0)?;
-                    self.expect(";")?;
-                    if let Expr::DynamicIndex { base, index } = expr {
-                        let array = self.assignment_place(*base)?;
-                        statements.push(Stmt::AssignIndex {
-                            array,
-                            index: *index,
-                            value,
-                        });
-                        continue;
-                    }
-                    if let Expr::Deref { value: carrier } = &expr
-                        && genuine_call(carrier)
-                    {
-                        let Expr::Deref { value: carrier } = expr else {
-                            unreachable!()
-                        };
-                        statements.push(Stmt::AssignDeref {
-                            carrier: *carrier,
-                            value,
-                        });
-                        continue;
-                    }
-                    let place = self.assignment_place(expr)?;
-                    if place.fields.is_empty() {
-                        statements.push(Stmt::Assign {
-                            name: place.local,
-                            value,
-                        });
-                    } else {
-                        statements.push(Stmt::AssignPlace { place, value });
-                    }
+                    statements.push(self.plain_assignment_statement(expr)?);
                 } else if self.eat(";") {
                     statements.push(Stmt::Expr(expr));
                 } else if self.is("}") {
@@ -13810,7 +13922,15 @@ fn walk_depth_inspecting(
                             push(DepthNode::Type(ty))?;
                             push(DepthNode::Expr(value))?;
                         }
-                        Stmt::AssignDeref { carrier, value } => {
+                        Stmt::AssignDeref {
+                            carrier,
+                            index,
+                            value,
+                            ..
+                        } => {
+                            if let Some(index) = index {
+                                push(DepthNode::Expr(index))?;
+                            }
                             push(DepthNode::Expr(value))?;
                             push(DepthNode::Expr(carrier))?;
                         }

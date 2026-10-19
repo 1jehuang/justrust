@@ -713,8 +713,18 @@ impl<'a> Validator<'a> {
                     self.push(Visit::LocalName(*name))?;
                     self.push(Visit::Expr(value))?;
                 }
-                Stmt::AssignDeref { carrier, value } => {
+                Stmt::AssignDeref {
+                    carrier,
+                    fields,
+                    index,
+                    value,
+                    ..
+                } => {
                     self.push(Visit::Expr(carrier))?;
+                    self.many(fields, Visit::Selector)?;
+                    if let Some(index) = index {
+                        self.push(Visit::Expr(index))?;
+                    }
                     self.push(Visit::Expr(value))?;
                 }
                 Stmt::AssignIndex {

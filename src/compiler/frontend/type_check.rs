@@ -3862,11 +3862,29 @@ impl<'a> Checker<'a> {
         }
         let local = self.lookup(place.local)?;
         let declaration = &self.locals[local.0];
-        let mut ty = declaration.ty.clone();
-        let mut writable = declaration.mutable;
+        self.project_place(
+            local,
+            declaration.ty.clone(),
+            declaration.mutable,
+            &place.fields,
+        )
+    }
+    /// Project written selectors from an already typed root local. The root
+    /// may be a hidden statement carrier, whose binding mutability is
+    /// independent of the writability of the referent it points to.
+    pub(super) fn project_place(
+        &self,
+        local: ir::LocalId,
+        mut ty: ir::Ty,
+        mut writable: bool,
+        fields: &[FieldSelector],
+    ) -> Result<(ir::Place, ir::Ty, bool), String> {
+        if fields.len() > 128 {
+            return Err("place projection nesting exceeds limit128".into());
+        }
         let mut derefs = 0;
-        let mut projection = Vec::with_capacity(place.fields.len());
-        for selector in &place.fields {
+        let mut projection = Vec::with_capacity(fields.len());
+        for selector in fields {
             match selector {
                 FieldSelector::Deref => {
                     derefs += 1;
@@ -3900,7 +3918,7 @@ impl<'a> Checker<'a> {
                                 "multiple dereferences in one field place are unsupported".into()
                             );
                         }
-                        if place.fields.len() >= 128 {
+                        if fields.len() >= 128 {
                             return Err(
                                 "normalized place projection nesting exceeds limit128".into()
                             );
@@ -5183,25 +5201,79 @@ impl<'a> Checker<'a> {
         }
         Ok((value, flow))
     }
+    /// Assignment through a reference returned by a genuine call. Stock
+    /// order is preserved exactly: the RHS is evaluated and saved first, then
+    /// the carrier call, then any runtime index, then the destination is
+    /// read (compound) and written. Every subexpression runs once.
     pub(super) fn deref_assignment(
         &mut self,
         carrier: &Expr,
+        fields: &[FieldSelector],
+        index: Option<&Expr>,
+        op: Option<BinaryOp>,
         value: &Expr,
         statements: &mut Vec<ir::Stmt>,
     ) -> Result<(ir::Stmt, bool), String> {
         let carrier_ty = self
             .scalar_hint(carrier)?
             .ok_or("unresolved reference call assignment carrier")?;
-        let ir::Ty::Ref { referent, .. } = &carrier_ty else {
-            return Err("call assignment carrier must return a reference".into());
+        if !matches!(carrier_ty, ir::Ty::Ref { .. }) {
+            // Only a written `*` of a primitive value is certainly invalid
+            // (E0614). By-value temporaries, raw pointers and user Deref
+            // carriers are legal Rust outside this bounded slice.
+            let primitive = matches!(
+                carrier_ty,
+                ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool | ir::Ty::Char | ir::Ty::Unit
+            );
+            if primitive && matches!(fields.first(), Some(FieldSelector::Deref)) {
+                return Err("E0614: call assignment carrier must return a reference".into());
+            }
+            return Err(
+                "unsupported: assignment through a call result that is not a reference".into(),
+            );
+        }
+        // Type-only projection: the carrier local is not allocated yet.
+        let (shape, destination, writable) =
+            self.project_place(ir::LocalId(usize::MAX), carrier_ty.clone(), false, fields)?;
+        if shape.projection.first() != Some(&ir::Projection::Deref) {
+            return Err("unsupported: assignment into a by-value call temporary".into());
+        }
+        if !writable {
+            return Err(
+                "E0594: cannot assign to data behind a shared reference returned by a call".into(),
+            );
+        }
+        let element = match index {
+            None => None,
+            Some(_) => {
+                let ir::Ty::Array { element, .. } = &destination else {
+                    return Err("runtime index assignment requires an array".into());
+                };
+                if op.is_none() {
+                    // Existing plain runtime IndexAssign does not admit Deref.
+                    return Err("unsupported: runtime indexed assignment through a call-returned reference; only compound operators are admitted".into());
+                }
+                Some(element.as_ref().clone())
+            }
         };
-        let referent = referent.as_ref().clone();
-        let rhs = self.expr_expected(value, Some(&referent))?;
-        let rhs_flow = self.flow(rhs);
-        self.require(&rhs_flow, &referent)?;
+        let target = element.as_ref().unwrap_or(&destination).clone();
+        let (rhs, rhs_flow) = match op {
+            Some(op) => self.compound_value(op, &target, value)?,
+            None => {
+                let rhs = self.expr_expected(value, Some(&target))?;
+                let flow = self.flow(rhs);
+                self.require(&flow, &target)?;
+                (rhs, flow)
+            }
+        };
+        let saved_ty = if rhs_flow.ty == ir::Ty::Never {
+            target.clone()
+        } else {
+            rhs_flow.ty.clone()
+        };
         let saved = self.temporary(
             &format!("$rhs{}", self.locals.len()),
-            referent.clone(),
+            saved_ty.clone(),
             false,
         )?;
         self.charge_node(std::mem::size_of::<ir::Stmt>() * 3)?;
@@ -5213,29 +5285,60 @@ impl<'a> Checker<'a> {
             self.expr_expected_when(carrier, self.reachable && rhs_flow.completes, None)?;
         let pf = self.flow(pointer);
         self.require(&pf, &carrier_ty)?;
-        let handle =
-            self.temporary(&format!("$carrier{}", self.locals.len()), carrier_ty, false)?;
+        let handle = self.temporary(
+            &format!("$carrier{}", self.locals.len()),
+            carrier_ty.clone(),
+            false,
+        )?;
         statements.push(ir::Stmt::Let {
             local: handle,
             value: pointer,
         });
+        let (place, _, _) = self.project_place(handle, carrier_ty, false, fields)?;
         let loaded = ir::ExprId(self.exprs.len());
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         self.exprs.push(ir::TypedExpr {
-            ty: referent,
+            ty: saved_ty,
             completion: ir::Completion::Returns,
             kind: ir::ExprKind::Local(saved),
         });
-        Ok((
-            ir::Stmt::AssignPlace {
-                place: ir::Place {
-                    local: handle,
-                    projection: vec![ir::Projection::Deref],
+        let completes = rhs_flow.completes && pf.completes;
+        Ok(match (index, op) {
+            (None, None) => (
+                ir::Stmt::AssignPlace {
+                    place,
+                    value: loaded,
                 },
-                value: loaded,
-            },
-            rhs_flow.completes && pf.completes,
-        ))
+                completes,
+            ),
+            (None, Some(op)) => (
+                ir::Stmt::AssignOp {
+                    place,
+                    op,
+                    value: loaded,
+                },
+                completes,
+            ),
+            (Some(index), Some(op)) => {
+                let index = self.expr_expected_when(
+                    index,
+                    self.reachable && completes,
+                    Some(&ir::Ty::Int(ir::IntTy::Usize)),
+                )?;
+                let index_flow = self.flow(index);
+                self.require_index(&index_flow)?;
+                (
+                    ir::Stmt::AssignIndexOp {
+                        array: place,
+                        index,
+                        op,
+                        value: loaded,
+                    },
+                    completes && index_flow.completes,
+                )
+            }
+            (Some(_), None) => unreachable!("rejected above"),
+        })
     }
     pub(super) fn block_when(
         &mut self,
@@ -5408,9 +5511,20 @@ impl<'a> Checker<'a> {
                         flow.completes,
                     )
                 }
-                Stmt::AssignDeref { carrier, value } => {
-                    self.deref_assignment(carrier, value, &mut statements)?
-                }
+                Stmt::AssignDeref {
+                    carrier,
+                    fields,
+                    index,
+                    op,
+                    value,
+                } => self.deref_assignment(
+                    carrier,
+                    fields,
+                    index.as_ref(),
+                    *op,
+                    value,
+                    &mut statements,
+                )?,
                 Stmt::Assign { name, value } => {
                     if let Some(pending) = self.pending_reference(name)? {
                         // Only the already known dereference result supplies a scalar

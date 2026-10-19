@@ -332,6 +332,9 @@ acceptance.
 - [ ] Extend dynamic borrowed places, temporary scopes/lifetime extension,
       aggregate carrier flows, general reborrows and loop/SCC-carried loans.
       Preserve the delivered current-cell and per-occurrence provenance rules.
+      Delivered: assignment/compound assignment through call-returned `&mut`
+      places with stock value->carrier->index order (TEMP-PLACES.md); by-value
+      temporary fields and plain runtime index through a call stay Unsupported.
 - [x] Normal-path canonical `Drop` for nongeneric scalar-field named structs
       under DROP-NORMAL.md: runtime drop flags, reverse lexical/parameter order,
       moves, conditional init/move, RHS-first replacement, loops, labeled exits,
