@@ -73,6 +73,10 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       124-binary hosted gate. Actual trailing semicolon syntax preserves source
       Unit obligations separately from intrinsic runtime loop divergence.
       Expression-position while-let, chains and refutable payload matrices remain open.
+- [x] Range expressions in ordinary expression positions, including call arguments,
+      parenthesized receivers and open/full/inclusive bounds. They lower to ordinary
+      native `std::ops` range values. `tests/range_exprs.rs` compares stock output.
+      Iterator/adapters remain a separate library workstream.
 - [x] Genuine statement-position integer range for loops (`start..end` and
       `start..=end`) through existing checked while/match IR. Bounds evaluate
       once, left to right, before body-only source bindings. Pre-body advancement

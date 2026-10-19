@@ -4717,6 +4717,7 @@ mod leading_zero_tests;
 #[cfg(test)]
 mod name_tests;
 mod or_patterns;
+mod range_expr;
 mod recipes;
 #[cfg(test)]
 mod slice_tests;
@@ -12167,8 +12168,15 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.is("&&") {
             return Err(self.unsupported("nested reference borrows are unsupported in B1"));
         }
+        if min == 0 && !self.token().string && (self.is("..") || self.is("..=")) {
+            return self.range_expression(None);
+        }
         let left = self.expr_prefix(statement)?;
-        self.expr_continuation(left, min, statement_blocklike)
+        let left = self.expr_continuation(left, min, statement_blocklike)?;
+        if min == 0 && !self.token().string && (self.is("..") || self.is("..=")) {
+            return self.range_expression(Some(left));
+        }
+        Ok(left)
     }
     #[inline(never)]
     fn labeled_expression(&mut self, min: u8, statement: bool) -> Result<Expr, ParseError> {
@@ -12558,7 +12566,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         let iterable = if self.is("(") {
             let mark = self.cursor.checkpoint();
             self.cursor.bump();
-            let start = self.nested_expr()?;
+            let start = self.nested_expr_no_range()?;
             if self.is("..") || self.is("..=") {
                 let inclusive = self.eat("..=");
                 if !inclusive {
@@ -12603,7 +12611,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 self.unsupported("unsupported: unbounded or half-open-start for-loop ranges")
             );
         } else {
-            let start = self.condition()?;
+            let start = self.condition_with(1, ConditionPurpose::Ordinary)?;
             if self.is("..") || self.is("..=") {
                 let inclusive = self.eat("..=");
                 if !inclusive {
@@ -12650,7 +12658,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         &mut self,
         adapters: &mut Vec<ForAdapter>,
     ) -> Result<ForIterable, ParseError> {
-        let value = self.condition()?;
+        let value = self.condition_with(1, ConditionPurpose::Ordinary)?;
         if self.is("..") || self.is("..=") {
             return Err(self.unsupported("unsupported: parenthesized range start in for loop"));
         }
@@ -12853,7 +12861,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         validate_depth(DepthNode::Expr(&left)).map_err(|e| self.depth_error(&e))?;
                         continue;
                     }
-                    let index = self.nested_expr()?;
+                    let index = self.nested_expr_no_range()?;
                     if self.is("..") || self.is("..=") {
                         left = self.range_index(left, Some(index))?;
                         validate_depth(DepthNode::Expr(&left)).map_err(|e| self.depth_error(&e))?;

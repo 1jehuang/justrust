@@ -102,3 +102,35 @@ pub trait Fn<Args> {
     type Output;
     fn call(&self, args: Args) -> Self::Output;
 }
+// Range expressions desugar to these struct literals (frontend/range_expr.rs).
+#[derive(Clone, PartialEq, Eq)]
+pub struct Range<Idx> {
+    pub start: Idx,
+    pub end: Idx,
+}
+#[derive(Clone, PartialEq, Eq)]
+pub struct RangeFrom<Idx> {
+    pub start: Idx,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct RangeTo<Idx> {
+    pub end: Idx,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct RangeFull;
+#[derive(Clone, PartialEq, Eq)]
+pub struct RangeInclusive<Idx> {
+    start: Idx,
+    end: Idx,
+}
+impl<Idx> RangeInclusive<Idx> {
+    pub fn new(start: Idx, end: Idx) -> Self {
+        Self { start, end }
+    }
+    pub fn start(&self) -> &Idx { &self.start }
+    pub fn end(&self) -> &Idx { &self.end }
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct RangeToInclusive<Idx> {
+    pub end: Idx,
+}
