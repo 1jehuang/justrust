@@ -4,92 +4,6 @@
 use super::{const_eval as scalar, const_source as source, frontend, ir};
 use std::sync::Arc;
 
-#[cfg(test)]
-mod storage_tests {
-    use super::*;
-    use std::{
-        future::Future,
-        pin::pin,
-        task::{Context, Poll, Waker},
-    };
-    fn run<T>(future: impl Future<Output = T>) -> T {
-        match pin!(future)
-            .as_mut()
-            .poll(&mut Context::from_waker(Waker::noop()))
-        {
-            Poll::Ready(value) => value,
-            Poll::Pending => panic!("literal constant unexpectedly suspended"),
-        }
-    }
-    fn limited(bytes: usize) -> ir::PlanBudget {
-        ir::PlanBudget::new(ir::PlanLimits {
-            bytes,
-            ..Default::default()
-        })
-    }
-    #[test]
-    fn const_wrapper_bytes_checked_and_each_constructor_admits_before_publication() {
-        assert!(publication_bytes(usize::MAX, false).is_err());
-        assert!(publication_bytes(usize::MAX - 2 * std::mem::size_of::<usize>(), true).is_err());
-        let budget = ir::PlanBudget::default();
-        let program = Arc::new(frontend::parse("const A:u8=1;fn main(){}").unwrap());
-        let plan = frontend::PlanCtx::from_shared_program(program.clone(), &budget).unwrap();
-        let id = plan.constant_decl(0).unwrap();
-        let source = Arc::new(
-            plan.publish_constant_declaration(&program, id, &budget)
-                .unwrap(),
-        );
-        let body_bytes = publication_bytes(std::mem::size_of::<BodyFact>(), true).unwrap();
-        let small = limited(body_bytes - 1);
-        assert!(check(source.clone(), &[], &plan, &small).is_err());
-        assert_eq!(
-            small.usage_snapshot().first_failure.unwrap().requested,
-            body_bytes
-        );
-        let body = Arc::new(check(source, &[], &plan, &budget).unwrap());
-        assert_eq!(body._storage.bytes(), body_bytes);
-        let proof_bytes =
-            publication_bytes(std::mem::size_of::<QualificationFact>(), false).unwrap();
-        let small = limited(proof_bytes - 1);
-        assert!(QualificationFact::new(body.clone(), &[], &small).is_err());
-        assert_eq!(
-            small.usage_snapshot().first_failure.unwrap().requested,
-            proof_bytes
-        );
-        let exact = limited(proof_bytes);
-        let proof = QualificationFact::new(body.clone(), &[], &exact).unwrap();
-        assert_eq!(proof._storage.bytes(), proof_bytes);
-        assert_eq!(exact.usage_snapshot().bytes, proof_bytes);
-        let receipt = proof._storage.clone();
-        drop(receipt);
-        assert_eq!(exact.usage_snapshot().bytes, proof_bytes);
-        let value_bytes = publication_bytes(std::mem::size_of::<ValueFact>(), false).unwrap();
-        let small = limited(value_bytes - 1);
-        assert!(
-            run(ValueFact::evaluate(body.clone(), &proof, &small, |_| {
-                std::future::ready(Err(crate::Error::new("unexpected reference")))
-            }))
-            .is_err()
-        );
-        assert_eq!(
-            small.usage_snapshot().first_failure.unwrap().requested,
-            value_bytes
-        );
-        let value = run(ValueFact::evaluate(body, &proof, &budget, |_| {
-            std::future::ready(Err(crate::Error::new("unexpected reference")))
-        }))
-        .unwrap();
-        assert_eq!(value._storage.bytes(), value_bytes);
-        let paid = budget.usage_snapshot().bytes;
-        let receipt = value._storage.clone();
-        drop(value);
-        drop(receipt);
-        assert_eq!(budget.usage_snapshot().bytes, paid);
-        drop(proof);
-        assert_eq!(exact.usage_snapshot().bytes, proof_bytes);
-    }
-}
-
 #[derive(Debug)]
 pub(super) struct BodyFact {
     source: Arc<source::DeclarationFact>,
@@ -475,4 +389,90 @@ fn integer_bits(magnitude: u128, ty: ir::IntTy, negative: bool) -> Result<u128, 
     } else {
         magnitude
     })
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+    use std::{
+        future::Future,
+        pin::pin,
+        task::{Context, Poll, Waker},
+    };
+    fn run<T>(future: impl Future<Output = T>) -> T {
+        match pin!(future)
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+        {
+            Poll::Ready(value) => value,
+            Poll::Pending => panic!("literal constant unexpectedly suspended"),
+        }
+    }
+    fn limited(bytes: usize) -> ir::PlanBudget {
+        ir::PlanBudget::new(ir::PlanLimits {
+            bytes,
+            ..Default::default()
+        })
+    }
+    #[test]
+    fn const_wrapper_bytes_checked_and_each_constructor_admits_before_publication() {
+        assert!(publication_bytes(usize::MAX, false).is_err());
+        assert!(publication_bytes(usize::MAX - 2 * std::mem::size_of::<usize>(), true).is_err());
+        let budget = ir::PlanBudget::default();
+        let program = Arc::new(frontend::parse("const A:u8=1;fn main(){}").unwrap());
+        let plan = frontend::PlanCtx::from_shared_program(program.clone(), &budget).unwrap();
+        let id = plan.constant_decl(0).unwrap();
+        let source = Arc::new(
+            plan.publish_constant_declaration(&program, id, &budget)
+                .unwrap(),
+        );
+        let body_bytes = publication_bytes(std::mem::size_of::<BodyFact>(), true).unwrap();
+        let small = limited(body_bytes - 1);
+        assert!(check(source.clone(), &[], &plan, &small).is_err());
+        assert_eq!(
+            small.usage_snapshot().first_failure.unwrap().requested,
+            body_bytes
+        );
+        let body = Arc::new(check(source, &[], &plan, &budget).unwrap());
+        assert_eq!(body._storage.bytes(), body_bytes);
+        let proof_bytes =
+            publication_bytes(std::mem::size_of::<QualificationFact>(), false).unwrap();
+        let small = limited(proof_bytes - 1);
+        assert!(QualificationFact::new(body.clone(), &[], &small).is_err());
+        assert_eq!(
+            small.usage_snapshot().first_failure.unwrap().requested,
+            proof_bytes
+        );
+        let exact = limited(proof_bytes);
+        let proof = QualificationFact::new(body.clone(), &[], &exact).unwrap();
+        assert_eq!(proof._storage.bytes(), proof_bytes);
+        assert_eq!(exact.usage_snapshot().bytes, proof_bytes);
+        let receipt = proof._storage.clone();
+        drop(receipt);
+        assert_eq!(exact.usage_snapshot().bytes, proof_bytes);
+        let value_bytes = publication_bytes(std::mem::size_of::<ValueFact>(), false).unwrap();
+        let small = limited(value_bytes - 1);
+        assert!(
+            run(ValueFact::evaluate(body.clone(), &proof, &small, |_| {
+                std::future::ready(Err(crate::Error::new("unexpected reference")))
+            }))
+            .is_err()
+        );
+        assert_eq!(
+            small.usage_snapshot().first_failure.unwrap().requested,
+            value_bytes
+        );
+        let value = run(ValueFact::evaluate(body, &proof, &budget, |_| {
+            std::future::ready(Err(crate::Error::new("unexpected reference")))
+        }))
+        .unwrap();
+        assert_eq!(value._storage.bytes(), value_bytes);
+        let paid = budget.usage_snapshot().bytes;
+        let receipt = value._storage.clone();
+        drop(value);
+        drop(receipt);
+        assert_eq!(budget.usage_snapshot().bytes, paid);
+        drop(proof);
+        assert_eq!(exact.usage_snapshot().bytes, proof_bytes);
+    }
 }
