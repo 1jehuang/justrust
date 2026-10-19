@@ -1728,7 +1728,7 @@ For more information about this error, try `rustc --explain E0425`.
             source_fingerprint: 7869453377562554686,
             source_sha256: r###"565419b04b7df7562ffe530b0d868e0623721a68a87a9f087b9e56a05160400d"###,
             native: Native::Unsupported,
-            boundary: r###"expected ASCII identifier"###,
+            boundary: r###"debug_assert_eq! nonliteral messages are unsupported"###,
             yes: Frozen {
                 compile_code: 1,
                 compile_stdout: r###""###,
@@ -1924,7 +1924,7 @@ For more information about this error, try `rustc --explain E0425`.
             source_fingerprint: 13036606243337873201,
             source_sha256: r###"1afa0cb7f3f2f1d6c5ebdf1d4cc30b991bbd0986872084cbb82623323bedb133"###,
             native: Native::Unsupported,
-            boundary: r###"expected ASCII identifier"###,
+            boundary: r###"debug_assert_ne! nonliteral messages are unsupported"###,
             yes: Frozen {
                 compile_code: 1,
                 compile_stdout: r###""###,
@@ -1982,7 +1982,7 @@ error: aborting due to 1 previous error
             source_fingerprint: 14728022449484480847,
             source_sha256: r###"4466d84f25a578bb78d04fdc26c87056be758b7e6edb83e485d4139ef19fa208"###,
             native: Native::Unsupported,
-            boundary: r###"expected ASCII identifier"###,
+            boundary: r###"debug_assert! nonliteral messages are unsupported"###,
             yes: Frozen {
                 compile_code: 1,
                 compile_stdout: r###""###,

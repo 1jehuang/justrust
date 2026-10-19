@@ -6955,9 +6955,6 @@ impl<'input, 'names> Parser<'input, 'names> {
             .input
             .opaque_literal_buffer(&self.token(), self.names)?;
         let cursor = TokenCursor::new(&buffer);
-        if cursor.current().matches("-") && cursor.peek(1).is_some_and(|token| token.string) {
-            return Err(self.error("cannot apply unary operator `-` to type `&str`"));
-        }
         let value = self.isolated_expression(&buffer)?;
         self.cursor.bump();
         Ok(value)
@@ -7511,7 +7508,15 @@ impl<'input, 'names> Parser<'input, 'names> {
             );
         }
         if self.eat("&") {
-            let region = if self.token().is_lifetime() && self.token().text == "'static" {
+            let region = if self.token().is_lifetime()
+                && self.token().text == "'static"
+                && self
+                    .cursor
+                    .peek(1)
+                    .is_some_and(|token| token.matches("str"))
+            {
+                // Only `&'static str` (program data) is admitted. Other
+                // `'static` references keep the explicit parser boundary.
                 self.cursor.bump();
                 Some(RegionName::Static)
             } else if self.token().is_lifetime() {

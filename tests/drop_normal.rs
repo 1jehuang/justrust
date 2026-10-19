@@ -340,7 +340,7 @@ fn rejection_reason(message: &str, case: &Case) {
     }
     if precedent_blocked(case) {
         let expected = match case.path.as_str() {
-            "negative/move_field.rs" => "expected ascii identifier, found \"owned\"",
+            "negative/move_field.rs" => "unresolved type",
             _ => "lifetime parameters on nominal and impl declarations are unsupported",
         };
         assert!(

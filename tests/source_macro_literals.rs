@@ -82,7 +82,7 @@ fn cases() -> Vec<Case> {
             source: r#"fn main(){macro_rules! value{($x:literal)=>{$x};}let result=value!("ok");if result=="ok"{println!("ok");}else{println!("bad");}}"#,
             stock_stdout: Some("ok\n"),
             stock_diagnostic: None,
-            native: NativeGate::UnsupportedStringValue,
+            native: NativeGate::Runtime,
         },
         Case {
             name: "negative_boolean",
@@ -96,9 +96,8 @@ fn cases() -> Vec<Case> {
             source: r#"fn main(){macro_rules! value{($x:literal)=>{$x};}let result=value!(-"ok");}"#,
             stock_stdout: None,
             stock_diagnostic: Some("cannot apply unary operator"),
-            // Stock is type-invalid, but native string consumption is outside
-            // this slice. Unsupported is not a proof of that type diagnosis.
-            native: NativeGate::UnsupportedStringValue,
+            // Native `&str` values reject negation in the type checker.
+            native: NativeGate::InvalidType,
         },
         Case {
             name: "integer_arbitrary_suffix",
@@ -359,7 +358,7 @@ fn stock_all() {
         }
     }
     assert_eq!(stock, (15, 6));
-    assert_eq!(partition, (12, 1, 3, 1, 2, 2));
+    assert_eq!(partition, (13, 2, 3, 1, 0, 2));
 }
 
 #[test]
@@ -414,8 +413,8 @@ fn typed_literal_parser_errors_distinguish_suffix_syntax_from_string_boundaries(
             assert!(error.message.contains("suffix"), "{}:{error}", case.name);
         }
     }
-    assert_eq!(counts, (3, 1, 2));
-    assert_eq!(parsed_type_invalid, 1);
+    assert_eq!(counts, (3, 1, 0));
+    assert_eq!(parsed_type_invalid, 2);
 }
 
 #[test]
@@ -506,5 +505,5 @@ fn native_literal_consumption_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 76);
-    assert_eq!(categories, (48, 20, 8));
+    assert_eq!(categories, (52, 24, 0));
 }

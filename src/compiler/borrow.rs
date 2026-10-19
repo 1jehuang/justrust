@@ -2392,14 +2392,15 @@ impl CarrierBuilder<'_, '_> {
             }
             Rvalue::Aggregate { fields, .. } | Rvalue::EnumVariant { fields, .. } => {
                 let mut output = Vec::new();
-                let nominal = matches!(
-                    value,
-                    Rvalue::EnumVariant { .. }
-                        | Rvalue::Aggregate {
-                            ty: Ty::Struct(_),
-                            ..
-                        }
-                );
+                // Only non-generic nominals: generic carriers transport their
+                // actual reference arguments through certified substitution.
+                let nominal = match value {
+                    Rvalue::EnumVariant { ty, .. } => ty.def().type_args.is_empty(),
+                    Rvalue::Aggregate {
+                        ty: Ty::Struct(ty), ..
+                    } => ty.def().type_args.is_empty(),
+                    _ => false,
+                };
                 for (index, operand) in fields.iter().enumerate() {
                     for (mut location, origins) in self.operand_value(state, operand)? {
                         // Nominal declarations have no lifetime parameters, so

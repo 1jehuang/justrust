@@ -502,7 +502,7 @@ after
             source_fingerprint: 14403378227036358309,
             source_sha256: r###"13589b58ac0f080c7d44e88bc6c0fc799017c62760382ef24b7717713f22d8c3"###,
             native: Native::Unsupported,
-            boundary: r###"expected ASCII identifier, found "custom""###,
+            boundary: r###"assert_eq! nonliteral messages are unsupported"###,
             phase: r###"parse"###,
             stock_compile_code: 1,
             stock_code: None,
