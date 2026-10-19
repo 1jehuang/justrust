@@ -528,6 +528,7 @@ impl Provider for CompilerProvider {
                                 if field.parameter != original.parameter
                                     || field.binding != original.binding
                                     || field.scalar != original.scalar
+                                    || field.kind != original.kind
                                 {
                                     return Err(Error::new(
                                         "capture environment handle changed original binding",

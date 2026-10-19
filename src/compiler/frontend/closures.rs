@@ -14,6 +14,7 @@ pub(super) struct SourceCapture {
     pub name: AstIdent,
     pub environment: AstIdent,
     pub ty: Type,
+    pub kind: ir::BorrowKind,
 }
 
 #[derive(Clone, Debug)]

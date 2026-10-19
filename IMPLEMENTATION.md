@@ -404,7 +404,7 @@ cleanup failures.
 - [ ] Complete closures and capture modes, callable traits, function values,
       iterator/for desugaring, async/await/Future state machines and pinning.
       Include capture lifetimes, suspension-safe moves, cancellation and Drop.
-      Immediate explicitly typed noncapturing callables and shared scalar
+      Immediate explicitly typed noncapturing callables and shared/mutable scalar
       parent-parameter captures are foundations only (CLOSURES.md), not
       completion of this item.
 - [ ] Extend monomorphization/recursive instance planning to the new forms while
