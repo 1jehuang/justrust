@@ -808,6 +808,7 @@ impl<'a> Validator<'a> {
                 }
                 Expr::Borrow { place, .. } => self.push(Visit::Place(place))?,
                 Expr::Deref { value }
+                | Expr::BorrowValue { value, .. }
                 | Expr::Repeat { value, .. }
                 | Expr::Index { base: value, .. }
                 | Expr::Unary { value, .. } => self.push(Visit::Expr(value))?,

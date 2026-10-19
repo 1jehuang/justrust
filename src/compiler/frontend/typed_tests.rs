@@ -2411,7 +2411,13 @@ fn b3b_mutable_call_temp_copy_reads_preserve_computed_place_boundaries() {
         if source.contains("*id(&mut x)=2") {
             check(&parse(source).unwrap()).unwrap();
         } else {
-            assert!(parse(source).unwrap_err().contains("unsupported"));
+            // `&mut *call()` reborrows through a call result: an explicit
+            // boundary of the checker, not a parse rejection.
+            assert!(
+                check(&parse(source).unwrap())
+                    .unwrap_err()
+                    .contains("unsupported")
+            );
         }
     }
     for source in [
@@ -2679,6 +2685,7 @@ fn b1_rejects_forbidden_reference_locations_authority_and_implicit_coercions() {
             "fn main(){let x=1;let r=&x;let nested=&r;}"
                 | "fn main(){let x=1;let r=&x;let a=[r;0];}"
                 | "fn main(){let x=1;let r=&x;let t=(r,);}"
+                | "fn main(){let r=&1;}"
         ) {
             result.unwrap();
             check(&parse(source).unwrap()).unwrap();

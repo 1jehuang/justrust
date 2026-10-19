@@ -1001,6 +1001,10 @@ impl<'s> Checker<'s> {
                 let inner = self.infer_type_term(&referent, None, depth + 1)?;
                 self.infer_node(InferKind::Ref(*kind, inner))?
             }
+            Expr::BorrowValue { kind, value } => {
+                let inner = self.inference_evidence(value, depth + 1)?;
+                self.infer_node(InferKind::Ref(*kind, inner))?
+            }
             Expr::Deref { value } => {
                 let carrier = self.inference_evidence(value, depth + 1)?;
                 match carrier.as_ref() {
@@ -1396,6 +1400,14 @@ pub(super) fn genuine_call(expr: &Expr) -> bool {
         _ => false,
     }
 }
+/// Place expressions that an rvalue temporary would wrongly copy.
+pub(super) fn place_expression(expr: &Expr) -> bool {
+    match expr {
+        Expr::Var(_) | Expr::Deref { .. } | Expr::DynamicIndex { .. } => true,
+        Expr::Field { base, .. } | Expr::Index { base, .. } => place_expression(base),
+        _ => false,
+    }
+}
 pub(super) fn static_source_place(mut expr: &Expr) -> Result<Place, String> {
     let mut fields = Vec::new();
     loop {
@@ -1472,6 +1484,13 @@ pub(super) struct Checker<'a> {
     /// move mode; implicit dereferences of matched references switch it to a
     /// borrow. Always restored after each implicit dereference.
     pub(super) binding_mode: std::cell::Cell<Option<ir::BorrowKind>>,
+    /// Storage for borrowed value temporaries (`&P { .. }`, `&f()`), with
+    /// whether the temporary is lifetime-extended by an enclosing `let`.
+    /// Extended temporaries are declared by the enclosing block; others are
+    /// declared by a block wrapping only their statement or initializer.
+    pub(super) borrow_temporaries: Vec<(ir::LocalId, bool)>,
+    /// Source addresses of borrow operands in extending `let` positions.
+    pub(super) extending_borrows: Vec<usize>,
 }
 #[derive(Clone, Copy)]
 pub(super) enum Expectation<'a> {
@@ -3209,6 +3228,8 @@ impl<'a> Checker<'a> {
             inference_evidence_cache: std::cell::RefCell::new(HashMap::new()),
             unsafe_depth: 0,
             binding_mode: std::cell::Cell::new(None),
+            borrow_temporaries: Vec::new(),
+            extending_borrows: Vec::new(),
             canonical: None,
         }
     }
@@ -4046,6 +4067,12 @@ impl<'a> Checker<'a> {
                 Some(ir::Ty::RawPtr { pointee, .. }) => Some(pointee.as_ref().clone()),
                 _ => None,
             },
+            Expr::BorrowValue { kind, value } => {
+                self.scalar_hint(value)?.map(|referent| ir::Ty::Ref {
+                    kind: *kind,
+                    referent: Arc::new(referent),
+                })
+            }
             Expr::Integer(literal) => literal.suffix.map(ir::Ty::Int),
             Expr::Float(literal) => literal.suffix.map(ir::Ty::Float),
             Expr::Bool(_) => Some(ir::Ty::Bool),
@@ -4357,6 +4384,222 @@ impl<'a> Checker<'a> {
         let result = f(self, referent, path);
         path.pop();
         result
+    }
+    /// `&value` where `value` is not a place: evaluate it into a fresh
+    /// temporary declared by the enclosing block, then borrow that.
+    pub(super) fn borrow_value(
+        &mut self,
+        kind: ir::BorrowKind,
+        value: &Expr,
+        expected: Option<&ir::Ty>,
+    ) -> Result<ir::ExprId, String> {
+        let source = value;
+        if place_expression(value) {
+            return Err(
+                "unsupported: borrowing runtime indexed or dereferenced places is unsupported"
+                    .into(),
+            );
+        }
+        if matches!(value, Expr::Field { .. } | Expr::Index { .. }) {
+            // `&call().field` may name a place behind a returned reference
+            // (autoderef), which a copied temporary would not alias.
+            return Err(
+                "unsupported: borrowing a field or element of a value expression is unsupported"
+                    .into(),
+            );
+        }
+        let hint = match (expected, value) {
+            // `&[a, b]` at a `&[T]` site: the array literal gets element type T.
+            (Some(ir::Ty::Ref { referent, .. }), Expr::Array(elements)) => {
+                match referent.as_ref() {
+                    ir::Ty::Slice { element } => Some(ir::Ty::Array {
+                        element: element.clone(),
+                        len: elements.len(),
+                    }),
+                    other => Some(other.clone()),
+                }
+            }
+            (Some(ir::Ty::Ref { referent, .. }), Expr::Repeat { len, .. }) => {
+                match referent.as_ref() {
+                    ir::Ty::Slice { element } => Some(ir::Ty::Array {
+                        element: element.clone(),
+                        len: *len,
+                    }),
+                    other => Some(other.clone()),
+                }
+            }
+            (Some(ir::Ty::Ref { referent, .. }), _)
+                if !matches!(referent.as_ref(), ir::Ty::Slice { .. }) =>
+            {
+                Some(referent.as_ref().clone())
+            }
+            _ => None,
+        };
+        let value = self.expr_expected(value, hint.as_ref())?;
+        let flow = self.flow(value);
+        if !flow.completes {
+            return Ok(value);
+        }
+        if !self.trivially_dropped(&flow.ty)? {
+            return Err("unsupported: borrowing a temporary whose type has a destructor".into());
+        }
+        let local = self.temporary("$borrow_temporary", flow.ty.clone(), true)?;
+        self.charge_node(std::mem::size_of::<ir::LocalId>())?;
+        let extended = self
+            .extending_borrows
+            .contains(&(source as *const Expr as usize));
+        self.borrow_temporaries.push((local, extended));
+        let borrowed = self.borrow_expression(
+            kind,
+            ir::Place {
+                local,
+                projection: Vec::new(),
+            },
+        )?;
+        let ty = self.exprs[borrowed.0].ty.clone();
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 64)?;
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty,
+            completion: ir::Completion::Returns,
+            kind: ir::ExprKind::Block(ir::Block {
+                statements: vec![ir::Stmt::Assign { local, value }],
+                tail: Some(borrowed),
+            }),
+        });
+        Ok(id)
+    }
+    /// Record borrow operands in extending positions of a `let` initializer:
+    /// the initializer itself, operands of extending borrows, and fields of
+    /// tuple, array, struct and variant constructors in extending positions.
+    fn mark_extending_borrows(&mut self, expr: &Expr, depth: usize) -> Result<(), String> {
+        if depth >= 128 {
+            return Ok(());
+        }
+        self.charge_node(std::mem::size_of::<usize>())?;
+        match expr {
+            Expr::BorrowValue { value, .. } => {
+                self.extending_borrows
+                    .push(value.as_ref() as *const Expr as usize);
+                self.mark_extending_borrows(value, depth + 1)?;
+            }
+            Expr::Apply { value, .. } => self.mark_extending_borrows(value, depth + 1)?,
+            Expr::Tuple(fields) | Expr::Array(fields) | Expr::TupleStruct { fields, .. } => {
+                for field in fields {
+                    self.mark_extending_borrows(field, depth + 1)?;
+                }
+            }
+            Expr::Struct { fields, .. } => {
+                for (_, field) in fields {
+                    self.mark_extending_borrows(field, depth + 1)?;
+                }
+            }
+            Expr::EnumVariant { fields, .. } => {
+                for (_, field) in fields {
+                    self.mark_extending_borrows(field, depth + 1)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    /// Give the borrowed temporaries created by one statement their Rust
+    /// scope. Extended temporaries are declared in the enclosing block. The
+    /// others end with the statement: a `let` initializer is wrapped in its own
+    /// block, and any other statement is wrapped together with its storage.
+    fn scope_borrow_temporaries(
+        &mut self,
+        start: usize,
+        statement: ir::Stmt,
+        completes: bool,
+        statements: &mut Vec<ir::Stmt>,
+    ) -> Result<ir::Stmt, String> {
+        if self.borrow_temporaries.len() == start {
+            return Ok(statement);
+        }
+        let mut local_scope = Vec::new();
+        for (local, extended) in self.borrow_temporaries.drain(start..) {
+            if extended {
+                statements.push(ir::Stmt::Declare { local });
+            } else {
+                local_scope.push(ir::Stmt::Declare { local });
+            }
+        }
+        if local_scope.is_empty() {
+            return Ok(statement);
+        }
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 64)?;
+        let completion = if completes {
+            ir::Completion::Returns
+        } else {
+            ir::Completion::Never
+        };
+        Ok(match statement {
+            ir::Stmt::Let { local, value } => {
+                let wrapped = self.temporary_block(local_scope, Some(value))?;
+                ir::Stmt::Let {
+                    local,
+                    value: wrapped,
+                }
+            }
+            ir::Stmt::LetPattern {
+                value,
+                ty,
+                bindings,
+            } => {
+                let wrapped = self.temporary_block(local_scope, Some(value))?;
+                ir::Stmt::LetPattern {
+                    value: wrapped,
+                    ty,
+                    bindings,
+                }
+            }
+            ir::Stmt::Assign { local, value } => {
+                let wrapped = self.temporary_block(local_scope, Some(value))?;
+                ir::Stmt::Assign {
+                    local,
+                    value: wrapped,
+                }
+            }
+            ir::Stmt::LetElse { .. } => {
+                return Err("unsupported: borrowed temporaries in let-else initializers".into());
+            }
+            other => {
+                local_scope.push(other);
+                let id = ir::ExprId(self.exprs.len());
+                self.exprs.push(ir::TypedExpr {
+                    ty: if completes {
+                        ir::Ty::Unit
+                    } else {
+                        ir::Ty::Never
+                    },
+                    completion,
+                    kind: ir::ExprKind::Block(ir::Block {
+                        statements: local_scope,
+                        tail: None,
+                    }),
+                });
+                ir::Stmt::Expr(id)
+            }
+        })
+    }
+    fn temporary_block(
+        &mut self,
+        statements: Vec<ir::Stmt>,
+        tail: Option<ir::ExprId>,
+    ) -> Result<ir::ExprId, String> {
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 64)?;
+        let (ty, completion) = match tail {
+            Some(tail) => (self.exprs[tail.0].ty.clone(), self.exprs[tail.0].completion),
+            None => (ir::Ty::Unit, ir::Completion::Returns),
+        };
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty,
+            completion,
+            kind: ir::ExprKind::Block(ir::Block { statements, tail }),
+        });
+        Ok(id)
     }
     /// True when dropping a value of `ty` runs no user destructor.
     pub(super) fn trivially_dropped(&self, ty: &ir::Ty) -> Result<bool, String> {
@@ -5003,6 +5246,7 @@ impl<'a> Checker<'a> {
     ) -> Result<(ir::Block, Flow), String> {
         let entered_reachable = self.reachable;
         let pending_start = self.pending_references.len();
+        let temporaries_start = self.borrow_temporaries.len();
         self.scopes.push(HashMap::new());
         let mut live = true;
         // While-let remains a source Unit obligation even when its genuine
@@ -5053,7 +5297,11 @@ impl<'a> Checker<'a> {
                     } else {
                         Some(checked_local_ty(ty, self.signatures)?)
                     };
-                    let value = self.expr_expected(value, annotation.as_ref())?;
+                    let extending = self.extending_borrows.len();
+                    self.mark_extending_borrows(value, 0)?;
+                    let value = self.expr_expected(value, annotation.as_ref());
+                    self.extending_borrows.truncate(extending);
+                    let value = value?;
                     let f = self.flow(value);
                     let t = if matches!(ty, Type::Infer) {
                         f.ty.clone()
@@ -5084,7 +5332,11 @@ impl<'a> Checker<'a> {
                     };
                     let direct_dynamic = matches!(value, Expr::DynamicIndex { .. });
                     let direct_wildcard = matches!(pattern, Pattern::Wildcard);
-                    let value = self.expr_expected(value, annotation.as_ref())?;
+                    let extending = self.extending_borrows.len();
+                    self.mark_extending_borrows(value, 0)?;
+                    let value = self.expr_expected(value, annotation.as_ref());
+                    self.extending_borrows.truncate(extending);
+                    let value = value?;
                     let flow = self.flow(value);
                     if direct_dynamic && !self.facts().must_copy(&flow.ty)? && !direct_wildcard {
                         return Err("non-Copy runtime indexed pattern extraction is unsupported; only direct let _ inspection is admitted".into());
@@ -5176,7 +5428,13 @@ impl<'a> Checker<'a> {
                             mutable: declaration.mutable,
                         });
                         self.scopes[declaration.scope].insert(key, local);
-                        statements.push(ir::Stmt::Assign { local, value });
+                        let statement = self.scope_borrow_temporaries(
+                            temporaries_start,
+                            ir::Stmt::Assign { local, value },
+                            flow.completes,
+                            &mut statements,
+                        )?;
+                        statements.push(statement);
                         live &= flow.completes;
                         continue;
                     }
@@ -5345,6 +5603,12 @@ impl<'a> Checker<'a> {
                     ..
                 } => self.while_let_statement(*label, pattern, scrutinee, body)?,
             };
+            let statement = self.scope_borrow_temporaries(
+                temporaries_start,
+                statement,
+                completes,
+                &mut statements,
+            )?;
             if let Some(cap) = self.canonical {
                 cap.record_emission(s, statements.len())?;
             }
@@ -5361,6 +5625,10 @@ impl<'a> Checker<'a> {
             .map(|e| self.expr_with_expectation(e, expectation))
             .transpose()?;
         self.reachable = entered_reachable;
+        // Tail temporaries live until the end of this block.
+        for (local, _) in self.borrow_temporaries.drain(temporaries_start..) {
+            statements.push(ir::Stmt::Declare { local });
+        }
         let mut flow = tail.map_or_else(
             || {
                 // An undiscarded genuine final while-let is a Unit-valued
@@ -7073,6 +7341,9 @@ impl<'a> Checker<'a> {
                         referent: std::sync::Arc::new(referent),
                     }),
                 )
+            }
+            Expr::BorrowValue { kind, value } => {
+                return self.borrow_value(*kind, value, expected);
             }
             Expr::Deref { value } => {
                 let mut root = value.as_ref();
@@ -8800,16 +9071,12 @@ mod checked_identity_tests {
     }
 
     #[test]
-    fn typed_slice_inference_does_not_admit_temporary_array_borrows() {
+    fn typed_slice_inference_types_temporary_array_borrows() {
         for source in [
             "fn read<T:Copy>(s:&[T])->T{s[0]}fn value()->u16{read(&[42])}fn main(){}",
             "fn read<T:Copy>(s:&[T],later:T)->T{s[0]}fn main(){let answer=read(&[42],7u16);}",
         ] {
-            let error = parse(source).unwrap_err();
-            assert!(
-                error.contains("borrowing requires a local-root static place"),
-                "{error}"
-            );
+            check(&parse(source).unwrap()).unwrap();
         }
     }
 
