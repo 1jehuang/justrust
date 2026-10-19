@@ -103,6 +103,11 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       retain conservative coverage; cyclic metadata and resource failures fail
       closed. This is not general Rust pattern grammar or full compatibility.
 - [x] Fieldless nominal enums and scalar/enum match with exhaustive coverage.
+- [x] Scoped local numeric literal constraints from later scalar uses, returns,
+      assignments and monomorphic calls, before existing peer-aware fallback.
+      `LOCAL-LITERALS.md` records 28 stock-differential witnesses and unchanged
+      Collatz exact native check/build/run acceptance. General structured and
+      reference inference remain open, with no new graph kinds or ratchet changes.
 - [x] Typed deferred local declarations, flow-sensitive first writes and shadowing.
 - [x] Payload enums, typed downcasts, bounded selection proofs and native tagged values.
 - [x] Fixed arrays, repeat effects, literal indexing and private by-value array ABI.

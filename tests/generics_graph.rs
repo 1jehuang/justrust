@@ -1,3 +1,6 @@
+#[path = "support/native_prelude.rs"]
+mod native_prelude;
+
 use justrust_engine::compiler;
 
 #[test]
@@ -112,7 +115,7 @@ fn unused_generic_types_and_nominal_applications_cannot_use_concrete_witnesses()
                     if !check {
                         expected.push(Key::new(105, vec![]));
                     }
-                    let program = compiler::frontend::parse(source).unwrap();
+                    let program = native_prelude::parse(source).unwrap();
                     let plan = compiler::frontend::PlanCtx::from_program(
                         &program,
                         &compiler::ir::PlanBudget::default(),
@@ -122,7 +125,11 @@ fn unused_generic_types_and_nominal_applications_cannot_use_concrete_witnesses()
                         let declaration = plan.callable_decl(index).unwrap();
                         match plan.callable_provider(declaration).unwrap() {
                             compiler::frontend::CallableProvider::Source { .. } => {
-                                assert!(index < compiled.functions);
+                                if plan.is_prelude_decl(declaration).unwrap() {
+                                    expected.push(Key::new(110, vec![index as u64]));
+                                } else {
+                                    assert!(index < compiled.functions);
+                                }
                                 if plan.callable_env(declaration).unwrap().is_generic()
                                     && index != 0
                                 {
@@ -145,10 +152,7 @@ fn unused_generic_types_and_nominal_applications_cannot_use_concrete_witnesses()
                         }
                     }
                     // Embedded native library files are independent SOURCE facts.
-                    expected.extend(
-                        [vec![1], vec![1, 0], vec![1, 0, 0], vec![1, 0, 1]]
-                            .map(|ordinal| Key::new(107, ordinal)),
-                    );
+                    expected.extend(native_prelude::library_source_keys());
                     assert_eq!(report.node_evaluations.len(), expected.len());
                     for key in expected {
                         let entries: Vec<_> = report

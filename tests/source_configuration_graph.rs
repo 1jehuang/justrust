@@ -1,3 +1,8 @@
+// This target uses the source inventory portion of the shared graph helper.
+#[allow(dead_code)]
+#[path = "support/native_prelude.rs"]
+mod native_prelude;
+
 use justrust_engine::compiler;
 use justrust_engine::compiler::source::SourceOptions;
 
@@ -38,8 +43,16 @@ fn configured_text_source_is_observed_and_check_stays_codegen_free() {
                 .iter()
                 .filter(|(key, _)| key.kind == 107)
                 .collect();
-            assert_eq!(source_nodes.len(), 1);
-            assert_eq!(source_nodes[0].1, 1);
+            let mut expected = native_prelude::library_source_keys();
+            expected.push(justrust_engine::Key::new(107, vec![0]));
+            assert_eq!(source_nodes.len(), expected.len());
+            for key in expected {
+                assert!(
+                    source_nodes
+                        .iter()
+                        .any(|(actual, count)| *actual == key && *count == 1)
+                );
+            }
             assert_eq!(compiled.executable.is_none(), check);
             if check {
                 assert!(
