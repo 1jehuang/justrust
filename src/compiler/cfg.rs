@@ -1843,7 +1843,12 @@ impl Function {
             }
             Operand::Move(place) => {
                 let ty = self.place_ty(place)?;
-                if !facts.must_copy(ty)?
+                // A move out of storage reached through a raw pointer is the
+                // unsafe `ptr::read` contract: the programmer owns validity.
+                let raw = ir::raw_deref_index(&self.locals[place.local.0].ty, &place.projection)
+                    .is_some();
+                if !raw
+                    && !facts.must_copy(ty)?
                     && place.projection.iter().any(|part| {
                         matches!(part, Projection::ConstantIndex(_) | Projection::Deref)
                     })
