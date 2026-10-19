@@ -184,7 +184,24 @@ impl Resolver<'_> {
         Err("projection trait is not a retained source declaration".into())
     }
 
-    fn check_associated_member(&self, trait_index: usize, item: AstIdent) -> Result<(), String> {
+    fn check_associated_member(
+        &mut self,
+        trait_index: usize,
+        item: AstIdent,
+    ) -> Result<(), String> {
+        self.check_inherited_associated_member(trait_index, item, &mut Vec::new())
+    }
+
+    fn check_inherited_associated_member(
+        &mut self,
+        trait_index: usize,
+        item: AstIdent,
+        active: &mut Vec<usize>,
+    ) -> Result<(), String> {
+        self.alias_budget.check_depth(active.len())?;
+        if active.contains(&trait_index) {
+            return Err("cyclic supertrait associated lookup".into());
+        }
         let key = self.ident_key(item, LookupClass::Member)?;
         let declaration = self
             .program
@@ -196,6 +213,29 @@ impl Resolver<'_> {
             if self.ident_key(associated.name, LookupClass::Member)? == key {
                 return Ok(());
             }
+        }
+        let module = declaration.module;
+        let parents = declaration.supertraits.clone();
+        active.push(trait_index);
+        let mut found = false;
+        for parent in parents {
+            if matches!(parent, TraitPath::Builtin(_)) {
+                continue;
+            }
+            let index = self.source_trait_index(&parent, module)?;
+            if self
+                .check_inherited_associated_member(index, item, active)
+                .is_ok()
+            {
+                if found {
+                    return Err("ambiguous associated type in supertraits".into());
+                }
+                found = true;
+            }
+        }
+        active.pop();
+        if found {
+            return Ok(());
         }
         Err("no associated type in the exact owning trait".into())
     }
@@ -214,13 +254,16 @@ impl Resolver<'_> {
                 item,
             } => {
                 self.ty(self_ty, module)?;
+                // Resolve the owning trait from the written path before
+                // trait_path canonicalizes it in place.
+                let index = self.source_trait_index(trait_path, module)?;
                 match self.trait_path(trait_path, module) {
                     Err(error) if error.starts_with("unsupported:") => {
                         boundary = Some(error);
                     }
                     result => result?,
                 }
-                (self.source_trait_index(trait_path, module)?, *item)
+                (index, *item)
             }
             SourceProjection::SelfItem { item } => {
                 let index = match self.source_owner {

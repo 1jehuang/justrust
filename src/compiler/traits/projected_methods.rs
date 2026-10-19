@@ -479,6 +479,88 @@ impl ValidatedTraitWorld {
                         &mut Vec::new(),
                     )?;
                     Ok(normal)
+                } else if self.eq_ty(
+                    &projection.trait_ref.self_ty,
+                    &owner.implementation.trait_ref.self_ty,
+                    0,
+                )? && self.associated_header(projection.item)?.trait_decl
+                    != owner.implementation.trait_ref.declaration
+                {
+                    let context = ProofContext {
+                        predicates: &owner.predicates,
+                        phase: FactsPhase::Universal,
+                    };
+                    // A supertrait's assignment is not owned by this impl.
+                    // Demand an independent concrete implementation witness,
+                    // even when its arguments retain this impl's rigid binders.
+                    let selection = self.prove_implementation_in(
+                        &Predicate::Implements(projection.trait_ref.clone()),
+                        context,
+                        &mut Vec::new(),
+                    )?;
+                    let ProofOutcome::Proved(selection) = selection else {
+                        return Err(FactsError::unproved(
+                            &self.budget,
+                            "inherited associated type has no implementation witness",
+                        ));
+                    };
+                    let ProofOrigin::Implementation {
+                        declaration,
+                        arguments,
+                    } = &selection.0.origin
+                    else {
+                        return Err(FactsError::unproved(
+                            &self.budget,
+                            "inherited associated type needs an assignment",
+                        ));
+                    };
+                    let header = self
+                        .headers
+                        .impls
+                        .iter()
+                        .find(|h| h.declaration == *declaration)
+                        .ok_or_else(|| {
+                            FactsError::invalid(&self.budget, "missing inherited implementation")
+                        })?;
+                    let rhs = self
+                        .schema
+                        .associated_type_rhs(*declaration, projection.item)?;
+                    let retained = self.associated_value(*declaration, projection.item)?;
+                    if !self.eq_ty(&rhs, &retained.rhs, 0)? {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "inherited associated RHS changed",
+                        ));
+                    }
+                    if active.contains(&projection.item) {
+                        return Err(FactsError::cycle(
+                            &self.budget,
+                            "inherited associated assignment cycle",
+                        ));
+                    }
+                    let schema = GenericSchema {
+                        env: header.schema_env.clone(),
+                        signature: Signature {
+                            params: Vec::new(),
+                            result: rhs,
+                            ref_contract: Arc::new(ir::RefContract::default()),
+                        },
+                        predicates: Arc::from([]),
+                    };
+                    let substituted = self.substitute_projected_schema(
+                        &schema,
+                        arguments,
+                        &owner.implementation.schema_env,
+                    )?;
+                    push(&self.budget, active, projection.item)?;
+                    let result = self.normalize_owner_type(
+                        &substituted.signature.result,
+                        owner,
+                        active,
+                        depth + 1,
+                    );
+                    active.pop();
+                    result
                 } else {
                     // No assignment authority for a different application. Only the
                     // ordinary closed selector may independently normalize it.

@@ -232,7 +232,16 @@ impl PlanState {
                         (trait_ref, *item)
                     }
                 };
-                let item = registry.associated_type_item(trait_ref.declaration, item, budget)?;
+                let (trait_ref, item) = self
+                    .inherited_associated_owner(
+                        registry,
+                        trait_ref,
+                        item,
+                        caller,
+                        budget,
+                        &mut Vec::new(),
+                    )?
+                    .ok_or("no associated type in trait or its supertraits")?;
                 budget.retain_bytes(
                     std::mem::size_of::<ir::AssociatedTypeProjection>()
                         + 2 * std::mem::size_of::<usize>(),

@@ -6546,9 +6546,36 @@ impl TraitCx for ValidatedTraitWorld {
             )
         })?;
         let direct = self.discharge_in(&target, closed)?;
+        let mut return_matches =
+            self.return_refines(&signature.ref_contract, &direct.signature.ref_contract)?;
+        if !return_matches
+            && !target.type_args.is_empty()
+            && self.type_contains_projection(
+                &self.item_header(call.item)?.schema.signature.result,
+                0,
+            )?
+        {
+            // Generic implementations retain their rigid envelope contract.
+            // Compare projected required signatures against the independently
+            // derived concrete specialization, not against that wider envelope.
+            let results = charged(
+                &self.budget,
+                ir::derive_return_contracts(
+                    &direct.signature.params,
+                    &direct.signature.result,
+                    &direct.signature.ref_contract,
+                    &self.budget,
+                ),
+            )?;
+            let concrete = ir::RefContract {
+                results,
+                ..(*direct.signature.ref_contract).clone()
+            };
+            return_matches = self.return_refines(&signature.ref_contract, &concrete)?;
+        }
         if !self.eq_types(&signature.params, &direct.signature.params, 0)?
             || !self.eq_ty(&signature.result, &direct.signature.result, 0)?
-            || !self.return_refines(&signature.ref_contract, &direct.signature.ref_contract)?
+            || !return_matches
         {
             return Err(FactsError::invalid(
                 &self.budget,

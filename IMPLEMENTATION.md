@@ -418,6 +418,10 @@ cleanup failures.
       with exact retained source occurrences and header/callback identity, all unused
       assignment checks under real impl predicates, and closed normalization replay.
       This does not infer Copy for an equality-bound U or admit arbitrary user bounds.
+- [x] Inherited associated type lookup through supertraits canonicalizes the owning
+      declaration and ordered actuals. Generic `IndexMut<I>: Index<I>` implementations
+      normalize inherited `Output` using an independently proved superclass impl,
+      with CHECK/BUILD/native-run tests at workers 1 and 8 (`inherited_associated`).
 - [ ] Add trait type/lifetime/const parameters, generic methods, where clauses,
       associated types/constants, projection normalization, GATs, defaults and
       supertrait obligations beyond the bounded delivered source-default slice.

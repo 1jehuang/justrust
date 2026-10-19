@@ -46,6 +46,7 @@ mod int_consts;
 mod format_macros;
 pub use format_macros::SourceFormatInto;
 mod format_spec;
+mod inherited_associated;
 mod operators;
 mod panic_format;
 mod trait_selection;
