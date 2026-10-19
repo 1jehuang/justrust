@@ -101,6 +101,7 @@ impl NameKey {
 /// Read-only occurrence metadata, not a constructor or publication capability.
 #[derive(Clone, Copy, Debug)]
 pub struct NameData {
+    anonymous_closure: bool,
     pub atom: NameAtomId,
     pub spelling: SymbolId,
     pub context: SyntaxContextId,
@@ -289,6 +290,7 @@ impl NameStoreBuilder {
             span: token.span,
             raw: ident.raw,
             edition: lexical_edition,
+            anonymous_closure: false,
         })
     }
 
@@ -411,6 +413,7 @@ impl NameStoreBuilder {
             span: token.span,
             raw: ident.raw,
             edition: lexical_edition,
+            anonymous_closure: false,
         })
     }
 
@@ -428,6 +431,31 @@ impl NameStoreBuilder {
             span: origin,
             raw: false,
             edition: self.edition(),
+            anonymous_closure: false,
+        })
+    }
+
+    /// Compiler-owned declaration identity anchored at the actual closure site.
+    /// The `$` spelling is impossible through either source-name ingress or
+    /// the public structural identifier factory. It never enters module lookup.
+    pub(crate) fn anonymous_closure(
+        &mut self,
+        origin: SpanId,
+        ordinal: usize,
+    ) -> Result<AstIdent, NameError> {
+        self.check_origin(origin)?;
+        let spelling = self
+            .store
+            .session
+            .intern_symbol(&format!("$closure${ordinal}"))?;
+        self.append(NameData {
+            atom: NameAtomId(spelling),
+            spelling,
+            context: self.session().root_context(),
+            span: origin,
+            raw: false,
+            edition: self.edition(),
+            anonymous_closure: true,
         })
     }
 
@@ -512,6 +540,10 @@ impl NameStoreBuilder {
 }
 
 impl NameStore {
+    pub(crate) fn is_anonymous_closure(&self, ident: AstIdent) -> Result<bool, NameError> {
+        Ok(self.record(ident)?.anonymous_closure)
+    }
+
     fn record(&self, ident: AstIdent) -> Result<&NameData, NameError> {
         self.budget().charge(Counter::Work, 1)?;
         if ident.owner != self.session.id() {

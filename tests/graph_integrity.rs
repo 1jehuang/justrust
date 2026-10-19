@@ -651,10 +651,10 @@ const WORK_GROWTH_CEILING: f64 = 1.81;
 
 /// The largest generated program that must compile. Raise as fixed; the
 /// architectural target is no fixed program-size ceiling at all.
-const REQUIRED_FUNCTIONS: usize = 996;
+const REQUIRED_FUNCTIONS: usize = 1165;
 /// Known to fail today because whole-compilation budgets cap total program
 /// size. When it compiles, this test fails until the constant is raised.
-const KNOWN_FAILING_FUNCTIONS: Option<usize> = Some(997);
+const KNOWN_FAILING_FUNCTIONS: Option<usize> = Some(1166);
 
 struct Graph {
     keys: HashMap<u64, (String, Vec<u64>)>,
@@ -859,4 +859,470 @@ fn program_size_ceiling_ratchet() {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Reachable-fact gate: mutable state reachable from published graph facts.
+// ---------------------------------------------------------------------------
+//
+// Graph facts must be immutable. A fact that carries a `Mutex`, `OnceLock` or
+// atomic (directly or through any field, alias, wrapper or generic argument)
+// is shared mutable state with a graph-shaped disguise: consumers read it
+// through a handle, but mutations through it are invisible to the graph. The
+// lexical scan above cannot see this when the primitive is declared in a
+// different file from the fact. This gate builds a type-reference graph of
+// compiler declarations and reports every mutable primitive reachable from a
+// fact root, recorded in a shrink-only debt inventory.
+
+const FACT_DEBT: &str = "tests/graph_integrity/fact_reachable_state.debt";
+
+/// Interior-mutability primitives that make a reachable value mutable across
+/// graph tasks. `Cell`/`RefCell` are `!Sync`, so `publish_fact` (which requires
+/// `Send + Sync`) cannot carry them; they are omitted.
+const FACT_MUTABLE: &[&str] = &[
+    "Mutex",
+    "RwLock",
+    "OnceLock",
+    "LazyLock",
+    "Condvar",
+    "UnsafeCell",
+    "AtomicBool",
+    "AtomicU8",
+    "AtomicU16",
+    "AtomicU32",
+    "AtomicU64",
+    "AtomicUsize",
+    "AtomicI8",
+    "AtomicI16",
+    "AtomicI32",
+    "AtomicI64",
+    "AtomicIsize",
+    "AtomicPtr",
+];
+
+/// One declaration: its type-name references, from fields, variants, alias
+/// right-hand sides and generic bounds.
+#[derive(Debug, Default, Clone)]
+struct TypeDecl {
+    file: String,
+    refs: BTreeSet<String>,
+}
+
+fn identifiers(text: &str) -> Vec<&str> {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|w| w.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_'))
+        .collect()
+}
+
+/// Matching close for the `{`, `(` or `<` at `open`, ignoring `->`/`=>`.
+fn matching(code: &[u8], open: usize) -> Option<usize> {
+    let (o, c) = match code[open] {
+        b'{' => (b'{', b'}'),
+        b'(' => (b'(', b')'),
+        b'<' => (b'<', b'>'),
+        _ => return None,
+    };
+    let mut depth = 0usize;
+    let mut k = open;
+    while k < code.len() {
+        let b = code[k];
+        let arrow = b == b'>' && k > 0 && (code[k - 1] == b'-' || code[k - 1] == b'=');
+        if b == o {
+            depth += 1;
+        } else if b == c && !arrow {
+            depth -= 1;
+            if depth == 0 {
+                return Some(k);
+            }
+        }
+        k += 1;
+    }
+    None
+}
+
+/// Parse `struct`, `enum`, `union` and `type` declarations out of stripped,
+/// test-blanked code. Names are keyed by identifier (last path segment); a
+/// name declared more than once merges its references conservatively.
+fn parse_type_decls(code: &[u8], file: &str, out: &mut BTreeMap<String, TypeDecl>) {
+    let text = String::from_utf8_lossy(code);
+    let bytes = text.as_bytes();
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0;
+    while i < bytes.len() {
+        let at_word = i == 0 || !ident(bytes[i - 1]);
+        let keyword = ["struct", "enum", "union", "type"].into_iter().find(|k| {
+            at_word && text[i..].starts_with(k) && !ident(*bytes.get(i + k.len()).unwrap_or(&b' '))
+        });
+        let Some(keyword) = keyword else {
+            i += 1;
+            continue;
+        };
+        let mut j = i + keyword.len();
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        let start = j;
+        while j < bytes.len() && ident(bytes[j]) {
+            j += 1;
+        }
+        if start == j {
+            i = j.max(i + 1);
+            continue;
+        }
+        let name = text[start..j].to_string();
+        // Body: through the matching brace/paren, or up to `;` for unit
+        // structs, tuple structs ending in `;`, and aliases.
+        let mut k = j;
+        let mut end = None;
+        while k < bytes.len() {
+            match bytes[k] {
+                b'<' | b'(' => {
+                    // Generics and tuple-struct fields: skip to the close and
+                    // keep scanning to the body or `;`.
+                    let close = matching(bytes, k).unwrap_or(bytes.len() - 1);
+                    k = close + 1;
+                    continue;
+                }
+                b'{' if keyword != "type" => {
+                    end = Some(matching(bytes, k).unwrap_or(bytes.len() - 1) + 1);
+                    break;
+                }
+                b';' => {
+                    end = Some(k + 1);
+                    break;
+                }
+                _ => k += 1,
+            }
+        }
+        let end = end.unwrap_or(bytes.len());
+        let body = &text[j..end];
+        let entry = out.entry(name.clone()).or_default();
+        if entry.file.is_empty() {
+            entry.file = file.to_string();
+        }
+        for word in identifiers(body) {
+            if word != name {
+                entry.refs.insert(word.to_string());
+            }
+        }
+        i = end;
+    }
+}
+
+/// Fact roots: every type named in a typed fact read or publication.
+/// `facts.get` / `read_fact` / `fact_of` results are annotated `Arc<T>` or
+/// turbofished; `publish_fact(i, value)` arguments are struct literals or
+/// expressions whose type also appears as a read. Helper methods returning
+/// `Result<Arc<T>, _>` are covered by their declared return types.
+fn fact_roots(code: &str) -> BTreeSet<String> {
+    let mut roots = BTreeSet::new();
+    let mut take = |fragment: &str| {
+        for word in identifiers(fragment) {
+            if !matches!(
+                word,
+                "Arc" | "Result" | "Error" | "Option" | "Vec" | "dyn" | "Any" | "Send" | "Sync"
+            ) {
+                roots.insert(word.to_string());
+            }
+        }
+    };
+    for line in code.lines() {
+        let l = line.trim();
+        // `let name: Arc<T> = facts.get(...)` / `= cx.read_fact(...)`
+        if let Some(colon) = l.find(": Arc<") {
+            let rest = &l[colon + 2..];
+            let next_line_read =
+                rest.ends_with('=') || rest.contains("facts.get") || rest.contains("read_fact");
+            if next_line_read {
+                if let Some(eq) = rest.find('=') {
+                    take(&rest[..eq]);
+                } else {
+                    take(rest);
+                }
+            }
+        }
+        // `fact_of::<T>(` / `read_fact::<T>(` / `.fact::<T>(`
+        for marker in ["fact_of::<", "read_fact::<", ".fact::<"] {
+            if let Some(at) = l.find(marker) {
+                let rest = &l[at + marker.len()..];
+                if let Some(end) = rest.find(">(")
+                    && rest[..end].trim() != "T"
+                {
+                    take(&rest[..end]);
+                }
+            }
+        }
+        // Typed helpers: `async fn x(&self ...) -> Result<Arc<T>, Error>`
+        if l.contains("async fn") && l.contains("-> Result<Arc<") {
+            let rest = &l[l.find("-> Result<Arc<").unwrap() + 14..];
+            if let Some(end) = rest.find(">,") {
+                take(&rest[..end]);
+            }
+        }
+        // `publish_fact(N, Name { ... })`
+        if let Some(at) = l.find("publish_fact(") {
+            let rest = &l[at + 13..];
+            if let Some(comma) = rest.find(',') {
+                let arg = rest[comma + 1..].trim();
+                if let Some(brace) = arg.find(" {") {
+                    take(&arg[..brace]);
+                }
+            }
+        }
+    }
+    roots
+}
+
+/// Every `(root, carrier, primitive)` where `carrier` is a declaration
+/// reachable from fact `root` that directly holds mutable `primitive`, with a
+/// shortest witness path. Keying by carrier means a second mutable field on a
+/// different type is new debt even when the root already reaches a `Mutex`.
+type Reach = BTreeMap<(String, String, String), Vec<String>>;
+
+fn reachable_mutable_state(decls: &BTreeMap<String, TypeDecl>, roots: &BTreeSet<String>) -> Reach {
+    let mut found = Reach::new();
+    for root in roots {
+        let mut parent: HashMap<String, String> = HashMap::new();
+        let mut seen: HashSet<String> = HashSet::from([root.clone()]);
+        let mut queue = std::collections::VecDeque::from([root.clone()]);
+        while let Some(name) = queue.pop_front() {
+            let refs: Vec<String> = decls
+                .get(&name)
+                .map(|d| d.refs.iter().cloned().collect())
+                .unwrap_or_default();
+            for next in refs {
+                if FACT_MUTABLE.contains(&next.as_str()) {
+                    let key = (root.clone(), name.clone(), next.clone());
+                    found.entry(key).or_insert_with(|| {
+                        let mut path = vec![next.clone(), name.clone()];
+                        let mut at = name.clone();
+                        while let Some(p) = parent.get(&at) {
+                            path.push(p.clone());
+                            at = p.clone();
+                        }
+                        path.reverse();
+                        path
+                    });
+                    continue;
+                }
+                if decls.contains_key(&next) && seen.insert(next.clone()) {
+                    parent.insert(next.clone(), name.clone());
+                    queue.push_back(next);
+                }
+            }
+        }
+    }
+    found
+}
+
+fn scanned_type_decls() -> (BTreeMap<String, TypeDecl>, String) {
+    let root = root();
+    let mut files = Vec::new();
+    for dir in SCANNED {
+        rust_files(&root.join(dir), &mut files);
+    }
+    let mut scanned: BTreeMap<PathBuf, Scanned> = BTreeMap::new();
+    let mut mod_rs = String::new();
+    for path in &files {
+        let text = fs::read_to_string(path).unwrap();
+        if path.ends_with("src/compiler/mod.rs") {
+            mod_rs = String::from_utf8_lossy(&scan(&text).code).to_string();
+        }
+        scanned.insert(path.clone(), scan(&text));
+    }
+    let mut test_only: HashSet<PathBuf> = HashSet::new();
+    let mut frontier: Vec<PathBuf> = Vec::new();
+    for (path, scan) in &scanned {
+        if scan.test_file {
+            frontier.push(path.clone());
+        }
+        for (name, explicit) in &scan.test_modules {
+            frontier.extend(module_files(path, name, explicit));
+        }
+    }
+    while let Some(path) = frontier.pop() {
+        let path = normalize(&path);
+        if !scanned.contains_key(&path) || !test_only.insert(path.clone()) {
+            continue;
+        }
+        let scan = &scanned[&path];
+        for (name, explicit) in scan.modules.iter().chain(&scan.test_modules) {
+            frontier.extend(module_files(&path, name, explicit));
+        }
+    }
+    let mut decls = BTreeMap::new();
+    for (path, scan) in &scanned {
+        if test_only.contains(path) {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(&root)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        parse_type_decls(&scan.code, &relative, &mut decls);
+    }
+    (decls, mod_rs)
+}
+
+fn read_fact_debt() -> BTreeSet<(String, String, String)> {
+    let text = fs::read_to_string(root().join(FACT_DEBT)).unwrap_or_default();
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| {
+            let mut parts = l.split_whitespace();
+            let mut next = || parts.next().unwrap().to_string();
+            (next(), next(), next())
+        })
+        .collect()
+}
+
+fn write_fact_debt(found: &Reach) {
+    let mut text = String::from(
+        "# Mutable state reachable from published graph facts.\n\
+         # Format: ROOT CARRIER PRIMITIVE  # witness path. ROOT is a type read or\n\
+         # published as a graph fact. CARRIER is a type reachable from ROOT through\n\
+         # fields, aliases or generic arguments that directly holds PRIMITIVE.\n\
+         # Shrink-only forever: removing a line is progress, adding one requires\n\
+         # explicit user approval. See GRAPH-INTEGRITY.md. Shrink after removal:\n\
+         # GRAPH_INTEGRITY_SHRINK=1 justrust test --test graph_integrity\n",
+    );
+    for ((root, carrier, primitive), path) in found {
+        text.push_str(&format!(
+            "{root} {carrier} {primitive}  # {}\n",
+            path.join(" -> ")
+        ));
+    }
+    fs::write(root().join(FACT_DEBT), text).unwrap();
+}
+
+#[test]
+fn graph_facts_reach_no_new_mutable_state() {
+    let (decls, mod_rs) = scanned_type_decls();
+    let roots = fact_roots(&mod_rs);
+    assert!(
+        roots.len() >= 8,
+        "fact root discovery found only {roots:?}; the gate would be vacuous. \
+         Update fact_roots() for the new fact API."
+    );
+    let found = reachable_mutable_state(&decls, &roots);
+    let current: BTreeSet<(String, String, String)> = found.keys().cloned().collect();
+    let recorded = read_fact_debt();
+    let added: Vec<String> = found
+        .iter()
+        .filter(|(k, _)| !recorded.contains(*k))
+        .map(|((r, c, p), path)| format!("  {r} reaches {p} in {c}: {}", path.join(" -> ")))
+        .collect();
+    assert!(
+        added.is_empty(),
+        "graph facts now reach new mutable state:\n{}\nFacts must be immutable values. \
+         Move the mutation into its own graph node or make the field an immutable \
+         value built when the fact is published. {RULE}",
+        added.join("\n")
+    );
+    let removed: Vec<String> = recorded
+        .difference(&current)
+        .map(|(r, c, p)| format!("  {r} {c} {p}"))
+        .collect();
+    if !removed.is_empty() {
+        if std::env::var_os(SHRINK_ENV).is_some() {
+            write_fact_debt(&found);
+            return;
+        }
+        panic!(
+            "reachable-fact mutable state shrank. Lock in the progress with \
+             `{SHRINK_ENV}=1 justrust test --test graph_integrity` and commit {FACT_DEBT}:\n{}",
+            removed.join("\n")
+        );
+    }
+}
+
+#[test]
+fn reachable_fact_gate_follows_aliases_wrappers_and_generics() {
+    let source = r#"
+pub struct Fact { inner: Arc<Middle>, plain: u64 }
+struct Middle { list: Vec<Option<Leaf>>, alias: Shared }
+type Shared = Arc<Cache>;
+struct Cache { slots: HashMap<u32, Guarded> }
+pub(super) struct Guarded(std::sync::Mutex<Vec<u8>>);
+enum Choice { A(Leaf), B { once: std::sync::OnceLock<u8> } }
+struct Leaf { n: u32 }
+struct Generic<T> where T: Bound { value: T, count: AtomicUsize }
+struct UsesGeneric { g: Generic<Leaf> }
+struct Cycle { next: Option<Box<Cycle>>, leaf: Leaf }
+struct Clean { a: Arc<[u8]>, b: Box<Leaf>, f: fn(u8) -> u8 }
+#[cfg(test)]
+struct TestOnly { m: Mutex<u8> }
+// struct Commented { m: Mutex<u8> }
+const S: &str = "struct InString { m: Mutex<u8> }";
+"#;
+    let code = scan(source).code;
+    let mut decls = BTreeMap::new();
+    parse_type_decls(&code, "fixture.rs", &mut decls);
+    assert!(
+        !decls.contains_key("TestOnly"),
+        "cfg(test) items are excluded"
+    );
+    assert!(!decls.contains_key("Commented") && !decls.contains_key("InString"));
+    let roots: BTreeSet<String> = ["Fact", "Choice", "UsesGeneric", "Cycle", "Clean"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let found = reachable_mutable_state(&decls, &roots);
+    let get = |r: &str, p: &str| {
+        found
+            .iter()
+            .find(|((root, _, prim), _)| root == r && prim == p)
+            .map(|(_, path)| path.clone())
+    };
+    assert_eq!(
+        get("Fact", "Mutex").unwrap(),
+        ["Fact", "Middle", "Shared", "Cache", "Guarded", "Mutex"],
+        "through Arc, Vec/Option generics, an alias, a map and a tuple struct"
+    );
+    assert!(
+        get("Choice", "OnceLock").is_some(),
+        "enum struct-variant fields"
+    );
+    assert!(
+        get("UsesGeneric", "AtomicUsize").is_some(),
+        "generic struct with where clause"
+    );
+    assert!(
+        found.keys().all(|(r, _, _)| r != "Cycle"),
+        "cycles terminate, no false positive"
+    );
+    assert!(
+        found.keys().all(|(r, _, _)| r != "Clean"),
+        "fn pointers and slices are clean"
+    );
+    // A second mutable carrier under an already-indebted root is distinct debt.
+    let carriers: BTreeSet<&str> = found
+        .keys()
+        .filter(|(r, _, _)| r == "Fact")
+        .map(|(_, c, _)| c.as_str())
+        .collect();
+    assert_eq!(carriers, BTreeSet::from(["Guarded"]));
+
+    let mod_rs = r#"
+        let a: Arc<FactA> = facts.get(key).await?;
+        let b: Arc<Arc<frontend::FactB>> =
+            facts.get(root(X)).await?;
+        let c = engine.fact_of::<module::FactC>(&key, 0);
+        async fn types(&self) -> Result<Arc<frontend::FactD>, Error> {
+        cx.publish_fact(0, FactE { inner })
+        self.cx.read_fact::<T>(handle).await
+    "#;
+    let roots = fact_roots(mod_rs);
+    for expected in ["FactA", "FactB", "FactC", "FactD", "FactE"] {
+        assert!(
+            roots.contains(expected),
+            "{expected} missing from {roots:?}"
+        );
+    }
+    assert!(
+        !roots.contains("T"),
+        "generic helper parameter is not a root"
+    );
 }

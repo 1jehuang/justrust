@@ -68,7 +68,7 @@ may only move toward the target:
 | Whole-program nodes | `parse`, `resolve`, `signatures`, `effects_ready`, `mono_plan` (`source` split per file and `concrete_proofs` removed 2026-10-18) | only `check`, `build` |
 | Leaf closure growth 16 to 32 | 1.205 (ceiling 1.23, was 1.481) | 1.0 |
 | Work growth 16 to 32 | 1.757 (ceiling 1.81, was 1.92; six fixed source-library method proofs lower the ratio, not an algorithmic speedup) | about 2.0 |
-| Largest compiling flat program | 996 functions (997 fails at the unchanged 32,000,000 work limit; sparse ownership accounting replaced obsolete dense selection charges, was 540/570) | no fixed ceiling |
+| Largest compiling flat program | 1165 functions (1166 fails at the unchanged 32,000,000 work limit; checked immutable call-effect lookup removed repeated full binding scans, was 996/997) | no fixed ceiling |
 
 When a change improves a number, the tests fail until it is recorded:
 
@@ -88,3 +88,59 @@ state (an `Arc` of a type defined elsewhere with interior locking, for example).
 The dynamic checks use one generated workload of independent leaf functions.
 Treat the gates as a tripwire, not a proof. Reviews of graph-facing changes
 still check the rule directly.
+
+## Reachable-fact mutable state (added 2026-10-19)
+
+Facts must be immutable values. A fact that carries a `Mutex`, `OnceLock` or
+atomic anywhere inside it is shared mutable state in disguise: consumers read
+it through a graph handle, but writes through it are invisible to the graph.
+The lexical scan above misses this when the primitive is declared in a
+different file from the fact.
+
+| Test | Fails when |
+|---|---|
+| `graph_facts_reach_no_new_mutable_state` | A type read or published as a graph fact reaches a new `(root, carrier, primitive)` triple not in `tests/graph_integrity/fact_reachable_state.debt`. Or the inventory has shrunk and not been recorded. |
+| `reachable_fact_gate_follows_aliases_wrappers_and_generics` | The analysis stops following `Arc`/`Vec`/`Option`/map generics, type aliases, tuple structs, enum struct variants and `where` clauses, stops terminating on cycles, or starts flagging test, comment or string text. |
+
+How it works: fact roots are every type named in a typed fact read
+(`facts.get` with `Arc<T>`, `read_fact`, `fact_of`, typed helpers) or a
+`publish_fact(_, Type { .. })` literal in `src/compiler/mod.rs`. A type
+reference graph is built from every `struct`, `enum`, `union` and `type`
+declaration in `src/compiler` and `src/project`, excluding test code. A
+breadth-first search from each root records every carrier type that directly
+holds a mutable primitive, with one shortest witness path.
+
+Recorded 2026-10-19: all 11 fact roots reach 7 carriers, 77 entries:
+
+| Carrier | Mutable field | Owner of removal |
+|---|---|---|
+| `PlanCtx` | `state: Arc<Mutex<PlanState>>` | llama (cr-graphunify) |
+| `ValidatedTraitWorld` | `memo`, `projection_memo` | llama |
+| `DeclaredCallableContext` (traits/equality.rs) | `reductions` | llama |
+| `PlanBudget` | `usage: Arc<Mutex<PlanUsage>>` | budget lane |
+| `PlanReservation` | `usage` (shared ledger) | budget lane |
+| `ExpansionBudget` | `state: Arc<Mutex<State>>` | budget lane |
+| `InvocationBudget` | `state: Arc<Mutex<InvocationState>>` | budget lane |
+
+The budget carriers are reached because facts retain the shared `PlanBudget`
+or expansion budget handle (for example `Plan`, `ClosedCfg`, `ModuleArena`).
+Removing them means facts stop holding the ledger: charge budgets to the
+producing node and drop the handle before publication.
+
+Limits, stated rather than claimed away:
+
+- Types are matched by identifier, not resolved path. Same-named types
+  (`State`, `Function`, `Program`) merge conservatively, which can add false
+  positives but not hide a real one with the same name.
+- Generic parameters are not substituted. `Wrapper<T>` with `T = Mutex<_>` at
+  a use site is caught only when the use site names `Mutex`, which a field type
+  does. A primitive hidden behind a trait object (`Arc<dyn SchemaCx>`), a
+  `fn`/closure capture, or a type from another crate or `std` that wraps a lock
+  internally (for example `std::sync::mpsc`) is not followed.
+- Roots come from `src/compiler/mod.rs` call shapes. A fact read through a new
+  helper with an unrecognized shape is not a root; the test fails if fewer
+  than 8 roots are found, so the API change is noticed.
+- `Cell`/`RefCell` are omitted because `publish_fact` requires `Send + Sync`.
+
+Treat it as a structural tripwire with explicit, inspectable witnesses, not a
+proof of immutability.
