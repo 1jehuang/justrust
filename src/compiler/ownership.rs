@@ -1805,8 +1805,8 @@ impl<'a> MoveShape<'a> {
                 .map_err(|_| Exhausted)?;
                 Self::Scalar
             }
-            Ty::Ref { .. } if ty.shared_slice_element().is_some() => {
-                let element = ty.shared_slice_element().ok_or(Exhausted)?;
+            Ty::Ref { .. } if ty.slice_ref_element().is_some() => {
+                let (_, element) = ty.slice_ref_element().ok_or(Exhausted)?;
                 if let Some(plan) = &budget.plan {
                     super::ir::validate_shared_slice_element(element, facts, plan)
                 } else {

@@ -1974,8 +1974,8 @@ impl Function {
     }
 
     fn slice_operand_ty(&self, value: &Operand, facts: ir::FactsCtx<'_>) -> Result<Ty, String> {
-        let Operand::Copy(place) = value else {
-            return Err("CFG slice operand must copy a whole local".into());
+        let (Operand::Copy(place) | Operand::Move(place)) = value else {
+            return Err("CFG slice operand requires a whole local".into());
         };
         if !place.projection.is_empty() {
             return Err("CFG slice operand must copy a whole local".into());
@@ -1991,6 +1991,15 @@ impl Function {
     ) -> Result<&Ty, String> {
         self.require_operand_with_facts(index, &Ty::Int(IntTy::Usize), facts)?;
         let array_ty = self.indexed_array_place_ty(array)?;
+        if let Ty::Slice { element } = array_ty {
+            // `*s` of a slice carrier (MUTABLE-SLICES.md): only the exact
+            // carrier dereference names unsized slice storage.
+            if array.projection.last() != Some(&Projection::Deref) {
+                return Err("runtime slice index requires a dereferenced slice carrier".into());
+            }
+            ir::validate_shared_slice_element_with_facts(element, facts)?;
+            return Ok(element);
+        }
         if facts.validated().is_none() {
             validate_type(array_ty, 0)?;
         }
@@ -2249,15 +2258,15 @@ impl Function {
             Rvalue::Use(operand) => self.operand_ty_with_facts(operand, facts),
             Rvalue::ArrayToSlice { reference } => {
                 let source = self.slice_operand_ty(reference, facts)?;
-                let (element, _) = source
-                    .shared_array_element_len()
-                    .ok_or("CFG array-to-slice requires shared array reference")?;
+                let (kind, element, _) = source
+                    .array_ref_element_len()
+                    .ok_or("CFG array-to-slice requires array reference")?;
                 ir::validate_shared_slice_element_with_facts(element, facts)?;
                 let Ty::Ref { referent, .. } = &source else {
-                    return Err("CFG array-to-slice requires shared array reference".into());
+                    return Err("CFG array-to-slice requires array reference".into());
                 };
                 let Ty::Array { element, .. } = referent.as_ref() else {
-                    return Err("CFG array-to-slice requires shared array reference".into());
+                    return Err("CFG array-to-slice requires array reference".into());
                 };
                 if let Some(authority) = facts.validated() {
                     authority.budget().charge_nodes(1)?;
@@ -2266,7 +2275,7 @@ impl Function {
                     )?;
                 }
                 Ok(Ty::Ref {
-                    kind: ir::BorrowKind::Shared,
+                    kind,
                     referent: std::sync::Arc::new(Ty::Slice {
                         element: element.clone(),
                     }),
@@ -2530,7 +2539,17 @@ impl Function {
                         index,
                         value,
                     } => {
+                        if matches!(self.indexed_array_place_ty(array)?, Ty::Slice { .. }) {
+                            self.indexed_mutation_ty(array)?;
+                        }
                         let element = self.indexed_element_ty(array, index, facts)?;
+                        if matches!(self.indexed_array_place_ty(array)?, Ty::Slice { .. })
+                            && !facts.must_copy(element)?
+                        {
+                            return Err(
+                                "unsupported: mutable slice assignment of non-Copy elements".into(),
+                            );
+                        }
                         self.require_operand_with_facts(value, element, facts)?;
                     }
                     Statement::IndexInspect { array, index } => {
@@ -4858,7 +4877,7 @@ pub(super) const SLICE_UNSUPPORTED: &str =
     "unsupported: slice type outside root shared slice locals is not supported by CFG lowering";
 
 fn validate_slice_position(ty: &Ty, facts: ir::FactsCtx<'_>) -> Result<(), String> {
-    if let Some(element) = ty.shared_slice_element() {
+    if let Some((_, element)) = ty.slice_ref_element() {
         ir::validate_shared_slice_element_with_facts(element, facts)?;
     } else if ty.contains_slice() {
         return Err(SLICE_UNSUPPORTED.into());

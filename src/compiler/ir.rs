@@ -4459,6 +4459,45 @@ fn type_metadata_walk(
 }
 
 impl Ty {
+    /// Kind and element of a root slice reference `&[T]` or `&mut [T]`
+    /// (MUTABLE-SLICES.md). Grants no element admission or layout.
+    pub fn slice_ref_element(&self) -> Option<(BorrowKind, &Ty)> {
+        match self {
+            Self::Ref { kind, referent } => match referent.as_ref() {
+                Self::Slice { element } => Some((*kind, element.as_ref())),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Element of exactly a mutable root slice reference `&mut [T]`.
+    pub fn mut_slice_element(&self) -> Option<&Ty> {
+        match self.slice_ref_element() {
+            Some((BorrowKind::Mut, element)) => Some(element),
+            _ => None,
+        }
+    }
+
+    /// Element of the private two-word (data, len) descriptor of `&[T]`,
+    /// `&mut [T]` or `&str`. Physical transport only.
+    pub fn descriptor_element(&self) -> Option<&Ty> {
+        self.shared_descriptor_element()
+            .or_else(|| self.mut_slice_element())
+    }
+
+    /// Kind, element and extent of a root array reference `&[T; N]` or
+    /// `&mut [T; N]` (the source of an unsizing coercion).
+    pub fn array_ref_element_len(&self) -> Option<(BorrowKind, &Ty, usize)> {
+        match self {
+            Self::Ref { kind, referent } => match referent.as_ref() {
+                Self::Array { element, len } => Some((*kind, element.as_ref(), *len)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Element of exactly a shared root slice reference, without granting
     /// element admission, Copy permission, or a concrete native layout.
     pub fn shared_slice_element(&self) -> Option<&Ty> {
@@ -4912,7 +4951,7 @@ pub fn validate_shared_slice_element_with_facts(
 }
 
 fn validate_slice_carrier_with_facts(ty: &Ty, facts: FactsCtx<'_>) -> Result<(), String> {
-    if let Some(element) = ty.shared_slice_element() {
+    if let Some((_, element)) = ty.slice_ref_element() {
         validate_shared_slice_element_with_facts(element, facts)
     } else {
         slice_boundary_walk(ty, true, facts.validated().map(|f| f.budget()), 0, &mut 0)
@@ -6264,6 +6303,11 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
             (Ty::Int(a), Ty::Int(b)) if a == b => {}
             (Ty::Float(a), Ty::Float(b)) if a == b => {}
             (Ty::Param(a), Ty::Param(b)) if a == b => {}
+            (Ty::Slice { element: a }, Ty::Slice { element: b }) => {
+                if !Arc::ptr_eq(a, b) {
+                    pending.push((a, b, depth + 1));
+                }
+            }
             (Ty::Dyn(a), Ty::Dyn(b)) if a.principal == b.principal => {}
             (Ty::Char, Ty::Char)
             | (Ty::Str, Ty::Str)
@@ -8258,12 +8302,15 @@ impl CheckedFunction {
                 ExprKind::ArrayToSlice { reference } => {
                     expr(*reference)?;
                     let source = &self.exprs[reference.0];
-                    let Some((source_element, _)) = source.ty.shared_array_element_len() else {
-                        return Err("array-to-slice requires shared array reference".into());
+                    let Some((from, source_element, _)) = source.ty.array_ref_element_len() else {
+                        return Err("array-to-slice requires array reference".into());
                     };
-                    let Some(result_element) = value.ty.shared_slice_element() else {
-                        return Err("array-to-slice result must be shared slice".into());
+                    let Some((to, result_element)) = value.ty.slice_ref_element() else {
+                        return Err("array-to-slice result must be a slice reference".into());
                     };
+                    if from != to {
+                        return Err("array-to-slice changed reference mutability".into());
+                    }
                     validate_shared_slice_element_with_facts(source_element, facts)?;
                     validate_shared_slice_element_with_facts(result_element, facts)?;
                     if !pattern_types_equal(source_element, result_element, &mut 0)? {
@@ -8868,9 +8915,14 @@ impl CheckedFunction {
                             &array.projection,
                             true,
                         )?;
-                        let Ty::Array { element, .. } = array_ty else {
+                        let (Ty::Array { element, .. } | Ty::Slice { element }) = array_ty else {
                             return Err("compound indexed assignment requires array type".into());
                         };
+                        if matches!(array_ty, Ty::Slice { .. }) && !facts.must_copy(element)? {
+                            return Err(
+                                "unsupported: mutable slice assignment of non-Copy elements".into(),
+                            );
+                        }
                         if self.exprs[index.0].ty != Ty::Int(IntTy::Usize) {
                             return Err("compound array index requires usize".into());
                         }
@@ -8889,7 +8941,21 @@ impl CheckedFunction {
                             &array.projection,
                             false,
                         )?;
-                        if !matches!(array_ty, Ty::Array { .. }) {
+                        if let Ty::Slice { element } = array_ty {
+                            if !facts.must_copy(element)? {
+                                return Err(
+                                    "unsupported: mutable slice assignment of non-Copy elements"
+                                        .into(),
+                                );
+                            }
+                            // `*s` of a slice carrier: writable only through
+                            // `&mut` at every dereference (MUTABLE-SLICES.md).
+                            indexed_array_ty(
+                                &self.locals[array.local.0].ty,
+                                &array.projection,
+                                true,
+                            )?;
+                        } else if !matches!(array_ty, Ty::Array { .. }) {
                             return Err("dynamic indexed assignment requires array type".into());
                         }
                         if self.exprs[index.0].ty != Ty::Int(IntTy::Usize)

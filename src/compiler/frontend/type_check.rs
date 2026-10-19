@@ -1372,8 +1372,9 @@ impl<'s> Checker<'s> {
         }
         for (formal, expr) in schema.signature.params.iter().zip(args) {
             let evidence = self.inference_evidence(expr, 0)?;
-            if let Some(element) = formal.shared_slice_element()
-                && let InferKind::Ref(ir::BorrowKind::Shared, referent) = evidence.as_ref()
+            if let Some((kind, element)) = formal.slice_ref_element()
+                && let InferKind::Ref(actual_kind, referent) = evidence.as_ref()
+                && kind == *actual_kind
             {
                 self.infer_work(1)?;
                 let actual = match referent.as_ref() {
@@ -2118,9 +2119,9 @@ pub(super) fn canonical_ref_contract(
     }))
 }
 
-/// A slice carrier is admitted only as an exact shared root reference.
+/// A slice carrier is admitted only as an exact shared or mutable root reference.
 fn admit_slice_value_shape(ty: &ir::Ty) -> Result<(), String> {
-    if ty.contains_slice() && ty.shared_slice_element().is_none() {
+    if ty.contains_slice() && ty.slice_ref_element().is_none() {
         return Err(if matches!(ty, ir::Ty::Slice { .. }) {
             BARE_SLICE_UNSUPPORTED.into()
         } else {
@@ -2135,16 +2136,14 @@ pub(super) fn reject_slice_result(result: &ir::Ty) -> Result<(), String> {
     }
     Ok(())
 }
-pub(super) const BARE_SLICE_UNSUPPORTED: &str = "unsupported: bare by-value slice type [T]; only shared &[T] parameters and locals are admitted";
+pub(super) const BARE_SLICE_UNSUPPORTED: &str = "unsupported: bare by-value slice type [T]; only &[T] and &mut [T] parameters and locals are admitted";
 
 /// Source shape only. The lowered element requires authoritative IR admission.
 pub(super) fn admit_shared_slice_kind(kind: ir::BorrowKind, slice: &Type) -> Result<(), String> {
     let Type::Slice(_) = slice else {
         return Err("internal: slice admission on non-slice type".into());
     };
-    if kind != ir::BorrowKind::Shared {
-        return Err("unsupported: mutable slice references (&mut [T])".into());
-    }
+    let _ = kind; // `&[T]` and `&mut [T]` (MUTABLE-SLICES.md)
     Ok(())
 }
 
@@ -3936,7 +3935,7 @@ impl<'a> Checker<'a> {
     }
     fn admit_slice_value(&self, ty: &ir::Ty) -> Result<(), String> {
         admit_slice_value_shape(ty)?;
-        if let Some(element) = ty.shared_slice_element() {
+        if let Some((_, element)) = ty.slice_ref_element() {
             ir::validate_shared_slice_element(
                 element,
                 self.facts(),
@@ -4378,7 +4377,7 @@ impl<'a> Checker<'a> {
                 if slice_len_candidate(e, self.names()?)?
                     && self
                         .scalar_hint(receiver)?
-                        .is_some_and(|ty| ty.shared_descriptor_element().is_some()) =>
+                        .is_some_and(|ty| ty.descriptor_element().is_some()) =>
             {
                 Some(ir::Ty::Int(ir::IntTy::Usize))
             }
@@ -6450,6 +6449,15 @@ impl<'a> Checker<'a> {
                     array,
                     index,
                     value,
+                } if let Some(done) =
+                    self.mut_slice_index_assignment(array, index, None, value)? =>
+                {
+                    done
+                }
+                Stmt::AssignIndex {
+                    array,
+                    index,
+                    value,
                 } => {
                     let (array, ty, writable) = self.checked_place(array)?;
                     if array.projection.contains(&ir::Projection::Deref) {
@@ -6481,6 +6489,12 @@ impl<'a> Checker<'a> {
                     )
                 }
                 Stmt::AssignOp { place, op, value }
+                    if let Some(done) =
+                        self.mut_slice_constant_assignment(place, Some(*op), value)? =>
+                {
+                    done
+                }
+                Stmt::AssignOp { place, op, value }
                     if let Some(id) = self.overloaded_assign(s, place, *op, value)? =>
                 {
                     (ir::Stmt::Expr(id), self.flow(id).completes)
@@ -6496,6 +6510,16 @@ impl<'a> Checker<'a> {
                         },
                         flow.completes,
                     )
+                }
+                Stmt::AssignIndexOp {
+                    array,
+                    index,
+                    op,
+                    value,
+                } if let Some(done) =
+                    self.mut_slice_index_assignment(array, index, Some(*op), value)? =>
+                {
+                    done
                 }
                 Stmt::AssignIndexOp {
                     array,
@@ -6540,6 +6564,12 @@ impl<'a> Checker<'a> {
                         },
                         flow.completes && index_flow.completes,
                     )
+                }
+                Stmt::AssignPlace { place, value }
+                    if let Some(done) =
+                        self.mut_slice_constant_assignment(place, None, value)? =>
+                {
+                    done
                 }
                 Stmt::AssignPlace { place, value } => {
                     let (place, ty, writable) = self.checked_place(place)?;
@@ -6735,8 +6765,12 @@ impl<'a> Checker<'a> {
         let result = self.record_original_call(e, result)?;
         match expectation.hard() {
             Some(expected)
-                if expected.shared_slice_element().is_some()
-                    && self.exprs[result.0].ty.shared_array_element_len().is_some() =>
+                if expected.slice_ref_element().is_some_and(|(kind, _)| {
+                    self.exprs[result.0]
+                        .ty
+                        .array_ref_element_len()
+                        .is_some_and(|(from, _, _)| from == kind)
+                }) =>
             {
                 self.coerce_shared_array_to_slice(result, expected)
             }
@@ -6924,14 +6958,17 @@ impl<'a> Checker<'a> {
         value: ir::ExprId,
         expected: &ir::Ty,
     ) -> Result<ir::ExprId, String> {
-        let element = expected
-            .shared_slice_element()
-            .ok_or("array-to-slice coercion target must be a shared slice")?;
+        let (kind, element) = expected
+            .slice_ref_element()
+            .ok_or("array-to-slice coercion target must be a slice reference")?;
         let source = &self.exprs[value.0];
-        let (actual, _) = source
+        let (from, actual, _) = source
             .ty
-            .shared_array_element_len()
-            .ok_or("array-to-slice coercion requires a shared array operand")?;
+            .array_ref_element_len()
+            .ok_or("array-to-slice coercion requires an array reference operand")?;
+        if from != kind {
+            return Err("array-to-slice coercion changed reference mutability".into());
+        }
         let budget = &self.signatures.plan()?.budget;
         ir::validate_shared_slice_element(element, self.facts(), budget)?;
         ir::validate_shared_slice_element(actual, self.facts(), budget)?;
@@ -7097,11 +7134,19 @@ impl<'a> Checker<'a> {
         if !slice_len_candidate(e, self.names()?)?
             || !self
                 .scalar_hint(receiver)?
-                .is_some_and(|ty| ty.shared_descriptor_element().is_some())
+                .is_some_and(|ty| ty.descriptor_element().is_some())
         {
             return Ok(None);
         }
         let slice = match receiver.as_ref() {
+            receiver
+                if self
+                    .scalar_hint(receiver)?
+                    .is_some_and(|ty| ty.mut_slice_element().is_some()) =>
+            {
+                self.shared_slice_view(receiver)?
+                    .ok_or("unsupported: mutable slice read requires a local-rooted carrier")?
+            }
             Expr::RangeIndex {
                 base,
                 start,
@@ -7337,11 +7382,24 @@ impl<'a> Checker<'a> {
         place: ir::Place,
     ) -> Result<ir::ExprId, String> {
         let referent = ir::projected_ty(&self.locals[place.local.0].ty, &place.projection)?.clone();
-        if matches!(referent, ir::Ty::Dyn(_)) {
+        if matches!(referent, ir::Ty::Dyn(_) | ir::Ty::Slice { .. }) {
             // Only a whole-object reborrow `&*d` / `&mut *d` of a local
-            // carrier is admitted; it copies the vtable word with the data.
+            // carrier is admitted; it copies the vtable or length word with
+            // the data (TRAIT-OBJECTS.md, MUTABLE-SLICES.md).
             if place.projection != [ir::Projection::Deref] {
-                return Err("unsupported: borrowing trait object places".into());
+                return Err(if matches!(referent, ir::Ty::Dyn(_)) {
+                    "unsupported: borrowing trait object places"
+                } else {
+                    "unsupported: borrowing or reborrowing slice places"
+                }
+                .into());
+            }
+            if let ir::Ty::Slice { element } = &referent {
+                ir::validate_shared_slice_element(
+                    element,
+                    self.facts(),
+                    &self.signatures.plan()?.budget,
+                )?;
             }
         } else {
             self.validate_borrow_referent(kind, &referent)?;
@@ -9401,7 +9459,10 @@ impl<'a> Checker<'a> {
                 if Self::dynamic_place(base) && !Self::nested_array_place(base) {
                     return Err("nested/chained runtime indexed place bases are unsupported; snapshot the row first".into());
                 }
-                let base = self.expr(base)?;
+                let base = match self.shared_slice_view(base)? {
+                    Some(view) => view,
+                    None => self.expr(base)?,
+                };
                 if self.flow(base).ty.shared_slice_element().is_some() {
                     return self.slice_index(base, index);
                 }
@@ -9459,7 +9520,10 @@ impl<'a> Checker<'a> {
                 if Self::dynamic_place(base) && !Self::nested_array_place(base) {
                     return Err("nested/chained runtime indexed place bases are unsupported; snapshot the row first".into());
                 }
-                let base = self.expr(base)?;
+                let base = match self.shared_slice_view(base)? {
+                    Some(view) => view,
+                    None => self.expr(base)?,
+                };
                 let flow = self.flow(base);
                 if flow.ty.shared_slice_element().is_some() {
                     // Constant slice indexes use the same runtime-checked read.

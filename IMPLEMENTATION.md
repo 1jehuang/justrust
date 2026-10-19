@@ -6,6 +6,8 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 
 ## Completed foundations, not full compatibility
 
+- [x] Mutable slice parameters and local carriers with same-kind array unsizing, generic reference-free elements, shared read reborrows and Copy-element checked writes (`MUTABLE-SLICES.md`). G0-G12 remain partial: slice returns, raw constructors, mutable ranges and non-Copy replacement remain open.
+
 - [x] Independent graph runtime with shared immutable facts and lifecycle telemetry.
 - [x] Direct native Linux x86-64 executable generation for the initial subset.
 - [x] Inline modules, qualified calls, simple imports and namespace/privacy checks.

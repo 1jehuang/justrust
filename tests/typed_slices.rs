@@ -236,7 +236,7 @@ fn cases() -> Vec<Case> {
             source: r###"fn read(s:&mut [i32])->i32{s[0]=42;s[0]}fn main(){let mut a=[1];if read(&mut a)==42{println!("ok");}}"###,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             // Promoted unchanged: shared subslices are supported (SUBSLICE.md).
@@ -437,7 +437,7 @@ fn stock_all() {
             }
         }
     }
-    assert_eq!(counts, [19, 3, 5, 5]);
+    assert_eq!(counts, [20, 3, 5, 4]);
 }
 #[test]
 fn stock_typed_slices_edition2024_actual_toolchain() {
@@ -541,13 +541,13 @@ fn every_admitted_function_checks_universally_and_slice_ir_keeps_exact_element()
                         own_index += 1;
                     }
                     ir::ExprKind::ArrayToSlice { reference } => {
-                        let (element, _len) = function.exprs[reference.0]
+                        let (kind, element, _len) = function.exprs[reference.0]
                             .ty
-                            .shared_array_element_len()
-                            .expect("real shared array origin");
+                            .array_ref_element_len()
+                            .expect("real array reference origin");
                         assert_eq!(
-                            expression.ty.shared_slice_element(),
-                            Some(element),
+                            expression.ty.slice_ref_element(),
+                            Some((kind, element)),
                             "{} no reinterpretation",
                             case.name
                         );
@@ -569,7 +569,7 @@ fn every_admitted_function_checks_universally_and_slice_ir_keeps_exact_element()
         }
         count += 1;
     }
-    assert_eq!(count, 22);
+    assert_eq!(count, 23);
     assert_eq!(generic, 3);
     assert!(indices >= 20);
     assert!(coercions >= 21);
@@ -631,7 +631,7 @@ fn valid_borrowed_projection_reference_elements_returns_mutability_and_ranges_st
         );
         count += 1;
     }
-    assert_eq!(count, 5);
+    assert_eq!(count, 4);
 }
 #[test]
 fn native_typed_slices_workers1_8_check_build_no_compiler_fallback() {
@@ -729,9 +729,9 @@ fn native_typed_slices_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 128);
-    assert_eq!(modes, [38, 38, 6, 6, 10, 10, 10, 10]);
-    assert_eq!(images, 44);
+    assert_eq!(modes, [40, 40, 6, 6, 10, 10, 8, 8]);
+    assert_eq!(images, 46);
     eprintln!(
-        "TYPED SLICES native128cells/44ELF executions/profile, modes{modes:?};5stock-validUnsupported capabilities are not ordinary-invalid parity, general borrowing or full Rust"
+        "TYPED SLICES native128cells/46ELF executions/profile, modes{modes:?};4stock-validUnsupported capabilities are not ordinary-invalid parity, general borrowing or full Rust"
     );
 }

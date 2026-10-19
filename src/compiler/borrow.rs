@@ -2663,6 +2663,20 @@ impl CarrierBuilder<'_, '_> {
                 index: subscript,
                 value,
             } => {
+                // `(*s)[i] = v` through a slice carrier (MUTABLE-SLICES.md):
+                // slice elements are reference-free (slice element boundary),
+                // so the write cannot create or replace a carrier component.
+                if matches!(
+                    ir::indexed_array_ty(
+                        &self.f.locals[array.local.0].ty,
+                        &array.projection,
+                        false
+                    ),
+                    Ok(Ty::Slice { .. })
+                ) {
+                    self.consume(state, value)?;
+                    return Ok(());
+                }
                 // A runtime row prefix (`m[i][j] = v`, NESTED-INDEX.md) has no
                 // constant element enumeration. Its admitted elements are
                 // scalar/unit (ir::projected_ty), so the write cannot create,

@@ -100,7 +100,7 @@ fn shared_slice_layout(element: &ir::Ty) -> Result<SliceLayout, String> {
 /// Exactly shared `&[T]` is true two-word transport (data, len); it is
 /// checked BEFORE `indirect`. Bare `Slice` has no by-value ABI and errors.
 fn argument_words(ty: &ir::Ty) -> Result<usize, String> {
-    if let Some(element) = ty.shared_descriptor_element() {
+    if let Some(element) = ty.descriptor_element() {
         shared_slice_layout(element)?;
         return Ok(2);
     }
@@ -176,7 +176,7 @@ fn result_indirect(ty: &ir::Ty) -> Result<bool, String> {
 /// boundary as a pointer: calls use `argument_words` == 2 and push both words.
 fn indirect(ty: &ir::Ty) -> Result<bool, String> {
     ir::reject_associated_types(ty, None)?;
-    if let Some(element) = ty.shared_descriptor_element() {
+    if let Some(element) = ty.descriptor_element() {
         shared_slice_layout(element)?;
         return Ok(true);
     }
@@ -216,7 +216,7 @@ fn value_size(ty: &ir::Ty) -> Result<i32, String> {
     if matches!(ty, ir::Ty::Param(_) | ir::Ty::AssociatedType(_)) {
         return Err("unresolved type has no native layout".into());
     }
-    if let Some(element) = ty.shared_descriptor_element() {
+    if let Some(element) = ty.descriptor_element() {
         shared_slice_layout(element)?;
         return Ok(2 * i32::from(SHARED_BYTE_SLICE_LAYOUT.word_bytes));
     }
@@ -542,11 +542,18 @@ impl<'a> Emitter<'a> {
     // Runtime index projections also use r10/r11 for descriptor metadata/base,
     // preserving the store RHS in r9 and the caller's index scratch in r8.
     fn place_address(&mut self, place: &ir::Place) -> Result<&'a ir::Ty, String> {
-        let mut offset = self.local_offset(place.local)?;
-        let mut ty: &'a ir::Ty = &self.function().locals[place.local.0].ty;
+        self.place_address_parts(place.local, &place.projection)
+    }
+    fn place_address_parts(
+        &mut self,
+        local: LocalId,
+        projection: &[ir::Projection],
+    ) -> Result<&'a ir::Ty, String> {
+        let mut offset = self.local_offset(local)?;
+        let mut ty: &'a ir::Ty = &self.function().locals[local.0].ty;
         let mut indirect_base = false;
         let mut slice_metadata = false;
-        let mut projections = place.projection.iter();
+        let mut projections = projection.iter();
         while let Some(projection) = projections.next() {
             let (field, next) = match projection {
                 ir::Projection::Deref => {
@@ -940,7 +947,7 @@ impl<'a> Emitter<'a> {
             || self
                 .function()
                 .place_ty(place)?
-                .shared_descriptor_element()
+                .descriptor_element()
                 .is_none()
         {
             return Err("slice operand requires a whole shared &[T] local".into());
@@ -1215,6 +1222,9 @@ impl<'a> Emitter<'a> {
         index: &cfg::Operand,
     ) -> Result<&'a ir::Ty, String> {
         let ty = self.function().indexed_array_place_ty(array)?;
+        if let ir::Ty::Slice { element } = ty {
+            return self.slice_place_index_address(array, index, element);
+        }
         let ir::Ty::Array { element, len } = ty else {
             return Err("runtime index requires array storage".into());
         };
@@ -1234,6 +1244,38 @@ impl<'a> Emitter<'a> {
             self.place_address(array)?;
             self.bytes(&[0x4c, 0x01, 0xc0]);
         }
+        Ok(element)
+    }
+    /// Element address of `(*s)[index]` for a slice carrier place `*s`
+    /// (MUTABLE-SLICES.md). Snapshots the carrier's data and len words once,
+    /// checks the full unsigned index against len before scaling, and leaves
+    /// the checked element address in rax. Clobbers r8, r10 and r11.
+    #[inline(never)]
+    fn slice_place_index_address(
+        &mut self,
+        array: &ir::Place,
+        index: &cfg::Operand,
+        element: &'a ir::Ty,
+    ) -> Result<&'a ir::Ty, String> {
+        let Some((ir::Projection::Deref, carrier)) = array.projection.split_last() else {
+            return Err("runtime slice index requires a dereferenced slice carrier".into());
+        };
+        if self.function().operand_ty(index)? != ir::Ty::Int(ir::IntTy::Usize) {
+            return Err("runtime index requires genuine usize operand".into());
+        }
+        let stride = value_size(element)?;
+        self.operand(index)?;
+        self.bytes(&[0x49, 0x89, 0xc0]); // r8 = index
+        // rax = address of the two-word carrier (data at +0, len at +8).
+        self.place_address_parts(array.local, carrier)?;
+        self.bytes(&[0x4c, 0x8b, 0x50, 0x08]); // r10 = len
+        self.bytes(&[0x4c, 0x8b, 0x18]); // r11 = data
+        self.bytes(&[0x4c, 0x89, 0xc0]); // rax = index
+        self.bytes(&[0x4c, 0x39, 0xd0]); // cmp rax, r10
+        self.trap_if(0x83); // jae, before scaling/address formation
+        self.bytes(&[0x48, 0x69, 0xc0]);
+        self.i32(stride); // rax *= stride
+        self.bytes(&[0x4c, 0x01, 0xd8]); // rax += r11
         Ok(element)
     }
     fn enum_variant(
@@ -2437,13 +2479,15 @@ impl Emitter<'_> {
                     .get(loan.0)
                     .ok_or("invalid checked loan site")?;
                 if let [ir::Projection::Deref] = site.place.projection.as_slice()
-                    && trait_object_ref(self.function().place_ty(&ir::Place {
-                        local: site.place.local,
-                        projection: Vec::new(),
-                    })?)
-                    .is_some()
+                    && {
+                        let carrier = self.function().place_ty(&ir::Place {
+                            local: site.place.local,
+                            projection: Vec::new(),
+                        })?;
+                        trait_object_ref(carrier).is_some() || carrier.slice_ref_element().is_some()
+                    }
                 {
-                    // Whole-object reborrow `&*d`: copy both carrier words.
+                    // Whole-object reborrow `&*d` / `&*s`: copy both carrier words.
                     let local = self.local_offset(site.place.local)?;
                     self.address(local);
                     self.copy_slice_to_frame(FAT_LAYOUT, self.aggregate_scratch)?;
@@ -2605,9 +2649,9 @@ impl Emitter<'_> {
                 // N comes only from the validated operand type. The operand is
                 // the thin array pointer (the dummy word address for N == 0).
                 let source = self.function().operand_ty(reference)?;
-                let (element, len) = source
-                    .shared_array_element_len()
-                    .ok_or("array-to-slice requires exactly shared &[T; N]")?;
+                let (_, element, len) = source
+                    .array_ref_element_len()
+                    .ok_or("array-to-slice requires &[T; N] or &mut [T; N]")?;
                 let layout = shared_slice_layout(element)?;
                 self.operand(reference)?;
                 self.array_to_slice(layout, self.aggregate_scratch, len)?;
@@ -2958,11 +3002,11 @@ impl Emitter<'_> {
                             self.operand(operand)?;
                             self.bytes(&[0x50]);
                         }
-                        2 if param.shared_descriptor_element().is_some()
+                        2 if param.descriptor_element().is_some()
                             && self
                                 .function()
                                 .operand_ty(operand)?
-                                .shared_descriptor_element()
+                                .descriptor_element()
                                 .is_some() =>
                         {
                             self.slice_operand(operand)?;
@@ -3044,7 +3088,7 @@ pub fn emit_cfg_function(
 ) -> Result<Object, String> {
     let function = concrete.function().as_ref();
     let validate_slice = |ty: &ir::Ty| -> Result<(), String> {
-        if let Some(element) = ty.shared_slice_element() {
+        if let Some((_, element)) = ty.slice_ref_element() {
             // Universal reference-free admission is not a concrete layout
             // certificate. Recheck the fully substituted type and its exact
             // sealed facts before emitting any descriptor or memory access.
@@ -3264,8 +3308,7 @@ pub fn emit_cfg_function(
     for ((local, offset), words) in function.params.iter().zip(&param_offsets).zip(&param_words) {
         let local_ty = &function.locals[local.0].ty;
         if *words == 2
-            && (local_ty.shared_descriptor_element().is_some()
-                || trait_object_ref(local_ty).is_some())
+            && (local_ty.descriptor_element().is_some() || trait_object_ref(local_ty).is_some())
         {
             // len at offset, data at offset+8, into the local carrier.
             emitter.store_slice_parameter(

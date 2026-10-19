@@ -458,17 +458,17 @@ fn unused_slice_body_cannot_import_foreign_source_binding() {
     reject_source(program);
 }
 #[test]
-fn reference_generic_argument_boundary_precedes_slice_instantiation() {
+fn reference_generic_argument_reaches_reference_free_slice_boundary() {
     observed_generic_argument_unsupported(
         "fn length<T>(values:&[T])->usize{values.len()}fn main(){let value=1i32;let values=[&value];length::<&i32>(&values);}",
-        "reference generic arguments are unsupported",
+        "slice elements containing references or slices, or nested slice carriers",
     );
 }
 #[test]
-fn reference_containing_generic_argument_boundary_precedes_slice_instantiation() {
+fn reference_containing_generic_argument_reaches_reference_free_slice_boundary() {
     observed_generic_argument_unsupported(
         "struct Wrap<T>{value:T}fn length<T>(values:&[T])->usize{values.len()}fn main(){let value=1i32;let values=[Wrap::<&i32>{value:&value}];length::<Wrap<&i32>>(&values);}",
-        "reference generic arguments are unsupported",
+        "slice elements containing references or slices, or nested slice carriers",
     );
 }
 #[test]
@@ -496,8 +496,17 @@ fn shared_descriptor_keeps_backing_array_mutation_conflict_live() {
     );
 }
 #[test]
-fn new_slice_element_types_do_not_grant_mutable_slice_capability() {
-    observed_unsupported("fn change(values:&mut [i32]){values[0usize]=3i32;}fn main(){}");
+fn mutable_slice_element_writes_require_and_accept_exclusive_carriers() {
+    for workers in [1, 8] {
+        let result = compiler::compile(
+            "fn change(values:&mut [i32]){values[0usize]=3i32;}fn main(){}".into(),
+            workers,
+            true,
+        )
+        .unwrap();
+        assert!(result.executable.is_none());
+        assert!(result.analyses.iter().all(|analysis| analysis.passed()));
+    }
 }
 #[test]
 fn new_slice_element_types_do_not_grant_slice_return_capability() {
