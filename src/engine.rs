@@ -274,26 +274,25 @@ fn allocate_graph_id(counter: &AtomicU64) -> Option<NonZeroU64> {
 }
 
 /// The single owner root of one producer: an engine authority plus the
-/// canonical key of the node that minted it. Not `Copy`/`Clone`, so issuing
-/// starts from exactly one value. A node can mint its root once per
-/// execution; re-minting is rejected. Two engines, or two different nodes,
-/// never share a root. Standalone (non-graph) computations get a root under a
-/// fresh engine id, so repeated direct parses never collide.
+/// engine-issued id of the node that minted it. Not `Copy`/`Clone`, so issuing
+/// starts from exactly one value. Fixed size: it copies no key payload and
+/// holds no `Arc<Node>`, `Context` or engine state. Node ids are unique within
+/// one engine (the node interner never reuses them), and each node evaluates
+/// once, so `(authority, node)` names exactly one producer execution.
+/// Standalone (non-graph) computations get a root under a fresh engine id.
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct OwnerRoot {
     authority: EngineAuthority,
     /// `None` only for standalone roots, which have no producing node.
-    node: Option<(u32, u32, Vec<u64>)>,
+    node: Option<u64>,
 }
 impl OwnerRoot {
     pub fn authority(&self) -> EngineAuthority {
         self.authority
     }
-    /// The producing key `(kind, version, params)`, absent for standalone roots.
-    pub fn producer(&self) -> Option<(u32, u32, &[u64])> {
+    /// The engine-local id of the producing node, absent for standalone roots.
+    pub fn producer(&self) -> Option<u64> {
         self.node
-            .as_ref()
-            .map(|(kind, version, params)| (*kind, *version, params.as_slice()))
     }
     /// A fresh root for one standalone, non-graph computation (direct parsing
     /// in library calls and tests). Fails closed if graph ids are exhausted.
@@ -857,10 +856,9 @@ impl Context {
         if self.node.owner_root_minted.swap(true, Ordering::AcqRel) {
             return Err(Error::new("owner root already minted by this node"));
         }
-        let key = &self.node.key;
         Ok(OwnerRoot {
             authority: self.authority(),
-            node: Some((key.kind, key.version, key.params.clone())),
+            node: Some(self.node.id),
         })
     }
 
@@ -1102,7 +1100,10 @@ impl Shared {
             return node;
         }
         let node = Arc::new(Node {
-            id: self.next_node.fetch_add(1, Ordering::Relaxed),
+            // Owner roots name producers by node id, so ids must never wrap.
+            id: allocate_graph_id(&self.next_node)
+                .expect("engine node identity space exhausted")
+                .get(),
             key: key.clone(),
             slots: (0..count).map(|_| Mutex::new(Slot::default())).collect(),
             state: Mutex::new(NodeState {

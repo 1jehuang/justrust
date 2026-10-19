@@ -80,11 +80,19 @@ impl From<BudgetFailure> for OwnerError {
     }
 }
 
-/// The producer's identity, shared by every path it issues.
+/// The producer's identity, shared by every path it issues. Fixed size: an
+/// engine authority and an engine-local node id, never a copied key payload.
 #[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct RootId {
     authority: EngineAuthority,
-    producer: Option<(u32, u32, Box<[u64]>)>,
+    producer: Option<u64>,
+}
+
+/// Root identity plus the immutable receipt paying for its storage.
+#[derive(Debug)]
+struct RootedId {
+    id: RootId,
+    _receipt: RetainedBytes,
 }
 
 #[derive(Debug)]
@@ -99,26 +107,26 @@ struct Steps {
 /// Equality, ordering and hashing compare the full structure.
 #[derive(Clone, Debug)]
 pub struct OwnerPath {
-    root: Arc<RootId>,
+    root: Arc<RootedId>,
     steps: Arc<Steps>,
 }
 
 impl PartialEq for OwnerPath {
     fn eq(&self, other: &Self) -> bool {
-        self.root == other.root && self.steps.steps == other.steps.steps
+        self.root.id == other.root.id && self.steps.steps == other.steps.steps
     }
 }
 impl Eq for OwnerPath {}
 impl std::hash::Hash for OwnerPath {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.root.hash(state);
+        self.root.id.hash(state);
         self.steps.steps.hash(state);
     }
 }
 
 impl OwnerPath {
     pub fn authority(&self) -> EngineAuthority {
-        self.root.authority
+        self.root.id.authority
     }
     pub fn depth(&self) -> usize {
         self.steps.steps.len()
@@ -126,7 +134,7 @@ impl OwnerPath {
     /// Whether `self` was issued (transitively) under `ancestor`.
     pub fn descends_from(&self, ancestor: &OwnerPath) -> bool {
         let (mine, theirs) = (&self.steps.steps, &ancestor.steps.steps);
-        self.root == ancestor.root
+        self.root.id == ancestor.root.id
             && mine.len() >= theirs.len()
             && mine[..theirs.len()] == theirs[..]
     }
@@ -141,6 +149,12 @@ pub struct OwnerIssuer {
     path: OwnerPath,
     next: [u64; DOMAINS],
     budget: ExpansionBudget,
+}
+
+/// Retained bytes for one root identity, including its fixed `Arc` header.
+fn root_bytes() -> Result<u64, OwnerError> {
+    u64::try_from(std::mem::size_of::<RootedId>() + 2 * std::mem::size_of::<usize>())
+        .map_err(|_| OwnerError::Allocation)
 }
 
 /// Retained bytes for a path of `depth` steps, including fixed `Arc` headers.
@@ -186,16 +200,17 @@ impl OwnerIssuer {
     /// minted once per node (`Context::owner_root`) or once per standalone
     /// computation (`OwnerRoot::standalone`).
     pub fn new(root: OwnerRoot, budget: &ExpansionBudget) -> Result<Self, OwnerError> {
-        let producer = root
-            .producer()
-            .map(|(kind, version, params)| (kind, version, params.into()));
-        let params = producer
-            .as_ref()
-            .map_or(0, |(_, _, p): &(u32, u32, Box<[u64]>)| p.len());
-        budget.charge(Counter::Work, params as u64 + 1)?;
-        let root = Arc::new(RootId {
-            authority: root.authority(),
-            producer,
+        // Pay for the fixed-size root (and its Arc header) before allocating
+        // it, and seal that payment into the same immutable receipt form.
+        budget.charge(Counter::Work, 1)?;
+        let root_bytes = root_bytes()?;
+        let receipt = budget.reserve(Storage::Retained, root_bytes)?.retain()?;
+        let root = Arc::new(RootedId {
+            id: RootId {
+                authority: root.authority(),
+                producer: root.producer(),
+            },
+            _receipt: receipt,
         });
         Ok(Self {
             path: OwnerPath {
@@ -330,7 +345,7 @@ mod tests {
         use super::super::expansion_budget::ExpansionLimits;
         // Room for the root path plus exactly one depth-1 child.
         let small = ExpansionBudget::new(ExpansionLimits {
-            bytes: path_bytes(0).unwrap() + path_bytes(1).unwrap(),
+            bytes: root_bytes().unwrap() + path_bytes(0).unwrap() + path_bytes(1).unwrap(),
             ..ExpansionLimits::default()
         });
         let mut root = OwnerIssuer::new(OwnerRoot::standalone().unwrap(), &small).unwrap();
@@ -464,7 +479,10 @@ mod tests {
         let mut root = OwnerIssuer::new(OwnerRoot::standalone().unwrap(), &budget).unwrap();
         let child = root.issue(OwnerDomain::TokenSession).unwrap().into_path();
         let charged = budget.snapshot().retained_bytes;
-        assert!(charged >= before + path_bytes(0).unwrap() + path_bytes(1).unwrap());
+        assert!(
+            charged
+                >= before + root_bytes().unwrap() + path_bytes(0).unwrap() + path_bytes(1).unwrap()
+        );
         drop(root);
         // Receipts never refund: retained storage stays paid after the issuer drops.
         assert_eq!(budget.snapshot().retained_bytes, charged);
