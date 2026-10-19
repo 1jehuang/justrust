@@ -462,10 +462,12 @@ fn main(){if run()==7{println!("compound oracle ok");}}"#,
 }
 
 #[test]
-fn rejects_legal_unsupported_custom_trait_compound() {
-    rejects(
-        "legalunsupported: custom_trait_compound",
+fn accepts_custom_trait_compound_matching_stock() {
+    // Formerly a legal-unsupported boundary; user AddAssign compound assignment
+    // is now supported by operator traits. Stock rustc 1.98.1 prints this line.
+    runs(
         r#"struct S(i32);impl std::ops::AddAssign<i32> for S{fn add_assign(&mut self,r:i32){self.0=self.0+r;}}fn run()->i32{let mut s=S(3);s+=4;s.0}
 fn main(){if run()==7{println!("compound oracle ok");}}"#,
+        "compound oracle ok\n",
     );
 }

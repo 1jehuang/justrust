@@ -79,6 +79,7 @@ fn fixture() -> CheckedFunction {
                             ty,
                             bindings: vec![binding(1, 0), binding(2, 1)],
                         },
+                        guard: None,
                         body: ExprId(1),
                     }],
                 },
@@ -156,6 +157,7 @@ fn separate_catchall_arms_may_use_distinct_fresh_locals() {
             ty: domain(),
             bindings: vec![binding(3, 0), binding(4, 1)],
         },
+        guard: None,
         body: ExprId(1),
     });
     function.validate().unwrap();
@@ -279,6 +281,7 @@ fn aggregate_binding_local_cannot_be_shared_across_arms() {
             ty: domain(),
             bindings: vec![binding(1, 0), binding(4, 1)],
         },
+        guard: None,
         body: ExprId(1),
     });
     reject(function);
@@ -402,6 +405,7 @@ fn unreachable_aggregate_arm_still_requires_valid_binding_metadata() {
         0,
         MatchArm {
             pattern: MatchPattern::Wildcard,
+            guard: None,
             body: ExprId(1),
         },
     );

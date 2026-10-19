@@ -437,6 +437,7 @@ mod tests {
             concrete: &concrete,
             resolve: &resolve,
             drop_flags: Vec::new(),
+            path_flags: Vec::new(),
             locals: Vec::new(),
             aggregate_scratch: 0,
             wide_scratch: -256,

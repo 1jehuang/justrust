@@ -80,6 +80,7 @@ fn fixture() -> CheckedFunction {
                             ty,
                             bindings: vec![binding(1, 0), binding(2, 2)],
                         },
+                        guard: None,
                         body: ExprId(1),
                     }],
                 },
@@ -405,6 +406,7 @@ fn unreachable_array_arm_still_validates_physical_indices() {
     *arms(&mut function) = vec![
         MatchArm {
             pattern: MatchPattern::Wildcard,
+            guard: None,
             body: ExprId(1),
         },
         second,
@@ -499,6 +501,7 @@ fn structural_ir_admission_does_not_grant_noncopy_indexed_move_permission() {
                             borrow: None,
                         }],
                     },
+                    guard: None,
                     body: ExprId(1),
                 }],
             },

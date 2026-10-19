@@ -27,13 +27,17 @@ fn normal_drop_descriptor_rejects_abi_compatible_noncanonical_target_and_signatu
     };
     valid.validate(&owner, facts).unwrap();
     let mut forged = valid.as_ref().clone();
-    forged.target = CallTarget {
+    forged.target = Some(CallTarget {
         declaration: context.function_decl(1).unwrap(),
         type_args: Arc::from([]),
-    };
+    });
     assert!(forged.validate(&owner, facts).is_err());
     let mut forged = valid.as_ref().clone();
-    forged.signature.result = Ty::Bool;
+    forged
+        .signature
+        .as_mut()
+        .expect("user Drop destructor has a canonical signature")
+        .result = Ty::Bool;
     assert!(forged.validate(&owner, facts).is_err());
 }
 
