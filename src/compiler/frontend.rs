@@ -32,6 +32,7 @@ use super::semantic_path::{NameAccess, PathKey};
 use native_adapter::{NativeParserInput, NativeTokenBuffer};
 mod char_literal;
 pub(super) mod closures;
+mod let_chains;
 mod name_scope;
 mod name_validation;
 mod pattern_usefulness;
@@ -1387,6 +1388,10 @@ impl SourceInventory {
         match pattern {
             Pattern::Binding { name, .. } => {
                 self.bind(name, node.clone(), None, None, None, budget)?
+            }
+            Pattern::At { name, pattern, .. } => {
+                self.bind(name, node.clone(), None, None, None, budget)?;
+                self.shadow_pattern(pattern, &node.child(9, 0, budget)?, budget, depth + 1)?
             }
             Pattern::Path(path) => {
                 if let Some(name) = path.single() {
@@ -5482,6 +5487,13 @@ pub enum Pattern {
         /// through references are inferred by the checker, not the parser.
         by_ref: Option<ir::BorrowKind>,
     },
+    /// `name @ pattern`: binds the whole matched place and tests `pattern`.
+    At {
+        name: AstIdent,
+        mutable: bool,
+        by_ref: Option<ir::BorrowKind>,
+        pattern: Box<Pattern>,
+    },
     /// Explicit `&pat` / `&mut pat` reference pattern.
     Ref {
         kind: ir::BorrowKind,
@@ -8158,8 +8170,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         tail: Some(failure),
                     },
                 };
-                validate_depth(DepthNode::Expr(&expression))
-                    .map_err(|e| self.depth_error(&e))?;
+                validate_depth(DepthNode::Expr(&expression)).map_err(|e| self.depth_error(&e))?;
                 return Ok(expression);
             }
             if !self.token().string && !self.token().is_opaque_literal() {
@@ -8630,6 +8641,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                 })?;
             match pattern {
                 Pattern::Binding { name, .. } => self.bind_lexical(*name)?,
+                Pattern::At { name, pattern, .. } => {
+                    self.bind_lexical(*name)?;
+                    pending
+                        .push(pattern)
+                        .map_err(native_adapter::transport_error)?;
+                }
                 Pattern::Tuple(fields) | Pattern::Alternatives(fields) => {
                     for field in fields {
                         pending
@@ -11436,6 +11453,35 @@ impl<'input, 'names> Parser<'input, 'names> {
         })
     }
     fn pattern_inner(&mut self) -> Result<Pattern, ParseError> {
+        let pattern = self.pattern_atom()?;
+        if !self.is("@") {
+            return Ok(pattern);
+        }
+        let Pattern::Binding {
+            name,
+            mutable,
+            by_ref,
+        } = pattern
+        else {
+            return Err(self.error("left-hand side of `@` must be a binding"));
+        };
+        if self.cursor.peek(1).is_some_and(|token| token.matches("..")) {
+            return Err(self.unsupported("@ rest (subslice) bindings are unsupported"));
+        }
+        self.cursor.bump();
+        let inner = self.pattern_no_alternatives()?;
+        let pattern = self
+            .names
+            .try_parser_box(inner)
+            .map_err(native_adapter::name_error)?;
+        Ok(Pattern::At {
+            name,
+            mutable,
+            by_ref,
+            pattern,
+        })
+    }
+    fn pattern_atom(&mut self) -> Result<Pattern, ParseError> {
         if self.is("..=") || self.is("..") || self.range_bound_start() {
             return self.scalar_pattern();
         }
@@ -11900,6 +11946,11 @@ impl<'input, 'names> Parser<'input, 'names> {
                     continue;
                 }
                 let condition = self.condition_with(0, ConditionPurpose::Conditional)?;
+                if self.at_chain_let() {
+                    let first = let_chains::ChainCond::Bool(condition);
+                    statements.push(self.while_chain_statement(label, first)?);
+                    continue;
+                }
                 let body = self.block()?;
                 statements.push(Stmt::While {
                     label,
@@ -12467,6 +12518,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             return self.if_let_prefix(statement);
         }
         let condition = Box::new(self.condition_with(0, ConditionPurpose::Conditional)?);
+        if self.at_chain_let() {
+            return self.if_chain(let_chains::ChainCond::Bool(*condition), statement);
+        }
         let then_block = self.block()?;
         let else_block = if self.eat("else") {
             if self.is("if") {
@@ -12504,8 +12558,19 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.expect("=")?;
         // Do not consume a let-chain into the scrutinee or publish its bindings.
         let scrutinee = self.condition_with(3, ConditionPurpose::Conditional)?;
-        if self.is("&&") || self.is("||") {
-            return Err(self.unsupported("if let chains are unsupported"));
+        if self.is("&&") {
+            let first = let_chains::ChainCond::Let(
+                self.names
+                    .try_parser_box(pattern)
+                    .map_err(native_adapter::name_error)?,
+                self.names
+                    .try_parser_box(scrutinee)
+                    .map_err(native_adapter::name_error)?,
+            );
+            return self.if_chain(first, statement);
+        }
+        if self.is("||") {
+            return Err(self.error("`||` operators are not supported in let chain conditions"));
         }
         let pattern = self
             .names
@@ -12725,8 +12790,19 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         self.expect("=")?;
         let scrutinee = self.condition_with(3, ConditionPurpose::Conditional)?;
-        if self.is("&&") || self.is("||") {
-            return Err(self.unsupported("while let chains are unsupported"));
+        if self.is("&&") {
+            let first = let_chains::ChainCond::Let(
+                self.names
+                    .try_parser_box(pattern)
+                    .map_err(native_adapter::name_error)?,
+                self.names
+                    .try_parser_box(scrutinee)
+                    .map_err(native_adapter::name_error)?,
+            );
+            return self.while_chain_statement(label, first);
+        }
+        if self.is("||") {
+            return Err(self.error("`||` operators are not supported in let chain conditions"));
         }
         let pattern = self
             .names
@@ -12950,7 +13026,8 @@ impl<'input, 'names> Parser<'input, 'names> {
                     .peek(1)
                     .is_some_and(|token| token.matches("let"))
             {
-                return Err(self.unsupported("if let chains are unsupported"));
+                // A let-chain operand: the chain parser takes over.
+                break;
             }
             if matches!(
                 op,
@@ -13662,17 +13739,16 @@ mod inactive_item_syntax_tests {
     }
 
     #[test]
-    fn if_let_chain_boundaries_are_typed_at_written_tokens() {
-        for (source, token) in [
-            ("fn main(){if let true=true && true {}}", "&&"),
-            ("fn main(){if true && let true=true {}}", "&&"),
-            ("fn main(){if let true=true || false {}}", "||"),
+    fn if_let_chains_parse_and_or_boundary_is_typed_at_written_tokens() {
+        for source in [
+            "fn main(){if let true=true && true {}}",
+            "fn main(){if true && let true=true {}}",
         ] {
+            parse_syntax_unprepared(source).unwrap();
+        }
+        for (source, token) in [("fn main(){if let true=true || false {}}", "||")] {
             let error = parse_syntax_unprepared(source).unwrap_err();
-            assert_eq!(
-                error.kind,
-                super::super::source::SourceErrorKind::Unsupported
-            );
+            assert_eq!(error.kind, super::super::source::SourceErrorKind::Syntax);
             let at = source.find(token).unwrap();
             assert_eq!(error.bytes, at..at + token.len());
         }
@@ -13717,10 +13793,14 @@ mod inactive_item_syntax_tests {
     }
 
     #[test]
-    fn while_let_chains_and_expression_positions_remain_explicit() {
+    fn while_let_chains_parse_and_expression_boundaries_remain_explicit() {
+        for source in [
+            "fn main(){while let true=true && true {}}",
+            "fn main(){while true && let true=true {}}",
+        ] {
+            parse_syntax_unprepared(source).unwrap();
+        }
         for (source, token) in [
-            ("fn main(){while let true=true && true {}}", "&&"),
-            ("fn main(){while true && let true=true {}}", "&&"),
             ("fn main(){while let true=true || false {}}", "||"),
             ("fn main(){let value=while let true=false {};}", "while"),
             (
@@ -13729,10 +13809,12 @@ mod inactive_item_syntax_tests {
             ),
         ] {
             let error = parse_syntax_unprepared(source).unwrap_err();
-            assert_eq!(
-                error.kind,
+            let expected = if token == "||" {
+                super::super::source::SourceErrorKind::Syntax
+            } else {
                 super::super::source::SourceErrorKind::Unsupported
-            );
+            };
+            assert_eq!(error.kind, expected);
             let at = source.find(token).unwrap();
             assert_eq!(error.bytes, at..at + token.len());
         }
@@ -14544,7 +14626,9 @@ fn walk_depth_inspecting(
                             push(DepthNode::Pattern(pattern))?;
                         }
                     }
-                    Pattern::Ref { pattern, .. } => push(DepthNode::Pattern(pattern))?,
+                    Pattern::Ref { pattern, .. } | Pattern::At { pattern, .. } => {
+                        push(DepthNode::Pattern(pattern))?
+                    }
                     _ => {}
                 }
             }

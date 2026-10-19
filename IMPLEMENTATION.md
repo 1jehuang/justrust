@@ -332,6 +332,10 @@ missing-file changes invalidate only justified consumers without stale lookup.
       IF-LET.md/WHILE-LET.md/LET-ELSE.md slices and destructuring assignment.
       Delivered: match ergonomics (default binding modes, `ref`/`ref mut`,
       `&pat`, enum matches through dereferences), see MATCH-ERGONOMICS.md.
+      Delivered: Copy/shared `name @ pattern` bindings (including nested/or
+      subpatterns) and edition-2024 if-let/while-let chains with short-circuit
+      evaluation and then-only scopes. Non-Copy by-value @ and runtime slice
+      patterns remain explicit Unsupported boundaries.
 - [ ] Extend bidirectional/local inference, coercion sites, partial type holes,
       omitted method arguments and control-flow joins, preserving rigid universal
       parameters and diagnostics for unresolved constraints.

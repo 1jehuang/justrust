@@ -2577,6 +2577,15 @@ impl Resolver<'_> {
                 self.pattern(pattern, module, names)?;
             }
             Pattern::Ref { pattern, .. } => self.pattern(pattern, module, names)?,
+            Pattern::At { name, pattern, .. } => {
+                if !self.local_insert(names, *name)? {
+                    return Err(format!(
+                        "E0416: identifier {} is bound more than once in the same pattern",
+                        self.ident_display(*name)?
+                    ));
+                }
+                self.pattern(pattern, module, names)?;
+            }
             Pattern::Variant { name, fields, .. } if name.anchor() == PathAnchor::SelfType => {
                 if !self.self_allowed {
                     return Err("Self outside impl".into());

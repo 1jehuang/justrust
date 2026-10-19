@@ -6503,6 +6503,24 @@ pub struct MatchArm {
 }
 
 /// The deliberately closed Copy domain of original root-arm alternatives.
+/// Builtin-Copy shapes recognizable without trait facts (scalars, shared
+/// references, and tuples/arrays of them). Conservative: false means unknown.
+fn structurally_copy(ty: &Ty, depth: usize) -> bool {
+    if depth > MAX_PATTERN_PROJECTION_DEPTH {
+        return false;
+    }
+    match ty {
+        Ty::Int(_) | Ty::Bool | Ty::Char | Ty::Float(_) | Ty::Unit => true,
+        Ty::Ref {
+            kind: BorrowKind::Shared,
+            ..
+        } => true,
+        Ty::Tuple(fields) => fields.iter().all(|f| structurally_copy(f, depth + 1)),
+        Ty::Array { element, .. } => structurally_copy(element, depth + 1),
+        _ => false,
+    }
+}
+
 pub fn validate_alternative_domain(ty: &Ty, budget: Option<&PlanBudget>) -> Result<(), String> {
     if budget.is_some_and(PlanBudget::has_resource_failure) {
         return Err("planning resource budget already exhausted".into());
@@ -7575,7 +7593,9 @@ impl CheckedFunction {
                 }
                 self.validate_pattern_bindings_with_params(domain, aggregate_bindings, parameters)?;
                 for binding in aggregate_bindings {
-                    if (binding.projection.is_empty() && binding.borrow.is_none())
+                    if (binding.projection.is_empty()
+                        && binding.borrow.is_none()
+                        && !structurally_copy(domain, 0))
                         || binding.projection.iter().any(|step| {
                             !matches!(
                                 step,
@@ -7616,7 +7636,9 @@ impl CheckedFunction {
                     index: *variant,
                 });
                 for binding in payload_bindings {
-                    if binding.projection.first() != Some(&expected)
+                    // `whole @ E::V(..)` binds the enum itself (empty projection).
+                    let whole = binding.projection.is_empty();
+                    if (!whole && binding.projection.first() != Some(&expected))
                         || !bindings.insert(binding.local)
                     {
                         return Err("invalid or repeated enum payload binding".into());
@@ -7862,11 +7884,25 @@ impl CheckedFunction {
             if !pattern_types_equal(&local.ty, &projected, work)? {
                 return Err("pattern binding local type mismatch".into());
             }
-            paths.push(binding.projection.as_slice());
+            // `x @ Some(y)`: overlapping shared borrows and Copy reads are
+            // sound; only overlapping moves or mutable borrows conflict.
+            let exclusive = match binding.borrow {
+                Some(BorrowKind::Shared) => false,
+                Some(_) => true,
+                None => !structurally_copy(projected_ty(ty, &binding.projection)?, 0),
+            };
+            paths.push((binding.projection.as_slice(), exclusive));
         }
-        paths.sort_unstable();
-        if paths.windows(2).any(|pair| pair[1].starts_with(pair[0])) {
-            return Err("overlapping pattern binding projections".into());
+        paths.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        for (i, (outer, outer_exclusive)) in paths.iter().enumerate() {
+            for (inner, inner_exclusive) in &paths[i + 1..] {
+                if !inner.starts_with(outer) {
+                    break;
+                }
+                if *outer_exclusive || *inner_exclusive {
+                    return Err("overlapping pattern binding projections".into());
+                }
+            }
         }
         Ok(())
     }

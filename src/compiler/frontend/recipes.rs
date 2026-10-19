@@ -325,7 +325,9 @@ pub(super) fn inventory(
                 generic_path(path, ds, b, depth)?;
                 pattern(child, ds, b, depth + 1)?;
             }
-            Pattern::Ref { pattern: child, .. } => pattern(child, ds, b, depth + 1)?,
+            Pattern::Ref { pattern: child, .. } | Pattern::At { pattern: child, .. } => {
+                pattern(child, ds, b, depth + 1)?
+            }
             Pattern::Tuple(children)
             | Pattern::Array(children)
             | Pattern::Alternatives(children) => {

@@ -1230,6 +1230,67 @@ impl<'s> Checker<'s> {
                     _ => self.infer_node(InferKind::Unknown(false))?,
                 }
             }
+            Expr::If {
+                then_block,
+                else_block,
+                ..
+            } => {
+                // Only statement-free branches: a tail could otherwise name
+                // a block-local that shadows an outer binding.
+                let mut term = None;
+                for block in [then_block, else_block] {
+                    if let (true, Some(tail)) = (block.statements.is_empty(), &block.tail) {
+                        let t = self.inference_evidence(tail, depth + 1)?;
+                        if !matches!(t.as_ref(), InferKind::Unknown(_)) {
+                            term = Some(t);
+                            break;
+                        }
+                    }
+                }
+                match term {
+                    Some(t) => t,
+                    None => self.infer_node(InferKind::Unknown(false))?,
+                }
+            }
+            Expr::Binary { op, left, right } => {
+                use BinaryOp::*;
+                match op {
+                    Eq | Ne | Lt | Le | Gt | Ge | And | Or => {
+                        self.infer_node(InferKind::Rigid(ir::Ty::Bool))?
+                    }
+                    _ => {
+                        // Builtin arithmetic: the result is the operand type
+                        // when that is a primitive scalar (or literal kind).
+                        // Overloaded operators on other types give no evidence.
+                        let primitive = |t: &InferTerm| {
+                            matches!(
+                                t.as_ref(),
+                                InferKind::Integer
+                                    | InferKind::Float
+                                    | InferKind::Rigid(
+                                        ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool
+                                    )
+                            )
+                        };
+                        let l = self.inference_evidence(left, depth + 1)?;
+                        if matches!(op, Shl | Shr) {
+                            if primitive(&l) {
+                                l
+                            } else {
+                                self.infer_node(InferKind::Unknown(false))?
+                            }
+                        } else {
+                            let r = self.inference_evidence(right, depth + 1)?;
+                            let rigid = |t: &InferTerm| matches!(t.as_ref(), InferKind::Rigid(_));
+                            if primitive(&l) && primitive(&r) {
+                                if rigid(&l) || !rigid(&r) { l } else { r }
+                            } else {
+                                self.infer_node(InferKind::Unknown(false))?
+                            }
+                        }
+                    }
+                }
+            }
             _ => self.infer_node(InferKind::Unknown(false))?,
         };
         self.infer_storage(1)?;
@@ -1391,6 +1452,43 @@ impl<'s> Checker<'s> {
         }
         // Preserve literal classes until the OUTER solver's existing fallback.
         self.infer_node(InferKind::Nominal(declaration, terms.into()))
+    }
+    /// Joint type evidence of two statement-free branch tails, used only when
+    /// an `if` has no outer expectation. None leaves checking unchanged.
+    pub(super) fn branch_evidence_type(
+        &self,
+        then_block: &Block,
+        else_block: &Block,
+    ) -> Result<Option<ir::Ty>, String> {
+        fn tail(b: &Block) -> Option<&Expr> {
+            if b.statements.is_empty() {
+                b.tail.as_deref()
+            } else {
+                None
+            }
+        }
+        let (Some(a), Some(b)) = (tail(then_block), tail(else_block)) else {
+            return Ok(None);
+        };
+        let constructor = |e: &Expr| {
+            matches!(
+                e,
+                Expr::Call { .. }
+                    | Expr::EnumVariant { .. }
+                    | Expr::TupleStruct { .. }
+                    | Expr::Var(_)
+            )
+        };
+        if !constructor(a) || !constructor(b) {
+            return Ok(None);
+        }
+        let a = self.inference_evidence(a, 0)?;
+        let b = self.inference_evidence(b, 0)?;
+        let mut solver = Inference::empty(self)?;
+        if solver.constrain(&a, &b, 0).is_err() {
+            return Ok(None);
+        }
+        Ok(solver.resolve(&a, true, 0).ok().flatten())
     }
     pub(super) fn infer_constructor(
         &self,
@@ -2499,6 +2597,12 @@ impl<'a> Checker<'a> {
         }
         let pattern = self.pattern_source(pattern, ty)?;
         match pattern {
+            Pattern::At { pattern, .. } => {
+                *binders = binders
+                    .checked_add(1)
+                    .ok_or("aggregate binder count overflow")?;
+                self.validate_aggregate_pattern(pattern, ty, depth + 1, work, binders)
+            }
             Pattern::Ref { kind, pattern } => {
                 self.explicit_deref(*kind, ty, &mut Vec::new(), |this, referent, _| {
                     this.validate_aggregate_pattern(pattern, referent, depth + 1, work, binders)
@@ -2768,6 +2872,28 @@ impl<'a> Checker<'a> {
                 self.explicit_deref(*kind, ty, path, |this, referent, path| {
                     this.collect_decision(pattern, referent, path, pending, depth + 1)
                 })?;
+            }
+            Pattern::At {
+                name,
+                mutable,
+                by_ref,
+                pattern: inner,
+            } => {
+                self.at_binding_admitted(*by_ref, ty)?;
+                let binding = Pattern::Binding {
+                    name: *name,
+                    mutable: *mutable,
+                    by_ref: *by_ref,
+                };
+                self.pattern_locals(
+                    &binding,
+                    ty,
+                    path,
+                    &mut std::collections::HashSet::new(),
+                    &mut pending.bindings,
+                    &mut pending.work,
+                )?;
+                self.collect_decision(inner, ty, path, pending, depth + 1)?;
             }
             Pattern::Wildcard => {}
             Pattern::Binding { .. } => self.pattern_locals(
@@ -3069,7 +3195,8 @@ impl<'a> Checker<'a> {
             Pattern::Wildcard => PatternTest::Wildcard,
             Pattern::Binding {
                 by_ref: Some(_), ..
-            } => return self.collect_complex_pattern(pattern, domain),
+            }
+            | Pattern::At { .. } => return self.collect_complex_pattern(pattern, domain),
             Pattern::Binding { .. } => {
                 self.pattern_locals(
                     pattern,
@@ -4585,6 +4712,20 @@ impl<'a> Checker<'a> {
     }
     /// A non-reference pattern matched against a reference implicitly
     /// dereferences it (RFC 2005 default binding modes, edition 2024 rules).
+    /// `x @ p` binds the whole place by value only when it is Copy, so the
+    /// subpattern's bindings never observe a moved-from value.
+    fn at_binding_admitted(
+        &self,
+        by_ref: Option<ir::BorrowKind>,
+        ty: &ir::Ty,
+    ) -> Result<(), String> {
+        if by_ref.is_none() && self.binding_mode.get().is_none() && !self.facts().must_copy(ty)? {
+            return Err(
+                "unsupported: by-value `@` bindings of non-Copy values (use `ref name @`)".into(),
+            );
+        }
+        Ok(())
+    }
     pub(super) fn implicitly_dereferenced(pattern: &Pattern, ty: &ir::Ty) -> bool {
         matches!(ty, ir::Ty::Ref { .. })
             && !matches!(
@@ -4923,6 +5064,7 @@ impl<'a> Checker<'a> {
         }
         match pattern {
             Pattern::Alternatives(_) => Err("unsupported: or-pattern outside match arm root".into()),
+            Pattern::At { pattern: inner, .. } => self.pattern_ty(inner, ty),
             Pattern::Ref { kind, pattern: inner } => {
                 self.explicit_deref(*kind, ty, &mut Vec::new(), |this, referent, _| {
                     this.pattern_ty(inner, referent)
@@ -4998,6 +5140,21 @@ impl<'a> Checker<'a> {
         match pattern {
             Pattern::Alternatives(_) => {
                 return Err("unsupported: or-pattern binding extraction".into());
+            }
+            Pattern::At {
+                name,
+                mutable,
+                by_ref,
+                pattern: inner,
+            } => {
+                self.at_binding_admitted(*by_ref, ty)?;
+                let binding = Pattern::Binding {
+                    name: *name,
+                    mutable: *mutable,
+                    by_ref: *by_ref,
+                };
+                self.pattern_locals(&binding, ty, path, names, pending, work)?;
+                return self.pattern_locals(inner, ty, path, names, pending, work);
             }
             Pattern::Ref { kind, pattern } => {
                 return self.explicit_deref(*kind, ty, path, |this, referent, path| {
@@ -9971,6 +10128,14 @@ impl<'a> Checker<'a> {
                 let c = self.flow(condition);
                 self.require(&c, &ir::Ty::Bool)?;
                 let reachable = self.reachable && c.completes;
+                // `if c { Some(x) } else { None }`: without an outer
+                // expectation, the branches' joint evidence types both.
+                let inferred = if expected.is_none() {
+                    self.branch_evidence_type(then_block, else_block)?
+                } else {
+                    None
+                };
+                let expected = expected.or(inferred.as_ref());
                 let (then_block, t) = self.block_expected_when(then_block, reachable, expected)?;
                 let (else_block, e) = self.block_expected_when(else_block, reachable, expected)?;
                 let ty = self.join(&t.ty, &e.ty, "if branches")?;

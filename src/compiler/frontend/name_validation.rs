@@ -998,6 +998,10 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Pattern(pattern))?;
                 }
                 Pattern::Ref { pattern, .. } => self.push(Visit::Pattern(pattern))?,
+                Pattern::At { name, pattern, .. } => {
+                    self.local(*name, true)?;
+                    self.push(Visit::Pattern(pattern))?;
+                }
                 Pattern::Variant { name, fields, .. } => {
                     self.push(Visit::Path(name))?;
                     self.pattern_fields(fields)?;
