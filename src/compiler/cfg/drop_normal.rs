@@ -39,6 +39,21 @@ pub(super) fn descriptor(
     if !facts.has_normal_drop_impls() {
         return Ok(None);
     }
+    // The checked source arena already validates these local/expression types.
+    // Their outer form cannot own Drop, even if a pointee is an owning type.
+    if matches!(
+        ty,
+        Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Bool
+            | Ty::Char
+            | Ty::Unit
+            | Ty::Never
+            | Ty::Ref { .. }
+            | Ty::RawPtr { .. }
+    ) {
+        return Ok(None);
+    }
     match facts
         .normal_drop_plan(ty)
         .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?

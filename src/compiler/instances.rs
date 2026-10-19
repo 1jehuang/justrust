@@ -758,6 +758,22 @@ pub(super) fn build(
                 .chain(std::iter::once(&source.result))
             {
                 budget.charge_work(1)?;
+                // Checked primitive/reference/pointer outer forms cannot acquire
+                // owning Drop through substitution. Nominal and aggregate forms
+                // still require the full closed canonical descriptor below.
+                if matches!(
+                    ty,
+                    ir::Ty::Int(_)
+                        | ir::Ty::Float(_)
+                        | ir::Ty::Bool
+                        | ir::Ty::Char
+                        | ir::Ty::Unit
+                        | ir::Ty::Never
+                        | ir::Ty::Ref { .. }
+                        | ir::Ty::RawPtr { .. }
+                ) {
+                    continue;
+                }
                 let ty = ir::substitute_ty(
                     ty,
                     &env,
