@@ -1,0 +1,361 @@
+{
+  "cases": [
+    {
+      "diagnostics": [
+        "warning: `#[inline]` attribute cannot be used on associated consts",
+        "warning: struct `S` is never constructed",
+        "warning: associated constant `N` is never used"
+      ],
+      "exit": 0,
+      "file": "associated_const.rs",
+      "sha256": "77c2d942759ca04266316d4882b967a4aa601a4185bfa208a0c7dbab1fca987d",
+      "source": "struct S;impl S{#[inline]const N:u8=1;}"
+    },
+    {
+      "diagnostics": [
+        "warning: trait `T` is never used"
+      ],
+      "exit": 0,
+      "file": "default_always.rs",
+      "sha256": "f77e5836fa6a693f141d75d6bb3f604059d5bee2766a3a3e0d677bdc7e5cd1c5",
+      "source": "trait T{#[inline(always)]fn f()->i32{7}}"
+    },
+    {
+      "diagnostics": [
+        "warning: trait `T` is never used"
+      ],
+      "exit": 0,
+      "file": "default_never.rs",
+      "sha256": "9b06707a4b671c12200d64a704ce3fd770e3e02fa2f37756983331c19260905d",
+      "source": "trait T{#[inline(never)]fn f()->i32{7}}"
+    },
+    {
+      "diagnostics": [
+        "warning: trait `T` is never used"
+      ],
+      "exit": 0,
+      "file": "default_word.rs",
+      "sha256": "d326f55e9518c71f9859891fc1ee42c1ce198af4bdc5247386957364547ca601",
+      "source": "trait T{#[inline]fn f()->i32{7}}"
+    },
+    {
+      "diagnostics": [
+        "warning: unused attribute",
+        "warning: struct `S` is never constructed",
+        "warning: associated function `f` is never used"
+      ],
+      "exit": 0,
+      "file": "duplicate.rs",
+      "sha256": "76aad557b96cd99a6e6b26f4dd0898223a3fa900056bf454ba8939cf353a6ff6",
+      "source": "struct S;impl S{#[inline]#[inline(never)]fn f(){}}"
+    },
+    {
+      "diagnostics": [
+        "warning: struct `S` is never constructed",
+        "warning: associated function `f` is never used"
+      ],
+      "exit": 0,
+      "file": "extern_c.rs",
+      "sha256": "97117d22aae8bf9edebf689e8f5f70d534467632e4d4d3daff8e0f80457a027a",
+      "source": "struct S;impl S{#[inline]extern \"C\" fn f(){}}"
+    },
+    {
+      "diagnostics": [
+        "warning: struct `S` is never constructed",
+        "warning: associated function `f` is never used"
+      ],
+      "exit": 0,
+      "file": "generated.rs",
+      "sha256": "78895a619589c5a97671715f8d005a1793d5c04489f66cffb6f086546a9dee6b",
+      "source": "macro_rules! m{()=>{struct S;impl S{#[inline]fn f(){}}}}m!();"
+    },
+    {
+      "diagnostics": [],
+      "exit": 0,
+      "file": "inactive_badmode.rs",
+      "sha256": "010e1202e764226b2fc6bd8811160c1a2404f4ee644a345a96b80714cae9defa",
+      "source": "#[cfg(any())]impl S{#[inline(sometimes)]fn f(){}}"
+    },
+    {
+      "diagnostics": [
+        "error: expected expression, found `]`",
+        "error: aborting due to 1 previous error"
+      ],
+      "exit": 1,
+      "file": "inactive_missing.rs",
+      "sha256": "1f433d7013725017db654975e9978a033de1b9232e8ad65529a1fa67b738758b",
+      "source": "#[cfg(any())]impl S{#[inline=]fn f(){}}"
+    },
+    {
+      "diagnostics": [
+        "warning: struct `S` is never constructed",
+        "warning: associated function `f` is never used"
+      ],
+      "exit": 0,
+      "file": "inherent_always.rs",
+      "sha256": "60030f4b528dba9404c486c4873e893bf3a77c6aded64bb01a01d7f705e98f3f",
+      "source": "struct S;impl S{#[inline(always)]fn f()->i32{7}}"
+    },
+    {
+      "diagnostics": [
+        "warning: struct `S` is never constructed",
+        "warning: associated function `f` is never used"
+      ],
+      "exit": 0,
+      "file": "inherent_never.rs",
+      "sha256": "cfa6897661c4a4f93357eca8e58170fb99749436f4a5d089e2d8d9914f247431",
+      "source": "struct S;impl S{#[inline(never)]fn f()->i32{7}}"
+    },
+    {
+      "diagnostics": [
+        "warning: struct `S` is never constructed",
+        "warning: associated function `f` is never used"
+      ],
+      "exit": 0,
+      "file": "inherent_word.rs",
+      "sha256": "e2479d9fe12bb3ffa7a5b1575eadf6b4dc5676ca5f40d70d769cf4adbec9471e",
+      "source": "struct S;impl S{#[inline]fn f()->i32{7}}"
+    },
+    {
+      "diagnostics": [
+        "error: `#[inline]` attribute cannot be used on inherent impl blocks",
+        "error: aborting due to 1 previous error"
+      ],
+      "exit": 1,
+      "file": "inner.rs",
+      "sha256": "a33279e71ca341bc1421c2945671557a1549f2968806a5b663983d0383ba1454",
+      "source": "struct S;impl S{#![inline]fn f(){}}"
+    },
+    {
+      "diagnostics": [
+        "error: `#[inline]` attribute cannot be used on required trait methods",
+        "warning: trait `T` is never used"
+      ],
+      "exit": 1,
+      "file": "lint_denied_required.rs",
+      "sha256": "f8500d1ac5dcecfbdf0095fb83f0dd1c1e56e452ad9a0866557ae88527c6c5a5",
+      "source": "#![deny(unused_attributes)]trait T{#[inline]fn f();}"
+    },
+    {
+      "diagnostics": [
+        "error[E0805]: malformed `inline` attribute input",
+        "error: aborting due to 1 previous error"
+      ],
+      "exit": 1,
+      "file": "malformed_empty.rs",
+      "sha256": "28dd84b17a3aee951b0609521f0f4ce1573bbe480fb2c5d84fd4b08facc67bb1",
+      "source": "struct S;impl S{#[inline()]fn f(){}}"
+    },
+    {
+      "diagnostics": [
+        "error[E0539]: malformed `inline` attribute input",
+        "error: aborting due to 1 previous error"
+      ],
+      "exit": 1,
+      "file": "malformed_mode.rs",
+      "sha256": "9dc578a5180a9ea1bf1f11be67c96202e9a27eaf754b1699235315ecf55ad13c",
+      "source": "struct S;impl S{#[inline(sometimes)]fn f(){}}"
+    },
+    {
+      "diagnostics": [
+        "error: valid forms for the attribute are `#[inline(always)]`, `#[inline(never)]`, and `#[inline]`",
+        "warning: struct `S` is never constructed",
+        "warning: associated function `f` is never used"
+      ],
+      "exit": 1,
+      "file": "malformed_value.rs",
+      "sha256": "b53feb5010449ea986ea79c397157ee95c0dd1e2d6ce9807daf92b1ff4c5a28e",
+      "source": "struct S;impl S{#[inline=\"x\"]fn f(){}}"
+    },
+    {
+      "diagnostics": [
+        "error: expected identifier, found `#`",
+        "error: aborting due to 1 previous error"
+      ],
+      "exit": 1,
+      "file": "midheader.rs",
+      "sha256": "670c390eca321fef2fc563987a7530fe0b001d6d4612eb2ce7e26a542bf51015",
+      "source": "struct S;impl S{fn #[inline]f(){}}"
+    },
+    {
+      "diagnostics": [
+        "warning: `#[inline]` attribute cannot be used on required trait methods",
+        "warning: trait `T` is never used"
+      ],
+      "exit": 0,
+      "file": "required_always.rs",
+      "sha256": "bb93d957400307d74fa8f50b0ab573ce4dc3a8f84bc473daedb1fcaf850b82aa",
+      "source": "trait T{#[inline(always)]fn f()->i32;}"
+    },
+    {
+      "diagnostics": [
+        "warning: `#[inline]` attribute cannot be used on required trait methods",
+        "warning: trait `T` is never used"
+      ],
+      "exit": 0,
+      "file": "required_never.rs",
+      "sha256": "03274cc608068c68ced0c1094b769c04647144ca4f06fc5e62d07debe71c5482",
+      "source": "trait T{#[inline(never)]fn f()->i32;}"
+    },
+    {
+      "diagnostics": [
+        "warning: `#[inline]` attribute cannot be used on required trait methods",
+        "warning: trait `T` is never used"
+      ],
+      "exit": 0,
+      "file": "required_word.rs",
+      "sha256": "aea0275293dd5a6b370abc0a3c13714a50c57765cf7dfa4d35e5732600086aeb",
+      "source": "trait T{#[inline]fn f()->i32;}"
+    },
+    {
+      "diagnostics": [
+        "error: cannot use `#[inline(always)]` with `#[target_feature]`",
+        "error: aborting due to 1 previous error"
+      ],
+      "exit": 1,
+      "file": "target_always.rs",
+      "sha256": "967d76cba5a45ba81110e549ae7d588f4f94e1d156a1934db9d696391ce4eb71",
+      "source": "struct S;impl S{#[target_feature(enable=\"sse2\")]#[inline(always)]unsafe fn f(){}}"
+    },
+    {
+      "diagnostics": [
+        "warning: trait `T` is never used",
+        "warning: struct `S` is never constructed"
+      ],
+      "exit": 0,
+      "file": "traitimpl_always.rs",
+      "sha256": "775a502770d0ae444e61b21b4cdd04a078501a53db74e833f38aa31fc1ac52c0",
+      "source": "trait T{fn f()->i32;}struct S;impl T for S{#[inline(always)]fn f()->i32{7}}"
+    },
+    {
+      "diagnostics": [
+        "warning: trait `T` is never used",
+        "warning: struct `S` is never constructed"
+      ],
+      "exit": 0,
+      "file": "traitimpl_never.rs",
+      "sha256": "653416a744397caabe0ec42c3ee0ea66a3427c61634d063b3bf061c0806273d6",
+      "source": "trait T{fn f()->i32;}struct S;impl T for S{#[inline(never)]fn f()->i32{7}}"
+    },
+    {
+      "diagnostics": [
+        "warning: trait `T` is never used",
+        "warning: struct `S` is never constructed"
+      ],
+      "exit": 0,
+      "file": "traitimpl_word.rs",
+      "sha256": "7d2e7d124bd4ac1a4b4069c463dbf1202ff7d0a51b4ec6641ad2c63a839dbefb",
+      "source": "trait T{fn f()->i32;}struct S;impl T for S{#[inline]fn f()->i32{7}}"
+    },
+    {
+      "diagnostics": [
+        "error[E0308]: mismatched types",
+        "error: aborting due to 1 previous error"
+      ],
+      "exit": 1,
+      "file": "unused_bad.rs",
+      "sha256": "094445c7f1ff4391fd8cf5aadc1955da6280bbe64413e22aa78344a015b36d34",
+      "source": "struct S;impl S{#[inline]fn f()->u8{true}}"
+    }
+  ],
+  "cfg_profile": "default cfg/features/profile; serial; 26 executed cases",
+  "command": [
+    "rustc",
+    "--edition=2024",
+    "--crate-type=lib",
+    "--emit=metadata",
+    "--target",
+    "x86_64-unknown-linux-gnu",
+    "<case.rs>",
+    "-o",
+    "<case.rmeta>"
+  ],
+  "date_utc": "2026-10-19",
+  "initial_filter_mismatch": {
+    "matched": 0,
+    "note": "Wrong compiler::source_attrs::tests filter. Not counted as unit acceptance.",
+    "run": "20261018-231513621-2753261"
+  },
+  "native_boundaries": [
+    "Exactly one inline, inline(always), or inline(never) on an original immediate associated function with an unambiguous body; literal docs may coexist. Hints are audit-only with no forced inlining or ABI guarantee.",
+    "Required methods, duplicate inline, other owners, inner attributes, generated owners and mixed semantic attributes remain Unsupported.",
+    "Ungrouped generic angle tokens, where or ! in function headers make body authority ambiguous and remain Unsupported. This intentionally excludes never-return headers. A1 docs behavior is unchanged.",
+    "No frontend, registry, SSA, ABI or graph-kind changes. No source or budget carriers added to graph facts.",
+    "Unused invalid bodies must fail; CHECK evaluates no OBJECT103. BUILD publishes no105 nor offending callable OBJECT103, unrelated valid object overlap is allowed."
+  ],
+  "not_executed": [
+    "required_const_group.rs",
+    "body_generic_header.rs",
+    "target_then_inline.rs",
+    "inline_then_target.rs"
+  ],
+  "not_executed_reason": "Authored after first 26 stock probes, execution withheld during coordinator CPU reservation. Not stock receipts.",
+  "oracle_toolchain": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8",
+  "scope": "A2 stock-first bounded original associated-function inline admission. No full Rust, core, unchanged module acceptance or optimization/ABI claim.",
+  "native_checkpoint": {
+    "source_commit": "9849375a8",
+    "base": "fd2712074",
+    "production_file": "src/compiler/source_attrs.rs",
+    "production_sha256": "f48eeb7c461a896f84bb0c6f989701cbb3a8717fde6543513e58d6af71e5e228",
+    "test_file": "tests/associated_doc_attributes.rs",
+    "test_sha256": "099c0134916dd252effbe50c03c2e02c0d5c527c4c2f977a677bcd170cb0476e",
+    "validation_source_commit": "545103c5b",
+    "validation_base": "aaa28f831",
+    "replay_note": "The coordinator requested replay onto fd2712074 after validation. Its diff from aaa28f831 contains only two review Markdown files. No src/tests/Cargo.toml/Cargo.lock/build.rs differences. The A2 source/test bytes are unchanged."
+  },
+  "final_scoped_hosted_receipts": {
+    "policy": {
+      "run": "20261018-231911304-2810703",
+      "passed": 26
+    },
+    "workflow_and_graph": {
+      "run": "20261018-231925968-2811536",
+      "passed": 24,
+      "workflow": 6,
+      "graph_integrity": 10,
+      "other_graph": 8
+    },
+    "strict_lint": {
+      "run": "20261018-231946615-2810501",
+      "exit": 0
+    },
+    "execution": "Forced hosted with JUSTRUST_BUILDD_PREBUILD=0 CARGO_BUILD_JOBS=2, serial tests. No full suite."
+  },
+  "earlier_graph_scope": {
+    "run": "20261018-231754438-2806689",
+    "passed": 21,
+    "graph_integrity": 7,
+    "note": "Older A1 private base. Not current ten-test graph acceptance."
+  },
+  "static_unchanged_source_candidates": [
+    {
+      "file": "core/src/io/error/repr_unpacked.rs",
+      "line": 12,
+      "sha256": "86b6af2a41931702d6cc47d0ef4fabc24e6bdb5f62e1f07e9e638c5181b73084",
+      "first": "plain associated inline",
+      "remaining": "Dependencies, aggregate and pointer contracts remain."
+    },
+    {
+      "file": "core/src/net/display_buffer.rs",
+      "line": 11,
+      "sha256": "d11bf44d7613b9ad31aa92d990d3b5775a1c24d2be94b22f6200e4bf04ef5327",
+      "first": "plain associated inline",
+      "remaining": "Lifetime, const function and const generic signatures remain parser/semantic barriers."
+    },
+    {
+      "file": "core/src/clone/uninit.rs",
+      "line": 13,
+      "sha256": "98aa23a7472366f8cb5e23eaaeea0b7b35a5beee8d13d15582c0959d5137a6da",
+      "first": "plain associated inline",
+      "remaining": "cfg_attr(track_caller) at later member remains fenced; unsafe specialization and pointer semantics remain."
+    },
+    {
+      "file": "core/src/num/imp/dec2flt/common.rs",
+      "line": 21,
+      "sha256": "fc64094721ff23e08fcba013154d04dec3fe986cae5ffd73a20f86049980aace",
+      "first": "A1 docs at line5, then associated inline(always)",
+      "remaining": "Slice receiver, arrays and primitive operations; no complete module acceptance."
+    }
+  ],
+  "static_inventory_note": "Source hashes are from retained stable checkout library sources. Prior core-discovery raw.tsv establishes historical first blockers only. No new core discovery, unchanged source acceptance or stripped-source claim."
+}
