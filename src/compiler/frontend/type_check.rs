@@ -4399,6 +4399,14 @@ impl<'a> Checker<'a> {
                     .into(),
             );
         }
+        if matches!(value, Expr::Field { .. } | Expr::Index { .. }) {
+            // `&call().field` may name a place behind a returned reference
+            // (autoderef), which a copied temporary would not alias.
+            return Err(
+                "unsupported: borrowing a field or element of a value expression is unsupported"
+                    .into(),
+            );
+        }
         let hint = match (expected, value) {
             // `&[a, b]` at a `&[T]` site: the array literal gets element type T.
             (Some(ir::Ty::Ref { referent, .. }), Expr::Array(elements)) => {

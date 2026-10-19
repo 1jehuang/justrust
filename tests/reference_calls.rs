@@ -468,12 +468,11 @@ fn main() { if run() == 7 { println!("borrow params oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_rvalue_borrow_argument() {
-    // Stock accepts and runs this fixture, outside this bounded B2 slice.
-    rejects(
-        "rvalue_borrow_argument",
+fn accepts_rvalue_borrow_argument() {
+    runs(
         r#"fn read(r:&i32)->i32{*r} fn run()->i32{read(&7)}
 fn main() { if run() == 7 { println!("borrow params oracle ok"); } }
 "#,
+        "borrow params oracle ok\n",
     );
 }
