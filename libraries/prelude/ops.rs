@@ -83,6 +83,9 @@ pub trait Index<Idx> {
     type Output;
     fn index(&self, index: Idx) -> &Self::Output;
 }
+pub trait IndexMut<Idx>: Index<Idx> {
+    fn index_mut(&mut self, index: Idx) -> &mut Self::Output;
+}
 pub trait Deref {
     type Target;
     fn deref(&self) -> &Self::Target;

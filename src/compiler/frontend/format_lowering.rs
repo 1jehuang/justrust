@@ -240,7 +240,19 @@ impl Checker<'_> {
             return Ok((
                 ir::ExprKind::Format {
                     pieces: pieces.to_vec(),
-                    arguments: evaluated.iter().map(|(_, _, operand)| *operand).collect(),
+                    arguments: evaluated
+                        .iter()
+                        .map(|(value, _, operand)| {
+                            // Native Format has special in-place handling for an
+                            // explicit Borrow, not arbitrary reference-producing
+                            // calls. An overloaded Index call must be dereferenced.
+                            if matches!(self.exprs[operand.0].kind, ir::ExprKind::Borrow { .. }) {
+                                *operand
+                            } else {
+                                *value
+                            }
+                        })
+                        .collect(),
                     modes: modes.to_vec(),
                     stream,
                     newline,
@@ -262,7 +274,9 @@ impl Checker<'_> {
                     *value
                 };
                 (init, ty)
-            } else if matches!(self.exprs[operand.0].kind, ir::ExprKind::Borrow { .. }) {
+            } else if operand != value
+                || matches!(self.exprs[operand.0].kind, ir::ExprKind::Borrow { .. })
+            {
                 (*operand, self.exprs[operand.0].ty.clone())
             } else {
                 // Temporary value: own it for the statement, lend it out.

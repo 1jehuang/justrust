@@ -277,3 +277,13 @@ impl<T> super::ops::Index<usize> for Vec<T> {
         self.get_ref(index)
     }
 }
+
+impl<T> super::ops::IndexMut<usize> for Vec<T> {
+    fn index_mut(&mut self, index: usize) -> &mut T {
+        if index >= self.len {
+            panic!("index out of bounds");
+        }
+        let p = slot(self.ptr, index);
+        unsafe { &mut *p }
+    }
+}

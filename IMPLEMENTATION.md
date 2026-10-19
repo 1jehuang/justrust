@@ -692,11 +692,13 @@ gate, nor does successful direct ELF emission alone.
 
 ### G7. Native core, alloc and std bring-up
 
-Native-prelude progress: `Vec<T>: Index<usize>` now supports value reads,
-shared element borrows and indexed formatting through ordinary source trait
-calls. `tests/vec_index.rs` compares CHECK/BUILD/output at workers 1 and 8
-with stock Rust and checks the out-of-bounds abort. Mutable IndexMut and
-range indexing remain separate blockers, not full Vec or std acceptance.
+Native-prelude progress: `Vec<T>: Index<usize> + IndexMut<usize>` supports value
+reads, assignments/compound assignments, shared/mutable element borrows and
+indexed formatting through ordinary source trait calls. `tests/vec_index.rs`
+compares CHECK/BUILD/output at workers 1 and 8 with stock Rust, checks
+read/write/borrow out-of-bounds aborts, immutable-place rejection, and exactly-once
+non-Copy indexed formatting. Range indexing remains a separate compiler/library
+blocker, not full Vec or std acceptance.
 
 - [ ] Establish pinned library source manifests, language-item/intrinsic inventory,
       sysroot identity and library feature/target configuration without embedding
