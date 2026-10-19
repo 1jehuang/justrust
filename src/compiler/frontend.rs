@@ -31,6 +31,7 @@ pub use super::semantic_path::{AstPath, PathAnchor};
 use super::semantic_path::{NameAccess, PathKey};
 use native_adapter::{NativeParserInput, NativeTokenBuffer};
 mod assignment_expr;
+mod carrier_regions;
 mod char_literal;
 pub(super) mod closures;
 mod function_qualifiers;
@@ -969,6 +970,23 @@ fn copy_source_path(
         .try_reserve_exact(path.segments.len())
         .map_err(|_| FactsError::resource(budget, "source path copy allocation"))?;
     for segment in &path.segments {
+        sr::work(budget, segment.region_args.len())?;
+        budget
+            .retain_bytes(
+                segment
+                    .region_args
+                    .len()
+                    .checked_mul(std::mem::size_of::<RegionName>())
+                    .ok_or_else(|| {
+                        FactsError::resource(budget, "source lifetime argument allocation overflow")
+                    })?,
+            )
+            .map_err(|error| FactsError::from_message(budget, &error))?;
+        let mut region_args = Vec::new();
+        region_args
+            .try_reserve_exact(segment.region_args.len())
+            .map_err(|_| FactsError::resource(budget, "source lifetime argument allocation"))?;
+        region_args.extend_from_slice(&segment.region_args);
         let mut args = Vec::new();
         args.try_reserve_exact(segment.args.len())
             .map_err(|_| FactsError::resource(budget, "source path argument allocation"))?;
@@ -988,6 +1006,7 @@ fn copy_source_path(
         }
         segments.push(PathSegment {
             name: segment.name,
+            region_args,
             args,
             associated_types,
         });
@@ -5334,6 +5353,7 @@ pub struct StructDecl {
     pub type_params: Vec<AstIdent>,
     /// Declared bounds, as for [`StructDecl::bounds`].
     pub bounds: Vec<TypeBound>,
+    pub region_params: Vec<AstIdent>,
     pub name: AstPath,
     pub visibility: ir::Visibility,
     pub fields: Vec<FieldDecl>,
@@ -5351,6 +5371,7 @@ pub struct EnumDecl {
     /// Declared bounds (`struct S<T: Ord>` / `where T: Ord`), proven for
     /// every concrete application built by a constructor.
     pub bounds: Vec<TypeBound>,
+    pub region_params: Vec<AstIdent>,
     pub name: AstPath,
     pub visibility: ir::Visibility,
     pub variants: Vec<VariantDecl>,
@@ -5385,6 +5406,7 @@ pub struct GenericPath {
 #[derive(Clone, Debug)]
 pub struct PathSegment {
     pub name: AstIdent,
+    pub region_args: Vec<RegionName>,
     pub args: Vec<Type>,
     pub associated_types: Vec<AssociatedTypeBinding>,
 }
@@ -5420,7 +5442,10 @@ impl GenericPath {
         }
     }
     fn application(&self) -> Result<(AstIdent, &[Type]), String> {
-        let mut applications = self.segments.iter().filter(|s| !s.args.is_empty());
+        let mut applications = self
+            .segments
+            .iter()
+            .filter(|s| !s.region_args.is_empty() || !s.args.is_empty());
         let segment = applications
             .next()
             .ok_or("missing explicit generic arguments")?;
@@ -9162,11 +9187,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             Ok(Type::Tuple(fields))
         } else {
             let path = self.generic_path(true)?;
-            if path
-                .segments
-                .iter()
-                .any(|s| !s.args.is_empty() || !s.associated_types.is_empty())
-            {
+            if path.segments.iter().any(|s| {
+                !s.region_args.is_empty() || !s.args.is_empty() || !s.associated_types.is_empty()
+            }) {
                 Ok(Type::Apply(path))
             } else {
                 Ok(Type::Named(
@@ -9275,7 +9298,7 @@ impl<'input, 'names> Parser<'input, 'names> {
 
     #[inline(never)]
     fn type_arguments(&mut self) -> Result<Vec<Type>, ParseError> {
-        let (args, associated_types) = self.path_arguments()?;
+        let (_, args, associated_types) = self.path_arguments()?;
         if !associated_types.is_empty() {
             return Err(
                 self.unsupported("associated equalities are unsupported in method type arguments")
@@ -9284,22 +9307,30 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(args)
     }
     #[inline(never)]
-    fn path_arguments(&mut self) -> Result<(Vec<Type>, Vec<AssociatedTypeBinding>), ParseError> {
+    fn path_arguments(
+        &mut self,
+    ) -> Result<(Vec<RegionName>, Vec<Type>, Vec<AssociatedTypeBinding>), ParseError> {
         self.expect("<")?;
         let mut args = Vec::new();
+        let mut region_args = Vec::new();
         let mut associated_types = Vec::new();
         loop {
-            if args.len() + associated_types.len() >= 32 {
+            if region_args.len() + args.len() + associated_types.len() >= 32 {
                 return Err(self.limit("generic argument resource limit 32"));
             }
             if self.token().is_lifetime() && !self.token().string {
-                // Lifetime arguments are erased: nominal reference fields are
-                // checked through carrier paths, which conservatively tie every
-                // reference inside an aggregate to every input carrier.
                 if !args.is_empty() || !associated_types.is_empty() {
                     return Err(self.error("lifetime arguments must precede type arguments"));
                 }
-                self.cursor.bump();
+                let region = if self.eat("'static") {
+                    RegionName::Static
+                } else if self.eat("'_") {
+                    RegionName::Infer
+                } else {
+                    self.lifetime()?
+                };
+                self.reserve_parser_items(&mut region_args, 1)?;
+                region_args.push(region);
                 if !self.eat(",") || self.token().text.starts_with('>') {
                     break;
                 }
@@ -9328,7 +9359,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
         }
         self.close_angle()?;
-        Ok((args, associated_types))
+        Ok((region_args, args, associated_types))
     }
     #[inline(never)]
     fn generic_path(&mut self, type_context: bool) -> Result<GenericPath, ParseError> {
@@ -9356,16 +9387,18 @@ impl<'input, 'names> Parser<'input, 'names> {
                 && matches!(&*self.token().text, "Fn" | "FnMut" | "FnOnce")
                 && self.cursor.peek(1).is_some_and(|token| token.matches("("));
             let name = self.ident()?;
-            let (args, associated_types) = if callable_sugar {
-                self.callable_sugar_arguments(sugar_site)?
+            let (region_args, args, associated_types) = if callable_sugar {
+                let (args, associated_types) = self.callable_sugar_arguments(sugar_site)?;
+                (Vec::new(), args, associated_types)
             } else if type_context && self.is("<") {
                 self.path_arguments()?
             } else {
-                (Vec::new(), Vec::new())
+                (Vec::new(), Vec::new(), Vec::new())
             };
             self.reserve_parser_items(&mut segments, 1)?;
             segments.push(PathSegment {
                 name,
+                region_args,
                 args,
                 associated_types,
             });
@@ -9373,13 +9406,15 @@ impl<'input, 'names> Parser<'input, 'names> {
                 break;
             }
             if self.is("<") {
-                let (args, associated_types) = self.path_arguments()?;
-                if !segments.last().unwrap().args.is_empty()
+                let (region_args, args, associated_types) = self.path_arguments()?;
+                if !segments.last().unwrap().region_args.is_empty()
+                    || !segments.last().unwrap().args.is_empty()
                     || !segments.last().unwrap().associated_types.is_empty()
                 {
                     return Err(self.error("duplicate generic arguments"));
                 }
                 segments.last_mut().unwrap().args = args;
+                segments.last_mut().unwrap().region_args = region_args;
                 segments.last_mut().unwrap().associated_types = associated_types;
                 if !self.eat("::") {
                     break;
@@ -9519,6 +9554,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 .map_err(|error| native_adapter::transport_error(error.into()))?;
             segments.push(PathSegment {
                 name: *name,
+                region_args: Vec::new(),
                 args: Vec::new(),
                 associated_types: Vec::new(),
             });
@@ -10259,6 +10295,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else if self.eat("enum") {
             let name = self.ident()?;
             let type_params = self.type_parameters()?;
+            let region_params = self.pending_regions.params.clone();
             self.type_params = type_params.clone();
             let bounds = self.nominal_bounds()?;
             self.expect("{")?;
@@ -10352,6 +10389,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 module,
                 type_params,
                 bounds,
+                region_params,
                 name: module_path
                     .push(self.names, name)
                     .map_err(native_adapter::name_error)?,
@@ -10362,6 +10400,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else if self.eat("struct") {
             let name = self.ident()?;
             let type_params = self.type_parameters()?;
+            let region_params = self.pending_regions.params.clone();
             self.type_params = type_params.clone();
             let mut bounds = self.nominal_bounds()?;
             let mut fields = Vec::new();
@@ -10414,6 +10453,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 module,
                 type_params,
                 bounds,
+                region_params,
                 name: module_path
                     .push(self.names, name)
                     .map_err(native_adapter::name_error)?,
@@ -14924,6 +14964,16 @@ fn exact_source_generic_path(
     equal &= a.anchor == b.anchor && a.segments.len() == b.segments.len();
     for (a, b) in a.segments.iter().zip(&b.segments) {
         equal &= exact_source_ident(names, a.name, b.name)?;
+        budget.charge_work(a.region_args.len().saturating_add(b.region_args.len()))?;
+        equal &= a.region_args.len() == b.region_args.len();
+        for (a, b) in a.region_args.iter().zip(&b.region_args) {
+            equal &= match (a, b) {
+                (RegionName::Named(a), RegionName::Named(b)) => exact_source_ident(names, *a, *b)?,
+                (RegionName::Static, RegionName::Static)
+                | (RegionName::Infer, RegionName::Infer) => true,
+                _ => false,
+            };
+        }
         equal &= a.args.len() == b.args.len();
         equal &= a.associated_types.len() == b.associated_types.len();
         for (a, b) in a.associated_types.iter().zip(&b.associated_types) {
@@ -17053,14 +17103,29 @@ impl PlanCtx {
             };
             source_schemas.source_regions.insert(
                 source_schemas::decl_slot(id, &registry, budget)?,
-                original_source_regions(
-                    (program.names.as_ref(), budget),
-                    id,
+                carrier_regions::attach(
+                    &registry,
                     &f.regions,
                     &f.params,
                     &f.result,
-                    &signature.ref_contract,
+                    match registry.callable_sources[index] {
+                        CallableSource::Associated { implementation, .. } => {
+                            Some(&program.impls[implementation])
+                        }
+                        _ => None,
+                    },
+                    &signature,
                     context.receiver,
+                    original_source_regions(
+                        (program.names.as_ref(), budget),
+                        id,
+                        &f.regions,
+                        &f.params,
+                        &f.result,
+                        &signature.ref_contract,
+                        context.receiver,
+                    )?,
+                    budget,
                 )?,
                 budget,
             )?;
@@ -17993,7 +18058,7 @@ impl PlanCtx {
             .segments
             .iter()
             .enumerate()
-            .find(|(_, s)| !s.args.is_empty())
+            .find(|(_, s)| !s.region_args.is_empty() || !s.args.is_empty())
             .ok_or("missing generic arguments")?;
         if path.segments[at + 1..].iter().any(|s| !s.args.is_empty()) {
             return Err(
@@ -19868,6 +19933,7 @@ mod registry_resource_tests {
             segments: (0..128)
                 .map(|_| PathSegment {
                     name,
+                    region_args: Vec::new(),
                     args: Vec::new(),
                     associated_types: Vec::new(),
                 })

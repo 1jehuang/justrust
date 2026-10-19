@@ -441,6 +441,7 @@ mod tests {
             anchor: PathAnchor::Relative,
             segments: vec![PathSegment {
                 name,
+                region_args: Vec::new(),
                 args: arguments,
                 associated_types: Vec::new(),
             }],
@@ -458,6 +459,7 @@ mod tests {
                     anchor: PathAnchor::Relative,
                     segments: vec![PathSegment {
                         name: trait_name,
+                        region_args: Vec::new(),
                         args: vec![argument],
                         associated_types: Vec::new(),
                     }],
@@ -558,11 +560,13 @@ mod tests {
                     segments: vec![
                         PathSegment {
                             name: own[0],
+                            region_args: Vec::new(),
                             args: vec![],
                             associated_types: Vec::new(),
                         },
                         PathSegment {
                             name: foreign_name,
+                            region_args: Vec::new(),
                             args: vec![],
                             associated_types: Vec::new(),
                         },

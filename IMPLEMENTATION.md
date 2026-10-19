@@ -389,6 +389,13 @@ acceptance.
 - [ ] Complete reference-containing nominal fields/aggregates and lifetime type
       parameters, variance, subtyping, implied/outlives bounds, higher-ranked
       regions, `'static`, placeholder lifetimes and general region inference.
+      Delivered: ordered nominal lifetime syntax and declaration-owned per-carrier
+      region rows preserve references returned through temporary receiver borrows,
+      including iterator-style `Option<&'a T>` results. Typed shared reborrow
+      boundaries retain referent provenance without borrowing the containing
+      handle; mutable chains retain every unique-access dependency. Exact named
+      carrier rows govern field replacement and reject unrelated-lifetime stores.
+      Stock differential and invalid escape controls: `tests/nominal_regions.rs`.
 - [ ] Extend dynamic borrowed places, temporary scopes/lifetime extension,
       aggregate carrier flows, general reborrows and loop/SCC-carried loans.
       Preserve the delivered current-cell and per-occurrence provenance rules.

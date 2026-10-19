@@ -766,6 +766,15 @@ pub struct SourceRegionEnv {
     pub region_count: u16,
     pub outlives: Arc<[(SourceRegionId, SourceRegionId)]>,
     pub normalized: Arc<[Option<RegionParamId>]>,
+    pub carriers: Arc<[SourceCarrierRegion]>,
+}
+/// A source lifetime bound to one exact carrier occurrence in its declaration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceCarrierRegion {
+    /// `None` identifies the result, otherwise this is the canonical input index.
+    pub parameter: Option<usize>,
+    pub location: CarrierLocation,
+    pub region: CarrierRegionTerm,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CallExpectation {

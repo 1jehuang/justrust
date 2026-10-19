@@ -267,7 +267,7 @@ impl PlanState {
                     .segments
                     .iter()
                     .enumerate()
-                    .find(|(_, s)| !s.args.is_empty())
+                    .find(|(_, s)| !s.region_args.is_empty() || !s.args.is_empty())
                     .ok_or("missing type arguments")?;
                 if at + 1 != path.segments.len() {
                     return Err("generic associated types are unsupported".into());
@@ -1007,19 +1007,6 @@ fn source_elides_lifetime(ty: &Type) -> bool {
             .segments
             .iter()
             .any(|segment| segment.args.iter().any(source_elides_lifetime)),
-        _ => false,
-    }
-}
-
-/// Whether a source type mentions a nominal (whose lifetime arguments are
-/// erased), so a named lifetime may be reachable only through it.
-pub(super) fn source_mentions_nominal(ty: &Type) -> bool {
-    match ty {
-        Type::Named(_) | Type::Apply(_) | Type::SelfType => true,
-        Type::Ref { referent, .. } => source_mentions_nominal(referent),
-        Type::Array(inner, _) | Type::Slice(inner) => source_mentions_nominal(inner),
-        Type::RawPtr { pointee, .. } => source_mentions_nominal(pointee),
-        Type::Tuple(items) => items.iter().any(source_mentions_nominal),
         _ => false,
     }
 }

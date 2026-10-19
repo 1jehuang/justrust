@@ -346,6 +346,7 @@ fn source_schemas_mixed_snapshot_rows_regions_and_region_keys_are_rejected() {
         .insert(
             slot(id(snapshot, 0)),
             Arc::new(ir::SourceRegionEnv {
+                carriers: Arc::from([]),
                 declaration: id(foreign, 0),
                 region_count: 0,
                 outlives: Arc::from([]),

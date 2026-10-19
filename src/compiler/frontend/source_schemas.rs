@@ -600,6 +600,7 @@ impl SourceSchemas {
             region_count: 0,
             outlives: Arc::from([]),
             normalized: Arc::from([]),
+            carriers: Arc::from([]),
         }))
     }
     pub(super) fn associated_rhs(

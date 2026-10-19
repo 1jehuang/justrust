@@ -452,6 +452,7 @@ impl Resolver<'_> {
         for ident in path.segments() {
             segments.push(PathSegment {
                 name: *ident,
+                region_args: Vec::new(),
                 args: Vec::new(),
                 associated_types: Vec::new(),
             });
@@ -1187,6 +1188,7 @@ impl Resolver<'_> {
                         .last_mut()
                         .ok_or("empty canonical trait path")?;
                     let final_segment = source.segments.last_mut().ok_or("empty trait path")?;
+                    destination.region_args = std::mem::take(&mut final_segment.region_args);
                     destination.args = std::mem::take(&mut final_segment.args);
                     destination.associated_types =
                         std::mem::take(&mut final_segment.associated_types);
@@ -1894,7 +1896,7 @@ impl Resolver<'_> {
         let at = path
             .segments
             .iter()
-            .position(|segment| !segment.args.is_empty())
+            .position(|segment| !segment.region_args.is_empty() || !segment.args.is_empty())
             .ok_or("missing explicit type arguments")?;
         let original_use = path
             .path(self.names())?
@@ -1930,12 +1932,18 @@ impl Resolver<'_> {
             return Err("generic arguments are not allowed on modules".into());
         }
         let mut args = std::mem::take(&mut path.segments[at].args);
+        let region_args = std::mem::take(&mut path.segments[at].region_args);
         for arg in &mut args {
             self.ty(arg, module)?;
         }
         clone_vector(&path.segments[at + 1..], &self.alias_budget)?;
         let suffix = path.segments[at + 1..].to_vec();
         let mut canonical = self.alias_source_path(item.source()?)?;
+        canonical
+            .segments
+            .last_mut()
+            .ok_or("generic declaration has no final segment")?
+            .region_args = region_args;
         canonical
             .segments
             .last_mut()

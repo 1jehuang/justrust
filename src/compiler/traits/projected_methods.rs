@@ -1001,7 +1001,7 @@ impl ValidatedTraitWorld {
         // The provided declaration was independently normalized and published
         // by build_origin_schemas. It cannot supply the required topology.
         let provided = self.declaration_carriers(provided.declaration)?;
-        if required != provided.contract {
+        if !self.carrier_contract_refines(&required, &provided.contract)? {
             return Err(FactsError::invalid(
                 &self.budget,
                 "trait implementation carrier contract does not match normalized required declaration",

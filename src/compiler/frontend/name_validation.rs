@@ -494,6 +494,7 @@ impl<'a> Validator<'a> {
                 self.visibility(&declaration.visibility, declaration.module)?;
                 self.declaration_path(&declaration.name, declaration.module)?;
                 self.identifiers(&declaration.type_params, LookupClass::TypeParameter)?;
+                self.identifiers(&declaration.region_params, LookupClass::LifetimeParameter)?;
                 self.many(&declaration.fields, |field| {
                     Visit::Field(field, declaration.module)
                 })?;
@@ -525,6 +526,7 @@ impl<'a> Validator<'a> {
                 self.visibility(&declaration.visibility, declaration.module)?;
                 self.declaration_path(&declaration.name, declaration.module)?;
                 self.identifiers(&declaration.type_params, LookupClass::TypeParameter)?;
+                self.identifiers(&declaration.region_params, LookupClass::LifetimeParameter)?;
                 self.many(&declaration.variants, |variant| {
                     Visit::Variant(variant, declaration.module)
                 })?;
@@ -656,6 +658,7 @@ impl<'a> Validator<'a> {
                     self.occurrence(*occurrence)?;
                 }
                 for segment in &path.segments {
+                    self.many(&segment.region_args, |region| Visit::Region(*region))?;
                     self.many(&segment.args, Visit::Type)?;
                     self.work(segment.associated_types.len())?;
                     for binding in &segment.associated_types {
@@ -1365,6 +1368,7 @@ mod tests {
             .iter()
             .map(|name| PathSegment {
                 name: *name,
+                region_args: Vec::new(),
                 args: Vec::new(),
                 associated_types: Vec::new(),
             })
@@ -1700,6 +1704,7 @@ mod tests {
             shape: StructShape::Record,
             type_params: Vec::new(),
             bounds: Vec::new(),
+            region_params: Vec::new(),
             name: path,
             visibility: ir::Visibility::Public,
             fields: vec![FieldDecl {
@@ -1720,6 +1725,7 @@ mod tests {
             shape: StructShape::Unit,
             type_params: Vec::new(),
             bounds: Vec::new(),
+            region_params: Vec::new(),
             name,
             visibility: ir::Visibility::Public,
             fields: Vec::new(),
@@ -2235,6 +2241,7 @@ mod tests {
             shape: StructShape::Tuple,
             type_params: Vec::new(),
             bounds: Vec::new(),
+            region_params: Vec::new(),
             name,
             visibility: ir::Visibility::Public,
             fields: (0..2)

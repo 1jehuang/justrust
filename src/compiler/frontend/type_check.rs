@@ -1933,6 +1933,7 @@ pub(super) fn original_source_regions(
         region_count: regions.params.len() as u16,
         outlives: outlives.into(),
         normalized: normalized.into(),
+        carriers: Arc::from([]),
     }))
 }
 pub(super) fn canonical_ref_contract(
@@ -2105,24 +2106,10 @@ pub(super) fn canonical_ref_contract(
             // input reference can supply. Only origin-free data may flow out.
             fresh(None)?
         } else if let Some(name) = region {
-            let named = lookup(name)?;
-            let via_nominal = !inputs.iter().any(|input| input.region == named)
-                && (receiver_region.is_some() && regions.receiver.is_none()
-                    || source_params
-                        .iter()
-                        .any(|(_, ty)| super::nominal_schema::source_mentions_nominal(ty)));
-            if !via_nominal {
-                named
-            } else if let Some(region) = receiver_region {
-                // The lifetime is only reachable through an erased nominal
-                // argument such as `&self` of `S<'a>`. Conservatively tie the
-                // result to the borrow that reaches that nominal.
-                region
-            } else if inputs.len() == 1 {
-                inputs[0].region
-            } else {
-                return Err("unsupported: result lifetime reachable only through a lifetime-parameterized nominal argument with several input references".into());
-            }
+            // Nominal input occurrences retain their own declaration-owned
+            // carrier region rows. Do not equate their named lifetime with
+            // the temporary reference used to access the nominal value.
+            lookup(name)?
         } else if let Some(region) = receiver_region {
             region
         } else {

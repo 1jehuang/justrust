@@ -11,6 +11,7 @@ use super::module_identity::{ModuleArena, ModuleError, ModuleId};
 use std::sync::{Arc, Mutex};
 
 mod associated_types;
+mod carrier_regions;
 mod catalog;
 mod closures;
 mod equality;
@@ -3623,11 +3624,36 @@ impl ValidatedTraitWorld {
             push(&self.budget, &mut normalized, mapped)?;
         }
         retain::<ir::SourceRegionEnv>(&self.budget, 1)?;
+        let mut carrier_regions = Vec::new();
+        for row in retained.source_regions.carriers.iter() {
+            let region = match row.region {
+                ir::CarrierRegionTerm::Fixed(old) => {
+                    ir::CarrierRegionTerm::Fixed(self.transport_fixed_region(
+                        old,
+                        &raw.signature.ref_contract,
+                        &signature.ref_contract,
+                    )?)
+                }
+                ref other => other.clone(),
+            };
+            for expanded in self.expand_carrier(&row.location, &raw.env, &arguments, &nominals)? {
+                push(
+                    &self.budget,
+                    &mut carrier_regions,
+                    ir::SourceCarrierRegion {
+                        parameter: row.parameter,
+                        location: expanded.location,
+                        region: region.clone(),
+                    },
+                )?;
+            }
+        }
         let source_regions = Arc::new(ir::SourceRegionEnv {
             declaration,
             region_count: retained.source_regions.region_count,
             outlives: retained.source_regions.outlives.clone(),
             normalized: normalized.into(),
+            carriers: carrier_regions.into(),
         });
         retain::<CarrierContractView>(&self.budget, 1)?;
         let projected_subject = projected.as_ref().map(|proof| proof.goal().clone());
@@ -4046,7 +4072,13 @@ impl ValidatedTraitWorld {
                 }
             }
         }
-        Ok(regions)
+        let original = self.schema.declaration_schema(declaration)?;
+        let carriers = self.checked_source_carriers(&regions, &original.signature, signature)?;
+        retain::<ir::SourceRegionEnv>(&self.budget, 1)?;
+        Ok(Arc::new(ir::SourceRegionEnv {
+            carriers,
+            ..regions.as_ref().clone()
+        }))
     }
     fn same_location(&self, a: &ir::CarrierLocation, b: &ir::CarrierLocation) -> Result<bool> {
         charged(
@@ -4159,13 +4191,20 @@ impl ValidatedTraitWorld {
         {
             let mut sources = Vec::new();
             for input in &inputs {
-                if self.carrier_source_eligible(
-                    signature,
-                    location,
-                    &signature.result,
-                    input,
-                    None,
-                )? {
+                let eligible = if let Some(eligible) =
+                    self.source_carrier_eligible(source, signature, location, input)?
+                {
+                    eligible
+                } else {
+                    self.carrier_source_eligible(
+                        signature,
+                        location,
+                        &signature.result,
+                        input,
+                        None,
+                    )?
+                };
+                if eligible {
                     push(&self.budget, &mut sources, input.clone())?;
                 }
             }
@@ -4187,13 +4226,20 @@ impl ValidatedTraitWorld {
             }
             let mut sources = Vec::new();
             for input in &inputs {
-                if self.carrier_source_eligible(
-                    signature,
-                    &destination.location,
-                    &signature.params[destination.param],
-                    input,
-                    Some(destination.param),
-                )? {
+                let eligible = if let Some(eligible) =
+                    self.source_write_eligible(source, signature, destination, input)?
+                {
+                    eligible
+                } else {
+                    self.carrier_source_eligible(
+                        signature,
+                        &destination.location,
+                        &signature.params[destination.param],
+                        input,
+                        Some(destination.param),
+                    )?
+                };
+                if eligible {
                     push(&self.budget, &mut sources, input.clone())?;
                 }
             }
@@ -7143,6 +7189,7 @@ pub(crate) mod test_support {
                 region_count: 0,
                 outlives: Arc::from([]),
                 normalized: Arc::from([]),
+                carriers: Arc::from([]),
             }))
         }
         fn instantiate_schema(
@@ -9567,6 +9614,7 @@ mod tests {
                     declaration,
                     region_count: self.count,
                     normalized: vec![None; usize::from(self.count)].into(),
+                    carriers: Arc::from([]),
                     outlives: Arc::from([]),
                 }))
             }

@@ -2471,13 +2471,16 @@ impl CarrierBuilder<'_, '_> {
                     )?;
                 }
                 for target in targets {
+                    // The typed lens retains unique-reference intermediates,
+                    // but a copied shared reference starts a fresh authority
+                    // chain. Its referent does not borrow the containing handle.
+                    for parent in &target.authority {
+                        self.dependencies[id.0].insert(*parent);
+                    }
                     self.push_target(ReferenceOriginId(id.0), target)?;
                 }
                 for parent in trace {
-                    // All unique-access intermediates constrain child lifetime;
-                    // the last handle alone is insufficient for &mut &mut T.
                     self.parents[id.0].insert(parent.0);
-                    self.dependencies[id.0].insert(parent.0);
                 }
                 let mut origins = self.empty_origins()?;
                 origins.references.0.insert(id.0);
@@ -2877,6 +2880,42 @@ impl CarrierBuilder<'_, '_> {
                             },
                         )?;
                         self.dependencies[row.0].union(&actual.references.0, self.budget)?;
+                    }
+                }
+            }
+            // Fixed contracts retain exact referent suffixes. Named nominal
+            // inputs can contribute additional origins independently, but their
+            // coarse root rows must not replace those precise fixed targets.
+            if fixed_contract
+                && let Some(view) = &view
+                && view.source_region_env().carriers.iter().any(|source| {
+                    source.parameter.is_none()
+                        && source.location == location
+                        && matches!(source.region, ir::CarrierRegionTerm::Named(_))
+                })
+                && let Some(result) = view
+                    .contract()
+                    .results
+                    .iter()
+                    .find(|result| result.location == location)
+            {
+                for source in result
+                    .sources
+                    .iter()
+                    .filter(|source| !source.location.path.0.is_empty())
+                {
+                    let input = self.input_value(&entry, &args, source)?;
+                    for parent in input.references.0.members() {
+                        self.parents[row.0].insert(parent);
+                        self.dependencies[row.0].insert(parent);
+                        for target in self.targets[parent].clone() {
+                            let mut target = target;
+                            if !target.authority.contains(&parent) {
+                                target.authority.push(parent);
+                                target.authority.sort_unstable();
+                            }
+                            self.push_target(row, target)?;
+                        }
                     }
                 }
             }
@@ -5037,9 +5076,56 @@ impl Plan {
                         }
                     }
                 }
+                if body.source_region_env().carriers.iter().any(|source| {
+                    source.parameter.is_none()
+                        && source.location == row.location
+                        && matches!(source.region, ir::CarrierRegionTerm::Named(_))
+                }) {
+                    // Named carrier rows authenticate the complete dependency
+                    // closure, not merely the immediate returned address.
+                    let mut seen = origins.references.0.clone();
+                    let mut pending: Vec<_> = seen.members().collect();
+                    while let Some(origin) = pending.pop() {
+                        budget.spend(self.lifetime_deps[origin].0.len() + 1)?;
+                        for target in &self.targets[origin] {
+                            budget.spend(row.sources.len() + f.params.len() + 1)?;
+                            let CanonicalRoot::ParameterReferent(local, location) =
+                                &target.place.root
+                            else {
+                                return Ok(Some(Problem::Invalid(
+                                    "returned carrier lifetime depends on owned frame storage"
+                                        .into(),
+                                )));
+                            };
+                            if !row.sources.iter().any(|input| {
+                                f.params.get(input.param) == Some(local)
+                                    && input.location == *location
+                            }) {
+                                return Ok(Some(Problem::Invalid("returned carrier dependency violates its declaration-owned lifetime".into())));
+                            }
+                        }
+                        for parent in self.lifetime_deps[origin].members() {
+                            if !seen.has(parent) {
+                                seen.insert(parent);
+                                pending.push(parent);
+                            }
+                        }
+                    }
+                }
             }
         }
         for result in f.ref_contract.results.iter() {
+            if self.body.as_ref().is_some_and(|body| {
+                body.source_region_env().carriers.iter().any(|source| {
+                    source.parameter.is_none()
+                        && source.location == fixed_location(result.position)
+                        && matches!(source.region, ir::CarrierRegionTerm::Named(_))
+                })
+            }) {
+                // The generalized carrier check above already proved the named
+                // lifetime against exact declaration-owned source occurrences.
+                continue;
+            }
             if let Some(problem) = self.check_return_position(f, block, result, facts, budget)? {
                 return Ok(Some(problem));
             }
