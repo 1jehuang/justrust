@@ -333,6 +333,11 @@ missing-file changes invalidate only justified consumers without stale lookup.
 - [ ] Extend bidirectional/local inference, coercion sites, partial type holes,
       omitted method arguments and control-flow joins, preserving rigid universal
       parameters and diagnostics for unresolved constraints.
+      Delivered body-local structural union-find constraints: later inherent
+      receiver uses, assignments and call parameters solve nested generic local
+      bindings before lowering, with i32/f64 defaults and E0282 for unresolved
+      nominal bindings (`tests/body_inference.rs`). Closure constraints and
+      general iterator-item projections remain follow-up work.
 
 **Next:** enumerate remaining type/pattern forms and freeze one end-to-end slice,
 such as general slice metadata or nested patterns, with resource accounting.

@@ -1,9 +1,7 @@
-//! Body-local scalar equality constraints, collected before literal fallback.
-//!
-//! This is scratch owned by one checking node. It does not publish semantic
-//! facts or bypass ordinary checking: solved types are only expected types for
-//! unannotated initializers and written iterable literals. Their complete checked
-//! IR is still validated.
+//! Body-local structural equality constraints, solved before lowering.
+//! Scratch never escapes the checking operation. Inference variables are union-find
+//! roots and constructors contain other roots, so evidence from later uses flows
+//! back through arbitrary nesting rather than defaulting a binding prematurely.
 use super::*;
 
 type Term = usize;
@@ -13,20 +11,37 @@ enum Domain {
     Integer,
     Float,
     Fixed(ir::Ty),
+    Nominal(ir::DeclId, Vec<Term>),
+    Tuple(Vec<Term>),
+    Ref(ir::BorrowKind, Term),
+    RawPtr(ir::BorrowKind, Term),
+    Array(Term, usize),
+    Slice(Term),
 }
 struct Variable {
     parent: Term,
     rank: u8,
     domain: Domain,
 }
+struct Method {
+    receiver: Term,
+    name: AstIdent,
+    actuals: Vec<Term>,
+    args: Vec<Term>,
+    result: Term,
+}
+struct Projection {
+    base: Term,
+    field: FieldSelector,
+    result: Term,
+}
 struct Solver<'a, 'b> {
     checker: &'a Checker<'b>,
     variables: Vec<Variable>,
     scopes: Vec<HashMap<LocalKey, Term>>,
     sites: Vec<(usize, Term)>,
-    /// Block-local bindings whose initializer is an array literal or a
-    /// repeat expression (scratch for builtin index inference).
-    arrays: Vec<HashMap<LocalKey, bool>>,
+    methods: Vec<Method>,
+    projections: Vec<Projection>,
 }
 
 pub(super) fn hints(
@@ -39,9 +54,9 @@ pub(super) fn hints(
         variables: Vec::new(),
         scopes: Vec::new(),
         sites: Vec::new(),
-        arrays: vec![HashMap::new()],
+        methods: Vec::new(),
+        projections: Vec::new(),
     };
-    // Existing parameters and enclosing locals are rigid, never reinferred.
     let mut outer = HashMap::new();
     for scope in &checker.scopes {
         for (key, local) in scope {
@@ -55,17 +70,16 @@ pub(super) fn hints(
         let expected = solver.fixed(expected.clone())?;
         solver.unify(result, expected)?;
     }
+    solver.solve()?;
     let mut hints = HashMap::new();
-    for (site, term) in &solver.sites {
-        let root = solver.root(*term);
-        let ty = match &solver.variables[root].domain {
-            // No new expectation for unresolved classes: expression checking
-            // may still obtain stronger peer evidence (fields/generic calls).
-            // Its existing i32/f64 fallback runs only after those constraints.
-            Domain::Fixed(ty @ (ir::Ty::Int(_) | ir::Ty::Float(_))) => ty.clone(),
-            _ => continue,
-        };
-        hints.insert(*site, ty);
+    for (site, term) in solver.sites.clone() {
+        if let Some(ty) = solver.resolve(term, 0)? {
+            hints.insert(site, ty);
+        } else if matches!(solver.domain(term), Domain::Nominal(..)) {
+            return Err(solver.user_error(
+                "E0282: type annotations needed: cannot infer the type of this binding",
+            ));
+        }
     }
     Ok(hints)
 }
@@ -81,11 +95,108 @@ impl Solver<'_, '_> {
         });
         Ok(term)
     }
+    fn user_error(&self, message: &str) -> String {
+        let budget = &self.checker.signatures.plan.as_ref().unwrap().budget;
+        let error = FactsError::unproved(budget, message);
+        match self.checker.canonical {
+            Some(capability) => capability.render(error),
+            None => error.into_legacy_diagnostic(budget),
+        }
+    }
+    fn fresh(&mut self) -> Result<Term, String> {
+        self.node(Domain::Unknown)
+    }
     fn fixed(&mut self, ty: ir::Ty) -> Result<Term, String> {
-        self.node(match ty {
-            ir::Ty::Int(_) | ir::Ty::Float(_) => Domain::Fixed(ty),
-            _ => Domain::Unknown,
-        })
+        self.schema(&ty, &HashMap::new(), 0)
+    }
+    fn schema(
+        &mut self,
+        ty: &ir::Ty,
+        params: &HashMap<ir::ParamId, Term>,
+        depth: usize,
+    ) -> Result<Term, String> {
+        self.checker.infer_work(depth)?;
+        if let ir::Ty::Param(param) = ty {
+            if let Some(term) = params.get(param) {
+                return Ok(*term);
+            }
+        }
+        let domain = match ty {
+            ir::Ty::Struct(_) | ir::Ty::Enum(_) => {
+                let (decl, args) = nominal_parts(ty).unwrap();
+                let args = args
+                    .iter()
+                    .map(|arg| self.schema(arg, params, depth + 1))
+                    .collect::<Result<_, _>>()?;
+                Domain::Nominal(decl, args)
+            }
+            ir::Ty::Ref { kind, referent } => {
+                Domain::Ref(*kind, self.schema(referent, params, depth + 1)?)
+            }
+            ir::Ty::RawPtr { kind, pointee } => {
+                Domain::RawPtr(*kind, self.schema(pointee, params, depth + 1)?)
+            }
+            ir::Ty::Array { element, len } => {
+                Domain::Array(self.schema(element, params, depth + 1)?, *len)
+            }
+            ir::Ty::Slice { element } => Domain::Slice(self.schema(element, params, depth + 1)?),
+            ir::Ty::Tuple(fields) => Domain::Tuple(
+                fields
+                    .iter()
+                    .map(|f| self.schema(f, params, depth + 1))
+                    .collect::<Result<_, _>>()?,
+            ),
+            _ => Domain::Fixed(ty.clone()),
+        };
+        self.node(domain)
+    }
+    fn source_ty(&mut self, ty: &Type) -> Result<Term, String> {
+        // Resolved aliases and primitive paths need not name a nominal. Only
+        // genuinely partial types need reconstruction with fresh variables.
+        if let Ok(ty) = checked_local_ty(ty, self.checker.signatures) {
+            return self.fixed(ty);
+        }
+        match ty {
+            Type::Infer => self.fresh(),
+            Type::Apply(path) => {
+                let path_id = path.path(self.checker.names()?)?;
+                let decl = self
+                    .checker
+                    .nominal_decl(&path_id)
+                    .map_err(|error| format!("{error} in partial local type {path_id:?}"))?;
+                let args = path
+                    .segments
+                    .iter()
+                    .flat_map(|s| &s.args)
+                    .map(|ty| self.source_ty(ty))
+                    .collect::<Result<_, _>>()?;
+                self.node(Domain::Nominal(decl, args))
+            }
+            Type::Ref { kind, referent, .. } => {
+                let inner = self.source_ty(referent)?;
+                self.node(Domain::Ref(*kind, inner))
+            }
+            Type::RawPtr { kind, pointee } => {
+                let inner = self.source_ty(pointee)?;
+                self.node(Domain::RawPtr(*kind, inner))
+            }
+            Type::Array(element, len) => {
+                let inner = self.source_ty(element)?;
+                self.node(Domain::Array(inner, *len))
+            }
+            Type::Slice(element) => {
+                let inner = self.source_ty(element)?;
+                self.node(Domain::Slice(inner))
+            }
+            Type::Tuple(fields) => {
+                let fields = fields
+                    .iter()
+                    .map(|f| self.source_ty(f))
+                    .collect::<Result<_, _>>()?;
+                self.node(Domain::Tuple(fields))
+            }
+            _ => self.fixed(checked_local_ty(ty, self.checker.signatures)?),
+        }
     }
     fn root(&self, mut term: Term) -> Term {
         while self.variables[term].parent != term {
@@ -93,34 +204,97 @@ impl Solver<'_, '_> {
         }
         term
     }
+    fn domain(&self, term: Term) -> Domain {
+        self.variables[self.root(term)].domain.clone()
+    }
+    fn occurs(&self, needle: Term, term: Term, depth: usize) -> Result<bool, String> {
+        self.checker.infer_work(depth)?;
+        let term = self.root(term);
+        if needle == term {
+            return Ok(true);
+        }
+        match &self.variables[term].domain {
+            Domain::Nominal(_, args) | Domain::Tuple(args) => {
+                for arg in args {
+                    if self.occurs(needle, *arg, depth + 1)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            Domain::Ref(_, t) | Domain::RawPtr(_, t) | Domain::Array(t, _) | Domain::Slice(t) => {
+                self.occurs(needle, *t, depth + 1)
+            }
+            _ => Ok(false),
+        }
+    }
     fn unify(&mut self, left: Term, right: Term) -> Result<(), String> {
-        self.checker.infer_work(0)?;
+        self.unify_at(left, right, 0)
+    }
+    fn unify_at(&mut self, left: Term, right: Term, depth: usize) -> Result<(), String> {
+        self.checker.infer_work(depth)?;
         let mut a = self.root(left);
         let mut b = self.root(right);
         if a == b {
             return Ok(());
         }
-        let domain = match (&self.variables[a].domain, &self.variables[b].domain) {
-            (Domain::Unknown, domain) | (domain, Domain::Unknown) => domain.clone(),
+        let x = self.domain(a);
+        let y = self.domain(b);
+        if matches!(x, Domain::Fixed(ir::Ty::Never)) || matches!(y, Domain::Fixed(ir::Ty::Never)) {
+            return Ok(());
+        }
+        let domain = match (&x, &y) {
+            (Domain::Unknown, _) => {
+                if self.occurs(a, b, depth + 1)? {
+                    return Err("E0282: cyclic local type inference constraint".into());
+                }
+                y.clone()
+            }
+            (_, Domain::Unknown) => {
+                if self.occurs(b, a, depth + 1)? {
+                    return Err("E0282: cyclic local type inference constraint".into());
+                }
+                x.clone()
+            }
             (Domain::Integer, Domain::Integer) => Domain::Integer,
             (Domain::Float, Domain::Float) => Domain::Float,
             (Domain::Integer, Domain::Fixed(ty @ ir::Ty::Int(_)))
             | (Domain::Fixed(ty @ ir::Ty::Int(_)), Domain::Integer)
             | (Domain::Float, Domain::Fixed(ty @ ir::Ty::Float(_)))
             | (Domain::Fixed(ty @ ir::Ty::Float(_)), Domain::Float) => Domain::Fixed(ty.clone()),
-            (Domain::Fixed(a), Domain::Fixed(b)) if a == b => Domain::Fixed(a.clone()),
-            (left, right) => {
-                let message =
-                    format!("local scalar inference constraint {left:?} does not match {right:?}");
-                // An inconsistent source equality is a user type error, not
-                // corrupt compiler metadata. Keep its typed cause through the
-                // canonical node's existing diagnostic transport. Legacy
-                // noncanonical checking still receives the same diagnostic.
-                let error = FactsError::unproved(&self.checker.signatures.plan()?.budget, &message);
-                return Err(match self.checker.canonical {
-                    Some(capability) => capability.render(error),
-                    None => error.into_legacy_diagnostic(&self.checker.signatures.plan()?.budget),
-                });
+            (Domain::Fixed(x), Domain::Fixed(y)) if x == y => Domain::Fixed(x.clone()),
+            (Domain::Nominal(d, x), Domain::Nominal(e, y)) if d == e && x.len() == y.len() => {
+                for (x, y) in x.iter().zip(y) {
+                    self.unify_at(*x, *y, depth + 1)?;
+                }
+                Domain::Nominal(*d, x.clone())
+            }
+            (Domain::Tuple(x), Domain::Tuple(y)) if x.len() == y.len() => {
+                for (x, y) in x.iter().zip(y) {
+                    self.unify_at(*x, *y, depth + 1)?;
+                }
+                Domain::Tuple(x.clone())
+            }
+            (Domain::Ref(k, x), Domain::Ref(l, y)) if k == l => {
+                self.unify_at(*x, *y, depth + 1)?;
+                Domain::Ref(*k, *x)
+            }
+            (Domain::RawPtr(k, x), Domain::RawPtr(l, y)) if k == l => {
+                self.unify_at(*x, *y, depth + 1)?;
+                Domain::RawPtr(*k, *x)
+            }
+            (Domain::Array(x, n), Domain::Array(y, m)) if n == m => {
+                self.unify_at(*x, *y, depth + 1)?;
+                Domain::Array(*x, *n)
+            }
+            (Domain::Slice(x), Domain::Slice(y)) => {
+                self.unify_at(*x, *y, depth + 1)?;
+                Domain::Slice(*x)
+            }
+            _ => {
+                return Err(self.user_error(&format!(
+                    "E0308: local inference constraint {x:?} does not match {y:?}"
+                )));
             }
         };
         if self.variables[a].rank < self.variables[b].rank {
@@ -133,6 +307,71 @@ impl Solver<'_, '_> {
         self.variables[a].domain = domain;
         Ok(())
     }
+    fn resolve(&self, term: Term, depth: usize) -> Result<Option<ir::Ty>, String> {
+        self.checker.infer_work(depth)?;
+        Ok(Some(match self.domain(term) {
+            Domain::Unknown => return Ok(None),
+            Domain::Integer => ir::Ty::Int(ir::IntTy::I32),
+            Domain::Float => ir::Ty::Float(ir::FloatTy::F64),
+            Domain::Fixed(ty) => ty,
+            Domain::Nominal(decl, args) => {
+                let mut actuals = Vec::new();
+                for arg in args {
+                    let Some(ty) = self.resolve(arg, depth + 1)? else {
+                        return Ok(None);
+                    };
+                    actuals.push(ty);
+                }
+                let plan = self.checker.signatures.plan()?;
+                plan.intern_nominal(decl, &actuals, self.checker.facts(), &plan.budget)?
+            }
+            Domain::Tuple(fields) => {
+                let mut types = Vec::new();
+                for f in fields {
+                    let Some(ty) = self.resolve(f, depth + 1)? else {
+                        return Ok(None);
+                    };
+                    types.push(ty);
+                }
+                ir::Ty::Tuple(types.into())
+            }
+            Domain::Ref(kind, term) => {
+                let Some(ty) = self.resolve(term, depth + 1)? else {
+                    return Ok(None);
+                };
+                ir::Ty::Ref {
+                    kind,
+                    referent: Arc::new(ty),
+                }
+            }
+            Domain::RawPtr(kind, term) => {
+                let Some(ty) = self.resolve(term, depth + 1)? else {
+                    return Ok(None);
+                };
+                ir::Ty::RawPtr {
+                    kind,
+                    pointee: Arc::new(ty),
+                }
+            }
+            Domain::Array(term, len) => {
+                let Some(ty) = self.resolve(term, depth + 1)? else {
+                    return Ok(None);
+                };
+                ir::Ty::Array {
+                    element: Arc::new(ty),
+                    len,
+                }
+            }
+            Domain::Slice(term) => {
+                let Some(ty) = self.resolve(term, depth + 1)? else {
+                    return Ok(None);
+                };
+                ir::Ty::Slice {
+                    element: Arc::new(ty),
+                }
+            }
+        }))
+    }
     fn lookup(&mut self, name: &impl LocalInput) -> Result<Term, String> {
         if let Some(key) = self.checker.local_key(name, false)? {
             for scope in self.scopes.iter().rev() {
@@ -141,28 +380,311 @@ impl Solver<'_, '_> {
                 }
             }
         }
-        self.node(Domain::Unknown)
+        self.fresh()
     }
     fn bind(&mut self, name: &impl LocalInput, term: Term) -> Result<(), String> {
         if let Some(key) = self.checker.local_key(name, true)? {
-            self.checker.infer_storage(1)?;
             self.scopes.last_mut().unwrap().insert(key, term);
         }
         Ok(())
     }
+    fn parameters(&mut self, env: &ir::GenericEnv) -> Result<HashMap<ir::ParamId, Term>, String> {
+        env.ordered_params()
+            .map(|p| Ok((p, self.fresh()?)))
+            .collect()
+    }
+    fn callable(
+        &mut self,
+        decl: ir::DeclId,
+        args: &[Term],
+        receiver: Option<Term>,
+        actuals: &[Term],
+    ) -> Result<Term, String> {
+        let plan = self.checker.signatures.plan()?;
+        let schema = plan.function_schema(decl)?;
+        let info = plan.declaration(decl)?;
+        let mut params = self.parameters(&schema.env)?;
+        for (i, actual) in actuals.iter().enumerate() {
+            params.insert(
+                ir::ParamId {
+                    owner: info.param_env.binder(),
+                    index: i as u16,
+                },
+                *actual,
+            );
+        }
+        let mut formals = schema.signature.params.iter();
+        if let Some(receiver) = receiver {
+            let associated = info
+                .path
+                .associated
+                .as_ref()
+                .ok_or("method without owner")?;
+            let owner = self.schema(&associated.self_pattern, &params, 0)?;
+            let receiver = self.peel_refs(receiver);
+            self.unify(receiver, owner)?;
+            formals.next();
+        }
+        for (arg, formal) in args.iter().zip(formals) {
+            let formal = self.schema(formal, &params, 0)?;
+            self.coerce(*arg, formal)?;
+        }
+        self.schema(&schema.signature.result, &params, 0)
+    }
+    fn coerce(&mut self, actual: Term, expected: Term) -> Result<(), String> {
+        match (self.domain(actual), self.domain(expected)) {
+            (Domain::Ref(_, a), Domain::Ref(_, b)) => self.coerce(a, b),
+            (Domain::Array(a, _), Domain::Slice(b)) => self.unify(a, b),
+            _ => self.unify(actual, expected),
+        }
+    }
+    fn peel_refs(&self, mut term: Term) -> Term {
+        while let Domain::Ref(_, inner) = self.domain(term) {
+            term = inner;
+        }
+        term
+    }
+    fn candidate(&self, nominal: ir::DeclId, name: AstIdent) -> Result<Option<ir::DeclId>, String> {
+        let plan = self.checker.signatures.plan()?;
+        let mut found = None;
+        for id in &plan.registry.function_ids {
+            self.checker.infer_work(0)?;
+            let info = plan.declaration(*id)?;
+            if let Some(owner) = &info.path.associated {
+                if owner.trait_decl.is_none()
+                    && owner.nominal == nominal
+                    && plan.registry.source_member_equal(info.path.item, name)?
+                {
+                    if found.replace(*id).is_some() {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+        Ok(found)
+    }
+    fn solve(&mut self) -> Result<(), String> {
+        let mut methods = std::mem::take(&mut self.methods);
+        let mut projections = std::mem::take(&mut self.projections);
+        loop {
+            let mut progress = false;
+            let mut pending = Vec::new();
+            for method in methods {
+                let receiver = self.peel_refs(method.receiver);
+                if let Domain::Nominal(decl, _) = self.domain(receiver) {
+                    if let Some(candidate) = self.candidate(decl, method.name)? {
+                        let result = self.callable(
+                            candidate,
+                            &method.args,
+                            Some(receiver),
+                            &method.actuals,
+                        )?;
+                        self.unify(result, method.result)?;
+                        progress = true;
+                        continue;
+                    }
+                }
+                // A concrete receiver can also select trait or primitive methods.
+                if let Some(ty) = self.resolve(receiver, 0)? {
+                    let plan = self.checker.signatures.plan()?;
+                    if method.actuals.is_empty() {
+                        if let Ok(selected) = plan.select_method(
+                            &ty,
+                            &method.name,
+                            &[],
+                            self.checker.facts(),
+                            &self.checker.module,
+                            &plan.budget,
+                        ) {
+                            for (arg, param) in method
+                                .args
+                                .iter()
+                                .zip(selected.signature.params.iter().skip(1))
+                            {
+                                let param = self.fixed(param.clone())?;
+                                self.coerce(*arg, param)?;
+                            }
+                            let result = self.fixed(selected.signature.result)?;
+                            self.unify(result, method.result)?;
+                            progress = true;
+                            continue;
+                        }
+                    }
+                }
+                pending.push(method);
+            }
+            methods = pending;
+            let mut pending = Vec::new();
+            for projection in projections {
+                if let Some(field) = self.project(projection.base, &projection.field)? {
+                    self.unify(field, projection.result)?;
+                    progress = true;
+                } else {
+                    pending.push(projection);
+                }
+            }
+            projections = pending;
+            if !progress {
+                break;
+            }
+        }
+        Ok(())
+    }
+    fn project(&mut self, base: Term, field: &FieldSelector) -> Result<Option<Term>, String> {
+        let base = self.peel_refs(base);
+        match (self.domain(base), field) {
+            (Domain::Tuple(fields), FieldSelector::Tuple(i)) => Ok(fields.get(*i).copied()),
+            (
+                Domain::Array(element, _) | Domain::Slice(element),
+                FieldSelector::ConstantIndex(_),
+            ) => Ok(Some(element)),
+            (Domain::Nominal(decl, args), _) => {
+                let plan = self.checker.signatures.plan()?;
+                let (env, schema) = plan.nominal_schema(decl, &plan.budget)?;
+                let ir::Ty::Struct(schema) = schema else {
+                    return Ok(None);
+                };
+                let index = match field {
+                    FieldSelector::Tuple(i) => *i,
+                    FieldSelector::Named(name) => self.checker.member_index(decl, None, *name)?,
+                    _ => return Ok(None),
+                };
+                let Some(field) = schema.def().fields.get(index) else {
+                    return Ok(None);
+                };
+                let params = args
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, t)| {
+                        (
+                            ir::ParamId {
+                                owner: env.binder(),
+                                index: i as u16,
+                            },
+                            t,
+                        )
+                    })
+                    .collect();
+                Ok(Some(self.schema(&field.ty, &params, 0)?))
+            }
+            _ => Ok(None),
+        }
+    }
+    fn field(&mut self, base: Term, field: FieldSelector) -> Result<Term, String> {
+        let result = self.fresh()?;
+        self.projections.push(Projection {
+            base,
+            field,
+            result,
+        });
+        Ok(result)
+    }
+    fn place(&mut self, place: &Place) -> Result<Term, String> {
+        let mut term = self.lookup(&place.local)?;
+        for field in &place.fields {
+            term = self.field(term, field.clone())?;
+        }
+        Ok(term)
+    }
+    fn constructor(
+        &mut self,
+        name: &AstPath,
+        variant: Option<AstIdent>,
+        fields: &[(FieldSelector, &Expr)],
+        depth: usize,
+    ) -> Result<Term, String> {
+        let plan = self.checker.signatures.plan()?;
+        let self_ty = if self.checker.self_path(name)? {
+            self.checker.signatures.self_ty.as_ref()
+        } else {
+            None
+        };
+        let decl = match self_ty.and_then(nominal_parts) {
+            Some((decl, _)) => decl,
+            None => self.checker.nominal_decl(name)?,
+        };
+        let (env, schema) = plan.nominal_schema(decl, &plan.budget)?;
+        let mut params = HashMap::new();
+        for index in 0..env.arity() {
+            params.insert(
+                ir::ParamId {
+                    owner: env.binder(),
+                    index: index as u16,
+                },
+                self.fresh()?,
+            );
+        }
+        let variant = variant
+            .map(|v| self.checker.variant_index(decl, v))
+            .transpose()?;
+        let definitions = match (&schema, variant) {
+            (ir::Ty::Struct(s), None) => &s.def().fields,
+            (ir::Ty::Enum(e), Some(v)) => &e.def().variants[v].fields,
+            _ => return self.fresh(),
+        };
+        for (selector, value) in fields {
+            let index = match selector {
+                FieldSelector::Tuple(i) => *i,
+                FieldSelector::Named(n) => self.checker.member_index(decl, variant, *n)?,
+                _ => continue,
+            };
+            if let Some(field) = definitions.get(index) {
+                let actual = self.expr(value, depth + 1)?;
+                let formal = self.schema(&field.ty, &params, depth + 1)?;
+                self.coerce(actual, formal)?;
+            }
+        }
+        let result = self.schema(&schema, &params, depth + 1)?;
+        if let Some(self_ty) = self_ty {
+            let rigid = self.fixed(self_ty.clone())?;
+            self.unify(result, rigid)?;
+        }
+        Ok(result)
+    }
     fn pattern(&mut self, pattern: &Pattern, term: Term) -> Result<(), String> {
         match pattern {
-            Pattern::Binding {
-                name, by_ref: None, ..
-            } => self.bind(name, term),
-            // Other patterns remain the ordinary checker's responsibility.
+            Pattern::Binding { name, by_ref, .. } => {
+                let bound = match by_ref {
+                    Some(kind) => self.node(Domain::Ref(*kind, term))?,
+                    None => term,
+                };
+                self.bind(name, bound)
+            }
+            Pattern::Tuple(fields) => {
+                let mut terms = Vec::new();
+                for field in fields {
+                    let t = self.fresh()?;
+                    self.pattern(field, t)?;
+                    terms.push(t);
+                }
+                let tuple = self.node(Domain::Tuple(terms))?;
+                self.unify(term, tuple)
+            }
+            Pattern::Apply { pattern, .. } => self.pattern(pattern, term),
+            Pattern::Alternatives(patterns) => {
+                for p in patterns {
+                    self.pattern(p, term)?;
+                }
+                Ok(())
+            }
+            Pattern::Char(_) => {
+                let t = self.fixed(ir::Ty::Char)?;
+                self.unify(term, t)
+            }
+            Pattern::Bool(_) => {
+                let t = self.fixed(ir::Ty::Bool)?;
+                self.unify(term, t)
+            }
+            Pattern::Int { literal, .. } => {
+                let t = self.integer(literal)?;
+                self.unify(term, t)
+            }
             _ => Ok(()),
         }
     }
     fn block(&mut self, block: &Block, depth: usize) -> Result<Term, String> {
         self.checker.infer_work(depth)?;
         self.scopes.push(HashMap::new());
-        self.arrays.push(HashMap::new());
         for stmt in &block.statements {
             self.checker.infer_work(depth)?;
             match stmt {
@@ -170,44 +692,61 @@ impl Solver<'_, '_> {
                     name, ty, value, ..
                 } => {
                     let term = self.expr(value, depth + 1)?;
-                    let array = matches!(ty, Type::Array(..))
-                        || matches!(ty, Type::Infer)
-                            && matches!(value, Expr::Array(_) | Expr::Repeat { .. });
-                    if let Some(key) = self.checker.local_key(name, true)? {
-                        self.checker.infer_storage(1)?;
-                        if let Some(scope) = self.arrays.last_mut() {
-                            scope.insert(key, array);
-                        }
-                    }
                     if !matches!(ty, Type::Infer) {
-                        let annotation =
-                            self.fixed(checked_local_ty(ty, self.checker.signatures)?)?;
-                        self.unify(term, annotation)?;
-                    } else {
-                        self.checker.infer_storage(1)?;
-                        self.sites.push((stmt as *const Stmt as usize, term));
+                        let ty = self.source_ty(ty)?;
+                        self.coerce(term, ty)?;
                     }
+                    self.sites.push((stmt as *const Stmt as usize, term));
                     self.bind(name, term)?;
                 }
                 Stmt::Declare { name, ty, .. } => {
-                    let term = if matches!(ty, Type::Infer) {
-                        self.node(Domain::Unknown)?
-                    } else {
-                        self.fixed(checked_local_ty(ty, self.checker.signatures)?)?
-                    };
+                    let term = self.source_ty(ty)?;
                     self.bind(name, term)?;
+                }
+                Stmt::LetPattern { pattern, ty, value } => {
+                    let term = self.expr(value, depth + 1)?;
+                    if !matches!(ty, Type::Infer) {
+                        let ty = self.source_ty(ty)?;
+                        self.coerce(term, ty)?;
+                    }
+                    self.pattern(pattern, term)?;
                 }
                 Stmt::Assign { name, value } => {
                     let target = self.lookup(name)?;
                     let value = self.expr(value, depth + 1)?;
-                    self.unify(target, value)?;
+                    self.coerce(value, target)?;
                 }
-                Stmt::AssignOp { place, op, value } if place.fields.is_empty() => {
-                    let target = self.lookup(&place.local)?;
+                Stmt::AssignPlace { place, value } | Stmt::AssignOp { place, value, .. } => {
+                    let target = self.place(place)?;
                     let value = self.expr(value, depth + 1)?;
-                    if !matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
-                        self.unify(target, value)?;
+                    if !matches!(
+                        stmt,
+                        Stmt::AssignOp {
+                            op: BinaryOp::Shl | BinaryOp::Shr,
+                            ..
+                        }
+                    ) {
+                        self.coerce(value, target)?;
                     }
+                }
+                Stmt::AssignIndex {
+                    array,
+                    index,
+                    value,
+                }
+                | Stmt::AssignIndexOp {
+                    array,
+                    index,
+                    value,
+                    ..
+                } => {
+                    let base = self.place(array)?;
+                    let target = self.field(base, FieldSelector::ConstantIndex(0))?;
+                    let value = self.expr(value, depth + 1)?;
+                    self.coerce(value, target)?;
+                    let index = self.expr(index, depth + 1)?;
+                    let usize = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
+                    self.unify(index, usize)?;
                 }
                 Stmt::Expr(expr) | Stmt::ImplicitExpr(expr) => {
                     self.expr(expr, depth + 1)?;
@@ -215,7 +754,7 @@ impl Solver<'_, '_> {
                 Stmt::Return(Some(expr)) => {
                     let value = self.expr(expr, depth + 1)?;
                     let result = self.fixed(self.checker.result.clone())?;
-                    self.unify(value, result)?;
+                    self.coerce(value, result)?;
                 }
                 Stmt::While {
                     condition, body, ..
@@ -223,37 +762,43 @@ impl Solver<'_, '_> {
                     self.expr(condition, depth + 1)?;
                     self.block(body, depth + 1)?;
                 }
+                Stmt::WhileLet {
+                    pattern,
+                    scrutinee,
+                    body,
+                    ..
+                } => {
+                    let term = self.expr(scrutinee, depth + 1)?;
+                    self.scopes.push(HashMap::new());
+                    self.pattern(pattern, term)?;
+                    self.block(body, depth + 1)?;
+                    self.scopes.pop();
+                }
                 Stmt::For {
                     pattern,
                     source,
                     body,
                     ..
                 } => {
-                    let term = match &source.iterable {
-                        ForIterable::Range { start, end, .. } if source.adapters.is_empty() => {
+                    let item = match &source.iterable {
+                        ForIterable::Range { start, end, .. } => {
                             let start = self.expr(start, depth + 1)?;
                             let end = self.expr(end, depth + 1)?;
                             self.unify(start, end)?;
                             start
                         }
-                        ForIterable::Value(value) if source.adapters.is_empty() => match value {
-                            Expr::Array(elements) => {
-                                let item = self.node(Domain::Unknown)?;
-                                for element in elements {
-                                    let element = self.expr(element, depth + 1)?;
-                                    self.unify(item, element)?;
-                                }
-                                item
+                        ForIterable::Value(value) => {
+                            let source = self.expr(value, depth + 1)?;
+                            let source = self.peel_refs(source);
+                            match self.domain(source) {
+                                Domain::Array(item, _) | Domain::Slice(item) => item,
+                                _ => self.fresh()?,
                             }
-                            Expr::Repeat { value, .. } => self.expr(value, depth + 1)?,
-                            _ => self.node(Domain::Unknown)?,
-                        },
-                        _ => self.node(Domain::Unknown)?,
+                        }
                     };
-                    self.checker.infer_storage(1)?;
-                    self.sites.push((stmt as *const Stmt as usize, term));
+                    self.sites.push((stmt as *const Stmt as usize, item));
                     self.scopes.push(HashMap::new());
-                    self.pattern(pattern, term)?;
+                    self.pattern(pattern, item)?;
                     self.block(body, depth + 1)?;
                     self.scopes.pop();
                 }
@@ -262,33 +807,73 @@ impl Solver<'_, '_> {
         }
         let result = match &block.tail {
             Some(tail) => self.expr(tail, depth + 1)?,
-            None => self.fixed(ir::Ty::Unit)?,
+            None => self.fresh()?,
         };
         self.scopes.pop();
-        self.arrays.pop();
         Ok(result)
     }
-    fn array_local(&self, expr: &Expr) -> Result<bool, String> {
-        let Expr::Var(path) = expr else {
-            return Ok(false);
-        };
-        let Some(key) = self.checker.local_key(path, false)? else {
-            return Ok(false);
-        };
-        for scope in self.arrays.iter().rev() {
-            if let Some(array) = scope.get(&key) {
-                return Ok(*array);
-            }
-        }
-        Ok(false)
+    fn integer(&mut self, lit: &IntegerLiteral) -> Result<Term, String> {
+        self.node(match lit.suffix {
+            Some(ty) => Domain::Fixed(ir::Ty::Int(ty)),
+            None => Domain::Integer,
+        })
     }
     fn expr(&mut self, expr: &Expr, depth: usize) -> Result<Term, String> {
         self.checker.infer_work(depth)?;
         match expr {
-            Expr::Integer(lit) => self.node(match lit.suffix {
-                Some(ty) => Domain::Fixed(ir::Ty::Int(ty)),
-                None => Domain::Integer,
-            }),
+            Expr::Struct { name, fields } => {
+                let fields = fields
+                    .iter()
+                    .map(|(n, v)| (FieldSelector::Named(*n), v))
+                    .collect::<Vec<_>>();
+                self.constructor(name, None, &fields, depth)
+            }
+            Expr::TupleStruct { name, fields } => {
+                let fields = fields
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| (FieldSelector::Tuple(i), v))
+                    .collect::<Vec<_>>();
+                self.constructor(name, None, &fields, depth)
+            }
+            Expr::EnumVariant { name, fields, .. } => {
+                let (owner, variant) = self.checker.split_variant(name)?;
+                let fields = fields
+                    .iter()
+                    .map(|(n, v)| (n.clone(), v))
+                    .collect::<Vec<_>>();
+                self.constructor(&owner, Some(variant), &fields, depth)
+            }
+            Expr::Apply { path, value } => {
+                let actuals = path
+                    .segments
+                    .iter()
+                    .flat_map(|s| &s.args)
+                    .map(|a| self.source_ty(a))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if let Expr::Call { name, args } = value.as_ref() {
+                    let args = args
+                        .iter()
+                        .map(|a| self.expr(a, depth + 1))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let plan = self.checker.signatures.plan()?;
+                    if let Some(decl) = plan
+                        .registry
+                        .functions
+                        .get(&self.checker.path_key(name, Namespace::Value)?)
+                    {
+                        return self.callable(*decl, &args, None, &actuals);
+                    }
+                }
+                let result = self.expr(value, depth + 1)?;
+                if let Domain::Nominal(_, inferred) = self.domain(result) {
+                    for (a, b) in actuals.iter().zip(inferred) {
+                        self.unify(*a, b)?;
+                    }
+                }
+                Ok(result)
+            }
+            Expr::Integer(lit) => self.integer(lit),
             Expr::Float(lit) => self.node(match lit.suffix {
                 Some(ty) => Domain::Fixed(ir::Ty::Float(ty)),
                 None => Domain::Float,
@@ -329,27 +914,80 @@ impl Solver<'_, '_> {
             }
             Expr::Cast { value, target } => {
                 self.expr(value, depth + 1)?;
-                self.fixed(checked_local_ty(target, self.checker.signatures)?)
+                self.source_ty(target)
             }
             Expr::Call { name, args } => {
+                let args = args
+                    .iter()
+                    .map(|a| self.expr(a, depth + 1))
+                    .collect::<Result<Vec<_>, _>>()?;
                 let plan = self.checker.signatures.plan()?;
                 let declaration = plan
                     .registry
                     .functions
                     .get(&self.checker.path_key(name, Namespace::Value)?)
                     .copied();
-                if let Some(declaration) = declaration {
-                    let schema = plan.function_schema(declaration)?;
-                    if !schema.env.is_generic() {
-                        for (arg, param) in args.iter().zip(&schema.signature.params) {
-                            let arg = self.expr(arg, depth + 1)?;
-                            let param = self.fixed(param.clone())?;
-                            self.unify(arg, param)?;
+                match declaration {
+                    Some(id) => self.callable(id, &args, None, &[]),
+                    None => self.fresh(),
+                }
+            }
+            Expr::AssociatedCall {
+                owner,
+                name,
+                type_args,
+                args,
+            } => {
+                let owner = self.source_ty(owner)?;
+                let args = args
+                    .iter()
+                    .map(|a| self.expr(a, depth + 1))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let actuals = type_args
+                    .iter()
+                    .map(|a| self.source_ty(a))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if let Domain::Nominal(decl, _) = self.domain(owner) {
+                    if let Some(candidate) = self.candidate(decl, *name)? {
+                        let result = self.callable(candidate, &args, None, &actuals)?;
+                        let plan = self.checker.signatures.plan()?;
+                        let info = plan.declaration(candidate)?;
+                        let schema = plan.function_schema(candidate)?;
+                        // Constructors normally return Self. Their result must agree
+                        // with the written owner's explicit or inferred arguments.
+                        if nominal_parts(&schema.signature.result).map(|p| p.0) == Some(decl) {
+                            self.unify(owner, result)?;
                         }
-                        return self.fixed(schema.signature.result.clone());
+                        let _ = info;
+                        return Ok(result);
                     }
                 }
-                self.node(Domain::Unknown)
+                self.fresh()
+            }
+            Expr::MethodCall {
+                receiver,
+                name,
+                type_args,
+                args,
+            } => {
+                let receiver = self.expr(receiver, depth + 1)?;
+                let args = args
+                    .iter()
+                    .map(|a| self.expr(a, depth + 1))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let actuals = type_args
+                    .iter()
+                    .map(|a| self.source_ty(a))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let result = self.fresh()?;
+                self.methods.push(Method {
+                    receiver,
+                    name: *name,
+                    actuals,
+                    args,
+                    result,
+                });
+                Ok(result)
             }
             Expr::If {
                 condition,
@@ -362,65 +1000,100 @@ impl Solver<'_, '_> {
                 self.unify(left, right)?;
                 Ok(left)
             }
-            Expr::Block(block) | Expr::Unsafe(block) => self.block(block, depth + 1),
-            // Runtime array/slice indices are `usize`; this flows backward to
-            // unannotated integer locals used as indices (`let mut i = 0`).
-            // Overloaded `Index` on user types keeps its own index type.
-            Expr::DynamicIndex {
-                base: base_expr,
-                index,
+            Expr::IfLet {
+                pattern,
+                scrutinee,
+                then_block,
+                else_branch,
             } => {
-                // A base known to be a nominal (user `Index` impl) keeps its
-                // own index type; arrays, slices and unknown bases admit only
-                // `usize` for the builtin operator, which is the stock answer
-                // whenever the base is array-like.
-                self.expr(base_expr, depth + 1)?;
-                let nominal = |ty: &ir::Ty| {
-                    let ty = match ty {
-                        ir::Ty::Ref { referent, .. } => referent.as_ref(),
-                        other => other,
-                    };
-                    !matches!(ty, ir::Ty::Array { .. } | ir::Ty::Slice { .. })
-                };
-                let builtin = match base_expr.as_ref() {
-                    Expr::Array(_) | Expr::Repeat { .. } => true,
-                    Expr::Var(_) => match self.checker.scalar_hint(base_expr) {
-                        Ok(Some(ty)) => !nominal(&ty),
-                        _ => self.array_local(base_expr)?,
-                    },
-                    _ => false,
-                };
+                let term = self.expr(scrutinee, depth + 1)?;
+                self.scopes.push(HashMap::new());
+                self.pattern(pattern, term)?;
+                let left = self.block(then_block, depth + 1)?;
+                self.scopes.pop();
+                if let Some(right) = else_branch {
+                    let right = self.expr(right, depth + 1)?;
+                    self.unify(left, right)?;
+                }
+                Ok(left)
+            }
+            Expr::Match { scrutinee, arms } => {
+                let term = self.expr(scrutinee, depth + 1)?;
+                let result = self.fresh()?;
+                for arm in arms {
+                    self.scopes.push(HashMap::new());
+                    self.pattern(&arm.pattern, term)?;
+                    if let Some(g) = &arm.guard {
+                        self.expr(g, depth + 1)?;
+                    }
+                    let body = self.expr(&arm.body, depth + 1)?;
+                    self.unify(result, body)?;
+                    self.scopes.pop();
+                }
+                Ok(result)
+            }
+            Expr::Block(block) | Expr::Unsafe(block) => self.block(block, depth + 1),
+            Expr::Array(elements) => {
+                let item = self.fresh()?;
+                for e in elements {
+                    let t = self.expr(e, depth + 1)?;
+                    self.unify(item, t)?;
+                }
+                self.node(Domain::Array(item, elements.len()))
+            }
+            Expr::Repeat { value, len } => {
+                let item = self.expr(value, depth + 1)?;
+                self.node(Domain::Array(item, *len))
+            }
+            Expr::Tuple(fields) => {
+                let fields = fields
+                    .iter()
+                    .map(|f| self.expr(f, depth + 1))
+                    .collect::<Result<_, _>>()?;
+                self.node(Domain::Tuple(fields))
+            }
+            Expr::DynamicIndex { base, index } => {
+                let base = self.expr(base, depth + 1)?;
                 let index = self.expr(index, depth + 1)?;
-                if builtin {
+                if matches!(
+                    self.domain(self.peel_refs(base)),
+                    Domain::Array(..) | Domain::Slice(..)
+                ) {
                     let usize = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
                     self.unify(index, usize)?;
                 }
-                self.node(Domain::Unknown)
+                self.field(base, FieldSelector::ConstantIndex(0))
             }
-            // Walk subexpressions for nested evidence (an index inside
-            // `v[i].f()`), without claiming the compound result type.
-            Expr::MethodCall { receiver, args, .. } => {
-                self.expr(receiver, depth + 1)?;
-                for arg in args {
-                    self.expr(arg, depth + 1)?;
+            Expr::Index { base, index } => {
+                let base = self.expr(base, depth + 1)?;
+                self.field(base, FieldSelector::ConstantIndex(*index))
+            }
+            Expr::Field { base, field } => {
+                let base = self.expr(base, depth + 1)?;
+                self.field(base, field.clone())
+            }
+            Expr::Deref { value } => {
+                let base = self.expr(value, depth + 1)?;
+                match self.domain(base) {
+                    Domain::Ref(_, t) | Domain::RawPtr(_, t) => Ok(t),
+                    _ => self.fresh(),
                 }
-                self.node(Domain::Unknown)
             }
-            Expr::Field { base, .. } | Expr::Deref { value: base } => {
-                self.expr(base, depth + 1)?;
-                self.node(Domain::Unknown)
+            Expr::BorrowValue { kind, value } => {
+                let value = self.expr(value, depth + 1)?;
+                self.node(Domain::Ref(*kind, value))
             }
-            Expr::BorrowValue { value, .. } => {
-                self.expr(value, depth + 1)?;
-                self.node(Domain::Unknown)
+            Expr::Borrow { kind, place } => {
+                let value = self.place(place)?;
+                self.node(Domain::Ref(*kind, value))
             }
             Expr::Loop { body, .. } => {
                 self.block(body, depth + 1)?;
-                self.node(Domain::Unknown)
+                self.fresh()
             }
             Expr::Format { arguments, .. } => {
-                for arg in arguments {
-                    self.expr(arg, depth + 1)?;
+                for a in arguments {
+                    self.expr(a, depth + 1)?;
                 }
                 self.fixed(ir::Ty::Unit)
             }
@@ -430,9 +1103,7 @@ impl Solver<'_, '_> {
                 }
                 self.fixed(ir::Ty::Unit)
             }
-            // Unknown forms contribute no speculative evidence. The ordinary
-            // checker still handles/rejects them with its full semantic rules.
-            _ => self.node(Domain::Unknown),
+            _ => self.fresh(),
         }
     }
 }

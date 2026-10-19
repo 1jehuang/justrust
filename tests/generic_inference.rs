@@ -425,22 +425,22 @@ fn main(){if run()==7{println!("inference oracle ok");}}
 }
 
 #[test]
-fn rejects_local_future_use_required() {
-    rejects(
-        "legalunsupported: local_future_use_required",
+fn accepts_local_future_use_required() {
+    runs(
         r###"enum E<T>{None,Some(T)}fn take(e:E<i32>)->i32{match e{E::None=>7,E::Some(v)=>v}}fn run()->i32{let e=E::None;take(e)}
 fn main(){if run()==7{println!("inference oracle ok");}}
 "###,
+        "inference oracle ok\n",
     );
 }
 
 #[test]
-fn rejects_unresolved_nested_omitted_without_other_evidence() {
-    rejects(
-        "legalunsupported: unresolved_nested_omitted_without_other_evidence",
+fn accepts_nested_omitted_with_body_constraints() {
+    runs(
         r###"fn id<T>(x:T)->T{x}fn run()->i32{let x=id(id(7));if x==7{7}else{0}}
 fn main(){if run()==7{println!("inference oracle ok");}}
 "###,
+        "inference oracle ok\n",
     );
 }
 
