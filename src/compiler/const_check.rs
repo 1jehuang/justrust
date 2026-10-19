@@ -4,19 +4,128 @@
 use super::{const_eval as scalar, const_source as source, frontend, ir};
 use std::sync::Arc;
 
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+    use std::{
+        future::Future,
+        pin::pin,
+        task::{Context, Poll, Waker},
+    };
+    fn run<T>(future: impl Future<Output = T>) -> T {
+        match pin!(future)
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+        {
+            Poll::Ready(value) => value,
+            Poll::Pending => panic!("literal constant unexpectedly suspended"),
+        }
+    }
+    fn limited(bytes: usize) -> ir::PlanBudget {
+        ir::PlanBudget::new(ir::PlanLimits {
+            bytes,
+            ..Default::default()
+        })
+    }
+    #[test]
+    fn const_wrapper_bytes_checked_and_each_constructor_admits_before_publication() {
+        assert!(publication_bytes(usize::MAX, false).is_err());
+        assert!(publication_bytes(usize::MAX - 2 * std::mem::size_of::<usize>(), true).is_err());
+        let budget = ir::PlanBudget::default();
+        let program = Arc::new(frontend::parse("const A:u8=1;fn main(){}").unwrap());
+        let plan = frontend::PlanCtx::from_shared_program(program.clone(), &budget).unwrap();
+        let id = plan.constant_decl(0).unwrap();
+        let source = Arc::new(
+            plan.publish_constant_declaration(&program, id, &budget)
+                .unwrap(),
+        );
+        let body_bytes = publication_bytes(std::mem::size_of::<BodyFact>(), true).unwrap();
+        let small = limited(body_bytes - 1);
+        assert!(check(source.clone(), &[], &plan, &small).is_err());
+        assert_eq!(
+            small.usage_snapshot().first_failure.unwrap().requested,
+            body_bytes
+        );
+        let body = Arc::new(check(source, &[], &plan, &budget).unwrap());
+        assert_eq!(body._storage.bytes(), body_bytes);
+        let proof_bytes =
+            publication_bytes(std::mem::size_of::<QualificationFact>(), false).unwrap();
+        let small = limited(proof_bytes - 1);
+        assert!(QualificationFact::new(body.clone(), &[], &small).is_err());
+        assert_eq!(
+            small.usage_snapshot().first_failure.unwrap().requested,
+            proof_bytes
+        );
+        let exact = limited(proof_bytes);
+        let proof = QualificationFact::new(body.clone(), &[], &exact).unwrap();
+        assert_eq!(proof._storage.bytes(), proof_bytes);
+        assert_eq!(exact.usage_snapshot().bytes, proof_bytes);
+        let receipt = proof._storage.clone();
+        drop(receipt);
+        assert_eq!(exact.usage_snapshot().bytes, proof_bytes);
+        let value_bytes = publication_bytes(std::mem::size_of::<ValueFact>(), false).unwrap();
+        let small = limited(value_bytes - 1);
+        assert!(
+            run(ValueFact::evaluate(body.clone(), &proof, &small, |_| {
+                std::future::ready(Err(crate::Error::new("unexpected reference")))
+            }))
+            .is_err()
+        );
+        assert_eq!(
+            small.usage_snapshot().first_failure.unwrap().requested,
+            value_bytes
+        );
+        let value = run(ValueFact::evaluate(body, &proof, &budget, |_| {
+            std::future::ready(Err(crate::Error::new("unexpected reference")))
+        }))
+        .unwrap();
+        assert_eq!(value._storage.bytes(), value_bytes);
+        let paid = budget.usage_snapshot().bytes;
+        let receipt = value._storage.clone();
+        drop(value);
+        drop(receipt);
+        assert_eq!(budget.usage_snapshot().bytes, paid);
+        drop(proof);
+        assert_eq!(exact.usage_snapshot().bytes, proof_bytes);
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct BodyFact {
     source: Arc<source::DeclarationFact>,
     checked: scalar::ConstBodyFact,
+    _storage: ir::RetainedStorage,
 }
 #[derive(Debug)]
 pub(super) struct QualificationFact {
     body: Arc<BodyFact>,
+    _storage: ir::RetainedStorage,
 }
 #[derive(Debug)]
 pub(super) struct ValueFact {
     body: Arc<BodyFact>,
     value: scalar::ConstValueFact,
+    _storage: ir::RetainedStorage,
+}
+
+// The engine wraps each published value in one Arc. Body0 also owns an
+// explicitly shared Arc<BodyFact>; its payload is paid once, never by readers.
+fn publication_bytes(payload: usize, extra_arc: bool) -> Result<usize, String> {
+    let header = 2usize
+        .checked_mul(std::mem::size_of::<usize>())
+        .ok_or("constant publication size overflow")?;
+    payload
+        .checked_add(header)
+        .and_then(|bytes| {
+            if extra_arc {
+                bytes
+                    .checked_add(header)?
+                    .checked_add(std::mem::size_of::<Arc<BodyFact>>())
+            } else {
+                Some(bytes)
+            }
+        })
+        .ok_or_else(|| "constant publication size overflow".into())
 }
 
 impl BodyFact {
@@ -33,6 +142,8 @@ impl QualificationFact {
         references: &[Arc<Self>],
         budget: &ir::PlanBudget,
     ) -> Result<Self, String> {
+        let storage =
+            budget.reserve_bytes(publication_bytes(std::mem::size_of::<Self>(), false)?)?;
         for expression in body.source.expressions.iter() {
             budget.charge_work(references.len() + 1)?;
             if let source::SyntaxKind::Reference(id) = expression.kind
@@ -51,7 +162,10 @@ impl QualificationFact {
                 return Err("contract: qualification contains extra or duplicate reference proof".into());
             }
         }
-        Ok(Self { body })
+        Ok(Self {
+            body,
+            _storage: storage.retain()?,
+        })
     }
 }
 impl ValueFact {
@@ -71,6 +185,11 @@ impl ValueFact {
         F: FnMut(ir::DeclId) -> Fut,
         Fut: std::future::Future<Output = Result<Arc<Self>, crate::Error>>,
     {
+        let storage = budget
+            .reserve_bytes(
+                publication_bytes(std::mem::size_of::<Self>(), false).map_err(crate::Error::new)?,
+            )
+            .map_err(crate::Error::new)?;
         if !Arc::ptr_eq(&body, &proof.body) {
             return Err(crate::Error::new(
                 "contract: constant qualification belongs to another body publication",
@@ -93,7 +212,11 @@ impl ValueFact {
             scalar::EvaluateError::Scalar(error) => crate::Error::new(error.to_string()),
             scalar::EvaluateError::Dependency(error) => error,
         })?;
-        Ok(Self { body, value })
+        Ok(Self {
+            body,
+            value,
+            _storage: storage.retain().map_err(crate::Error::new)?,
+        })
     }
 }
 
@@ -103,6 +226,8 @@ pub(super) fn check(
     plan: &frontend::PlanCtx,
     budget: &ir::PlanBudget,
 ) -> Result<BodyFact, String> {
+    let storage =
+        budget.reserve_bytes(publication_bytes(std::mem::size_of::<BodyFact>(), true)?)?;
     declaration.validate_authority()?;
     for reference in references {
         budget.charge_work(1)?;
@@ -131,6 +256,7 @@ pub(super) fn check(
     Ok(BodyFact {
         source: declaration,
         checked,
+        _storage: storage.retain()?,
     })
 }
 struct Checker<'a> {

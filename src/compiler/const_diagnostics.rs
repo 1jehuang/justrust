@@ -2,6 +2,133 @@
 //! No compiler scheduling, acceptance, or value computation reads this path.
 use super::*;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    struct Control {
+        compiler: CompilerProvider,
+        mixed: bool,
+        error: &'static str,
+    }
+    impl Provider for Control {
+        fn outputs(&self, key: &Key) -> usize {
+            self.compiler.outputs(key)
+        }
+        fn start(&self, cx: Context, key: Key) -> TaskFuture {
+            if key.kind == 900 {
+                let error = self.error;
+                return Box::pin(async move { Err(Error::new(error)) });
+            }
+            if self.mixed && matches!(key.kind, CONST_BODY | CONST_VALUE) {
+                return Box::pin(async move {
+                    let other = if key.kind == CONST_BODY {
+                        CONST_VALUE
+                    } else {
+                        CONST_BODY
+                    };
+                    cx.read(
+                        cx.request(Key::new(other, vec![0]))
+                            .get(if other == CONST_BODY { 1 } else { 0 }),
+                    )
+                    .await?;
+                    cx.publish(0, 1)
+                });
+            }
+            self.compiler.start(cx, key)
+        }
+    }
+    #[test]
+    fn const_cycle_witness_without_capture_preserves_independent_resource_and_type_errors() {
+        for workers in [1, 8] {
+            for error in [
+                "resource limit independent control",
+                "E0308 independent type control",
+            ] {
+                let budget = ir::PlanBudget::default();
+                let compiler = CompilerProvider(Arc::new(Snapshot {
+                    input: Input::Text("const A:bool=false&&A;fn main(){}".into()),
+                    source_options: Default::default(),
+                    budget: budget.clone(),
+                }));
+                let engine = Engine::with_event_capacity(
+                    Control {
+                        compiler,
+                        mixed: false,
+                        error,
+                    },
+                    0,
+                );
+                let cycle = engine.request(Facts::root(CHECK));
+                let failure = engine.request(Key::new(900, vec![]));
+                let report = engine.run(workers).unwrap();
+                assert!(report.dependency_cycle().is_some());
+                assert!(!report.capture_complete);
+                let plan = engine
+                    .fact_of::<frontend::PlanCtx>(&Facts::root(SIGNATURES), 0)
+                    .unwrap();
+                let id = plan.constant_decl(0).unwrap();
+                let key = Facts::item(CONST_BODY, id.index as usize);
+                assert!(
+                    engine
+                        .fact_of::<Arc<const_check::BodyFact>>(&key, 0)
+                        .is_some(),
+                    "typed body may publish independently"
+                );
+                let cycle_error = cycle.result(0).unwrap_err();
+                assert!(
+                    qualification_cycle_error(&engine, &report, &cycle_error, &budget)
+                        .unwrap()
+                        .to_string()
+                        .contains("E0391")
+                );
+                let original = failure.result(0).unwrap_err();
+                assert_eq!(original.to_string(), error);
+                assert!(qualification_cycle_error(&engine, &report, &original, &budget).is_none());
+                assert!(
+                    engine
+                        .fact_of::<const_check::ValueFact>(
+                            &Facts::item(CONST_VALUE, id.index as usize),
+                            0
+                        )
+                        .is_none()
+                );
+            }
+        }
+    }
+    #[test]
+    fn const_mixed_body_value_cycle_is_not_language_qualification_cycle() {
+        for workers in [1, 8] {
+            let budget = ir::PlanBudget::default();
+            let compiler = CompilerProvider(Arc::new(Snapshot {
+                input: Input::Text("const A:bool=true;fn main(){}".into()),
+                source_options: Default::default(),
+                budget: budget.clone(),
+            }));
+            let engine = Engine::with_event_capacity(
+                Control {
+                    compiler,
+                    mixed: true,
+                    error: "unused",
+                },
+                0,
+            );
+            let _plan = engine.request(Facts::root(SIGNATURES));
+            let demand = engine.request(Facts::item(CONST_BODY, 0));
+            let report = engine.run(workers).unwrap();
+            let witness = report.dependency_cycle().unwrap();
+            assert!(
+                witness
+                    .edges()
+                    .iter()
+                    .any(|edge| edge.consumer().kind == CONST_VALUE)
+            );
+            let original = demand.result(1).unwrap_err();
+            assert!(qualification_cycle_error(&engine, &report, &original, &budget).is_none());
+            assert!(!original.to_string().contains("E0391"));
+        }
+    }
+}
+
 pub(super) fn qualification_cycle_error(
     engine: &Engine,
     report: &Report,
@@ -62,7 +189,8 @@ pub(super) fn qualification_cycle_error(
                 report
                     .node_evaluations
                     .len()
-                    .checked_add(report.node_errors.len())?,
+                    .checked_add(report.node_errors.len())?
+                    .checked_add(report.node_ids.len())?,
             )
             .ok()?;
         let node = report

@@ -86,3 +86,24 @@ missing runtime graph inputs. Engine tests cover capture-independent cycle
 witnesses, mixed output slots, early publication and fallible allocation.
 Graph-integrity ratchets may not increase. Complete source/regression/lint gates
 and coordinator approval are still required before publication.
+
+### Retained allocation audit
+
+Body, qualification and value producers prepay their own payload and engine Arc
+header before construction/publication, retaining immutable receipts without any
+ledger back-reference. Body0 additionally prepays its shared body Arc and the
+engine's outer Arc wrapper. Qualification/value readers share that body, not a
+second payment for its payload. Source projection pays both frozen arena headers,
+the empty root path header and the declaration publication header. Nonempty source
+paths and owner identities use the existing prepaid source-replay constructors.
+Checked scalar arenas pay incoming Vec capacity and overlapping frozen Arc storage.
+Runtime occurrence/emission vectors use source-replay prepaid geometric growth;
+direct dependency lists/handles/proofs remain paid provider-local scratch.
+
+Scoped controls test checked wrapper-size overflow, one-byte-short admission for
+each constructor before a fact can be returned for publication, exact qualification
+wrapper payment without repaying the shared body, and receipt clone/drop without
+refund. Diagnostic controls run with capture disabled: a real source119 cycle
+still has a typed witness, coexisting independent resource/type errors are not
+relabeled, and mixed119/120 cycles remain generic. Full regression acceptance is
+still pending coordinator scheduling, not implied by these focused controls.

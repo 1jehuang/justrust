@@ -150,7 +150,9 @@ pub(super) fn project(
     let _scratch = budget.reserve_bytes(bytes)?;
     let storage = budget.reserve_bytes(
         bytes
-            .checked_add(4 * std::mem::size_of::<usize>())
+            // Two frozen arena Arc headers, the empty root-path Arc header,
+            // and the engine's published DeclarationFact Arc header.
+            .checked_add(8 * std::mem::size_of::<usize>())
             .and_then(|bytes| bytes.checked_add(std::mem::size_of::<DeclarationFact>()))
             .ok_or("constant source allocation overflow")?,
     )?;

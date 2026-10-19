@@ -62,9 +62,6 @@ impl CompilerProvider {
                 }
                 let body = const_check::check(source, &references, &plan, &self.0.budget)
                     .map_err(Error::new)?;
-                self.retain(
-                    std::mem::size_of::<const_check::BodyFact>() + 2 * std::mem::size_of::<usize>(),
-                )?;
                 let body = Arc::new(body);
                 cx.publish_fact(0, body.clone())?;
                 let (mut qualifications, _qualification_storage) =
