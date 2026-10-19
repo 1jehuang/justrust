@@ -122,13 +122,24 @@ pub struct RangeFull;
 pub struct RangeInclusive<Idx> {
     start: Idx,
     end: Idx,
+    exhausted: bool,
 }
 impl<Idx> RangeInclusive<Idx> {
     pub fn new(start: Idx, end: Idx) -> Self {
-        Self { start, end }
+        RangeInclusive { start, end, exhausted: false }
     }
     pub fn start(&self) -> &Idx { &self.start }
     pub fn end(&self) -> &Idx { &self.end }
+    pub fn into_inner(self) -> (Idx, Idx) { (self.start, self.end) }
+    // Internal iterator hooks keep the standard bounds private. The iterator
+    // checks equality before advancing at MIN/MAX and marks the final item
+    // exhausted without performing an overflowing successor/predecessor.
+    pub fn __jr_set_start(&mut self, next: Idx) { self.start = next; }
+    pub fn __jr_set_end(&mut self, next: Idx) { self.end = next; }
+    pub fn __jr_exhaust(&mut self) { self.exhausted = true; }
+}
+impl<Idx: super::cmp::PartialOrd> RangeInclusive<Idx> {
+    pub fn is_empty(&self) -> bool { self.exhausted || !(self.start <= self.end) }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RangeToInclusive<Idx> {

@@ -10,6 +10,19 @@ fn range_exprs_match_stock() {
         "range-exprs",
         &[
             Case {
+                name: "inclusive_state",
+                source: r#"fn main() {
+    let a = 1..=3;
+    let empty = a.is_empty();
+    let pair = a.into_inner();
+    println!("{} {} {}", empty, pair.0, pair.1);
+    let b = 4..=2;
+    let c = 255u8..=255u8;
+    println!("{} {}", b.is_empty(), c.is_empty());
+}"#,
+                expect: Expect::Run("false 1 3\ntrue false\n"),
+            },
+            Case {
                 name: "reverse_bounds",
                 source: r#"fn bound(x: i32) -> i32 { print!("b{} ", x); x }
 fn main() {

@@ -78,6 +78,8 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       native `std::ops` range values. `tests/range_exprs.rs` compares stock output.
       Native bounded integer `for` ranges also accept `.rev()` and `.into_iter()`
       chains, preserving bound evaluation order, empty ranges and inclusive MIN.
+      RangeInclusive keeps private bounds/exhaustion state and provides standard
+      accessors, into_inner and is_empty plus internal fused-iteration hooks.
       General Iterator/adapters remain a separate library workstream.
 - [x] Genuine statement-position integer range for loops (`start..end` and
       `start..=end`) through existing checked while/match IR. Bounds evaluate
