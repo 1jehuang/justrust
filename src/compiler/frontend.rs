@@ -1566,6 +1566,18 @@ impl SourceInventory {
             }
             Expr::Output(output) => validate_output_site(output, &self.names)
                 .map_err(|message| source_error(budget, &message))?,
+            Expr::Format { arguments, .. } => {
+                for (index, argument) in arguments.iter().enumerate() {
+                    self.expr(
+                        argument,
+                        &node.child(21, index, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
+            }
             Expr::Panic(panic) => validate_panic_site(panic, &self.names)
                 .map_err(|message| source_error(budget, &message))?,
             Expr::Apply { path, value } => {
@@ -5420,6 +5432,12 @@ pub enum Expr {
         label: Option<AstIdent>,
     },
     Println(String),
+    Format {
+        pieces: Vec<String>,
+        arguments: Vec<Expr>,
+        stream: ir::OutputStream,
+        newline: bool,
+    },
     Output(Box<SourceOutput>),
     Panic(Box<SourcePanic>),
 }
@@ -6765,6 +6783,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else {
             return Err(self.error("expected an output macro delimiter"));
         };
+        if !self.is(close) {
+            return self.scalar_output(close, spelling, Some(site));
+        }
         let (nonliteral, placeholders, arguments) = match spelling {
             "print" => (
                 "print! nonliteral arguments are unsupported",
@@ -6810,6 +6831,105 @@ impl<'input, 'names> Parser<'input, 'names> {
             })
             .map_err(native_adapter::name_error)?;
         Ok(Expr::Output(payload))
+    }
+    fn scalar_output(
+        &mut self,
+        close: &str,
+        spelling: &str,
+        site: Option<super::expansion_span::SpanId>,
+    ) -> Result<Expr, ParseError> {
+        let buffer;
+        let token = if self.token().is_opaque_literal() {
+            buffer = self
+                .input
+                .opaque_literal_buffer(&self.token(), self.names)?;
+            TokenCursor::new(&buffer).current()
+        } else {
+            self.token()
+        };
+        if !token.string {
+            if spelling == "println" {
+                return Err(self.error("println! requires one literal string"));
+            }
+            return Err(
+                self.unsupported(&format!("{spelling}! nonliteral arguments are unsupported"))
+            );
+        }
+        let text = self.string_literal_value(token.text)?;
+        self.cursor.bump();
+        let mut pieces = Vec::new();
+        let mut piece = String::new();
+        let mut chars = text.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '{' => match chars.next() {
+                    Some('{') => piece.push('{'),
+                    Some('}') => {
+                        pieces.push(std::mem::take(&mut piece));
+                    }
+                    None => return Err(self.error("unmatched opening brace in format string")),
+                    _ => {
+                        return Err(
+                            self.unsupported("only bare {} formatting placeholders are supported")
+                        );
+                    }
+                },
+                '}' => {
+                    if chars.next() == Some('}') {
+                        piece.push('}');
+                    } else {
+                        return Err(self.error("unmatched closing brace in format string"));
+                    }
+                }
+                _ => piece.push(c),
+            }
+        }
+        pieces.push(piece);
+        let mut arguments = Vec::new();
+        while self.eat(",") && !self.is(close) {
+            arguments.push(self.nested_expr()?);
+        }
+        self.expect(close)?;
+        if pieces.len() != arguments.len() + 1 {
+            return Err(self.error("format argument count mismatch"));
+        }
+        let stream = if matches!(spelling, "print" | "println") {
+            ir::OutputStream::Stdout
+        } else {
+            ir::OutputStream::Stderr
+        };
+        let newline = matches!(spelling, "println" | "eprintln");
+        if arguments.is_empty() {
+            let text = pieces.pop().unwrap();
+            return if let Some(site) = site {
+                Ok(Expr::Output(
+                    self.names
+                        .try_parser_box(SourceOutput {
+                            output: ir::LiteralOutput {
+                                text,
+                                stream,
+                                newline,
+                            },
+                            site,
+                        })
+                        .map_err(native_adapter::name_error)?,
+                ))
+            } else {
+                Ok(Expr::Println(text))
+            };
+        }
+        self.names
+            .retain_parser_text(
+                pieces.len() * std::mem::size_of::<String>()
+                    + arguments.len() * std::mem::size_of::<Expr>(),
+            )
+            .map_err(native_adapter::name_error)?;
+        Ok(Expr::Format {
+            pieces,
+            arguments,
+            stream,
+            newline,
+        })
     }
     fn panic_expression(&mut self, spelling: &'static str) -> Result<Expr, ParseError> {
         let (default, delimiter, nonliteral, placeholders, arguments) = match spelling {
@@ -7365,43 +7485,6 @@ impl<'input, 'names> Parser<'input, 'names> {
         let text = literal_format_owned(token.text, self.names).map_err(|error| {
             if error.kind == super::source::SourceErrorKind::Syntax {
                 self.unsupported(formatting)
-            } else {
-                error
-            }
-        })?;
-        self.cursor.bump();
-        Ok(text)
-    }
-    fn println_literal(&mut self) -> Result<String, ParseError> {
-        if self.token().is_opaque_literal() {
-            let buffer = self
-                .input
-                .opaque_literal_buffer(&self.token(), self.names)?;
-            let mut cursor = TokenCursor::new(&buffer);
-            if !cursor.current().string {
-                return Err(self.error("println! requires one literal string"));
-            }
-            let text =
-                literal_format_owned(cursor.current().text, self.names).map_err(|error| {
-                    if error.kind == super::source::SourceErrorKind::Syntax {
-                        self.error(&error.message)
-                    } else {
-                        error
-                    }
-                })?;
-            cursor.bump();
-            if !cursor.current().matches("") {
-                return Err(self.error("println! requires one literal string"));
-            }
-            self.cursor.bump();
-            return Ok(text);
-        }
-        if !self.token().string {
-            return Err(self.error("println! requires one literal string"));
-        }
-        let text = literal_format_owned(self.token().text, self.names).map_err(|error| {
-            if error.kind == super::source::SourceErrorKind::Syntax {
-                self.error(&error.message)
             } else {
                 error
             }
@@ -10574,10 +10657,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return Err(self.error("only println! is supported"));
             }
             self.expect("(")?;
-            let text = self.println_literal()?;
-            self.eat(",");
-            self.expect(")")?;
-            Expr::Println(text)
+            if self.is(")") {
+                self.expect(")")?;
+                Expr::Println(String::new())
+            } else {
+                return self.scalar_output(")", "println", None);
+            }
         } else if self.eat("(") {
             let mut args = Vec::new();
             if !self.is(")") {
@@ -13093,7 +13178,10 @@ fn walk_depth_inspecting(
                     push(DepthNode::Expr(left))?;
                     push(DepthNode::Expr(right))?;
                 }
-                Expr::Call { args, .. } => {
+                Expr::Call { args, .. }
+                | Expr::Format {
+                    arguments: args, ..
+                } => {
                     for arg in args {
                         push(DepthNode::Expr(arg))?;
                     }

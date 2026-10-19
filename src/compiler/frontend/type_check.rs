@@ -8125,6 +8125,71 @@ impl<'a> Checker<'a> {
                 ir::ExprKind::Println(text.clone()),
                 Flow::value(ir::Ty::Unit),
             ),
+            Expr::Format {
+                pieces,
+                arguments,
+                stream,
+                newline,
+            } => {
+                let mut ids = Vec::new();
+                let mut completion = ir::Completion::Returns;
+                for argument in arguments {
+                    let id = self.expr_expected(argument, None)?;
+                    let flow = self.flow(id);
+                    if !matches!(
+                        flow.ty,
+                        ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char | ir::Ty::Never
+                    ) && !flow.ty.is_shared_str()
+                    {
+                        return Err(
+                            "format argument requires integer, bool, char or &str Display".into(),
+                        );
+                    }
+                    if !flow.completes {
+                        completion = ir::Completion::Never;
+                    }
+                    // format_args borrows place arguments until the output call.
+                    // Keep that loan live across later argument evaluation rather
+                    // than accepting mutation of an already-snapshotted place.
+                    let id = if let Ok(place) = static_source_place(argument) {
+                        let (place, _, _) = self.checked_place(&place)?;
+                        self.borrow_expression(ir::BorrowKind::Shared, place)?
+                    } else if matches!(
+                        argument,
+                        Expr::DynamicIndex { .. }
+                            | Expr::Deref { .. }
+                            | Expr::Field { .. }
+                            | Expr::Index { .. }
+                    ) {
+                        return Err(
+                            "unsupported: dynamic or temporary-rooted format place arguments"
+                                .into(),
+                        );
+                    } else {
+                        id
+                    };
+                    ids.push(id);
+                }
+                for piece in pieces {
+                    self.charge_node(piece.len())?;
+                }
+                self.charge_node(
+                    ids.len() * std::mem::size_of::<ir::ExprId>()
+                        + pieces.len() * std::mem::size_of::<String>(),
+                )?;
+                (
+                    ir::ExprKind::Format {
+                        pieces: pieces.clone(),
+                        arguments: ids,
+                        stream: *stream,
+                        newline: *newline,
+                    },
+                    Flow {
+                        ty: ir::Ty::Unit,
+                        completes: completion == ir::Completion::Returns,
+                    },
+                )
+            }
             Expr::Unary { op, value } => {
                 if matches!(op, UnaryOp::Neg)
                     && let Expr::Integer(literal) = value.as_ref()
