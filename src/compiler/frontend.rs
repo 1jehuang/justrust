@@ -10663,7 +10663,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         bounds.extend(impl_bounds);
         self.expect(")")?;
         let result = if self.eat("->") {
-            self.ty()?
+            if self.eat("!") { Type::Never } else { self.ty()? }
         } else {
             Type::Unit
         };
