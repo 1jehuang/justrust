@@ -2101,7 +2101,7 @@ impl Resolver<'_> {
                 }
             }
             Type::Ref { referent, .. } => self.ty(referent, module)?,
-            Type::Dyn(trait_path) => self.trait_path(trait_path, module)?,
+            Type::Dyn(trait_path) => self.trait_application(trait_path, module, true)?,
             Type::Array(element, _)
             | Type::Slice(element)
             | Type::RawPtr {

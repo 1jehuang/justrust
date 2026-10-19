@@ -1181,9 +1181,22 @@ fn source_type_mentions_self(
     Ok(match ty {
         Type::SelfType => true,
         Type::Projection(projection) => match projection.as_ref() {
-            SourceProjection::SelfItem { .. } => true,
-            SourceProjection::Qualified { self_ty, .. } => {
-                source_type_mentions_self(self_ty, budget, depth + 1)?
+            SourceProjection::SelfItem { .. } => false,
+            SourceProjection::Qualified {
+                self_ty,
+                trait_path,
+                ..
+            } => {
+                let mut mentions = !matches!(self_ty, Type::SelfType)
+                    && source_type_mentions_self(self_ty, budget, depth + 1)?;
+                if let TraitPath::Source(path) = trait_path {
+                    for segment in &path.segments {
+                        for argument in &segment.args {
+                            mentions |= source_type_mentions_self(argument, budget, depth + 1)?;
+                        }
+                    }
+                }
+                mentions
             }
         },
         Type::Ref { referent, .. } => source_type_mentions_self(referent, budget, depth + 1)?,
@@ -15619,30 +15632,6 @@ impl DeclRegistry {
             .copied()
             .ok_or_else(|| "unknown trait".into())
     }
-    /// Lower a written `dyn Trait` to its rigid object type after checking
-    /// stock dyn compatibility (E0038). Unused object types are checked too.
-    pub(super) fn trait_object_ty(
-        &self,
-        path: &TraitPath,
-        budget: &ir::PlanBudget,
-    ) -> Result<ir::Ty, String> {
-        let TraitPath::Source(source) = path else {
-            return Err(
-                "E0038: builtin marker traits (Sized, Copy, Clone, Drop) are not dyn compatible"
-                    .into(),
-            );
-        };
-        if source
-            .segments
-            .iter()
-            .any(|s| !s.args.is_empty() || !s.associated_types.is_empty())
-        {
-            return Err("unsupported: generic or associated-type trait object principals".into());
-        }
-        let principal = self.resolve_trait_path(path)?;
-        self.check_dyn_compatible(principal, budget, 0)?;
-        Ok(ir::Ty::Dyn(Arc::new(ir::DynTy { principal })))
-    }
     /// Source trait declaration behind a trait DeclId.
     pub(super) fn source_trait(&self, principal: ir::DeclId) -> Result<&TraitDecl, String> {
         let info = self.declaration(principal)?;
@@ -15671,12 +15660,6 @@ impl DeclRegistry {
                     .unwrap_or_default()
             ))
         };
-        if !declaration.type_params.is_empty() {
-            return Err("unsupported: generic trait object principals".into());
-        }
-        if !declaration.associated_types.is_empty() {
-            return Err("unsupported: trait objects of traits with associated types".into());
-        }
         for supertrait in &declaration.supertraits {
             match supertrait {
                 TraitPath::Builtin(BuiltinTrait::Sized) => {
@@ -18445,7 +18428,12 @@ impl PlanState {
                     self.validate_source_type_metadata(registry, actual, bindings, caller, budget)?;
                 }
                 for binding in &segment.associated_types {
-                    registry.associated_type_item(declaration, binding.name, budget)?;
+                    // Membership is resolved below against the instantiated
+                    // principal and its canonical supertrait applications.
+                    registry
+                        .names
+                        .check(binding.name)
+                        .map_err(|e| e.to_string())?;
                     self.validate_source_type_metadata(
                         registry,
                         &binding.value,
@@ -18538,7 +18526,16 @@ impl PlanState {
             for segment in &path.segments {
                 for binding in &segment.associated_types {
                     budget.charge_work(1)?;
-                    let item = registry.associated_type_item(declaration, binding.name, budget)?;
+                    let (binding_owner, item) = self
+                        .inherited_associated_owner(
+                            registry,
+                            trait_ref.clone(),
+                            binding.name,
+                            caller,
+                            budget,
+                            &mut Vec::new(),
+                        )?
+                        .ok_or("extra or unknown associated type item")?;
                     let ty = self.source_ty(
                         registry,
                         &binding.value,
@@ -18569,7 +18566,7 @@ impl PlanState {
                     )?;
                     equalities.push(LoweredAssociatedEquality {
                         projection: ir::AssociatedTypeProjection {
-                            trait_ref: trait_ref.clone(),
+                            trait_ref: binding_owner,
                             item,
                         },
                         ty,
@@ -19187,7 +19184,27 @@ fn metered_type_equal(
         (ir::Ty::Slice { element: a }, ir::Ty::Slice { element: b }) => {
             metered_type_equal(a, b, budget, depth + 1)
         }
-        (ir::Ty::Dyn(a), ir::Ty::Dyn(b)) => Ok(a.principal == b.principal),
+        (ir::Ty::Dyn(a), ir::Ty::Dyn(b)) => {
+            if a.principal != b.principal
+                || a.args.len() != b.args.len()
+                || a.associated_types.len() != b.associated_types.len()
+            {
+                return Ok(false);
+            }
+            for (left, right) in a.args.iter().zip(b.args.iter()) {
+                if !metered_type_equal(left, right, budget, depth + 1)? {
+                    return Ok(false);
+                }
+            }
+            for ((left_item, left), (right_item, right)) in
+                a.associated_types.iter().zip(b.associated_types.iter())
+            {
+                if left_item != right_item || !metered_type_equal(left, right, budget, depth + 1)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
         (
             ir::Ty::Ref {
                 kind: a,
@@ -19881,6 +19898,7 @@ fn collect_source_params(
     }
     Ok(())
 }
+mod dynamic_objects;
 mod nominal_schema;
 /// One immutable per-body view with a shared canonical application service.
 mod type_check;

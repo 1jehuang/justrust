@@ -332,7 +332,17 @@ impl Encoder<'_> {
             // --- trait objects (snail): `dyn Trait` identity tag b'D' ---
             ir::Ty::Dyn(object) => {
                 self.append(b"D")?;
-                self.declaration(object.principal)
+                self.declaration(object.principal)?;
+                self.count(object.args.len())?;
+                for argument in object.args.iter() {
+                    self.pattern(argument, env, depth + 1)?;
+                }
+                self.count(object.associated_types.len())?;
+                for (item, value) in object.associated_types.iter() {
+                    self.declaration(*item)?;
+                    self.pattern(value, env, depth + 1)?;
+                }
+                Ok(())
             }
             ir::Ty::Never => Err("unsupported associated instance self pattern".into()),
             ir::Ty::AssociatedType(_) => {
@@ -411,7 +421,17 @@ impl Encoder<'_> {
             // --- trait objects (snail): `dyn Trait` identity tag b'D' ---
             ir::Ty::Dyn(object) => {
                 self.append(b"D")?;
-                self.declaration(object.principal)
+                self.declaration(object.principal)?;
+                self.count(object.args.len())?;
+                for argument in object.args.iter() {
+                    self.ty(argument, depth + 1)?;
+                }
+                self.count(object.associated_types.len())?;
+                for (item, value) in object.associated_types.iter() {
+                    self.declaration(*item)?;
+                    self.ty(value, depth + 1)?;
+                }
+                Ok(())
             }
             ir::Ty::Param(_) => Err("generic instance key contains unresolved parameter".into()),
             ir::Ty::AssociatedType(_) => {
@@ -528,6 +548,11 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
             ir::Ty::Array { element, .. } | ir::Ty::Slice { element } => {
                 walk(element, depth + 1, budget)?
             }
+            ir::Ty::Dyn(object) => {
+                for value in object.types() {
+                    walk(value, depth + 1, budget)?;
+                }
+            }
             ir::Ty::Struct(_)
             | ir::Ty::Enum(_)
             | ir::Ty::Int(_)
@@ -536,7 +561,6 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
             | ir::Ty::Str
             | ir::Ty::Bool
             | ir::Ty::Unit
-            | ir::Ty::Dyn(_)
             | ir::Ty::Never => {}
             ir::Ty::Ref { referent, .. }
             | ir::Ty::RawPtr {
@@ -873,7 +897,7 @@ pub(super) fn build(
                     return Err("trait object unsizing operand must be a reference".into());
                 };
                 for slot in closed_facts
-                    .vtable_targets(referent, object.principal)
+                    .object_vtable_targets(referent, object)
                     .map_err(|e| e.into_legacy_diagnostic(budget))?
                 {
                     queue.add(slot, depth + 1, context, budget)?;

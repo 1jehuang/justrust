@@ -59,12 +59,18 @@ struct NormalizationKey {
 }
 
 #[derive(Clone, Debug)]
+enum NormalizationOrigin {
+    Implementation(DeclId),
+    Dynamic(Arc<ir::DynTy>),
+}
+
+#[derive(Clone, Debug)]
 struct NormalizationEvidence {
     world: WorldId,
     key: NormalizationKey,
     membership: ProofEvidence,
     selected_goal: TraitRef,
-    implementation: DeclId,
+    implementation: NormalizationOrigin,
     arguments: Arc<[Ty]>,
     raw_rhs: Ty,
     normal: Ty,
@@ -316,7 +322,52 @@ impl ValidatedTraitWorld {
                 child(referent)?;
             }
             Ty::Dyn(object) => {
-                self.trait_header(object.principal)?;
+                let header = self.trait_header(object.principal)?;
+                if object.args.len().checked_add(1) != Some(header.env.total_arity()) {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "dynamic principal generic arity changed",
+                    ));
+                }
+                for argument in object.args.iter() {
+                    child(argument)?;
+                }
+                let mut previous = None;
+                for (item, value) in object.associated_types.iter() {
+                    let associated = self.associated_header(*item)?;
+                    if item.snapshot != self.registry
+                        || previous.is_some_and(|index| index >= item.index)
+                        || !self.trait_object_implements(
+                            object.principal,
+                            associated.trait_decl,
+                            0,
+                        )?
+                    {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "dynamic associated equality identity or order changed",
+                        ));
+                    }
+                    previous = Some(item.index);
+                    child(value)?;
+                }
+                let applications = self.object_applications(object, &Ty::Unit, env)?;
+                for application in applications {
+                    let owner = self.trait_header(application.declaration)?;
+                    for item in owner.associated_types.iter() {
+                        charged(&self.budget, self.budget.charge_work(1))?;
+                        if !object
+                            .associated_types
+                            .iter()
+                            .any(|(bound, _)| bound == item)
+                        {
+                            return Err(FactsError::invalid(
+                                &self.budget,
+                                "dynamic metadata omitted a required associated equality",
+                            ));
+                        }
+                    }
+                }
             }
             Ty::Struct(value) => {
                 if value.def().id.snapshot != self.registry
@@ -613,7 +664,9 @@ impl ValidatedTraitWorld {
                     }
                     self.validate_ty(argument, env, None, true, depth + 1)?;
                 }
-                if !self.raw_associated_ty_is_closed(ty, depth + 1)? {
+                if !self.raw_associated_ty_is_closed(ty, depth + 1)?
+                    && !matches!(&projection.trait_ref.self_ty, Ty::Dyn(_))
+                {
                     return Err(FactsError::unsupported(
                         &self.budget,
                         "unsupported: rigid generic associated projection",
@@ -653,6 +706,13 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_work(1))?;
         match ty {
             Ty::Param(_) => return Ok(false),
+            Ty::Dyn(object) => {
+                for value in object.types() {
+                    if !self.raw_associated_ty_is_closed(value, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+            }
             Ty::Struct(value) => {
                 for field in value.def().fields.iter() {
                     if !self.raw_associated_ty_is_closed(&field.ty, depth + 1)? {
@@ -1058,6 +1118,26 @@ impl ValidatedTraitWorld {
                     )?),
                 })
             }
+            Ty::Dyn(object) => {
+                let mut arguments = Vec::new();
+                for argument in object.args.iter() {
+                    let normal =
+                        self.normalize_type_in(argument, context, stack, dependencies, depth + 1)?;
+                    push(&self.budget, &mut arguments, normal)?;
+                }
+                let mut associated_types = Vec::new();
+                for (item, value) in object.associated_types.iter() {
+                    let normal =
+                        self.normalize_type_in(value, context, stack, dependencies, depth + 1)?;
+                    push(&self.budget, &mut associated_types, (*item, normal))?;
+                }
+                retain::<ir::DynTy>(&self.budget, 1)?;
+                Ok(Ty::Dyn(Arc::new(ir::DynTy {
+                    principal: object.principal,
+                    args: arguments.into(),
+                    associated_types: associated_types.into(),
+                })))
+            }
             Ty::Struct(_) | Ty::Enum(_) => {
                 self.normalize_nominal_actuals(ty, context.proof.env(), depth, |argument| {
                     self.normalize_type_in(argument, context, stack, dependencies, depth + 1)
@@ -1146,6 +1226,54 @@ impl ValidatedTraitWorld {
             args: projection.trait_ref.args.clone(),
         };
         self.validate_ref_in(&selected_goal, context.proof.env(), None)?;
+        if let Some(raw_rhs) = self.dynamic_associated_binding(
+            &ir::AssociatedTypeProjection {
+                trait_ref: selected_goal.clone(),
+                item: projection.item,
+            },
+            context.proof.env(),
+        )? {
+            let Ty::Dyn(object) = &selected_goal.self_ty else {
+                unreachable!()
+            };
+            let object = object.clone();
+            let membership = match self.prove_in(
+                &Predicate::Implements(selected_goal.clone()),
+                context.proof,
+                &mut stack.obligations,
+            )? {
+                ProofOutcome::Proved(evidence) => evidence,
+                ProofOutcome::NotProven => {
+                    return Err(FactsError::unproved(
+                        &self.budget,
+                        "dynamic projection lost trait membership",
+                    ));
+                }
+            };
+            push(
+                &self.budget,
+                &mut stack.active,
+                (key.clone(), object.principal),
+            )?;
+            let normalized =
+                self.normalize_type_in(&raw_rhs, context, stack, &mut child_dependencies, 0);
+            stack.active.pop();
+            let normal = normalized?;
+            self.validate_ty(&normal, context.proof.env(), None, true, 0)?;
+            let evidence = Arc::new(NormalizationEvidence {
+                world: self.id,
+                key,
+                membership,
+                selected_goal,
+                implementation: NormalizationOrigin::Dynamic(object),
+                arguments: Arc::from([]),
+                raw_rhs,
+                normal,
+                dependencies: child_dependencies.into(),
+            });
+            self.validate_normalization_evidence(&evidence, context)?;
+            return Ok(evidence);
+        }
         if !self.goal_is_closed(&selected_goal, context.proof.env())? {
             return Err(FactsError::unsupported(
                 &self.budget,
@@ -1174,7 +1302,7 @@ impl ValidatedTraitWorld {
                 key,
                 membership,
                 selected_goal: selected_goal.clone(),
-                implementation: closure.provider(),
+                implementation: NormalizationOrigin::Implementation(closure.provider()),
                 arguments: closure.owner_args().into(),
                 raw_rhs,
                 normal,
@@ -1306,7 +1434,7 @@ impl ValidatedTraitWorld {
                 key: key.clone(),
                 membership,
                 selected_goal,
-                implementation,
+                implementation: NormalizationOrigin::Implementation(implementation),
                 arguments,
                 raw_rhs,
                 normal,
@@ -1418,7 +1546,29 @@ impl ValidatedTraitWorld {
             ) if left_kind == right_kind => {
                 return child(left, right);
             }
-            (Ty::Dyn(left), Ty::Dyn(right)) if left.principal == right.principal => {}
+            (Ty::Dyn(left), Ty::Dyn(right))
+                if left.principal == right.principal
+                    && left.args.len() == right.args.len()
+                    && left.associated_types.len() == right.associated_types.len() =>
+            {
+                for (left, right) in left.args.iter().zip(right.args.iter()) {
+                    child(left, right)?;
+                }
+                for ((left_item, left), (right_item, right)) in left
+                    .associated_types
+                    .iter()
+                    .zip(right.associated_types.iter())
+                {
+                    if left_item != right_item {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "dyn substitution changed associated declaration identity",
+                        ));
+                    }
+                    child(left, right)?;
+                }
+                return Ok(());
+            }
             (Ty::Tuple(_), Ty::Tuple(_)) => {}
             (Ty::Struct(left), Ty::Struct(right))
                 if left.def().source_decl == right.def().source_decl => {}
@@ -1488,8 +1638,18 @@ impl ValidatedTraitWorld {
             || evidence.key.staged != context.staged
             || evidence.key.finalized != self.owner_normalization_finalized
             || evidence.membership.0.world != self.id
-            || evidence.membership.0.environment != self.empty.index
-            || evidence.membership.0.phase != FactsPhase::Closed
+            || evidence.membership.0.environment
+                != if matches!(&evidence.implementation, NormalizationOrigin::Dynamic(_)) {
+                    context.proof.predicates.index
+                } else {
+                    self.empty.index
+                }
+            || evidence.membership.0.phase
+                != if matches!(&evidence.implementation, NormalizationOrigin::Dynamic(_)) {
+                    context.proof.phase
+                } else {
+                    FactsPhase::Closed
+                }
             || !self.eq_predicate(
                 &evidence.membership.0.goal,
                 &Predicate::Implements(evidence.selected_goal.clone()),
@@ -1513,7 +1673,7 @@ impl ValidatedTraitWorld {
                 .closure_trait_kind(evidence.selected_goal.declaration)?
                 != Some(*kind)
                 || !closure.supports(*kind)
-                || evidence.implementation != closure.provider()
+                || !matches!(&evidence.implementation, NormalizationOrigin::Implementation(provider) if *provider == closure.provider())
                 || !self.eq_types(&evidence.arguments, closure.owner_args(), 0)?
                 || !self.eq_ty(&evidence.raw_rhs, closure.result(), 0)?
                 || !self.eq_ty(&evidence.normal, closure.result(), 0)?
@@ -1529,11 +1689,71 @@ impl ValidatedTraitWorld {
             }
             return Ok(());
         }
+        let implementation = match &evidence.implementation {
+            NormalizationOrigin::Implementation(declaration) => *declaration,
+            NormalizationOrigin::Dynamic(object) => {
+                if !matches!(evidence.membership.0.origin, ProofOrigin::TraitObject)
+                    || !self.eq_ty(&evidence.selected_goal.self_ty, &Ty::Dyn(object.clone()), 0)?
+                    || !evidence.arguments.is_empty()
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "dynamic normalization lost immutable object membership",
+                    ));
+                }
+                let expected = self
+                    .dynamic_associated_binding(&evidence.key.projection, context.proof.env())?
+                    .ok_or_else(|| {
+                        FactsError::invalid(
+                            &self.budget,
+                            "dynamic normalization lost associated binding",
+                        )
+                    })?;
+                if !self.eq_ty(&expected, &evidence.raw_rhs, 0)? {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "dynamic normalization binding identity changed",
+                    ));
+                }
+                for dependency in evidence.dependencies.iter() {
+                    self.validate_normalization_evidence(dependency, context)?;
+                }
+                let mut replay_stack = NormalizationStack::default();
+                push(
+                    &self.budget,
+                    &mut replay_stack.active,
+                    (evidence.key.clone(), object.principal),
+                )?;
+                let mut replay_dependencies = Vec::new();
+                let normal = self.normalize_type_in(
+                    &expected,
+                    context,
+                    &mut replay_stack,
+                    &mut replay_dependencies,
+                    0,
+                )?;
+                if !self.eq_ty(&normal, &evidence.normal, 0)?
+                    || replay_dependencies.len() != evidence.dependencies.len()
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "dynamic normalization output changed immutable equality",
+                    ));
+                }
+                self.require_associated_assignment_bounds(
+                    evidence.key.projection.item,
+                    &evidence.normal,
+                    context.proof,
+                    &mut Vec::new(),
+                )?;
+                return Ok(());
+            }
+        };
         match &evidence.membership.0.origin {
             ProofOrigin::Implementation {
                 declaration,
                 arguments,
-            } if *declaration == evidence.implementation
+            } if *declaration == implementation
                 && self.eq_types(arguments, &evidence.arguments, 0)? => {}
             _ => {
                 return Err(FactsError::invalid(
@@ -1542,7 +1762,7 @@ impl ValidatedTraitWorld {
                 ));
             }
         }
-        let value = self.associated_value(evidence.implementation, evidence.key.projection.item)?;
+        let value = self.associated_value(implementation, evidence.key.projection.item)?;
         if !self.eq_ty(&evidence.raw_rhs, &value.rhs, 0)? {
             return Err(FactsError::invalid(
                 &self.budget,

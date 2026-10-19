@@ -1026,7 +1026,7 @@ impl ValidatedTraitWorld {
                 "projected required application changed item owner",
             ));
         }
-        if !self.goal_is_closed(goal, context.env())? {
+        if !self.goal_is_closed(goal, context.env())? && !matches!(&goal.self_ty, Ty::Dyn(_)) {
             return Err(FactsError::unsupported(
                 &self.budget,
                 "unsupported: rigid caller projected method application",
@@ -1034,15 +1034,21 @@ impl ValidatedTraitWorld {
         }
         let selection = self.require_in(
             &Predicate::Implements(goal.clone()),
-            ProofContext {
-                predicates: &self.empty,
-                phase: FactsPhase::Closed,
+            if matches!(&goal.self_ty, Ty::Dyn(_)) {
+                context
+            } else {
+                ProofContext {
+                    predicates: &self.empty,
+                    phase: FactsPhase::Closed,
+                }
             },
             &mut Vec::new(),
         )?;
         if !matches!(
             &selection.0.origin,
-            ProofOrigin::Implementation { .. } | ProofOrigin::Closure { .. }
+            ProofOrigin::Implementation { .. }
+                | ProofOrigin::Closure { .. }
+                | ProofOrigin::TraitObject
         ) {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -1143,8 +1149,18 @@ impl ValidatedTraitWorld {
         facts: &ValidatedFacts,
     ) -> Result<ProjectedCarrierBase> {
         if evidence.selection.0.world != self.id
-            || evidence.selection.0.environment != self.empty.index
-            || evidence.selection.0.phase != FactsPhase::Closed
+            || evidence.selection.0.environment
+                != if matches!(&evidence.selection.0.origin, ProofOrigin::TraitObject) {
+                    facts.predicates.index
+                } else {
+                    self.empty.index
+                }
+            || evidence.selection.0.phase
+                != if matches!(&evidence.selection.0.origin, ProofOrigin::TraitObject) {
+                    facts.phase()
+                } else {
+                    FactsPhase::Closed
+                }
             || !self.eq_predicate(
                 &evidence.selection.0.goal,
                 &Predicate::Implements(evidence.goal.clone()),
@@ -1155,9 +1171,21 @@ impl ValidatedTraitWorld {
                 "projected carrier selection changed exact goal authority",
             ));
         }
-        if let ProofOrigin::Closure { .. } = &evidence.selection.0.origin {
+        if matches!(
+            &evidence.selection.0.origin,
+            ProofOrigin::Closure { .. } | ProofOrigin::TraitObject
+        ) {
+            let env = if matches!(&evidence.selection.0.origin, ProofOrigin::TraitObject) {
+                facts.env().clone()
+            } else {
+                self.empty.env.clone()
+            };
+            let mut arguments = Vec::new();
+            for parameter in env.ordered_params() {
+                push(&self.budget, &mut arguments, Ty::Param(parameter))?;
+            }
             let schema = GenericSchema {
-                env: self.empty.env.clone(),
+                env,
                 signature: evidence.signature.clone(),
                 predicates: Arc::from([]),
             };
@@ -1169,7 +1197,7 @@ impl ValidatedTraitWorld {
             let (contract, regions) = self.derive_carriers(&schema.signature, &source_regions)?;
             return Ok(ProjectedCarrierBase {
                 schema,
-                arguments: Arc::from([]),
+                arguments: arguments.into(),
                 origin,
                 retained: DeclarationCarriers {
                     declaration: evidence.item,
@@ -1288,6 +1316,7 @@ impl ValidatedTraitWorld {
         ) {
             (ProofOrigin::Closure { kind: left }, ProofOrigin::Closure { kind: right })
                 if left == right => {}
+            (ProofOrigin::TraitObject, ProofOrigin::TraitObject) => {}
             (
                 ProofOrigin::Implementation {
                     declaration: left,

@@ -500,6 +500,9 @@ cleanup failures.
       dyn compatibility/vtables, unsizing and `?Sized` with authoritative layout
       and receiver adjustments rather than name- or pointer-based permissions.
       Delivered: `&dyn`/`&mut dyn` vtables, unsizing, E0038 (TRAIT-OBJECTS.md).
+      Dynamic principals retain ordered generic actuals and canonical associated
+      equalities, including inherited bindings, through native vtable dispatch.
+      Missing/wrong equalities reject. `Box<dyn>` structural drop remains open.
 - [ ] Complete closures and capture modes, callable traits, function values,
       iterator/for desugaring, async/await/Future state machines and pinning.
       Include capture lifetimes, suspension-safe moves, cancellation and Drop.

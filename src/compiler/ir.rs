@@ -1191,7 +1191,7 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
         (Ty::Tuple(a), Ty::Tuple(b)) => Arc::ptr_eq(a, b),
         (Ty::Struct(a), Ty::Struct(b)) => std::ptr::eq(a.def(), b.def()),
         (Ty::Enum(a), Ty::Enum(b)) => std::ptr::eq(a.def(), b.def()),
-        (Ty::Dyn(a), Ty::Dyn(b)) => a.principal == b.principal,
+        (Ty::Dyn(a), Ty::Dyn(b)) => a == b,
         (Ty::Param(a), Ty::Param(b)) => a == b,
         (Ty::Int(a), Ty::Int(b)) => a == b,
         (Ty::Float(a), Ty::Float(b)) => a == b,
@@ -2624,14 +2624,38 @@ fn substitute_ty_walk(
                 budget,
             )?
         }
-        Ty::Int(_)
-        | Ty::Float(_)
-        | Ty::Char
-        | Ty::Str
-        | Ty::Bool
-        | Ty::Unit
-        | Ty::Dyn(_)
-        | Ty::Never => ty.clone(),
+        Ty::Dyn(object) => {
+            budget.retain_bytes(std::mem::size_of::<DynTy>())?;
+            let mut arguments = Vec::new();
+            for argument in object.args.iter() {
+                budget.retain_bytes(std::mem::size_of::<Ty>())?;
+                arguments.push(substitute_ty_walk(
+                    argument,
+                    env,
+                    args,
+                    caller,
+                    cx,
+                    budget,
+                    depth + 1,
+                )?);
+            }
+            let mut associated_types = Vec::new();
+            for (item, value) in object.associated_types.iter() {
+                budget.retain_bytes(std::mem::size_of::<(DeclId, Ty)>())?;
+                associated_types.push((
+                    *item,
+                    substitute_ty_walk(value, env, args, caller, cx, budget, depth + 1)?,
+                ));
+            }
+            Ty::Dyn(Arc::new(DynTy {
+                principal: object.principal,
+                args: arguments.into(),
+                associated_types: associated_types.into(),
+            }))
+        }
+        Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Str | Ty::Bool | Ty::Unit | Ty::Never => {
+            ty.clone()
+        }
     })
 }
 
@@ -2935,15 +2959,31 @@ fn substitute_callee_metadata(
                 method_args,
             })
         }
-        // Trait object metadata is closed: `dyn P` contains no parameters.
         Callee::Virtual(virtual_call) => {
-            if !virtual_call.call.method_args.is_empty()
-                || !virtual_call.call.trait_ref.args.is_empty()
-            {
-                return Err("unsupported: generic virtual calls".into());
+            if !virtual_call.call.method_args.is_empty() {
+                return Err("unsupported: generic virtual methods".into());
             }
             virtual_call.principal()?;
-            Callee::Virtual(virtual_call.clone())
+            let trait_args = types(&virtual_call.call.trait_ref.args)?;
+            let self_ty = substitute_ty(
+                &virtual_call.call.trait_ref.self_ty,
+                env,
+                args,
+                facts,
+                cx,
+                budget,
+            )?;
+            Callee::Virtual(VirtualCall {
+                call: TraitCall {
+                    trait_ref: TraitRef {
+                        declaration: virtual_call.call.trait_ref.declaration,
+                        self_ty,
+                        args: trait_args,
+                    },
+                    item: virtual_call.call.item,
+                    method_args: Arc::from([]),
+                },
+            })
         }
     };
     Ok(substituted)
@@ -4217,12 +4257,22 @@ pub fn ptr_cast_valid(from: &Ty, to: &Ty) -> bool {
     }
 }
 
-/// Principal trait of a trait object. This milestone admits nongeneric
-/// principal traits without associated types, so the object type is a rigid
-/// metadata leaf identified by its trait declaration alone.
+/// Immutable semantic identity of a trait object. Ordered principal actuals and
+/// resolved associated assignments participate in identity and vtable selection.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DynTy {
     pub principal: DeclId,
+    /// Principal trait actuals in declaration order, excluding erased Self.
+    pub args: Arc<[Ty]>,
+    /// Associated type assignments ordered by resolved declaring item identity.
+    pub associated_types: Arc<[(DeclId, Ty)]>,
+}
+impl DynTy {
+    pub fn types(&self) -> impl Iterator<Item = &Ty> {
+        self.args
+            .iter()
+            .chain(self.associated_types.iter().map(|(_, ty)| ty))
+    }
 }
 
 /// Words of a pointer to `pointee` in the private ABI: two for unsized slice
@@ -4372,6 +4422,7 @@ fn type_metadata_walk(
                 }
                 (6, std::ptr::from_ref(value.def()) as usize)
             }
+            Ty::Dyn(value) => (8, Arc::as_ptr(value) as usize),
             Ty::Param(parameter) => {
                 if let Some(facts) = facts {
                     let FactsCtx::Universal(env) = facts else {
@@ -4386,14 +4437,7 @@ fn type_metadata_walk(
                 }
                 return Ok((false, 0));
             }
-            Ty::Int(_)
-            | Ty::Float(_)
-            | Ty::Char
-            | Ty::Str
-            | Ty::Bool
-            | Ty::Unit
-            | Ty::Dyn(_)
-            | Ty::Never => {
+            Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Str | Ty::Bool | Ty::Unit | Ty::Never => {
                 return Ok((false, 0));
             }
         };
@@ -4486,6 +4530,11 @@ fn type_metadata_walk(
                     }
                 }
             }
+            Ty::Dyn(object) => {
+                for value in object.types() {
+                    child(value)?;
+                }
+            }
             Ty::Param(_)
             | Ty::Int(_)
             | Ty::Float(_)
@@ -4493,7 +4542,6 @@ fn type_metadata_walk(
             | Ty::Str
             | Ty::Bool
             | Ty::Unit
-            | Ty::Dyn(_)
             | Ty::Never => {}
         }
         memo.entries[index].1 = Some((found, height));
@@ -5802,7 +5850,7 @@ fn ref_types_equal(
                 x == y && child(a, b)?
             }
             (Ty::Slice { element: a }, Ty::Slice { element: b }) => child(a, b)?,
-            (Ty::Dyn(a), Ty::Dyn(b)) => a.principal == b.principal,
+            (Ty::Dyn(a), Ty::Dyn(b)) => a == b,
             (
                 Ty::Ref {
                     kind: a,
@@ -6378,7 +6426,7 @@ fn pattern_types_equal(a: &Ty, b: &Ty, work: &mut usize) -> Result<bool, String>
                     pending.push((a, b, depth + 1));
                 }
             }
-            (Ty::Dyn(a), Ty::Dyn(b)) if a.principal == b.principal => {}
+            (Ty::Dyn(a), Ty::Dyn(b)) if a == b => {}
             (Ty::Char, Ty::Char)
             | (Ty::Str, Ty::Str)
             | (Ty::Bool, Ty::Bool)
@@ -8406,6 +8454,18 @@ impl CheckedFunction {
                         Ty::Dyn(_) | Ty::Slice { .. } | Ty::Never | Ty::AssociatedType(_)
                     ) {
                         return Err("unsupported: trait object unsizing source".into());
+                    }
+                    let Ty::Dyn(object) = object.as_ref() else {
+                        unreachable!()
+                    };
+                    if let Some(authority) = facts.validated() {
+                        authority
+                            .prove_dynamic_unsize(concrete, object)
+                            .map_err(|error| error.into_legacy_diagnostic(authority.budget()))?;
+                    } else if !object.args.is_empty() || !object.associated_types.is_empty() {
+                        return Err(
+                            "dynamic generic unsizing requires validated trait facts".into()
+                        );
                     }
                     if value.completion != source.completion {
                         return Err("trait object unsizing completion mismatch".into());

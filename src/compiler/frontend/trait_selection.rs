@@ -186,6 +186,17 @@ impl PlanCtx {
         let mut applications = BudgetVec::new(self.program.names.budget(), Storage::Temporary)
             .map_err(selection_token_error)?;
         budget.charge_work(1)?;
+        if let ir::Ty::Dyn(object) = owner {
+            for application in facts
+                .dynamic_applications(object)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?
+            {
+                if application.declaration == trait_id {
+                    self.push_trait_application(&mut applications, application, budget)?;
+                }
+            }
+            return Ok(applications);
+        }
         if self.param_env(trait_id)?.arity() == 1 {
             self.push_trait_application(
                 &mut applications,

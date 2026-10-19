@@ -376,7 +376,9 @@ impl PlanState {
                 };
                 ir::Ty::Ref {
                     kind: *kind,
-                    referent: Arc::new(registry.trait_object_ty(trait_path, budget)?),
+                    referent: Arc::new(
+                        self.source_dynamic_type(registry, trait_path, bindings, caller, budget)?,
+                    ),
                 }
             }
             Type::Ref { kind, referent, .. } => {

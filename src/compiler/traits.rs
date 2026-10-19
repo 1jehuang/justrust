@@ -14,6 +14,7 @@ mod associated_types;
 mod carrier_regions;
 mod catalog;
 mod closures;
+mod dynamic_objects;
 mod equality;
 mod generic_methods;
 mod impl_constraints;
@@ -2106,6 +2107,10 @@ impl ValidatedTraitWorld {
                         "foreign trait object principal",
                     ));
                 }
+                self.validate_ty_metadata_in(ty, env, depth)?;
+                for value in object.types() {
+                    child(value, TypeUse::Root)?;
+                }
             }
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => {}
         }
@@ -2465,7 +2470,21 @@ impl ValidatedTraitWorld {
                 },
             ) => Ok(al == bl && self.eq_ty(a, b, depth + 1)?),
             (Ty::Slice { element: a }, Ty::Slice { element: b }) => self.eq_ty(a, b, depth + 1),
-            (Ty::Dyn(a), Ty::Dyn(b)) => Ok(a.principal == b.principal),
+            (Ty::Dyn(a), Ty::Dyn(b)) => {
+                if a.principal != b.principal
+                    || a.associated_types.len() != b.associated_types.len()
+                    || !self.eq_types(&a.args, &b.args, depth + 1)?
+                {
+                    return Ok(false);
+                }
+                for ((ai, av), (bi, bv)) in a.associated_types.iter().zip(b.associated_types.iter())
+                {
+                    if ai != bi || !self.eq_ty(av, bv, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
             (
                 Ty::Ref {
                     kind: a,
@@ -3307,10 +3326,14 @@ impl ValidatedTraitWorld {
     ) -> Result<Arc<CarrierContractView>> {
         self.check_facts(facts, true)?;
         self.check_context(ProofContext::from_facts(facts))?;
-        if let SignatureSubject::Call(Callee::TraitItem(call)) = subject
+        if let SignatureSubject::Call(
+            Callee::TraitItem(call) | Callee::Virtual(ir::VirtualCall { call }),
+        ) = subject
             && self.schema_contains_projection(&self.item_header(call.item)?.schema)?
         {
-            if !self.goal_is_closed(&call.trait_ref, facts.env())? {
+            if !self.goal_is_closed(&call.trait_ref, facts.env())?
+                && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
+            {
                 return self.equality_required_carrier_contract(call, facts);
             }
             return self.projected_carrier_contract(call, facts);
@@ -3909,6 +3932,26 @@ impl ValidatedTraitWorld {
             ) if al == bl => self.collect_nominal_mappings(a, b, output, depth + 1)?,
             (Ty::Slice { element: a }, Ty::Slice { element: b }) => {
                 self.collect_nominal_mappings(a, b, output, depth + 1)?;
+            }
+            (Ty::Dyn(a), Ty::Dyn(b))
+                if a.principal == b.principal
+                    && a.args.len() == b.args.len()
+                    && a.associated_types.len() == b.associated_types.len() =>
+            {
+                for (a, b) in a.args.iter().zip(b.args.iter()) {
+                    self.collect_nominal_mappings(a, b, output, depth + 1)?;
+                }
+                for ((a_item, a), (b_item, b)) in
+                    a.associated_types.iter().zip(b.associated_types.iter())
+                {
+                    if a_item != b_item {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "dynamic carrier changed associated identity",
+                        ));
+                    }
+                    self.collect_nominal_mappings(a, b, output, depth + 1)?;
+                }
             }
             (Ty::Struct(a), Ty::Struct(b))
                 if a.def().source_decl == b.def().source_decl
@@ -5982,10 +6025,10 @@ impl ValidatedTraitWorld {
         {
             // Trait objects implement exactly their principal and its
             // supertraits (never through a user impl: E0371 overlap aside).
-            if goal.args.is_empty()
-                && self.trait_object_implements(object.principal, goal.declaration, 0)?
-            {
-                return self.evidence(predicate, facts, ProofOrigin::TraitObject);
+            for application in self.object_applications(object, &goal.self_ty, facts.env())? {
+                if self.eq_predicate(&Predicate::Implements(application), predicate)? {
+                    return self.evidence(predicate, facts, ProofOrigin::TraitObject);
+                }
             }
         }
         self.prove_implementation_in(predicate, facts, active)
@@ -6491,6 +6534,7 @@ impl TraitCx for ValidatedTraitWorld {
         self.check_facts(facts, true)?;
         if self.schema_contains_projection(&self.item_header(call.item)?.schema)?
             && !self.goal_is_closed(&call.trait_ref, facts.env())?
+            && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
         {
             return Ok(self
                 .instantiate_equality_required_item(call, facts)?
@@ -6520,6 +6564,7 @@ impl TraitCx for ValidatedTraitWorld {
         let caller = ProofContext::from_facts(facts);
         if self.schema_contains_projection(&self.item_header(call.item)?.schema)?
             && !self.goal_is_closed(&call.trait_ref, facts.env())?
+            && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
         {
             let application = self.instantiate_equality_required_item(call, facts)?;
             let required = self.equality_required_carrier_contract(call, facts)?;
@@ -6544,7 +6589,11 @@ impl TraitCx for ValidatedTraitWorld {
         {
             let evidence = self.require_in(&predicate, caller, &mut Vec::new())?;
             return Ok(ResolvedTraitCall {
-                callee: Callee::TraitItem(call.clone()),
+                callee: if matches!(&call.trait_ref.self_ty, Ty::Dyn(_)) {
+                    Callee::Virtual(ir::VirtualCall { call: call.clone() })
+                } else {
+                    Callee::TraitItem(call.clone())
+                },
                 signature,
                 _evidence: evidence,
                 _refinement: None,
@@ -6569,6 +6618,32 @@ impl TraitCx for ValidatedTraitWorld {
                 &self.budget,
                 "dispatch evidence does not prove the exact goal",
             ));
+        }
+        if matches!(&evidence.0.origin, ProofOrigin::TraitObject) {
+            let Ty::Dyn(object) = &call.trait_ref.self_ty else {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "dynamic dispatch lost object identity",
+                ));
+            };
+            let methods = facts.object_vtable_methods(object)?;
+            if !methods
+                .iter()
+                .any(|(application, item)| application == &call.trait_ref && *item == call.item)
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "dynamic dispatch item not in exact object vtable",
+                ));
+            }
+            return Ok(ResolvedTraitCall {
+                callee: Callee::Virtual(ir::VirtualCall { call: call.clone() }),
+                signature,
+                _evidence: evidence,
+                _refinement: None,
+                _topology: topology,
+                _required: None,
+            });
         }
         let mut target = None;
         if let ProofOrigin::Closure { kind } = &evidence.0.origin {

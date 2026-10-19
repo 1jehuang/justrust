@@ -363,6 +363,9 @@ pub struct Object {
 /// principal's `vtable_methods` slot order. Identical vtables are shared.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Vtable {
+    /// Exact resolved identities prevent distinct associated assignments
+    /// from sharing an otherwise identical table.
+    pub identity: (ir::Ty, ir::DynTy),
     pub drop: Option<String>,
     pub size: u64,
     pub align: u64,
@@ -886,11 +889,11 @@ impl<'a> Emitter<'a> {
     /// rax = address of an exactly shared `&[T]` whole-local carrier.
     /// Closed vtable of concrete Sized `concrete` for `principal`, resolved
     /// only through this function's sealed closed facts (never by name).
-    fn vtable(&mut self, concrete: &ir::Ty, principal: ir::DeclId) -> Result<Vtable, String> {
+    fn vtable(&mut self, concrete: &ir::Ty, object: &ir::DynTy) -> Result<Vtable, String> {
         let facts = self.concrete.facts();
         let budget = facts.budget();
         let targets = facts
-            .vtable_targets(concrete, principal)
+            .object_vtable_targets(concrete, object)
             .map_err(|e| e.into_legacy_diagnostic(budget))?;
         let mut methods = Vec::with_capacity(targets.len());
         for target in &targets {
@@ -924,6 +927,7 @@ impl<'a> Emitter<'a> {
         };
         let size = u64::try_from(value_size(concrete)?).map_err(|_| "vtable size")?;
         Ok(Vtable {
+            identity: (concrete.clone(), object.clone()),
             drop,
             size,
             align: 8,
@@ -2627,15 +2631,12 @@ impl Emitter<'_> {
                 self.literal_output(&output.text, output.stream, output.newline)?;
             }
             cfg::Rvalue::Str(text) => self.str_literal(text)?,
-            cfg::Rvalue::RefToDyn {
-                reference,
-                principal,
-            } => {
+            cfg::Rvalue::RefToDyn { reference, object } => {
                 // The operand is a thin `&T`/`&mut T` (rax = data pointer).
                 let ir::Ty::Ref { referent, .. } = self.function().operand_ty(reference)? else {
                     return Err("trait object unsizing requires a reference operand".into());
                 };
-                let vtable = self.vtable(&referent, *principal)?;
+                let vtable = self.vtable(&referent, object)?;
                 self.operand(reference)?;
                 let base = self.aggregate_scratch;
                 self.bytes(&[0x48, 0x89, 0x85]); // mov [rbp+base], rax (data)
@@ -2939,17 +2940,23 @@ impl Emitter<'_> {
                     ir::Callee::Direct(_) => None,
                     ir::Callee::Virtual(virtual_call) => {
                         let principal = virtual_call.principal()?;
-                        let slots =
-                            self.concrete
-                                .facts()
-                                .vtable_methods(principal)
-                                .map_err(|e| {
-                                    e.into_legacy_diagnostic(self.concrete.facts().budget())
-                                })?;
+                        let ir::Ty::Dyn(object) = &virtual_call.call.trait_ref.self_ty else {
+                            return Err("virtual call has no exact dynamic object type".into());
+                        };
+                        let slots = self
+                            .concrete
+                            .facts()
+                            .object_vtable_methods(object)
+                            .map_err(|e| {
+                                e.into_legacy_diagnostic(self.concrete.facts().budget())
+                            })?;
                         let slot = slots
                             .iter()
-                            .position(|(_, item)| *item == virtual_call.call.item)
-                            .ok_or("virtual call item is not a vtable slot")?;
+                            .position(|(application, item)| {
+                                *item == virtual_call.call.item
+                                    && application == &virtual_call.call.trait_ref
+                            })
+                            .ok_or("virtual call item is not an exact vtable application slot")?;
                         if signature.params.first().and_then(trait_object_ref) != Some(principal) {
                             return Err("virtual call receiver is not the object carrier".into());
                         }

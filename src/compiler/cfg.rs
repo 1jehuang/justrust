@@ -565,7 +565,7 @@ pub enum Rvalue {
     /// of the operand's exact referent type for principal `P`.
     RefToDyn {
         reference: Operand,
-        principal: ir::DeclId,
+        object: std::sync::Arc<ir::DynTy>,
     },
     /// Builtin length of exactly shared `&[u8]`, result `usize`. Grants no
     /// storage authority and performs no read through the reference.
@@ -2281,10 +2281,7 @@ impl Function {
                     }),
                 })
             }
-            Rvalue::RefToDyn {
-                reference,
-                principal,
-            } => {
+            Rvalue::RefToDyn { reference, object } => {
                 let Ty::Ref { kind, referent } = self.operand_ty_with_facts(reference, facts)?
                 else {
                     return Err("CFG trait object unsizing requires a reference".into());
@@ -2294,9 +2291,7 @@ impl Function {
                 }
                 Ok(Ty::Ref {
                     kind,
-                    referent: std::sync::Arc::new(Ty::Dyn(std::sync::Arc::new(ir::DynTy {
-                        principal: *principal,
-                    }))),
+                    referent: std::sync::Arc::new(Ty::Dyn(object.clone())),
                 })
             }
             Rvalue::SliceLen { slice } => {
@@ -4117,14 +4112,11 @@ impl Lowerer<'_> {
                 let Ty::Dyn(object) = referent.as_ref() else {
                     return Err("trait object unsizing result must be a trait object".into());
                 };
-                let principal = object.principal;
+                let object = object.clone();
                 let reference = self.expression(*reference)?;
                 self.assign(
                     destination.clone(),
-                    Rvalue::RefToDyn {
-                        reference,
-                        principal,
-                    },
+                    Rvalue::RefToDyn { reference, object },
                     origin,
                 );
             }

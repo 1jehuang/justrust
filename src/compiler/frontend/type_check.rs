@@ -6873,8 +6873,9 @@ impl<'a> Checker<'a> {
         value: ir::ExprId,
         expected: &ir::Ty,
     ) -> Result<ir::ExprId, String> {
-        let (want_kind, principal) =
+        let (want_kind, object) =
             trait_object_target(expected).ok_or("trait object coercion target")?;
+        let principal = object.principal;
         let source = &self.exprs[value.0];
         let ir::Ty::Ref {
             kind: have_kind,
@@ -6913,7 +6914,7 @@ impl<'a> Checker<'a> {
         let goal = ir::Predicate::Implements(ir::TraitRef {
             declaration: principal,
             self_ty: referent.clone(),
-            args: Arc::from([]),
+            args: object.args.clone(),
         });
         match facts
             .service()
@@ -6928,6 +6929,9 @@ impl<'a> Checker<'a> {
                 ));
             }
         }
+        facts
+            .prove_dynamic_unsize(&referent, &object)
+            .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?;
         let completion = source.completion;
         let id = ir::ExprId(self.exprs.len());
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
@@ -11206,14 +11210,14 @@ pub(super) fn range_pattern_test(
 }
 
 /// `&dyn P` / `&mut dyn P` coercion target: (reference kind, principal).
-pub(super) fn trait_object_target(ty: &ir::Ty) -> Option<(ir::BorrowKind, ir::DeclId)> {
+pub(super) fn trait_object_target(ty: &ir::Ty) -> Option<(ir::BorrowKind, Arc<ir::DynTy>)> {
     let ir::Ty::Ref { kind, referent } = ty else {
         return None;
     };
     let ir::Ty::Dyn(object) = referent.as_ref() else {
         return None;
     };
-    Some((*kind, object.principal))
+    Some((*kind, object.clone()))
 }
 
 #[cfg(test)]

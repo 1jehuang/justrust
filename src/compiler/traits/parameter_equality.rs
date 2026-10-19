@@ -420,7 +420,8 @@ impl ValidatedTraitWorld {
         if let EqualityResultSubject::Required(call) = &view.result_subject
             && self.schema_contains_projection(&raw)?
         {
-            let closed = self.goal_is_closed(&call.trait_ref, facts.env())?;
+            let closed = self.goal_is_closed(&call.trait_ref, facts.env())?
+                || matches!(&call.trait_ref.self_ty, Ty::Dyn(_));
             if (closed && view.projected.is_none()) || (!closed && view.equality_required.is_none())
             {
                 return Err(FactsError::invalid(
@@ -438,6 +439,7 @@ impl ValidatedTraitWorld {
         if let EqualityResultSubject::Required(call) = &view.result_subject
             && self.schema_contains_projection(&raw)?
             && !self.goal_is_closed(&call.trait_ref, facts.env())?
+            && !matches!(&call.trait_ref.self_ty, Ty::Dyn(_))
         {
             let application = self.instantiate_equality_required_item(call, facts)?;
             if !self.eq_signature(&application.instantiated.signature, &view.result_signature)? {
