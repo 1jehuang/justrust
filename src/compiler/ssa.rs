@@ -5,9 +5,9 @@
 //! global budget. Graph nodes (`SSA`, `LOCAL_OPT`, `FRAGMENT`) will wrap these
 //! functions once compiler facts are typed graph outputs (OPTIMIZATION.md 8a).
 //!
-//! Form: a CFG of blocks with block parameters instead of phi nodes. Block 0 is
+//! Form: a CFG of blocks with block parameters instead of phi nodes. SsaBlock 0 is
 //! the entry and its parameters are the function parameters. Every instruction
-//! defines exactly one value. Value and block IDs are local to one function and
+//! defines exactly one value. SsaValue and block IDs are local to one function and
 //! carry no meaning: `hash::canonical` renumbers them, so equal bodies hash
 //! equally regardless of construction order.
 //!
@@ -19,30 +19,63 @@
 
 pub mod eval;
 pub mod hash;
+pub mod inline;
 pub mod interp;
+pub mod lower;
+pub mod machine;
 pub mod opt;
 pub mod verify;
+
+/// Optimization mode: an explicit, immutable compile input (OPTIMIZATION.md
+/// section 6). Never read from process state inside the compiler; the CLI maps
+/// `JR_OPT` onto it. Part of every optimizer fact's identity via the snapshot.
+///
+/// The library default stays `Off` until a measured default promotion: graph
+/// schema tests pin the BUILD node set, and the stack emitter remains the
+/// reference. The `jr-rust` CLI defaults to `Adaptive`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum OptMode {
+    /// Only the stack emitter. No optimizer node is demanded.
+    #[default]
+    Off,
+    /// Iteration goal. Currently identical to `Final`: the adaptive background
+    /// scheduler is not implemented yet.
+    Adaptive,
+    /// Deterministic full optimization.
+    Final,
+}
+
+impl OptMode {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "off" | "0" => Some(Self::Off),
+            "adaptive" => Some(Self::Adaptive),
+            "final" => Some(Self::Final),
+            _ => None,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Value(pub u32);
+pub struct SsaValue(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Block(pub u32);
+pub struct SsaBlock(pub u32);
 
-/// Callee reference. Inside the graph this becomes a canonical item identity.
+/// SsaCallee reference. Inside the graph this becomes a canonical item identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FuncRef(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct IntTy {
+pub struct SsaIntTy {
     bits: u8,
     signed: bool,
 }
 
-impl IntTy {
+impl SsaIntTy {
     pub const I8: Self = Self::of(8, true);
     pub const I16: Self = Self::of(16, true);
     pub const I32: Self = Self::of(32, true);
@@ -81,19 +114,19 @@ impl IntTy {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Ty {
+pub enum SsaTy {
     Unit,
     Bool,
-    Int(IntTy),
+    Int(SsaIntTy),
 }
 
-impl Ty {
+impl SsaTy {
     /// Largest valid raw bit pattern for a constant of this type.
     pub fn max_bits(self) -> u128 {
         match self {
-            Ty::Unit => 0,
-            Ty::Bool => 1,
-            Ty::Int(int) => int.mask(),
+            SsaTy::Unit => 0,
+            SsaTy::Bool => 1,
+            SsaTy::Int(int) => int.mask(),
         }
     }
 }
@@ -163,6 +196,9 @@ pub enum PanicKind {
     DivOverflow,
     RemOverflow,
     Unreachable,
+    /// Explicit `panic!` with message index into the owning `lower::Lowered`
+    /// panic table. Never produced by evaluation.
+    Message(u32),
 }
 
 impl PanicKind {
@@ -179,6 +215,7 @@ impl PanicKind {
             PanicKind::DivOverflow => "attempt to divide with overflow",
             PanicKind::RemOverflow => "attempt to calculate the remainder with overflow",
             PanicKind::Unreachable => "internal error: entered unreachable code",
+            PanicKind::Message(_) => "explicit panic",
         }
     }
 }
@@ -186,45 +223,39 @@ impl PanicKind {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum InstKind {
     /// `bits` is the raw pattern, at most `ty.max_bits()`.
-    Const {
-        ty: Ty,
-        bits: u128,
-    },
+    Const { ty: SsaTy, bits: u128 },
     Binary {
         op: BinOp,
         overflow: Overflow,
-        lhs: Value,
-        rhs: Value,
+        lhs: SsaValue,
+        rhs: SsaValue,
     },
     Unary {
         op: UnOp,
         overflow: Overflow,
-        value: Value,
+        value: SsaValue,
     },
     Cmp {
         op: CmpOp,
-        lhs: Value,
-        rhs: Value,
+        lhs: SsaValue,
+        rhs: SsaValue,
     },
     /// Rust `as` from an integer or bool to an integer type.
-    Cast {
-        to: IntTy,
-        value: Value,
-    },
+    Cast { to: SsaIntTy, value: SsaValue },
     Select {
-        cond: Value,
-        then: Value,
-        otherwise: Value,
+        cond: SsaValue,
+        then: SsaValue,
+        otherwise: SsaValue,
     },
     Call {
         callee: FuncRef,
-        args: Vec<Value>,
+        args: Vec<SsaValue>,
     },
 }
 
 impl InstKind {
     /// Operands in a fixed order, used by verification, hashing and DCE.
-    pub fn operands(&self) -> Vec<Value> {
+    pub fn operands(&self) -> Vec<SsaValue> {
         match self {
             InstKind::Const { .. } => Vec::new(),
             InstKind::Binary { lhs, rhs, .. } | InstKind::Cmp { lhs, rhs, .. } => {
@@ -240,7 +271,7 @@ impl InstKind {
         }
     }
 
-    pub fn operands_mut(&mut self) -> Vec<&mut Value> {
+    pub fn operands_mut(&mut self) -> Vec<&mut SsaValue> {
         match self {
             InstKind::Const { .. } => Vec::new(),
             InstKind::Binary { lhs, rhs, .. } | InstKind::Cmp { lhs, rhs, .. } => {
@@ -259,56 +290,56 @@ impl InstKind {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Inst {
-    pub result: Value,
+    pub result: SsaValue,
     pub kind: InstKind,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Target {
-    pub block: Block,
-    pub args: Vec<Value>,
+pub struct SsaTarget {
+    pub block: SsaBlock,
+    pub args: Vec<SsaValue>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Terminator {
-    Jump(Target),
+pub enum SsaTerminator {
+    Jump(SsaTarget),
     Branch {
-        cond: Value,
-        then: Target,
-        otherwise: Target,
+        cond: SsaValue,
+        then: SsaTarget,
+        otherwise: SsaTarget,
     },
-    Return(Value),
+    Return(SsaValue),
     Panic(PanicKind),
 }
 
-impl Terminator {
+impl SsaTerminator {
     /// Successor targets in canonical order (then before otherwise).
-    pub fn targets(&self) -> Vec<&Target> {
+    pub fn targets(&self) -> Vec<&SsaTarget> {
         match self {
-            Terminator::Jump(target) => vec![target],
-            Terminator::Branch {
+            SsaTerminator::Jump(target) => vec![target],
+            SsaTerminator::Branch {
                 then, otherwise, ..
             } => vec![then, otherwise],
-            Terminator::Return(_) | Terminator::Panic(_) => Vec::new(),
+            SsaTerminator::Return(_) | SsaTerminator::Panic(_) => Vec::new(),
         }
     }
 
-    pub fn targets_mut(&mut self) -> Vec<&mut Target> {
+    pub fn targets_mut(&mut self) -> Vec<&mut SsaTarget> {
         match self {
-            Terminator::Jump(target) => vec![target],
-            Terminator::Branch {
+            SsaTerminator::Jump(target) => vec![target],
+            SsaTerminator::Branch {
                 then, otherwise, ..
             } => vec![then, otherwise],
-            Terminator::Return(_) | Terminator::Panic(_) => Vec::new(),
+            SsaTerminator::Return(_) | SsaTerminator::Panic(_) => Vec::new(),
         }
     }
 
     /// Every value read by the terminator, including jump arguments.
-    pub fn operands(&self) -> Vec<Value> {
+    pub fn operands(&self) -> Vec<SsaValue> {
         let mut values = match self {
-            Terminator::Branch { cond, .. } => vec![*cond],
-            Terminator::Return(value) => vec![*value],
-            Terminator::Jump(_) | Terminator::Panic(_) => Vec::new(),
+            SsaTerminator::Branch { cond, .. } => vec![*cond],
+            SsaTerminator::Return(value) => vec![*value],
+            SsaTerminator::Jump(_) | SsaTerminator::Panic(_) => Vec::new(),
         };
         for target in self.targets() {
             values.extend_from_slice(&target.args);
@@ -316,10 +347,10 @@ impl Terminator {
         values
     }
 
-    pub fn operands_mut(&mut self) -> Vec<&mut Value> {
+    pub fn operands_mut(&mut self) -> Vec<&mut SsaValue> {
         match self {
-            Terminator::Jump(target) => target.args.iter_mut().collect(),
-            Terminator::Branch {
+            SsaTerminator::Jump(target) => target.args.iter_mut().collect(),
+            SsaTerminator::Branch {
                 cond,
                 then,
                 otherwise,
@@ -329,41 +360,49 @@ impl Terminator {
                 values.extend(otherwise.args.iter_mut());
                 values
             }
-            Terminator::Return(value) => vec![value],
-            Terminator::Panic(_) => Vec::new(),
+            SsaTerminator::Return(value) => vec![value],
+            SsaTerminator::Panic(_) => Vec::new(),
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BlockData {
-    pub params: Vec<(Value, Ty)>,
+    pub params: Vec<(SsaValue, SsaTy)>,
     pub insts: Vec<Inst>,
-    pub term: Terminator,
+    pub term: SsaTerminator,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Signature {
-    pub params: Vec<Ty>,
-    pub ret: Ty,
+pub struct SsaSignature {
+    pub params: Vec<SsaTy>,
+    pub ret: SsaTy,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Function {
-    pub params: Vec<Ty>,
-    pub ret: Ty,
+pub struct SsaPanicText {
+    pub message: String,
+    pub location: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SsaFunction {
+    pub params: Vec<SsaTy>,
+    pub ret: SsaTy,
     pub blocks: Vec<BlockData>,
+    /// Explicit panic diagnostics referenced by `PanicKind::Message`.
+    pub panics: Vec<SsaPanicText>,
 }
 
-impl Function {
-    pub fn signature(&self) -> Signature {
-        Signature {
+impl SsaFunction {
+    pub fn signature(&self) -> SsaSignature {
+        SsaSignature {
             params: self.params.clone(),
             ret: self.ret,
         }
     }
 
-    pub fn block(&self, block: Block) -> Option<&BlockData> {
+    pub fn block(&self, block: SsaBlock) -> Option<&BlockData> {
         self.blocks.get(block.0 as usize)
     }
 
@@ -388,7 +427,7 @@ impl Function {
     /// Blocks reachable from the entry in reverse postorder. Successors are
     /// visited in canonical order, so the result depends only on structure.
     /// Out-of-range targets are skipped; the verifier reports them.
-    pub fn reverse_postorder(&self) -> Vec<Block> {
+    pub fn reverse_postorder(&self) -> Vec<SsaBlock> {
         let count = self.blocks.len();
         if count == 0 {
             return Vec::new();
@@ -407,7 +446,7 @@ impl Function {
                     stack.push((successor, 0));
                 }
             } else {
-                postorder.push(Block(block as u32));
+                postorder.push(SsaBlock(block as u32));
                 stack.pop();
             }
         }
@@ -420,33 +459,34 @@ impl Function {
 /// convenience. In the graph, callees are separate typed outputs.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Module {
-    pub functions: Vec<Function>,
+    pub functions: Vec<SsaFunction>,
 }
 
 impl Module {
-    pub fn function(&self, callee: FuncRef) -> Option<&Function> {
+    pub fn function(&self, callee: FuncRef) -> Option<&SsaFunction> {
         self.functions.get(callee.0 as usize)
     }
 
-    pub fn signature(&self, callee: FuncRef) -> Option<Signature> {
-        self.function(callee).map(Function::signature)
+    pub fn signature(&self, callee: FuncRef) -> Option<SsaSignature> {
+        self.function(callee).map(SsaFunction::signature)
     }
 }
 
 /// Incremental construction with fresh IDs. New blocks end in an
 /// `Unreachable` panic until terminated.
 pub struct Builder {
-    function: Function,
+    function: SsaFunction,
     next_value: u32,
 }
 
 impl Builder {
-    pub fn new(params: Vec<Ty>, ret: Ty) -> (Self, Vec<Value>) {
+    pub fn new(params: Vec<SsaTy>, ret: SsaTy) -> (Self, Vec<SsaValue>) {
         let mut builder = Builder {
-            function: Function {
+            function: SsaFunction {
                 params: params.clone(),
                 ret,
                 blocks: Vec::new(),
+                panics: Vec::new(),
             },
             next_value: 0,
         };
@@ -454,25 +494,25 @@ impl Builder {
         (builder, values)
     }
 
-    fn fresh(&mut self) -> Value {
-        let value = Value(self.next_value);
+    fn fresh(&mut self) -> SsaValue {
+        let value = SsaValue(self.next_value);
         self.next_value += 1;
         value
     }
 
-    pub fn block(&mut self, params: &[Ty]) -> (Block, Vec<Value>) {
-        let block = Block(self.function.blocks.len() as u32);
-        let params: Vec<(Value, Ty)> = params.iter().map(|ty| (self.fresh(), *ty)).collect();
+    pub fn block(&mut self, params: &[SsaTy]) -> (SsaBlock, Vec<SsaValue>) {
+        let block = SsaBlock(self.function.blocks.len() as u32);
+        let params: Vec<(SsaValue, SsaTy)> = params.iter().map(|ty| (self.fresh(), *ty)).collect();
         let values = params.iter().map(|(value, _)| *value).collect();
         self.function.blocks.push(BlockData {
             params,
             insts: Vec::new(),
-            term: Terminator::Panic(PanicKind::Unreachable),
+            term: SsaTerminator::Panic(PanicKind::Unreachable),
         });
         (block, values)
     }
 
-    pub fn inst(&mut self, block: Block, kind: InstKind) -> Value {
+    pub fn inst(&mut self, block: SsaBlock, kind: InstKind) -> SsaValue {
         let result = self.fresh();
         self.function.blocks[block.0 as usize]
             .insts
@@ -480,23 +520,44 @@ impl Builder {
         result
     }
 
-    pub fn constant(&mut self, block: Block, ty: Ty, bits: u128) -> Value {
+    pub fn constant(&mut self, block: SsaBlock, ty: SsaTy, bits: u128) -> SsaValue {
         self.inst(block, InstKind::Const { ty, bits })
     }
 
-    pub fn terminate(&mut self, block: Block, term: Terminator) {
+    pub fn terminate(&mut self, block: SsaBlock, term: SsaTerminator) {
         self.function.blocks[block.0 as usize].term = term;
     }
 
-    pub fn finish(self) -> Function {
+    /// Intern an explicit panic diagnostic, returning its terminator kind.
+    pub fn panic_text(&mut self, message: String, location: String) -> PanicKind {
+        let text = SsaPanicText { message, location };
+        let index = match self.function.panics.iter().position(|t| *t == text) {
+            Some(index) => index,
+            None => {
+                self.function.panics.push(text);
+                self.function.panics.len() - 1
+            }
+        };
+        PanicKind::Message(index as u32)
+    }
+
+    pub fn finish(self) -> SsaFunction {
         self.function
+    }
+
+    pub fn params_of(&self, block: SsaBlock) -> Vec<SsaValue> {
+        self.function.blocks[block.0 as usize]
+            .params
+            .iter()
+            .map(|(value, _)| *value)
+            .collect()
     }
 }
 
-pub fn jump(block: Block, args: Vec<Value>) -> Terminator {
-    Terminator::Jump(Target { block, args })
+pub fn jump(block: SsaBlock, args: Vec<SsaValue>) -> SsaTerminator {
+    SsaTerminator::Jump(SsaTarget { block, args })
 }
 
-pub fn target(block: Block, args: Vec<Value>) -> Target {
-    Target { block, args }
+pub fn target(block: SsaBlock, args: Vec<SsaValue>) -> SsaTarget {
+    SsaTarget { block, args }
 }

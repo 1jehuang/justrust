@@ -1,11 +1,11 @@
 //! The single definition of SSA instruction semantics. Both the interpreter and
 //! constant folding call these functions, so a fold can never disagree with
 //! execution. Values are raw bit patterns masked to their type's width.
-use super::{BinOp, CmpOp, IntTy, Overflow, PanicKind, Ty, UnOp};
+use super::{BinOp, CmpOp, Overflow, PanicKind, SsaIntTy, SsaTy, UnOp};
 
 /// Sign-extend (signed) or zero-extend (unsigned) a raw pattern to i128 space.
 /// For u128 the result is the same bit pattern reinterpreted.
-fn widen(int: IntTy, bits: u128) -> i128 {
+fn widen(int: SsaIntTy, bits: u128) -> i128 {
     let bits = bits & int.mask();
     if int.signed() && int.bits() < 128 {
         let shift = 128 - u32::from(int.bits());
@@ -15,16 +15,16 @@ fn widen(int: IntTy, bits: u128) -> i128 {
     }
 }
 
-fn int_of(ty: Ty) -> Option<IntTy> {
+fn int_of(ty: SsaTy) -> Option<SsaIntTy> {
     match ty {
-        Ty::Int(int) => Some(int),
-        Ty::Bool => Some(IntTy::U8),
-        Ty::Unit => None,
+        SsaTy::Int(int) => Some(int),
+        SsaTy::Bool => Some(SsaIntTy::U8),
+        SsaTy::Unit => None,
     }
 }
 
 /// True when the signed mathematical `value` fits in signed `int`.
-fn fits_signed(int: IntTy, value: i128) -> bool {
+fn fits_signed(int: SsaIntTy, value: i128) -> bool {
     let bits = u32::from(int.bits());
     if bits == 128 {
         return true;
@@ -48,7 +48,7 @@ fn overflow_panic(op: BinOp) -> PanicKind {
 }
 
 /// Add/Sub/Mul: returns the wrapped result and whether it overflowed.
-fn arith(op: BinOp, int: IntTy, a: u128, b: u128) -> (u128, bool) {
+fn arith(op: BinOp, int: SsaIntTy, a: u128, b: u128) -> (u128, bool) {
     let mask = int.mask();
     if int.signed() {
         let (x, y) = (widen(int, a), widen(int, b));
@@ -78,9 +78,9 @@ fn arith(op: BinOp, int: IntTy, a: u128, b: u128) -> (u128, bool) {
 pub fn binary(
     op: BinOp,
     overflow: Overflow,
-    lhs_ty: Ty,
+    lhs_ty: SsaTy,
     a: u128,
-    rhs_ty: Ty,
+    rhs_ty: SsaTy,
     b: u128,
 ) -> Result<u128, PanicKind> {
     match op {
@@ -150,7 +150,7 @@ pub fn binary(
     }
 }
 
-pub fn unary(op: UnOp, overflow: Overflow, ty: Ty, a: u128) -> Result<u128, PanicKind> {
+pub fn unary(op: UnOp, overflow: Overflow, ty: SsaTy, a: u128) -> Result<u128, PanicKind> {
     match op {
         UnOp::Not => Ok(!a & ty.max_bits()),
         UnOp::Neg => {
@@ -165,7 +165,7 @@ pub fn unary(op: UnOp, overflow: Overflow, ty: Ty, a: u128) -> Result<u128, Pani
     }
 }
 
-pub fn compare(op: CmpOp, ty: Ty, a: u128, b: u128) -> bool {
+pub fn compare(op: CmpOp, ty: SsaTy, a: u128, b: u128) -> bool {
     let ordering = match int_of(ty) {
         Some(int) if int.signed() => widen(int, a).cmp(&widen(int, b)),
         Some(int) => (a & int.mask()).cmp(&(b & int.mask())),
@@ -183,7 +183,7 @@ pub fn compare(op: CmpOp, ty: Ty, a: u128, b: u128) -> bool {
 
 /// Rust `as` between integer types, or from bool: extend by the source
 /// signedness, then truncate.
-pub fn cast(from: Ty, to: IntTy, a: u128) -> u128 {
+pub fn cast(from: SsaTy, to: SsaIntTy, a: u128) -> u128 {
     let wide = match int_of(from) {
         Some(int) => widen(int, a) as u128,
         None => 0,
@@ -196,8 +196,8 @@ pub fn cast(from: Ty, to: IntTy, a: u128) -> u128 {
 pub fn binary_cannot_panic(
     op: BinOp,
     overflow: Overflow,
-    lhs_ty: Ty,
-    rhs_ty: Ty,
+    lhs_ty: SsaTy,
+    rhs_ty: SsaTy,
     rhs: Option<u128>,
 ) -> bool {
     match op {

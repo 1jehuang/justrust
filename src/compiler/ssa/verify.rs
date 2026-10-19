@@ -1,8 +1,8 @@
 //! Structural, type and dominance checks. Every optimizer node must produce a
 //! function that passes `verify`; tests run it after every pass.
 use super::{
-    BinOp, Block, CmpOp, FuncRef, Function, InstKind, Overflow, Signature, Terminator, Ty, UnOp,
-    Value,
+    BinOp, CmpOp, FuncRef, InstKind, Overflow, SsaBlock, SsaFunction, SsaSignature, SsaTerminator,
+    SsaTy, SsaValue, UnOp,
 };
 use std::fmt;
 
@@ -27,12 +27,12 @@ macro_rules! fail {
 struct Def {
     block: usize,
     position: usize,
-    ty: Option<Ty>,
+    ty: Option<SsaTy>,
 }
 
 /// Immediate dominators over the reachable blocks (Cooper, Harvey, Kennedy).
 /// `None` for unreachable blocks. The entry is its own dominator.
-pub fn dominators(function: &Function) -> Vec<Option<usize>> {
+pub fn dominators(function: &SsaFunction) -> Vec<Option<usize>> {
     let count = function.blocks.len();
     let order = function.reverse_postorder();
     let mut rpo_index = vec![usize::MAX; count];
@@ -100,14 +100,14 @@ fn dominates(idom: &[Option<usize>], a: usize, mut b: usize) -> bool {
     }
 }
 
-/// Value types indexed by `Value`, produced by a successful `verify`.
-pub type Types = Vec<Option<Ty>>;
+/// SsaValue types indexed by `SsaValue`, produced by a successful `verify`.
+pub type Types = Vec<Option<SsaTy>>;
 
 /// Verify `function` and return the type of every defined value. `callee`
 /// resolves call signatures.
 pub fn verify(
-    function: &Function,
-    callee: &dyn Fn(FuncRef) -> Option<Signature>,
+    function: &SsaFunction,
+    callee: &dyn Fn(FuncRef) -> Option<SsaSignature>,
 ) -> Result<Types, VerifyError> {
     let count = function.blocks.len();
     if count == 0 {
@@ -116,7 +116,7 @@ pub fn verify(
     if u32::try_from(count).is_err() {
         fail!("too many blocks");
     }
-    let entry_types: Vec<Ty> = function.blocks[0]
+    let entry_types: Vec<SsaTy> = function.blocks[0]
         .params
         .iter()
         .map(|(_, ty)| *ty)
@@ -127,7 +127,7 @@ pub fn verify(
 
     // Definitions.
     let mut defs: Vec<Option<Def>> = vec![None; function.value_bound()];
-    let mut define = |value: Value, def: Def| -> Result<(), VerifyError> {
+    let mut define = |value: SsaValue, def: Def| -> Result<(), VerifyError> {
         let slot = &mut defs[value.0 as usize];
         if slot.is_some() {
             fail!("value v{} defined more than once", value.0);
@@ -161,7 +161,7 @@ pub fn verify(
 
     let idom = dominators(function);
     let check_use = |defs: &[Option<Def>],
-                     value: Value,
+                     value: SsaValue,
                      block: usize,
                      position: usize|
      -> Result<(), VerifyError> {
@@ -254,23 +254,28 @@ pub fn verify(
             check_use(&defs, operand, block, position)?;
         }
         match &data.term {
-            Terminator::Return(value) => {
+            SsaTerminator::Return(value) => {
                 if ty_of(&defs, *value)? != function.ret {
                     fail!("b{block} returns the wrong type");
                 }
             }
-            Terminator::Branch { cond, .. } => {
-                if ty_of(&defs, *cond)? != Ty::Bool {
+            SsaTerminator::Branch { cond, .. } => {
+                if ty_of(&defs, *cond)? != SsaTy::Bool {
                     fail!("b{block} branches on a non-bool");
                 }
             }
-            Terminator::Jump(_) | Terminator::Panic(_) => {}
+            SsaTerminator::Panic(super::PanicKind::Message(index)) => {
+                if *index as usize >= function.panics.len() {
+                    fail!("b{block} panics with missing message {index}");
+                }
+            }
+            SsaTerminator::Jump(_) | SsaTerminator::Panic(_) => {}
         }
         for target in data.term.targets() {
             let Some(successor) = function.block(target.block) else {
                 fail!("b{block} targets missing block b{}", target.block.0);
             };
-            if target.block == Block(0) {
+            if target.block == SsaBlock(0) {
                 fail!("b{block} targets the entry block");
             }
             if successor.params.len() != target.args.len() {
@@ -289,7 +294,7 @@ pub fn verify(
     Ok(defs.iter().map(|def| def.and_then(|def| def.ty)).collect())
 }
 
-fn ty_of(defs: &[Option<Def>], value: Value) -> Result<Ty, VerifyError> {
+fn ty_of(defs: &[Option<Def>], value: SsaValue) -> Result<SsaTy, VerifyError> {
     match defs.get(value.0 as usize).copied().flatten() {
         Some(Def { ty: Some(ty), .. }) => Ok(ty),
         Some(_) => fail!("v{} used before its type is known", value.0),
@@ -300,8 +305,8 @@ fn ty_of(defs: &[Option<Def>], value: Value) -> Result<Ty, VerifyError> {
 fn inst_type(
     kind: &InstKind,
     defs: &[Option<Def>],
-    callee: &dyn Fn(FuncRef) -> Option<Signature>,
-) -> Result<Ty, VerifyError> {
+    callee: &dyn Fn(FuncRef) -> Option<SsaSignature>,
+) -> Result<SsaTy, VerifyError> {
     let ty = |value| ty_of(defs, value);
     Ok(match kind {
         InstKind::Const { ty, bits } => {
@@ -322,17 +327,17 @@ fn inst_type(
             }
             match op {
                 BinOp::And | BinOp::Or | BinOp::Xor => {
-                    if left != right || left == Ty::Unit {
+                    if left != right || left == SsaTy::Unit {
                         fail!("{op:?} needs equal int or bool operands");
                     }
                 }
                 BinOp::Shl | BinOp::Shr => {
-                    if !matches!(left, Ty::Int(_)) || !matches!(right, Ty::Int(_)) {
+                    if !matches!(left, SsaTy::Int(_)) || !matches!(right, SsaTy::Int(_)) {
                         fail!("{op:?} needs integer operands");
                     }
                 }
                 _ => {
-                    if left != right || !matches!(left, Ty::Int(_)) {
+                    if left != right || !matches!(left, SsaTy::Int(_)) {
                         fail!("{op:?} needs equal integer operands");
                     }
                 }
@@ -347,14 +352,14 @@ fn inst_type(
             let operand = ty(*value)?;
             match op {
                 UnOp::Neg => match operand {
-                    Ty::Int(int) if int.signed() => {}
+                    SsaTy::Int(int) if int.signed() => {}
                     _ => fail!("Neg needs a signed integer"),
                 },
                 UnOp::Not => {
                     if *overflow != Overflow::Wrap {
                         fail!("Not must use Overflow::Wrap");
                     }
-                    if operand == Ty::Unit {
+                    if operand == SsaTy::Unit {
                         fail!("Not needs an int or bool");
                     }
                 }
@@ -363,24 +368,24 @@ fn inst_type(
         }
         InstKind::Cmp { op, lhs, rhs } => {
             let (left, right) = (ty(*lhs)?, ty(*rhs)?);
-            if left != right || left == Ty::Unit {
+            if left != right || left == SsaTy::Unit {
                 fail!("comparison needs equal int or bool operands");
             }
             let _: CmpOp = *op;
-            Ty::Bool
+            SsaTy::Bool
         }
         InstKind::Cast { to, value } => {
-            if ty(*value)? == Ty::Unit {
+            if ty(*value)? == SsaTy::Unit {
                 fail!("cast from unit");
             }
-            Ty::Int(*to)
+            SsaTy::Int(*to)
         }
         InstKind::Select {
             cond,
             then,
             otherwise,
         } => {
-            if ty(*cond)? != Ty::Bool {
+            if ty(*cond)? != SsaTy::Bool {
                 fail!("select condition is not bool");
             }
             let result = ty(*then)?;

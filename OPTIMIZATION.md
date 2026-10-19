@@ -1,7 +1,8 @@
 # Graph-native optimizer and code generation
 
-Status: **decided direction, nothing implemented.** Decisions recorded 2026-10-18.
-Tracker: `IMPLEMENTATION.md` G12.
+Status: **phases 1-2 and part of 3 implemented for the scalar subset.**
+Decisions recorded 2026-10-18. Tracker: `IMPLEMENTATION.md` G12. Current state
+is in section 13.
 
 ## 1. Decision
 
@@ -321,3 +322,58 @@ in `cfg.rs`, `ownership.rs`, `ir.rs` and `backend.rs`.
 - Determinism: identical final outputs at workers 1/N and across machines.
 - Invalidation: an edit dirties exactly the recorded dependents.
 - Backtraces include inlined frames at every optimization amount.
+
+## 13. Implemented state (2026-10-19)
+
+Code: `src/compiler/ssa/` (pure library) plus graph nodes in
+`src/compiler/mod.rs`.
+
+```mermaid
+flowchart LR
+  AN[ANALYZE i] --> S[SSA i 130]
+  S --> L[LOCAL_OPT i 131]
+  L --> SU[SUMMARY i 132]
+  L --> I[IPO_OPT i 133]
+  SU -. direct callee j .-> I
+  L -. inlined callee j body .-> I
+  I --> O[OBJECT i]
+  AN --> O
+```
+
+- Every optimizer key carries exactly one instance index. Facts are typed and
+  read through `Context::read_fact`. No side slots, no new integrity baseline.
+- `OptMode::Off` demands none of these nodes, which gives the cold
+  no-optimization baseline. CHECK never demands them.
+- Defaults: the `jr-rust` CLI uses `adaptive` (override with `--opt` or
+  `JR_OPT`). The library default stays `off` until a measured default
+  promotion, so existing graph schema tests keep pinning the stack-emitter
+  BUILD node set. The full suite (3,424 tests) passes with both.
+- Scope: scalar functions only (integers up to 64 bits, bool, unit). Other
+  functions publish an `unsupported` reason and OBJECT uses the stack emitter.
+  Both kinds link together because the SSA backend uses the same private ABI.
+- Inlining: leaves of up to 24 instructions, chosen from direct-callee
+  summaries. Inlined bodies are recorded graph edges.
+- Machine code: linear-scan allocation over 11 registers. Values live across
+  calls go to stack slots.
+- Overflow checks are always on in the native profile today (matching the
+  stack emitter), so lowered arithmetic uses `Overflow::Trap`.
+
+Evidence:
+
+- Library: eval against native Rust for every width, exhaustive 8-bit
+  `x op c` rewrite soundness, 1,500 random functions differentially against
+  the interpreter, random-callee inlining differentially against the
+  interpreter, and block-parameter elimination on loops.
+- End to end (`tests/optimizer.rs`): the 3 passing full-program corpus
+  entries match their stock rustc oracle stdout with the optimizer on. Real
+  programs compiled off and on must
+  match in exit status, stdout and stderr, including overflow, division,
+  shift and explicit-panic aborts. Workers 1 and 8 give byte-identical output.
+- One compute-bound program (Collatz totals to 300,000): 723 ms off versus
+  404 ms on, best of 3, local machine, a 1.79x runtime speedup. This is one
+  synthetic program, not a benchmark claim, and is not compared with stock.
+
+Not done: real G6 ABI, aggregates/references/enums/floats/128-bit in SSA,
+adaptive background scheduling, cross-build early cutoff, recursion
+fixed-point protocol, non-leaf inlining, specialization, reachability-driven
+codegen, incremental linker, devirtualization, comparison against stock.

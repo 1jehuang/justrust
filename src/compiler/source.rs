@@ -33,12 +33,16 @@ pub struct SourceOptions {
     /// Attach the embedded native prelude library (`libraries/prelude`) after
     /// the user crate in graph compilation. See PRELUDE.md.
     pub prelude: bool,
+    /// Optimizer mode (OPTIMIZATION.md section 6). An explicit compile input:
+    /// the compiler never reads `JR_OPT` itself.
+    pub opt: super::ssa::OptMode,
 }
 impl Default for SourceOptions {
     fn default() -> Self {
         Self {
             cfg: CfgSet::native_x86_64_linux(),
             prelude: true,
+            opt: super::ssa::OptMode::default(),
         }
     }
 }
