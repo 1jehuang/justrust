@@ -16275,7 +16275,8 @@ impl PlanCtx {
                 caller,
                 budget,
                 0,
-                false,
+                // Trait impls may target reference types (`impl Tr for &T`).
+                block.trait_path.is_some(),
             )?;
             if raw_type_has_projection(&self_ty, budget, 0)? {
                 return Err("unsupported: projection-bearing impl heads".into());
@@ -19687,7 +19688,9 @@ mod const_declaration_tests {
             check(&parse(&source).unwrap()).unwrap();
         }
         // Type errors in unused const fn bodies still reject.
-        assert!(super::super::compile("const fn f(x:u8)->u64{x}fn main(){}".into(), 1, true).is_err());
+        assert!(
+            super::super::compile("const fn f(x:u8)->u64{x}fn main(){}".into(), 1, true).is_err()
+        );
     }
 
     #[test]

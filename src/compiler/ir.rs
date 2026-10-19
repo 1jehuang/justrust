@@ -2360,7 +2360,12 @@ pub(super) fn substitute_schema_ty(
                 budget.charge_work(1)?;
                 inner = referent;
             }
-            reject_references(inner, budget)?;
+            // Unsized `str` / `[T]` are valid trait Self types (`impl Tr for str`).
+            match inner {
+                Ty::Str => {}
+                Ty::Slice { element } => reject_references(element, budget)?,
+                _ => reject_references(inner, budget)?,
+            }
         } else if declaration.kind == DeclKind::TraitItem
             && declaration.own_env.binder() == parameter.owner
             && declaration.own_env.contains(parameter)

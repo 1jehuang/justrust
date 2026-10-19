@@ -1840,6 +1840,27 @@ pub(super) fn canonical_ref_contract(
     } else {
         None
     };
+    // A reference Self type (`impl Tr for &T`) adds inner reference layers
+    // to the receiver; each gets its own region outliving the outer one.
+    if injected == 1 {
+        let skip = usize::from(receiver_region.is_some());
+        let layers = ir::root_reference_layers(&params[0])?;
+        let mut previous = receiver_region;
+        for depth in skip..layers {
+            let region = fresh(None)?;
+            if let Some(outer) = previous {
+                edges.push((region, outer));
+            }
+            inputs.push(ir::InputRegion {
+                input: ir::InputReference {
+                    param: 0,
+                    position: ir::ReferencePosition { depth: depth as u8 },
+                },
+                region,
+            });
+            previous = Some(region);
+        }
+    }
     for (index, (_, source_ty)) in source_params.iter().enumerate() {
         let mut ty = source_ty;
         let mut previous = None;

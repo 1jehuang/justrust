@@ -5936,15 +5936,30 @@ impl ValidatedTraitWorld {
             }
             let schema = GenericSchema {
                 env: implementation.schema_env.clone(),
+                // Self is carried as a one-tuple so a reference Self type
+                // (`impl Tr for &T`) is not a returned reference.
                 signature: Signature {
                     ref_contract: Arc::new(ir::RefContract::default()),
                     params: head_arguments,
-                    result: implementation.trait_ref.self_ty.clone(),
+                    result: match &implementation.trait_ref.self_ty {
+                        reference @ Ty::Ref { .. } => Ty::Tuple(Arc::from([reference.clone()])),
+                        other => other.clone(),
+                    },
                 },
                 predicates: implementation.predicates.clone(),
             };
             let instantiated = self.instantiate_in(&schema, &args, facts, None)?;
-            if !self.eq_ty(&instantiated.signature.result, &goal.self_ty, 0)?
+            let head_self = match (
+                &implementation.trait_ref.self_ty,
+                &instantiated.signature.result,
+            ) {
+                (Ty::Ref { .. }, Ty::Tuple(wrapped)) => &wrapped[0],
+                (Ty::Ref { .. }, _) => {
+                    return Err(FactsError::invalid(&self.budget, "impl head Self lost"));
+                }
+                (_, result) => result,
+            };
+            if !self.eq_ty(head_self, &goal.self_ty, 0)?
                 || !self.eq_types(&instantiated.signature.params, &goal.args, 0)?
             {
                 return Err(FactsError::invalid(
