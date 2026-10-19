@@ -2265,24 +2265,24 @@ impl Transfer<'_> {
     fn raw_deref(&self, place: &Place) -> Option<usize> {
         super::ir::raw_deref_index(&self.f.locals[place.local.0].ty, &place.projection)
     }
-    fn targets(&mut self, place: &Place) -> Result<Vec<Target>, Exhausted> {
+    fn targets(&mut self, place: &Place) -> Result<borrow::ResolvedTargets, Exhausted> {
         if self.raw_deref(place).is_some() {
-            return Ok(vec![]);
+            return Ok(borrow::ResolvedTargets::Heap(vec![]));
         }
         if let Some(loans) = self.loans {
             match loans.resolve(place, self.block, self.statement, self.phase, self.budget)? {
                 Ok(targets) => Ok(targets),
                 Err(problem) => {
                     self.problem(problem, place.clone());
-                    Ok(vec![])
+                    Ok(borrow::ResolvedTargets::Heap(vec![]))
                 }
             }
         } else {
-            Ok(vec![Target {
+            Ok(borrow::ResolvedTargets::Heap(vec![Target {
                 place: CanonicalPlace::owned(place),
                 precision: TargetPrecision::Exact,
                 authority: vec![],
-            }])
+            }]))
         }
     }
     fn check_access(&mut self, target: &Target, access: Access) -> Result<(), Exhausted> {

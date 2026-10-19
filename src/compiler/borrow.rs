@@ -4386,6 +4386,46 @@ fn target_payload_bytes_with_growth(
     )
 }
 
+/// A direct owned root requires no heap allocation. Indirect and projected
+/// resolution keeps the existing paid vector representation unchanged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum ResolvedTargets {
+    Inline(Target),
+    Heap(Vec<Target>),
+}
+impl ResolvedTargets {
+    pub fn as_slice(&self) -> &[Target] {
+        match self {
+            Self::Inline(target) => std::slice::from_ref(target),
+            Self::Heap(targets) => targets,
+        }
+    }
+}
+impl std::ops::Deref for ResolvedTargets {
+    type Target = [Target];
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+impl IntoIterator for ResolvedTargets {
+    type Item = Target;
+    type IntoIter = std::iter::Chain<std::option::IntoIter<Target>, std::vec::IntoIter<Target>>;
+    fn into_iter(self) -> Self::IntoIter {
+        let (inline, heap) = match self {
+            Self::Inline(target) => (Some(target), Vec::new()),
+            Self::Heap(targets) => (None, targets),
+        };
+        inline.into_iter().chain(heap)
+    }
+}
+impl<'a> IntoIterator for &'a ResolvedTargets {
+    type Item = &'a Target;
+    type IntoIter = std::slice::Iter<'a, Target>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter()
+    }
+}
+
 impl Plan {
     pub fn build_validated(
         f: &Arc<cfg::Function>,
@@ -4690,8 +4730,21 @@ impl Plan {
         statement: Option<usize>,
         phase: Phase,
         budget: &mut Budget,
-    ) -> Result<Result<Vec<Target>, Problem>, Exhausted> {
+    ) -> Result<Result<ResolvedTargets, Problem>, Exhausted> {
         let (origins, _) = self.point(block, statement, phase);
+        if place.projection.is_empty() && self.original_locals.get(place.local.0).is_some() {
+            // No dereference means no provenance-cell traversal. This is the
+            // exact singleton resolve_cells would construct, kept on the stack.
+            budget.spend(1)?;
+            return Ok(Ok(ResolvedTargets::Inline(Target {
+                place: CanonicalPlace {
+                    root: CanonicalRoot::Owned(place.local),
+                    projection: Vec::new(),
+                },
+                precision: TargetPrecision::Exact,
+                authority: Vec::new(),
+            })));
+        }
         let (targets, _, failure) = resolve_cells(
             &self.original_locals,
             &self.cells,
@@ -4706,7 +4759,7 @@ impl Plan {
                 "reference lacks a complete original typed cell cover",
             )))
         } else {
-            Ok(Ok(targets))
+            Ok(Ok(ResolvedTargets::Heap(targets)))
         }
     }
     pub fn call_write_targets(
