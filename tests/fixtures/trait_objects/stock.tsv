@@ -27,7 +27,7 @@ negative/impl_unknown_method.rs	reject	E0599
 negative/impl_unsatisfied.rs	reject	E0277
 negative/impl_unused_unsatisfied.rs	reject	E0277
 boundary/dyn_assoc_type.rs	accept	-
-boundary/dyn_drop_owner.rs	accept	-
+positive/dyn_drop_owner.rs	accept	-
 boundary/dyn_mut_to_shared.rs	accept	-
 boundary/dyn_plus_bound.rs	accept	-
 boundary/dyn_where_self_sized.rs	accept	-

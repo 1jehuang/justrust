@@ -154,3 +154,50 @@ fn native_matches_stock_workers_1_and_8() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+#[test]
+fn dyn_drop_owner_preserves_all_body_proofs_and_object_gates() {
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            let source = include_str!("fixtures/trait_objects/positive/dyn_drop_owner.rs");
+            for workers in [1, 8] {
+                for check_only in [true, false] {
+                    let result =
+                        justrust_engine::compiler::compile(source.to_owned(), workers, check_only)
+                            .unwrap();
+                    assert_eq!(result.functions, 4);
+                    assert_eq!(result.analyses.len(), result.functions);
+                    assert!(result.analyses.iter().all(|analysis| analysis.passed()));
+                    assert_eq!(result.executable.is_none(), check_only);
+                    let report = result.report;
+                    assert!(report.capture_complete);
+                    assert_eq!(report.events_dropped, 0);
+                    assert_eq!(report.failures, 0);
+                    let id = |kind, index| {
+                        report.node_evaluations.iter().enumerate().find_map(
+                            |(position, (key, _))| {
+                                (key.kind == kind && key.params == [index])
+                                    .then_some(report.node_ids[position])
+                            },
+                        )
+                    };
+                    for index in 0..result.functions as u64 {
+                        assert!(id(110, index).is_some(), "missing checked body {index}");
+                        let proof = id(109, index).expect("missing concrete body proof");
+                        if check_only {
+                            assert!(id(103, index).is_none());
+                        } else {
+                            let object = id(103, index).expect("missing object");
+                            assert!(report.dependency_edges.contains(&(object, proof, 0)));
+                        }
+                    }
+                    assert_eq!(report.published_kind(103), !check_only);
+                    assert_eq!(report.published_kind(105), !check_only);
+                }
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
