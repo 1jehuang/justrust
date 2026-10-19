@@ -4457,6 +4457,7 @@ impl PlanCtx {
 
 #[cfg(test)]
 mod associated_bounds;
+mod array_len;
 mod const_inputs;
 mod const_items;
 #[cfg(test)]
@@ -9276,6 +9277,21 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(number)
     }
     fn unsupported_array_expression(&mut self, context: &str) -> Result<usize, ParseError> {
+        if let Some(start) = self.cursor.index() {
+            let tokens: &[Token] = self.input;
+            if let Some(end) = array_len::length_end(tokens, start) {
+                let table = array_len::scan(tokens);
+                if let Some(value) = array_len::evaluate(tokens, &table, start..end) {
+                    if value > ir::MAX_ARRAY_LEN as u128 {
+                        return Err(self.limit("array length/index exceeds supported limit"));
+                    }
+                    while self.cursor.index().is_some_and(|at| at < end) {
+                        self.cursor.bump();
+                    }
+                    return Ok(value as usize);
+                }
+            }
+        }
         // Validate the bounded expression grammar before classifying the
         // constant-evaluation boundary. Missing expressions, malformed literals
         // and missing closing brackets remain syntax errors, not fake CTFE.

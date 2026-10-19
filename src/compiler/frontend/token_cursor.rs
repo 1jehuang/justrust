@@ -98,6 +98,11 @@ impl<'input> TokenCursor<'input> {
         token
     }
 
+    /// Whole-token index of the current position, if not mid-token.
+    pub(super) fn index(&self) -> Option<usize> {
+        (self.prefix == 0).then_some(self.at)
+    }
+
     pub(super) fn checkpoint(&self) -> CursorMark<'input> {
         CursorMark {
             input: self.input,
