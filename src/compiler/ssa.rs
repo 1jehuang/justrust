@@ -310,6 +310,7 @@ impl InstKind {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Inst {
+    pub runtime_location: Option<std::sync::Arc<super::ir::RuntimeLocation>>,
     pub result: SsaValue,
     pub kind: InstKind,
 }
@@ -417,6 +418,7 @@ impl SsaTerminator {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BlockData {
+    pub panic_location: Option<std::sync::Arc<super::ir::RuntimeLocation>>,
     pub params: Vec<(SsaValue, SsaTy)>,
     pub insts: Vec<Inst>,
     pub term: SsaTerminator,
@@ -599,6 +601,7 @@ impl Builder {
         let params: Vec<(SsaValue, SsaTy)> = params.iter().map(|ty| (self.fresh(), *ty)).collect();
         let values = params.iter().map(|(value, _)| *value).collect();
         self.function.blocks.push(BlockData {
+            panic_location: None,
             params,
             insts: Vec::new(),
             term: SsaTerminator::Panic(PanicKind::Unreachable),
@@ -608,9 +611,11 @@ impl Builder {
 
     pub fn inst(&mut self, block: SsaBlock, kind: InstKind) -> SsaValue {
         let result = self.fresh();
-        self.function.blocks[block.0 as usize]
-            .insts
-            .push(Inst { result, kind });
+        self.function.blocks[block.0 as usize].insts.push(Inst {
+            runtime_location: None,
+            result,
+            kind,
+        });
         result
     }
 

@@ -5020,6 +5020,7 @@ mod tests {
         let (env, parameters) = symbolic_pair();
         let ty = Ty::Tuple(Vec::from(parameters).into());
         let source = Arc::new(CheckedFunction {
+            runtime_sites: Default::default(),
             call_evidence: Arc::from([]),
             body_substitution: None,
             ref_contract: Default::default(),
@@ -5197,6 +5198,7 @@ mod tests {
         use super::super::ir::{Block, Completion, ExprKind, PlanBudget, TypedExpr};
         let (env, parameter) = symbolic_parameter();
         let source = Arc::new(CheckedFunction {
+            runtime_sites: Default::default(),
             call_evidence: Arc::from([]),
             body_substitution: None,
             ref_contract: Default::default(),
@@ -7137,6 +7139,7 @@ mod tests {
         cfg::Function {
             body_substitution: None,
             call_evidence: Arc::from([]),
+            runtime_sites: Default::default(),
             lowering_proof: None,
             ref_contract: Default::default(),
             name: "caps".into(),

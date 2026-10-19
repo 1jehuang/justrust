@@ -266,6 +266,7 @@ pub fn try_string(from: &str) -> Result<String, String> {
 
 pub fn try_clone_inst(inst: &Inst) -> Result<Inst, String> {
     Ok(Inst {
+        runtime_location: inst.runtime_location.clone(),
         result: inst.result,
         kind: match &inst.kind {
             InstKind::Call { callee, args } => InstKind::Call {
@@ -309,6 +310,7 @@ pub fn try_clone_block(data: &BlockData) -> Result<BlockData, String> {
         insts.push(try_clone_inst(inst)?);
     }
     Ok(BlockData {
+        panic_location: data.panic_location.clone(),
         params: try_vec(&data.params)?,
         insts,
         term: try_clone_term(&data.term)?,

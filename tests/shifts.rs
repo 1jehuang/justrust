@@ -1,11 +1,12 @@
 //! Checked heterogeneous shifts, unchanged frozen stock32 corpus.
 //! Native CHECK rejects static invalid counts earlier than stock metadata-only
 //! checking. Stock BUILD rejects those same sources under arithmetic_overflow.
-//! Declared runtime traps require successful check/build and exact exit101.
+//! Source-backed shift panics require successful check/build and SIGABRT.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -128,7 +129,11 @@ fn runs_with_exit(source: &str, expected: &str, expected_exit: i32) {
         assert_eq!(&bytes[..6], b"\x7fELF\x02\x01");
         let result = capture(&mut Command::new(output), &scratch, 5);
         assert_eq!(
-            result.status.code(),
+            if expected_exit < 0 {
+                result.status.signal().map(|signal| -signal)
+            } else {
+                result.status.code()
+            },
             Some(expected_exit),
             "runtime status failure: {result:?}\n{source}"
         );
@@ -174,9 +179,8 @@ fn runs(source: &str, expected: &str) {
     runs_with_exit(source, expected, 0);
 }
 fn traps(source: &str, expected: &str) {
-    // Only declared runtime traps may differ from stock panic text/unwinding.
-    // Exact code 101 rejects signals, crashes, successful exits and all other codes.
-    runs_with_exit(source, expected, 101);
+    // The native panic=abort contract requires SIGABRT, not unwinding exit 101.
+    runs_with_exit(source, expected, -6);
 }
 
 #[test]

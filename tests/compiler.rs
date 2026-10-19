@@ -7,6 +7,7 @@ mod native_prelude;
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -463,7 +464,7 @@ fn main() {
 }
 
 #[test]
-fn checked_runtime_arithmetic_traps_exit_101() {
+fn checked_runtime_arithmetic_panics_abort() {
     // Parameters keep these genuine runtime traps in stock Rust as well,
     // without requiring an arithmetic_overflow/unconditional_panic lint override.
     for (expression, x, y) in [
@@ -483,7 +484,7 @@ fn checked_runtime_arithmetic_traps_exit_101() {
         let output = compile(&scratch, &source, 2);
         let result = capture(&mut Command::new(output), &scratch, RUN_TIMEOUT);
         assert!(!result.timed_out, "trap hung for {expression}: {result:?}");
-        assert_eq!(result.status.code(), Some(101), "{expression}: {result:?}");
+        assert_eq!(result.status.signal(), Some(6), "{expression}: {result:?}");
         assert!(
             result.stdout.is_empty(),
             "continued after trap: {expression}"

@@ -236,6 +236,7 @@ impl Checker<'_> {
                 locals,
                 exprs,
                 call_evidence: child.call_evidence.clone().into(),
+                runtime_sites: ir::RuntimeSites::from_source(child.runtime_sites.clone())?,
                 body_substitution: None,
                 body,
             };

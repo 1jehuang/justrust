@@ -1,12 +1,13 @@
 //! Full-width usize and dynamic indexing bounded native acceptance.
 //! All 32 exact fixtures were stock-classified with rustc 1.98.1, edition 2024.
 //! Stock is an external scratch oracle only and is never invoked by these tests.
-//! Declared traps require compile/check success and exact runtime 101/stdout.
+//! Arithmetic requires SIGABRT; legacy bounds guards retain exit 101/stdout.
 //! Native panic text/unwinding is not claimed or compared for those trap fixtures.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -129,7 +130,11 @@ fn runs_with_exit(source: &str, expected: &str, expected_exit: i32) {
         assert_eq!(&bytes[..6], b"\x7fELF\x02\x01");
         let result = capture(&mut Command::new(output), &scratch, 5);
         assert_eq!(
-            result.status.code(),
+            if expected_exit < 0 {
+                result.status.signal().map(|signal| -signal)
+            } else {
+                result.status.code()
+            },
             Some(expected_exit),
             "runtime status failure: {result:?}\n{source}"
         );
@@ -173,6 +178,9 @@ fn rejects(label: &str, source: &str) {
 
 fn runs(source: &str, expected: &str) {
     runs_with_exit(source, expected, 0);
+}
+fn arithmetic_traps(source: &str, expected: &str) {
+    runs_with_exit(source, expected, -6);
 }
 fn traps(source: &str, expected: &str) {
     // Only declared runtime traps may differ from stock panic text/unwinding.
@@ -367,7 +375,7 @@ fn main() { if run() == 7 { println!("dynamic oracle ok"); } }
 #[test]
 fn traps_checked_add_overflow() {
     // Stock runtime panic verified: attempt to add with overflow.
-    traps(
+    arithmetic_traps(
         r#"fn wide()->usize{4294967296usize} fn high()->usize{9223372036854775808usize} fn maximum()->usize{18446744073709551615usize} fn add(a:usize,b:usize)->usize{a+b} fn run()->i32{println!("before");let one:usize=1;let n=add(maximum(),one);0}
 fn main() { run(); println!("after trap"); }
 "#,
@@ -378,7 +386,7 @@ fn main() { run(); println!("after trap"); }
 #[test]
 fn traps_checked_sub_underflow() {
     // Stock runtime panic verified: attempt to subtract with overflow.
-    traps(
+    arithmetic_traps(
         r#"fn sub(a:usize,b:usize)->usize{a-b} fn run()->i32{println!("before");let zero:usize=0;let one:usize=1;let n=sub(zero,one);0}
 fn main() { run(); println!("after trap"); }
 "#,
@@ -389,7 +397,7 @@ fn main() { run(); println!("after trap"); }
 #[test]
 fn traps_checked_mul_overflow() {
     // Stock runtime panic verified: attempt to multiply with overflow.
-    traps(
+    arithmetic_traps(
         r#"fn wide()->usize{4294967296usize} fn high()->usize{9223372036854775808usize} fn maximum()->usize{18446744073709551615usize} fn mul(a:usize,b:usize)->usize{a*b} fn run()->i32{println!("before");let two:usize=2;let n=mul(high(),two);0}
 fn main() { run(); println!("after trap"); }
 "#,
@@ -400,7 +408,7 @@ fn main() { run(); println!("after trap"); }
 #[test]
 fn traps_usize_divide_by_zero() {
     // Stock runtime panic verified: attempt to divide by zero.
-    traps(
+    arithmetic_traps(
         r#"fn divide(a:usize,b:usize)->usize{a/b} fn run()->i32{println!("before");let a:usize=7;let b:usize=0;let n=divide(a,b);0}
 fn main() { run(); println!("after trap"); }
 "#,
@@ -411,7 +419,7 @@ fn main() { run(); println!("after trap"); }
 #[test]
 fn traps_usize_remainder_by_zero() {
     // Stock runtime panic verified: attempt to calculate the remainder with a divisor of zero.
-    traps(
+    arithmetic_traps(
         r#"fn rem(a:usize,b:usize)->usize{a%b} fn run()->i32{println!("before");let a:usize=7;let b:usize=0;let n=rem(a,b);0}
 fn main() { run(); println!("after trap"); }
 "#,

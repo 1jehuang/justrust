@@ -40,6 +40,8 @@ impl Emitter<'_> {
         self.address(self.wide_scratch + 32);
     }
     pub(super) fn wide_unary(&mut self, op: UnaryOp, ty: ir::IntTy) -> Result<(), String> {
+        self.runtime_panic_kind =
+            matches!(op, UnaryOp::Neg).then_some(crate::compiler::ssa::PanicKind::NegOverflow);
         self.wi_load(0, 0);
         self.wi_load(2, 8);
         match op {
@@ -81,6 +83,7 @@ impl Emitter<'_> {
         _rhs: ir::IntTy,
     ) -> Result<(), String> {
         use BinaryOp::*;
+        self.binary_panic_kind(op);
         // Canonical sign/zero extension makes the exact RHS type unnecessary:
         // negative counts have a nonzero high limb, and all positive counts
         // are checked in full before x86's masked shift-count instructions.
@@ -299,10 +302,16 @@ impl Emitter<'_> {
     }
 
     fn wi_div(&mut self, op: BinaryOp, ty: ir::IntTy) -> Result<(), String> {
+        self.runtime_panic_kind = Some(if matches!(op, BinaryOp::Div) {
+            crate::compiler::ssa::PanicKind::DivByZero
+        } else {
+            crate::compiler::ssa::PanicKind::RemByZero
+        });
         self.wi_load(0, 16);
         self.wi_load(2, 24);
         self.wi_rr(0x09, 0, 2);
         self.trap_if(0x84);
+        self.binary_panic_kind(op);
         if ty.is_signed() {
             self.wi_load(0, 8);
             self.wi_store(232, 0); // remainder sign
@@ -444,6 +453,9 @@ mod tests {
             wide_scratch: -256,
             vtable_scratch: 0,
             returns: Vec::new(),
+            runtime_location: None,
+            runtime_panic_kind: None,
+            runtime_traps: Vec::new(),
             traps: Vec::new(),
             edges: Vec::new(),
         };

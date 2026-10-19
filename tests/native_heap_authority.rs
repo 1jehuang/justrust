@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 fn source() -> ir::CheckedFunction {
     ir::CheckedFunction {
+        runtime_sites: Default::default(),
         call_evidence: Arc::from([]),
         body_substitution: None,
         ref_contract: Default::default(),

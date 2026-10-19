@@ -1184,8 +1184,14 @@ fn unsupported_module_forms_are_rejected_explicitly() {
             "type Alias<T> where T:Copy=T;fn main(){}",
             "type alias bounds and where clauses are unsupported",
         ),
-        ("use crate::*; fn main(){}", "glob imports of the crate root namespace are unsupported"),
-        ("pub use crate::*; fn main(){}", "glob imports of the crate root namespace are unsupported"),
+        (
+            "use crate::*; fn main(){}",
+            "glob imports of the crate root namespace are unsupported",
+        ),
+        (
+            "pub use crate::*; fn main(){}",
+            "glob imports of the crate root namespace are unsupported",
+        ),
         ("mod a{} mod a{} fn main(){}", "duplicate item"),
     ] {
         assert!(parse(source).unwrap_err().contains(message), "{source}");
@@ -1958,6 +1964,7 @@ fn comparison_assertions_delimiters_messages_and_source_order() {
                     op: actual,
                     left,
                     right,
+                    ..
                 } = condition.as_ref()
                 else {
                     panic!("expected comparison")

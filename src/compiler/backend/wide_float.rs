@@ -246,6 +246,9 @@ mod tests {
             wide_scratch: -256,
             vtable_scratch: 0,
             returns: Vec::new(),
+            runtime_location: None,
+            runtime_panic_kind: None,
+            runtime_traps: Vec::new(),
             traps: Vec::new(),
             edges: Vec::new(),
         };

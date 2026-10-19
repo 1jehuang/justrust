@@ -16,7 +16,7 @@ use super::{
     SsaValue, UnOp,
 };
 
-pub const ENCODING_VERSION: u32 = 2;
+pub const ENCODING_VERSION: u32 = 3;
 
 /// Unmetered canonical form, for the interpreter and tests.
 pub fn canonical(function: &SsaFunction) -> SsaFunction {
@@ -159,6 +159,16 @@ fn values(h: &mut Fnv, values: &[SsaValue]) {
     }
 }
 
+fn location(h: &mut Fnv, site: &Option<std::sync::Arc<crate::compiler::ir::RuntimeLocation>>) {
+    h.u8(u8::from(site.is_some()));
+    if let Some(site) = site {
+        h.len(site.path.len());
+        h.bytes(site.path.as_bytes());
+        h.len(site.line);
+        h.len(site.column);
+    }
+}
+
 fn binop(op: BinOp) -> u8 {
     match op {
         BinOp::Add => 0,
@@ -243,6 +253,7 @@ fn encode(
         }
         h.len(data.insts.len());
         for inst in &data.insts {
+            location(h, &inst.runtime_location);
             h.u32(inst.result.0);
             match &inst.kind {
                 InstKind::Const { ty: t, bits } => {
@@ -299,6 +310,7 @@ fn encode(
                 }
             }
         }
+        location(h, &data.panic_location);
         match &data.term {
             SsaTerminator::Jump(target) => {
                 h.u8(0);

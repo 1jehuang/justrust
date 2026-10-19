@@ -66,6 +66,7 @@ fn function(decls: Vec<(Ty, bool)>, blocks: Vec<BasicBlock>) -> cfg::Function {
     let mut function = cfg::Function {
         body_substitution: None,
         call_evidence: std::sync::Arc::from([]),
+        runtime_sites: Default::default(),
         lowering_proof: None,
         ref_contract: Default::default(),
         name: "synthetic".into(),

@@ -64,6 +64,7 @@ mod nominal_intern_tests;
 mod operators;
 mod panic_format;
 mod param_projection;
+mod runtime_sites;
 mod trait_selection;
 mod vec_macro;
 pub use program_symbols::ProgramSymbols;
@@ -561,6 +562,7 @@ mod canonical_source_replay_tests {
         )
         .unwrap();
         let cap = CanonicalSourceCapability {
+            runtime_sites: Default::default(),
             plan: original.plan.clone(),
             declaration: original.declaration,
             facts: original.facts.clone(),
@@ -2121,6 +2123,7 @@ impl SourceInventory {
                 left: base,
                 right: index,
                 op,
+                ..
             } if !matches!(op, BinaryOp::And | BinaryOp::Or) => {
                 self.operator_site(expr as *const Expr as usize, node, budget)?;
                 self.expr(
@@ -2503,6 +2506,7 @@ struct RawSharedOccurrence {
     trace: Arc<sr::SharedIdentityTrace>,
 }
 pub(super) struct CanonicalSourceCapability {
+    runtime_sites: std::cell::RefCell<Vec<(ir::ExprId, Arc<ir::RuntimeLocation>)>>,
     plan: PlanCtx,
     declaration: ir::DeclId,
     facts: Arc<tr::ValidatedFacts>,
@@ -4761,6 +4765,7 @@ impl PlanCtx {
                 })?;
                 let identity = inventory.owner.clone();
                 let mut cap = CanonicalSourceCapability {
+                    runtime_sites: Default::default(),
                     plan: self.clone(),
                     declaration,
                     facts: facts.clone(),
@@ -6020,6 +6025,7 @@ impl Expr {
             Self::Unary {
                 op: UnaryOp::Neg,
                 value: Box::new(literal),
+                site: None,
             }
         } else {
             literal
@@ -6204,11 +6210,15 @@ pub enum Expr {
     Unary {
         op: UnaryOp,
         value: Box<Expr>,
+        site: Option<super::expansion_span::SpanId>,
     },
     Binary {
         op: BinaryOp,
         left: Box<Expr>,
         right: Box<Expr>,
+        /// Original source occurrence, retained across Pratt restructuring.
+        /// Generated arithmetic has no site and cannot invent one later.
+        site: Option<super::expansion_span::SpanId>,
     },
     Call {
         name: AstPath,
@@ -6873,6 +6883,7 @@ mod local_macro_parser_tests {
                     Expr::Unary {
                         op: UnaryOp::Neg,
                         value,
+                        ..
                     },
                 ..
             } = &program.functions[0].body.statements[0]
@@ -8230,6 +8241,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 .map_err(|error| native_adapter::transport_error(error.into()))?;
             Expr::Binary {
                 op,
+                site: None,
                 left: self
                     .names
                     .try_parser_box(condition)
@@ -12381,8 +12393,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         if min == 0 && !self.token().string && (self.is("..") || self.is("..=")) {
             return self.range_expression(None);
         }
+        let site = self.token().span;
         let left = self.expr_prefix(statement)?;
-        let left = self.expr_continuation(left, min, statement_blocklike)?;
+        let left = self.expr_continuation(left, min, statement_blocklike, site)?;
         if min == 0 && !self.token().string && (self.is("..") || self.is("..=")) {
             return self.range_expression(Some(left));
         }
@@ -12393,6 +12406,7 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     #[inline(never)]
     fn labeled_expression(&mut self, min: u8, statement: bool) -> Result<Expr, ParseError> {
+        let site = self.token().span;
         let label = self.input.mint_name(&self.token(), self.names)?;
         self.cursor.bump();
         self.expect(":")?;
@@ -12416,7 +12430,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else {
             return Err(self.error("a label must precede a loop, while, or block"));
         };
-        self.expr_continuation(left, min, statement)
+        self.expr_continuation(left, min, statement, site)
     }
     #[inline(never)]
     fn trait_call_prefix(&mut self) -> Result<Expr, ParseError> {
@@ -12486,6 +12500,7 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     #[inline(never)]
     fn ordinary_expr_prefix(&mut self, statement: bool) -> Result<Expr, ParseError> {
+        let site = self.token().span;
         if self.is("|") || self.is("||") || self.is("move") {
             return self.stored_closure();
         }
@@ -12530,11 +12545,13 @@ impl<'input, 'names> Parser<'input, 'names> {
             Expr::Unary {
                 op: UnaryOp::Neg,
                 value: Box::new(self.expr(11)?),
+                site: Some(site),
             }
         } else if self.eat("!") {
             Expr::Unary {
                 op: UnaryOp::Not,
                 value: Box::new(self.expr(11)?),
+                site: Some(site),
             }
         } else if self.token().string {
             let text = self.string_literal_value(self.token().text)?;
@@ -13017,6 +13034,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         mut left: Expr,
         min: u8,
         statement_blocklike: bool,
+        site: super::expansion_span::SpanId,
     ) -> Result<Expr, ParseError> {
         let mut compared = false;
         loop {
@@ -13168,6 +13186,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             let right = self.expr(precedence + 1)?;
             left = Expr::Binary {
                 op,
+                site: Some(site),
                 left: Box::new(left),
                 right: Box::new(right),
             };

@@ -156,7 +156,7 @@ impl Resolver<'_> {
                 };
                 Value::Int(n, Some(*t))
             }
-            Expr::Unary { op, value } => {
+            Expr::Unary { op, value, .. } => {
                 match (op, self.const_expr(value, module, hint, depth + 1)?) {
                     (UnaryOp::Neg, Value::Int(n, t)) => Value::Int(-n, t),
                     (UnaryOp::Not, Value::Bool(b)) => Value::Bool(!b),
@@ -170,7 +170,9 @@ impl Resolver<'_> {
                     _ => return Err(unsupported()),
                 }
             }
-            Expr::Binary { op, left, right } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 let l = self.const_expr(left, module, hint, depth + 1)?;
                 let r_hint = match l {
                     Value::Int(_, t) => t.or(hint),

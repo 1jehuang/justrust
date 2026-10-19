@@ -54,6 +54,7 @@ fn comparison_operands_are_once_in_order_and_panic_has_no_result() {
             op: source_op,
             left: source_left,
             right: source_right,
+            ..
         } = condition.as_ref()
         else {
             panic!("expected source comparison")

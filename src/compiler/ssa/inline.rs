@@ -293,6 +293,7 @@ fn build(
     // Reserve the caller block slots first so appended blocks get stable IDs.
     for _ in &caller.blocks {
         blocks.push(BlockData {
+            panic_location: None,
             params: Vec::new(),
             insts: Vec::new(),
             term: SsaTerminator::Panic(PanicKind::Unreachable),
@@ -335,12 +336,14 @@ fn build(
             let mut insts = try_vec(end - start)?;
             for inst in &data.insts[start..end] {
                 insts.push(Inst {
+                    runtime_location: inst.runtime_location.clone(),
                     result: inst.result,
                     kind: remap_kind(&inst.kind)?,
                 });
             }
             let Some(at) = split else {
                 blocks[slot] = BlockData {
+                    panic_location: data.panic_location.clone(),
                     params,
                     insts,
                     term: store::try_clone_term(&data.term)?,
@@ -377,6 +380,7 @@ fn build(
             let mut entry_args = try_vec(args.len())?;
             entry_args.extend_from_slice(args);
             blocks[slot] = BlockData {
+                panic_location: None,
                 params,
                 insts,
                 term: SsaTerminator::Jump(SsaTarget {
@@ -397,6 +401,7 @@ fn build(
                         *operand = rename[operand.0 as usize];
                     }
                     block_insts.push(Inst {
+                        runtime_location: inst.runtime_location.clone(),
                         result: rename[inst.result.0 as usize],
                         kind,
                     });
@@ -428,6 +433,7 @@ fn build(
                     return Err("inlining exceeded its admitted shape".into());
                 }
                 blocks.push(BlockData {
+                    panic_location: block.panic_location.clone(),
                     params: block_params,
                     insts: block_insts,
                     term,
@@ -438,6 +444,7 @@ fn build(
                 return Err("inlining exceeded its admitted shape".into());
             }
             blocks.push(BlockData {
+                panic_location: None,
                 params: Vec::new(),
                 insts: Vec::new(),
                 term: SsaTerminator::Panic(PanicKind::Unreachable),

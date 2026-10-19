@@ -1279,7 +1279,9 @@ impl<'s> Checker<'s> {
                     None => self.infer_node(InferKind::Unknown(false))?,
                 }
             }
-            Expr::Binary { op, left, right } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 use BinaryOp::*;
                 match op {
                     Eq | Ne | Lt | Le | Gt | Ge | And | Or => {
@@ -1635,6 +1637,7 @@ pub(super) struct PendingReferenceDecl {
 pub(super) type CheckedApplication = (PathKey, Vec<ir::Ty>, Arc<[ir::TypeActualRegion]>);
 
 pub(super) struct Checker<'a> {
+    pub(super) runtime_sites: Vec<(ir::ExprId, Arc<ir::RuntimeLocation>)>,
     pub(super) signatures: &'a Signatures,
     pub(super) canonical: Option<&'a CanonicalSourceCapability>,
     pub(super) scopes: Vec<HashMap<LocalKey, ir::LocalId>>,
@@ -3577,6 +3580,7 @@ impl<'a> Checker<'a> {
     }
     pub(super) fn new(signatures: &'a Signatures, result: ir::Ty, module: ModuleId) -> Self {
         Self {
+            runtime_sites: Vec::new(),
             signatures,
             scopes: vec![HashMap::new()],
             lexical_scope: None,
@@ -6884,6 +6888,7 @@ impl<'a> Checker<'a> {
             return Ok(id);
         }
         let result = self.expr_with_expectation_inner(e, expectation)?;
+        self.record_runtime_site(e, result)?;
         let result = self.record_original_call(e, result)?;
         match expectation.coercion() {
             Some(expected)
@@ -10213,7 +10218,7 @@ impl<'a> Checker<'a> {
                 newline,
             } => self.check_format(pieces, arguments, modes, specs, *stream, *newline)?,
             Expr::FormatInto(source) => self.check_format_into(source)?,
-            Expr::Unary { op, value } => {
+            Expr::Unary { op, value, .. } => {
                 if matches!(op, UnaryOp::Neg)
                     && let Expr::Integer(literal) = value.as_ref()
                 {
@@ -10268,7 +10273,9 @@ impl<'a> Checker<'a> {
                     },
                 )
             }
-            Expr::Binary { op, left, right } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 let logical = matches!(op, BinaryOp::And | BinaryOp::Or);
                 let shifting = matches!(op, BinaryOp::Shl | BinaryOp::Shr);
                 let hint = if logical {
@@ -11092,6 +11099,7 @@ pub(super) fn type_callable_source_and_closures(
     c.require(&flow, &c.result)?;
     validate_shift_counts(&c.exprs, &c.count_queries)?;
     let checked = ir::CheckedFunction {
+        runtime_sites: ir::RuntimeSites::from_source(c.runtime_sites)?,
         name: f
             .name
             .display(&*program.names)
@@ -11182,6 +11190,7 @@ pub fn type_function_with_env(
     validate_shift_counts(&c.exprs, &c.count_queries)
         .map_err(|e| format!("in function {:?}: {e}", f.name))?;
     Ok(ir::CheckedFunction {
+        runtime_sites: ir::RuntimeSites::from_source(c.runtime_sites)?,
         name: f
             .name
             .display(&*program.names)

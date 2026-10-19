@@ -22,6 +22,7 @@ fn binding(local: usize, field: usize) -> PatternBinding {
 fn fixture() -> CheckedFunction {
     let ty = domain();
     let function = CheckedFunction {
+        runtime_sites: Default::default(),
         call_evidence: Arc::from([]),
         body_substitution: None,
         ref_contract: Default::default(),

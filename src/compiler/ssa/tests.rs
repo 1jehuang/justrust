@@ -273,6 +273,7 @@ fn verify_rejects_malformed_functions() {
     let mut f = Builder::new(vec![], I32).0.finish();
     f.blocks[0].insts = vec![
         Inst {
+            runtime_location: None,
             result: SsaValue(0),
             kind: InstKind::Unary {
                 op: UnOp::Not,
@@ -281,6 +282,7 @@ fn verify_rejects_malformed_functions() {
             },
         },
         Inst {
+            runtime_location: None,
             result: SsaValue(1),
             kind: InstKind::Const { ty: I32, bits: 3 },
         },
@@ -338,6 +340,7 @@ fn verify_rejects_malformed_functions() {
     let c = b.constant(SsaBlock(0), I32, 1);
     let mut f = b.finish();
     f.blocks[0].insts.push(Inst {
+        runtime_location: None,
         result: c,
         kind: InstKind::Const { ty: I32, bits: 2 },
     });
@@ -480,6 +483,7 @@ fn hash_ignores_numbering_and_dead_blocks_but_not_content() {
         }
     }
     shuffled.blocks.push(BlockData {
+        panic_location: None,
         params: vec![],
         insts: vec![],
         term: SsaTerminator::Panic(PanicKind::Unreachable),
@@ -504,7 +508,56 @@ fn hash_is_pinned() {
     let h = hash::content_hash(&sum_loop(Overflow::Trap));
     assert_eq!(h, hash::content_hash(&sum_loop(Overflow::Trap)));
     assert_eq!(format!("{h:032x}").len(), 32);
-    assert_eq!(hash::ENCODING_VERSION, 2);
+    assert_eq!(hash::ENCODING_VERSION, 3);
+}
+
+#[test]
+fn panic_locations_survive_constant_folding_and_change_content_identity() {
+    let (mut builder, _) = Builder::new(vec![], I32);
+    let left = builder.constant(SsaBlock(0), I32, i32::MAX as u128);
+    let right = builder.constant(SsaBlock(0), I32, 1);
+    let result = bin(
+        &mut builder,
+        SsaBlock(0),
+        BinOp::Add,
+        Overflow::Trap,
+        left,
+        right,
+    );
+    builder.terminate(SsaBlock(0), SsaTerminator::Return(result));
+    let mut function = builder.finish();
+    let location = std::sync::Arc::new(crate::compiler::ir::RuntimeLocation {
+        path: "src/main.rs".into(),
+        line: 7,
+        column: 9,
+    });
+    function.blocks[0]
+        .insts
+        .last_mut()
+        .unwrap()
+        .runtime_location = Some(location.clone());
+    let original_hash = hash::content_hash(&function);
+    let copied = store::try_clone_block(&function.blocks[0]).unwrap();
+    assert_eq!(
+        copied.insts.last().unwrap().runtime_location.as_ref(),
+        Some(&location)
+    );
+    let (optimized, stats) = optimize(&function);
+    assert!(stats.panics_folded > 0);
+    assert_eq!(
+        optimized.blocks[0].term,
+        SsaTerminator::Panic(PanicKind::AddOverflow)
+    );
+    assert_eq!(optimized.blocks[0].panic_location.as_ref(), Some(&location));
+    function.blocks[0]
+        .insts
+        .last_mut()
+        .unwrap()
+        .runtime_location = None;
+    assert_ne!(hash::content_hash(&function), original_hash);
+    let mut changed = optimized.clone();
+    changed.blocks[0].panic_location = None;
+    assert_ne!(hash::content_hash(&optimized), hash::content_hash(&changed));
 }
 
 // ---------------------------------------------------------------------------

@@ -8,7 +8,9 @@ use super::ir::{self, ExprId, IntTy, IntValue, LocalId, LoopId, Place, Projectio
 mod drop_normal;
 mod grouped_or;
 mod intrinsics;
+mod runtime_sites;
 pub use drop_normal::ValidatedCleanupCall;
+pub use runtime_sites::RuntimeSites;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BlockId(pub usize);
@@ -42,6 +44,7 @@ pub struct Located<T> {
 
 #[derive(Clone, Debug)]
 pub struct Function {
+    pub runtime_sites: RuntimeSites,
     pub lowering_proof: Option<std::sync::Arc<GeneratedCfgShape>>,
     pub body_substitution: Option<std::sync::Arc<ir::BodySubstitutionProof>>,
     pub call_evidence: std::sync::Arc<[std::sync::Arc<ir::ValidatedCallEvidence>]>,
@@ -69,6 +72,7 @@ pub struct BasicBlock {
 /// only the original verified template, so these guards have no output backedge.
 #[derive(Clone, Debug)]
 pub struct GeneratedCfgShape {
+    runtime_sites: RuntimeSites,
     name: String,
     params: std::sync::Arc<[LocalId]>,
     locals: std::sync::Arc<[ir::LocalDecl]>,
@@ -112,6 +116,7 @@ impl GeneratedCfgShape {
         )?;
         budget.charge_work(f.call_evidence.len())?;
         Ok(Self {
+            runtime_sites: f.runtime_sites.clone(),
             name: f.name.clone(),
             params: f.params.clone().into(),
             locals: f.locals.clone().into(),
@@ -202,7 +207,8 @@ impl GeneratedCfgShape {
                 .saturating_add(self.blocks.len())
                 .saturating_add(self.loans.len()),
         )?;
-        if f.name != self.name
+        if f.runtime_sites != self.runtime_sites
+            || f.name != self.name
             || f.params.as_slice() != self.params.as_ref()
             || f.locals.len() != self.locals.len()
             || f.blocks.len() != self.blocks.len()
@@ -2822,6 +2828,7 @@ struct Lowerer<'a> {
     facts: ir::FactsCtx<'a>,
     budget: Option<&'a ir::PlanBudget>,
     resource_error: Option<String>,
+    runtime_sites: Vec<runtime_sites::Row>,
     lowering_depth: usize,
     lowering_work: usize,
     origins: usize,
@@ -4457,7 +4464,7 @@ impl Lowerer<'_> {
             }
             ir::ExprKind::Unary { op, value } => {
                 let operand = self.expression(*value)?;
-                self.assign(
+                self.assign_source_arithmetic(
                     destination.clone(),
                     Rvalue::Unary {
                         op: *op,
@@ -4528,7 +4535,7 @@ impl Lowerer<'_> {
             ir::ExprKind::Binary { op, left, right } => {
                 let left = self.expression(*left)?;
                 let right = self.expression(*right)?;
-                self.assign(
+                self.assign_source_arithmetic(
                     destination.clone(),
                     Rvalue::Binary {
                         op: *op,
@@ -4780,6 +4787,7 @@ mod literal_output_tests {
 
     fn fixture(output: ir::LiteralOutput) -> ir::CheckedFunction {
         ir::CheckedFunction {
+            runtime_sites: Default::default(),
             call_evidence: std::sync::Arc::from([]),
             body_substitution: None,
             ref_contract: Default::default(),
@@ -5120,6 +5128,7 @@ fn lower_internal_with_source(
         facts,
         budget,
         resource_error: None,
+        runtime_sites: Vec::new(),
         lowering_depth: 0,
         lowering_work: 0,
         origins: formal_parameter_origins + loan_sites.len(),
@@ -5128,6 +5137,7 @@ fn lower_internal_with_source(
         used_loans: std::collections::HashSet::new(),
         source,
         result: Function {
+            runtime_sites: Default::default(),
             lowering_proof: None,
             body_substitution: source.body_substitution.clone(),
             call_evidence: std::sync::Arc::from([]),
@@ -5194,6 +5204,7 @@ fn lower_internal_with_source(
             };
         }
     }
+    lowerer.result.runtime_sites = RuntimeSites::from_lowering(lowerer.runtime_sites)?;
     lowerer.result.blocks = lowerer
         .blocks
         .into_iter()
@@ -5495,6 +5506,7 @@ mod panic_terminal_tests {
             facts: ir::FactsCtx::from_validated(publication.facts()),
             budget: Some(&budget),
             resource_error: None,
+            runtime_sites: Vec::new(),
             lowering_depth: 0,
             lowering_work: 0,
             origins: 0,
@@ -6126,6 +6138,7 @@ mod tests {
         let types = env.ordered_params().map(Ty::Param).collect::<Vec<_>>();
         let result = Ty::Tuple(types.clone().into());
         let source = ir::CheckedFunction {
+            runtime_sites: Default::default(),
             call_evidence: std::sync::Arc::from([]),
             body_substitution: None,
             ref_contract: Default::default(),
@@ -6219,6 +6232,7 @@ mod tests {
         });
         let env = std::sync::Arc::new(ir::GenericEnv::new(&[scope], &budget).unwrap());
         let source = ir::CheckedFunction {
+            runtime_sites: Default::default(),
             call_evidence: std::sync::Arc::from([]),
             body_substitution: None,
             ref_contract: Default::default(),
@@ -6319,6 +6333,7 @@ mod tests {
         })]));
         let aggregate = Ty::Tuple(std::sync::Arc::from([Ty::Enum(closed_enum)]));
         let malformed = Function {
+            runtime_sites: Default::default(),
             lowering_proof: None,
             body_substitution: None,
             call_evidence: std::sync::Arc::from([]),
@@ -7118,6 +7133,7 @@ mod tests {
         statements: Vec<ir::Stmt>,
     ) -> ir::CheckedFunction {
         ir::CheckedFunction {
+            runtime_sites: Default::default(),
             call_evidence: std::sync::Arc::from([]),
             body_substitution: None,
             ref_contract: Default::default(),
@@ -8592,6 +8608,7 @@ mod tests {
             facts: ir::FactsCtx::Concrete,
             budget: None,
             resource_error: None,
+            runtime_sites: Vec::new(),
             lowering_depth: 0,
             lowering_work: ir::MAX_PATTERN_PROJECTION_WORK,
             origins: 0,
@@ -9825,6 +9842,7 @@ mod tests {
             facts: ir::FactsCtx::Concrete,
             budget: Some(budget),
             resource_error: None,
+            runtime_sites: Vec::new(),
             lowering_depth: 0,
             lowering_work: 0,
             origins: 0,

@@ -423,7 +423,9 @@ impl type_check::Checker<'_> {
     /// Overloaded binary/unary operator, or `None` for primitive operands.
     pub(super) fn overloaded_operator(&mut self, e: &Expr) -> Result<Option<ir::ExprId>, String> {
         match e {
-            Expr::Binary { op, left, right } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 let Some(spec) = binary_trait(*op) else {
                     return Ok(None);
                 };
@@ -445,7 +447,7 @@ impl type_check::Checker<'_> {
                 self.record_operator(e as *const Expr as usize, id)?;
                 Ok(Some(id))
             }
-            Expr::Unary { op, value } => {
+            Expr::Unary { op, value, .. } => {
                 let Some(ty) = self.method_receiver_hint(value)? else {
                     return Ok(None);
                 };

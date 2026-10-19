@@ -876,6 +876,10 @@ impl CanonicalSourcePublication {
                 "publication changed exact source or facts",
             ));
         }
+        source
+            .runtime_sites
+            .validate(source.exprs.len())
+            .map_err(|message| FactsError::invalid(budget, &message))?;
         // The private factory replayed this exact immutable final Arc and performed the
         // mandatory candidate structural validation before mint. No retained payload
         // has interior mutability, and Arc::make_mut edits cannot share this Arc.
@@ -896,6 +900,7 @@ pub(super) fn publish_canonical_source(
     budget: &ir::PlanBudget,
 ) -> Result<Arc<CanonicalSourcePublication>, FactsError> {
     cap.validate_original(&original.source, budget)?;
+    cap.validate_runtime_sites(&final_source)?;
     let replayed = replay_original_calls(final_source.clone(), &original, &facts, budget)?;
     ir::validate_source_candidate(&final_source, &facts, &replayed, budget)?;
     budget

@@ -131,6 +131,7 @@ fn fold(
         let mut write = 0usize;
         let mut panicked = None;
         let placeholder = || Inst {
+            runtime_location: None,
             result: SsaValue(0),
             kind: InstKind::Const {
                 ty: SsaTy::Unit,
@@ -217,6 +218,7 @@ fn fold(
                     known[inst.result.0 as usize] = Some(bits);
                     stats.folded += 1;
                     Inst {
+                        runtime_location: inst.runtime_location.clone(),
                         result: inst.result,
                         kind: InstKind::Const {
                             ty: ty(types, inst.result),
@@ -226,10 +228,11 @@ fn fold(
                 }
                 Some(Err(kind)) => {
                     stats.panics_folded += 1;
-                    panicked = Some(kind);
+                    panicked = Some((kind, inst.runtime_location.clone()));
                     break;
                 }
                 None => Inst {
+                    runtime_location: inst.runtime_location.clone(),
                     result: inst.result,
                     kind,
                 },
@@ -239,11 +242,12 @@ fn fold(
         }
         kept.truncate(write);
         data.insts = kept;
-        if let Some(kind) = panicked {
+        if let Some((kind, location)) = panicked {
             // Everything after a certain panic is unreachable. Blocks that
             // depended on the dropped values were dominated by this one and
             // are removed by canonicalization.
             data.term = SsaTerminator::Panic(kind);
+            data.panic_location = location;
             continue;
         }
         for operand in data.term.operands_mut() {
@@ -316,6 +320,7 @@ fn merge(
             let taken = std::mem::replace(
                 &mut out.value.blocks[successor],
                 super::BlockData {
+                    panic_location: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: SsaTerminator::Panic(super::PanicKind::Unreachable),
@@ -344,6 +349,7 @@ fn merge(
             }
             let data = &mut out.value.blocks[block];
             data.insts.extend(taken.insts);
+            data.panic_location = taken.panic_location;
             data.term = taken.term;
             stats.merged += 1;
         }

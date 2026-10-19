@@ -41,10 +41,18 @@ impl Parser<'_, '_> {
         Ok(Some(match name {
             "BITS" => literal(u128::from(bits), ir::IntTy::U32),
             "MAX" if signed => literal((1u128 << (bits - 1)) - 1, ty),
-            "MAX" => literal(if bits == 128 { u128::MAX } else { (1u128 << bits) - 1 }, ty),
+            "MAX" => literal(
+                if bits == 128 {
+                    u128::MAX
+                } else {
+                    (1u128 << bits) - 1
+                },
+                ty,
+            ),
             _ if signed => Expr::Unary {
                 op: UnaryOp::Neg,
                 value: Box::new(literal(1u128 << (bits - 1), ty)),
+                site: None,
             },
             _ => literal(0, ty),
         }))

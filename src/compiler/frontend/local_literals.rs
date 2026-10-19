@@ -1129,7 +1129,9 @@ impl<'s> Solver<'_, '_, 's> {
                 self.lookup(path)
             }
             Expr::Unary { value, .. } => self.expr(value, depth + 1),
-            Expr::Binary { op, left, right } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 let left = self.expr(left, depth + 1)?;
                 let right = self.expr(right, depth + 1)?;
                 if !matches!(op, BinaryOp::Shl | BinaryOp::Shr) {

@@ -373,6 +373,7 @@ fn put<T>(data: &mut Vec<T>, value: T) -> Result<(), String> {
 }
 
 struct Ctx<'a, 'm> {
+    runtime_location: Option<std::sync::Arc<ir::RuntimeLocation>>,
     cfg: &'a cfg::Function,
     meter: &'a Meter<'m>,
     function: SsaFunction,
@@ -395,7 +396,11 @@ impl Ctx<'_, '_> {
         let result = self.fresh()?;
         put(
             &mut self.function.blocks[block].insts,
-            Inst { result, kind },
+            Inst {
+                runtime_location: self.runtime_location.clone(),
+                result,
+                kind,
+            },
         )?;
         Ok(result)
     }
@@ -524,12 +529,17 @@ impl Ctx<'_, '_> {
         }
         let cfg = self.cfg;
         let data = &cfg.blocks[index];
-        for statement in &data.statements {
+        for (statement_index, statement) in data.statements.iter().enumerate() {
+            self.runtime_location = cfg
+                .runtime_sites
+                .get(cfg::BlockId(index), statement_index)
+                .cloned();
             if let cfg::Statement::Assign { destination, value } = &statement.value {
                 let local = whole(destination).ok_or("validated destination changed")?;
                 env[local] = self.rvalue(ssa, env, value)?;
             }
         }
+        self.runtime_location = None;
         let term = match &data.terminator.value {
             cfg::Terminator::Goto(next) => SsaTerminator::Jump(self.edge(*next, env)?),
             cfg::Terminator::Switch {
@@ -658,6 +668,7 @@ pub fn lower(
                 entry_params.push((fresh()?, *ty));
             }
             ssa_blocks.push(BlockData {
+                panic_location: None,
                 params: entry_params,
                 insts: try_vec(locals.saturating_sub(params))?,
                 term: SsaTerminator::Panic(PanicKind::Unreachable),
@@ -670,12 +681,14 @@ pub fn lower(
                     block_params.push((fresh()?, *ty));
                 }
                 ssa_blocks.push(BlockData {
+                    panic_location: None,
                     params: block_params,
                     insts: try_vec(*count)?,
                     term: SsaTerminator::Panic(PanicKind::Unreachable),
                 });
             }
             let mut ctx = Ctx {
+                runtime_location: None,
                 cfg: function,
                 meter,
                 function: SsaFunction {

@@ -227,7 +227,7 @@ impl ConstProjectionScratch<'_> {
                 SyntaxKind::Reference(self.plan.constant_path(path)?)
             }
             frontend::Expr::Var(path) => return Err(self.plan.constant_unresolved_value(path)?),
-            frontend::Expr::Unary { op, value } => SyntaxKind::Unary {
+            frontend::Expr::Unary { op, value, .. } => SyntaxKind::Unary {
                 op: match op {
                     frontend::UnaryOp::Neg => scalar::Unary::Neg,
                     frontend::UnaryOp::Not => scalar::Unary::Not,
@@ -238,7 +238,9 @@ impl ConstProjectionScratch<'_> {
                     depth + 1,
                 )?,
             },
-            frontend::Expr::Binary { op, left, right } => {
+            frontend::Expr::Binary {
+                op, left, right, ..
+            } => {
                 let left = self.expr(
                     left,
                     source.child(2, 0, self.budget).map_err(|e| e.to_string())?,

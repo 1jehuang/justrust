@@ -29,6 +29,7 @@ use super::ownership;
 use std::collections::HashMap;
 
 mod panic_header;
+mod runtime_traps;
 mod wide_float;
 mod wide_int;
 
@@ -397,6 +398,9 @@ struct Emitter<'a> {
     /// Frame slot holding the vtable word of the current virtual call.
     vtable_scratch: i32,
     returns: Vec<usize>,
+    runtime_location: Option<std::sync::Arc<ir::RuntimeLocation>>,
+    runtime_panic_kind: Option<super::ssa::PanicKind>,
+    runtime_traps: Vec<runtime_traps::RuntimeTrap>,
     traps: Vec<usize>,
     edges: Vec<(usize, cfg::BlockId)>,
 }
@@ -537,7 +541,15 @@ impl<'a> Emitter<'a> {
     }
     fn trap_if(&mut self, condition: u8) {
         let at = self.jump(&[0x0f, condition]);
-        self.traps.push(at);
+        if let (Some(kind), Some(location)) = (self.runtime_panic_kind, &self.runtime_location) {
+            self.runtime_traps.push(runtime_traps::RuntimeTrap {
+                branch: at,
+                kind,
+                location: location.clone(),
+            });
+        } else {
+            self.traps.push(at);
+        }
     }
     fn local_offset(&self, local: LocalId) -> Result<i32, String> {
         self.locals
@@ -1370,6 +1382,7 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
     fn binary_integer(&mut self, op: BinaryOp, ty: ir::IntTy) -> Result<(), String> {
+        self.binary_panic_kind(op);
         if ty.bits() > 64 {
             return Err("wide integer cannot use the word arithmetic kernel".into());
         }
@@ -1428,7 +1441,13 @@ impl<'a> Emitter<'a> {
             }
             BinaryOp::Div | BinaryOp::Rem => {
                 self.bytes(&[0x48, 0x85, 0xc9]);
+                self.runtime_panic_kind = Some(if matches!(op, BinaryOp::Div) {
+                    super::ssa::PanicKind::DivByZero
+                } else {
+                    super::ssa::PanicKind::RemByZero
+                });
                 self.trap_if(0x84);
+                self.binary_panic_kind(op);
                 if ty.is_signed() {
                     // Guard MIN/-1 at the declared width for BOTH operations,
                     // before hardware division can fault or rem can hide overflow.
@@ -2581,6 +2600,8 @@ impl Emitter<'_> {
                     return Ok(());
                 }
                 self.operand(value)?;
+                self.runtime_panic_kind =
+                    matches!(op, UnaryOp::Neg).then_some(super::ssa::PanicKind::NegOverflow);
                 if let ir::Ty::Int(integer) = ty
                     && integer.bits() == 128
                 {
@@ -3357,6 +3378,9 @@ pub fn emit_cfg_function(
         wide_scratch,
         vtable_scratch,
         returns: Vec::new(),
+        runtime_location: None,
+        runtime_panic_kind: None,
+        runtime_traps: Vec::new(),
         traps: Vec::new(),
         edges: Vec::new(),
     };
@@ -3388,11 +3412,18 @@ pub fn emit_cfg_function(
     }
     emitter.edge(&[0xe9], function.entry);
     let mut labels = Vec::with_capacity(function.blocks.len());
-    for block in &function.blocks {
+    for (block_index, block) in function.blocks.iter().enumerate() {
         labels.push(emitter.position());
-        for statement in &block.statements {
+        for (statement_index, statement) in block.statements.iter().enumerate() {
+            emitter.runtime_location = function
+                .runtime_sites
+                .get(cfg::BlockId(block_index), statement_index)
+                .cloned();
+            emitter.runtime_panic_kind = None;
             emitter.statement(&statement.value)?;
         }
+        emitter.runtime_location = None;
+        emitter.runtime_panic_kind = None;
         emitter.terminator(&block.terminator.value)?;
     }
     for (at, target) in std::mem::take(&mut emitter.edges) {
@@ -3410,6 +3441,7 @@ pub fn emit_cfg_function(
         emitter.patch(at, epilogue)?;
     }
     emitter.trap_block()?;
+    emitter.runtime_panic_blocks()?;
     Ok(emitter.object)
 }
 
@@ -3608,6 +3640,7 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    use std::os::unix::process::ExitStatusExt;
     use std::process::{Command, Output, Stdio};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -3743,6 +3776,7 @@ mod tests {
     fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
         Expr::Binary {
             op,
+            site: None,
             left: Box::new(left),
             right: Box::new(right),
         }
@@ -4289,6 +4323,9 @@ mod tests {
             wide_scratch: 0,
             vtable_scratch: 0,
             returns: Vec::new(),
+            runtime_location: None,
+            runtime_panic_kind: None,
+            runtime_traps: Vec::new(),
             traps: Vec::new(),
             edges: Vec::new(),
         };
@@ -4356,6 +4393,9 @@ mod tests {
             wide_scratch: -48,
             vtable_scratch: 0,
             returns: Vec::new(),
+            runtime_location: None,
+            runtime_panic_kind: None,
+            runtime_traps: Vec::new(),
             traps: Vec::new(),
             edges: Vec::new(),
         };
@@ -4407,6 +4447,9 @@ mod tests {
             wide_scratch: -64,
             vtable_scratch: 0,
             returns: Vec::new(),
+            runtime_location: None,
+            runtime_panic_kind: None,
+            runtime_traps: Vec::new(),
             traps: Vec::new(),
             edges: Vec::new(),
         };
@@ -4876,6 +4919,9 @@ mod tests {
             wide_scratch: 0,
             vtable_scratch: 0,
             returns: Vec::new(),
+            runtime_location: None,
+            runtime_panic_kind: None,
+            runtime_traps: Vec::new(),
             traps: Vec::new(),
             edges: Vec::new(),
         };
@@ -5019,6 +5065,9 @@ mod tests {
             wide_scratch: 0,
             vtable_scratch: 0,
             returns: Vec::new(),
+            runtime_location: None,
+            runtime_panic_kind: None,
+            runtime_traps: Vec::new(),
             traps: Vec::new(),
             edges: Vec::new(),
         };
@@ -5980,7 +6029,7 @@ mod tests {
                 );
                 let program = frontend::parse(&source).unwrap();
                 let output = run(&program);
-                assert_eq!(output.status.code(), Some(101), "{source}: {output:?}");
+                assert_eq!(output.status.signal(), Some(6), "{source}: {output:?}");
             }
         }
     }
@@ -6061,7 +6110,7 @@ mod tests {
             );
             let program = frontend::parse(&source).unwrap();
             let output = run(&program);
-            assert_eq!(output.status.code(), Some(101), "{expression}: {output:?}");
+            assert_eq!(output.status.signal(), Some(6), "{expression}: {output:?}");
         }
     }
 
@@ -6343,8 +6392,8 @@ mod tests {
                 let p = frontend::parse(&source).unwrap();
                 let output = run(&p);
                 assert_eq!(
-                    output.status.code(),
-                    Some(101),
+                    output.status.signal(),
+                    Some(6),
                     "{ty} {expression}: {output:?}"
                 );
             }
@@ -7229,7 +7278,7 @@ mod tests {
 
     #[test]
     fn usize_unsigned_overflow_zero_division_and_full_width_bounds_trap() {
-        for source in [
+        for (case, source) in [
             "fn main() { let n = 18446744073709551615usize + 1usize; }",
             "fn main() { let n = 0usize - 1usize; }",
             "fn main() { let n = 9223372036854775808usize * 2usize; }",
@@ -7240,10 +7289,14 @@ mod tests {
             "fn main() { let mut a = [7]; let i = 4294967296usize; a[i] = 9; }",
             "fn main() { let a = [7; 0]; let i = 0usize; let n = a[i]; }",
             "struct Item { n: i32 } fn main() { let a = [Item { n: 7 }]; let i = 4294967296usize; let _ = a[i]; }",
-        ] {
+        ].into_iter().enumerate() {
             let p = frontend::parse(source).unwrap();
             let output = run(&p);
-            assert_eq!(output.status.code(), Some(101), "{source}: {output:?}");
+            if case < 5 {
+                assert_eq!(output.status.signal(), Some(6), "{source}: {output:?}");
+            } else {
+                assert_eq!(output.status.code(), Some(101), "{source}: {output:?}");
+            }
         }
     }
 
@@ -7344,6 +7397,9 @@ mod tests {
             wide_scratch: -264,
             vtable_scratch: 0,
             returns: vec![],
+            runtime_location: None,
+            runtime_panic_kind: None,
+            runtime_traps: Vec::new(),
             traps: vec![],
             edges: vec![],
         };
@@ -7530,6 +7586,7 @@ mod tests {
             let function = cfg::Function {
                 body_substitution: None,
                 call_evidence: std::sync::Arc::from([]),
+                runtime_sites: Default::default(),
                 lowering_proof: None,
                 ref_contract: Default::default(),
                 loan_sites: vec![],
@@ -7602,6 +7659,9 @@ mod tests {
                 wide_scratch: 0,
                 vtable_scratch: 0,
                 returns: vec![],
+                runtime_location: None,
+                runtime_panic_kind: None,
+                runtime_traps: Vec::new(),
                 traps: vec![],
                 edges: vec![],
             };
@@ -7691,6 +7751,9 @@ mod tests {
             wide_scratch: -288,
             vtable_scratch: 0,
             returns: vec![],
+            runtime_location: None,
+            runtime_panic_kind: None,
+            runtime_traps: Vec::new(),
             traps: vec![],
             edges: vec![],
         };
@@ -7817,6 +7880,7 @@ mod tests {
             Expr::Unary {
                 op: UnaryOp::Neg,
                 value: Box::new(Expr::i32(i32::MIN)),
+                site: None,
             },
             crash(),
             binary(BinaryOp::Rem, Expr::i32(1), Expr::i32(0)),
@@ -7845,6 +7909,7 @@ mod tests {
                 Expr::Unary {
                     op: UnaryOp::Neg,
                     value: Box::new(Expr::i32(7)),
+                    site: None,
                 },
                 -7,
             ),
@@ -7852,6 +7917,7 @@ mod tests {
                 Expr::Unary {
                     op: UnaryOp::Not,
                     value: Box::new(Expr::Bool(true)),
+                    site: None,
                 },
                 false,
             ),
@@ -8557,6 +8623,7 @@ mod tests {
         );
         assert!(value_size(&too_large).is_err());
         let checked = ir::CheckedFunction {
+            runtime_sites: Default::default(),
             body_substitution: None,
             call_evidence: std::sync::Arc::from([]),
             ref_contract: Default::default(),
@@ -8620,6 +8687,7 @@ mod tests {
         let mut function = cfg::Function {
             body_substitution: None,
             call_evidence: std::sync::Arc::from([]),
+            runtime_sites: Default::default(),
             lowering_proof: None,
             ref_contract: Default::default(),
             loan_sites: vec![],

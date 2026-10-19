@@ -746,6 +746,7 @@ pub(super) fn checked_body(
     let footprint = counts(descriptor, budget)?;
     budget.retain_bytes(footprint.ir_retained_bytes)?;
     let mut f = ir::CheckedFunction {
+        runtime_sites: Default::default(),
         name: "clone".into(),
         ref_contract: signature.ref_contract.clone(),
         params: vec![ir::LocalId(0)],

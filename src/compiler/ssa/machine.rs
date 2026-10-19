@@ -5,7 +5,8 @@
 //! functions call each other freely and link with the same linker:
 //! arguments pushed left to right as eight-byte words, read by the callee at
 //! `rbp + 16 + 8 * (later parameters)`, results normalized in `rax`, every
-//! register caller-saved, overflow and division traps exit with status 101.
+//! register caller-saved. Source-backed arithmetic panics abort with diagnostics;
+//! synthetic guards without source authority retain the legacy exit 101.
 //!
 //! Allocation is linear scan over live intervals on the canonical block order
 //! (reverse postorder). Values live across a call are kept in stack slots,
@@ -75,6 +76,13 @@ fn int_of(ty: SsaTy) -> SsaIntTy {
 struct Asm<'m> {
     code: meter::Buf<u8>,
     traps: meter::Buf<usize>,
+    runtime_traps: meter::Buf<(
+        usize,
+        PanicKind,
+        std::sync::Arc<crate::compiler::ir::RuntimeLocation>,
+    )>,
+    runtime_location: Option<std::sync::Arc<crate::compiler::ir::RuntimeLocation>>,
+    runtime_kind: Option<PanicKind>,
     meter: Meter<'m>,
 }
 
@@ -109,7 +117,12 @@ impl Asm<'_> {
     fn trap_if(&mut self, condition: u8) -> Result<(), String> {
         let at = self.rel32(&[0x0f, condition])?;
         let meter = self.meter;
-        self.traps.push_growing(&meter, at)
+        if let (Some(kind), Some(location)) = (self.runtime_kind, &self.runtime_location) {
+            self.runtime_traps
+                .push_growing(&meter, (at, kind, location.clone()))
+        } else {
+            self.traps.push_growing(&meter, at)
+        }
     }
 
     fn rex(w: bool, reg: u8, base: u8) -> u8 {
@@ -734,6 +747,9 @@ pub fn emit(
     let mut asm = Asm {
         code: meter.buf(bound.code)?,
         traps: meter.buf(bound.traps)?,
+        runtime_traps: meter.buf(0)?,
+        runtime_location: None,
+        runtime_kind: None,
         meter: *meter,
     };
     // Split payments: `call_symbols` pays only the symbol strings inside
@@ -768,6 +784,21 @@ pub fn emit(
     for (block, data) in function.blocks.iter().enumerate() {
         labels[block] = asm.code.len();
         for inst in &data.insts {
+            asm.runtime_location = inst.runtime_location.clone();
+            asm.runtime_kind = match &inst.kind {
+                InstKind::Binary { op, .. } => match op {
+                    BinOp::Add => Some(PanicKind::AddOverflow),
+                    BinOp::Sub => Some(PanicKind::SubOverflow),
+                    BinOp::Mul => Some(PanicKind::MulOverflow),
+                    BinOp::Div => Some(PanicKind::DivOverflow),
+                    BinOp::Rem => Some(PanicKind::RemOverflow),
+                    BinOp::Shl => Some(PanicKind::ShlOverflow),
+                    BinOp::Shr => Some(PanicKind::ShrOverflow),
+                    _ => None,
+                },
+                InstKind::Unary { op: UnOp::Neg, .. } => Some(PanicKind::NegOverflow),
+                _ => None,
+            };
             let result = inst.result;
             let out = loc[result.0 as usize];
             match &inst.kind {
@@ -821,7 +852,17 @@ pub fn emit(
                         }
                         BinOp::Div | BinOp::Rem => {
                             asm.bytes(&[0x48, 0x85, 0xc9])?; // test rcx, rcx
+                            asm.runtime_kind = Some(if *op == BinOp::Div {
+                                PanicKind::DivByZero
+                            } else {
+                                PanicKind::RemByZero
+                            });
                             asm.trap_if(0x84)?;
+                            asm.runtime_kind = Some(if *op == BinOp::Div {
+                                PanicKind::DivOverflow
+                            } else {
+                                PanicKind::RemOverflow
+                            });
                             if int.signed() {
                                 let minimum = u64::MAX << (int.bits() - 1);
                                 asm.bytes(&[0x48, 0xba])?;
@@ -971,6 +1012,20 @@ pub fn emit(
                     &text.location,
                 )?;
             }
+            SsaTerminator::Panic(kind) if data.panic_location.is_some() => {
+                let location = data
+                    .panic_location
+                    .as_ref()
+                    .expect("matched source location");
+                emit_runtime_panic(
+                    &mut asm,
+                    &mut strings,
+                    &mut panic_payloads,
+                    meter,
+                    *kind,
+                    location,
+                )?;
+            }
             SsaTerminator::Panic(_) => {
                 let at = asm.rel32(&[0xe9])?;
                 asm.traps.push_growing(meter, at)?;
@@ -1043,13 +1098,30 @@ pub fn emit(
         let at = asm.traps.as_slice()[index];
         asm.patch(at, trap)?;
     }
+    for index in 0..asm.runtime_traps.len() {
+        let (at, kind, location) = asm.runtime_traps.as_slice()[index].clone();
+        let here = asm.code.len();
+        asm.patch(at, here)?;
+        emit_runtime_panic(
+            &mut asm,
+            &mut strings,
+            &mut panic_payloads,
+            meter,
+            kind,
+            &location,
+        )?;
+    }
     let mut stats = layout.stats;
     stats.code_bytes = asm.code.len();
     let Asm {
-        mut code, traps, ..
+        mut code,
+        traps,
+        runtime_traps,
+        ..
     } = asm;
     // The trap table is scratch (data then lease).
     drop(traps);
+    drop(runtime_traps);
     // Every output stays a coupled Buf (Vec + its lease) until all fallible
     // merges finished. First each payment lease merges into the buffer whose
     // contents it pays (after which that buffer is self-contained), then the
@@ -1146,6 +1218,27 @@ fn merge_buf<T>(
         return Err((other, "injected merge failure (test)".into()));
     }
     code.absorb_from(meter, other)
+}
+
+fn emit_runtime_panic<'m>(
+    asm: &mut Asm<'m>,
+    strings: &mut meter::Buf<(usize, Vec<u8>)>,
+    diagnostics: &mut meter::Lease,
+    meter: &Meter<'m>,
+    kind: PanicKind,
+    location: &crate::compiler::ir::RuntimeLocation,
+) -> Result<(), String> {
+    // The coordinate text is temporary. The shared panic sink owns and pays
+    // for the final diagnostic payload in exactly the same way as panic!.
+    let _temporary = meter.lease(meter::add(location.path.len(), 48)?)?;
+    let text = location.diagnostic_location();
+    let mut sink = MachinePanic {
+        asm,
+        strings,
+        diagnostics,
+        meter,
+    };
+    crate::compiler::backend::emit_panic_into(&mut sink, kind.message(), &text)
 }
 
 /// Paid panic adapter: the shared abort sequence written into the machine's

@@ -17,6 +17,9 @@ use std::sync::Arc;
 pub const MAX_LOAN_SITES: usize = 4096;
 #[path = "ir/grouped_or.rs"]
 mod grouped_or;
+#[path = "ir/runtime_sites.rs"]
+mod runtime_sites;
+pub use runtime_sites::{RuntimeLocation, RuntimeSites};
 use std::sync::atomic::{AtomicU64, Ordering};
 #[path = "ir/closure.rs"]
 mod closure;
@@ -1197,6 +1200,7 @@ fn validate_call_evidence_with_policy(
 /// Exact generated payload, without an output-source or proof backedge.
 #[derive(Clone, Debug)]
 struct GeneratedBodyShape {
+    runtime_sites: RuntimeSites,
     name: String,
     params: Arc<[LocalId]>,
     locals: Arc<[LocalDecl]>,
@@ -1496,6 +1500,7 @@ impl GeneratedBodyShape {
         source.preflight_plan(FactsCtx::from_validated(facts), budget)?;
         budget.retain_bytes(std::mem::size_of::<Self>() + 8 * std::mem::size_of::<usize>())?;
         Ok(Self {
+            runtime_sites: source.runtime_sites.clone(),
             name: source.name.clone(),
             params: source.params.clone().into(),
             locals: source.locals.clone().into(),
@@ -1519,7 +1524,8 @@ impl GeneratedBodyShape {
                 .saturating_add(self.locals.len())
                 .saturating_add(self.exprs.len()),
         )?;
-        if source.name != self.name
+        if source.runtime_sites != self.runtime_sites
+            || source.name != self.name
             || source.params.as_slice() != self.params.as_ref()
             || source.locals.len() != self.locals.len()
             || source.exprs.len() != self.exprs.len()
@@ -1594,6 +1600,7 @@ impl BodySubstitutionProof {
                 .world()
                 .types_equal(&target.type_args, &self.target.type_args)
                 .map_err(|e| e.into_legacy_diagnostic(budget))?
+            || source.runtime_sites != self.template.source().runtime_sites
             || source.exprs.len() != self.template.source().exprs.len()
             || source.locals.len() != self.template.source().locals.len()
             || source.locals.len() != self.local_types.len()
@@ -5310,6 +5317,7 @@ pub struct Signature {
 
 #[derive(Clone, Debug)]
 pub struct CheckedFunction {
+    pub runtime_sites: RuntimeSites,
     pub call_evidence: Arc<[CallEvidence]>,
     /// Minted only by instantiate_checked from the exact verified source.
     pub body_substitution: Option<Arc<BodySubstitutionProof>>,
@@ -9492,6 +9500,7 @@ mod conditional_validation_tests {
 
     fn fixture() -> CheckedFunction {
         CheckedFunction {
+            runtime_sites: Default::default(),
             call_evidence: Arc::from([]),
             body_substitution: None,
             ref_contract: Default::default(),
@@ -14228,6 +14237,7 @@ mod tests {
 
     fn fixture() -> CheckedFunction {
         CheckedFunction {
+            runtime_sites: Default::default(),
             call_evidence: Arc::from([]),
             body_substitution: None,
             ref_contract: Default::default(),
