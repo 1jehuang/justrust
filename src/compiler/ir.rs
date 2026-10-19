@@ -10,6 +10,9 @@ use std::sync::Arc;
 /// Combined explicit loan sites and formal reference-parameter origins.
 pub const MAX_LOAN_SITES: usize = 4096;
 use std::sync::atomic::{AtomicU64, Ordering};
+#[path = "ir/intrinsics.rs"]
+mod intrinsics;
+pub use intrinsics::{Intrinsic, IntrinsicOp, IntrinsicSignature, ScalarTy};
 
 /// Process-local namespace for one validated declaration environment. IDs must
 /// not be persisted as cache identities or reused by another environment.
@@ -2523,6 +2526,7 @@ pub fn instantiate_checked(
             ExprKind::CharToInt { .. }
             | ExprKind::U8ToChar { .. }
             | ExprKind::PtrCast { .. }
+            | ExprKind::Intrinsic { .. }
             | ExprKind::LeadingZeros { .. }
             | ExprKind::IntCast { .. }
             | ExprKind::FloatCast { .. }
@@ -2547,6 +2551,7 @@ pub fn instantiate_checked(
             | ExprKind::Break { .. }
             | ExprKind::Continue { .. }
             | ExprKind::Output(_)
+            | ExprKind::Format { .. }
             | ExprKind::Println(_)
             | ExprKind::Panic(_) => {}
         }
@@ -3096,6 +3101,18 @@ impl IntTy {
 
     pub const fn mask(self) -> u128 {
         u128::MAX >> (128 - self.bits())
+    }
+
+    /// The same-width unsigned type.
+    pub const fn unsigned(self) -> Self {
+        match self {
+            Self::I8 | Self::U8 => Self::U8,
+            Self::I16 | Self::U16 => Self::U16,
+            Self::I32 | Self::U32 => Self::U32,
+            Self::I64 | Self::U64 => Self::U64,
+            Self::Isize | Self::Usize => Self::Usize,
+            Self::I128 | Self::U128 => Self::U128,
+        }
     }
 
     pub const fn name(self) -> &'static str {
@@ -5988,6 +6005,12 @@ pub struct LiteralOutput {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExprKind {
     Char(CharValue),
+    /// Inherent primitive method. `args[0]` is the by-value receiver; all
+    /// operand and result types are exactly `intrinsic.signature()`.
+    Intrinsic {
+        intrinsic: Intrinsic,
+        args: Vec<ExprId>,
+    },
     /// A string literal: `&'static str` over immutable program data.
     Str(String),
     /// Count zero bits before the highest set bit within the integer's declared width.
@@ -6124,6 +6147,12 @@ pub enum ExprKind {
     },
     Output(LiteralOutput),
     Println(String),
+    Format {
+        pieces: Vec<String>,
+        arguments: Vec<ExprId>,
+        stream: OutputStream,
+        newline: bool,
+    },
     Panic(Box<PanicMessage>),
 }
 
@@ -6672,10 +6701,21 @@ impl CheckedFunction {
                 ExprKind::Block(value)
                 | ExprKind::Loop { body: value, .. }
                 | ExprKind::LabeledBlock { body: value, .. } => block(value, facts, budget, 0)?,
-                ExprKind::Tuple(values) | ExprKind::Array(values) => {
+                ExprKind::Tuple(values)
+                | ExprKind::Array(values)
+                | ExprKind::Intrinsic { args: values, .. } => {
                     storage(budget, values.len(), std::mem::size_of::<ExprId>())?
                 }
                 ExprKind::Output(output) => storage(budget, output.text.len(), 1)?,
+                ExprKind::Format {
+                    pieces, arguments, ..
+                } => {
+                    storage(budget, pieces.len(), std::mem::size_of::<String>())?;
+                    for piece in pieces {
+                        storage(budget, piece.len(), 1)?;
+                    }
+                    storage(budget, arguments.len(), std::mem::size_of::<ExprId>())?;
+                }
                 ExprKind::Str(text) => storage(budget, text.len(), 1)?,
                 ExprKind::Println(text) => storage(budget, text.len(), 1)?,
                 ExprKind::Panic(payload) => {
@@ -7215,6 +7255,31 @@ impl CheckedFunction {
                     }
                     if value.completion != source.completion {
                         return Err("pointer cast completion mismatch".into());
+                    }
+                }
+                ExprKind::Intrinsic { intrinsic, args } => {
+                    let signature = intrinsic
+                        .signature()
+                        .ok_or("primitive method has no signature for its receiver")?;
+                    if args.len() != signature.params.len() {
+                        return Err("primitive method arity mismatch".into());
+                    }
+                    let mut completion = Completion::Returns;
+                    for (arg, param) in args.iter().zip(&signature.params) {
+                        expr(*arg)?;
+                        let operand = &self.exprs[arg.0];
+                        if operand.ty != *param && operand.ty != Ty::Never {
+                            return Err("primitive method operand type mismatch".into());
+                        }
+                        if operand.completion == Completion::Never {
+                            completion = Completion::Never;
+                        }
+                    }
+                    if value.ty != signature.result {
+                        return Err("primitive method result type mismatch".into());
+                    }
+                    if value.completion != completion {
+                        return Err("primitive method completion mismatch".into());
                     }
                 }
                 ExprKind::LeadingZeros { value: source } => {
@@ -7860,6 +7925,46 @@ impl CheckedFunction {
                     }
                 }
                 ExprKind::Bool(_) | ExprKind::Println(_) => {}
+                ExprKind::Format {
+                    pieces, arguments, ..
+                } => {
+                    if pieces.len() != arguments.len() + 1 {
+                        return Err("format argument count mismatch".into());
+                    }
+                    let mut completion = Completion::Returns;
+                    for &id in arguments {
+                        expr(id)?;
+                        let argument = &self.exprs[id.0];
+                        let ty = if matches!(
+                            argument.kind,
+                            ExprKind::Borrow {
+                                kind: BorrowKind::Shared,
+                                ..
+                            }
+                        ) {
+                            let Ty::Ref { referent, .. } = &argument.ty else {
+                                return Err("format borrow requires reference type".into());
+                            };
+                            referent.as_ref()
+                        } else {
+                            &argument.ty
+                        };
+                        if !matches!(ty, Ty::Int(_) | Ty::Bool | Ty::Char | Ty::Never)
+                            && !ty.is_shared_str()
+                        {
+                            return Err(
+                                "format argument requires integer, bool, char or &str Display"
+                                    .into(),
+                            );
+                        }
+                        if argument.completion == Completion::Never {
+                            completion = Completion::Never;
+                        }
+                    }
+                    if value.ty != Ty::Unit || value.completion != completion {
+                        return Err("format output type or completion mismatch".into());
+                    }
+                }
             }
         }
         while let Some(block) = blocks.pop() {

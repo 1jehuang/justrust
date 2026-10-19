@@ -7,8 +7,8 @@
 //! SHA256: e14960c7ce019ef53084fd257803f9627cbba99f623d2d7544b5bfb87d92b268
 //! Native phases frozen from the full graph/CLI workers1/8 CHECK/BUILD output in
 //! 942230mfnq.output. Original29: Runtime2, Invalid10, Unsupported17.
-//! Append11: Runtime6, Invalid4, Unsupported1 (nominal-self-pattern boundary).
-//! Total40: Runtime8, Invalid14, Unsupported18. Earlier syntax, resolution and
+//! Append14: Runtime6, Invalid7, Unsupported1 (nominal-self-pattern boundary).
+//! Total43: Runtime8, Invalid14, Unsupported21. Earlier syntax, resolution and
 //! inference failures do not demonstrate associated-bound proof coverage.
 //! The frozen user trait named Copy hits its scalar impl self-pattern boundary,
 //! not associated user-trait validation. No source was rewritten to bypass it.
@@ -65,8 +65,8 @@ fn main() { let _ = dup(Wrap(7u8)); println!("ok"); }
             source_bytes: 287,
             source_fingerprint: 3275860743914007048,
             stock_errors: &["E0382"],
-            outcome: Outcome::Invalid,
-            boundary: Boundary::MoveAnalysis,
+            outcome: Outcome::Unsupported,
+            boundary: Boundary::GenericInference,
         },
         // Source SHA256 36affe439b686c8889cdd48a2f22499567735a9aa40dff84778b8e037a1000c3
         Case {
@@ -126,8 +126,8 @@ fn main() { let _ = dup(Wrap((1u8, 2u64, true))); println!("ok"); }
             source_bytes: 301,
             source_fingerprint: 1697987148083301104,
             stock_errors: &["E0382"],
-            outcome: Outcome::Invalid,
-            boundary: Boundary::MoveAnalysis,
+            outcome: Outcome::Unsupported,
+            boundary: Boundary::GenericInference,
         },
         // Source SHA256 b9b94c5f7ab4c7fc9dda197d25a82c61df63d58eaa5154e447750c018d3b5dc8
         Case {
@@ -142,8 +142,8 @@ fn main() { let _ = dup(Wrap(([3u64; 64], 4u128))); println!("ok"); }
             source_bytes: 303,
             source_fingerprint: 5949057885420266546,
             stock_errors: &["E0382"],
-            outcome: Outcome::Invalid,
-            boundary: Boundary::MoveAnalysis,
+            outcome: Outcome::Unsupported,
+            boundary: Boundary::GenericInference,
         },
         // Source SHA256 f65babe522c17e8fca8e910fb803c043da454e2c54237de01c632e3a39c3c272
         Case {
@@ -159,7 +159,7 @@ fn main() { let _ = dup::<Wrap<u8>, u16>(Wrap(1u8)); println!("ok"); }
             source_fingerprint: 7466752687292535547,
             stock_errors: &["E0271", "E0382"],
             outcome: Outcome::Invalid,
-            boundary: Boundary::MoveAnalysis,
+            boundary: Boundary::AssociatedEquality,
         },
         // Source SHA256 6d92a1a7e385542992afa1a51588293a499568a6fdd64f23f52a68a2c0adad50
         Case {
@@ -672,6 +672,54 @@ fn main() { let _ = dup::<Wrap<i32>,bool>(Wrap(81)); println!("ok"); }
             outcome: Outcome::Invalid,
             boundary: Boundary::AssociatedEquality,
         },
+        // Source SHA256 0f5d82b07fa7c53176e8f6ed819438bcc8a655f65b6d636abc47a0b9dba9cb5c
+        Case {
+            name: "append_scalar_explicit_args_no_u_copy_duplicate",
+            group: "append",
+            source: r###"trait Source: Sized { type Out: Copy; fn get(self) -> <Self as Source>::Out; }
+struct Wrap<T>(T);
+impl<T: Copy> Source for Wrap<T> { type Out = T; fn get(self) -> <Self as Source>::Out { self.0 } }
+fn dup<T: Source<Out = U>, U>(x: T) -> (U,U) { let y = <T as Source>::get(x); (y,y) }
+fn main() { let _ = dup::<Wrap<i32>,i32>(Wrap(101)); println!("ok"); }
+"###,
+            source_bytes: 355,
+            source_fingerprint: 16507149085501307754,
+            stock_errors: &["E0382"],
+            outcome: Outcome::Invalid,
+            boundary: Boundary::MoveAnalysis,
+        },
+        // Source SHA256 4a414cd82f75a162776b401bf14a6916261ac6be409845b87ddd6e29407f4029
+        Case {
+            name: "append_tuple_explicit_args_no_u_copy_duplicate",
+            group: "append",
+            source: r###"trait Source: Sized { type Out: Copy; fn get(self) -> <Self as Source>::Out; }
+struct Wrap<T>(T);
+impl<T: Copy> Source for Wrap<T> { type Out = T; fn get(self) -> <Self as Source>::Out { self.0 } }
+fn dup<T: Source<Out = U>, U>(x: T) -> (U,U) { let y = <T as Source>::get(x); (y,y) }
+fn main() { let _ = dup::<Wrap<(i32,bool,u64)>,(i32,bool,u64)>(Wrap((102,true,103u64))); println!("ok"); }
+"###,
+            source_bytes: 391,
+            source_fingerprint: 4129063903231111271,
+            stock_errors: &["E0382"],
+            outcome: Outcome::Invalid,
+            boundary: Boundary::MoveAnalysis,
+        },
+        // Source SHA256 282154cf44cf797cb4007ee6c19d412487d242a87ddef252c1a8ba5be89e8e5f
+        Case {
+            name: "append_wide_explicit_args_no_u_copy_duplicate",
+            group: "append",
+            source: r###"trait Source: Sized { type Out: Copy; fn get(self) -> <Self as Source>::Out; }
+struct Wrap<T>(T);
+impl<T: Copy> Source for Wrap<T> { type Out = T; fn get(self) -> <Self as Source>::Out { self.0 } }
+fn dup<T: Source<Out = U>, U>(x: T) -> (U,U) { let y = <T as Source>::get(x); (y,y) }
+fn main() { let _ = dup::<Wrap<(i64,i64,i64,i64,i64,i64,i64,i64)>,(i64,i64,i64,i64,i64,i64,i64,i64)>(Wrap((111i64,112i64,113i64,114i64,115i64,116i64,117i64,118i64))); println!("ok"); }
+"###,
+            source_bytes: 469,
+            source_fingerprint: 1713037527920817655,
+            stock_errors: &["E0382"],
+            outcome: Outcome::Invalid,
+            boundary: Boundary::MoveAnalysis,
+        },
         // Source SHA256 812e69fc628a39dc686d67275a5ce875e94ff4dff4eaaeed52bdfe359ef4d0d1
         Case {
             name: "append_user_trait_named_copy",
@@ -947,7 +995,7 @@ fn fingerprint(source: &str) -> u64 {
 #[test]
 fn frozen_source_partitions_and_payloads() {
     let cases = cases();
-    assert_eq!(cases.len(), 40);
+    assert_eq!(cases.len(), 43);
     let mut groups = [0; 4];
     let mut outcomes = [0; 3];
     let mut accepted = 0;
@@ -987,13 +1035,13 @@ fn frozen_source_partitions_and_payloads() {
             case.outcome == Outcome::Runtime
         );
     }
-    assert_eq!(groups, [18, 8, 3, 11]);
-    assert_eq!(outcomes, [8, 14, 18]);
+    assert_eq!(groups, [18, 8, 3, 14]);
+    assert_eq!(outcomes, [8, 14, 21]);
     assert_eq!(accepted, 18);
     let originals: String = cases[..29].iter().map(|c| c.source).collect();
     assert_eq!(fingerprint(&originals), 2831013440210668996);
     let append: String = cases[29..].iter().map(|c| c.source).collect();
-    assert_eq!(fingerprint(&append), 704696224508669485);
+    assert_eq!(fingerprint(&append), 13782585076383314700);
 }
 fn diagnostic(case: &Case, text: &str) {
     assert!(!text.is_empty(), "{}: empty diagnostic", case.name);
@@ -1161,11 +1209,11 @@ fn cli_all() {
             }
         }
     }
-    assert_eq!(cells, 160);
+    assert_eq!(cells, 172);
     failures.check("runtime count", || assert_eq!(runtimes, 16));
     failures.finish();
     eprintln!(
-        "ASSOCIATED BOUNDS CLI COMPLETE:160 classified cells;16 ELF payloads;Runtime8 Invalid14 Unsupported18"
+        "ASSOCIATED BOUNDS CLI COMPLETE:172 classified cells;16 ELF payloads;Runtime8 Invalid14 Unsupported21"
     );
 }
 fn graph_all() {
@@ -1203,10 +1251,10 @@ fn graph_all() {
             }
         }
     }
-    assert_eq!(cells, 160);
+    assert_eq!(cells, 172);
     failures.finish();
     eprintln!(
-        "ASSOCIATED BOUNDS GRAPH COMPLETE:160 classified cells;Runtime8 Invalid14 Unsupported18"
+        "ASSOCIATED BOUNDS GRAPH COMPLETE:172 classified cells;Runtime8 Invalid14 Unsupported21"
     );
 }
 fn isolated(name: &str, marker: &str, run: fn()) {

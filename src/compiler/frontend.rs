@@ -486,6 +486,7 @@ mod canonical_source_replay_tests {
             calls: Default::default(),
             builtin_leading_zeros: Default::default(),
             builtin_lens: Default::default(),
+            builtin_intrinsics: Default::default(),
             unsizes: Default::default(),
             bindings: Default::default(),
             narrow: Default::default(),
@@ -603,6 +604,8 @@ struct SourceCallSite {
     /// typed receiver, and replay requires typed evidence for every builtin row.
     len_candidate: bool,
     leading_zeros_candidate: bool,
+    /// Syntactic `receiver.name(args)` with an admitted primitive method name.
+    intrinsic_candidate: bool,
     ordinary: Option<AstPath>,
     application: Option<GenericPath>,
     argument_binding: Option<sr::SourceNode>,
@@ -1563,6 +1566,18 @@ impl SourceInventory {
             }
             Expr::Output(output) => validate_output_site(output, &self.names)
                 .map_err(|message| source_error(budget, &message))?,
+            Expr::Format { arguments, .. } => {
+                for (index, argument) in arguments.iter().enumerate() {
+                    self.expr(
+                        argument,
+                        &node.child(21, index, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
+            }
             Expr::Panic(panic) => validate_panic_site(panic, &self.names)
                 .map_err(|message| source_error(budget, &message))?,
             Expr::Apply { path, value } => {
@@ -1600,6 +1615,7 @@ impl SourceInventory {
                         node: node.clone(),
                         len_candidate: false,
                         leading_zeros_candidate: false,
+                        intrinsic_candidate: false,
                         ordinary: Some(name.clone()),
                         application: application
                             .map(|path| copy_source_path(path, budget, 0))
@@ -1639,6 +1655,8 @@ impl SourceInventory {
                         leading_zeros_candidate: leading_zeros_candidate(expr, &self.names)
                             .map_err(|e| source_error(budget, &e))?,
                         len_candidate: slice_len_candidate(expr, &self.names)
+                            .map_err(|e| source_error(budget, &e))?,
+                        intrinsic_candidate: intrinsic_candidate(expr, &self.names)
                             .map_err(|e| source_error(budget, &e))?,
                         ordinary: None,
                         application: None,
@@ -1911,6 +1929,33 @@ fn slice_len_candidate(expr: &Expr, names: &NameStore) -> Result<bool, String> {
     }
 }
 
+/// Syntax alone never grants primitive-method authority: the checker resolves
+/// the actual operation from the typed receiver.
+fn intrinsic_candidate(expr: &Expr, names: &NameStore) -> Result<bool, String> {
+    if let Expr::MethodCall {
+        name, type_args, ..
+    } = expr
+    {
+        Ok(type_args.is_empty()
+            && ir::IntrinsicOp::candidate_name(
+                names
+                    .spelling(*name)
+                    .map_err(native_adapter::name_diagnostic)?,
+            ))
+    } else {
+        Ok(false)
+    }
+}
+
+/// Typed primitive-method occurrence: source call index, the checked
+/// Intrinsic expression, and its exact checked receiver.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct BuiltinIntrinsicOccurrence {
+    pub(super) source_index: usize,
+    pub(super) expr: ir::ExprId,
+    pub(super) receiver: ir::ExprId,
+}
+
 /// Stock E0658: `X..` directly inside a slice or array pattern is feature-gated.
 fn reject_slice_half_open(pattern: &Pattern) -> Result<(), &'static str> {
     if let Pattern::Range {
@@ -1981,6 +2026,7 @@ pub(super) struct CanonicalSourceCapability {
     calls: std::cell::RefCell<Vec<(usize, ir::ExprId, ir::Callee)>>,
     builtin_leading_zeros: std::cell::RefCell<Vec<BuiltinLeadingZerosOccurrence>>,
     builtin_lens: std::cell::RefCell<Vec<BuiltinLenOccurrence>>,
+    builtin_intrinsics: std::cell::RefCell<Vec<BuiltinIntrinsicOccurrence>>,
     unsizes: std::cell::RefCell<Vec<UnsizeOccurrence>>,
     bindings: std::cell::RefCell<Vec<(usize, ir::LocalId)>>,
     narrow: std::cell::RefCell<Vec<RawSharedOccurrence>>,
@@ -1998,6 +2044,7 @@ pub(super) struct OriginalSource {
     call_mapping: Vec<(usize, ir::ExprId, ir::Callee)>,
     builtin_leading_zeros_mapping: Vec<BuiltinLeadingZerosOccurrence>,
     builtin_len_mapping: Vec<BuiltinLenOccurrence>,
+    builtin_intrinsic_mapping: Vec<BuiltinIntrinsicOccurrence>,
     unsize_mapping: Vec<UnsizeOccurrence>,
     binding_mapping: Vec<(usize, ir::LocalId)>,
     narrow: Vec<RawSharedOccurrence>,
@@ -2054,6 +2101,65 @@ impl CanonicalSourceCapability {
         sr::push(
             &mut self.calls.borrow_mut(),
             (index, id, target.clone()),
+            budget,
+        )
+        .map_err(|e| self.render(e))
+    }
+    /// Record a typed primitive method at its exact original source occurrence.
+    fn record_builtin_intrinsic(
+        &self,
+        expr: &Expr,
+        id: ir::ExprId,
+        checked: &[ir::TypedExpr],
+    ) -> Result<(), String> {
+        let budget = &self.plan.budget;
+        sr::work(budget, 1).map_err(|e| self.render(e))?;
+        let index = self
+            .inventory
+            .call_pointers
+            .get(&(expr as *const Expr as usize))
+            .copied()
+            .ok_or_else(|| {
+                self.render(FactsError::invalid(
+                    budget,
+                    "primitive method has no original occurrence",
+                ))
+            })?;
+        let Some(ir::TypedExpr {
+            kind: ir::ExprKind::Intrinsic { intrinsic, args },
+            ty,
+            ..
+        }) = checked.get(id.0)
+        else {
+            return Err(self.render(FactsError::invalid(
+                budget,
+                "primitive method occurrence did not produce Intrinsic",
+            )));
+        };
+        let receiver = *args.first().ok_or_else(|| {
+            self.render(FactsError::invalid(
+                budget,
+                "primitive method lost receiver",
+            ))
+        })?;
+        if !self.inventory.calls[index].intrinsic_candidate
+            || intrinsic.signature().map(|s| s.result).as_ref() != Some(ty)
+            || !checked
+                .get(receiver.0)
+                .is_some_and(|r| r.ty == intrinsic.receiver.ty() || r.ty == ir::Ty::Never)
+        {
+            return Err(self.render(FactsError::invalid(
+                budget,
+                "primitive method occurrence has wrong typed shape",
+            )));
+        }
+        sr::push(
+            &mut self.builtin_intrinsics.borrow_mut(),
+            BuiltinIntrinsicOccurrence {
+                source_index: index,
+                expr: id,
+                receiver,
+            },
             budget,
         )
         .map_err(|e| self.render(e))
@@ -3076,6 +3182,98 @@ fn replay_builtin_leading_zeros(
     Ok(sources)
 }
 
+/// Exact replay of typed primitive-method occurrences, including unused rows.
+fn replay_builtin_intrinsics(
+    original: &OriginalSource,
+    checked: &ir::CheckedFunction,
+    ordinary: &[Option<usize>],
+    seen: &mut [bool],
+    budget: &ir::PlanBudget,
+) -> Result<Vec<bool>, FactsError> {
+    sr::work(budget, original.calls.len())?;
+    sr::retain(budget, original.calls.len())?;
+    let mut sources = Vec::new();
+    sources
+        .try_reserve_exact(original.calls.len())
+        .map_err(|_| FactsError::resource(budget, "primitive method occurrence allocation"))?;
+    sources.resize(original.calls.len(), false);
+    let mut previous: Option<(usize, ir::ExprId)> = None;
+    for row in &original.builtin_intrinsic_mapping {
+        sr::work(budget, 1)?;
+        let site = original
+            .calls
+            .get(row.source_index)
+            .ok_or_else(|| FactsError::invalid(budget, "orphan primitive method occurrence"))?;
+        if !site.intrinsic_candidate || site.ordinary.is_some() || site.application.is_some() {
+            return Err(FactsError::invalid(
+                budget,
+                "primitive method mapped from a non-candidate source call",
+            ));
+        }
+        if std::mem::replace(&mut sources[row.source_index], true)
+            || ordinary.get(row.source_index).copied().flatten().is_some()
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "duplicate primitive method correspondence",
+            ));
+        }
+        if let Some((index, expr)) = previous {
+            let prior = &original.calls[index].node.path;
+            let current = &site.node.path;
+            sr::work(budget, prior.len().saturating_add(current.len()))?;
+            // Inventory is preorder, emission is postorder: receiver and
+            // argument calls precede their enclosing method.
+            let encloses_prior = prior.len() > current.len() && prior.starts_with(current);
+            let prior_encloses = current.len() > prior.len() && current.starts_with(prior);
+            if row.expr.0 <= expr.0
+                || prior_encloses
+                || (row.source_index <= index && !encloses_prior)
+            {
+                return Err(FactsError::invalid(
+                    budget,
+                    "primitive method source order changed",
+                ));
+            }
+        }
+        previous = Some((row.source_index, row.expr));
+        let result = checked
+            .exprs
+            .get(row.expr.0)
+            .ok_or_else(|| FactsError::invalid(budget, "primitive method outside checked arena"))?;
+        let ir::ExprKind::Intrinsic { intrinsic, args } = &result.kind else {
+            return Err(FactsError::invalid(
+                budget,
+                "primitive method mapped to a different operation",
+            ));
+        };
+        if args.first() != Some(&row.receiver)
+            || intrinsic.signature().map(|s| s.result).as_ref() != Some(&result.ty)
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "primitive method receiver or type changed",
+            ));
+        }
+        if std::mem::replace(&mut seen[row.expr.0], true) {
+            return Err(FactsError::invalid(
+                budget,
+                "checked primitive method mapped from two source occurrences",
+            ));
+        }
+    }
+    sr::work(budget, checked.exprs.len())?;
+    for (index, expr) in checked.exprs.iter().enumerate() {
+        if matches!(expr.kind, ir::ExprKind::Intrinsic { .. }) && !seen[index] {
+            return Err(FactsError::invalid(
+                budget,
+                "orphan checked primitive method lacks original occurrence",
+            ));
+        }
+    }
+    Ok(sources)
+}
+
 /// Exact replay of typed builtin `.len()` occurrences and their receivers.
 fn replay_builtin_lens(
     original: &OriginalSource,
@@ -3327,6 +3525,7 @@ pub(super) fn replay_source_body(
         if fresh.node != retained.node
             || fresh.leading_zeros_candidate != retained.leading_zeros_candidate
             || fresh.len_candidate != retained.len_candidate
+            || fresh.intrinsic_candidate != retained.intrinsic_candidate
             || !optional_source_path_equal(
                 &fresh.ordinary,
                 &retained.ordinary,
@@ -3456,10 +3655,12 @@ pub(super) fn replay_source_body(
     let leading_zero_sources =
         replay_builtin_leading_zeros(original, checked, &positions, &mut seen, budget)?;
     let builtin_sources = replay_builtin_lens(original, checked, &positions, &mut seen, budget)?;
+    let intrinsic_sources =
+        replay_builtin_intrinsics(original, checked, &positions, &mut seen, budget)?;
     replay_unsizes(original, checked, budget)?;
     for (index, site) in original.calls.iter().enumerate() {
         sr::work(budget, 1)?;
-        if builtin_sources[index] || leading_zero_sources[index] {
+        if builtin_sources[index] || leading_zero_sources[index] || intrinsic_sources[index] {
             continue;
         }
         let position = positions[index].ok_or_else(|| {
@@ -3822,6 +4023,7 @@ pub(super) fn replay_source_body(
         .call_mapping
         .len()
         .checked_add(original.builtin_len_mapping.len())
+        .and_then(|n| n.checked_add(original.builtin_intrinsic_mapping.len()))
         .and_then(|n| n.checked_add(original.builtin_leading_zeros_mapping.len()))
         != Some(original.calls.len())
     {
@@ -3916,6 +4118,7 @@ impl PlanCtx {
                     calls: Default::default(),
                     builtin_leading_zeros: Default::default(),
                     builtin_lens: Default::default(),
+                    builtin_intrinsics: Default::default(),
                     unsizes: Default::default(),
                     bindings: Default::default(),
                     narrow: Default::default(),
@@ -3957,6 +4160,7 @@ impl PlanCtx {
                     call_mapping: cap.calls.take(),
                     builtin_leading_zeros_mapping: cap.builtin_leading_zeros.take(),
                     builtin_len_mapping: cap.builtin_lens.take(),
+                    builtin_intrinsic_mapping: cap.builtin_intrinsics.take(),
                     unsize_mapping: cap.unsizes.take(),
                     binding_mapping: cap.bindings.take(),
                     narrow: cap.narrow.take(),
@@ -3999,6 +4203,12 @@ pub struct Program {
     pub impls: Vec<ImplDecl>,
     pub traits: Vec<TraitDecl>,
     pub trait_imports: Vec<(ModuleId, TraitPath)>,
+    /// Hidden crate-root module holding the embedded native prelude library,
+    /// when loaded. `std::`/`core::` paths and prelude names resolve into it.
+    pub prelude_module: Option<ModuleId>,
+    /// The `prelude::v1` module inside the prelude library. Its public names
+    /// (types, variants, traits) are in scope in every module unless shadowed.
+    pub prelude_scope: Option<ModuleId>,
     // Resolver-issued source authority. Shared unchanged by public AST clones.
     associated_bound_sources: Arc<[AssociatedBoundSource]>,
 }
@@ -4028,6 +4238,8 @@ struct ProgramDeclarations {
     impls: Vec<ImplDecl>,
     traits: Vec<TraitDecl>,
     trait_imports: Vec<(ModuleId, TraitPath)>,
+    prelude_module: Option<ModuleId>,
+    prelude_scope: Option<ModuleId>,
 }
 struct ParsedDeclarations {
     program: ProgramDeclarations,
@@ -4053,6 +4265,8 @@ impl ProgramDeclarations {
             impls: self.impls,
             traits: self.traits,
             trait_imports: self.trait_imports,
+            prelude_module: self.prelude_module,
+            prelude_scope: self.prelude_scope,
             associated_bound_sources: Arc::from([]),
         }
     }
@@ -4180,6 +4394,8 @@ impl ProgramBuilder {
             impls: self.impls,
             traits: self.traits,
             trait_imports: self.trait_imports,
+            prelude_module: None,
+            prelude_scope: None,
         }
         .publish(names, modules, self.symbols, None);
         program.validate_name_handles()?;
@@ -4187,6 +4403,24 @@ impl ProgramBuilder {
     }
 }
 impl Program {
+    fn in_prelude(&self, module: ModuleId) -> bool {
+        self.prelude_module
+            .is_some_and(|prelude| self.modules.is_descendant(module, prelude).unwrap_or(false))
+    }
+    /// User-crate struct count, excluding the embedded prelude library.
+    pub fn user_structs(&self) -> usize {
+        self.structs
+            .iter()
+            .filter(|s| !self.in_prelude(s.module))
+            .count()
+    }
+    /// User-crate enum count, excluding the embedded prelude library.
+    pub fn user_enums(&self) -> usize {
+        self.enums
+            .iter()
+            .filter(|e| !self.in_prelude(e.module))
+            .count()
+    }
     fn validate_name_handles(&self) -> Result<(), String> {
         name_validation::validate_program_names(self)
     }
@@ -5228,6 +5462,12 @@ pub enum Expr {
         label: Option<AstIdent>,
     },
     Println(String),
+    Format {
+        pieces: Vec<String>,
+        arguments: Vec<Expr>,
+        stream: ir::OutputStream,
+        newline: bool,
+    },
     Output(Box<SourceOutput>),
     Panic(Box<SourcePanic>),
 }
@@ -6573,6 +6813,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else {
             return Err(self.error("expected an output macro delimiter"));
         };
+        if !self.is(close) {
+            return self.scalar_output(close, spelling, Some(site));
+        }
         let (nonliteral, placeholders, arguments) = match spelling {
             "print" => (
                 "print! nonliteral arguments are unsupported",
@@ -6618,6 +6861,105 @@ impl<'input, 'names> Parser<'input, 'names> {
             })
             .map_err(native_adapter::name_error)?;
         Ok(Expr::Output(payload))
+    }
+    fn scalar_output(
+        &mut self,
+        close: &str,
+        spelling: &str,
+        site: Option<super::expansion_span::SpanId>,
+    ) -> Result<Expr, ParseError> {
+        let buffer;
+        let token = if self.token().is_opaque_literal() {
+            buffer = self
+                .input
+                .opaque_literal_buffer(&self.token(), self.names)?;
+            TokenCursor::new(&buffer).current()
+        } else {
+            self.token()
+        };
+        if !token.string {
+            if spelling == "println" {
+                return Err(self.error("println! requires one literal string"));
+            }
+            return Err(
+                self.unsupported(&format!("{spelling}! nonliteral arguments are unsupported"))
+            );
+        }
+        let text = self.string_literal_value(token.text)?;
+        self.cursor.bump();
+        let mut pieces = Vec::new();
+        let mut piece = String::new();
+        let mut chars = text.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '{' => match chars.next() {
+                    Some('{') => piece.push('{'),
+                    Some('}') => {
+                        pieces.push(std::mem::take(&mut piece));
+                    }
+                    None => return Err(self.error("unmatched opening brace in format string")),
+                    _ => {
+                        return Err(
+                            self.unsupported("only bare {} formatting placeholders are supported")
+                        );
+                    }
+                },
+                '}' => {
+                    if chars.next() == Some('}') {
+                        piece.push('}');
+                    } else {
+                        return Err(self.error("unmatched closing brace in format string"));
+                    }
+                }
+                _ => piece.push(c),
+            }
+        }
+        pieces.push(piece);
+        let mut arguments = Vec::new();
+        while self.eat(",") && !self.is(close) {
+            arguments.push(self.nested_expr()?);
+        }
+        self.expect(close)?;
+        if pieces.len() != arguments.len() + 1 {
+            return Err(self.error("format argument count mismatch"));
+        }
+        let stream = if matches!(spelling, "print" | "println") {
+            ir::OutputStream::Stdout
+        } else {
+            ir::OutputStream::Stderr
+        };
+        let newline = matches!(spelling, "println" | "eprintln");
+        if arguments.is_empty() {
+            let text = pieces.pop().unwrap();
+            return if let Some(site) = site {
+                Ok(Expr::Output(
+                    self.names
+                        .try_parser_box(SourceOutput {
+                            output: ir::LiteralOutput {
+                                text,
+                                stream,
+                                newline,
+                            },
+                            site,
+                        })
+                        .map_err(native_adapter::name_error)?,
+                ))
+            } else {
+                Ok(Expr::Println(text))
+            };
+        }
+        self.names
+            .retain_parser_text(
+                pieces.len() * std::mem::size_of::<String>()
+                    + arguments.len() * std::mem::size_of::<Expr>(),
+            )
+            .map_err(native_adapter::name_error)?;
+        Ok(Expr::Format {
+            pieces,
+            arguments,
+            stream,
+            newline,
+        })
     }
     fn panic_expression(&mut self, spelling: &'static str) -> Result<Expr, ParseError> {
         let (default, delimiter, nonliteral, placeholders, arguments) = match spelling {
@@ -7173,43 +7515,6 @@ impl<'input, 'names> Parser<'input, 'names> {
         let text = literal_format_owned(token.text, self.names).map_err(|error| {
             if error.kind == super::source::SourceErrorKind::Syntax {
                 self.unsupported(formatting)
-            } else {
-                error
-            }
-        })?;
-        self.cursor.bump();
-        Ok(text)
-    }
-    fn println_literal(&mut self) -> Result<String, ParseError> {
-        if self.token().is_opaque_literal() {
-            let buffer = self
-                .input
-                .opaque_literal_buffer(&self.token(), self.names)?;
-            let mut cursor = TokenCursor::new(&buffer);
-            if !cursor.current().string {
-                return Err(self.error("println! requires one literal string"));
-            }
-            let text =
-                literal_format_owned(cursor.current().text, self.names).map_err(|error| {
-                    if error.kind == super::source::SourceErrorKind::Syntax {
-                        self.error(&error.message)
-                    } else {
-                        error
-                    }
-                })?;
-            cursor.bump();
-            if !cursor.current().matches("") {
-                return Err(self.error("println! requires one literal string"));
-            }
-            self.cursor.bump();
-            return Ok(text);
-        }
-        if !self.token().string {
-            return Err(self.error("println! requires one literal string"));
-        }
-        let text = literal_format_owned(self.token().text, self.names).map_err(|error| {
-            if error.kind == super::source::SourceErrorKind::Syntax {
-                self.error(&error.message)
             } else {
                 error
             }
@@ -8557,6 +8862,38 @@ impl<'input, 'names> Parser<'input, 'names> {
                     .modules
                     .intern_child(self.names, module, name)
                     .map_err(module_parse_error)?;
+                if module == self.modules.source_root().map_err(module_parse_error)?
+                    && self
+                        .names
+                        .spelling(name)
+                        .map_err(native_adapter::name_error)?
+                        == super::source::source_prelude::PRELUDE_MODULE
+                {
+                    if parsed.program.prelude_module.is_some() {
+                        return Err(self.error("duplicate native prelude module"));
+                    }
+                    parsed.program.prelude_module = Some(child);
+                }
+                if let Some(prelude) = parsed.program.prelude_module {
+                    let spelling = self
+                        .names
+                        .spelling(name)
+                        .map_err(native_adapter::name_error)?;
+                    let parent = self.modules.parent(module).map_err(module_parse_error)?;
+                    if spelling == "v1"
+                        && parent == Some(prelude)
+                        && self
+                            .modules
+                            .name(module)
+                            .map_err(module_parse_error)?
+                            .map(|ident| self.names.spelling(ident).map(|s| s == "prelude"))
+                            .transpose()
+                            .map_err(native_adapter::name_error)?
+                            == Some(true)
+                    {
+                        parsed.program.prelude_scope = Some(child);
+                    }
+                }
                 if self.eat(";") {
                     return Err(
                         self.unsupported("external module files are unsupported; use inline mod")
@@ -10382,10 +10719,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return Err(self.error("only println! is supported"));
             }
             self.expect("(")?;
-            let text = self.println_literal()?;
-            self.eat(",");
-            self.expect(")")?;
-            Expr::Println(text)
+            if self.is(")") {
+                self.expect(")")?;
+                Expr::Println(String::new())
+            } else {
+                return self.scalar_output(")", "println", None);
+            }
         } else if self.eat("(") {
             let mut args = Vec::new();
             if !self.is(")") {
@@ -12901,7 +13240,10 @@ fn walk_depth_inspecting(
                     push(DepthNode::Expr(left))?;
                     push(DepthNode::Expr(right))?;
                 }
-                Expr::Call { args, .. } => {
+                Expr::Call { args, .. }
+                | Expr::Format {
+                    arguments: args, ..
+                } => {
                     for arg in args {
                         push(DepthNode::Expr(arg))?;
                     }
@@ -14405,6 +14747,8 @@ impl PlanCtx {
                 .schemas
                 .insert(id, Arc::new(NominalSchema::Enum(d.clone())));
         }
+        // User callables keep their indices; native prelude callables follow.
+        let mut prelude_callables: Vec<(ir::DeclId, CallableSource)> = Vec::new();
         for (index, f) in program.functions.iter().enumerate() {
             let item = *f
                 .name
@@ -14419,8 +14763,12 @@ impl PlanCtx {
                 ir::DeclKind::Function,
                 index,
             )?;
-            registry.function_ids.push(id);
-            registry.callable_sources.push(CallableSource::Free(index));
+            if program.in_prelude(f.module) {
+                prelude_callables.push((id, CallableSource::Free(index)));
+            } else {
+                registry.function_ids.push(id);
+                registry.callable_sources.push(CallableSource::Free(index));
+            }
         }
         for (index, declaration) in program.traits.iter().enumerate() {
             let item = *declaration
@@ -14464,13 +14812,16 @@ impl PlanCtx {
                         ir::DeclKind::AssociatedFunction,
                         item,
                     )?;
-                    registry.function_ids.push(id);
-                    registry
-                        .callable_sources
-                        .push(CallableSource::TraitDefault {
-                            trait_index: index,
-                            item,
-                        });
+                    let source = CallableSource::TraitDefault {
+                        trait_index: index,
+                        item,
+                    };
+                    if program.in_prelude(declaration.module) {
+                        prelude_callables.push((id, source));
+                    } else {
+                        registry.function_ids.push(id);
+                        registry.callable_sources.push(source);
+                    }
                 }
             }
             let mut associated_types = Vec::new();
@@ -14539,14 +14890,23 @@ impl PlanCtx {
                     ir::DeclKind::AssociatedFunction,
                     item,
                 )?;
-                registry.function_ids.push(id);
-                registry.callable_sources.push(CallableSource::Associated {
+                let source = CallableSource::Associated {
                     implementation,
                     item,
-                });
+                };
+                if program.in_prelude(block.module) {
+                    prelude_callables.push((id, source));
+                } else {
+                    registry.function_ids.push(id);
+                    registry.callable_sources.push(source);
+                }
                 ids.push(id);
             }
             registry.associated_ids.push(ids);
+        }
+        for (id, source) in prelude_callables {
+            registry.function_ids.push(id);
+            registry.callable_sources.push(source);
         }
         for entry in catalog_builder.base_declarations() {
             if entry.info.kind != ir::DeclKind::Trait {
@@ -14584,9 +14944,13 @@ impl PlanCtx {
             )?];
             registry.declarations[id.index as usize].visibility = declaration.visibility.clone();
         }
-        for (index, function) in program.functions.iter().enumerate() {
+        for (position, source) in registry.callable_sources.iter().enumerate() {
+            let CallableSource::Free(index) = *source else {
+                continue;
+            };
+            let function = &program.functions[index];
             clone_visibility(&function.visibility, budget)?;
-            let id = registry.function_ids[index];
+            let id = registry.function_ids[position];
             registry.declarations[id.index as usize].visibility = function.visibility.clone();
         }
         for (index, declaration) in program.traits.iter().enumerate() {
@@ -15598,6 +15962,19 @@ impl PlanCtx {
             .catalog
             .declaration(id)
             .map_or(tr::DeclOrigin::Source, |d| d.origin))
+    }
+    /// Whether a declaration lives in the embedded native prelude library.
+    /// Prelude items are library code: not user telemetry, and nongeneric
+    /// prelude bodies are instantiated only on demand.
+    pub fn is_prelude_decl(&self, id: ir::DeclId) -> Result<bool, String> {
+        let Some(prelude) = self.program.prelude_module else {
+            return Ok(false);
+        };
+        let module = self.declaration(id)?.path.module;
+        self.program
+            .modules
+            .is_descendant(module, prelude)
+            .map_err(module_diagnostic)
     }
     pub fn callable_provider(&self, id: ir::DeclId) -> Result<CallableProvider, String> {
         self.declaration(id)?;

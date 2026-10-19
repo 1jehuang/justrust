@@ -529,6 +529,12 @@ host macro and compiles its generated target source.
       passed. See `LITERAL-OUTPUT.md`; general formatting, buffering and platform
       IO compatibility remain open.
 
+- [x] Native bare `{}` scalar print formatting for integers through 128 bits,
+      bool, char and shared str, with once-only left-to-right argument evaluation
+      and shared place loans. Frozen scalar stock corpus and graph-integrity
+      gates pass; first full-program corpus source `01_hello` executes with exact
+      stock stdout. See `FORMAT-SCALARS.md`; general Rust formatting remains open.
+
 - [x] Bounded `assert_eq!`/`assert_ne!` use existing Unit/Bool/integer/float
       comparisons, evaluate operands once in source order, and retain checked
       literal panic locations. Stock-first 27-source debug/release CLI and graph

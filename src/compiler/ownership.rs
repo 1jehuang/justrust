@@ -1545,10 +1545,20 @@ fn preflight_with_plan(
                             operand(field, &mut budget)?;
                         }
                     }
+                    Rvalue::Intrinsic { args, .. } => {
+                        for arg in args {
+                            operand(arg, &mut budget)?;
+                        }
+                    }
                     Rvalue::EnumVariant { ty, fields, .. } => {
                         preflight_ty(&Ty::Enum(ty.clone()), 0, &mut budget)?;
                         for field in fields {
                             operand(field, &mut budget)?;
+                        }
+                    }
+                    Rvalue::Format { arguments, .. } => {
+                        for value in arguments {
+                            operand(value, &mut budget)?;
                         }
                     }
                     Rvalue::Println(_) | Rvalue::Output(_) | Rvalue::Str(_) => {}
@@ -2733,7 +2743,12 @@ impl Transfer<'_> {
                 self.operand(state, left)?;
                 self.operand(state, right)?;
             }
-            Rvalue::Aggregate { fields, .. } | Rvalue::EnumVariant { fields, .. } => {
+            Rvalue::Aggregate { fields, .. }
+            | Rvalue::EnumVariant { fields, .. }
+            | Rvalue::Intrinsic { args: fields, .. }
+            | Rvalue::Format {
+                arguments: fields, ..
+            } => {
                 for field in fields {
                     self.operand(state, field)?;
                 }

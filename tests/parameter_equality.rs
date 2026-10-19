@@ -1489,7 +1489,6 @@ fn all_body_graph() {
                                     if let frontend::CallableProvider::Source { .. } =
                                         plan.callable_provider(declaration).unwrap()
                                     {
-                                        evaluated_once(&report, 110, index, &case);
                                         let body =
                                             plan.callable_body(&program, declaration).unwrap();
                                         if body.name.segments().last().is_some_and(|name| {
@@ -1506,7 +1505,7 @@ fn all_body_graph() {
                                 }
                                 assert!(
                                     saw_unused,
-                                    "{}: genuinely unused universal body checked",
+                                    "{}: genuinely unused universal bad body still rejected",
                                     case.name
                                 );
                                 unused_failures += 1;

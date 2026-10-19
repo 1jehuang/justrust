@@ -528,9 +528,13 @@ fn invalid_programs_fail_without_publishing_an_executable() {
         ),
         ("main arguments", "fn main(x: i32) {}"),
         ("main return", "fn main() -> i32 { 0 }"),
-        ("formatted println", "fn main() { println!(\"{}\", 1); }"),
+        (
+            "missing format argument",
+            "fn main() { println!(\"{} {}\", 1); }",
+        ),
         ("nonliteral println", "fn main() { println!(1); }"),
         ("refutable for pattern", "fn main() { for 1 in 0..2 {} }"),
+        ("noniterable for loop", "fn main() { for x in 2 {} }"),
         ("struct", "struct X {} fn main() {}"),
         ("malformed syntax", "fn main( {"),
     ];
@@ -779,6 +783,11 @@ fn compiler_graph_shares_check_and_build_and_check_only_never_demands_codegen() 
                         }
                     }
                 }
+                // Embedded native library files are independent SOURCE facts.
+                expected.extend(
+                    [vec![1], vec![1, 0], vec![1, 0, 0], vec![1, 0, 1]]
+                        .map(|ordinal| Key::new(107, ordinal)),
+                );
                 assert_eq!(report.node_evaluations.len(), expected.len());
                 for key in expected {
                     let entries: Vec<_> = report
