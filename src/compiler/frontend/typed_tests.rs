@@ -801,15 +801,10 @@ fn omitted_generic_inference_keeps_opaque_sites_and_universal_binders_rigid() {
         "fn id<T>(x:T)->T{x}fn main(){let x:u8=id({let a=1;2});}",
         "fn id<T>(x:T)->T{x}fn same<T>(x:T,y:T)->T{y}fn main(){let x=same(id(1),2u8);}",
         "fn f<T>(x:T,n:i32)->T{if n==0{x}else{f(x,n-1)}}fn main(){let x=f(1u8,1);}",
-    ] {
-        check(&parse(source).unwrap()).unwrap();
-    }
-    for source in [
         "fn id<T>(x:T)->T{x}fn main(){let x=id({let a=1;2});}",
         "fn id<T>(x:T)->T{x}fn main(){let x=id(id(1));}",
     ] {
-        let error = parse(source).and_then(|p| check(&p)).unwrap_err();
-        assert!(error.contains("unsupported generic inference"), "{error}");
+        check(&parse(source).unwrap()).unwrap();
     }
     for source in [
         "fn same<T>(x:T,y:T)->T{y}fn main(){let x=same(1u8,2u16);}",
