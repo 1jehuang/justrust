@@ -16,6 +16,7 @@ pub mod vec;
 pub mod ops;
 pub mod cmp;
 pub mod default;
+pub mod convert;
 pub mod hash;
 pub mod string;
 pub mod fmt;

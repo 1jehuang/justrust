@@ -2,6 +2,7 @@
 use super::*;
 
 mod byte_strings;
+mod primitive_actuals;
 #[path = "format_lowering.rs"]
 mod format_lowering;
 #[path = "type_check/constructor_expectations.rs"]
@@ -8193,14 +8194,16 @@ impl<'a> Checker<'a> {
             ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
             ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) => 0,
         };
-        self.finish_checked_call(
+        let call = self.finish_checked_call(
             target,
             name,
             signature,
             args,
             self.type_actual_regions(type_args, region_offset)?,
             adjusted,
-        )
+        )?;
+        self.primitive_associated_actuals(expression, &owner, call)?;
+        Ok(call)
     }
     /// `as` casts whose source or target is a raw pointer. Pairs are exactly
     /// those admitted by `ir::ptr_cast_valid`; everything else is E0606.

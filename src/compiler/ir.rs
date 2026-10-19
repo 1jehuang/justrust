@@ -21,6 +21,8 @@ mod grouped_or;
 mod runtime_sites;
 pub use runtime_sites::{RuntimeLocation, RuntimeSites};
 use std::sync::atomic::{AtomicU64, Ordering};
+#[path = "ir/call_value_types.rs"]
+mod call_value_types;
 #[path = "ir/closure.rs"]
 mod closure;
 pub use closure::{CaptureKind, CaptureSource, ClosureKind, ClosureTy};
@@ -9195,6 +9197,7 @@ impl CheckedFunction {
                     for &id in args {
                         expr(id)?;
                     }
+                    self.validate_call_value_types(value, args, signature, facts, conditional_budget)?;
                 }
                 ExprKind::If {
                     condition,

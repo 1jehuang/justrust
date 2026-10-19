@@ -8,6 +8,7 @@ mod capture_resolution;
 mod const_inline;
 mod const_pattern;
 mod stored_closures;
+mod primitive_owners;
 
 #[derive(Clone, Debug)]
 enum ResolvedPath {
@@ -1999,8 +2000,24 @@ impl Resolver<'_> {
             Type::SelfType
         } else {
             let Some(resolved) = self.path(&owner_path, module, true, false)? else {
-                return Ok(None);
+                return self.primitive_associated_path(&prefix, item, module);
             };
+            if resolved.kind == ResolvedKind::TypeAlias {
+                let owner = if prefix.segments.iter().any(|segment| !segment.args.is_empty()) {
+                    Type::Apply(prefix)
+                } else {
+                    Type::Named(owner_path)
+                };
+                return self.resolved_associated_owner(owner, item, module);
+            }
+            if resolved.kind == ResolvedKind::Module {
+                // Rust retries primitive type syntax only when the source
+                // module has no value at the complete call path.
+                if self.path(&path.path(self.names())?, module, false, false)?.is_none() {
+                    return self.primitive_associated_path(&prefix, item, module);
+                }
+                return Ok(None);
+            }
             if !matches!(resolved.kind, ResolvedKind::Struct | ResolvedKind::Enum) {
                 return Ok(None);
             }
