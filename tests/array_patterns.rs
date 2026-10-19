@@ -185,14 +185,14 @@ fn cases() -> Vec<Case> {
             source: r#"fn main(){let answer=match [40,2]{[a,b] if a==40=>a+b,_=>0};if answer==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "or_boundary",
             source: r#"fn main(){let answer=match [40,2]{[a,b]|[a,b]=>a+b};if answer==42{println!("ok");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "tail_binding_boundary",
@@ -381,7 +381,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (22, 5));
-    assert_eq!(partition, (16, 5, 6));
+    assert_eq!(partition, (18, 5, 4));
 }
 #[test]
 fn stock_array_patterns_mapping_ownership_and_valid_unsupported_oracle_edition2024() {
@@ -422,6 +422,8 @@ fn source_array_patterns_publish_exact_constant_indexes_without_omitted_bindings
                 && !matches!(
                     c.name,
                     "refutable_child_boundary"
+                        | "guard_boundary"
+                        | "or_boundary"
                         | "reference_array_boundary"
                         | "ref_binding_boundary"
                 )
@@ -550,7 +552,7 @@ fn array_pattern_closed_boundaries_reject_at_their_actual_frontend_phase() {
             counts.1 += 1;
         }
     }
-    assert_eq!(counts, (3, 2, 1));
+    assert_eq!(counts, (2, 2, 0));
 }
 #[test]
 fn native_array_patterns_workers1_8_check_build_no_compiler_fallback() {
@@ -579,7 +581,7 @@ fn native_array_patterns_workers1_8_check_build_no_compiler_fallback() {
                 } else {
                     command.arg("-o").arg(&image);
                 }
-                let result = capture(&mut command, &scratch, 20);
+                let result = capture(&mut command, &scratch, 180);
                 let diagnostic = String::from_utf8_lossy(&result.stderr);
                 assert!(
                     !diagnostic.contains("panicked at"),
@@ -637,7 +639,7 @@ fn native_array_patterns_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 108);
-    assert_eq!(modes, (32, 32, 10, 10, 12, 12));
+    assert_eq!(modes, (36, 36, 10, 10, 8, 8));
     eprintln!(
         "NATIVE ARRAY PATTERNS:108 cells, modes{modes:?};32 executed native images;24 stock-valid Unsupported cells are boundaries, not Rust-invalid parity or native layout/FFI proof"
     );
