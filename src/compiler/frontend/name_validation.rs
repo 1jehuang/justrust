@@ -743,6 +743,25 @@ impl<'a> Validator<'a> {
                     self.push(Visit::IfLetThen(pattern, body))?;
                     self.push(Visit::Expr(scrutinee))?;
                 }
+                Stmt::For {
+                    label,
+                    pattern,
+                    source,
+                    body,
+                    ..
+                } => {
+                    if let Some(label) = label {
+                        self.push(Visit::Ident(*label, LookupClass::Label))?;
+                    }
+                    self.push(Visit::IfLetThen(pattern, body))?;
+                    match &source.iterable {
+                        ForIterable::Range { start, end, .. } => {
+                            self.push(Visit::Expr(end))?;
+                            self.push(Visit::Expr(start))?;
+                        }
+                        ForIterable::Value(value) => self.push(Visit::Expr(value))?,
+                    }
+                }
                 Stmt::While {
                     label,
                     condition,

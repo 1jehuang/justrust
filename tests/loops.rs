@@ -1,5 +1,5 @@
 //! Bounded native CLI acceptance of loops, break and continue.
-//! Stock rustc is never invoked by these tests.
+//! Range fixtures also execute stock rustc as an external oracle.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 use std::fs::{self, OpenOptions};
@@ -415,7 +415,6 @@ fn loop_milestone_boundaries_reject_without_silent_fallback() {
     for (label, source) in [
         ("labelled break", "fn main(){loop {break 'missing;}}"),
         ("labelled continue", "fn main(){loop {continue 'missing;}}"),
-        ("for loop", "fn main(){for i in 0..3 {}}"),
         ("while expression", "fn main(){let x=while false {}; }"),
         ("continue value", "fn main(){loop {continue 1;}}"),
     ] {
@@ -486,4 +485,130 @@ fn unreachable_typed_values_still_constrain_breaks_conditions_and_results() {
     // A pure Never operand has no concrete i32 constraint to conflict with
     // the later bool break. The early return means there is no output.
     runs("fn main(){let x=loop{break {return;};break false;};}", "");
+}
+
+fn stock(source: &str, expected: Option<&str>) {
+    let scratch = Scratch::new();
+    let input = scratch.source(source);
+    let output = scratch.path("stock");
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let result = capture(
+        Command::new(rustc)
+            .arg("--edition=2024")
+            .arg(&input)
+            .arg("-o")
+            .arg(&output),
+        &scratch,
+        Duration::from_secs(30),
+    );
+    if let Some(expected) = expected {
+        result.success(source);
+        let result = capture(&mut Command::new(output), &scratch, Duration::from_secs(5));
+        result.success(source);
+        assert_eq!(result.stdout, expected.as_bytes(), "{source}");
+    } else {
+        assert!(
+            !result.status.success(),
+            "stock accepted invalid fixture: {source}"
+        );
+    }
+}
+
+#[test]
+fn range_for_matches_stock_once_only_bounds_scope_and_control() {
+    let source = r#"
+fn bound(x:i32)->i32 { if x==2 {println!("two");} if x==4 {println!("four");} if x==6 {println!("six");} x }
+fn main() {
+    let i=2;
+    let mut sum=0;
+    for i in bound(i)..bound(6) {
+        if i==3 {continue;}
+        sum=sum+i;
+        if i==4 {break;}
+    }
+    if i==2 && sum==6 {println!("scope sum ok");}
+    for _ in bound(4)..bound(2) {println!("bad");}
+    for _ in 3..3 {println!("bad");}
+    let mut count=0;
+    'outer: for n in 0..=3 {
+        for j in 0..3 {
+            if j==1 {continue 'outer;}
+            count=count+n;
+        }
+    }
+    if count==6 {println!("continue ok");}
+    'stop: for _ in 0..5 {for _ in 0..5 {break 'stop;}}
+    for mut x in 1..3 {x=x+10;if x==11 {println!("eleven");} if x==12 {println!("twelve");}}
+}
+"#;
+    let expected = "two\nsix\nscope sum ok\nfour\ntwo\ncontinue ok\neleven\ntwelve\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn inclusive_range_maxima_do_not_overflow_or_repeat_on_continue() {
+    let source = r#"
+fn main(){
+    let mut count=0;
+    for x in 254u8..=255u8 {if x==254u8 || x==255u8 {count=count+1;}continue;}
+    for x in 126i8..=127i8 {if x==126i8 || x==127i8 {count=count+1;}}
+    for x in 18446744073709551615u64..=18446744073709551615u64 {if x==18446744073709551615u64 {count=count+1;}}
+    for x in -128i8..=-127i8 {if x== -128i8 || x== -127i8 {count=count+1;}}
+    if count==7 {println!("maxima ok");}
+    for _ in 2..=1 {println!("bad");}
+}
+"#;
+    let expected = "maxima ok\n";
+    stock(source, Some(expected));
+    runs(source, expected);
+}
+
+#[test]
+fn range_for_invalid_patterns_types_binding_scope_and_break_values() {
+    for source in [
+        "fn main(){for i in 0..3 {} let x=i;}",
+        "fn main(){for i in i..3 {}}",
+        "fn main(){for i in 0..3 {i=4;}}",
+        "fn main(){for i in 0..3 {break 1;}}",
+        "fn main(){for i in 0..3 {break ();}}",
+        "fn main(){for i in 0u8..3i32 {}}",
+        "fn main(){for i in false..true {}}",
+        "fn main(){for 1 in 0..3 {}}",
+        "fn main(){for i in 0..3 {1}}",
+        "fn main(){for i in 3..0 {missing;}}",
+        "fn main(){for i in 0..3 {continue 'missing;}}",
+        "fn f()->i32{for _ in ({return 7;0}..3) {}} fn main(){}",
+        "fn f()->i32{return 7;for _ in 0..3 {}} fn main(){}",
+        "fn main(){for _ in ({return;0}..3) {missing;}}",
+    ] {
+        stock(source, None);
+        rejects("invalid range for", source);
+    }
+}
+
+#[test]
+fn range_bounds_keep_enclosing_control_and_once_only_mutation() {
+    let source = r#"
+fn main(){
+    let mut n=0;
+    let mut end=4;
+    let mut sum=0;
+    for x in ({n=n+1;1}..{n=n+10;end}) {
+        end=0;
+        sum=sum+x;
+    }
+    if n==11 && sum==6 && end==0 {println!("bounds snapshot ok");}
+    let mut attempts=0;
+    'outer: loop {
+        attempts=attempts+1;
+        for _ in ({if attempts<3 {continue 'outer;} 0}..2) {break 'outer;}
+    }
+    if attempts==3 {println!("bound control ok");}
+    for _ in ({return;}..3) {println!("bad");}
+}
+"#;
+    let expected = "bounds snapshot ok\nbound control ok\n";
+    stock(source, Some(expected));
+    runs(source, expected);
 }
