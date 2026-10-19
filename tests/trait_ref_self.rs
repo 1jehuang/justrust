@@ -72,3 +72,26 @@ fn relaxing_other_bounds_is_rejected() {
     let source = "fn f<T: ?Copy>(t: T) {} fn main() {}";
     assert!(compiler::compile(source.into(), 1, true).is_err());
 }
+
+#[test]
+fn dyn_dispatch_and_inferred_usize_index() {
+    run(
+        "trait Shape { fn area(&self) -> i32; fn name(&self) -> i32 { 1 } }
+         struct Sq(i32);
+         struct Rect { w: i32, h: i32 }
+         impl Shape for Sq { fn area(&self) -> i32 { self.0 * self.0 } }
+         impl Shape for Rect { fn area(&self) -> i32 { self.w * self.h } fn name(&self) -> i32 { 2 } }
+         fn show(s: &dyn Shape) -> i32 { s.area() + s.name() }
+         fn main() {
+             let a = Sq(3);
+             let b = Rect { w: 2, h: 5 };
+             println!(\"{}\", show(&a));
+             let list: [&dyn Shape; 2] = [&a, &b];
+             let mut t = 0;
+             let mut i = 0;
+             while i < 2 { t += list[i].area(); i += 1; }
+             println!(\"{}\", t);
+         }",
+        "10\n19\n",
+    );
+}

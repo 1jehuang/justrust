@@ -24,6 +24,9 @@ struct Solver<'a, 'b> {
     variables: Vec<Variable>,
     scopes: Vec<HashMap<LocalKey, Term>>,
     sites: Vec<(usize, Term)>,
+    /// Block-local bindings whose initializer is an array literal or a
+    /// repeat expression (scratch for builtin index inference).
+    arrays: Vec<HashMap<LocalKey, bool>>,
 }
 
 pub(super) fn hints(
@@ -36,6 +39,7 @@ pub(super) fn hints(
         variables: Vec::new(),
         scopes: Vec::new(),
         sites: Vec::new(),
+        arrays: vec![HashMap::new()],
     };
     // Existing parameters and enclosing locals are rigid, never reinferred.
     let mut outer = HashMap::new();
@@ -158,6 +162,7 @@ impl Solver<'_, '_> {
     fn block(&mut self, block: &Block, depth: usize) -> Result<Term, String> {
         self.checker.infer_work(depth)?;
         self.scopes.push(HashMap::new());
+        self.arrays.push(HashMap::new());
         for stmt in &block.statements {
             self.checker.infer_work(depth)?;
             match stmt {
@@ -165,6 +170,15 @@ impl Solver<'_, '_> {
                     name, ty, value, ..
                 } => {
                     let term = self.expr(value, depth + 1)?;
+                    let array = matches!(ty, Type::Array(..))
+                        || matches!(ty, Type::Infer)
+                            && matches!(value, Expr::Array(_) | Expr::Repeat { .. });
+                    if let Some(key) = self.checker.local_key(name, true)? {
+                        self.checker.infer_storage(1)?;
+                        if let Some(scope) = self.arrays.last_mut() {
+                            scope.insert(key, array);
+                        }
+                    }
                     if !matches!(ty, Type::Infer) {
                         let annotation =
                             self.fixed(checked_local_ty(ty, self.checker.signatures)?)?;
@@ -251,7 +265,22 @@ impl Solver<'_, '_> {
             None => self.fixed(ir::Ty::Unit)?,
         };
         self.scopes.pop();
+        self.arrays.pop();
         Ok(result)
+    }
+    fn array_local(&self, expr: &Expr) -> Result<bool, String> {
+        let Expr::Var(path) = expr else {
+            return Ok(false);
+        };
+        let Some(key) = self.checker.local_key(path, false)? else {
+            return Ok(false);
+        };
+        for scope in self.arrays.iter().rev() {
+            if let Some(array) = scope.get(&key) {
+                return Ok(*array);
+            }
+        }
+        Ok(false)
     }
     fn expr(&mut self, expr: &Expr, depth: usize) -> Result<Term, String> {
         self.checker.infer_work(depth)?;
@@ -334,6 +363,57 @@ impl Solver<'_, '_> {
                 Ok(left)
             }
             Expr::Block(block) | Expr::Unsafe(block) => self.block(block, depth + 1),
+            // Runtime array/slice indices are `usize`; this flows backward to
+            // unannotated integer locals used as indices (`let mut i = 0`).
+            // Overloaded `Index` on user types keeps its own index type.
+            Expr::DynamicIndex {
+                base: base_expr,
+                index,
+            } => {
+                // A base known to be a nominal (user `Index` impl) keeps its
+                // own index type; arrays, slices and unknown bases admit only
+                // `usize` for the builtin operator, which is the stock answer
+                // whenever the base is array-like.
+                self.expr(base_expr, depth + 1)?;
+                let nominal = |ty: &ir::Ty| {
+                    let ty = match ty {
+                        ir::Ty::Ref { referent, .. } => referent.as_ref(),
+                        other => other,
+                    };
+                    !matches!(ty, ir::Ty::Array { .. } | ir::Ty::Slice { .. })
+                };
+                let builtin = match base_expr.as_ref() {
+                    Expr::Array(_) | Expr::Repeat { .. } => true,
+                    Expr::Var(_) => match self.checker.scalar_hint(base_expr) {
+                        Ok(Some(ty)) => !nominal(&ty),
+                        _ => self.array_local(base_expr)?,
+                    },
+                    _ => false,
+                };
+                let index = self.expr(index, depth + 1)?;
+                if builtin {
+                    let usize = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
+                    self.unify(index, usize)?;
+                }
+                self.node(Domain::Unknown)
+            }
+            // Walk subexpressions for nested evidence (an index inside
+            // `v[i].f()`), without claiming the compound result type.
+            Expr::MethodCall { receiver, args, .. } => {
+                self.expr(receiver, depth + 1)?;
+                for arg in args {
+                    self.expr(arg, depth + 1)?;
+                }
+                self.node(Domain::Unknown)
+            }
+            Expr::Field { base, .. } | Expr::Deref { value: base } => {
+                self.expr(base, depth + 1)?;
+                self.node(Domain::Unknown)
+            }
+            Expr::BorrowValue { value, .. } => {
+                self.expr(value, depth + 1)?;
+                self.node(Domain::Unknown)
+            }
             Expr::Loop { body, .. } => {
                 self.block(body, depth + 1)?;
                 self.node(Domain::Unknown)
