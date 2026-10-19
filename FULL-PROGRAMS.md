@@ -21,10 +21,13 @@ milestone, not full Rust support (see RUST-COMPATIBILITY.md).
 - `justrust test --test full_programs -- --nocapture` prints per-program
   `PASS` or the first native diagnostic.
 
-## Status (2026-10-19, origin/clean-room-rewrite 6ae2c3e)
+## Status (2026-10-19)
 
-Landed since bf4ad37: char literal/range patterns (671f9090f), argument-position
-`impl Trait` (8347eaf25), rvalue method receivers (2dcaa3841), char casts.
+The pass count below is current through the integrated numeric inference
+milestones. The original blocker matrix further below is a historical inventory,
+not a fresh measurement of today's diagnostics. Subsequent source-prelude,
+formatting, pointer, pattern, closure and borrowed-iteration slices are tracked
+in `IMPLEMENTATION.md` and their scoped feature documents.
 
 3/20 pass: `01_hello`, unchanged `03_collatz`, and unchanged `05_gcd_fib`
 check, build and execute with exact frozen stock stdout. The numeric programs
@@ -34,14 +37,22 @@ constraints, including bidirectional range/array item evidence
 until their remaining features land. This is not full formatting or full Rust
 support. See `FORMAT-SCALARS.md`.
 
-## Ranked blockers (feature -> programs blocked)
+## Historical feature-demand matrix
 
-The count is how many programs need the feature, from a manual read of each program.
-First-diagnostic counts undercount, because every program stops at its first
-error. "Probe" is the native diagnostic for a minimal program using only
-that feature (values observed via `if cond { println!("ok") }`).
+The counts below describe features required by the original 20 programs, before
+incremental implementations landed. They are **not current counts of blocked
+programs**. Scalar Display, string literals, range/array loops, match ergonomics,
+byte literals, primitive methods, dyn references and some Option/Result methods
+now have supported slices. A broad feature tag can remain when a program needs
+an unsupported part, such as generic Iterator dispatch rather than integer-range
+lowering.
 
-| # | tag | blocks | feature | probe today |
+The quoted probes are retained historical diagnostics, not a claim that those
+minimal examples still reject. Re-run the corpus for current first errors.
+First-diagnostic counts also undercount remaining requirements because each
+program stops at its first error.
+
+| # | tag | original demand | feature | historical probe |
 |---|-----|-------:|---------|-------------|
 | 1 | fmt-display | 20 | `println!`/`print!` with `{}` args (ints, bool, char, &str, String, f64) | "formatting placeholders are unsupported" (FORMAT-SCALARS.md slice in progress) |
 | 2 | for | 16 | `for` over ranges (`a..b`, `a..=b`, typed `1..10u64`) and IntoIterator | "for loops and iterators ... unsupported" |
@@ -79,7 +90,11 @@ that feature (values observed via `if cond { println!("ok") }`).
 | 31 | ops-traits | 1 | `std::ops::{Add, Sub, Mul, Neg, Index}` user impls driving operators | std-paths first |
 | 31 | rc-refcell | 1 | `Rc`, `Rc::strong_count`, `RefCell` borrow/borrow_mut | std-paths first |
 
-### Greedy unlock order (fewest new features per program)
+### Original greedy unlock hypothesis
+
+This order predates the first passing program and is not a current measured
+schedule. Programs 01, 03 and 05 already pass. Prioritize reusable source-library
+and trait machinery over isolated per-program special cases.
 
 1. fmt-display + str: 01_hello
 2. + for: 03_collatz
