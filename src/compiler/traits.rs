@@ -1192,6 +1192,15 @@ struct TypeWalk {
     has_parameters: bool,
 }
 impl TypeWalk {
+    fn growth_slots(len: usize, capacity: usize) -> Option<usize> {
+        if len < capacity {
+            Some(0)
+        } else if len == capacity {
+            len.checked_add(len.max(1)).map(|_| len.max(1))
+        } else {
+            None
+        }
+    }
     fn key(ty: &Ty) -> Option<TypeNode> {
         match ty {
             Ty::Struct(t) => Some(TypeNode::Struct(
@@ -1235,18 +1244,64 @@ impl TypeWalk {
                     + 32,
             ),
         )?;
-        let relocation = self
+        // The per-entry receipt pays two slots in both vectors. Doubling only
+        // at capacity therefore remains paid after publication of this entry.
+        // During relocation the old allocation is still live, so separately
+        // admit that temporary peak before requesting either new allocation.
+        let complete_growth = Self::growth_slots(self.complete.len(), self.complete.capacity())
+            .ok_or_else(|| FactsError::resource(budget, "type memo capacity overflow"))?;
+        let reservation_growth =
+            Self::growth_slots(self.reservations.len(), self.reservations.capacity())
+                .ok_or_else(|| FactsError::resource(budget, "type memo capacity overflow"))?;
+        let grow_complete = complete_growth != 0;
+        let grow_reservations = reservation_growth != 0;
+        let old_complete = if grow_complete {
+            self.complete.len()
+        } else {
+            0
+        };
+        let old_reservations = if grow_reservations {
+            self.reservations.len()
+        } else {
+            0
+        };
+        let relocation = old_complete
+            .checked_add(old_reservations)
+            .ok_or_else(|| FactsError::resource(budget, "type memo relocation overflow"))?;
+        let temporary_bytes = old_complete
+            .checked_mul(std::mem::size_of::<((TypeNode, TypeUse), usize)>())
+            .and_then(|bytes| {
+                old_reservations
+                    .checked_mul(std::mem::size_of::<ir::PlanReservation>())
+                    .and_then(|other| bytes.checked_add(other))
+            })
+            .ok_or_else(|| FactsError::resource(budget, "type memo storage overflow"))?;
+        let _relocation_storage = charged(budget, budget.reserve_bytes(temporary_bytes))?;
+        charged(budget, budget.charge_work(relocation))?;
+        if grow_complete {
+            self.complete
+                .try_reserve_exact(complete_growth)
+                .map_err(|_| FactsError::resource(budget, "type memo allocation failed"))?;
+        }
+        if grow_reservations {
+            self.reservations
+                .try_reserve_exact(reservation_growth)
+                .map_err(|_| {
+                    FactsError::resource(budget, "type memo reservation allocation failed")
+                })?;
+        }
+        let paid_slots = self
             .complete
             .len()
-            .checked_add(self.reservations.len())
-            .ok_or_else(|| FactsError::resource(budget, "type memo relocation overflow"))?;
-        charged(budget, budget.charge_work(relocation))?;
-        self.complete
-            .try_reserve_exact(1)
-            .map_err(|_| FactsError::resource(budget, "type memo allocation failed"))?;
-        self.reservations
-            .try_reserve_exact(1)
-            .map_err(|_| FactsError::resource(budget, "type memo reservation allocation failed"))?;
+            .checked_add(1)
+            .and_then(|len| len.checked_mul(2))
+            .ok_or_else(|| FactsError::resource(budget, "type memo capacity overflow"))?;
+        if self.complete.capacity() > paid_slots || self.reservations.capacity() > paid_slots {
+            return Err(FactsError::resource(
+                budget,
+                "type memo allocator exceeded paid capacity",
+            ));
+        }
         self.complete.push((key, height));
         self.reservations.push(reservation);
         Ok(())
@@ -7112,6 +7167,50 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn local_type_memo_growth_is_paid_checked_and_amortized() {
+        assert_eq!(TypeWalk::growth_slots(0, 0), Some(1));
+        assert_eq!(TypeWalk::growth_slots(3, 4), Some(0));
+        assert_eq!(TypeWalk::growth_slots(4, 4), Some(4));
+        assert_eq!(TypeWalk::growth_slots(usize::MAX, usize::MAX), None);
+        assert_eq!(TypeWalk::growth_slots(2, 1), None);
+        let budget = PlanBudget::new(ir::PlanLimits::default());
+        let mut memo = TypeWalk::default();
+        for index in 0..65 {
+            let before = budget.usage_snapshot();
+            let old_capacity = memo.complete.capacity();
+            memo.insert((TypeNode::Tuple(index, 1), TypeUse::Root), index, &budget)
+                .unwrap();
+            let after = budget.usage_snapshot();
+            assert_eq!(
+                after.work - before.work,
+                if index == old_capacity { 2 * index } else { 0 }
+            );
+            assert!(memo.complete.capacity() <= 2 * memo.complete.len());
+            assert!(memo.reservations.capacity() <= 2 * memo.reservations.len());
+            assert!(after.bytes > before.bytes);
+        }
+        assert_eq!(budget.usage_snapshot().work, 254);
+        assert_eq!(
+            memo.lookup((TypeNode::Tuple(64, 1), TypeUse::Root), &budget)
+                .unwrap(),
+            Some(64)
+        );
+        let exhausted = PlanBudget::new(ir::PlanLimits {
+            bytes: 0,
+            ..ir::PlanLimits::default()
+        });
+        let mut unpaid = TypeWalk::default();
+        assert!(
+            unpaid
+                .insert((TypeNode::Tuple(0, 1), TypeUse::Root), 0, &exhausted)
+                .unwrap_err()
+                .is_resource()
+        );
+        assert!(unpaid.complete.is_empty());
+        assert!(unpaid.reservations.is_empty());
+    }
+
     use super::*;
     use ir::{
         BinderId, BorrowKind, FieldDef, IntTy, NominalAppId, RefContract, StructDef, StructTy,
