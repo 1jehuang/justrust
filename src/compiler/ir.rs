@@ -5,6 +5,9 @@
 //! diagnostics only. This structured representation is a migration boundary,
 //! not yet an ownership-checking CFG or a target layout/ABI representation.
 use super::frontend::{BinaryOp, UnaryOp};
+#[path = "ir/associated_const.rs"]
+mod associated_const;
+pub use associated_const::AssociatedConstOperand;
 #[path = "ir/schema_metadata.rs"]
 mod schema_metadata;
 pub(super) use schema_metadata::substitute_schema_metadata_ty;
@@ -89,6 +92,7 @@ pub enum DeclKind {
     Trait,
     TraitItem,
     AssociatedType,
+    AssociatedConst,
     TraitImpl,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -2761,6 +2765,17 @@ pub fn instantiate_checked(
     cx: &mut impl SubstitutionCx,
     budget: &PlanBudget,
 ) -> Result<CheckedFunction, String> {
+    instantiate_checked_with_constants(template, args, closed_facts, cx, budget, &[])
+}
+
+pub(in crate::compiler) fn instantiate_checked_with_constants(
+    template: &super::ownership::VerifiedTemplateCfg,
+    args: &[Ty],
+    closed_facts: &super::traits::ValidatedFacts,
+    cx: &mut impl SubstitutionCx,
+    budget: &PlanBudget,
+    constants: &[Arc<super::associated_constant_graph::AssociatedConstantValueFact>],
+) -> Result<CheckedFunction, String> {
     let env = template.env();
     if !template.budget().same_authority(budget) {
         return Err("generic instance changed planning budget authority".into());
@@ -2808,10 +2823,39 @@ pub fn instantiate_checked(
     for local in &mut output.locals {
         local.ty = visitor.ty(&local.ty)?;
     }
+    let symbolic_count = source
+        .exprs
+        .iter()
+        .filter(|expression| matches!(expression.kind, ExprKind::AssociatedConst(_)))
+        .count();
+    if symbolic_count != constants.len() {
+        return Err("associated constant closed graph frontier coverage changed".into());
+    }
+    let mut constant_index = 0;
     for expression in &mut output.exprs {
         budget.charge_work(1)?;
         expression.ty = visitor.ty(&expression.ty)?;
         match &mut expression.kind {
+            ExprKind::AssociatedConst(operand) => {
+                operand.validate(template.facts(), budget)?;
+                let value =
+                    constants[constant_index].closed_scalar(closed_facts, operand, budget)?;
+                constant_index += 1;
+                let ty = match value.ty() {
+                    super::const_eval::ScalarTy::Int(ty) => Ty::Int(ty),
+                    super::const_eval::ScalarTy::Bool => Ty::Bool,
+                };
+                if expression.ty != ty {
+                    return Err(
+                        "associated constant instantiated operand changed declared value type"
+                            .into(),
+                    );
+                }
+                expression.kind = match value {
+                    super::const_eval::ScalarValue::Int(value) => ExprKind::Int(value),
+                    super::const_eval::ScalarValue::Bool(value) => ExprKind::Bool(value),
+                };
+            }
             ExprKind::Borrow { place, .. } => visitor.path(&mut place.projection)?,
             ExprKind::Struct { ty, .. } => {
                 let Ty::Struct(value) = visitor.ty(&Ty::Struct(ty.clone()))? else {
@@ -7060,6 +7104,8 @@ pub struct LiteralOutput {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExprKind {
+    /// Universally typed member use, replaced only by graph-sealed closed CTFE.
+    AssociatedConst(Arc<AssociatedConstOperand>),
     /// Linux syscall number followed by its six usize ABI arguments.
     NativeSyscall(Vec<ExprId>),
     TypeAlignment(TypeAlignmentQuery),
@@ -7882,6 +7928,7 @@ impl CheckedFunction {
                 }
                 ExprKind::Str(text) => storage(budget, text.len(), 1)?,
                 ExprKind::ByteStr(bytes) => storage(budget, bytes.len(), 1)?,
+                ExprKind::AssociatedConst(operand) => operand.validate_context(facts, budget)?,
                 ExprKind::Println(text) => storage(budget, text.len(), 1)?,
                 ExprKind::Panic(payload) => {
                     storage(budget, 1, std::mem::size_of::<PanicMessage>())?;
@@ -9237,7 +9284,13 @@ impl CheckedFunction {
                     for &id in args {
                         expr(id)?;
                     }
-                    self.validate_call_value_types(value, args, signature, facts, conditional_budget)?;
+                    self.validate_call_value_types(
+                        value,
+                        args,
+                        signature,
+                        facts,
+                        conditional_budget,
+                    )?;
                 }
                 ExprKind::If {
                     condition,
@@ -9304,6 +9357,18 @@ impl CheckedFunction {
                     character.validate()?;
                     if value.ty != Ty::Char || value.completion != Completion::Returns {
                         return Err("character expression type mismatch".into());
+                    }
+                }
+                ExprKind::AssociatedConst(operand) => {
+                    let FactsCtx::Validated(validated) = facts else {
+                        return Err("associated constant operand lacks validated universal source authority".into());
+                    };
+                    operand.validate_context(facts, validated.budget())?;
+                    if &value.ty != operand.ty() || value.completion != Completion::Returns {
+                        return Err(
+                            "associated constant symbolic expression type/completion changed"
+                                .into(),
+                        );
                     }
                 }
                 ExprKind::Int(integer) => {

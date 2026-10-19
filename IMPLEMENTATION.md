@@ -751,6 +751,13 @@ remain separate open work.
       formatting. See CONST-EVAL-SCALAR.md and data/runs/const-source/. Target-sized
       types, array lengths/repeats, const patterns, generated/associated consts,
       statics and general const-fn execution remain unsupported; corpus stays 3/20.
+- [ ] Complete associated constant evaluation and lookup (ASSOCIATED-CONSTANTS.md).
+      The scalar draft supports trait defaults/overrides, inherent generic owners,
+      qualified and bound-authorized symbolic uses, and exact initializer member
+      dependencies through per-use header/selection/value facts (134/135/136).
+      Twenty-three stock cases pass native CHECK without artifacts and BUILD/run
+      at workers 1 and 8, including skipped-reference cycles and unused bad types.
+      General const-fn execution and unchanged time-core acceptance remain open.
 
 **Acceptance:**
 expansion order/hygiene, const failures and generated diagnostics match pinned

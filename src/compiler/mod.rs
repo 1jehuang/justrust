@@ -1,4 +1,5 @@
 //! Source-to-native compiler built on the fact graph. See COMPILER.md.
+mod associated_constant_graph;
 pub mod backend;
 mod borrow;
 pub mod c_abi;
@@ -194,6 +195,9 @@ const MONO_PLAN: u32 = 113;
 const UNIVERSAL_EFFECTS_READY: u32 = 115;
 const BODY_LEXICAL: u32 = 116;
 const CAPTURE_ENV: u32 = 117;
+const ASSOCIATED_CONST_HEADER: u32 = 134;
+const ASSOCIATED_CONST_SELECT: u32 = 135;
+const ASSOCIATED_CONST_VALUE: u32 = 136;
 const CONST_DECL: u32 = 118;
 const CONST_BODY: u32 = 119;
 const CONST_VALUE: u32 = 120;
@@ -536,7 +540,12 @@ impl CompilerProvider {
 impl Provider for CompilerProvider {
     fn outputs(&self, key: &Key) -> usize {
         match key.kind {
-            UNIVERSAL_ANALYZE | ANALYZE | CONST_BODY | TEMPLATE_BODY => 2,
+            UNIVERSAL_ANALYZE
+            | ANALYZE
+            | CONST_BODY
+            | TEMPLATE_BODY
+            | ASSOCIATED_CONST_HEADER
+            | ASSOCIATED_CONST_SELECT => 2,
             PARSE => PARSE_OUTPUTS,
             _ => 1,
         }
@@ -549,6 +558,10 @@ impl Provider for CompilerProvider {
             let function = Facts::item;
             match key.kind {
                 CONST_DECL | CONST_BODY | CONST_VALUE => this.constant_node(&cx, &key).await,
+                ASSOCIATED_CONST_HEADER => this.associated_constant_header_node(&cx, &key).await,
+                ASSOCIATED_CONST_SELECT | ASSOCIATED_CONST_VALUE => {
+                    this.associated_constant_use_node(&cx, &key).await
+                }
                 SOURCE => {
                     // One node per source file, keyed by its child-ordinal path
                     // from the root file: [0] is the root, [0, i] its i-th
@@ -820,13 +833,49 @@ impl Provider for CompilerProvider {
                                 .get(0),
                         );
                     }
+                    let generic = types
+                        .callable_env(declaration)
+                        .map_err(Error::new)?
+                        .is_generic();
+                    let associated_count = if generic {
+                        0
+                    } else {
+                        prepared.associated_paths().count()
+                    };
+                    let caller = ir::CallTarget {
+                        declaration,
+                        type_args: Arc::from([]),
+                    };
+                    let (mut associated_value_handles, _associated_value_handles_storage) =
+                        this.scratch_vec(associated_count)?;
+                    for path in prepared.associated_paths().take(associated_count) {
+                        associated_value_handles.push(
+                            cx.request(associated_constant_graph::member_use_key(
+                                ASSOCIATED_CONST_VALUE,
+                                &caller,
+                                path,
+                                &this.0.budget,
+                            )?)
+                            .get(0),
+                        );
+                    }
                     let (mut values, _values_storage) =
                         this.scratch_vec::<Arc<const_check::ValueFact>>(constant_handles.len())?;
                     for handle in constant_handles {
                         values.push(cx.read_fact(handle).await?);
                     }
+                    let (mut associated_values, _associated_values_storage) =
+                        this.scratch_vec(associated_count)?;
+                    for handle in associated_value_handles {
+                        associated_values.push(cx.read_fact(handle).await?);
+                    }
                     let constants = types
-                        .seal_body_constants(prepared, values, &this.0.budget)
+                        .seal_body_constants_with_associated(
+                            prepared,
+                            values,
+                            associated_values,
+                            &this.0.budget,
+                        )
                         .map_err(|error| source_fact_error(error, &this.0.budget))?;
                     let (body, closures) = types
                         .publish_callable_body_with_closures(declaration, constants, &this.0.budget)
@@ -919,7 +968,16 @@ impl Provider for CompilerProvider {
                         )
                         .map_err(|error| source_fact_error(error, &this.0.budget))?
                     } else if let Some(closure) = &template.closure {
-                        cfg::lower_closure_template(source, callable, closure, template.closure_mode.ok_or_else(|| Error::new("closure lowering lacks canonical mode"))?, &this.0.budget).map_err(Error::new)?
+                        cfg::lower_closure_template(
+                            source,
+                            callable,
+                            closure,
+                            template.closure_mode.ok_or_else(|| {
+                                Error::new("closure lowering lacks canonical mode")
+                            })?,
+                            &this.0.budget,
+                        )
+                        .map_err(Error::new)?
                     } else {
                         cfg::lower_template(source, callable, &this.0.budget).map_err(Error::new)?
                     };
@@ -1070,7 +1128,44 @@ impl Provider for CompilerProvider {
                     } else {
                         let closed = types.instance_facts(&instance_target).map_err(Error::new)?;
                         let mut context = types.as_ref().clone();
-                        let proof: Arc<UniversalProofFact> = facts.get(proof_key).await?;
+                        let proof_handle = cx.request(proof_key).get(0);
+                        let count = source
+                            .exprs
+                            .iter()
+                            .filter(|expression| {
+                                matches!(expression.kind, ir::ExprKind::AssociatedConst(_))
+                            })
+                            .count();
+                        let (mut constant_handles, _constant_handles_storage) =
+                            this.scratch_vec(count)?;
+                        for expression in &source.exprs {
+                            this.0.budget.charge_work(1).map_err(Error::new)?;
+                            if let ir::ExprKind::AssociatedConst(operand) = &expression.kind {
+                                constant_handles.push(
+                                    cx.request(associated_constant_graph::member_use_key(
+                                        ASSOCIATED_CONST_VALUE,
+                                        &instance_target,
+                                        operand.path(),
+                                        &this.0.budget,
+                                    )?)
+                                    .get(0),
+                                );
+                            }
+                        }
+                        let proof: Arc<UniversalProofFact> = cx.read_fact(proof_handle).await?;
+                        let (mut constant_values, _constant_values_storage) =
+                            this.scratch_vec(count)?;
+                        for handle in constant_handles {
+                            let value: Arc<associated_constant_graph::AssociatedConstantValueFact> =
+                                cx.read_fact(handle).await?;
+                            value.validate(
+                                &types,
+                                &instance_target,
+                                value.authorization.path(),
+                                &this.0.budget,
+                            )?;
+                            constant_values.push(value);
+                        }
                         let verified = &proof.verified;
                         if closed
                             .is_source_callable(instance_target.declaration)
@@ -1089,12 +1184,13 @@ impl Provider for CompilerProvider {
                                 .map_err(|error| source_fact_error(error, &this.0.budget))?;
                         }
                         let checked = Arc::new(
-                            ir::instantiate_checked(
+                            ir::instantiate_checked_with_constants(
                                 verified,
                                 &instance_target.type_args,
                                 &closed,
                                 &mut context,
                                 &this.0.budget,
+                                &constant_values,
                             )
                             .map_err(Error::new)?,
                         );
@@ -1472,6 +1568,21 @@ impl Provider for CompilerProvider {
                                 .get(0),
                         );
                     }
+                    let (mut associated_handles, _associated_handles_storage) =
+                        this.scratch_vec(types.associated_constant_count())?;
+                    for declaration in types.associated_constant_declarations() {
+                        associated_handles.push((
+                            declaration,
+                            cx.request(Key::new(
+                                ASSOCIATED_CONST_HEADER,
+                                vec![
+                                    declaration.snapshot.graph_word(),
+                                    u64::from(declaration.index),
+                                ],
+                            ))
+                            .get(1),
+                        ));
+                    }
                     let kind = if key.kind == BUILD { OBJECT } else { ANALYZE };
                     let (mut root_handles, _root_handles_reservation) =
                         this.scratch_vec(root_count)?;
@@ -1481,6 +1592,11 @@ impl Provider for CompilerProvider {
                     let plan = facts.plan().await?;
                     for handle in constant_handles {
                         cx.read(handle).await?;
+                    }
+                    for (declaration, handle) in associated_handles {
+                        let checked: Arc<associated_constant_graph::AssociatedConstantCheckedFact> =
+                            cx.read_fact(handle).await?;
+                        checked.validate(&types, declaration, &this.0.budget)?;
                     }
                     if key.kind == CHECK {
                         // Required universal admission is per-caller, not one

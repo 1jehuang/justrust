@@ -99,6 +99,7 @@ enum Visit<'a> {
     Variant(&'a VariantDecl, ModuleId),
     Field(&'a FieldDecl, ModuleId),
     Impl(&'a ImplDecl),
+    AssociatedConst(&'a AssociatedConstDecl, ModuleId),
     Associated(&'a AssociatedFunction, ModuleId),
     Trait(&'a TraitDecl),
     TraitItem(&'a TraitItemDecl, ModuleId),
@@ -578,9 +579,20 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Ident(associated.name, LookupClass::Member))?;
                     self.push(Visit::Type(&associated.value))?;
                 }
+                self.many(&implementation.associated_constants, |item| {
+                    Visit::AssociatedConst(item, implementation.module)
+                })?;
                 self.many(&implementation.items, |item| {
                     Visit::Associated(item, implementation.module)
                 })?;
+            }
+            Visit::AssociatedConst(item, module) => {
+                self.visibility(&item.visibility, module)?;
+                self.push(Visit::Ident(item.name, LookupClass::Member))?;
+                self.push(Visit::Type(&item.ty))?;
+                if let Some(value) = &item.initializer {
+                    self.push(Visit::Expr(value))?;
+                }
             }
             Visit::Associated(item, module) => {
                 receiver_authority::validate_kind(self.program, &item.function, item.receiver)?;
@@ -599,6 +611,9 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Ident(associated.name, LookupClass::Member))?;
                     self.many(&associated.bounds, Visit::TraitPath)?;
                 }
+                self.many(&declaration.associated_constants, |item| {
+                    Visit::AssociatedConst(item, declaration.module)
+                })?;
                 self.many(&declaration.items, |item| {
                     Visit::TraitItem(item, declaration.module)
                 })?;
@@ -834,6 +849,13 @@ impl<'a> Validator<'a> {
                 }
             },
             Visit::Expr(expression) => match expression {
+                Expr::AssociatedConst(value) => {
+                    self.push(Visit::Ident(value.name, LookupClass::Member))?;
+                    self.push(Visit::Type(&value.owner))?;
+                    if let Some(path) = &value.trait_path {
+                        self.push(Visit::TraitPath(path))?;
+                    }
+                }
                 Expr::Try(inner) => self.push(Visit::Expr(inner))?,
                 Expr::UnexpandedMacro(_) => {
                     let mut error = crate::compiler::source::SourceError::syntax(
@@ -1464,6 +1486,7 @@ mod tests {
             supertraits: vec![parent],
             name,
             visibility: ir::Visibility::Public,
+            associated_constants: Vec::new(),
             associated_types: Vec::new(),
             self_defaults: Vec::new(),
             items: Vec::new(),

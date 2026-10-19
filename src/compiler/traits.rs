@@ -11,6 +11,7 @@ use super::module_identity::{ModuleArena, ModuleError, ModuleId};
 use std::sync::{Arc, Mutex};
 
 mod associated_bounds;
+mod associated_constants;
 mod associated_types;
 mod callable_inputs;
 mod carrier_regions;
@@ -18,10 +19,12 @@ mod catalog;
 #[path = "traits/closure_dispatch.rs"]
 mod closure_dispatch;
 mod closures;
+mod constant_members;
 mod dynamic_objects;
 mod equality;
 mod generic_methods;
 mod impl_constraints;
+mod inherent_constants;
 mod nominal_normalization;
 mod normal_drop;
 mod parameter_equality;
@@ -31,12 +34,17 @@ mod symbolic_equalities;
 mod universal_carriers;
 mod universal_methods;
 mod universal_projections;
+pub use associated_constants::{
+    AssociatedConstHeader, AssociatedConstantType, ClosedAssociatedConstant,
+};
 pub use associated_types::NormalizedAssociatedType;
 pub use catalog::{
     CallableProvider, CatalogDecl, CatalogItem, CoreCatalog, CoreCatalogBuilder, DeclOrigin,
     RecipeDescriptor, RecipeShapeInventory,
 };
+pub use constant_members::{ConstantMemberType, SelectedAssociatedConstant};
 pub use equality::NormalizedProjectionEquality;
+pub use inherent_constants::InherentConstantType;
 pub use normal_drop::{DropGlue, NormalDropPlan, ValidatedDestructor};
 
 pub const MAX_PREDICATES: usize = 256;
@@ -372,6 +380,7 @@ fn clone_schema(schema: &GenericSchema, budget: &PlanBudget) -> Result<GenericSc
 }
 #[derive(Clone, Debug, Default)]
 pub struct HeaderSet {
+    pub constants: Arc<[AssociatedConstHeader]>,
     pub traits: Arc<[TraitHeader]>,
     pub associated_types: Arc<[AssociatedTypeHeader]>,
     pub items: Arc<[TraitItemHeader]>,
@@ -457,6 +466,39 @@ pub trait SchemaCx {
     fn closure_owner_site(&self, provider: DeclId) -> Result<Option<(DeclId, u32)>> {
         let _ = provider;
         Ok(None)
+    }
+    fn associated_constant_schema(&self, declaration: DeclId) -> Result<AssociatedConstHeader> {
+        let _ = declaration;
+        Err(FactsError::invalid(
+            self.budget(),
+            "associated constant has no retained source schema",
+        ))
+    }
+    fn instantiate_constant_metadata(
+        &self,
+        declaration: DeclId,
+        args: &[Ty],
+        caller: &GenericEnv,
+        budget: &PlanBudget,
+    ) -> Result<(Option<Ty>, Ty, Arc<[Predicate]>)> {
+        let _ = (declaration, args, caller);
+        Err(FactsError::invalid(
+            budget,
+            "constant metadata has no retained substitution provider",
+        ))
+    }
+    fn instantiate_constant_type(
+        &self,
+        declaration: DeclId,
+        args: &[Ty],
+        caller: &GenericEnv,
+        budget: &PlanBudget,
+    ) -> Result<Ty> {
+        let _ = (declaration, args, caller);
+        Err(FactsError::invalid(
+            budget,
+            "associated constant has no canonical type substitution provider",
+        ))
     }
     fn associated_type_bounds(&self, associated: DeclId) -> Result<Arc<[DeclId]>> {
         let _ = associated;
@@ -567,6 +609,7 @@ impl PredicateEnv {
 }
 #[derive(Clone, Debug)]
 enum FactsSubject {
+    AssociatedConstant(DeclId),
     SchemaItem(DeclId),
     UniversalCallable(DeclId),
     ClosedInstance(CallTarget),
@@ -753,7 +796,7 @@ impl ValidatedFacts {
     }
     pub fn phase(&self) -> FactsPhase {
         match self.subject {
-            FactsSubject::SchemaItem(_) => FactsPhase::Schema,
+            FactsSubject::SchemaItem(_) | FactsSubject::AssociatedConstant(_) => FactsPhase::Schema,
             FactsSubject::UniversalCallable(_) => FactsPhase::Universal,
             FactsSubject::ClosedInstance(_) => FactsPhase::Closed,
         }
@@ -763,7 +806,9 @@ impl ValidatedFacts {
     }
     pub fn declaration(&self) -> DeclId {
         match &self.subject {
-            FactsSubject::SchemaItem(d) | FactsSubject::UniversalCallable(d) => *d,
+            FactsSubject::SchemaItem(d)
+            | FactsSubject::AssociatedConstant(d)
+            | FactsSubject::UniversalCallable(d) => *d,
             FactsSubject::ClosedInstance(t) => t.declaration,
         }
     }
@@ -1413,6 +1458,8 @@ pub struct ValidatedTraitWorld {
     has_associated_bounds: bool,
     has_normal_drop: bool,
     declared_callables: Vec<equality::DeclaredCallableContext>,
+    constant_header_index: DeclIndex,
+    constant_impl_index: std::collections::HashMap<(DeclId, DeclId), DeclId>,
     declared_callable_index: DeclIndex,
 }
 
@@ -1563,10 +1610,14 @@ impl ValidatedTraitWorld {
             has_associated_bounds: false,
             has_normal_drop: false,
             declared_callables: Vec::new(),
+            constant_header_index: DeclIndex::default(),
+            constant_impl_index: std::collections::HashMap::new(),
             declared_callable_index: DeclIndex::default(),
         };
+        world.build_constant_index()?;
         world.validate_header_type_metadata()?;
         world.validate_headers()?;
+        world.validate_constant_headers()?;
         world.validate_associated_headers()?;
         world.validate_supertrait_graph()?;
         world.build_declared_environments()?;
@@ -1587,6 +1638,7 @@ impl ValidatedTraitWorld {
             world.require_impl_wf(h, &h.trait_ref, context, &mut Vec::new())?;
         }
         world.build_environments()?;
+        world.build_constant_environments()?;
         world.validate_final_declared_contexts()?;
         world.validate_default_body_signatures()?;
         for h in world.headers.impls.iter() {
@@ -1639,7 +1691,9 @@ impl ValidatedTraitWorld {
             }
         }
         world.owner_normalization_finalized = true;
-        Ok(Arc::new(world))
+        let world = Arc::new(world);
+        world.validate_constant_implementations()?;
+        Ok(world)
     }
     pub fn registry_snapshot(&self) -> SnapshotId {
         self.registry
@@ -3454,7 +3508,7 @@ impl ValidatedTraitWorld {
                     target.type_args.clone(),
                     self.discharge_direct(target, facts)?.signature,
                 ),
-                FactsSubject::SchemaItem(_) => {
+                FactsSubject::SchemaItem(_) | FactsSubject::AssociatedConstant(_) => {
                     return Err(FactsError::invalid(
                         &self.budget,
                         "schema item cannot publish a body carrier view",
@@ -5183,7 +5237,7 @@ impl ValidatedTraitWorld {
                     self.validate_ty(ty, self.empty.env(), None, true, 0)?;
                 }
             }
-            FactsSubject::SchemaItem(_) => {
+            FactsSubject::SchemaItem(_) | FactsSubject::AssociatedConstant(_) => {
                 return Err(FactsError::invalid(
                     &self.budget,
                     "schema-only facts cannot read executable original call headers",
@@ -6709,7 +6763,7 @@ impl TraitCx for ValidatedTraitWorld {
                 FactsSubject::ClosedInstance(target) => {
                     self.discharge_direct(target, facts)?.signature
                 }
-                FactsSubject::SchemaItem(_) => {
+                FactsSubject::SchemaItem(_) | FactsSubject::AssociatedConstant(_) => {
                     return Err(FactsError::invalid(
                         &self.budget,
                         "schema facts cannot validate an executable body",
@@ -7892,6 +7946,7 @@ mod tests {
         });
         let empty = env(&[], &budget);
         let headers = HeaderSet {
+            constants: Arc::from([]),
             associated_types: Arc::from([]),
             traits: Arc::from([
                 TraitHeader {
@@ -9934,6 +9989,7 @@ mod tests {
         let budget = PlanBudget::default();
         let header = carrier_header(&budget, 1, |p| sig(vec![p[0].clone()], p[0].clone()));
         let headers = HeaderSet {
+            constants: Arc::from([]),
             traits: Arc::from([]),
             associated_types: Arc::from([]),
             items: Arc::from([]),

@@ -3352,6 +3352,21 @@ impl Resolver<'_> {
                     };
                     return self.expr(expr, module, locals);
                 }
+                if matches!(value.as_ref(), Expr::Var(_))
+                    && let Some((owner, name, actuals)) = self.associated_path(path, module)?
+                {
+                    if !actuals.is_empty() {
+                        return Err(
+                            "associated constants cannot take method generic arguments".into()
+                        );
+                    }
+                    *expr = Expr::AssociatedConst(Box::new(AssociatedConstUse {
+                        owner,
+                        trait_path: None,
+                        name,
+                    }));
+                    return self.expr(expr, module, locals);
+                }
                 self.generic_path(path, module)?;
                 self.expr(value, module, locals)?;
             }
@@ -3471,7 +3486,29 @@ impl Resolver<'_> {
                     self.expr(bound, module, locals)?;
                 }
             }
+            Expr::AssociatedConst(value) => {
+                self.ty(&mut value.owner, module)?;
+                if let Some(path) = &mut value.trait_path {
+                    self.trait_path(path, module)?;
+                }
+            }
             Expr::Var(name) => {
+                if !self.local_contains(name, locals)? {
+                    let path = self.alias_source_path(name)?;
+                    if let Some((owner, name, actuals)) = self.associated_path(&path, module)? {
+                        if !actuals.is_empty() {
+                            return Err(
+                                "associated constants cannot take method generic arguments".into(),
+                            );
+                        }
+                        *expr = Expr::AssociatedConst(Box::new(AssociatedConstUse {
+                            owner,
+                            trait_path: None,
+                            name,
+                        }));
+                        return Ok(());
+                    }
+                }
                 let value_item = self.path(name, module, false, false)?;
                 if let Some(item) = &value_item
                     && item.kind == ResolvedKind::Const
@@ -4092,6 +4129,18 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                     bounds: bounds.into(),
                 });
             }
+            for constant in &mut declaration.associated_constants {
+                clone_vector(&declaration.type_params, &resolver.alias_budget)?;
+                resolver.type_params = declaration.type_params.clone();
+                resolver.ty(&mut constant.ty, declaration.module)?;
+                if let Some(value) = &mut constant.initializer {
+                    resolver.expr(
+                        value,
+                        declaration.module,
+                        &mut vec![std::collections::HashSet::new()],
+                    )?;
+                }
+            }
             for (item_index, item) in declaration.items.iter_mut().enumerate() {
                 clone_vector(&declaration.type_params, &resolver.alias_budget)?;
                 resolver.type_params = declaration.type_params.clone();
@@ -4243,6 +4292,18 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
             for associated in &mut block.associated_types {
                 validate_depth(DepthNode::Type(&associated.value))?;
                 resolver.ty(&mut associated.value, block.module)?;
+            }
+            for constant in &mut block.associated_constants {
+                clone_vector(&block.type_params, &resolver.alias_budget)?;
+                resolver.type_params = block.type_params.clone();
+                resolver.ty(&mut constant.ty, block.module)?;
+                if let Some(value) = &mut constant.initializer {
+                    resolver.expr(
+                        value,
+                        block.module,
+                        &mut vec![std::collections::HashSet::new()],
+                    )?;
+                }
             }
             for (item_index, item) in block.items.iter_mut().enumerate() {
                 resolver.current_callable = Some(CallableSource::Associated {

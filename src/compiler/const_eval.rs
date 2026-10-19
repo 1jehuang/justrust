@@ -129,10 +129,13 @@ pub enum Binary {
     Or,
 }
 #[derive(Clone, Debug)]
-pub enum ExprKind {
+pub enum ScalarExprKind {
     Literal(ScalarValue),
     /// Canonical resolved value-namespace identity, never a spelling lookup.
     Reference(DeclId),
+    /// Typed input from an original initializer node. The source checker owns
+    /// this coordinate and graph providers supply its authenticated value.
+    Input(usize),
     Unary {
         op: Unary,
         value: usize,
@@ -150,7 +153,7 @@ pub enum ExprKind {
 #[derive(Clone, Debug)]
 pub struct ScalarExpr {
     pub ty: ScalarTy,
-    pub kind: ExprKind,
+    pub kind: ScalarExprKind,
 }
 
 /// Structurally checked initializer owned by one immutable output. This is not
@@ -199,18 +202,19 @@ impl ConstBodyFact {
                 Ok(exprs[id].ty)
             };
             match expr.kind {
-                ExprKind::Literal(value) => {
+                ScalarExprKind::Literal(value) => {
                     value.validate()?;
                     if value.ty() != expr.ty {
                         return Err(type_error());
                     }
                 }
-                ExprKind::Reference(id) => {
+                ScalarExprKind::Reference(id) => {
                     if id.snapshot != declaration.snapshot {
                         return Err(invalid("constant reference belongs to another snapshot"));
                     }
                 }
-                ExprKind::Unary { op, value } => {
+                ScalarExprKind::Input(_) => {}
+                ScalarExprKind::Unary { op, value } => {
                     let ty = child(value)?;
                     if ty != expr.ty
                         || matches!((op, ty), (Unary::Neg, ScalarTy::Bool))
@@ -219,7 +223,7 @@ impl ConstBodyFact {
                         return Err(type_error());
                     }
                 }
-                ExprKind::Binary { op, left, right } => {
+                ScalarExprKind::Binary { op, left, right } => {
                     let l = child(left)?;
                     let r = child(right)?;
                     let result = match op {
@@ -251,13 +255,13 @@ impl ConstBodyFact {
                         return Err(type_error());
                     }
                 }
-                ExprKind::RuntimeCall => {
+                ScalarExprKind::RuntimeCall => {
                     return Err(ConstError::new(
                         ErrorKind::NonConstCall,
                         "cannot call non-const function in constant initializer",
                     ));
                 }
-                ExprKind::UnsupportedConstCall => {
+                ScalarExprKind::UnsupportedConstCall => {
                     return Err(ConstError::new(
                         ErrorKind::Unsupported,
                         "const function execution is not supported yet",
@@ -329,11 +333,28 @@ where
 pub async fn evaluate_with_read<F, Fut, E>(
     body: &ConstBodyFact,
     budget: &PlanBudget,
-    mut read: F,
+    read: F,
 ) -> Result<ConstValueFact, EvaluateError<E>>
 where
     F: FnMut(DeclId) -> Fut,
     Fut: Future<Output = Result<ConstValueFact, E>>,
+{
+    evaluate_with_inputs(body, budget, read, |_| std::future::ready(Ok(None))).await
+}
+
+/// Evaluate typed original-node inputs independently from free declaration
+/// references. This callback conveys values, never source or dispatch authority.
+pub async fn evaluate_with_inputs<F, Fut, I, Input, E>(
+    body: &ConstBodyFact,
+    budget: &PlanBudget,
+    mut read: F,
+    mut input: I,
+) -> Result<ConstValueFact, EvaluateError<E>>
+where
+    F: FnMut(DeclId) -> Fut,
+    Fut: Future<Output = Result<ConstValueFact, E>>,
+    I: FnMut(usize) -> Input,
+    Input: Future<Output = Result<Option<ScalarValue>, E>>,
 {
     let bytes = body
         .exprs
@@ -353,8 +374,8 @@ where
         }
         let expr = &body.exprs[id];
         let value = match expr.kind {
-            ExprKind::Literal(v) => v,
-            ExprKind::Reference(declaration) => {
+            ScalarExprKind::Literal(v) => v,
+            ScalarExprKind::Reference(declaration) => {
                 let fact = read(declaration).await.map_err(EvaluateError::Dependency)?;
                 if fact.declaration != declaration {
                     return Err(invalid("constant graph read returned another declaration").into());
@@ -362,7 +383,15 @@ where
                 fact.value.validate()?;
                 fact.value
             }
-            ExprKind::Unary { op, value } => {
+            ScalarExprKind::Input(index) => {
+                let value = input(index)
+                    .await
+                    .map_err(EvaluateError::Dependency)?
+                    .ok_or_else(|| invalid("constant original-node input is unavailable"))?;
+                value.validate()?;
+                value
+            }
+            ScalarExprKind::Unary { op, value } => {
                 if phase == 0 {
                     stack.push((id, 1));
                     stack.push((value, 0));
@@ -373,7 +402,7 @@ where
                     values[value].ok_or_else(|| invalid("missing constant unary input"))?,
                 )?
             }
-            ExprKind::Binary { op, left, right } => {
+            ScalarExprKind::Binary { op, left, right } => {
                 if phase == 0 {
                     stack.push((id, 1));
                     stack.push((left, 0));
@@ -397,7 +426,7 @@ where
                     )?
                 }
             }
-            ExprKind::RuntimeCall | ExprKind::UnsupportedConstCall => {
+            ScalarExprKind::RuntimeCall | ScalarExprKind::UnsupportedConstCall => {
                 return Err(invalid("unqualified call in checked constant body").into());
             }
         };

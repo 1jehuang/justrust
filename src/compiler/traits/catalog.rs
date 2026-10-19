@@ -502,6 +502,7 @@ impl CoreCatalogBuilder {
             budget: budget.clone(),
             declarations,
             headers: HeaderSet {
+                constants: Arc::from([]),
                 associated_types: Arc::from([]),
                 traits: traits.into(),
                 items: items.into(),

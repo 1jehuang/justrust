@@ -37,7 +37,7 @@ fn int(ty: IntTy, bits: u128) -> ScalarValue {
 fn lit(value: ScalarValue) -> ScalarExpr {
     ScalarExpr {
         ty: value.ty(),
-        kind: ExprKind::Literal(value),
+        kind: ScalarExprKind::Literal(value),
     }
 }
 fn body(exprs: Vec<ScalarExpr>) -> ConstBodyFact {
@@ -73,7 +73,7 @@ fn bin(op: Binary, l: ScalarValue, r: ScalarValue) -> Result<ScalarValue, ConstE
         lit(r),
         ScalarExpr {
             ty,
-            kind: ExprKind::Binary {
+            kind: ScalarExprKind::Binary {
                 op,
                 left: 0,
                 right: 1,
@@ -87,10 +87,59 @@ fn unary(op: Unary, value: ScalarValue) -> Result<ScalarValue, ConstError> {
         lit(value),
         ScalarExpr {
             ty: value.ty(),
-            kind: ExprKind::Unary { op, value: 0 },
+            kind: ScalarExprKind::Unary { op, value: 0 },
         },
     ]))
     .map(ConstValueFact::value)
+}
+
+#[test]
+fn original_node_inputs_are_typed_and_not_declaration_aliases() {
+    let input = body(vec![ScalarExpr {
+        ty: ScalarTy::Int(IntTy::U16),
+        kind: ScalarExprKind::Input(37),
+    }]);
+    let evaluate = |value| {
+        run(evaluate_with_inputs(
+            &input,
+            &PlanBudget::default(),
+            |_| {
+                ready(Err::<ConstValueFact, &'static str>(
+                    "unexpected declaration read",
+                ))
+            },
+            |node| {
+                assert_eq!(node, 37);
+                ready(Ok(value))
+            },
+        ))
+    };
+    assert_eq!(
+        evaluate(Some(int(IntTy::U16, 513))).unwrap().value(),
+        int(IntTy::U16, 513)
+    );
+    assert!(matches!(evaluate(None), Err(EvaluateError::Scalar(_))));
+    assert!(matches!(
+        evaluate(Some(int(IntTy::U8, 1))),
+        Err(EvaluateError::Scalar(_))
+    ));
+    assert!(eval(&input).is_err());
+    let failed = run(evaluate_with_inputs(
+        &input,
+        &PlanBudget::default(),
+        |_| {
+            ready(Err::<ConstValueFact, &'static str>(
+                "unexpected declaration read",
+            ))
+        },
+        |_| ready(Err("original member graph dependency failed")),
+    ));
+    assert!(matches!(
+        failed,
+        Err(EvaluateError::Dependency(
+            "original member graph dependency failed"
+        ))
+    ));
 }
 
 #[test]
@@ -282,7 +331,7 @@ fn resolver_must_return_exact_declaration_and_type() {
         owner,
         vec![ScalarExpr {
             ty: ScalarTy::Int(IntTy::U32),
-            kind: ExprKind::Reference(dependency),
+            kind: ScalarExprKind::Reference(dependency),
         }],
         0,
         &PlanBudget::default(),
@@ -333,11 +382,11 @@ fn short_circuit_skips_value_dependency_but_not_body_validation() {
             lit(ScalarValue::Bool(l)),
             ScalarExpr {
                 ty: ScalarTy::Bool,
-                kind: ExprKind::Reference(other),
+                kind: ScalarExprKind::Reference(other),
             },
             ScalarExpr {
                 ty: ScalarTy::Bool,
-                kind: ExprKind::Binary {
+                kind: ScalarExprKind::Binary {
                     op,
                     left: 0,
                     right: 1,
@@ -347,7 +396,7 @@ fn short_circuit_skips_value_dependency_but_not_body_validation() {
         let caller = ConstBodyFact::new(owner, exprs.clone(), 2, &PlanBudget::default()).unwrap();
         assert_eq!(eval(&caller).unwrap().value(), ScalarValue::Bool(l));
         let mut invalid = exprs;
-        invalid[1].kind = ExprKind::RuntimeCall;
+        invalid[1].kind = ScalarExprKind::RuntimeCall;
         let error = ConstBodyFact::new(owner, invalid, 2, &PlanBudget::default()).unwrap_err();
         assert_eq!(error.kind, ErrorKind::NonConstCall);
         assert_eq!(error.code(), Some("E0015"));
@@ -359,18 +408,18 @@ fn malformed_arenas_and_cross_snapshot_refs_are_not_evaluation_errors() {
     let owner = id(0);
     let bad_ref = ScalarExpr {
         ty: ScalarTy::Bool,
-        kind: ExprKind::Reference(id(0)),
+        kind: ScalarExprKind::Reference(id(0)),
     };
     let bad_bits = ScalarExpr {
         ty: ScalarTy::Int(IntTy::U8),
-        kind: ExprKind::Literal(ScalarValue::Int(IntValue {
+        kind: ScalarExprKind::Literal(ScalarValue::Int(IntValue {
             ty: IntTy::U8,
             bits: 256,
         })),
     };
     let forward = ScalarExpr {
         ty: ScalarTy::Bool,
-        kind: ExprKind::Unary {
+        kind: ScalarExprKind::Unary {
             op: Unary::Not,
             value: 0,
         },
@@ -387,16 +436,16 @@ fn malformed_arenas_and_cross_snapshot_refs_are_not_evaluation_errors() {
         ErrorKind::InvalidMetadata
     );
     for kind in [
-        ExprKind::UnsupportedConstCall,
+        ScalarExprKind::UnsupportedConstCall,
         // usize is admitted on the pinned 64-bit native target; isize is
         // the remaining target-sized Unsupported boundary.
-        ExprKind::Literal(ScalarValue::Int(IntValue {
+        ScalarExprKind::Literal(ScalarValue::Int(IntValue {
             ty: IntTy::Isize,
             bits: 1,
         })),
     ] {
         let ty = match kind {
-            ExprKind::Literal(v) => v.ty(),
+            ScalarExprKind::Literal(v) => v.ty(),
             _ => ScalarTy::Bool,
         };
         let error = ConstBodyFact::new(
@@ -418,7 +467,7 @@ fn type_errors_are_distinct_from_ctfe_failures() {
             lit(ScalarValue::Bool(true)),
             ScalarExpr {
                 ty: ScalarTy::Bool,
-                kind: ExprKind::Unary {
+                kind: ScalarExprKind::Unary {
                     op: Unary::Neg,
                     value: 0,
                 },
@@ -428,7 +477,7 @@ fn type_errors_are_distinct_from_ctfe_failures() {
             lit(int(IntTy::U8, 1)),
             ScalarExpr {
                 ty: ScalarTy::Int(IntTy::U8),
-                kind: ExprKind::Unary {
+                kind: ScalarExprKind::Unary {
                     op: Unary::Neg,
                     value: 0,
                 },
@@ -439,7 +488,7 @@ fn type_errors_are_distinct_from_ctfe_failures() {
             lit(int(IntTy::U16, 1)),
             ScalarExpr {
                 ty: ScalarTy::Int(IntTy::U8),
-                kind: ExprKind::Binary {
+                kind: ScalarExprKind::Binary {
                     op: Binary::Add,
                     left: 0,
                     right: 1,
@@ -484,7 +533,7 @@ fn deep_initializers_use_iterative_local_state() {
     for i in 0..4096 {
         exprs.push(ScalarExpr {
             ty: ScalarTy::Bool,
-            kind: ExprKind::Unary {
+            kind: ScalarExprKind::Unary {
                 op: Unary::Not,
                 value: i,
             },
@@ -533,7 +582,7 @@ fn asynchronous_dependency_suspends_without_repeating_read() {
         owner,
         vec![ScalarExpr {
             ty: ScalarTy::Int(IntTy::U8),
-            kind: ExprKind::Reference(dependency),
+            kind: ScalarExprKind::Reference(dependency),
         }],
         0,
         &PlanBudget::default(),
@@ -578,7 +627,7 @@ fn logical_short_circuit_skips_evaluation_errors_but_not_type_errors() {
         lit(int(IntTy::U8, 0)),
         ScalarExpr {
             ty: ScalarTy::Int(IntTy::U8),
-            kind: ExprKind::Binary {
+            kind: ScalarExprKind::Binary {
                 op: Binary::Div,
                 left: 1,
                 right: 2,
@@ -586,7 +635,7 @@ fn logical_short_circuit_skips_evaluation_errors_but_not_type_errors() {
         },
         ScalarExpr {
             ty: ScalarTy::Bool,
-            kind: ExprKind::Binary {
+            kind: ScalarExprKind::Binary {
                 op: Binary::Eq,
                 left: 3,
                 right: 1,
@@ -594,7 +643,7 @@ fn logical_short_circuit_skips_evaluation_errors_but_not_type_errors() {
         },
         ScalarExpr {
             ty: ScalarTy::Bool,
-            kind: ExprKind::Binary {
+            kind: ScalarExprKind::Binary {
                 op: Binary::And,
                 left: 0,
                 right: 4,

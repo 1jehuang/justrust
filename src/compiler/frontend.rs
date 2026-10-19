@@ -63,8 +63,13 @@ mod int_consts;
 mod item_module;
 mod let_statement;
 pub use format_macros::SourceFormatInto;
+mod associated_constants;
 mod format_spec;
 mod inherited_associated;
+pub use associated_constants::{AssociatedConstDecl, AssociatedConstUse};
+pub(in crate::compiler) use associated_constants::{
+    AuthorizedAssociatedConstant, InitializerMemberInput,
+};
 mod iterator_source;
 mod iterator_traits;
 mod nominal_bounds;
@@ -577,6 +582,8 @@ mod canonical_source_replay_tests {
             facts: original.facts.clone(),
             inventory,
             constants: Vec::new(),
+            symbolic_constants: Vec::new(),
+            symbolic_constant_emissions: Default::default(),
             constant_emissions: Default::default(),
             calls: Default::default(),
             builtin_leading_zeros: Default::default(),
@@ -721,6 +728,8 @@ struct SourceInventory {
     owner: sr::OriginalBodyId,
     calls: Vec<SourceCallSite>,
     constants: Vec<(sr::SourceNode, PathKey)>,
+    associated_constants: Vec<(sr::SourceNode, AssociatedConstUse)>,
+    associated_constant_pointers: HashMap<usize, usize>,
     constant_pointers: HashMap<usize, usize>,
     bindings: Vec<SourceBindingSite>,
     call_pointers: HashMap<usize, usize>,
@@ -1276,6 +1285,8 @@ impl SourceInventory {
             owner: owner.clone(),
             calls: Vec::new(),
             constants: Vec::new(),
+            associated_constants: Vec::new(),
+            associated_constant_pointers: HashMap::new(),
             constant_pointers: HashMap::new(),
             bindings: Vec::new(),
             call_pointers: HashMap::new(),
@@ -1899,6 +1910,20 @@ impl SourceInventory {
         depth: usize,
     ) -> Result<(), FactsError> {
         match expr {
+            Expr::AssociatedConst(value) => {
+                let index = self.associated_constants.len();
+                sr::push(
+                    &mut self.associated_constants,
+                    (node.clone(), value.as_ref().clone()),
+                    budget,
+                )?;
+                insert_source_pointer(
+                    &mut self.associated_constant_pointers,
+                    expr as *const Expr as usize,
+                    index,
+                    budget,
+                )?;
+            }
             Expr::UnexpandedMacro(_) => {
                 return Err(source_error(
                     budget,
@@ -2535,7 +2560,9 @@ pub(super) struct CanonicalSourceCapability {
     facts: Arc<tr::ValidatedFacts>,
     inventory: SourceInventory,
     constants: Vec<const_inputs::SourceConstantUse>,
+    symbolic_constants: Vec<associated_constants::SourceSymbolicConstantUse>,
     constant_emissions: std::cell::RefCell<Vec<(usize, ir::ExprId)>>,
+    symbolic_constant_emissions: std::cell::RefCell<Vec<(usize, ir::ExprId)>>,
     calls: std::cell::RefCell<Vec<(usize, ir::ExprId, ir::Callee)>>,
     builtin_leading_zeros: std::cell::RefCell<Vec<BuiltinLeadingZerosOccurrence>>,
     builtin_lens: std::cell::RefCell<Vec<BuiltinLenOccurrence>>,
@@ -2553,7 +2580,9 @@ pub(super) struct OriginalSource {
     facts: Arc<tr::ValidatedFacts>,
     identity: sr::OriginalBodyId,
     constants: Vec<const_inputs::SourceConstantUse>,
+    symbolic_constants: Vec<associated_constants::SourceSymbolicConstantUse>,
     constant_emissions: Vec<(usize, ir::ExprId)>,
+    symbolic_constant_emissions: Vec<(usize, ir::ExprId)>,
     calls: Vec<SourceCallSite>,
     bindings: Vec<SourceBindingSite>,
     call_mapping: Vec<(usize, ir::ExprId, ir::Callee)>,
@@ -4091,6 +4120,7 @@ pub(super) fn replay_source_body(
         budget,
     )?;
     const_inputs::validate_constants(original, &fresh, checked, budget)?;
+    associated_constants::validate_symbolic_constants(original, &fresh, checked, budget)?;
     if fresh.calls.len() != original.calls.len() || fresh.bindings.len() != original.bindings.len()
     {
         return Err(FactsError::invalid(
@@ -4794,6 +4824,8 @@ impl PlanCtx {
                     facts: facts.clone(),
                     inventory,
                     constants: constants.uses,
+                    symbolic_constants: constants.symbolic,
+                    symbolic_constant_emissions: Default::default(),
                     constant_emissions: Default::default(),
                     calls: Default::default(),
                     builtin_leading_zeros: Default::default(),
@@ -4836,6 +4868,8 @@ impl PlanCtx {
                     facts: facts.clone(),
                     identity,
                     constants: std::mem::take(&mut cap.constants),
+                    symbolic_constants: std::mem::take(&mut cap.symbolic_constants),
+                    symbolic_constant_emissions: cap.symbolic_constant_emissions.take(),
                     constant_emissions: cap.constant_emissions.take(),
                     calls,
                     bindings: std::mem::take(&mut cap.inventory.bindings),
@@ -5328,6 +5362,7 @@ pub struct ImplDecl {
     pub self_ty: Type,
     pub items: Vec<AssociatedFunction>,
     pub associated_types: Vec<AssociatedTypeValue>,
+    pub associated_constants: Vec<AssociatedConstDecl>,
 }
 /// A written trait-impl assignment, not a callable or a new generic binder.
 #[derive(Clone, Debug)]
@@ -5364,6 +5399,7 @@ pub struct TraitDecl {
     pub visibility: ir::Visibility,
     pub items: Vec<TraitItemDecl>,
     pub associated_types: Vec<AssociatedTypeDecl>,
+    pub associated_constants: Vec<AssociatedConstDecl>,
     /// Trailing type parameters (indices) defaulted to `Self` when omitted.
     pub self_defaults: Vec<usize>,
 }
@@ -6246,6 +6282,7 @@ pub enum Expr {
     Var(AstPath),
     /// Resolved module constant, never a local binding or mutable place.
     ConstItem(AstPath),
+    AssociatedConst(Box<AssociatedConstUse>),
     Unary {
         op: UnaryOp,
         value: Box<Expr>,
@@ -10332,9 +10369,15 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.expect("{")?;
             let mut items = Vec::new();
             let mut associated_types = Vec::new();
+            let mut associated_constants = Vec::new();
             let mut item_names = std::collections::HashSet::new();
             while !self.is("}") {
-                if items.len().saturating_add(associated_types.len()) >= 4096 {
+                if items
+                    .len()
+                    .saturating_add(associated_types.len())
+                    .saturating_add(associated_constants.len())
+                    >= 4096
+                {
                     return Err(self.limit("trait item limit exceeded"));
                 }
                 if self.is("pub") {
@@ -10378,6 +10421,16 @@ impl<'input, 'names> Parser<'input, 'names> {
                         name,
                         bounds: associated_bounds,
                     });
+                    continue;
+                }
+                if self.is("const") && !self.starts_qualified_function() {
+                    let constant =
+                        self.associated_constant(true, visibility.clone(), &type_params)?;
+                    if !item_names.insert(self.name_key(constant.name, LookupClass::Member)?) {
+                        return Err(self.error("duplicate trait value member"));
+                    }
+                    self.reserve_parser_items(&mut associated_constants, 1)?;
+                    associated_constants.push(constant);
                     continue;
                 }
                 let (signature, receiver) = self.function_head(&type_params, true)?;
@@ -10428,6 +10481,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 visibility: visibility.clone(),
                 items,
                 associated_types,
+                associated_constants,
                 self_defaults,
             });
             (name, ItemKind::Trait)
@@ -10653,8 +10707,14 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.expect("{")?;
             let mut items = Vec::new();
             let mut associated_types = Vec::new();
+            let mut associated_constants = Vec::new();
             while !self.is("}") {
-                if items.len().saturating_add(associated_types.len()) >= 4096 {
+                if items
+                    .len()
+                    .saturating_add(associated_types.len())
+                    .saturating_add(associated_constants.len())
+                    >= 4096
+                {
                     return Err(self.limit("associated item limit exceeded"));
                 }
                 let (visibility, explicit_visibility) = self.visibility(module)?;
@@ -10685,6 +10745,13 @@ impl<'input, 'names> Parser<'input, 'names> {
                     associated_types.push(AssociatedTypeValue { name, value });
                     continue;
                 }
+                if self.is("const") && !self.starts_qualified_function() {
+                    let constant =
+                        self.associated_constant(false, visibility.clone(), &type_params)?;
+                    self.reserve_parser_items(&mut associated_constants, 1)?;
+                    associated_constants.push(constant);
+                    continue;
+                }
                 let (mut function, receiver) = self.function_scoped(&type_params, true)?;
                 function.visibility = visibility.clone();
                 self.reserve_parser_items(&mut items, 1)?;
@@ -10703,6 +10770,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 self_ty,
                 items,
                 associated_types,
+                associated_constants,
             });
             self.type_params.clear();
             self.visible_bounds.clear();
@@ -12470,6 +12538,23 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else {
             Vec::new()
         };
+        if !self.is("(") {
+            if !type_args.is_empty() {
+                return Err(
+                    self.unsupported("associated constants cannot take method type arguments")
+                );
+            }
+            let value = AssociatedConstUse {
+                owner,
+                trait_path: Some(*trait_path),
+                name,
+            };
+            return Ok(Expr::AssociatedConst(
+                self.names
+                    .try_parser_box(value)
+                    .map_err(native_adapter::name_error)?,
+            ));
+        }
         self.expect("(")?;
         let mut args = Vec::new();
         while !self.is(")") {
@@ -14722,6 +14807,26 @@ fn walk_depth_inspecting(
             Ok(())
         };
         match node {
+            DepthNode::Expr(Expr::AssociatedConst(value)) => {
+                if let Some(names) = names {
+                    names
+                        .check(value.name)
+                        .map_err(native_adapter::name_diagnostic)?;
+                }
+                push(DepthNode::Type(&value.owner))?;
+                if let Some(TraitPath::Source(path)) = &value.trait_path {
+                    for segment in &path.segments {
+                        for actual in segment.args.iter().chain(
+                            segment
+                                .associated_types
+                                .iter()
+                                .map(|binding| &binding.value),
+                        ) {
+                            push(DepthNode::Type(actual))?;
+                        }
+                    }
+                }
+            }
             DepthNode::Type(Type::Projection(projection)) => {
                 if let Some(names) = names {
                     let item = match projection.as_ref() {
@@ -15437,6 +15542,7 @@ pub struct DeclRegistry {
     native_iterator_traits: [Option<ir::DeclId>; 2],
     trait_items: Vec<Vec<ir::DeclId>>,
     trait_default_callables: HashMap<(usize, usize), ir::DeclId>,
+    associated_constants: associated_constants::Registry,
     trait_associated_types: Vec<Vec<ir::DeclId>>,
     associated_type_bounds: HashMap<ir::DeclId, FrozenAssociatedBounds>,
     trait_imports: Vec<(ModuleId, TraitPath)>,
@@ -15538,7 +15644,9 @@ impl DeclRegistry {
             .map_err(module_diagnostic)?;
         let owner = match info.kind {
             ir::DeclKind::Trait | ir::DeclKind::TraitImpl => Some(info.id),
-            ir::DeclKind::TraitItem | ir::DeclKind::AssociatedType => info.owner,
+            ir::DeclKind::TraitItem
+            | ir::DeclKind::AssociatedType
+            | ir::DeclKind::AssociatedConst => info.owner,
             ir::DeclKind::AssociatedFunction => info
                 .owner
                 .or_else(|| info.path.associated.as_ref().map(|owner| owner.impl_decl)),
@@ -15592,6 +15700,9 @@ impl DeclRegistry {
         let mut found = match info.kind {
             ir::DeclKind::AssociatedType => {
                 associated_declarations::contains_projection(self, info.id, projection, budget)?
+            }
+            ir::DeclKind::AssociatedConst => {
+                associated_constants::retains_projection(self, info, projection, budget)?
             }
             ir::DeclKind::TraitImpl => {
                 let block = self
@@ -16333,6 +16444,7 @@ impl PlanCtx {
             native_iterator_traits: [None; 2],
             trait_items: Vec::new(),
             trait_default_callables: HashMap::new(),
+            associated_constants: associated_constants::Registry::default(),
             trait_associated_types: Vec::new(),
             associated_type_bounds: HashMap::new(),
             trait_imports: program.trait_imports.clone(),
@@ -16434,14 +16546,18 @@ impl PlanCtx {
                 program.traits.iter().try_fold(n, |n, t| {
                     let defaults = t.items.iter().filter(|i| i.default.is_some()).count();
                     default_callable_count = default_callable_count.checked_add(defaults)?;
-                    n.checked_add(1 + t.items.len() + t.associated_types.len() + defaults)
+                    n.checked_add(
+                        1 + t.items.len()
+                            + t.associated_types.len()
+                            + t.associated_constants.len()
+                            + defaults,
+                    )
                 })
             })
             .and_then(|n| {
-                program
-                    .impls
-                    .iter()
-                    .try_fold(n, |n, b| n.checked_add(1 + b.items.len()))
+                program.impls.iter().try_fold(n, |n, b| {
+                    n.checked_add(1 + b.items.len() + b.associated_constants.len())
+                })
             })
             .ok_or("generic declaration resource overflow")?;
         reserve_registry_map(
@@ -16760,6 +16876,18 @@ impl PlanCtx {
                     item,
                 )?);
             }
+            let mut constants = Vec::new();
+            for (item, constant) in declaration.associated_constants.iter().enumerate() {
+                constants.push(insert(
+                    None,
+                    declaration.module,
+                    DeclItemName::Source(constant.name),
+                    &[],
+                    ir::DeclKind::AssociatedConst,
+                    item,
+                )?);
+            }
+            registry.associated_constants.traits.push(constants);
             registry.trait_associated_types.push(associated_types);
             registry.trait_items.push(items);
         }
@@ -16805,6 +16933,18 @@ impl PlanCtx {
                 }
                 ids.push(id);
             }
+            let mut constants = Vec::new();
+            for (item, constant) in block.associated_constants.iter().enumerate() {
+                constants.push(insert(
+                    None,
+                    block.module,
+                    DeclItemName::Source(constant.name),
+                    &[],
+                    ir::DeclKind::AssociatedConst,
+                    item,
+                )?);
+            }
+            registry.associated_constants.impls.push(constants);
             registry.associated_ids.push(ids);
         }
         for (index, declaration) in program.constants.iter().enumerate() {
@@ -16879,6 +17019,7 @@ impl PlanCtx {
             let id = registry.function_ids[position];
             registry.declarations[id.index as usize].visibility = function.visibility.clone();
         }
+        associated_constants::seal_registry_owners(&mut registry, program, budget)?;
         for (index, declaration) in program.traits.iter().enumerate() {
             let id = registry.trait_ids[index];
             clone_visibility(&declaration.visibility, budget)?;
@@ -17858,6 +17999,24 @@ impl PlanCtx {
                 schema: self.raw_schema(*id)?,
             });
         }
+        let mut constant_headers = Vec::new();
+        for declaration in self
+            .registry
+            .associated_constants
+            .traits
+            .iter()
+            .chain(&self.registry.associated_constants.impls)
+            .flatten()
+        {
+            budget.charge_work(1)?;
+            budget.retain_bytes(std::mem::size_of::<tr::AssociatedConstHeader>())?;
+            constant_headers
+                .try_reserve_exact(1)
+                .map_err(|_| "associated constant header allocation")?;
+            constant_headers.push(self.associated_constant_schema(*declaration, budget)?);
+        }
+        self.validate_constant_completeness(&impls, budget)?;
+        headers.constants = constant_headers.into();
         headers.traits = traits.into();
         headers.items = items.into();
         headers.associated_types = associated_types.into();
@@ -19016,6 +19175,15 @@ impl tr::SchemaCx for SchemaAdapter {
             .schema(id, &self.budget)
             .map_err(|e| self.error(e))
     }
+    fn associated_constant_schema(
+        &self,
+        declaration: ir::DeclId,
+    ) -> Result<tr::AssociatedConstHeader, tr::FactsError> {
+        self.raw_plan()
+            .map_err(|e| self.error(e))?
+            .associated_constant_schema(declaration, &self.budget)
+            .map_err(|e| self.error(e))
+    }
     fn associated_type_rhs(
         &self,
         implementation: ir::DeclId,
@@ -19055,6 +19223,43 @@ impl tr::SchemaCx for SchemaAdapter {
         self.source_schemas
             .associated_rhs(implementation, associated, &self.budget)
             .map_err(|e| self.error(e))
+    }
+    fn instantiate_constant_metadata(
+        &self,
+        declaration: ir::DeclId,
+        args: &[ir::Ty],
+        caller: &ir::GenericEnv,
+        budget: &ir::PlanBudget,
+    ) -> Result<(Option<ir::Ty>, ir::Ty, Arc<[ir::Predicate]>), tr::FactsError> {
+        self.substitute_constant_metadata(declaration, args, caller, budget)
+    }
+    fn instantiate_constant_type(
+        &self,
+        declaration: ir::DeclId,
+        args: &[ir::Ty],
+        caller: &ir::GenericEnv,
+        budget: &ir::PlanBudget,
+    ) -> Result<ir::Ty, tr::FactsError> {
+        if !budget.same_authority(&self.budget) {
+            return Err(tr::FactsError::invalid(
+                budget,
+                "constant schema budget authority mismatch",
+            ));
+        }
+        let mut plan = self.raw_plan().map_err(|e| self.error(e))?;
+        let header = plan
+            .associated_constant_schema(declaration, budget)
+            .map_err(|e| self.error(e))?;
+        ir::substitute_schema_metadata_ty(
+            &header.ty,
+            &header.env,
+            args,
+            ir::FactsCtx::Universal(caller),
+            &mut plan,
+            self,
+            budget,
+        )
+        .map_err(|e| self.error(e))
     }
     fn associated_type_bounds(
         &self,

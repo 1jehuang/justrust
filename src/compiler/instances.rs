@@ -78,6 +78,7 @@ impl Encoder<'_> {
             ir::DeclKind::TraitImpl => 7,
             ir::DeclKind::AssociatedType => 8,
             ir::DeclKind::Const => 9,
+            ir::DeclKind::AssociatedConst => 10,
         }])?;
         self.module_path(&path)?;
         match path.item() {

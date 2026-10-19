@@ -176,6 +176,12 @@ pub(super) fn preflight_clone_node(
             Expr::UnexpandedMacro(_) => {
                 return Err("unexpanded macro syntax cannot enter active AST cloning".into());
             }
+            Expr::AssociatedConst(value) => {
+                budget.retain_bytes(std::mem::size_of::<AssociatedConstUse>())?;
+                if let Some(path) = &value.trait_path {
+                    clone_trait_path_shallow(path, budget)?;
+                }
+            }
             Expr::Var(path) | Expr::ConstItem(path) => clone_ast_path(path, budget)?,
             Expr::Println(text) => clone_text(text, budget)?,
             Expr::Format {
@@ -353,6 +359,14 @@ pub(super) fn preflight_program_clone(
         for associated in &implementation.associated_types {
             walk_depth(DepthNode::Type(&associated.value), Some(budget))?;
         }
+        clone_vector(&implementation.associated_constants, budget)?;
+        for associated in &implementation.associated_constants {
+            clone_visibility(&associated.visibility, budget)?;
+            walk_depth(DepthNode::Type(&associated.ty), Some(budget))?;
+            if let Some(value) = &associated.initializer {
+                walk_depth(DepthNode::Expr(value), Some(budget))?;
+            }
+        }
         clone_vector(&implementation.items, budget)?;
         for item in &implementation.items {
             clone_visibility(&item.visibility, budget)?;
@@ -385,6 +399,14 @@ pub(super) fn preflight_program_clone(
         clone_vector(&declaration.supertraits, budget)?;
         for path in &declaration.supertraits {
             clone_trait_path(path, budget)?;
+        }
+        clone_vector(&declaration.associated_constants, budget)?;
+        for associated in &declaration.associated_constants {
+            clone_visibility(&associated.visibility, budget)?;
+            walk_depth(DepthNode::Type(&associated.ty), Some(budget))?;
+            if let Some(value) = &associated.initializer {
+                walk_depth(DepthNode::Expr(value), Some(budget))?;
+            }
         }
         clone_vector(&declaration.items, budget)?;
         clone_vector(&declaration.associated_types, budget)?;

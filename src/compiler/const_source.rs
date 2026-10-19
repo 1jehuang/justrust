@@ -14,6 +14,7 @@ pub(super) enum SyntaxKind {
     },
     Bool(bool),
     Reference(ir::DeclId),
+    MemberInput(Arc<frontend::InitializerMemberInput>),
     Unary {
         op: scalar::Unary,
         value: usize,
@@ -106,6 +107,7 @@ fn shape(
         frontend::Expr::Integer(_)
         | frontend::Expr::Bool(_)
         | frontend::Expr::ConstItem(_)
+        | frontend::Expr::AssociatedConst(_)
         | frontend::Expr::Var(_) => {}
         frontend::Expr::Unary { value, .. } => child(value)?,
         frontend::Expr::Binary { left, right, .. } => {
@@ -137,7 +139,101 @@ pub(super) fn project(
         );
     }
     let ty = scalar_type(&source.ty)?;
-    let (node_count, edge_count) = shape(&source.initializer, budget, 0)?;
+    project_initializer(
+        plan,
+        declaration,
+        source.module,
+        &source.visibility,
+        &source.initializer,
+        ty,
+        budget,
+    )
+}
+
+pub(super) fn associated_scalar_type(ty: &ir::Ty) -> Result<scalar::ScalarTy, String> {
+    match ty {
+        ir::Ty::Bool => Ok(scalar::ScalarTy::Bool),
+        ir::Ty::Int(ir::IntTy::Isize) => {
+            Err("unsupported: target-sized signed source constants".into())
+        }
+        ir::Ty::Int(integer) => Ok(scalar::ScalarTy::Int(*integer)),
+        _ => Err(
+            "unsupported: associated constant CTFE requires a closed integer or bool value type"
+                .into(),
+        ),
+    }
+}
+
+/// Universal initializer checking, including unused defaults and implementations.
+/// Required trait members have no initializer and therefore no scalar body.
+pub(super) fn project_associated_header(
+    plan: &frontend::PlanCtx,
+    declaration: ir::DeclId,
+    budget: &ir::PlanBudget,
+) -> Result<Option<DeclarationFact>, String> {
+    let source = plan.associated_constant_source(declaration)?;
+    let Some(initializer) = &source.initializer else {
+        return Ok(None);
+    };
+    let header = plan.associated_constant_header(declaration, budget)?;
+    let ty = associated_scalar_type(&header.ty)?;
+    let info = plan.declaration(declaration)?;
+    project_initializer(
+        plan,
+        declaration,
+        info.path.module,
+        &source.visibility,
+        initializer,
+        ty,
+        budget,
+    )
+    .map(Some)
+}
+
+/// Closed CTFE reads its value type from sealed member selection, not a caller
+/// supplied type or a fabricated free constant declaration.
+pub(super) fn project_associated_selected(
+    plan: &frontend::PlanCtx,
+    selected: &super::traits::SelectedAssociatedConstant,
+    caller: &super::traits::ValidatedFacts,
+    budget: &ir::PlanBudget,
+) -> Result<DeclarationFact, String> {
+    selected
+        .validate_for(caller)
+        .map_err(|e| e.into_legacy_diagnostic(budget))?;
+    let declaration = selected.declaration();
+    let source = plan.associated_constant_source(declaration)?;
+    let initializer = source
+        .initializer
+        .as_ref()
+        .ok_or("selected associated constant has no initializer")?;
+    let header = plan.associated_constant_header(declaration, budget)?;
+    let info = plan.declaration(declaration)?;
+    if header.env.total_arity() != selected.arguments().len() {
+        return Err("contract: selected associated constant argument arity changed".into());
+    }
+    project_initializer(
+        plan,
+        declaration,
+        info.path.module,
+        &source.visibility,
+        initializer,
+        associated_scalar_type(selected.ty())?,
+        budget,
+    )
+}
+
+/// Shared scalar arena projection, reached only after real declaration authentication.
+fn project_initializer(
+    plan: &frontend::PlanCtx,
+    declaration: ir::DeclId,
+    module: super::module_identity::ModuleId,
+    visibility: &ir::Visibility,
+    initializer: &frontend::Expr,
+    ty: scalar::ScalarTy,
+    budget: &ir::PlanBudget,
+) -> Result<DeclarationFact, String> {
+    let (node_count, edge_count) = shape(initializer, budget, 0)?;
     let bytes = node_count
         .checked_mul(std::mem::size_of::<SyntaxExpr>())
         .and_then(|n| {
@@ -170,12 +266,13 @@ pub(super) fn project(
         path: Arc::from([]),
     };
     let mut builder = ConstProjectionScratch {
+        declaration,
         plan,
         budget,
         expressions: &mut expressions,
         arguments: &mut arguments,
     };
-    let root = builder.expr(&source.initializer, root_source, 0)?;
+    let root = builder.expr(initializer, root_source, 0)?;
     if expressions.len() != node_count || arguments.len() != edge_count {
         return Err("contract: constant projection shape changed".into());
     }
@@ -183,8 +280,8 @@ pub(super) fn project(
     let arguments: Arc<[usize]> = arguments.into();
     let authority = DeclarationAuthority {
         declaration,
-        module: source.module,
-        visibility: source.visibility.clone(),
+        module,
+        visibility: visibility.clone(),
         ty,
         expressions: expressions.clone(),
         arguments: arguments.clone(),
@@ -192,8 +289,8 @@ pub(super) fn project(
     };
     Ok(DeclarationFact {
         declaration,
-        module: source.module,
-        visibility: source.visibility.clone(),
+        module,
+        visibility: visibility.clone(),
         ty,
         expressions,
         arguments,
@@ -203,6 +300,7 @@ pub(super) fn project(
     })
 }
 struct ConstProjectionScratch<'a> {
+    declaration: ir::DeclId,
     plan: &'a frontend::PlanCtx,
     budget: &'a ir::PlanBudget,
     expressions: &'a mut Vec<SyntaxExpr>,
@@ -226,6 +324,10 @@ impl ConstProjectionScratch<'_> {
             frontend::Expr::ConstItem(path) => {
                 SyntaxKind::Reference(self.plan.constant_path(path)?)
             }
+            frontend::Expr::AssociatedConst(_) => SyntaxKind::MemberInput(Arc::new(
+                self.plan
+                    .initializer_member_input(self.declaration, &source.path, self.budget)?,
+            )),
             frontend::Expr::Var(path) => return Err(self.plan.constant_unresolved_value(path)?),
             frontend::Expr::Unary { op, value, .. } => SyntaxKind::Unary {
                 op: match op {

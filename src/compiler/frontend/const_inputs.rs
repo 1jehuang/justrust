@@ -8,6 +8,8 @@ pub(super) struct SourceConstantUse {
     pub(super) node: sr::SourceNode,
     pub(super) declaration: ir::DeclId,
     pub(super) value: Arc<const_check::ValueFact>,
+    pub(super) associated:
+        Option<Arc<crate::compiler::associated_constant_graph::AssociatedConstantValueFact>>,
 }
 pub(in crate::compiler) struct PreparedBodyConstants {
     declaration: ir::DeclId,
@@ -15,6 +17,14 @@ pub(in crate::compiler) struct PreparedBodyConstants {
     direct: Vec<ir::DeclId>,
 }
 impl PreparedBodyConstants {
+    pub(in crate::compiler) fn associated_paths(&self) -> impl Iterator<Item = &[u32]> {
+        self.inventory.iter().flat_map(|inventory| {
+            inventory
+                .associated_constants
+                .iter()
+                .map(|(node, _)| node.path.as_ref())
+        })
+    }
     pub(in crate::compiler) fn direct(&self) -> &[ir::DeclId] {
         &self.direct
     }
@@ -23,6 +33,7 @@ pub(in crate::compiler) struct SealedBodyConstants {
     pub(super) declaration: ir::DeclId,
     pub(super) inventory: Option<SourceInventory>,
     pub(super) uses: Vec<SourceConstantUse>,
+    pub(super) symbolic: Vec<associated_constants::SourceSymbolicConstantUse>,
 }
 impl PlanCtx {
     pub(in crate::compiler) fn prepare_body_constants(
@@ -77,6 +88,17 @@ impl PlanCtx {
         values: Vec<Arc<const_check::ValueFact>>,
         budget: &ir::PlanBudget,
     ) -> Result<SealedBodyConstants, FactsError> {
+        self.seal_body_constants_with_associated(prepared, values, Vec::new(), budget)
+    }
+    pub(in crate::compiler) fn seal_body_constants_with_associated(
+        &self,
+        prepared: PreparedBodyConstants,
+        values: Vec<Arc<const_check::ValueFact>>,
+        associated: Vec<
+            Arc<crate::compiler::associated_constant_graph::AssociatedConstantValueFact>,
+        >,
+        budget: &ir::PlanBudget,
+    ) -> Result<SealedBodyConstants, FactsError> {
         self.check_budget(budget)
             .map_err(|e| source_error(budget, &e))?;
         if values.len() != prepared.direct.len() {
@@ -120,30 +142,120 @@ impl PlanCtx {
                         node: node.clone(),
                         declaration: id,
                         value: values[index].clone(),
+                        associated: None,
                     },
                     budget,
                 )?;
+            }
+        }
+        self.seal_associated_body_constants(prepared, uses, associated, budget)
+    }
+    fn seal_associated_body_constants(
+        &self,
+        prepared: PreparedBodyConstants,
+        mut uses: Vec<SourceConstantUse>,
+        associated: Vec<
+            Arc<crate::compiler::associated_constant_graph::AssociatedConstantValueFact>,
+        >,
+        budget: &ir::PlanBudget,
+    ) -> Result<SealedBodyConstants, FactsError> {
+        let mut symbolic = Vec::new();
+        let generic = self
+            .callable_env(prepared.declaration)
+            .map_err(|e| source_error(budget, &e))?
+            .is_generic();
+        if generic {
+            if !associated.is_empty() {
+                return Err(FactsError::invalid(
+                    budget,
+                    "universal member source received evaluated values",
+                ));
+            }
+            let facts = self
+                .callable_facts(prepared.declaration)
+                .map_err(|e| source_error(budget, &e))?;
+            if let Some(inventory) = &prepared.inventory {
+                for (node, source) in &inventory.associated_constants {
+                    let operand = self
+                        .associated_constant_operand(
+                            prepared.declaration,
+                            source,
+                            node.path.clone(),
+                            &facts,
+                            budget,
+                        )
+                        .map_err(|e| source_error(budget, &e))?;
+                    sr::push(
+                        &mut symbolic,
+                        associated_constants::SourceSymbolicConstantUse {
+                            node: node.clone(),
+                            operand: Arc::new(operand),
+                        },
+                        budget,
+                    )?;
+                }
+            }
+        } else {
+            let target = ir::CallTarget {
+                declaration: prepared.declaration,
+                type_args: Arc::from([]),
+            };
+            let count = prepared
+                .inventory
+                .as_ref()
+                .map_or(0, |inventory| inventory.associated_constants.len());
+            if associated.len() != count {
+                return Err(FactsError::invalid(
+                    budget,
+                    "associated constant graph frontier coverage changed",
+                ));
+            }
+            if let Some(inventory) = &prepared.inventory {
+                for ((node, _), value) in inventory.associated_constants.iter().zip(associated) {
+                    value
+                        .validate(self, &target, &node.path, budget)
+                        .map_err(|e| source_error(budget, &e.to_string()))?;
+                    sr::push(
+                        &mut uses,
+                        SourceConstantUse {
+                            node: node.clone(),
+                            declaration: value.authorization.selected().declaration(),
+                            value: value.value.clone(),
+                            associated: Some(value),
+                        },
+                        budget,
+                    )?;
+                }
             }
         }
         Ok(SealedBodyConstants {
             declaration: prepared.declaration,
             inventory: prepared.inventory,
             uses,
+            symbolic,
         })
     }
 }
 impl CanonicalSourceCapability {
+    fn constant_index(&self, expr: &Expr) -> Result<usize, String> {
+        let pointer = expr as *const Expr as usize;
+        let index = if matches!(expr, Expr::AssociatedConst(_)) {
+            self.inventory
+                .associated_constant_pointers
+                .get(&pointer)
+                .map(|index| self.inventory.constants.len() + *index)
+        } else {
+            self.inventory.constant_pointers.get(&pointer).copied()
+        };
+        index.ok_or_else(|| {
+            self.render(FactsError::invalid(
+                &self.plan.budget,
+                "constant lacks original source occurrence",
+            ))
+        })
+    }
     pub(super) fn constant_value(&self, expr: &Expr) -> Result<const_eval::ScalarValue, String> {
-        let index = *self
-            .inventory
-            .constant_pointers
-            .get(&(expr as *const Expr as usize))
-            .ok_or_else(|| {
-                self.render(FactsError::invalid(
-                    &self.plan.budget,
-                    "constant lacks original source occurrence",
-                ))
-            })?;
+        let index = self.constant_index(expr)?;
         let row = self.constants.get(index).ok_or_else(|| {
             self.render(FactsError::invalid(
                 &self.plan.budget,
@@ -161,12 +273,21 @@ impl CanonicalSourceCapability {
         Ok(row.value.scalar().value())
     }
     pub(super) fn record_constant(&self, expr: &Expr, id: ir::ExprId) -> Result<(), String> {
+        if self.symbolic_constant(expr)?.is_some() {
+            let index = *self
+                .inventory
+                .associated_constant_pointers
+                .get(&(expr as *const Expr as usize))
+                .ok_or("symbolic constant lost source mapping")?;
+            return sr::push(
+                &mut self.symbolic_constant_emissions.borrow_mut(),
+                (index, id),
+                &self.plan.budget,
+            )
+            .map_err(|e| self.render(e));
+        }
         self.constant_value(expr)?;
-        let index = *self
-            .inventory
-            .constant_pointers
-            .get(&(expr as *const Expr as usize))
-            .unwrap();
+        let index = self.constant_index(expr)?;
         sr::push(
             &mut self.constant_emissions.borrow_mut(),
             (index, id),
@@ -187,7 +308,12 @@ pub(super) fn validate_constants(
     checked: &ir::CheckedFunction,
     budget: &ir::PlanBudget,
 ) -> Result<(), FactsError> {
-    if fresh.constants.len() != original.constants.len()
+    let associated_count = if original.symbolic_constants.is_empty() {
+        fresh.associated_constants.len()
+    } else {
+        0
+    };
+    if fresh.constants.len().checked_add(associated_count) != Some(original.constants.len())
         || original.constant_emissions.len() != original.constants.len()
     {
         return Err(FactsError::invalid(
@@ -204,10 +330,40 @@ pub(super) fn validate_constants(
             || retained.declaration != *id
             || retained.value.scalar().declaration() != *id
             || retained.value.body().source().declaration != *id
+            || retained.associated.is_some()
         {
             return Err(FactsError::invalid(
                 budget,
                 "constant source occurrence/value publication changed",
+            ));
+        }
+    }
+    for ((node, _), retained) in fresh
+        .associated_constants
+        .iter()
+        .zip(original.constants.iter().skip(fresh.constants.len()))
+    {
+        sr::work(budget, node.path.len() + 1)?;
+        let proof = retained.associated.as_ref().ok_or_else(|| {
+            FactsError::invalid(
+                budget,
+                "associated constant lacks sealed source-use graph proof",
+            )
+        })?;
+        let target = ir::CallTarget {
+            declaration: original.declaration,
+            type_args: Arc::from([]),
+        };
+        proof
+            .validate(&original.plan, &target, &node.path, budget)
+            .map_err(|error| source_error(budget, &error.to_string()))?;
+        if node != &retained.node
+            || !Arc::ptr_eq(&proof.value, &retained.value)
+            || retained.declaration != proof.authorization.selected().declaration()
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "associated constant graph value publication changed",
             ));
         }
     }

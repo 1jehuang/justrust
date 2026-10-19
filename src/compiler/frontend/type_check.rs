@@ -3,6 +3,9 @@ use super::*;
 
 #[path = "type_check/associated_hint.rs"]
 mod associated_hint;
+#[path = "type_check/binary_expression.rs"]
+mod binary_expression;
+
 mod byte_strings;
 #[path = "type_check/callable_arguments.rs"]
 mod callable_arguments;
@@ -1049,12 +1052,12 @@ impl<'s> Checker<'s> {
             Expr::ByteStr(bytes) => {
                 self.infer_node(InferKind::Rigid(ir::Ty::byte_string_ty(bytes.len())))?
             }
-            Expr::ConstItem(_) => {
-                let value = self
+            Expr::ConstItem(_) | Expr::AssociatedConst(_) => {
+                let ty = self
                     .canonical
                     .ok_or("contract: constant inference requires sealed graph inputs")?
-                    .constant_value(expr)?;
-                self.infer_node(InferKind::Rigid(const_inputs::scalar_ir_type(value.ty())))?
+                    .constant_type(expr)?;
+                self.infer_node(InferKind::Rigid(ty))?
             }
             Expr::Var(name) => match self.callable_value_hint(name)? {
                 Some(ty) => self.infer_type_term(&ty, None, depth + 1)?,
@@ -4525,12 +4528,11 @@ impl<'a> Checker<'a> {
             Expr::Char(_) => Some(ir::Ty::Char),
             Expr::Str(_) => Some(ir::Ty::shared_str_ty()),
             Expr::ByteStr(bytes) => Some(ir::Ty::byte_string_ty(bytes.len())),
-            Expr::ConstItem(_) => Some(const_inputs::scalar_ir_type(
+            Expr::ConstItem(_) | Expr::AssociatedConst(_) => Some(
                 self.canonical
                     .ok_or("contract: constant hint requires sealed graph inputs")?
-                    .constant_value(e)?
-                    .ty(),
-            )),
+                    .constant_type(e)?,
+            ),
             Expr::Tuple(fields) if fields.is_empty() => Some(ir::Ty::Unit),
             Expr::Var(name) => self.callable_value_hint(name)?,
             Expr::Call { name, args } => {
@@ -7503,6 +7505,9 @@ impl<'a> Checker<'a> {
         {
             return Ok(id);
         }
+        if matches!(e, Expr::Binary { .. }) {
+            return self.builtin_binary_expression(e, expectation.hard());
+        }
         self.expr_without_cast(e, expectation)
     }
     pub(super) fn validate_borrow_referent(
@@ -10121,20 +10126,14 @@ impl<'a> Checker<'a> {
                     Flow::value(ir::Ty::shared_str_ty()),
                 )
             }
-            Expr::ConstItem(_) => {
-                let value = self
+            Expr::ConstItem(_) | Expr::AssociatedConst(_) => {
+                let canonical = self
                     .canonical
-                    .ok_or("contract: constant occurrence requires sealed graph inputs")?
-                    .constant_value(e)?;
-                let kind = match value {
-                    crate::compiler::const_eval::ScalarValue::Int(value) => {
-                        ir::ExprKind::Int(value)
-                    }
-                    crate::compiler::const_eval::ScalarValue::Bool(value) => {
-                        ir::ExprKind::Bool(value)
-                    }
-                };
-                (kind, Flow::value(const_inputs::scalar_ir_type(value.ty())))
+                    .ok_or("contract: constant occurrence requires sealed graph inputs")?;
+                (
+                    canonical.constant_kind(e)?,
+                    Flow::value(canonical.constant_type(e)?),
+                )
             }
             Expr::Var(n) => {
                 let local = self.lookup(n)?;
@@ -10294,154 +10293,8 @@ impl<'a> Checker<'a> {
                     },
                 )
             }
-            Expr::Binary {
-                op, left, right, ..
-            } => {
-                let logical = matches!(op, BinaryOp::And | BinaryOp::Or);
-                let shifting = matches!(op, BinaryOp::Shl | BinaryOp::Shr);
-                let hint = if logical {
-                    Some(ir::Ty::Bool)
-                } else {
-                    let mut hint = expected
-                        .filter(|t| matches!(t, ir::Ty::Int(_) | ir::Ty::Float(_)))
-                        .cloned();
-                    if hint.is_none() {
-                        hint = self.scalar_hint(left)?;
-                    }
-                    if hint.is_none() && !shifting {
-                        hint = self.scalar_hint(right)?;
-                    }
-                    hint
-                };
-                let left = self.expr_expected(left, hint.as_ref())?;
-                let left_flow = self.flow(left);
-                let right_hint = if shifting {
-                    None
-                } else {
-                    hint.or_else(|| {
-                        if matches!(
-                            left_flow.ty,
-                            ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool
-                        ) {
-                            Some(left_flow.ty.clone())
-                        } else {
-                            None
-                        }
-                    })
-                };
-                let right = self.expr_expected_when(
-                    right,
-                    self.reachable && left_flow.completes,
-                    right_hint.as_ref(),
-                )?;
-                let l = self.flow(left);
-                let r = self.flow(right);
-                let str_comparison = l.ty.is_shared_str()
-                    && r.ty.is_shared_str()
-                    && matches!(
-                        op,
-                        BinaryOp::Eq
-                            | BinaryOp::Ne
-                            | BinaryOp::Lt
-                            | BinaryOp::Le
-                            | BinaryOp::Gt
-                            | BinaryOp::Ge
-                    );
-                if str_comparison {
-                    // Builtin `&str` comparison: byte-lexicographic, exactly
-                    // `<str as PartialOrd>` / `PartialEq` on UTF-8 contents.
-                    let completes = l.completes && r.completes;
-                    (
-                        ir::ExprKind::Binary {
-                            op: *op,
-                            left,
-                            right,
-                        },
-                        Flow {
-                            ty: ir::Ty::Bool,
-                            completes,
-                        },
-                    )
-                } else {
-                    if matches!(l.ty, ir::Ty::Ref { .. }) || matches!(r.ty, ir::Ty::Ref { .. }) {
-                        return Err(
-                            "reference comparisons and arithmetic are unsupported in B1".into()
-                        );
-                    }
-                    if matches!(
-                        l.ty,
-                        ir::Ty::Tuple(_) | ir::Ty::Struct(_) | ir::Ty::Array { .. }
-                    ) || matches!(
-                        r.ty,
-                        ir::Ty::Tuple(_) | ir::Ty::Struct(_) | ir::Ty::Array { .. }
-                    ) {
-                        return Err("aggregate operators and comparisons are unsupported".into());
-                    }
-                    let numeric = if matches!(l.ty, ir::Ty::Int(_) | ir::Ty::Float(_)) {
-                        l.ty.clone()
-                    } else if matches!(r.ty, ir::Ty::Int(_) | ir::Ty::Float(_)) {
-                        r.ty.clone()
-                    } else {
-                        ir::Ty::Int(ir::IntTy::I32)
-                    };
-                    let (operand, result) = match op {
-                        BinaryOp::And | BinaryOp::Or => (ir::Ty::Bool, ir::Ty::Bool),
-                        BinaryOp::Shl | BinaryOp::Shr => {
-                            if l.ty == ir::Ty::Never || r.ty == ir::Ty::Never {
-                                return Err(
-                                    "shift operator on semantic Never is unsupported".into()
-                                );
-                            }
-                            if !matches!(l.ty, ir::Ty::Int(_)) || !matches!(r.ty, ir::Ty::Int(_)) {
-                                return Err("shift operands must both be integers".into());
-                            }
-                            (l.ty.clone(), l.ty.clone())
-                        }
-                        BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
-                            let operand = self.join(&l.ty, &r.ty, "bitwise operands")?;
-                            if !matches!(operand, ir::Ty::Int(_) | ir::Ty::Bool) {
-                                return Err(
-                                    "bitwise operands require identical integer types or Bool"
-                                        .into(),
-                                );
-                            }
-                            (operand.clone(), operand)
-                        }
-                        BinaryOp::Eq | BinaryOp::Ne => {
-                            (self.join(&l.ty, &r.ty, "equality operands")?, ir::Ty::Bool)
-                        }
-                        BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => (
-                            if l.ty == ir::Ty::Char || r.ty == ir::Ty::Char {
-                                ir::Ty::Char
-                            } else {
-                                numeric.clone()
-                            },
-                            ir::Ty::Bool,
-                        ),
-                        _ => (numeric.clone(), numeric),
-                    };
-                    self.require(&l, &operand)?;
-                    if !shifting {
-                        self.require(&r, &operand)?;
-                    }
-                    // Trait-based scalar operators do not gain a never coercion
-                    // merely because evaluating an operand cannot complete.
-                    if !logical && (l.ty == ir::Ty::Never || r.ty == ir::Ty::Never) {
-                        return Err("binary operator on never is unsupported".into());
-                    }
-                    let completes = l.completes && (logical || r.completes);
-                    (
-                        ir::ExprKind::Binary {
-                            op: *op,
-                            left,
-                            right,
-                        },
-                        Flow {
-                            ty: result,
-                            completes,
-                        },
-                    )
-                }
+            Expr::Binary { .. } => {
+                return self.builtin_binary_expression(e, expected);
             }
             Expr::Call { name, args } => {
                 let key = self.path_key(name, Namespace::Value)?;
@@ -10689,6 +10542,15 @@ impl<'a> Checker<'a> {
                 (ir::ExprKind::Block(block), flow)
             }
         };
+        self.finish_checked_expression(e, kind, flow)
+    }
+
+    fn finish_checked_expression(
+        &mut self,
+        e: &Expr,
+        kind: ir::ExprKind,
+        flow: Flow,
+    ) -> Result<ir::ExprId, String> {
         self.accessible(&flow.ty)?;
         self.admit_slice_value(&flow.ty)?;
         if matches!(flow.ty, ir::Ty::Array { .. } | ir::Ty::Tuple(_)) {
@@ -10705,7 +10567,7 @@ impl<'a> Checker<'a> {
             },
             kind,
         });
-        if matches!(e, Expr::ConstItem(_)) {
+        if matches!(e, Expr::ConstItem(_) | Expr::AssociatedConst(_)) {
             self.canonical
                 .ok_or("contract: constant emission requires sealed graph inputs")?
                 .record_constant(e, id)?;

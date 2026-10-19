@@ -5,8 +5,8 @@
 //! dataflow is established separately by the analyzer before native emission.
 use super::frontend::{BinaryOp, UnaryOp};
 use super::ir::{self, ExprId, IntTy, IntValue, LocalId, LoopId, Place, Projection, Ty};
-mod drop_normal;
 mod closure_template;
+mod drop_normal;
 pub(super) use closure_template::lower_closure_template;
 mod grouped_or;
 mod intrinsics;
@@ -180,9 +180,16 @@ impl GeneratedCfgShape {
             return Err("lowering proof facts authority changed".into());
         }
         match (&self.closure_authority, facts.closure_lowering_identity()) {
-            (Some((original, mode)), Some((current, current_mode))) if *mode == current_mode
-                && facts.world().types_equal(&[Ty::Closure(original.clone())], &[Ty::Closure(current.clone())]).map_err(|e| e.into_legacy_diagnostic(budget))? => {},
-            (None, None) => {},
+            (Some((original, mode)), Some((current, current_mode)))
+                if *mode == current_mode
+                    && facts
+                        .world()
+                        .types_equal(
+                            &[Ty::Closure(original.clone())],
+                            &[Ty::Closure(current.clone())],
+                        )
+                        .map_err(|e| e.into_legacy_diagnostic(budget))? => {}
+            (None, None) => {}
             _ => return Err("lowering proof closure parent or capability changed".into()),
         }
         match (&self.target, facts.target()) {
@@ -485,6 +492,7 @@ pub enum Statement {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Constant {
+    AssociatedConst(std::sync::Arc<ir::AssociatedConstOperand>),
     Enum { ty: ir::EnumTy, variant: usize },
     Int(IntValue),
     Char(ir::CharValue),
@@ -1698,6 +1706,9 @@ impl Function {
         ) -> Result<(), String> {
             budget.charge_work(1)?;
             match value {
+                Operand::Constant(Constant::AssociatedConst(operand)) => {
+                    operand.validate_context(facts, budget)?
+                }
                 Operand::Constant(Constant::Enum { ty, .. }) => {
                     facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?
                 }
@@ -1899,6 +1910,7 @@ impl Function {
         facts: ir::FactsCtx<'_>,
     ) -> Result<Ty, String> {
         match operand {
+            Operand::Constant(Constant::AssociatedConst(operand)) => Ok(operand.ty().clone()),
             Operand::Constant(Constant::Int(value)) => {
                 value.validate()?;
                 Ok(Ty::Int(value.ty))
@@ -4386,6 +4398,11 @@ impl Lowerer<'_> {
             ir::ExprKind::Match { scrutinee, arms } => {
                 self.match_expression(id, *scrutinee, arms, destination.clone())?;
             }
+            ir::ExprKind::AssociatedConst(value) => self.assign(
+                destination.clone(),
+                Rvalue::Use(Operand::Constant(Constant::AssociatedConst(value.clone()))),
+                origin,
+            ),
             ir::ExprKind::Int(value) => self.assign(
                 destination.clone(),
                 Rvalue::Use(Operand::Constant(Constant::Int(*value))),

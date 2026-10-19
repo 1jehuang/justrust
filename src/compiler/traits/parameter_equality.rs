@@ -256,7 +256,7 @@ impl ValidatedTraitWorld {
                     declaration: target.declaration,
                     arguments: target.type_args.clone(),
                 },
-                FactsSubject::SchemaItem(_) => {
+                FactsSubject::SchemaItem(_) | FactsSubject::AssociatedConstant(_) => {
                     return Err(FactsError::invalid(
                         &self.budget,
                         "schema has no result-flow body authority",

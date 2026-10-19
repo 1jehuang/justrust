@@ -93,11 +93,27 @@ impl ValueFact {
         body: Arc<BodyFact>,
         proof: &QualificationFact,
         budget: &ir::PlanBudget,
-        mut read: F,
+        read: F,
     ) -> Result<Self, crate::Error>
     where
         F: FnMut(ir::DeclId) -> Fut,
         Fut: std::future::Future<Output = Result<Arc<Self>, crate::Error>>,
+    {
+        Self::evaluate_with_inputs(body, proof, budget, read, |_| std::future::ready(Ok(None)))
+            .await
+    }
+    pub(super) async fn evaluate_with_inputs<F, Fut, I, Input>(
+        body: Arc<BodyFact>,
+        proof: &QualificationFact,
+        budget: &ir::PlanBudget,
+        mut read: F,
+        input: I,
+    ) -> Result<Self, crate::Error>
+    where
+        F: FnMut(ir::DeclId) -> Fut,
+        Fut: std::future::Future<Output = Result<Arc<Self>, crate::Error>>,
+        I: FnMut(usize) -> Input,
+        Input: std::future::Future<Output = Result<Option<scalar::ScalarValue>, crate::Error>>,
     {
         let storage = budget
             .reserve_bytes(
@@ -109,18 +125,23 @@ impl ValueFact {
                 "contract: constant qualification belongs to another body publication",
             ));
         }
-        let value = scalar::evaluate_with_read(&body.checked, budget, |id| {
-            let future = read(id);
-            async move {
-                let value = future.await?;
-                if value.body.source.declaration != id || value.value.declaration() != id {
-                    return Err(crate::Error::new(
-                        "contract: constant value graph handle identity changed",
-                    ));
+        let value = scalar::evaluate_with_inputs(
+            &body.checked,
+            budget,
+            |id| {
+                let future = read(id);
+                async move {
+                    let value = future.await?;
+                    if value.body.source.declaration != id || value.value.declaration() != id {
+                        return Err(crate::Error::new(
+                            "contract: constant value graph handle identity changed",
+                        ));
+                    }
+                    Ok(value.value)
                 }
-                Ok(value.value)
-            }
-        })
+            },
+            input,
+        )
         .await
         .map_err(|error| match error {
             scalar::EvaluateError::Scalar(error) => crate::Error::new(error.to_string()),
@@ -143,6 +164,14 @@ pub(super) fn check(
     let storage =
         budget.reserve_bytes(publication_bytes(std::mem::size_of::<BodyFact>(), true)?)?;
     declaration.validate_authority()?;
+    for expression in declaration.expressions.iter() {
+        if let source::SyntaxKind::MemberInput(input) = &expression.kind {
+            input.validate(plan, budget)?;
+            if input.path() != expression.source.path.as_ref() {
+                return Err("constant member input changed original initializer coordinate".into());
+            }
+        }
+    }
     for reference in references {
         budget.charge_work(1)?;
         reference.validate_authority()?;
@@ -202,6 +231,9 @@ impl Checker<'_> {
                 source::SyntaxKind::Integer { suffix, .. } => suffix.map(scalar::ScalarTy::Int),
                 source::SyntaxKind::Bool(_) => Some(scalar::ScalarTy::Bool),
                 source::SyntaxKind::Reference(id) => Some(self.reference(*id)?),
+                source::SyntaxKind::MemberInput(input) => {
+                    Some(source::associated_scalar_type(input.ty())?)
+                }
                 source::SyntaxKind::Unary { value, .. } => self.hint(*value, depth + 1)?,
                 source::SyntaxKind::Binary { op, left, right } => match op {
                     scalar::Binary::Eq
@@ -243,16 +275,23 @@ impl Checker<'_> {
                 let bits = integer_bits(*magnitude, ty, false)?;
                 (
                     scalar::ScalarTy::Int(ty),
-                    scalar::ExprKind::Literal(scalar::ScalarValue::Int(ir::IntValue { ty, bits })),
+                    scalar::ScalarExprKind::Literal(scalar::ScalarValue::Int(ir::IntValue {
+                        ty,
+                        bits,
+                    })),
                 )
             }
             source::SyntaxKind::Bool(value) => (
                 scalar::ScalarTy::Bool,
-                scalar::ExprKind::Literal(scalar::ScalarValue::Bool(*value)),
+                scalar::ScalarExprKind::Literal(scalar::ScalarValue::Bool(*value)),
             ),
             source::SyntaxKind::Reference(id) => {
-                (self.reference(*id)?, scalar::ExprKind::Reference(*id))
+                (self.reference(*id)?, scalar::ScalarExprKind::Reference(*id))
             }
+            source::SyntaxKind::MemberInput(input) => (
+                source::associated_scalar_type(input.ty())?,
+                scalar::ScalarExprKind::Input(index),
+            ),
             source::SyntaxKind::Unary {
                 op: scalar::Unary::Neg,
                 value,
@@ -270,7 +309,10 @@ impl Checker<'_> {
                 let bits = integer_bits(magnitude, ty, true)?;
                 (
                     scalar::ScalarTy::Int(ty),
-                    scalar::ExprKind::Literal(scalar::ScalarValue::Int(ir::IntValue { ty, bits })),
+                    scalar::ScalarExprKind::Literal(scalar::ScalarValue::Int(ir::IntValue {
+                        ty,
+                        bits,
+                    })),
                 )
             }
             source::SyntaxKind::Unary { op, value } => {
@@ -278,7 +320,7 @@ impl Checker<'_> {
                     .or(self.hint(*value, depth + 1)?)
                     .unwrap_or(scalar::ScalarTy::Int(ir::IntTy::I32));
                 let value = self.expr(*value, Some(ty), depth + 1)?;
-                (ty, scalar::ExprKind::Unary { op: *op, value })
+                (ty, scalar::ScalarExprKind::Unary { op: *op, value })
             }
             source::SyntaxKind::Binary { op, left, right } => {
                 use scalar::Binary as B;
@@ -306,7 +348,7 @@ impl Checker<'_> {
                     } else {
                         operand
                     },
-                    scalar::ExprKind::Binary {
+                    scalar::ScalarExprKind::Binary {
                         op: *op,
                         left,
                         right,
