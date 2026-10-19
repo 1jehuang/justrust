@@ -1,5 +1,25 @@
 # Findings: where agent build time goes
 
+## 2026-10-19: Hosted disk recovery using native dependency-artifact LRU
+
+At 16:42:41 UTC the hosted root filesystem had 94,478,336 bytes available
+(518,822,424,576 used). Verified executable and effective cache scope first:
+`/home/ubuntu/.justrust/cache/depcache`, 27.21 GB, 13,042 entries. Ran only:
+
+```sh
+env JUSTRUST_DEPCACHE_MAX=16G /home/ubuntu/.justrust/bin/agent/7d88a669bafab7bda02c6f001602ddee/justrust cache --prune
+```
+
+The native command exited 0 at 16:42:49 UTC, evicting 6,518 entries
+(reported 12.83 GB), leaving 14.34 GB and 6,524 entries. Default 600-second
+grace was unchanged, with the native collector's lock, atomic trash rename,
+and concurrent-hit recheck. No build was launched, and no private sources,
+private caches, active targets, runs, or toolchains were selected for cleanup.
+At 16:43:16 UTC `df -B1 /` reported 13,941,305,344 bytes available and
+504,975,597,568 used (98%). Net available-space increase was 13,846,827,008
+bytes, which includes concurrent host activity rather than being an exact
+native eviction byte count. The 16G cap was command-local, not persisted.
+
 ## 2026-10-19: Source-sync errors must not terminate shared hosted jobs
 
 At 09:14:32 PDT (16:14:32 UTC), daemon.log recorded rsync exit 24
