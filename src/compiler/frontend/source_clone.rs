@@ -286,6 +286,12 @@ pub(super) fn preflight_clone_node(
                     Stmt::AssignPlace { place, .. } | Stmt::AssignOp { place, .. } => {
                         clone_place(place, budget)?
                     }
+                    Stmt::AssignDeref { fields, .. } => {
+                        clone_vector(fields, budget)?;
+                        for field in fields {
+                            clone_selector(field, budget)?;
+                        }
+                    }
                     Stmt::AssignIndex { array, .. } | Stmt::AssignIndexOp { array, .. } => {
                         clone_place(array, budget)?
                     }

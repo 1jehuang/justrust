@@ -2481,9 +2481,17 @@ impl Resolver<'_> {
                         .map_err(|_| "pattern scope allocation failed")?;
                     scope.extend(names);
                 }
-                Stmt::AssignDeref { carrier, value } => {
+                Stmt::AssignDeref {
+                    carrier,
+                    index,
+                    value,
+                    ..
+                } => {
                     self.expr(value, module, locals)?;
                     self.expr(carrier, module, locals)?;
+                    if let Some(index) = index {
+                        self.expr(index, module, locals)?;
+                    }
                 }
                 Stmt::AssignIndex { index, value, .. }
                 | Stmt::AssignIndexOp { index, value, .. } => {

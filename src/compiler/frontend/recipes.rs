@@ -402,8 +402,16 @@ pub(super) fn inventory(
                     expr(value, ds, b, d + 1)?;
                     block(else_block, ds, b, d + 1)?;
                 }
-                Stmt::AssignDeref { carrier, value } => {
+                Stmt::AssignDeref {
+                    carrier,
+                    index,
+                    value,
+                    ..
+                } => {
                     expr(carrier, ds, b, d + 1)?;
+                    if let Some(index) = index {
+                        expr(index, ds, b, d + 1)?;
+                    }
                     expr(value, ds, b, d + 1)?;
                 }
                 Stmt::AssignIndex { index, value, .. }

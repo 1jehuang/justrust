@@ -5236,28 +5236,83 @@ impl<'a> Checker<'a> {
         }
         Ok((value, flow))
     }
+    /// Assignment through a reference returned by a genuine call. Stock
+    /// order is preserved exactly: the RHS is evaluated and saved first, then
+    /// the carrier call, then any runtime index, then the destination is
+    /// read (compound) and written. Every subexpression runs once.
     pub(super) fn deref_assignment(
         &mut self,
         carrier: &Expr,
+        fields: &[FieldSelector],
+        index: Option<&Expr>,
+        op: Option<BinaryOp>,
         value: &Expr,
         statements: &mut Vec<ir::Stmt>,
     ) -> Result<(ir::Stmt, bool), String> {
         let carrier_ty = self
             .scalar_hint(carrier)?
             .ok_or("unresolved reference call assignment carrier")?;
-        let ir::Ty::Ref { referent, .. } = &carrier_ty else {
-            return Err("call assignment carrier must return a reference".into());
+        if !matches!(carrier_ty, ir::Ty::Ref { .. }) {
+            // Only a written `*` of a primitive value is certainly invalid
+            // (E0614). By-value temporaries, raw pointers and user Deref
+            // carriers are legal Rust outside this bounded slice.
+            let primitive = matches!(
+                carrier_ty,
+                ir::Ty::Int(_) | ir::Ty::Float(_) | ir::Ty::Bool | ir::Ty::Char | ir::Ty::Unit
+            );
+            if primitive && matches!(fields.first(), Some(FieldSelector::Deref)) {
+                return Err("E0614: call assignment carrier must return a reference".into());
+            }
+            return Err(
+                "unsupported: assignment through a call result that is not a reference".into(),
+            );
+        }
+        // One paid projection, built once and later moved into the place.
+        let (projection, destination, writable) =
+            self.call_place_projection(&carrier_ty, fields)?;
+        if projection.first() != Some(&ir::Projection::Deref) {
+            return Err("unsupported: assignment into a by-value call temporary".into());
+        }
+        if !writable {
+            return Err(
+                "E0594: cannot assign to data behind a shared reference returned by a call".into(),
+            );
+        }
+        let element = match index {
+            None => None,
+            Some(_) => {
+                let ir::Ty::Array { element, .. } = &destination else {
+                    return Err("runtime index assignment requires an array".into());
+                };
+                if op.is_none() {
+                    // Existing plain runtime IndexAssign does not admit Deref.
+                    return Err("unsupported: runtime indexed assignment through a call-returned reference; only compound operators are admitted".into());
+                }
+                Some(element.as_ref().clone())
+            }
         };
-        let referent = referent.as_ref().clone();
-        let rhs = self.expr_expected(value, Some(&referent))?;
-        let rhs_flow = self.flow(rhs);
-        self.require(&rhs_flow, &referent)?;
+        let target = element.as_ref().unwrap_or(&destination).clone();
+        let (rhs, rhs_flow) = match op {
+            Some(op) => self.compound_value(op, &target, value)?,
+            None => {
+                let rhs = self.expr_expected(value, Some(&target))?;
+                let flow = self.flow(rhs);
+                self.require(&flow, &target)?;
+                (rhs, flow)
+            }
+        };
+        let saved_ty = if rhs_flow.ty == ir::Ty::Never {
+            target.clone()
+        } else {
+            rhs_flow.ty.clone()
+        };
         let saved = self.temporary(
             &format!("$rhs{}", self.locals.len()),
-            referent.clone(),
+            saved_ty.clone(),
             false,
         )?;
         self.charge_node(std::mem::size_of::<ir::Stmt>() * 3)?;
+        self.plan_budget_guard()?;
         statements.push(ir::Stmt::Let {
             local: saved,
             value: rhs,
@@ -5266,29 +5321,189 @@ impl<'a> Checker<'a> {
             self.expr_expected_when(carrier, self.reachable && rhs_flow.completes, None)?;
         let pf = self.flow(pointer);
         self.require(&pf, &carrier_ty)?;
-        let handle =
-            self.temporary(&format!("$carrier{}", self.locals.len()), carrier_ty, false)?;
+        let handle = self.temporary(
+            &format!("$carrier{}", self.locals.len()),
+            carrier_ty.clone(),
+            false,
+        )?;
+        self.plan_budget_guard()?;
         statements.push(ir::Stmt::Let {
             local: handle,
             value: pointer,
         });
+        let place = ir::Place {
+            local: handle,
+            projection,
+        };
         let loaded = ir::ExprId(self.exprs.len());
         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
         self.exprs.push(ir::TypedExpr {
-            ty: referent,
+            ty: saved_ty,
             completion: ir::Completion::Returns,
             kind: ir::ExprKind::Local(saved),
         });
-        Ok((
-            ir::Stmt::AssignPlace {
-                place: ir::Place {
-                    local: handle,
-                    projection: vec![ir::Projection::Deref],
+        let completes = rhs_flow.completes && pf.completes;
+        let result = match (index, op) {
+            (None, None) => (
+                ir::Stmt::AssignPlace {
+                    place,
+                    value: loaded,
                 },
-                value: loaded,
-            },
-            rhs_flow.completes && pf.completes,
-        ))
+                completes,
+            ),
+            (None, Some(op)) => (
+                ir::Stmt::AssignOp {
+                    place,
+                    op,
+                    value: loaded,
+                },
+                completes,
+            ),
+            (Some(index), Some(op)) => {
+                let index = self.expr_expected_when(
+                    index,
+                    self.reachable && completes,
+                    Some(&ir::Ty::Int(ir::IntTy::Usize)),
+                )?;
+                let index_flow = self.flow(index);
+                self.require_index(&index_flow)?;
+                (
+                    ir::Stmt::AssignIndexOp {
+                        array: place,
+                        index,
+                        op,
+                        value: loaded,
+                    },
+                    completes && index_flow.completes,
+                )
+            }
+            (Some(_), None) => unreachable!("rejected above"),
+        };
+        self.plan_budget_guard()?;
+        Ok(result)
+    }
+    /// Explicit stop after any recorded planning resource failure. PlanBudget
+    /// records the first failure but still admits later in-limit charges, so
+    /// producers must not allocate or publish once a failure exists.
+    fn plan_budget_guard(&self) -> Result<(), String> {
+        if let Some(plan) = &self.signatures.plan
+            && plan.budget.has_resource_failure()
+        {
+            return Err("planning resource budget already exhausted".into());
+        }
+        Ok(())
+    }
+    /// Paid projection for a place rooted at a call-returned reference. Only
+    /// `deref_assignment` uses it; `checked_place` is unchanged. Pass A walks
+    /// selectors without allocating and counts projections; the exact count
+    /// is then allocated through `retained_pattern_vec` (charged before
+    /// allocation, with any capacity surplus charged before return); pass B
+    /// fills that buffer without growth. The hidden carrier's binding
+    /// mutability is never authority: writability comes only from the
+    /// reference kinds traversed.
+    pub(super) fn call_place_projection(
+        &self,
+        carrier: &ir::Ty,
+        fields: &[FieldSelector],
+    ) -> Result<(Vec<ir::Projection>, ir::Ty, bool), String> {
+        self.plan_budget_guard()?;
+        if fields.len() > 128 {
+            return Err("place projection nesting exceeds limit128".into());
+        }
+        let work = fields
+            .len()
+            .checked_add(1)
+            .ok_or("place projection work overflow")?;
+        self.signatures.plan()?.budget.charge_work(work)?;
+        let (requested, _, _) = self.walk_call_place(carrier, fields, None)?;
+        self.plan_budget_guard()?;
+        let mut projection = self.retained_pattern_vec::<ir::Projection>(requested)?;
+        self.plan_budget_guard()?;
+        self.signatures.plan()?.budget.charge_work(work)?;
+        let (pushed, destination, writable) =
+            self.walk_call_place(carrier, fields, Some(&mut projection))?;
+        if pushed != requested || projection.len() != requested {
+            return Err("call place projection count mismatch".into());
+        }
+        self.plan_budget_guard()?;
+        Ok((projection, destination, writable))
+    }
+    /// One selector walk with `checked_place` rule order. With `out == None`
+    /// it only counts; with a buffer it pushes without ever growing it.
+    fn walk_call_place(
+        &self,
+        carrier: &ir::Ty,
+        fields: &[FieldSelector],
+        mut out: Option<&mut Vec<ir::Projection>>,
+    ) -> Result<(usize, ir::Ty, bool), String> {
+        let mut count = 0usize;
+        let mut emit = |projection: ir::Projection| -> Result<(), String> {
+            if let Some(out) = out.as_deref_mut() {
+                if out.len() >= out.capacity() {
+                    return Err("call place projection capacity exceeded".into());
+                }
+                out.push(projection);
+            }
+            count = count
+                .checked_add(1)
+                .ok_or("call place projection count overflow")?;
+            Ok(())
+        };
+        let mut ty = carrier.clone();
+        let mut writable = false;
+        let mut derefs = 0;
+        for selector in fields {
+            match selector {
+                FieldSelector::Deref => {
+                    derefs += 1;
+                    if derefs > 128 {
+                        return Err("reference dereference depth exceeds limit128".into());
+                    }
+                    if let ir::Ty::RawPtr { kind, pointee } = &ty {
+                        if self.unsafe_depth == 0 {
+                            return Err("E0133: dereference of raw pointer is unsafe and requires unsafe block".into());
+                        }
+                        writable = *kind == ir::BorrowKind::Mut;
+                        ty = pointee.as_ref().clone();
+                        emit(ir::Projection::Deref)?;
+                        continue;
+                    }
+                    let ir::Ty::Ref { kind, referent } = &ty else {
+                        return Err("dereference requires a reference".into());
+                    };
+                    writable = *kind == ir::BorrowKind::Mut;
+                    ty = referent.as_ref().clone();
+                    emit(ir::Projection::Deref)?;
+                }
+                FieldSelector::ConstantIndex(index) => {
+                    ty = self.index_type(&ty, *index)?;
+                    emit(ir::Projection::ConstantIndex(*index))?;
+                }
+                _ => {
+                    if let ir::Ty::Ref { kind, referent } = &ty {
+                        if derefs >= 128 {
+                            return Err(
+                                "multiple dereferences in one field place are unsupported".into()
+                            );
+                        }
+                        if fields.len() >= 128 {
+                            return Err(
+                                "normalized place projection nesting exceeds limit128".into()
+                            );
+                        }
+                        derefs += 1;
+                        writable = *kind == ir::BorrowKind::Mut;
+                        ty = referent.as_ref().clone();
+                        emit(ir::Projection::Deref)?;
+                    }
+                    let (index, field) = self.field_type(&ty, selector)?;
+                    ty = field;
+                    emit(ir::Projection::Field(index))?;
+                }
+            }
+        }
+        self.accessible(&ty)?;
+        Ok((count, ty, writable))
     }
     pub(super) fn block_when(
         &mut self,
@@ -5461,9 +5676,20 @@ impl<'a> Checker<'a> {
                         flow.completes,
                     )
                 }
-                Stmt::AssignDeref { carrier, value } => {
-                    self.deref_assignment(carrier, value, &mut statements)?
-                }
+                Stmt::AssignDeref {
+                    carrier,
+                    fields,
+                    index,
+                    op,
+                    value,
+                } => self.deref_assignment(
+                    carrier,
+                    fields,
+                    index.as_ref(),
+                    *op,
+                    value,
+                    &mut statements,
+                )?,
                 Stmt::Assign { name, value } => {
                     if let Some(pending) = self.pending_reference(name)? {
                         // Only the already known dereference result supplies a scalar
@@ -9989,6 +10215,127 @@ mod checked_identity_tests {
         assert!(check(&program).is_err());
     }
     use super::*;
+
+    const CALL_PLACE_SOURCE: &str = "struct In{v:i32,w:[i32;2]}struct S{a:In,t:(i32,In)}fn p(s:&mut S)->&mut S{s}fn q(s:&S)->&S{s}fn main(){let mut s=S{a:In{v:0,w:[0;2]},t:(0,In{v:0,w:[0;2]})};p(&mut s).a.v=1;(*p(&mut s)).a.w[1]+=2;p(&mut s).zzz=3;p(&mut s).a=In{v:0,w:[0;2]};}";
+
+    fn call_place_fixture() -> (Program, Signatures) {
+        let program = parse(CALL_PLACE_SOURCE).unwrap();
+        let signatures = signature_table(&program).unwrap();
+        (program, signatures)
+    }
+    /// Result type of `p` (`&mut S`) or `q` (`&S`) from the planned schema.
+    fn carrier(signatures: &Signatures, function: usize) -> ir::Ty {
+        let plan = signatures.plan().unwrap();
+        let declaration = plan.function_decl(function).unwrap();
+        plan.function_schema(declaration).unwrap().signature.result
+    }
+    /// Written selectors of the `n`th call-rooted assignment in `main`.
+    fn written(program: &Program, n: usize) -> Vec<FieldSelector> {
+        program.functions[2]
+            .body
+            .statements
+            .iter()
+            .filter_map(|statement| match statement {
+                Stmt::AssignDeref { fields, .. } => Some(fields.clone()),
+                _ => None,
+            })
+            .nth(n)
+            .unwrap()
+    }
+    fn budget_of(signatures: &Signatures) -> &ir::PlanBudget {
+        &signatures.plan().unwrap().budget
+    }
+
+    #[test]
+    fn call_place_projection_matches_checked_place_rules() {
+        let (program, signatures) = call_place_fixture();
+        let checker = Checker::new(&signatures, ir::Ty::Unit, program.functions[2].module);
+        let mutable = carrier(&signatures, 0);
+        let shared = carrier(&signatures, 1);
+        // p().a.v : implicit Deref, Field(a), Field(v)
+        let av = written(&program, 0);
+        let (projection, ty, writable) = checker.call_place_projection(&mutable, &av).unwrap();
+        assert_eq!(
+            projection,
+            vec![
+                ir::Projection::Deref,
+                ir::Projection::Field(0),
+                ir::Projection::Field(0)
+            ]
+        );
+        assert_eq!(ty, ir::Ty::Int(ir::IntTy::I32));
+        assert!(writable);
+        assert_eq!(projection.capacity(), projection.len());
+        // (*p()).a.w[1] : explicit Deref, Field, Field, ConstantIndex
+        let (projection, ty, _) = checker
+            .call_place_projection(&mutable, &written(&program, 1))
+            .unwrap();
+        assert_eq!(
+            projection,
+            vec![
+                ir::Projection::Deref,
+                ir::Projection::Field(0),
+                ir::Projection::Field(1),
+                ir::Projection::ConstantIndex(1)
+            ]
+        );
+        assert_eq!(ty, ir::Ty::Int(ir::IntTy::I32));
+        // Shared carrier: never writable; the hidden binding grants nothing.
+        let (_, _, writable) = checker.call_place_projection(&shared, &av).unwrap();
+        assert!(!writable);
+        // Unknown field keeps the base diagnostic.
+        assert!(
+            checker
+                .call_place_projection(&mutable, &written(&program, 2))
+                .is_err()
+        );
+        // Aggregate destination.
+        let (projection, ty, _) = checker
+            .call_place_projection(&mutable, &written(&program, 3))
+            .unwrap();
+        assert_eq!(projection.len(), 2);
+        assert!(matches!(ty, ir::Ty::Struct(_)));
+    }
+
+    #[test]
+    fn call_place_projection_charges_before_allocation_and_stops_after_failure() {
+        let (program, signatures) = call_place_fixture();
+        let checker = Checker::new(&signatures, ir::Ty::Unit, program.functions[2].module);
+        let mutable = carrier(&signatures, 0);
+        let fields = written(&program, 0);
+        // Warm the per-struct field memo so the measured delta is ours only.
+        checker.call_place_projection(&mutable, &fields).unwrap();
+        let before = budget_of(&signatures).usage_snapshot();
+        let (projection, _, _) = checker.call_place_projection(&mutable, &fields).unwrap();
+        let after = budget_of(&signatures).usage_snapshot();
+        let paid = after.bytes - before.bytes;
+        let element = std::mem::size_of::<ir::Projection>();
+        // Requested bytes plus any measured capacity surplus are retained,
+        // each through one existing PlanState reservation whose fixed
+        // bookkeeping overhead is defined in nominal_schema::retain.
+        let overhead = 4 * std::mem::size_of::<ir::PlanReservation>() + 64;
+        assert_eq!(projection.capacity(), projection.len());
+        assert_eq!(paid, projection.len() * element + overhead);
+        assert!(after.work > before.work);
+        // Once a planning failure is recorded, no further allocation happens.
+        let limited = ir::PlanBudget::new(ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        assert!(limited.charge_work(1).is_err());
+        budget_of(&signatures).record_resource_failure(limited.first_resource_failure().unwrap());
+        let failed = budget_of(&signatures).usage_snapshot();
+        let error = checker
+            .call_place_projection(&mutable, &fields)
+            .unwrap_err();
+        assert!(error.contains("already exhausted"), "{error}");
+        assert_eq!(budget_of(&signatures).usage_snapshot().bytes, failed.bytes);
+        // The original first failure is preserved.
+        assert_eq!(
+            budget_of(&signatures).first_resource_failure(),
+            failed.first_failure
+        );
+    }
 
     #[test]
     fn constructor_method_receiver_fallback_preserves_explicit_and_local_widths() {

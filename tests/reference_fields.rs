@@ -334,13 +334,15 @@ fn main() { run(); }
 }
 
 #[test]
-fn rejects_legal_unsupported_computed_call_field_assignment() {
-    // Stock accepts and runs this fixture, outside the bounded E2 slice.
-    rejects(
-        "computed_call_field_assignment",
+fn promotes_unchanged_computed_call_field_assignment() {
+    // Previously a legal-unsupported E2 boundary. Promoted unchanged by the
+    // temporary-rooted assignment place slice (TEMP-PLACES.md); stock
+    // rustc 1.98.1 prints exactly this line.
+    runs(
         r#"struct S{x:i32} fn get(r:&mut S)->&mut S{r} fn run()->i32{let mut s=S{x:3};get(&mut s).x=7;s.x}
 fn main() { if run() == 7 { println!("reference fields oracle ok"); } }
 "#,
+        "reference fields oracle ok\n",
     );
 }
 
