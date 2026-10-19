@@ -6,7 +6,7 @@ use super::macro_rules::{CallSite, DefinitionSite, ExpandedTokens, RulesDef};
 use super::semantic_name::{AstIdent, LookupClass, NameKey, NameStoreBuilder, Namespace};
 use super::semantic_scope::{ModuleFrontierId, ScopeArenaBuilder};
 use super::source_macro::DriverError;
-use super::token_session::{BudgetVec, SessionId, TokenError, allocate_identity};
+use super::token_session::{BudgetVec, SessionId, SourceFileHandle, TokenError, allocate_identity};
 use super::token_tree::{Node, TokenStream};
 use std::num::NonZeroU64;
 use std::sync::atomic::AtomicU64;
@@ -47,6 +47,7 @@ struct Definition {
     /// the same rules with a function-local driver.
     body: TokenSlice,
     site: DefinitionSite,
+    source_crate: SourceFileHandle,
 }
 #[derive(Clone, Copy)]
 pub(super) struct CheckedDef {
@@ -54,6 +55,7 @@ pub(super) struct CheckedDef {
     index: u32,
     definition: ModuleFrontierId,
     call: ModuleFrontierId,
+    source_crate: SourceFileHandle,
 }
 impl CheckedDef {
     pub(super) fn definition(self) -> ModuleFrontierId {
@@ -108,6 +110,12 @@ impl SourceItemMacroDriver {
                 message: "generated macro definitions are unsupported",
             });
         }
+        let source_crate = super::source_macro_binding::validate_definition(names.session(), site)?;
+        if super::source_macro_binding::definition_root(names.session(), names.span(name)?)?
+            != source_crate
+        {
+            return Err(TokenError::InvalidHandle.into());
+        }
         let name = names.key(name, LookupClass::Item(Namespace::Macro))?;
         let rules = names.compile_local_rules(body.clone(), site)?;
         u32::try_from(self.definitions.len()).map_err(|_| TokenError::IdExhausted)?;
@@ -117,6 +125,7 @@ impl SourceItemMacroDriver {
             rules,
             body,
             site,
+            source_crate,
         })?;
         Ok(())
     }
@@ -127,24 +136,14 @@ impl SourceItemMacroDriver {
         scopes: &ScopeArenaBuilder,
         names: &NameStoreBuilder,
     ) -> Result<CheckedDef, DriverError> {
-        self.check(names)?;
-        scopes.check_names(names).map_err(DriverError::Scope)?;
-        scopes.module_of(call).map_err(DriverError::Scope)?;
-        let key = names.key(name, LookupClass::Item(Namespace::Macro))?;
-        for (index, definition) in self.definitions.as_slice().iter().enumerate().rev() {
-            names.budget().charge(Counter::Work, 1)?;
-            if definition.name == key
-                && scopes
-                    .module_visible_from(definition.point, call)
-                    .map_err(DriverError::Scope)?
-            {
-                return Ok(CheckedDef {
-                    driver: self.id,
-                    index: u32::try_from(index).map_err(|_| TokenError::IdExhausted)?,
-                    definition: definition.point,
-                    call,
-                });
-            }
+        if let Some((index, definition)) = self.find_visible(name, call, scopes, names)? {
+            return Ok(CheckedDef {
+                driver: self.id,
+                index: u32::try_from(index).map_err(|_| TokenError::IdExhausted)?,
+                definition: definition.point,
+                call,
+                source_crate: definition.source_crate,
+            });
         }
         Err(super::macro_rules::MacroError::Syntax {
             span: Some(names.span(name)?),
@@ -161,19 +160,9 @@ impl SourceItemMacroDriver {
         scopes: &ScopeArenaBuilder,
         names: &NameStoreBuilder,
     ) -> Result<Option<(TokenSlice, DefinitionSite)>, DriverError> {
-        self.check(names)?;
-        let key = names.key(name, LookupClass::Item(Namespace::Macro))?;
-        for definition in self.definitions.as_slice().iter().rev() {
-            names.budget().charge(Counter::Work, 1)?;
-            if definition.name == key
-                && scopes
-                    .module_visible_from(definition.point, call)
-                    .map_err(DriverError::Scope)?
-            {
-                return Ok(Some((definition.body.clone(), definition.site)));
-            }
-        }
-        Ok(None)
+        Ok(self
+            .find_visible(name, call, scopes, names)?
+            .map(|(_, definition)| (definition.body.clone(), definition.site)))
     }
     pub(super) fn is_empty(&self) -> bool {
         self.definitions.len() == 0
@@ -185,21 +174,35 @@ impl SourceItemMacroDriver {
         scopes: &ScopeArenaBuilder,
         names: &NameStoreBuilder,
     ) -> Result<bool, DriverError> {
+        Ok(self.find_visible(name, call, scopes, names)?.is_some())
+    }
+    /// One selection policy for probes, function imports and item expansion.
+    /// Textual ancestry alone is insufficient for mounted independent crates.
+    fn find_visible(
+        &self,
+        name: AstIdent,
+        call: ModuleFrontierId,
+        scopes: &ScopeArenaBuilder,
+        names: &NameStoreBuilder,
+    ) -> Result<Option<(usize, &Definition)>, DriverError> {
         self.check(names)?;
         scopes.check_names(names).map_err(DriverError::Scope)?;
         scopes.module_of(call).map_err(DriverError::Scope)?;
         let key = names.key(name, LookupClass::Item(Namespace::Macro))?;
-        for definition in self.definitions.as_slice() {
+        let source_crate =
+            super::source_macro_binding::invocation_root(names.session(), names.span(name)?)?;
+        for (index, definition) in self.definitions.as_slice().iter().enumerate().rev() {
             names.budget().charge(Counter::Work, 1)?;
             if definition.name == key
+                && definition.source_crate == source_crate
                 && scopes
                     .module_visible_from(definition.point, call)
                     .map_err(DriverError::Scope)?
             {
-                return Ok(true);
+                return Ok(Some((index, definition)));
             }
         }
-        Ok(false)
+        Ok(None)
     }
     pub(super) fn expand(
         &self,
@@ -218,6 +221,9 @@ impl SourceItemMacroDriver {
             .get(selected.index as usize)
             .ok_or(TokenError::InvalidHandle)?;
         if definition.point != selected.definition
+            || definition.source_crate != selected.source_crate
+            || super::source_macro_binding::invocation_root(names.session(), site.span)?
+                != selected.source_crate
             || site.parent.is_some()
             || names.session().span(site.span)?.expansion.is_some()
         {
@@ -248,6 +254,123 @@ mod tests {
     use crate::compiler::token::{Edition, TokenKind};
     use crate::compiler::token_tree::{GroupPolicy, group};
     use std::path::Path;
+
+    #[test]
+    fn crate_filter_is_shared_by_probe_import_selection_and_expansion_authority() {
+        use crate::compiler::source::{OriginSegment, PreparedSource, SourceSpan};
+        let budget = ExpansionBudget::default();
+        let mut prepared = PreparedSource::default();
+        for text in ["()=>{1};", "()=>{2};"] {
+            let start = prepared.text.len();
+            let file = prepared
+                .sources
+                .add("same.rs".into(), std::sync::Arc::from(text));
+            prepared.crate_roots.push(file);
+            prepared.text.push_str(text);
+            prepared.origins.push(OriginSegment {
+                prepared: start..prepared.text.len(),
+                origin: SourceSpan {
+                    file,
+                    lo: 0,
+                    hi: text.len() as u32,
+                },
+                synthetic: false,
+            });
+        }
+        let projection = PreparedLexInput::prepared(&prepared, &budget).unwrap();
+        let (mut session, cap) = super::super::token_session::TokenSession::standalone(
+            projection.snapshot().clone(),
+            budget,
+        )
+        .unwrap();
+        let lexed =
+            super::super::lexer::lex_prepared(&projection, Edition::E2024, &mut session).unwrap();
+        let events: Vec<_> = lexed.events().iter().map(|event| event.token).collect();
+        let stream = group(&session, &events, GroupPolicy::OriginalSource).unwrap();
+        let source = TokenSlice::roots(&session, stream.clone()).unwrap();
+        let half = source.len(&session).unwrap() / 2;
+        let first = source.subslice(&session, 0..half).unwrap();
+        let second = source
+            .subslice(&session, half..source.len(&session).unwrap())
+            .unwrap();
+        let span0 = events[0].span();
+        let span1 = events[events.len() / 2].span();
+        let crate0 = session
+            .register_crate_root(session.sources().file(0).unwrap())
+            .unwrap();
+        let crate1 = session
+            .register_crate_root(session.sources().file(1).unwrap())
+            .unwrap();
+        let mut names = NameStoreBuilder::new(session, cap, Edition::E2024).unwrap();
+        let name0 = names.intern_root("arbitrary", span0).unwrap();
+        let name1 = names.intern_root("arbitrary", span1).unwrap();
+        let modules = ModuleArenaBuilder::for_source(&names).unwrap();
+        let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
+        let point = scopes
+            .module_root(&names, &modules, modules.source_root().unwrap(), None)
+            .unwrap();
+        let mut driver = SourceItemMacroDriver::new(stream, &names).unwrap();
+        let site0 = DefinitionSite {
+            span: span0,
+            edition: Edition::E2024,
+            defining_crate: crate0,
+        };
+        let site1 = DefinitionSite {
+            span: span1,
+            defining_crate: crate1,
+            ..site0
+        };
+        driver
+            .define(name0, first.clone(), site0, point, &mut names)
+            .unwrap();
+        assert!(!driver.known(name1, point, &scopes, &names).unwrap());
+        assert!(
+            driver
+                .visible_body(name1, point, &scopes, &names)
+                .unwrap()
+                .is_none()
+        );
+        assert!(driver.select(name1, point, &scopes, &names).is_err());
+        let selected = driver.select(name0, point, &scopes, &names).unwrap();
+        let args = first.subslice(names.session(), 0..0).unwrap();
+        assert!(matches!(
+            driver.expand(
+                selected,
+                args,
+                CallSite {
+                    span: span1,
+                    parent: None
+                },
+                &mut names
+            ),
+            Err(DriverError::Token(TokenError::InvalidHandle))
+        ));
+        assert!(
+            driver
+                .define(
+                    name1,
+                    second.clone(),
+                    DefinitionSite {
+                        defining_crate: crate0,
+                        ..site1
+                    },
+                    point,
+                    &mut names
+                )
+                .is_err()
+        );
+        driver
+            .define(name1, second, site1, point, &mut names)
+            .unwrap();
+        assert_eq!(
+            driver.select(name0, point, &scopes, &names).unwrap().index,
+            0
+        );
+        assert_eq!(
+            driver.select(name1, point, &scopes, &names).unwrap().index,
+            1
+        );
+    }
 
     #[test]
     fn selected_rule_remains_committed_and_other_driver_rejects_handle() {

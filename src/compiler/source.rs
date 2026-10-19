@@ -230,6 +230,9 @@ pub struct PreparedAttribute {
 #[derive(Clone, Debug)]
 pub struct PreparedSource {
     debug_assertions: bool,
+    /// Assembly-owned crate root for each original file. Empty only for raw
+    /// caller-built maps, whose files all belong to the single input crate.
+    pub(super) crate_roots: Vec<FileId>,
     pub text: String,
     pub sources: SourceMap,
     pub origins: Vec<OriginSegment>,
@@ -243,6 +246,7 @@ impl Default for PreparedSource {
     fn default() -> Self {
         Self {
             debug_assertions: CfgSet::DEFAULT_DEBUG_ASSERTIONS,
+            crate_roots: Vec::new(),
             text: String::new(),
             sources: SourceMap::default(),
             origins: Vec::new(),
@@ -791,20 +795,6 @@ impl SourceAssembler {
                 format!("source size limit ({MAX_BYTES} bytes) exceeded"),
             )));
         }
-        if ordinal.len() == 1
-            && ordinal[0] >= 2
-            && let Some(name) = self.externs.get(ordinal[0] as usize - 2)
-        {
-            let anchor = SourceSpan {
-                file: FileId(0),
-                lo: 0,
-                hi: 0,
-            };
-            let open = format!("\npub mod {EXTERN_PREFIX}{name} {{\n");
-            if let Err(error) = append_segment(&mut self.prepared, &open, anchor, true) {
-                return Err(self.fail(error));
-            }
-        }
         if !self.in_prelude && !self.in_extern {
             self.prepared.source_bytes += unit.contents.len();
             self.prepared.files += 1;
@@ -822,6 +812,24 @@ impl SourceAssembler {
             .prepared
             .sources
             .add(unit.path.clone(), unit.contents.clone());
+        // Each attachment starts a separate crate, regardless of its mounted
+        // module spelling or filesystem path. Descendant files inherit it.
+        let crate_root = self.frames.first().map_or(id, |frame| frame.id);
+        self.prepared.crate_roots.push(crate_root);
+        if ordinal.len() == 1
+            && ordinal[0] >= 2
+            && let Some(name) = self.externs.get(ordinal[0] as usize - 2)
+        {
+            let anchor = SourceSpan {
+                file: id,
+                lo: 0,
+                hi: 0,
+            };
+            let open = format!("\npub mod {EXTERN_PREFIX}{name} {{\n");
+            if let Err(error) = append_segment(&mut self.prepared, &open, anchor, true) {
+                return Err(self.fail(error));
+            }
+        }
         for attribute in &unit.attributes {
             self.prepared.attributes.push(PreparedAttribute {
                 span: remap_span(attribute.span, id),
@@ -967,7 +975,7 @@ impl SourceAssembler {
                 && frame.ordinal[0] >= 2
             {
                 let anchor = SourceSpan {
-                    file: FileId(0),
+                    file: frame.id,
                     lo: 0,
                     hi: 0,
                 };

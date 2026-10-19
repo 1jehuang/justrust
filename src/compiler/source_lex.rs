@@ -53,7 +53,7 @@ impl<'a> PreparedLexInput<'a> {
         Self::new(
             &prepared.text,
             Some(&prepared.origins),
-            SourceSnapshot::copy_borrowed(&prepared.sources, budget)
+            SourceSnapshot::copy_with_crates(&prepared.sources, &prepared.crate_roots, budget)
                 .map_err(SourceError::from_token)?,
             budget,
         )

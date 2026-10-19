@@ -7553,22 +7553,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else {
             self.expect(";")?;
         }
-        let original = self
-            .names
-            .session()
-            .original(span, 64)
-            .map_err(native_adapter::transport_error)?;
-        let rendered = self
-            .names
-            .session()
-            .sources()
-            .render_span(original)
-            .map_err(native_adapter::transport_error)?;
-        let file = self
-            .names
-            .session()
-            .sources()
-            .file(rendered.file.0 as usize)
+        let file = super::source_macro_binding::definition_root(self.names.session(), span)
             .map_err(native_adapter::transport_error)?;
         let defining_crate = self
             .names
@@ -12071,8 +12056,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         if let Some(limit) = self.int_const_expr()? {
             return Ok(limit);
         }
-        let println_syntax =
-            self.is("println") && self.cursor.peek(1).is_some_and(|token| token.matches("!"));
+        // The legacy println parser is a builtin consumer, not a spelling-based
+        // bypass of the same checked binding policy used by every other macro.
+        let println_syntax = self.is("println")
+            && self.cursor.peek(1).is_some_and(|token| token.matches("!"))
+            && self.builtin_macro_ahead("println")?;
         if !println_syntax && self.cursor.peek(1).is_some_and(|token| token.matches("!")) {
             return self.local_macro_expression();
         }

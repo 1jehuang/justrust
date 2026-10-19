@@ -612,6 +612,12 @@ iteration and suspended-state destruction each have executable oracle cases.
       gates. See ITEM-SOURCE-MACROS.md and data/runs/macro-many/. Composed
       primary-branch acceptance/integration remains coordinator-owned. This
       adds no exports, proc macros, new fragments or general hygiene claim.
+- [x] Validate source-owned macro routing across native prelude and mounted
+      dependency crate boundaries. SOURCE-MACRO-BINDINGS.md freezes the bounded
+      G0-G12 acceptance contract, immutable per-file crate ownership, common
+      probe/import/selection policy and workers-1/8 stock differential gates.
+      This repairs lexical binding isolation, not general macro imports/exports
+      or full Rust hygiene. No new graph join or mutable fact state is admitted.
 - [ ] Generalize nested/recursive expansion and namespace-specific hygiene,
       generated declarations, cfg-before-child-IO and graph discovery closure.
       Add real item/export/import/cross-crate clients and remaining fragment/AST

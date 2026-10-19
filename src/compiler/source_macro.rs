@@ -155,6 +155,7 @@ impl LocalMacroDriver {
                 message: "generated macro definitions are unsupported",
             });
         }
+        super::source_macro_binding::validate_definition(names.session(), site)?;
         let key = names.key(name, LookupClass::Item(Namespace::Macro))?;
         let rules = names.compile_local_rules(body, site)?;
         u32::try_from(self.rules.len()).map_err(|_| TokenError::IdExhausted)?;

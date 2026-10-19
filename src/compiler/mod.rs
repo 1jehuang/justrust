@@ -31,6 +31,7 @@ pub mod semantic_scope;
 pub mod source;
 mod source_item_macro;
 mod source_macro;
+mod source_macro_binding;
 mod source_replay;
 pub mod ssa;
 mod token;

@@ -125,6 +125,7 @@ pub struct OriginalSpan {
 struct SealedSources {
     id: SourceSnapshotId,
     storage: SourceStorage,
+    crate_roots: Vec<super::source::FileId>,
     // Drop after the backing. Clones retain this through the shared Arc, rather
     // than tying source ownership to any particular TokenSession lifetime.
     _lease: Option<ByteLease>,
@@ -187,9 +188,30 @@ impl SourceSnapshot {
     /// Copies only map metadata. Original contents remain shared with their
     /// source owner, whose source-byte accounting is not replaced by this lease.
     pub fn copy_borrowed(map: &SourceMap, budget: &ExpansionBudget) -> Result<Self, TokenError> {
+        Self::copy_with_crates(map, &[], budget)
+    }
+
+    pub(super) fn copy_with_crates(
+        map: &SourceMap,
+        roots: &[super::source::FileId],
+        budget: &ExpansionBudget,
+    ) -> Result<Self, TokenError> {
         budget.check()?;
         Self::validate_map(map, Some(budget))?;
         let mut lease = Self::metadata_lease(budget)?;
+        if !roots.is_empty() && roots.len() != map.files.len() {
+            return Err(TokenError::InvalidInput(
+                "incomplete source crate ownership",
+            ));
+        }
+        let mut crate_roots = Self::copy_capacity(roots.len(), budget, &mut lease)?;
+        for (index, &root) in roots.iter().enumerate() {
+            budget.charge(Counter::Work, 1)?;
+            if root.0 as usize > index || roots.get(root.0 as usize) != Some(&root) {
+                return Err(TokenError::InvalidInput("invalid source crate root"));
+            }
+            crate_roots.push(root);
+        }
         let mut files = Self::copy_capacity::<SourceFile>(map.files.len(), budget, &mut lease)?;
         for file in &map.files {
             let lexical_path = Self::copy_path(&file.lexical_path, budget, &mut lease)?;
@@ -203,7 +225,11 @@ impl SourceSnapshot {
                 line_starts,
             });
         }
-        Self::seal(SourceStorage::Map(SourceMap { files }), Some(lease))
+        Self::seal_with_crates(
+            SourceStorage::Map(SourceMap { files }),
+            crate_roots,
+            Some(lease),
+        )
     }
 
     /// Creates one syntax-only identity source without preparation, cfg or I/O.
@@ -362,6 +388,14 @@ impl SourceSnapshot {
     }
 
     fn seal(storage: SourceStorage, lease: Option<ByteLease>) -> Result<Self, TokenError> {
+        Self::seal_with_crates(storage, Vec::new(), lease)
+    }
+
+    fn seal_with_crates(
+        storage: SourceStorage,
+        crate_roots: Vec<super::source::FileId>,
+        lease: Option<ByteLease>,
+    ) -> Result<Self, TokenError> {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let id = match allocate_identity(&NEXT) {
             Ok(id) => SourceSnapshotId(id),
@@ -378,6 +412,7 @@ impl SourceSnapshot {
             inner: Arc::new(SealedSources {
                 id,
                 storage,
+                crate_roots,
                 _lease: lease,
             }),
         })
@@ -396,6 +431,25 @@ impl SourceSnapshot {
             return Err(TokenError::ForeignHandle);
         }
         Ok(self.inner.storage.view(file.index as usize)?.contents)
+    }
+
+    /// Checked source ownership, issued by assembly rather than inferred from
+    /// names, paths, source text or a caller-supplied macro definition handle.
+    pub(super) fn source_crate_root(
+        &self,
+        file: SourceFileHandle,
+    ) -> Result<SourceFileHandle, TokenError> {
+        self.text(file)?;
+        let root = if self.inner.crate_roots.is_empty() {
+            0
+        } else {
+            self.inner
+                .crate_roots
+                .get(file.index as usize)
+                .ok_or(TokenError::InvalidHandle)?
+                .0 as usize
+        };
+        self.file(root)
     }
 
     pub fn span(
