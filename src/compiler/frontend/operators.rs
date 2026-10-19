@@ -49,17 +49,6 @@ fn assign_trait(op: BinaryOp) -> Option<(&'static str, &'static str)> {
     })
 }
 
-/// Shared borrow of an operand, as a place borrow when it is one.
-fn borrow_operand(kind: ir::BorrowKind, value: &Expr) -> Expr {
-    match type_check::static_source_place(value) {
-        Ok(place) if type_check::place_expression(value) => Expr::Borrow { kind, place },
-        _ => Expr::BorrowValue {
-            kind,
-            value: Box::new(value.clone()),
-        },
-    }
-}
-
 enum First<'e> {
     Value(&'e Expr),
     Borrow(ir::BorrowKind, &'e Expr),
@@ -416,13 +405,13 @@ impl type_check::Checker<'_> {
                     }
                 };
                 let receiver = Some((first, None));
-                return self.finish_checked_call(
+                return self.finish_checked_call_mode(
                     target,
                     ident,
                     signature,
                     rest,
                     Arc::from([]),
-                    receiver,
+                    (receiver, module == "cmp"),
                 );
             }
         }
@@ -446,9 +435,9 @@ impl type_check::Checker<'_> {
                 }
                 let rhs = self.method_receiver_hint(right)?;
                 let id = if spec.0 == "cmp" {
-                    let rest = [borrow_operand(ir::BorrowKind::Shared, right)];
+                    let rest = std::slice::from_ref(right.as_ref());
                     let first = First::Borrow(ir::BorrowKind::Shared, left);
-                    self.operator_call(spec, lhs, rhs, first, &rest)?
+                    self.operator_call(spec, lhs, rhs, first, rest)?
                 } else {
                     let rest = std::slice::from_ref(right.as_ref());
                     self.operator_call(spec, lhs, rhs, First::Value(left), rest)?

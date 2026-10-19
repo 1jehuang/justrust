@@ -7595,6 +7595,27 @@ impl<'a> Checker<'a> {
         type_actual_regions: Arc<[ir::TypeActualRegion]>,
         receiver: Option<(ir::ExprId, Option<ir::ImplicitBorrowKind>)>,
     ) -> Result<ir::ExprId, String> {
+        self.finish_checked_call_mode(
+            target,
+            name,
+            signature,
+            source_args,
+            type_actual_regions,
+            (receiver, false),
+        )
+    }
+
+    /// Comparison autoref borrows the original argument occurrence directly.
+    /// It must not synthesize a cloned AST whose nested calls lose authority.
+    pub(super) fn finish_checked_call_mode(
+        &mut self,
+        target: ir::Callee,
+        name: impl LocalInput,
+        signature: ir::Signature,
+        source_args: &[Expr],
+        type_actual_regions: Arc<[ir::TypeActualRegion]>,
+        (receiver, shared_arguments): (Option<(ir::ExprId, Option<ir::ImplicitBorrowKind>)>, bool),
+    ) -> Result<ir::ExprId, String> {
         let name = name.diagnostic(self.names()?)?;
         let plan = self
             .signatures
@@ -7727,7 +7748,24 @@ impl<'a> Checker<'a> {
             .zip(&signature.params[offset..])
             .enumerate()
         {
-            let (id, reason) = if identity {
+            let (id, reason) = if shared_arguments {
+                let ir::Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    ..
+                } = ty
+                else {
+                    return Err("comparison argument must have a shared-reference signature".into());
+                };
+                let id = if let Ok(place) = static_source_place(source)
+                    && place_expression(source)
+                {
+                    let (place, _, _) = self.checked_place(&place)?;
+                    self.borrow_expression(ir::BorrowKind::Shared, place)?
+                } else {
+                    self.borrow_value(ir::BorrowKind::Shared, source, None)?
+                };
+                (id, None)
+            } else if identity {
                 (self.expr(source)?, None)
             } else {
                 self.call_argument(source, ty, self.reachable && completes)?
