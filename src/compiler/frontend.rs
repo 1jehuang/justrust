@@ -5985,8 +5985,10 @@ mod local_macro_parser_tests {
         let budget = ExpansionBudget::new(limits);
         let result = syntax_with_budget("fn main(){macro_rules! leaf{()=>{1};}macro_rules! pass{()=>{leaf!()};}let a:i32=pass!();let b:i32=pass!();}", &budget).unwrap();
         assert!(budget.snapshot().failure.is_none());
+        let receipt = super::super::owner_path::published_owner_receipt(&result.program.names);
         drop(result);
-        assert_eq!(budget.snapshot().retained_bytes, 0);
+        // Only the published owner receipt stays (permanent by design).
+        assert_eq!(budget.snapshot().retained_bytes, receipt);
         assert_eq!(budget.snapshot().temporary_bytes, 0);
 
         let budget = ExpansionBudget::new(limits);
@@ -6066,11 +6068,13 @@ mod local_macro_parser_tests {
         drop(text);
         assert_eq!(budget.snapshot().retained_bytes - before, charged);
         let program = builder.finish().unwrap();
+        let receipt = super::super::owner_path::published_owner_receipt(&program.names);
         let owner = program.names.clone();
         drop(program);
         assert!(budget.snapshot().retained_bytes >= charged);
         drop(owner);
-        assert_eq!(budget.snapshot().retained_bytes, 0);
+        // Format storage returns to the permanent owner-receipt baseline.
+        assert_eq!(budget.snapshot().retained_bytes, receipt);
         assert_eq!(budget.snapshot().temporary_bytes, 0);
     }
     #[test]

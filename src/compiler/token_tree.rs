@@ -455,18 +455,45 @@ mod tests {
     }
     #[test]
     fn lowered_work_limit_is_budget_failure_not_empty_success() {
+        use super::super::expansion_budget::{BudgetFailureKind, BudgetResource};
+        // The real paid setup (owner issuance included), unchanged.
+        let setup = |budget: ExpansionBudget| {
+            let mut map = SourceMap::default();
+            map.add("empty.rs".into(), Arc::from("+"));
+            let sources = SourceSnapshot::new(map).unwrap();
+            let source = sources.span(sources.file(0).unwrap(), 0, 1).unwrap();
+            let mut session = TokenSession::new(sources, budget).unwrap();
+            let span = session.original_span(source).unwrap();
+            (session, span)
+        };
+        // Control: the exact Work the setup admits. Deterministic, since
+        // owner ids and tags do not change Work.
+        let control = ExpansionBudget::default();
+        drop(setup(control.clone()));
+        let setup_work = control.snapshot().counters[Counter::Work as usize];
+        assert!(setup_work > 0, "paid setup admits Work");
+        // Same policy, Work limit lowered to exactly the setup's cost: setup
+        // succeeds at the limit, and group's first Work admission fails.
         let mut limits = ExpansionLimits::default();
-        limits.counters[Counter::Work as usize] = 0;
-        let mut map = SourceMap::default();
-        map.add("empty.rs".into(), Arc::from("+"));
-        let sources = SourceSnapshot::new(map).unwrap();
-        let source = sources.span(sources.file(0).unwrap(), 0, 1).unwrap();
-        let mut session = TokenSession::new(sources, ExpansionBudget::new(limits)).unwrap();
-        let span = session.original_span(source).unwrap();
-        assert!(matches!(
-            group(&session, &[leaf(span)], GroupPolicy::OriginalSource),
-            Err(TokenError::Budget(_))
-        ));
-        assert!(session.budget().snapshot().failure.is_some());
+        limits.counters[Counter::Work as usize] = setup_work;
+        let budget = ExpansionBudget::new(limits);
+        let (session, span) = setup(budget.clone());
+        assert!(budget.snapshot().failure.is_none());
+        assert_eq!(
+            budget.snapshot().counters[Counter::Work as usize],
+            setup_work
+        );
+        let failure = match group(&session, &[leaf(span)], GroupPolicy::OriginalSource) {
+            Err(TokenError::Budget(failure)) => failure,
+            Err(other) => panic!("lowered Work limit failed with {other:?}"),
+            Ok(_) => panic!("lowered Work limit did not fail group"),
+        };
+        assert_eq!(failure.resource, BudgetResource::Counter(Counter::Work));
+        assert_eq!(failure.kind, BudgetFailureKind::Limit);
+        assert_eq!(failure.used, setup_work);
+        assert_eq!(failure.limit, setup_work);
+        // group's first admission is exactly one Work unit.
+        assert_eq!(failure.requested, 1);
+        assert_eq!(session.budget().snapshot().failure, Some(failure));
     }
 }

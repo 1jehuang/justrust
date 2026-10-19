@@ -486,6 +486,19 @@ pub fn owner_receipt_bytes(capacity: usize) -> u64 {
     path_bytes(capacity).unwrap_or(u64::MAX)
 }
 
+/// Test-only: the published store's one permanent owner receipt, checked to
+/// pay exactly the step capacity actually allocated. Capture it before the
+/// last owner drops; refundable storage must return to this baseline.
+#[cfg(test)]
+pub(crate) fn published_owner_receipt(names: &super::semantic_name::NameStore) -> u64 {
+    let path = names.owner_path().expect("published store has an owner");
+    assert_eq!(
+        path.receipt_bytes(),
+        owner_receipt_bytes(path.step_capacity())
+    );
+    path.receipt_bytes()
+}
+
 impl OwnerPath {
     /// Bytes this published path's receipt holds: exactly its step capacity.
     pub fn receipt_bytes(&self) -> u64 {

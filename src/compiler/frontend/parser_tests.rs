@@ -1060,6 +1060,7 @@ fn restricted_visibility_rejects_unused_nonlexical_paths_and_explicit_trait_item
 fn module_arena_capacity_is_retained_until_last_clone_owner() {
     let public = parse("pub fn main(){}").unwrap();
     let budget = public.names.budget().clone();
+    let receipt = crate::compiler::owner_path::published_owner_receipt(&public.names);
     let cloned = public.clone();
     assert!(std::sync::Arc::ptr_eq(&public.modules, &cloned.modules));
     let retained = budget.snapshot().retained_bytes;
@@ -1072,12 +1073,16 @@ fn module_arena_capacity_is_retained_until_last_clone_owner() {
     let modules = cloned.modules.clone();
     drop(cloned);
     let arena_bytes = budget.snapshot().retained_bytes;
-    assert!(arena_bytes > 0);
+    assert!(
+        arena_bytes > receipt,
+        "arena charge is separate from the receipt"
+    );
     let last_owner = modules.clone();
     drop(modules);
     assert_eq!(budget.snapshot().retained_bytes, arena_bytes);
     drop(last_owner);
-    assert_eq!(budget.snapshot().retained_bytes, 0);
+    // Only the published owner receipt stays (permanent by design).
+    assert_eq!(budget.snapshot().retained_bytes, receipt);
 }
 #[test]
 fn module_parser_depth_limit_uses_an_ordinary_stack() {

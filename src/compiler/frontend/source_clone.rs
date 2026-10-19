@@ -949,7 +949,11 @@ mod tests {
             .unwrap()
             .finish()
             .unwrap();
+        let receipt = crate::compiler::owner_path::published_owner_receipt(&program.names);
         let baseline = source_budget.snapshot().retained_bytes;
+        // The live program holds name, module and symbol storage beyond the
+        // permanent owner receipt; all of it except the receipt is refundable.
+        assert!(baseline > receipt);
         let mut scopes =
             crate::compiler::semantic_scope::ScopeArenaBuilder::for_names(program.names.as_ref())
                 .unwrap();
@@ -968,6 +972,7 @@ mod tests {
             .check_names(copied.names.as_ref())
             .unwrap();
         drop(copied);
-        assert_eq!(source_budget.snapshot().retained_bytes, 0);
+        // Scope storage returns to the permanent owner-receipt baseline.
+        assert_eq!(source_budget.snapshot().retained_bytes, receipt);
     }
 }
