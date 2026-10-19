@@ -18,7 +18,8 @@ use justrust_engine::compiler::token_primitives::{
 
 fn scanned(text: &str, budget: &ExpansionBudget) -> (NameStoreBuilder, Vec<Token>) {
     let input = PreparedLexInput::identity(Path::new("scope-control.rs"), text, budget).unwrap();
-    let mut session = TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
+    let (mut session, cap) =
+        TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
     let lexed = lex_prepared(&input, Edition::E2024, &mut session).unwrap();
     let tokens = lexed
         .events()
@@ -29,7 +30,7 @@ fn scanned(text: &str, budget: &ExpansionBudget) -> (NameStoreBuilder, Vec<Token
         })
         .collect();
     (
-        NameStoreBuilder::new(session, Edition::E2024).unwrap(),
+        NameStoreBuilder::new(session, cap, Edition::E2024).unwrap(),
         tokens,
     )
 }
@@ -755,7 +756,8 @@ fn public_name_gate_cannot_mint_unproved_marked_or_expanded_scope_occurrences() 
     let budget = ExpansionBudget::default();
     let input =
         PreparedLexInput::identity(Path::new("scope-mark-control.rs"), "x", &budget).unwrap();
-    let mut session = TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
+    let (mut session, cap) =
+        TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
     let lexed = lex_prepared(&input, Edition::E2024, &mut session).unwrap();
     let original = lexed
         .events()
@@ -799,7 +801,7 @@ fn public_name_gate_cannot_mint_unproved_marked_or_expanded_scope_occurrences() 
         span: captured_span,
         kind: original.kind,
     };
-    let mut names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+    let mut names = NameStoreBuilder::new(session, cap, Edition::E2024).unwrap();
     for token in marked_tokens {
         assert!(matches!(
             names.from_token(token, Edition::E2024),

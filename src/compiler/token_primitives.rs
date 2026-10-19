@@ -26,7 +26,7 @@ pub use super::token::{
     Delimiter, Edition, Ident, InputToken, LiteralKind, Spacing, Token, TokenKind,
 };
 pub use super::token_session::{
-    ExpansionTrace, OriginalSpan, SourceFileHandle, SourceLimitResource, SourceSnapshot, SymbolId,
-    TokenError, TokenSession,
+    ExpansionTrace, OriginalSpan, SessionOwnerCap, SourceFileHandle, SourceLimitResource,
+    SourceSnapshot, SymbolId, TokenError, TokenSession,
 };
 pub use super::token_tree::{GroupPolicy, Node, TokenStream, TreeId, TreeRange, group};

@@ -1113,7 +1113,7 @@ mod tests {
         let sources = SourceSnapshot::from_text(Path::new("scope.rs"), "x", &budget).unwrap();
         let file = sources.file(0).unwrap();
         let original = sources.span(file, 0, 1).unwrap();
-        let mut session = TokenSession::new(sources, budget).unwrap();
+        let (mut session, session_cap) = TokenSession::standalone(sources, budget).unwrap();
         let span = session.original_span(original).unwrap();
         let defining_crate = session.register_crate_root(file).unwrap();
         let expansion = session
@@ -1149,7 +1149,7 @@ mod tests {
             span: captured_span,
         };
         (
-            NameStoreBuilder::new(session, Edition::E2024).unwrap(),
+            NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap(),
             span,
             expansion,
             literal,
@@ -1171,7 +1171,7 @@ mod tests {
     fn nested_fixture() -> NestedFixture {
         let budget = ExpansionBudget::default();
         let sources = SourceSnapshot::from_text(Path::new("nested.rs"), "x", &budget).unwrap();
-        let mut session = TokenSession::new(sources, budget).unwrap();
+        let (mut session, session_cap) = TokenSession::standalone(sources, budget).unwrap();
         let file = session.sources().file(0).unwrap();
         let original = session
             .original_span(session.sources().span(file, 0, 1).unwrap())
@@ -1279,7 +1279,7 @@ mod tests {
                 edition: Edition::E2024,
             })
             .unwrap();
-        let names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let names = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         NestedFixture {
             names,
             original,

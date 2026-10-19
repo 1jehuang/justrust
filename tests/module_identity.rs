@@ -13,7 +13,8 @@ use std::sync::Arc;
 
 fn names(text: &str, budget: &ExpansionBudget) -> (NameStoreBuilder, Vec<AstIdent>) {
     let input = PreparedLexInput::identity(Path::new("module-control.rs"), text, budget).unwrap();
-    let mut session = TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
+    let (mut session, cap) =
+        TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
     let lexed = lex_prepared(&input, Edition::E2024, &mut session).unwrap();
     let tokens = lexed
         .events()
@@ -23,7 +24,7 @@ fn names(text: &str, budget: &ExpansionBudget) -> (NameStoreBuilder, Vec<AstIden
             _ => panic!("identifier-only fixture"),
         })
         .collect::<Vec<_>>();
-    let mut names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+    let mut names = NameStoreBuilder::new(session, cap, Edition::E2024).unwrap();
     let ids = tokens
         .into_iter()
         .map(|token| names.from_token(token, Edition::E2024).unwrap())

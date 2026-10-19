@@ -178,7 +178,7 @@ mod tests {
         let value_origin = sources
             .span(file, 1, text.len().try_into().unwrap())
             .unwrap();
-        let mut session = TokenSession::new(sources, budget).unwrap();
+        let (mut session, session_cap) = TokenSession::standalone(sources, budget).unwrap();
         let minus_span = session.original_span(minus_origin).unwrap();
         let value_span = session.original_span(value_origin).unwrap();
         let symbol = session
@@ -234,7 +234,7 @@ mod tests {
         opaque.span = session
             .reissue_span(opaque.span, context, expansion)
             .unwrap();
-        let names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let names = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let mut scopes = ScopeArenaBuilder::for_names(&names).unwrap();
         let frontier = scopes.function_root(&names).unwrap();
         let proof = scopes

@@ -26,6 +26,7 @@ fn session() -> TokenSession {
         ExpansionBudget::new(ExpansionLimits::default()),
     )
     .unwrap()
+    .0
 }
 fn span(s: &mut TokenSession, lo: u32, hi: u32) -> SpanId {
     let raw = s
@@ -201,9 +202,11 @@ fn sessions_do_not_share_symbol_span_or_context_authority() {
         sources.clone(),
         ExpansionBudget::new(ExpansionLimits::default()),
     )
-    .unwrap();
+    .unwrap()
+    .0;
     let mut b = TokenSession::standalone(sources, ExpansionBudget::new(ExpansionLimits::default()))
-        .unwrap();
+        .unwrap()
+        .0;
     let symbol = a.intern_symbol("not a Rust identifier!").unwrap();
     assert_eq!(a.intern_symbol("not a Rust identifier!").unwrap(), symbol);
     assert_eq!(a.symbol(symbol).unwrap(), "not a Rust identifier!");
@@ -464,7 +467,9 @@ fn original_and_generated_group_depth_limits_are_distinct() {
     limits.depths[Depth::OriginalGroups as usize] = 1;
     limits.depths[Depth::GeneratedGroups as usize] = 0;
     let budget = ExpansionBudget::new(limits);
-    let mut s = TokenSession::standalone(snapshot("x"), budget.clone()).unwrap();
+    let mut s = TokenSession::standalone(snapshot("x"), budget.clone())
+        .unwrap()
+        .0;
     let anchor = span(&mut s, 0, 1);
     let pair = [
         InputToken::Open {
@@ -496,7 +501,9 @@ fn synthetic_origins_and_provenance_truncation_are_explicit() {
         ..ExpansionLimits::default()
     };
     let budget = ExpansionBudget::new(limits);
-    let mut s = TokenSession::standalone(snapshot("x"), budget.clone()).unwrap();
+    let mut s = TokenSession::standalone(snapshot("x"), budget.clone())
+        .unwrap()
+        .0;
     let anchor = span(&mut s, 0, 1);
     let synthetic = s
         .synthetic_span(anchor, SyntheticReason::ExpansionToken)

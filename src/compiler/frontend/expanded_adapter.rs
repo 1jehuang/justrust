@@ -528,7 +528,8 @@ mod tests {
             &budget,
         )
         .unwrap();
-        let mut session = TokenSession::new(input.snapshot().clone(), budget.clone()).unwrap();
+        let (mut session, session_cap) =
+            TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
         let lexed =
             crate::compiler::lexer::lex_prepared(&input, Edition::E2024, &mut session).unwrap();
         let original_eof = lexed.eof().span;
@@ -547,7 +548,7 @@ mod tests {
         let args = root.children(&session, last).unwrap().unwrap();
         let body = root.subslice(&session, 0..last).unwrap();
         let file = session.sources().file(0).unwrap();
-        let mut names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let mut names = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let krate = names.register_crate_root(file).unwrap();
         let rules = names
             .compile_local_rules(
@@ -728,7 +729,8 @@ mod tests {
         let budget = ExpansionBudget::default();
         let text = format!("{rules} {args}");
         let input = PreparedLexInput::identity(Path::new("expanded.rs"), &text, &budget).unwrap();
-        let mut session = TokenSession::new(input.snapshot().clone(), budget.clone()).unwrap();
+        let (mut session, session_cap) =
+            TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
         let lexed =
             crate::compiler::lexer::lex_prepared(&input, Edition::E2024, &mut session).unwrap();
         let original_eof = lexed.eof().span;
@@ -747,7 +749,7 @@ mod tests {
         let args = root.children(&session, last).unwrap().unwrap();
         let body = root.subslice(&session, 0..last).unwrap();
         let file = session.sources().file(0).unwrap();
-        let mut names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let mut names = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let defining_crate = names.register_crate_root(file).unwrap();
         let rules = names
             .compile_local_rules(

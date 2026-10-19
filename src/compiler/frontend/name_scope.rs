@@ -417,10 +417,11 @@ mod tests {
     fn names(text: &str, budget: &ExpansionBudget) -> (Arc<NameStore>, Vec<AstIdent>) {
         let input =
             PreparedLexInput::identity(Path::new("comparison-control.rs"), text, budget).unwrap();
-        let mut session = TokenSession::new(input.snapshot().clone(), budget.clone()).unwrap();
+        let (mut session, session_cap) =
+            TokenSession::standalone(input.snapshot().clone(), budget.clone()).unwrap();
         let tokens =
             crate::compiler::lexer::lex_prepared(&input, Edition::E2024, &mut session).unwrap();
-        let mut builder = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let mut builder = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let identifiers = tokens
             .events()
             .iter()

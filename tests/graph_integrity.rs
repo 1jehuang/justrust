@@ -1448,7 +1448,6 @@ fn reachable_builder_types(decls: &BTreeMap<String, TypeDecl>, root: &str) -> Ve
 /// owner type at all (PARSE-SPLIT.md). A runtime "published" enum variant is
 /// not enough: the builder variant would still be reachable by type.
 #[test]
-#[ignore = "known flaw: NameStore -> TokenSession -> SessionOwner; fixed by the FrozenSession type split"]
 fn published_stores_reach_no_builder_owner_types() {
     let (decls, _) = scanned_type_decls();
     for root in ["NameStore", "ParsedProgram", "Program", "OwnerPath"] {

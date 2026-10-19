@@ -218,9 +218,11 @@ mod tests {
         let budget = ExpansionBudget::default();
         let projection =
             PreparedLexInput::identity(Path::new("items.rs"), "()=>{1};()=>{2};", &budget).unwrap();
-        let mut session =
-            super::super::token_session::TokenSession::new(projection.snapshot().clone(), budget)
-                .unwrap();
+        let (mut session, session_cap) = super::super::token_session::TokenSession::standalone(
+            projection.snapshot().clone(),
+            budget,
+        )
+        .unwrap();
         let lexed =
             super::super::lexer::lex_prepared(&projection, Edition::E2024, &mut session).unwrap();
         let events: Vec<_> = lexed.events().iter().map(|event| event.token).collect();
@@ -234,7 +236,7 @@ mod tests {
         let second = source
             .subslice(&session, middle..source.len(&session).unwrap())
             .unwrap();
-        let mut names = NameStoreBuilder::new(session, Edition::E2024).unwrap();
+        let mut names = NameStoreBuilder::new(session, session_cap, Edition::E2024).unwrap();
         let name = names.intern_root("make", span).unwrap();
         let modules = ModuleArenaBuilder::for_source(&names).unwrap();
         let module = modules.source_root().unwrap();

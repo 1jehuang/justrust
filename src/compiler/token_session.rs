@@ -550,7 +550,6 @@ struct ExpansionEntry {
 pub struct TokenSession {
     pub(super) fragments: BudgetVec<super::macro_fragments::FragmentPayload>,
     id: SessionId,
-    owner: SessionOwner,
     sources: SourceSnapshot,
     budget: ExpansionBudget,
     symbols: BudgetVec<SymbolEntry>,
@@ -563,34 +562,61 @@ pub struct TokenSession {
     _lease: ByteLease,
 }
 
-/// A session's owner identity: refundable while the session is built,
-/// an immutable receipt once its store is published.
+/// The one-time capability to publish a name store over one session. Holds
+/// the session's refundable owner path and the id it is bound to. Not
+/// `Clone`/`Copy` and not constructible outside this module: only
+/// `TokenSession::with_owner`/`standalone` create one, together with its
+/// session. `NameStoreBuilder::new` consumes it and rejects a cap bound to a
+/// different session. `TokenSession` itself never holds owner state.
+///
+/// ```compile_fail
+/// fn reuse(cap: justrust_engine::compiler::token_primitives::SessionOwnerCap) {
+///     let first = cap;
+///     let _second = (cap, first);
+/// }
+/// ```
 #[derive(Debug)]
-enum SessionOwner {
-    Building(super::owner_path::BuilderOwnedPath),
-    Published(super::owner_path::OwnerPath),
-    /// Transient during `publish_owner` only.
-    Taken,
+pub struct SessionOwnerCap {
+    session: SessionId,
+    path: super::owner_path::BuilderOwnedPath,
+}
+impl SessionOwnerCap {
+    /// Consume the cap for exactly the session it was issued with.
+    pub(super) fn bind(
+        self,
+        session: &TokenSession,
+    ) -> Result<super::owner_path::BuilderOwnedPath, TokenError> {
+        if self.session != session.id {
+            return Err(TokenError::ForeignHandle);
+        }
+        Ok(self.path)
+    }
+    /// The builder owner path, for structural checks only.
+    pub fn path(&self) -> &super::owner_path::BuilderOwnedPath {
+        &self.path
+    }
 }
 
 impl TokenSession {
-    /// A session owned by one issued owner. Consumes the `Issued` pair, so one
-    /// issuance builds exactly one session; the session keeps the immutable
-    /// `OwnerPath` as its authority of record next to the 8-byte tag.
-    /// The only production constructor: graph routes pass the `Issued` from
-    /// their producer's `OwnerIssuer`, so no fresh root is minted.
+    /// A session owned by one issued owner, plus the one-time capability to
+    /// publish a store over it. Consumes the `Issued` pair, so one issuance
+    /// builds exactly one session. The only production constructor: graph
+    /// routes pass the `Issued` from their producer's `OwnerIssuer`.
     pub fn with_owner(
         sources: SourceSnapshot,
         budget: ExpansionBudget,
         owner: super::owner_path::Issued,
-    ) -> Result<Self, TokenError> {
+    ) -> Result<(Self, SessionOwnerCap), TokenError> {
         let super::owner_path::Issued { issuer, tag } = owner;
-        Self::build(
-            SessionId(tag.bits()),
-            SessionOwner::Building(issuer.into_path()),
-            sources,
-            budget,
-        )
+        let id = SessionId(tag.bits());
+        let session = Self::build(id, sources, budget)?;
+        Ok((
+            session,
+            SessionOwnerCap {
+                session: id,
+                path: issuer.into_path(),
+            },
+        ))
     }
 
     /// An independent session for direct, non-graph tooling and tests. Mints
@@ -599,51 +625,20 @@ impl TokenSession {
     pub fn standalone(
         sources: SourceSnapshot,
         budget: ExpansionBudget,
-    ) -> Result<Self, TokenError> {
+    ) -> Result<(Self, SessionOwnerCap), TokenError> {
         let owner = super::owner_path::standalone_issued(&budget)?;
         Self::with_owner(sources, budget, owner)
     }
 
-    /// Test shorthand for [`Self::standalone`].
+    /// Test shorthand: a standalone session whose publish capability is
+    /// dropped (refunding it). Such a session cannot back a name store.
     #[cfg(test)]
     pub fn new(sources: SourceSnapshot, budget: ExpansionBudget) -> Result<Self, TokenError> {
-        Self::standalone(sources, budget)
-    }
-
-    /// The published owner identity, once the owning store is frozen.
-    /// `None` while the session is still being built.
-    pub fn owner_path(&self) -> Option<&super::owner_path::OwnerPath> {
-        match &self.owner {
-            SessionOwner::Published(path) => Some(path),
-            _ => None,
-        }
-    }
-
-    /// The owner identity while building, for structural checks.
-    pub fn building_owner(&self) -> Option<&super::owner_path::BuilderOwnedPath> {
-        match &self.owner {
-            SessionOwner::Building(path) => Some(path),
-            _ => None,
-        }
-    }
-
-    /// Publish the session's owner: the refundable reservation becomes an
-    /// immutable receipt exactly once. Called only by the consuming freeze of
-    /// the store that owns this session.
-    pub(super) fn publish_owner(&mut self) -> Result<(), TokenError> {
-        self.owner = match std::mem::replace(&mut self.owner, SessionOwner::Taken) {
-            SessionOwner::Building(path) => SessionOwner::Published(
-                path.freeze()
-                    .map_err(|_| TokenError::InvalidInput("owner publication failed"))?,
-            ),
-            other => other,
-        };
-        Ok(())
+        Self::standalone(sources, budget).map(|(session, _)| session)
     }
 
     fn build(
         id: SessionId,
-        owner: SessionOwner,
         sources: SourceSnapshot,
         budget: ExpansionBudget,
     ) -> Result<Self, TokenError> {
@@ -655,7 +650,6 @@ impl TokenSession {
             fragments: BudgetVec::new(&budget, Storage::Retained)?,
             _lease: lease,
             id,
-            owner,
             sources,
             symbols: BudgetVec::new(&budget, Storage::Retained)?,
             symbol_slots: BudgetVec::new(&budget, Storage::Retained)?,
@@ -1074,18 +1068,67 @@ mod owner_defect_tests {
             OwnerIssuer::new(crate::OwnerRoot::standalone().unwrap(), &budget).unwrap();
         let first = issuer.issue(OwnerDomain::TokenSession).unwrap();
         let second = issuer.issue(OwnerDomain::TokenSession).unwrap();
-        let a = TokenSession::with_owner(snapshot(), budget.clone(), first).unwrap();
-        let b = TokenSession::with_owner(snapshot(), budget.clone(), second).unwrap();
+        let (a, a_cap) = TokenSession::with_owner(snapshot(), budget.clone(), first).unwrap();
+        let (b, b_cap) = TokenSession::with_owner(snapshot(), budget.clone(), second).unwrap();
         assert_ne!(
             a.id(),
             b.id(),
             "two sessions share one owner: grafts would pass"
         );
-        let (a_owner, b_owner) = (a.building_owner().unwrap(), b.building_owner().unwrap());
-        assert_ne!(a_owner, b_owner);
-        assert!(a_owner.descends_from(issuer.path()));
-        // Unfrozen sessions publish nothing yet.
-        assert!(a.owner_path().is_none());
+        assert_ne!(a_cap.path(), b_cap.path());
+        assert!(a_cap.path().descends_from(issuer.path()));
+    }
+
+    /// Crossed caps over the same snapshot and the same payer are rejected:
+    /// a cap publishes only the session it was issued with.
+    #[test]
+    fn crossed_caps_with_same_snapshot_and_payer_reject() {
+        use crate::compiler::semantic_name::{NameError, NameStoreBuilder};
+        let budget = ExpansionBudget::default();
+        let shared = snapshot();
+        let (a, a_cap) = TokenSession::standalone(shared.clone(), budget.clone()).unwrap();
+        let (b, b_cap) = TokenSession::standalone(shared, budget.clone()).unwrap();
+        assert!(matches!(
+            NameStoreBuilder::new(a, b_cap, super::super::token::Edition::E2024),
+            Err(NameError::Token(TokenError::ForeignHandle))
+        ));
+        assert!(matches!(
+            NameStoreBuilder::new(b, a_cap, super::super::token::Edition::E2024),
+            Err(NameError::Token(TokenError::ForeignHandle))
+        ));
+    }
+
+    /// A dropped cap refunds its owner lease; a session without its cap cannot
+    /// publish a store, so no published owner receipt exists for it.
+    #[test]
+    fn dropped_cap_refunds_and_never_publishes() {
+        let budget = ExpansionBudget::default();
+        let before = budget.snapshot().retained_bytes;
+        let (session, cap) = TokenSession::standalone(snapshot(), budget.clone()).unwrap();
+        let with_cap = budget.snapshot().retained_bytes;
+        drop(cap);
+        let without_cap = budget.snapshot().retained_bytes;
+        assert!(without_cap < with_cap, "dropping the cap refunded nothing");
+        drop(session);
+        assert_eq!(budget.snapshot().retained_bytes, before);
+    }
+
+    /// The published store holds the immutable owner; the builder's lease is
+    /// converted exactly once and the session itself holds no owner state.
+    #[test]
+    fn frozen_store_holds_published_owner_only() {
+        use crate::compiler::semantic_name::NameStoreBuilder;
+        let budget = ExpansionBudget::default();
+        let (session, cap) = TokenSession::standalone(snapshot(), budget.clone()).unwrap();
+        let builder =
+            NameStoreBuilder::new(session, cap, super::super::token::Edition::E2024).unwrap();
+        let reserved = budget.snapshot().retained_bytes;
+        let store = builder.freeze().unwrap();
+        assert!(store.owner_path().is_some());
+        assert!(
+            budget.snapshot().retained_bytes <= reserved,
+            "freeze charged the owner twice"
+        );
     }
 
     /// Defect 2 regression: an exhausted, zero or poisoned caller budget
