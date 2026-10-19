@@ -5,6 +5,9 @@
 //! Receipt SHA256: 8f08e56b4ba29908641f980bc5894c1b490be79a18e4d723b0daee42e3b024ab
 //! All native rejection expectations are type errors, never unsupported feature passes.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/native_prelude.rs"]
+mod native_prelude;
+
 use justrust_engine::{
     Key,
     compiler::{self, frontend},
@@ -954,7 +957,7 @@ fn isolated(name: &str, marker: &str, run: fn()) {
     success(&result, name);
 }
 fn successful_graph(case: &Case, compiled: &compiler::Compilation, check: bool) {
-    let program = frontend::parse(case.source).unwrap();
+    let program = native_prelude::parse(case.source).unwrap();
     frontend::check(&program).unwrap();
     let plan =
         frontend::PlanCtx::from_program(&program, &compiler::ir::PlanBudget::default()).unwrap();
@@ -968,7 +971,7 @@ fn successful_graph(case: &Case, compiled: &compiler::Compilation, check: bool) 
         let declaration = plan.callable_decl(index).unwrap();
         let universal = match plan.callable_provider(declaration).unwrap() {
             frontend::CallableProvider::Source { .. } => {
-                source_bodies += 1;
+                source_bodies += usize::from(!plan.is_prelude_decl(declaration).unwrap());
                 plan.callable_env(declaration).unwrap().is_generic()
             }
             frontend::CallableProvider::Recipe { .. } => true,

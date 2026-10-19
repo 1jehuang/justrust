@@ -1,6 +1,9 @@
 //! Native inline-module acceptance tests. Stock Rust is deliberately not used here.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
+#[path = "support/native_prelude.rs"]
+mod native_prelude;
+
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -535,7 +538,7 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                 }
                 // Available catalog recipes add real universal proof nodes, but
                 // never eager concrete roots. Keep every historical source key.
-                let program = compiler::frontend::parse(source).unwrap();
+                let program = native_prelude::parse(source).unwrap();
                 let plan = compiler::frontend::PlanCtx::from_program(
                     &program,
                     &compiler::ir::PlanBudget::default(),
@@ -545,7 +548,11 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                     let declaration = plan.callable_decl(index).unwrap();
                     match plan.callable_provider(declaration).unwrap() {
                         compiler::frontend::CallableProvider::Source { .. } => {
-                            assert!(index < result.functions);
+                            if plan.is_prelude_decl(declaration).unwrap() {
+                                expected.push(Key::new(110, vec![index as u64]));
+                            } else {
+                                assert!(index < result.functions);
+                            }
                             if plan.callable_env(declaration).unwrap().is_generic() {
                                 for kind in [111, 112, 115] {
                                     expected.push(Key::new(kind, vec![index as u64]));
@@ -614,6 +621,7 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
                         }
                     }
                 }
+                expected.extend(native_prelude::library_source_keys());
                 assert_eq!(report.node_evaluations.len(), expected.len());
                 for key in expected {
                     let entries: Vec<_> = report
