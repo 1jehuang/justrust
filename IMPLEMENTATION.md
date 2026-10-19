@@ -695,6 +695,21 @@ missing native compilation. Catalog Copy/Clone support is not core acceptance.
 - [ ] Keep explicit stock fallback separate and labeled. Never send private
       formats to stock tools or count fallback as native compatibility.
 
+**Progress (2026-10-19, rough draft):** `jr-rust check|build|test|run` drives
+Cargo projects natively (`src/project/{manifest,driver,cli}.rs`): workspaces
+(members globs, exclude, default-members, `workspace.package`/`dependencies`
+inheritance), target discovery (lib, main, `src/bin`, `tests/`, `examples/`,
+explicit tables), path dependencies mounted as extern crates
+(`SourceOptions::externs`, SOURCE ordinal `[2+i]`, `crate::` re-rooted inside
+each mount), features with `dep:`/`pkg/feat`/optional deps unified across the
+build, `dev`/`release`/custom profile `debug-assertions`, `#[test]`/`#[ignore]`/
+`#[should_panic(expected)]` discovery under `cfg(test)` with a native fork-per-
+test harness (`libraries/prelude/test.rs`) matching libtest output and exit 101.
+`tests/projects.rs` compares a two-crate workspace with stock Cargo. Open:
+registry/git sources, lockfiles, build scripts, proc macros, doc tests, test
+filters/harness flags, parallel units, per-crate graph identity (dependency
+crates are currently re-checked inside each dependent unit).
+
 **Progress (2026-10-18):** `src/project/toml.rs` is a native TOML 1.0 reader
 (offsets, line/column errors, duplicate/redefinition/inline-seal rules, bounded
 depth) with unit tests (hosted run `20261018-142549166-1772846`). It is not yet

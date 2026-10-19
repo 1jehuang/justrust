@@ -1413,6 +1413,9 @@ impl Resolver<'_> {
             // Inside the native prelude library `crate` names the library root.
             PathAnchor::Crate => Some(match self.prelude_root_of(from)? {
                 Some(prelude) if !self.user_crate_anchor => prelude,
+                _ if !self.user_crate_anchor && self.extern_root_of(from)?.is_some() => {
+                    self.extern_root_of(from)?.unwrap()
+                }
                 _ => self
                     .program
                     .modules
@@ -1499,6 +1502,8 @@ impl Resolver<'_> {
                 self.item(&full, from, type_namespace, importing && parts.len() == 1)?
             {
                 item
+            } else if let Some(found) = self.extern_path(path, from, namespace)? {
+                return Ok(found);
             } else if let Some(found) = self.prelude_path(path, from, namespace, type_namespace)? {
                 return Ok(found);
             } else if type_namespace
@@ -1552,6 +1557,66 @@ impl Resolver<'_> {
             at += 1;
         }
         Ok((current.module == namespace).then_some(current))
+    }
+    /// The mounted dependency crate root containing `module`, if any.
+    fn extern_root_of(&self, module: ModuleId) -> Result<Option<ModuleId>, String> {
+        for mount in &self.program.extern_mounts {
+            if self
+                .program
+                .modules
+                .is_descendant(module, *mount)
+                .map_err(module_diagnostic)?
+            {
+                return Ok(Some(*mount));
+            }
+        }
+        Ok(None)
+    }
+    /// Extern prelude: an unresolved first segment naming a dependency crate
+    /// resolves into its hidden mount `crate::__justrust_extern_<name>`.
+    fn extern_path(
+        &mut self,
+        path: &AstPath,
+        from: ModuleId,
+        namespace: bool,
+    ) -> Result<Option<Option<ResolvedItem>>, String> {
+        if self.program.extern_mounts.is_empty() {
+            return Ok(None);
+        }
+        let parts = path.segments();
+        let Some(first) = parts.first().copied() else {
+            return Ok(None);
+        };
+        let wanted = format!(
+            "{}{}",
+            crate::compiler::source::EXTERN_PREFIX,
+            self.ident_display(first)?
+        );
+        let mut mount = None;
+        for candidate in &self.program.extern_mounts {
+            let name = self
+                .program
+                .modules
+                .name(*candidate)
+                .map_err(module_diagnostic)?;
+            if let Some(name) = name
+                && self.ident_display(name)? == wanted
+            {
+                mount = Some(*candidate);
+            }
+        }
+        let Some(mount) = mount else {
+            return Ok(None);
+        };
+        let base_path = self.module_path(mount)?;
+        let mut segments = base_path.segments().to_vec();
+        segments.extend_from_slice(&parts[1..]);
+        let full = AstPath::new(self.names(), PathAnchor::Crate, &segments)
+            .map_err(native_adapter::name_diagnostic)?;
+        let previous = std::mem::replace(&mut self.user_crate_anchor, true);
+        let found = self.path(&full, from, namespace, false);
+        self.user_crate_anchor = previous;
+        Ok(Some(found?))
     }
     /// The native prelude library root containing `module`, if any.
     fn prelude_root_of(&self, module: ModuleId) -> Result<Option<ModuleId>, String> {

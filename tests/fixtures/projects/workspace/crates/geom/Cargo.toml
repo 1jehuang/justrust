@@ -1,0 +1,9 @@
+[package]
+name = "geom"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["area"]
+area = []
+fancy = []

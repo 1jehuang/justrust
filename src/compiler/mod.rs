@@ -498,14 +498,19 @@ impl Provider for CompilerProvider {
                         },
                         // [1] attaches the embedded native prelude library.
                         [1] => source::prepare_prelude_unit(options, &budget),
-                        [_] => return Err(Error::new("source root ordinal must be 0 or 1")),
+                        // [2 + i] attaches dependency crate i.
+                        [n] if (*n as usize).wrapping_sub(2) < options.externs.len() => {
+                            source::prepare_extern_unit(options, *n as usize - 2, &budget)
+                        }
+                        [_] => return Err(Error::new("unknown source root ordinal")),
                         [parent @ .., index] => {
                             let parent: Arc<source::UnitResult> =
                                 facts.get(Key::new(SOURCE, parent.to_vec())).await?;
                             let parent = parent.as_ref().as_ref().map_err(|_| {
                                 Error::new("child module requested from a failed source file")
                             })?;
-                            source::prepare_child_unit(parent, *index as usize, options, &budget)
+                            let options = options.for_ordinal(&key.params);
+                            source::prepare_child_unit(parent, *index as usize, &options, &budget)
                         }
                     };
                     cx.publish_fact(0, unit)

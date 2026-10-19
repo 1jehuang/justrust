@@ -4710,6 +4710,10 @@ pub struct Program {
     /// The `prelude::v1` module inside the prelude library. Its public names
     /// (types, variants, traits) are in scope in every module unless shadowed.
     pub prelude_scope: Option<ModuleId>,
+    /// Hidden crate-root modules holding mounted dependency crates
+    /// (`__justrust_extern_<name>`). `<name>::` paths resolve into them and
+    /// `crate` inside one names its mount.
+    pub extern_mounts: Vec<ModuleId>,
     // Resolver-issued source authority. Shared unchanged by public AST clones.
     associated_bound_sources: Arc<[AssociatedBoundSource]>,
     /// Immutable parser/resolver output, never a mutable callable side slot.
@@ -4745,6 +4749,7 @@ struct ProgramDeclarations {
     trait_imports: Vec<(ModuleId, TraitPath)>,
     prelude_module: Option<ModuleId>,
     prelude_scope: Option<ModuleId>,
+    extern_mounts: Vec<ModuleId>,
     closure_sources: HashMap<PathKey, closures::ClosureSource>,
 }
 struct ParsedDeclarations {
@@ -4774,6 +4779,7 @@ impl ProgramDeclarations {
             trait_imports: self.trait_imports,
             prelude_module: self.prelude_module,
             prelude_scope: self.prelude_scope,
+            extern_mounts: self.extern_mounts,
             associated_bound_sources: Arc::from([]),
             closure_sources: Arc::new(self.closure_sources),
             closure_owners: Arc::new(HashMap::new()),
@@ -4914,6 +4920,7 @@ impl ProgramBuilder {
             trait_imports: self.trait_imports,
             prelude_module: None,
             prelude_scope: None,
+            extern_mounts: Vec::new(),
             closure_sources: HashMap::new(),
         }
         .publish(names, modules, self.symbols, None);
@@ -9861,6 +9868,15 @@ impl<'input, 'names> Parser<'input, 'names> {
                         return Err(self.error("duplicate native prelude module"));
                     }
                     parsed.program.prelude_module = Some(child);
+                }
+                if module == self.modules.source_root().map_err(module_parse_error)?
+                    && self
+                        .names
+                        .spelling(name)
+                        .map_err(native_adapter::name_error)?
+                        .starts_with(super::source::EXTERN_PREFIX)
+                {
+                    parsed.program.extern_mounts.push(child);
                 }
                 if let Some(prelude) = parsed.program.prelude_module {
                     let spelling = self

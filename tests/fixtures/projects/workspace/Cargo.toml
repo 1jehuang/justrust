@@ -1,0 +1,10 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.3.0"
+edition = "2024"
+
+[workspace.dependencies]
+geom = { path = "crates/geom" }
