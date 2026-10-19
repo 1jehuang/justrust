@@ -1,8 +1,10 @@
 //! Source-to-template panic authority, not native runtime or unwinding coverage.
-//! Formatting/nonliteral arguments are an earlier explicit parser boundary.
+//! Formatted panic bodies and macro shadowing retain their source identity.
 //! Every fact and source handle below comes from a real parsed program.
 use justrust_engine::compiler::{cfg, frontend, ir, ownership};
 use std::sync::Arc;
+#[path = "support/iterator_oracle.rs"]
+mod oracle;
 
 fn plan(source: &str) -> (frontend::Program, frontend::PlanCtx) {
     let program = frontend::parse(source).unwrap();
@@ -205,34 +207,25 @@ fn main() {}
 
 #[test]
 fn known_module_macro_is_not_silently_replaced_by_builtin_panic() {
-    let error =
-        frontend::parse("macro_rules! panic {() => {23i32};} fn f()->i32 {panic!()} fn main() {}")
-            .expect_err("known unsupported module macro must retain its boundary");
-    assert!(
-        error.contains("module macros in expression position are unsupported"),
-        "{error}"
+    oracle::stock_native(
+        "macro_rules! panic {() => {23i32};} fn f()->i32 {panic!()} fn main() {assert_eq!(f(),23i32);}",
     );
 }
 
 #[test]
-fn formatting_and_nonliteral_arguments_are_explicit_early_boundaries() {
-    for (source, boundary) in [
-        (
-            "fn main(){panic!(\"{}\", 1i32)}",
-            "panic! formatting placeholders are unsupported",
-        ),
-        ("fn main(){panic!(1i32)}", "nonliteral arguments"),
-        (
-            "fn main(){panic!(\"first\");panic!(\"{}\", 1i32)}",
-            "panic! formatting placeholders are unsupported",
-        ),
+fn formatting_is_supported_and_invalid_arguments_still_reject() {
+    for source in [
+        "fn unused()->i32{panic!(\"{}\", 1i32)} fn main(){}",
+        "fn unused()->i32{panic!(\"first\");panic!(\"{}\", 1i32)} fn main(){}",
     ] {
-        let error =
-            frontend::parse(source).expect_err("unsupported panic syntax must be diagnosed");
-        assert!(
-            error.contains(boundary) && error.contains("unsupported"),
-            "{error}"
-        );
+        oracle::stock_native(source);
+    }
+    for source in [
+        "fn main(){panic!(1i32)}",
+        "fn unused(){panic!(\"{}\")} fn main(){}",
+        "fn unused(){panic!(\"literal\",1i32)} fn main(){}",
+    ] {
+        oracle::stock_and_native_reject(source);
     }
 }
 
