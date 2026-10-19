@@ -382,6 +382,77 @@ mod tests {
     }
 
     #[test]
+    fn owner_root_lifecycle_across_pending_failure_and_reexecution() {
+        use crate::{Context, Engine, Key, Provider, TaskFuture};
+        use std::sync::Mutex;
+        // Key 1: mints, suspends on key 2 (Pending), then issues a child from
+        // the root it still owns locally. Key 2: mints and fails after minting.
+        type Log = Arc<Mutex<Vec<String>>>;
+        struct Life(Log, bool);
+        impl Provider for Life {
+            fn outputs(&self, _: &Key) -> usize {
+                1
+            }
+            fn start(&self, cx: Context, key: Key) -> TaskFuture {
+                let log = self.0.clone();
+                let fail = self.1;
+                Box::pin(async move {
+                    let root = cx.owner_root()?;
+                    if key.kind == 2 {
+                        log.lock()
+                            .unwrap()
+                            .push(format!("minted 2 {}", root.authority().get()));
+                        if fail {
+                            return Err(crate::Error::new("fails after minting"));
+                        }
+                        return cx.publish(0, 7);
+                    }
+                    let mut issuer =
+                        OwnerIssuer::new(root, &ExpansionBudget::default()).expect("issuer");
+                    // Suspends: the root is moved into the future and owned
+                    // across polls; no re-mint happens on resume.
+                    let value = cx.read(cx.request(Key::new(2, vec![])).get(0)).await;
+                    let child = issuer.issue(OwnerDomain::TokenSession).expect("child");
+                    assert!(child.path().descends_from(issuer.path()));
+                    log.lock()
+                        .unwrap()
+                        .push(format!("resumed 1 ok={}", value.is_ok()));
+                    match value {
+                        Ok(_) => cx.publish(0, 1),
+                        Err(error) => Err(error),
+                    }
+                })
+            }
+        }
+        let run = |fail: bool| {
+            let log: Log = Arc::default();
+            let engine = Engine::new(Life(log.clone(), fail));
+            let authority = engine.authority();
+            let demand = engine.request(Key::new(1, vec![]));
+            engine.run(2).unwrap();
+            let outcome = demand.completion();
+            let log = log.lock().unwrap().clone();
+            (authority, outcome, log)
+        };
+        // Success: one mint per node, the suspended node resumes with its root.
+        let (a, outcome, log) = run(false);
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert_eq!(log.len(), 2, "{log:?}");
+        assert!(log[0].starts_with("minted 2 "));
+        assert_eq!(log[1], "resumed 1 ok=true");
+        // Failure after minting: the dependent observes the error and the
+        // mint does not leak into later engines.
+        let (b, outcome, log) = run(true);
+        assert!(outcome.is_err());
+        assert_eq!(log.last().map(String::as_str), Some("resumed 1 ok=false"));
+        // Deterministic re-execution in a fresh engine mints again under a
+        // new authority; no cross-engine mint state exists.
+        let (c, outcome, _) = run(false);
+        assert!(outcome.is_ok());
+        assert!(a != b && b != c && a != c);
+    }
+
+    #[test]
     fn graph_id_allocation_fails_closed_at_exhaustion() {
         use std::sync::atomic::AtomicU64;
         let counter = AtomicU64::new(u64::MAX - 1);
