@@ -7,6 +7,8 @@ mod inferred_owner;
 mod local_literals;
 #[path = "try_operator.rs"]
 mod try_operator;
+#[path = "type_check/unsafety.rs"]
+mod unsafety;
 
 /// Borrowed source bodies and the semantic unit value of an absent else.
 #[derive(Clone, Copy)]
@@ -5374,7 +5376,9 @@ impl<'a> Checker<'a> {
         let carrier_ty = self
             .scalar_hint(carrier)?
             .ok_or("unresolved reference call assignment carrier")?;
-        if !matches!(carrier_ty, ir::Ty::Ref { .. }) {
+        let raw_deref = matches!(carrier_ty, ir::Ty::RawPtr { .. })
+            && matches!(fields.first(), Some(FieldSelector::Deref));
+        if !matches!(carrier_ty, ir::Ty::Ref { .. }) && !raw_deref {
             // Only a written `*` of a primitive value is certainly invalid
             // (E0614). By-value temporaries, raw pointers and user Deref
             // carriers are legal Rust outside this bounded slice.
@@ -7170,6 +7174,9 @@ impl<'a> Checker<'a> {
                 expectation: expectations[argument],
             })
             .collect::<Vec<_>>();
+        if let ir::Callee::Direct(direct) = &target {
+            self.require_safe_callable(direct.declaration)?;
+        }
         self.charge_node(4 * std::mem::size_of::<ir::CallEvidence>() + 64)?;
         self.call_evidence.push(ir::CallEvidence {
             call: id,
@@ -10181,6 +10188,7 @@ pub(super) fn type_callable_source(
     c.install_lexical_scope(f.lexical_scope)?;
     c.declaration = Some(declaration);
     c.canonical = canonical;
+    c.unsafe_depth = usize::from(f.unsafety);
     let mut params = Vec::new();
     let offset = if context.receiver != ReceiverKind::None {
         let local = c.bind(LocalName::Receiver, signature.params[0].clone())?;
@@ -10297,6 +10305,7 @@ pub fn type_function_with_env(
     }
     let mut c = Checker::new(signatures, signature.result.clone(), f.module);
     c.install_lexical_scope(f.lexical_scope)?;
+    c.unsafe_depth = usize::from(f.unsafety);
     let mut params = Vec::with_capacity(f.params.len());
     for ((n, _), t) in f.params.iter().zip(&signature.params) {
         params.push(
@@ -11805,6 +11814,8 @@ mod checked_identity_tests {
             lexical_scope: None,
             module,
             constness: Constness::Runtime,
+            unsafety: false,
+            static_mut: false,
             visibility: ir::Visibility::Public,
             bounds: Vec::new(),
             name: main,

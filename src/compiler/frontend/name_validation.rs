@@ -1293,6 +1293,8 @@ mod tests {
             lexical_scope: None,
             module: builder.module_root().unwrap(),
             constness: Constness::Runtime,
+            unsafety: false,
+            static_mut: false,
             visibility: ir::Visibility::Public,
             bounds: Vec::new(),
             name: builder.path("crate::unused").unwrap(),
@@ -2360,6 +2362,7 @@ mod tests {
         let input = program();
         let mut head = FunctionHead {
             constness: Constness::Runtime,
+            unsafety: false,
             name: input.functions[0].name.segments()[0],
             regions: RegionDecls::default(),
             type_params: Vec::new(),

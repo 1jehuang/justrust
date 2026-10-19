@@ -48,6 +48,8 @@ pub(super) fn checked_body(declaration: &ConstDecl) -> Function {
         lexical_scope: None,
         module: declaration.module,
         constness: Constness::Const,
+        unsafety: false,
+        static_mut: false,
         visibility: declaration.visibility.clone(),
         bounds: Vec::new(),
         name: declaration.name.clone(),

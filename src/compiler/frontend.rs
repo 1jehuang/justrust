@@ -4605,6 +4605,7 @@ impl PlanCtx {
 }
 
 mod array_len;
+mod static_mut;
 #[cfg(test)]
 mod associated_bounds;
 mod const_inputs;
@@ -5002,6 +5003,11 @@ pub struct Function {
     pub lexical_scope: Option<super::semantic_scope::ScopeId>,
     pub module: ModuleId,
     pub constness: Constness,
+    /// `unsafe fn`: calls require an unsafe context (E0133).
+    pub unsafety: bool,
+    /// Synthetic accessor of a `static mut` item (see static_mut.rs): uses
+    /// of the item name are rewritten to `*accessor()`.
+    pub static_mut: bool,
     pub visibility: ir::Visibility,
     pub bounds: Vec<TypeBound>,
     pub name: AstPath,
@@ -5088,6 +5094,7 @@ pub struct TraitItemDecl {
 #[derive(Clone, Debug)]
 pub struct FunctionHead {
     pub constness: Constness,
+    pub unsafety: bool,
     pub name: AstIdent,
     pub regions: RegionDecls,
     pub type_params: Vec<AstIdent>,
@@ -9740,9 +9747,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         if !self.token().string
             && matches!(
                 self.token().text,
-                "async" | "unsafe" | "extern" | "union" | "macro_rules"
+                "async" | "extern" | "union" | "macro_rules"
             )
-            || (self.is("static") && self.cursor.peek(1).is_some_and(|t| t.text == "mut"))
+            || (self.is("unsafe") && !self.cursor.peek(1).is_some_and(|t| t.text == "fn"))
         {
             return Err(self.unsupported("item syntax is unsupported"));
         }
@@ -9883,6 +9890,8 @@ impl<'input, 'names> Parser<'input, 'names> {
                         lexical_scope,
                         module,
                         constness: signature.constness,
+                        unsafety: signature.unsafety,
+                        static_mut: false,
                         visibility: visibility.clone(),
                         bounds: signature.bounds.clone(),
                         name: AstPath::new(self.names, PathAnchor::Relative, &[signature.name])
@@ -10174,6 +10183,16 @@ impl<'input, 'names> Parser<'input, 'names> {
             });
             self.type_params.clear();
             return Ok(());
+        } else if self.is("static") && self.cursor.peek(1).is_some_and(|t| t.text == "mut") {
+            let function = self.static_mut_item(module)?;
+            let name = *function.name.segments().last().ok_or_else(|| self.error("empty static name"))?;
+            let mut function = function;
+            function.visibility = visibility.clone();
+            function.name = module_path
+                .push(self.names, name)
+                .map_err(native_adapter::name_error)?;
+            parsed.program.functions.push(function);
+            (name, ItemKind::Function)
         } else if self.is("static")
             || (self.is("const") && !self.cursor.peek(1).is_some_and(|t| t.text == "fn"))
         {
@@ -10202,7 +10221,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 initializer,
             });
             (name, ItemKind::Const)
-        } else if self.is("fn") || self.is("const") {
+        } else if self.is("fn") || self.is("const") || self.is("unsafe") {
             let mut function = self.function()?;
             function.visibility = visibility.clone();
             let name = function
@@ -10488,6 +10507,8 @@ impl<'input, 'names> Parser<'input, 'names> {
                     lexical_scope,
                     module: self.module,
                     constness: head.constness,
+                    unsafety: head.unsafety,
+                    static_mut: false,
                     visibility: ir::Visibility::Public,
                     name: AstPath::new(self.names, PathAnchor::Relative, &[head.name])
                         .map_err(native_adapter::name_error)?,
@@ -10604,6 +10625,10 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else {
             Constness::Runtime
         };
+        let unsafety = !self.token().string && self.eat("unsafe");
+        if !self.token().string && self.is("extern") {
+            return Err(self.unsupported("extern ABI function qualifiers are unsupported"));
+        }
         self.expect("fn")?;
         let name = self.ident()?;
         let mut regions = RegionDecls::default();
@@ -10744,6 +10769,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok((
             FunctionHead {
                 constness,
+                unsafety,
                 name,
                 regions,
                 type_params,

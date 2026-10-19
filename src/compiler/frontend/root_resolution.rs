@@ -6,6 +6,7 @@ use super::super::semantic_scope::{BindingId, ScopeId, scope_diagnostic};
 use super::*;
 mod capture_resolution;
 mod const_inline;
+mod const_pattern;
 
 #[derive(Clone, Debug)]
 enum ResolvedPath {
@@ -77,6 +78,8 @@ struct Resolver<'a> {
     resolved_closures: HashMap<PathKey, closures::ClosureSource>,
     resolved_closure_owners: HashMap<PathKey, Vec<PathKey>>,
     current_function_name: Option<AstPath>,
+    /// Keys of `static mut` accessor functions (see static_mut.rs).
+    static_muts: std::collections::HashSet<PathKey>,
 }
 impl Resolver<'_> {
     fn with_source_owner<T>(
@@ -1985,6 +1988,61 @@ impl Resolver<'_> {
         }
         Err("resolved struct has no checked source schema".into())
     }
+    fn is_static_mut(&self, item: &ResolvedItem) -> Result<bool, String> {
+        let ResolvedPath::Source(path) = &item.path else {
+            return Ok(false);
+        };
+        if self.static_muts.is_empty() {
+            return Ok(false);
+        }
+        Ok(self.static_muts.contains(&self.key(path)?))
+    }
+    /// `S = v`, `S OP= v`, `S.f = v` on a `static mut S` become assignments
+    /// through the accessor's raw pointer (`*S() ... = v`).
+    fn static_mut_assignment(
+        &mut self,
+        stmt: &mut Stmt,
+        module: ModuleId,
+        locals: &[std::collections::HashSet<LocalKey>],
+    ) -> Result<(), String> {
+        let (local, mut fields, op) = match stmt {
+            Stmt::Assign { name, .. } => (*name, Vec::new(), None),
+            Stmt::AssignOp { place, op, .. } => (place.local, place.fields.clone(), Some(*op)),
+            Stmt::AssignPlace { place, .. } => (place.local, place.fields.clone(), None),
+            _ => return Ok(()),
+        };
+        let LocalName::Named(ident) = local else {
+            return Ok(());
+        };
+        let path = self.single_path(ident)?;
+        if self.local_contains(&path, locals)? {
+            return Ok(());
+        }
+        let Some(item) = self.path(&path, module, false, false)? else {
+            return Ok(());
+        };
+        if item.kind != ResolvedKind::Function || !self.is_static_mut(&item)? {
+            return Ok(());
+        }
+        let value = match stmt {
+            Stmt::Assign { value, .. }
+            | Stmt::AssignOp { value, .. }
+            | Stmt::AssignPlace { value, .. } => std::mem::replace(value, Expr::Tuple(Vec::new())),
+            _ => unreachable!(),
+        };
+        fields.insert(0, FieldSelector::Deref);
+        *stmt = Stmt::AssignDeref {
+            carrier: Expr::Call {
+                name: path,
+                args: Vec::new(),
+            },
+            fields,
+            index: None,
+            op,
+            value,
+        };
+        Ok(())
+    }
     fn source_struct(&self, path: &AstPath) -> Result<&StructDecl, String> {
         let key = self.key(path)?;
         for declaration in &self.program.structs {
@@ -2360,6 +2418,10 @@ impl Resolver<'_> {
             | Pattern::Range { .. } => {}
             Pattern::Path(name) if name.anchor() == PathAnchor::SelfType && self.self_allowed => {}
             Pattern::Path(name) => {
+                if let Some(literal) = self.const_pattern(name, module)? {
+                    *pattern = literal;
+                    return Ok(());
+                }
                 let item = self
                     .zero_constructor(name, module)?
                     .ok_or("unresolved zero-field constructor pattern")?;
@@ -2371,6 +2433,12 @@ impl Resolver<'_> {
                 by_ref,
             } => {
                 let path = self.single_path(*name)?;
+                if !*mutable && by_ref.is_none() {
+                    if let Some(literal) = self.const_pattern(&path, module)? {
+                        *pattern = literal;
+                        return Ok(());
+                    }
+                }
                 if let Some(item) = self.zero_constructor(&path, module)? {
                     if *mutable || by_ref.is_some() {
                         return Err(format!(
@@ -2508,6 +2576,7 @@ impl Resolver<'_> {
                     value: value.clone(),
                 };
             }
+            self.static_mut_assignment(stmt, module, locals)?;
             match stmt {
                 Stmt::Assign { name, .. } if self.anonymous_closure_body => {
                     let mut place = Place {
@@ -3070,6 +3139,21 @@ impl Resolver<'_> {
                     *expr = Expr::ConstItem(resolved);
                     return Ok(());
                 }
+                if let Some(item) = &value_item
+                    && item.kind == ResolvedKind::Function
+                    && self.is_static_mut(item)?
+                {
+                    // `static mut` use: `*NAME()` (raw-pointer place, E0133).
+                    let mut call = Expr::Call {
+                        name: name.clone(),
+                        args: Vec::new(),
+                    };
+                    self.expr(&mut call, module, locals)?;
+                    *expr = Expr::Deref {
+                        value: Box::new(call),
+                    };
+                    return Ok(());
+                }
                 if value_item
                     .as_ref()
                     .is_some_and(|item| item.kind == ResolvedKind::Struct)
@@ -3387,7 +3471,16 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
         .program
         .symbols
         .check(parsed.program.names.as_ref())?;
+    let mut static_muts = std::collections::HashSet::new();
+    for function in parsed.program.functions.iter().filter(|f| f.static_mut) {
+        static_muts.insert(name_scope::path_key(
+            parsed.program.names.as_ref(),
+            &function.name,
+            Namespace::Type,
+        )?);
+    }
     let mut resolver = Resolver {
+        static_muts,
         program: &parsed.program,
         type_depth: 0,
         alias_cache: HashMap::new(),
@@ -3537,12 +3630,16 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
             resolver.inline_constant(&mut probe, &declaration.name, &mut vec![])?;
         }
     }
-    program.constants.retain(|declaration| !const_inline::needs_inline(declaration));
+    program
+        .constants
+        .retain(|declaration| !const_inline::needs_inline(declaration));
     // The value-namespace slot freed above holds a checked zero-argument
     // `const fn` computing the initializer, so unused constants still type check.
     for declaration in &parsed.program.constants {
         if const_inline::needs_inline(declaration) {
-            program.functions.push(const_inline::checked_body(declaration));
+            program
+                .functions
+                .push(const_inline::checked_body(declaration));
         }
     }
     for declaration in &mut program.constants {

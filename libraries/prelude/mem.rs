@@ -71,3 +71,21 @@ pub fn panic_message(msg: &str) {
         __justrust_linux_syscall6!(1usize, 2usize, super::string::str_parts("\n").0, 1usize, 0usize, 0usize, 0usize)
     };
 }
+
+// Backing storage for `static mut` items. Each static owns a fixed 16 MiB
+// address window derived from its id. The first access maps it
+// (MAP_FIXED_NOREPLACE) and writes the initializer; later accesses observe
+// EEXIST and reuse the live value.
+pub fn static_slot<T>(id: usize, init: T) -> *mut T {
+    let address = 35184372088832usize + id * 16777216usize;
+    let size = size_of::<T>();
+    let bytes = if size == 0usize { 4096usize } else { (size + 4095usize) / 4096usize * 4096usize };
+    let result = unsafe {
+        __justrust_linux_syscall6!(9usize, address, bytes, 3usize, 1048610usize, 18446744073709551615usize, 0usize)
+    };
+    let p = address as *mut T;
+    if result == address {
+        unsafe { *p = init; }
+    }
+    p
+}

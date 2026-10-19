@@ -161,6 +161,8 @@ impl Parser<'_, '_> {
             lexical_scope,
             module: self.module,
             constness: Constness::Runtime,
+            unsafety: false,
+            static_mut: false,
             visibility: ir::Visibility::Restricted(self.module),
             bounds: Vec::new(),
             name: name.clone(),

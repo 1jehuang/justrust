@@ -3501,6 +3501,8 @@ mod tests {
     ) -> Function {
         Function {
             constness: crate::compiler::frontend::Constness::Runtime,
+            unsafety: false,
+            static_mut: false,
             visibility: ir::Visibility::Public,
             module: builder.module_root().unwrap(),
             lexical_scope: None,

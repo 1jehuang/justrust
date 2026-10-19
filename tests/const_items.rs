@@ -73,7 +73,7 @@ fn invalid_constants_reject_even_when_unused() {
             "E0015",
         ),
         ("const A:[i32;2]=[1,true]; fn main(){}", ""),
-        ("static mut X:u8=1;fn main(){}", "unsupported"),
+        ("static mut X:u8=1;fn main(){ X = 2; }", "E0133"),
     ] {
         let error = compiler::compile_observed(source.into(), 1, true)
             .err()
