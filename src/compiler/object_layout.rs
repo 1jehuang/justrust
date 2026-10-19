@@ -13,22 +13,22 @@
 //! Every length must be exact. Decode checks the entire pointer suffix, but
 //! calculating a pointer's layout never visits or calculates its pointee.
 //!
-//! Fixed buffers avoid hidden allocation capacity or relocation peaks. Their
-//! complete inline capacity, including unused words, is paid before construction.
-//! Only existing PlanBudget admission and immutable RetainedStorage are used.
+//! Input-sized buffers use only existing PlanBudget admission. Requested bytes
+//! are prepaid; allocator surplus is reconciled before fill/publication. This
+//! does not prepay an allocator-rounded transient peak. Scratch leases outlive
+//! their buffers. Output retains immutable accounting receipts only.
 //! Receipts prove accounting authority, never source or semantic authority.
 
-use super::ir::{PlanBudget, RetainedStorage};
+use super::ir::{PlanBudget, PlanReservation, RetainedStorage};
 use std::mem::size_of;
 
 pub const GRAMMAR_VERSION: u64 = 1;
-const MAX_DEPTH: usize = 128;
-const KEY_WORDS: usize = 1 + 3 * MAX_DEPTH;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayoutError {
     Resource,
-    KeyCapacity,
+    Allocation,
+    StorageOverflow,
     InvalidEncoding,
     UnsupportedGrammarVersion,
     UnsupportedTarget,
@@ -203,64 +203,172 @@ pub struct Shape {
     pub validity: Validity,
 }
 
+/// Task-local only. Its buffer is destroyed before its leases release bytes.
+#[derive(Debug)]
+struct Staged<T> {
+    buffer: Vec<T>,
+    base: Option<PlanReservation>,
+    surplus: Option<PlanReservation>,
+}
+
+fn storage_bytes<T>(header: usize, capacity: usize) -> Result<usize> {
+    capacity
+        .checked_mul(size_of::<T>())
+        .and_then(|bytes| header.checked_add(bytes))
+        .ok_or(LayoutError::StorageOverflow)
+}
+
+impl<T> Staged<T> {
+    fn new(count: usize, header: usize, budget: &PlanBudget) -> Result<Self> {
+        Self::allocate_with(count, header, budget, |buffer, count| {
+            buffer
+                .try_reserve_exact(count)
+                .map_err(|_| LayoutError::Allocation)
+        })
+    }
+
+    // Private seam for synthetic allocator surplus/failure controls. Production
+    // always calls new, which allocates once from an empty Vec.
+    fn allocate_with(
+        count: usize,
+        header: usize,
+        budget: &PlanBudget,
+        allocate: impl FnOnce(&mut Vec<T>, usize) -> Result<()>,
+    ) -> Result<Self> {
+        ready(budget)?;
+        let base = budget
+            .reserve_bytes(storage_bytes::<T>(header, count)?)
+            .map_err(|_| LayoutError::Resource)?;
+        let mut staged = Self {
+            buffer: Vec::new(),
+            base: Some(base),
+            surplus: None,
+        };
+        allocate(&mut staged.buffer, count)?;
+        let excess = staged
+            .buffer
+            .capacity()
+            .checked_sub(count)
+            .and_then(|capacity| capacity.checked_mul(size_of::<T>()))
+            .ok_or(LayoutError::StorageOverflow)?;
+        if excess != 0 {
+            staged.surplus = Some(
+                budget
+                    .reserve_bytes(excess)
+                    .map_err(|_| LayoutError::Resource)?,
+            );
+        }
+        // No fill before reconciliation. Failure discards allocation before
+        // releasing leases. Allocator-rounded transient peak is not prepaid.
+        ready(budget)?;
+        Ok(staged)
+    }
+
+    fn push(&mut self, value: T) -> Result<()> {
+        if self.buffer.len() == self.buffer.capacity() {
+            return Err(LayoutError::InvalidLayout);
+        }
+        self.buffer.push(value);
+        Ok(())
+    }
+
+    fn seal(mut self) -> Result<(Vec<T>, RetainedStorage, Option<RetainedStorage>)> {
+        let base = self
+            .base
+            .take()
+            .ok_or(LayoutError::InvalidLayout)?
+            .retain()
+            .map_err(|_| LayoutError::Resource)?;
+        let surplus = self
+            .surplus
+            .take()
+            .map(PlanReservation::retain)
+            .transpose()
+            .map_err(|_| LayoutError::Resource)?;
+        Ok((std::mem::take(&mut self.buffer), base, surplus))
+    }
+}
+
+impl<T> Drop for Staged<T> {
+    fn drop(&mut self) {
+        // Explicit on success and all errors, including surplus rejection.
+        drop(std::mem::take(&mut self.buffer));
+    }
+}
+
 /// Complete private grammar identity, with immutable paid-storage evidence.
-/// No Clone: duplicating the owned inline buffer requires new admission.
+/// No Clone: a second owned allocation requires fresh admission.
 #[derive(Debug)]
 pub struct ClosedTypeKey {
-    words: [u64; KEY_WORDS],
-    len: usize,
+    words: Vec<u64>,
     storage: RetainedStorage,
+    surplus: Option<RetainedStorage>,
 }
 
 impl ClosedTypeKey {
     pub fn decode(words: &[u64], budget: &PlanBudget) -> Result<Self> {
-        // Check sticky failure even for malformed, empty or zero-work requests.
-        work(budget, words.len())?;
-        if words.first() != Some(&GRAMMAR_VERSION) {
-            return Err(LayoutError::UnsupportedGrammarVersion);
-        }
-        if words.len() > KEY_WORDS {
-            return Err(LayoutError::KeyCapacity);
-        }
-        validate_grammar(words, budget)?;
-        let paid = budget
-            .reserve_bytes(size_of::<Self>())
+        scan(words, budget)?;
+        // Temporary staging metadata is separate from the eventual key header.
+        let _staging = budget
+            .reserve_bytes(size_of::<Staged<u64>>())
             .map_err(|_| LayoutError::Resource)?;
-        // Zeroing unused fixed capacity and copying the used words are work.
-        work(budget, KEY_WORDS + words.len())?;
-        let mut owned = [0; KEY_WORDS];
-        owned[..words.len()].copy_from_slice(words);
+        let mut staged = Staged::new(words.len(), size_of::<Self>(), budget)?;
+        work(budget, words.len())?;
+        for &word in words {
+            staged.push(word)?;
+        }
         ready(budget)?;
+        let (words, storage, surplus) = staged.seal()?;
         Ok(Self {
-            words: owned,
-            len: words.len(),
-            storage: paid.retain().map_err(|_| LayoutError::Resource)?,
+            words,
+            storage,
+            surplus,
         })
     }
 
     pub fn words(&self) -> &[u64] {
-        &self.words[..self.len]
+        &self.words
+    }
+
+    pub fn capacity_words(&self) -> usize {
+        self.words.capacity()
     }
 
     pub fn storage(&self) -> &RetainedStorage {
         &self.storage
     }
 
-    fn validate(&self, budget: &PlanBudget) -> Result<()> {
+    pub fn surplus_storage(&self) -> Option<&RetainedStorage> {
+        self.surplus.as_ref()
+    }
+
+    fn validate(&self, budget: &PlanBudget) -> Result<Scan> {
         ready(budget)?;
-        if !self.storage.authority().same_authority(budget.authority()) {
-            return Err(LayoutError::WrongAuthority);
+        for receipt in std::iter::once(&self.storage).chain(self.surplus.as_ref()) {
+            if !receipt.authority().same_authority(budget.authority()) {
+                return Err(LayoutError::WrongAuthority);
+            }
         }
-        if self.storage.bytes() != size_of::<Self>() {
-            return Err(LayoutError::InvalidLayout);
-        }
-        if !(3..=KEY_WORDS).contains(&self.len) {
+        if self.words.len() < 3 {
             return Err(LayoutError::InvalidEncoding);
         }
-        if self.words[0] != GRAMMAR_VERSION {
-            return Err(LayoutError::UnsupportedGrammarVersion);
+        let base = storage_bytes::<u64>(size_of::<Self>(), self.words.len())?;
+        let actual = storage_bytes::<u64>(size_of::<Self>(), self.words.capacity())?;
+        let excess = actual.checked_sub(base).ok_or(LayoutError::InvalidLayout)?;
+        if self.storage.bytes() != base
+            || match &self.surplus {
+                Some(receipt) => excess == 0 || receipt.bytes() != excess,
+                None => excess != 0,
+            }
+            || self
+                .storage
+                .bytes()
+                .checked_add(self.surplus.as_ref().map_or(0, RetainedStorage::bytes))
+                != Some(actual)
+        {
+            return Err(LayoutError::InvalidLayout);
         }
-        validate_grammar(self.words(), budget)
+        scan(self.words(), budget)
     }
 }
 
@@ -273,7 +381,8 @@ struct Node {
 
 fn node(words: &[u64], at: usize) -> Result<Node> {
     let tag = *words.get(at).ok_or(LayoutError::InvalidEncoding)?;
-    let length = usize::try_from(*words.get(at + 1).ok_or(LayoutError::InvalidEncoding)?)
+    let length_at = at.checked_add(1).ok_or(LayoutError::InvalidEncoding)?;
+    let length = usize::try_from(*words.get(length_at).ok_or(LayoutError::InvalidEncoding)?)
         .map_err(|_| LayoutError::InvalidEncoding)?;
     let payload = at.checked_add(2).ok_or(LayoutError::InvalidEncoding)?;
     // Unary grammar: every nested node ends at the exact end of the key.
@@ -287,30 +396,53 @@ fn node(words: &[u64], at: usize) -> Result<Node> {
     })
 }
 
-fn validate_grammar(words: &[u64], budget: &PlanBudget) -> Result<()> {
+#[derive(Clone, Copy)]
+struct Scan {
+    arrays: usize,
+}
+
+fn scan(words: &[u64], budget: &PlanBudget) -> Result<Scan> {
+    work(budget, words.len())?;
+    if words.first() != Some(&GRAMMAR_VERSION) {
+        return Err(LayoutError::UnsupportedGrammarVersion);
+    }
     let mut at = 1;
-    for depth in 1..=MAX_DEPTH {
+    let mut depth = 1_usize;
+    let mut arrays = 0_usize;
+    let mut prefix = true;
+    loop {
         work(budget, 1)?;
         budget
             .check_depth(depth)
             .map_err(|_| LayoutError::Resource)?;
         let n = node(words, at)?;
-        match n.tag {
+        let next = match n.tag {
             0 if n.length == 1 => {
                 Scalar::decode(words[n.payload])?;
-                return Ok(());
+                return Ok(Scan { arrays });
             }
-            1 if n.length == 0 => return Ok(()),
-            2..=5 if n.length >= 2 => at = n.payload,
-            6 if n.length >= 3 => at = n.payload + 1,
+            1 if n.length == 0 => return Ok(Scan { arrays }),
+            2..=5 if n.length >= 2 => {
+                prefix = false;
+                n.payload
+            }
+            6 if n.length >= 3 => {
+                if prefix {
+                    work(budget, 1)?;
+                    arrays = arrays.checked_add(1).ok_or(LayoutError::StorageOverflow)?;
+                }
+                n.payload
+                    .checked_add(1)
+                    .ok_or(LayoutError::InvalidEncoding)?
+            }
             _ => return Err(LayoutError::InvalidEncoding),
+        };
+        if next <= at || next >= words.len() {
+            return Err(LayoutError::InvalidEncoding);
         }
+        at = next;
+        depth = depth.checked_add(1).ok_or(LayoutError::StorageOverflow)?;
     }
-    // The same existing task budget owns depth rejection and sticky failure.
-    budget
-        .check_depth(MAX_DEPTH + 1)
-        .map_err(|_| LayoutError::Resource)?;
-    Err(LayoutError::KeyCapacity)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -345,7 +477,7 @@ impl ObjectLayout {
     ) -> Result<Self> {
         ready(budget)?;
         target.validate()?;
-        key.validate(budget)?;
+        let scanned = key.validate(budget)?;
         // The moved key is already paid. Admit only additional owned fields
         // and padding, not a second ledger charge for the same key bytes.
         let additional_bytes = size_of::<Self>()
@@ -354,7 +486,7 @@ impl ObjectLayout {
         let paid = budget
             .reserve_bytes(additional_bytes)
             .map_err(|_| LayoutError::Resource)?;
-        let computed = compute(&key, budget)?;
+        let computed = compute(&key, scanned, budget)?;
         ready(budget)?;
         Ok(Self {
             key,
@@ -406,9 +538,6 @@ impl ObjectLayout {
         if self.target != expected_target {
             return Err(LayoutError::WrongTarget);
         }
-        if self.key.len > KEY_WORDS || self.key.words[0] != GRAMMAR_VERSION {
-            return Err(LayoutError::InvalidEncoding);
-        }
         work(budget, expected_words.len())?;
         if self.key.words() != expected_words {
             return Err(LayoutError::WrongType);
@@ -416,16 +545,14 @@ impl ObjectLayout {
         let additional_bytes = size_of::<Self>()
             .checked_sub(size_of::<ClosedTypeKey>())
             .ok_or(LayoutError::InvalidLayout)?;
-        if self.key.storage.bytes() != size_of::<ClosedTypeKey>()
-            || self.storage.bytes() != additional_bytes
-        {
+        if self.storage.bytes() != additional_bytes {
             return Err(LayoutError::InvalidLayout);
         }
-        self.key.validate(budget)?;
+        let scanned = self.key.validate(budget)?;
         let _scratch = budget
             .reserve_bytes(size_of::<Computed>())
             .map_err(|_| LayoutError::Resource)?;
-        if compute(&self.key, budget)? != self.computed {
+        if compute(&self.key, scanned, budget)? != self.computed {
             return Err(LayoutError::InvalidLayout);
         }
         ready(budget)
@@ -438,16 +565,8 @@ struct ArrayFrame {
     child_start: usize,
 }
 
-fn compute(key: &ClosedTypeKey, budget: &PlanBudget) -> Result<Computed> {
-    let _scratch = budget
-        .reserve_bytes(size_of::<[ArrayFrame; MAX_DEPTH]>())
-        .map_err(|_| LayoutError::Resource)?;
-    work(budget, MAX_DEPTH)?;
-    let mut arrays = [ArrayFrame {
-        length: 0,
-        child_start: 0,
-    }; MAX_DEPTH];
-    let mut count = 0;
+fn compute(key: &ClosedTypeKey, scanned: Scan, budget: &PlanBudget) -> Result<Computed> {
+    let mut arrays = Staged::new(scanned.arrays, size_of::<Staged<ArrayFrame>>(), budget)?;
     let mut at = 1;
     let mut root = loop {
         work(budget, 1)?;
@@ -481,19 +600,26 @@ fn compute(key: &ClosedTypeKey, budget: &PlanBudget) -> Result<Computed> {
                     },
                 };
             }
-            6 if count < MAX_DEPTH => {
-                arrays[count] = ArrayFrame {
+            6 if arrays.buffer.len() < scanned.arrays => {
+                work(budget, 1)?;
+                let child_start = n
+                    .payload
+                    .checked_add(1)
+                    .ok_or(LayoutError::InvalidEncoding)?;
+                arrays.push(ArrayFrame {
                     length: key.words[n.payload],
-                    child_start: n.payload + 1,
-                };
-                count += 1;
-                at = n.payload + 1;
+                    child_start,
+                })?;
+                at = child_start;
             }
             _ => return Err(LayoutError::InvalidEncoding),
         }
     };
     let mut element = None;
-    for frame in arrays[..count].iter().rev() {
+    if arrays.buffer.len() != scanned.arrays {
+        return Err(LayoutError::InvalidLayout);
+    }
+    for frame in arrays.buffer.iter().rev() {
         work(budget, 1)?;
         element = Some(ArrayElement {
             encoding_start: frame.child_start,
@@ -524,11 +650,254 @@ mod forged_tests {
     use super::*;
 
     #[test]
+    fn zero_prefix_and_zst_staging_charge_wrapper_once_without_heap_bytes() {
+        let budget = PlanBudget::default();
+        let header = size_of::<Staged<ArrayFrame>>();
+        let empty = Staged::<ArrayFrame>::new(0, header, &budget).unwrap();
+        assert_eq!(empty.buffer.capacity(), 0);
+        assert!(empty.surplus.is_none());
+        assert_eq!(budget.usage_snapshot().bytes, header);
+        drop(empty);
+        assert_eq!(budget.usage_snapshot().bytes, 0);
+        let header = size_of::<Staged<()>>();
+        let mut zst = Staged::<()>::new(17, header, &budget).unwrap();
+        assert!(zst.surplus.is_none());
+        for _ in 0..17 {
+            zst.push(()).unwrap();
+        }
+        assert_eq!(budget.usage_snapshot().bytes, header);
+        drop(zst);
+        assert_eq!(budget.usage_snapshot().bytes, 0);
+    }
+
+    #[test]
+    fn storage_arithmetic_and_allocator_errors_are_not_faked_budget_exhaustion() {
+        assert_eq!(
+            storage_bytes::<u64>(0, usize::MAX),
+            Err(LayoutError::StorageOverflow)
+        );
+        assert_eq!(
+            storage_bytes::<u8>(usize::MAX, 1),
+            Err(LayoutError::StorageOverflow)
+        );
+        assert_eq!(storage_bytes::<()>(7, usize::MAX), Ok(7));
+        let budget = PlanBudget::default();
+        assert_eq!(
+            Staged::<u64>::new(usize::MAX, 0, &budget).unwrap_err(),
+            LayoutError::StorageOverflow
+        );
+        assert_eq!(budget.usage_snapshot().bytes, 0);
+        assert_eq!(
+            Staged::<u8>::allocate_with(1, 0, &budget, |_, _| Err(LayoutError::Allocation))
+                .unwrap_err(),
+            LayoutError::Allocation
+        );
+        assert_eq!(budget.usage_snapshot().bytes, 0);
+        assert!(budget.first_resource_failure().is_none());
+        let empty = Staged::<u8>::new(0, 0, &budget).unwrap();
+        drop(empty);
+    }
+
+    #[test]
+    fn surplus_is_admitted_before_fill_and_discarded_on_rejection() {
+        let budget = PlanBudget::default();
+        let header = size_of::<Staged<u64>>();
+        let mut staged = Staged::<u64>::allocate_with(1, header, &budget, |buffer, n| {
+            buffer
+                .try_reserve_exact(n + 7)
+                .map_err(|_| LayoutError::Allocation)
+        })
+        .unwrap();
+        let actual = header + staged.buffer.capacity() * size_of::<u64>();
+        assert_eq!(budget.usage_snapshot().bytes, actual);
+        assert!(staged.surplus.is_some());
+        assert!(staged.buffer.is_empty());
+        staged.push(42).unwrap();
+        drop(staged);
+        assert_eq!(budget.usage_snapshot().bytes, 0);
+
+        let budget = PlanBudget::new(super::super::ir::PlanLimits {
+            bytes: header + size_of::<u64>(),
+            ..super::super::ir::PlanLimits::default()
+        });
+        let called = std::cell::Cell::new(false);
+        assert_eq!(
+            Staged::<u64>::allocate_with(1, header, &budget, |buffer, n| {
+                called.set(true);
+                buffer
+                    .try_reserve_exact(n + 7)
+                    .map_err(|_| LayoutError::Allocation)
+            })
+            .unwrap_err(),
+            LayoutError::Resource
+        );
+        assert!(called.get());
+        assert_eq!(budget.usage_snapshot().bytes, 0);
+        assert!(budget.first_resource_failure().is_some());
+        assert_eq!(
+            Staged::<u64>::new(0, 0, &budget).unwrap_err(),
+            LayoutError::Resource
+        );
+        assert_eq!(
+            ClosedTypeKey::decode(&[], &budget).unwrap_err(),
+            LayoutError::Resource
+        );
+    }
+
+    #[test]
+    fn old_and_new_full_allocations_overlap_and_preflight_precedes_allocator() {
+        let budget = PlanBudget::default();
+        let header = size_of::<Staged<u64>>();
+        let old = Staged::<u64>::new(8, header, &budget).unwrap();
+        let old_bytes = budget.usage_snapshot().bytes;
+        let replacement = Staged::<u64>::new(9, header, &budget).unwrap();
+        let new_bytes = header + replacement.buffer.capacity() * size_of::<u64>();
+        assert_eq!(budget.usage_snapshot().bytes, old_bytes + new_bytes);
+        drop(replacement);
+        assert_eq!(budget.usage_snapshot().bytes, old_bytes);
+        let requested = header + 9 * size_of::<u64>();
+        let blocker = budget
+            .reserve_bytes(budget.limits().bytes - old_bytes - requested + 1)
+            .unwrap();
+        let before = budget.usage_snapshot().bytes;
+        let called = std::cell::Cell::new(false);
+        assert_eq!(
+            Staged::<u64>::allocate_with(9, header, &budget, |_, _| {
+                called.set(true);
+                Ok(())
+            })
+            .unwrap_err(),
+            LayoutError::Resource
+        );
+        assert!(!called.get());
+        assert_eq!(budget.usage_snapshot().bytes, before);
+        drop(blocker);
+        drop(old);
+        assert_eq!(budget.usage_snapshot().bytes, 0);
+    }
+
+    #[test]
+    fn initialized_storage_is_destroyed_before_scratch_admission_refunds() {
+        #[derive(Debug)]
+        struct Probe<'a> {
+            budget: &'a PlanBudget,
+            paid: usize,
+            destroyed: &'a std::cell::Cell<bool>,
+        }
+        impl Drop for Probe<'_> {
+            fn drop(&mut self) {
+                assert!(self.budget.usage_snapshot().bytes >= self.paid);
+                self.destroyed.set(true);
+            }
+        }
+        let budget = PlanBudget::default();
+        let destroyed = std::cell::Cell::new(false);
+        let mut staged =
+            Staged::<Probe<'_>>::new(1, size_of::<Staged<Probe<'_>>>(), &budget).unwrap();
+        let paid = budget.usage_snapshot().bytes;
+        staged
+            .push(Probe {
+                budget: &budget,
+                paid,
+                destroyed: &destroyed,
+            })
+            .unwrap();
+        assert!(budget.charge_work(usize::MAX).is_err());
+        assert_eq!(ready(&budget), Err(LayoutError::Resource));
+        drop(staged);
+        assert!(destroyed.get());
+        assert_eq!(budget.usage_snapshot().bytes, 0);
+        assert!(budget.first_resource_failure().is_some());
+    }
+
+    #[test]
+    fn retained_surplus_has_exact_authority_and_is_not_reusable_credit() {
+        let budget = PlanBudget::default();
+        let words = [1, 0, 1, Scalar::U8 as u64];
+        let _metadata = budget.reserve_bytes(size_of::<Staged<u64>>()).unwrap();
+        let mut staged = Staged::<u64>::allocate_with(
+            words.len(),
+            size_of::<ClosedTypeKey>(),
+            &budget,
+            |buffer, n| {
+                buffer
+                    .try_reserve_exact(n + 7)
+                    .map_err(|_| LayoutError::Allocation)
+            },
+        )
+        .unwrap();
+        work(&budget, words.len()).unwrap();
+        for word in words {
+            staged.push(word).unwrap();
+        }
+        let (words, storage, surplus) = staged.seal().unwrap();
+        let mut key = ClosedTypeKey {
+            words,
+            storage,
+            surplus,
+        };
+        assert!(key.validate(&budget).is_ok());
+        let paid = budget.usage_snapshot().bytes;
+        let cloned = key.surplus.as_ref().unwrap().clone();
+        drop(cloned);
+        assert_eq!(budget.usage_snapshot().bytes, paid);
+        let original = key.surplus.take().unwrap();
+        assert!(matches!(
+            key.validate(&budget),
+            Err(LayoutError::InvalidLayout)
+        ));
+        let foreign = PlanBudget::default();
+        key.surplus = Some(
+            foreign
+                .reserve_bytes(original.bytes())
+                .unwrap()
+                .retain()
+                .unwrap(),
+        );
+        assert!(matches!(
+            key.validate(&budget),
+            Err(LayoutError::WrongAuthority)
+        ));
+        key.surplus = Some(
+            budget
+                .reserve_bytes(original.bytes() + 1)
+                .unwrap()
+                .retain()
+                .unwrap(),
+        );
+        assert!(matches!(
+            key.validate(&budget),
+            Err(LayoutError::InvalidLayout)
+        ));
+        key.surplus = Some(original);
+        assert!(key.validate(&budget).is_ok());
+        let before = budget.usage_snapshot().bytes;
+        drop(key);
+        assert_eq!(budget.usage_snapshot().bytes, before);
+    }
+
+    #[test]
+    fn complete_scan_counts_only_root_array_frontier() {
+        let budget = PlanBudget::default();
+        let words = [1, 6, 9, 3, 2, 6, 6, 4, u64::MAX, 0, 1, Scalar::U128 as u64];
+        assert_eq!(scan(&words, &budget).unwrap().arrays, 1);
+        let key = ClosedTypeKey::decode(&words, &budget).unwrap();
+        let layout =
+            ObjectLayout::calculate(key, TargetContract::LINUX_X86_64_V1, &budget).unwrap();
+        assert_eq!(layout.shape().size, 24);
+        let mut malformed = words;
+        malformed[11] = 999;
+        assert_eq!(
+            ClosedTypeKey::decode(&malformed, &budget).unwrap_err(),
+            LayoutError::InvalidEncoding
+        );
+    }
+
+    #[test]
     fn calculate_rejects_forged_key_bounds_grammar_and_receipts_without_panicking() {
         let budget = PlanBudget::default();
         let words = [1, 0, 1, Scalar::U8 as u64];
         for (field, value, expected) in [
-            (0, (KEY_WORDS + 1) as u64, LayoutError::InvalidEncoding),
             (0, 2, LayoutError::InvalidEncoding),
             (1, 2, LayoutError::UnsupportedGrammarVersion),
             (2, 0, LayoutError::InvalidEncoding),
@@ -536,7 +905,7 @@ mod forged_tests {
         ] {
             let mut key = ClosedTypeKey::decode(&words, &budget).unwrap();
             match field {
-                0 => key.len = value as usize,
+                0 => key.words.truncate(value as usize),
                 1 => key.words[0] = value,
                 2 => key.words[2] = value,
                 _ => key.words[3] = value,
