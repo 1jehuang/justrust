@@ -303,8 +303,31 @@ impl ExpansionBudget {
         let mut s = self.lock();
         s.healthy()?;
         let index = counter as usize;
-        let used = s.snapshot.counters[index];
         let limit = s.limits.counters[index];
+        // Inside a graph task, work is charged to the polled task's own meter
+        // with its input-scaled limit, so a ledger shared by later tasks (the
+        // session name store) never caps total program or library size.
+        if counter == Counter::Work
+            && let Some(result) = crate::engine::with_current_meter(|meter| {
+                let meter = meter?;
+                let limit = meter.work_limit(limit);
+                Some(
+                    crate::engine::Meter::admit(&meter.work, n, limit)
+                        .map_err(|used| (used, limit)),
+                )
+            })
+        {
+            return result.map_err(|(used, limit)| {
+                s.latch(BudgetFailure {
+                    kind: BudgetFailureKind::Limit,
+                    resource: BudgetResource::Counter(counter),
+                    used,
+                    requested: n,
+                    limit,
+                })
+            });
+        }
+        let used = s.snapshot.counters[index];
         let next = s.checked(BudgetResource::Counter(counter), used, n, limit)?;
         s.snapshot.counters[index] = next;
         Ok(())
