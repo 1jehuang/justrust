@@ -101,3 +101,37 @@ fn string_unicode_trim_and_utf8_prefix_suffix_match_stock() {
     }
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn string_implementation_helpers_remain_private() {
+    for call in [
+        "std::string::str_starts_with(\"é\", \"é\")",
+        "std::string::str_ends_with(\"é\", \"é\")",
+        "std::string::char_is_whitespace(' ')",
+    ] {
+        let source = format!("fn main() {{ let _value = {call}; }}");
+        let error = compiler::compile(source, 1, true)
+            .err()
+            .expect("private implementation helper was exposed")
+            .to_string();
+        assert!(
+            error.contains("private") || error.contains("visible"),
+            "{call}: {error}"
+        );
+    }
+    let source = "fn main() { let text = String::from(\"\\u{3000}é\\u{a0}\"); println!(\"[{}] {} {}\", text.trim(), text.starts_with(\"\\u{3000}\"), text.ends_with(\"\\u{a0}\")); }";
+    compiler::compile(source.into(), 1, true).unwrap();
+    let built = compiler::compile(source.into(), 1, false).unwrap();
+    let root = std::env::var_os("JCODE_SCRATCH_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("jr-string-private-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let binary = root.join("native");
+    fs::write(&binary, built.executable.unwrap()).unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
+    let actual = Command::new(binary).output().unwrap();
+    assert!(actual.status.success(), "{actual:?}");
+    assert_eq!(actual.stdout, "[é] true true\n".as_bytes());
+    fs::remove_dir_all(root).unwrap();
+}

@@ -310,7 +310,7 @@ pub fn str_find(haystack: &str, needle: &str) -> Option<usize> {
     Option::None
 }
 
-pub fn str_starts_with(text: &str, pattern: &str) -> bool {
+pub(super) fn str_starts_with(text: &str, pattern: &str) -> bool {
     let (base, len) = str_parts(text);
     let (needle, count) = str_parts(pattern);
     if count > len { return false; }
@@ -322,7 +322,7 @@ pub fn str_starts_with(text: &str, pattern: &str) -> bool {
     true
 }
 
-pub fn str_ends_with(text: &str, pattern: &str) -> bool {
+pub(super) fn str_ends_with(text: &str, pattern: &str) -> bool {
     let (base, len) = str_parts(text);
     let (needle, count) = str_parts(pattern);
     if count > len { return false; }
@@ -336,7 +336,7 @@ pub fn str_ends_with(text: &str, pattern: &str) -> bool {
 }
 
 // Unicode White_Space, the property used by Rust's char::is_whitespace.
-pub fn char_is_whitespace(ch: char) -> bool {
+pub(super) fn char_is_whitespace(ch: char) -> bool {
     let c = ch as u32;
     (c >= 9u32 && c <= 13u32) || c == 32u32 || c == 133u32
         || c == 160u32 || c == 5760u32 || (c >= 8192u32 && c <= 8202u32)
