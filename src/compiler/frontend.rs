@@ -51,6 +51,7 @@ mod format_macros;
 pub use format_macros::SourceFormatInto;
 mod format_spec;
 mod inherited_associated;
+mod iterator_traits;
 mod nominal_bounds;
 mod operators;
 mod panic_format;
@@ -15189,6 +15190,8 @@ pub struct DeclRegistry {
     associated_ids: Vec<Vec<ir::DeclId>>,
     traits: HashMap<TraitLookupKey, ir::DeclId>,
     trait_ids: Vec<ir::DeclId>,
+    /// Canonical embedded iter module declarations, indexed during registration.
+    native_iterator_traits: [Option<ir::DeclId>; 2],
     trait_items: Vec<Vec<ir::DeclId>>,
     trait_associated_types: Vec<Vec<ir::DeclId>>,
     associated_type_bounds: HashMap<ir::DeclId, FrozenAssociatedBounds>,
@@ -16104,6 +16107,7 @@ impl PlanCtx {
             associated_ids: Vec::new(),
             traits: HashMap::new(),
             trait_ids: Vec::new(),
+            native_iterator_traits: [None; 2],
             trait_items: Vec::new(),
             trait_associated_types: Vec::new(),
             associated_type_bounds: HashMap::new(),
@@ -16452,6 +16456,11 @@ impl PlanCtx {
                 id,
             );
             registry.trait_ids.push(id);
+            if let Some(slot) = iterator_traits::native_iterator_slot(program, declaration)? {
+                if registry.native_iterator_traits[slot].replace(id).is_some() {
+                    return Err("duplicate canonical native iterator trait".into());
+                }
+            }
             let mut items = Vec::new();
             for (item, method) in declaration.items.iter().enumerate() {
                 items.push(insert(
