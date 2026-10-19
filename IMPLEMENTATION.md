@@ -76,7 +76,9 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
 - [x] Range expressions in ordinary expression positions, including call arguments,
       parenthesized receivers and open/full/inclusive bounds. They lower to ordinary
       native `std::ops` range values. `tests/range_exprs.rs` compares stock output.
-      Iterator/adapters remain a separate library workstream.
+      Native bounded integer `for` ranges also accept `.rev()` and `.into_iter()`
+      chains, preserving bound evaluation order, empty ranges and inclusive MIN.
+      General Iterator/adapters remain a separate library workstream.
 - [x] Genuine statement-position integer range for loops (`start..end` and
       `start..=end`) through existing checked while/match IR. Bounds evaluate
       once, left to right, before body-only source bindings. Pre-body advancement
@@ -675,12 +677,6 @@ targets reject explicitly. The current private aggregate ABI does not pass this
 gate, nor does successful direct ELF emission alone.
 
 ### G7. Native core, alloc and std bring-up
-
-Native-prelude progress: `Vec<T>: Index<usize>` now supports value reads,
-shared element borrows and indexed formatting through ordinary source trait
-calls. `tests/vec_index.rs` compares CHECK/BUILD/output at workers 1 and 8
-with stock Rust and checks the out-of-bounds abort. Mutable IndexMut and
-range indexing remain separate blockers, not full Vec or std acceptance.
 
 - [ ] Establish pinned library source manifests, language-item/intrinsic inventory,
       sysroot identity and library feature/target configuration without embedding

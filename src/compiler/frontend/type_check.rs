@@ -1016,10 +1016,6 @@ impl<'s> Checker<'s> {
             Expr::Borrow { kind, place } => {
                 plan.budget.charge_work(place.fields.len() + 1)?;
                 self.infer_storage(place.fields.len() + 1)?;
-                if let Some(ir::Ty::Ref { referent, .. }) = self.static_index_borrow_hint(place)? {
-                    let inner = self.infer_type_term(&referent, None, depth + 1)?;
-                    return self.infer_node(InferKind::Ref(*kind, inner));
-                }
                 let (_, referent, _) = self.checked_place(place)?;
                 self.validate_borrow_referent(*kind, &referent)?;
                 let inner = self.infer_type_term(&referent, None, depth + 1)?;
@@ -4271,16 +4267,6 @@ impl<'a> Checker<'a> {
                     referent: Arc::new(referent),
                 })
             }
-            Expr::Borrow { kind, place } => {
-                if let Some(ir::Ty::Ref { referent, .. }) = self.static_index_borrow_hint(place)? {
-                    Some(ir::Ty::Ref {
-                        kind: *kind,
-                        referent,
-                    })
-                } else {
-                    None
-                }
-            }
             Expr::Integer(literal) => literal.suffix.map(ir::Ty::Int),
             Expr::Float(literal) => literal.suffix.map(ir::Ty::Float),
             Expr::Bool(_) => Some(ir::Ty::Bool),
@@ -4402,24 +4388,7 @@ impl<'a> Checker<'a> {
                             )?;
                             Some(element.clone())
                         } else {
-                            let literal;
-                            let index = match e {
-                                Expr::DynamicIndex { index, .. } => index.as_ref(),
-                                Expr::Index { index, .. } => {
-                                    literal = Expr::Integer(IntegerLiteral {
-                                        magnitude: *index as u128,
-                                        suffix: None,
-                                    });
-                                    &literal
-                                }
-                                _ => unreachable!(),
-                            };
-                            match self.index_reference_hint(&ty, index)? {
-                                Some(ir::Ty::Ref { referent, .. }) => {
-                                    Some(referent.as_ref().clone())
-                                }
-                                _ => None,
-                            }
+                            None
                         }
                     }
                     _ => None,
@@ -6029,9 +5998,6 @@ impl<'a> Checker<'a> {
         for s in &b.statements {
             self.reachable = entered_reachable && live;
             let (statement, completes) = match s {
-                _ if let Some(result) = self.overloaded_index_assignment(s, &mut statements)? => {
-                    result
-                }
                 Stmt::Declare { name, ty, mutable } => {
                     if matches!(ty, Type::Infer) {
                         let BindingName::Named(name) = name else {
@@ -7088,9 +7054,6 @@ impl<'a> Checker<'a> {
         ) {
             return self.associated_expression(e, expectation.hard());
         }
-        if let Some(id) = self.overloaded_index_borrow(e)? {
-            return Ok(id);
-        }
         if matches!(
             e,
             Expr::Binary { .. }
@@ -7901,15 +7864,31 @@ impl<'a> Checker<'a> {
         body: &Block,
         item_hint: Option<&ir::Ty>,
     ) -> Result<(ir::Stmt, bool), String> {
-        if !source.adapters.is_empty() {
+        if source
+            .adapters
+            .iter()
+            .any(|a| !matches!(a, ForAdapter::Rev | ForAdapter::IntoIter))
+        {
             return Err("for iterator adapters are not supported yet".into());
         }
+        let reverse = source
+            .adapters
+            .iter()
+            .filter(|a| matches!(a, ForAdapter::Rev))
+            .count()
+            % 2
+            != 0;
         let ForIterable::Range {
             start,
             end,
             inclusive,
         } = &source.iterable
         else {
+            if !source.adapters.is_empty() {
+                return Err(
+                    "for iterator adapters on non-range values are not supported yet".into(),
+                );
+            }
             let ForIterable::Value(value) = &source.iterable else {
                 unreachable!()
             };
@@ -7982,7 +7961,11 @@ impl<'a> Checker<'a> {
             let next = self.for_expr(
                 ty.clone(),
                 ir::ExprKind::Binary {
-                    op: BinaryOp::Add,
+                    op: if reverse {
+                        BinaryOp::Sub
+                    } else {
+                        BinaryOp::Add
+                    },
                     left: increment_cursor,
                     right: one,
                 },
@@ -7998,7 +7981,11 @@ impl<'a> Checker<'a> {
             let in_range = self.for_expr(
                 ir::Ty::Bool,
                 ir::ExprKind::Binary {
-                    op: if *inclusive {
+                    op: if reverse && *inclusive {
+                        BinaryOp::Ge
+                    } else if reverse {
+                        BinaryOp::Gt
+                    } else if *inclusive {
                         BinaryOp::Le
                     } else {
                         BinaryOp::Lt
@@ -8030,6 +8017,29 @@ impl<'a> Checker<'a> {
                     },
                 },
             )?;
+            // A reversed half-open range holds the exclusive upper cursor.
+            // Only subtract after the comparison, so empty ranges at MIN do
+            // not overflow. Inclusive reverse snapshots before decrementing.
+            let snapshot_cursor = if reverse && !*inclusive {
+                let cursor_value = self.for_expr(ty.clone(), ir::ExprKind::Local(cursor))?;
+                let one = self.for_expr(
+                    ty.clone(),
+                    ir::ExprKind::Int(ir::IntValue {
+                        ty: int_ty,
+                        bits: 1,
+                    }),
+                )?;
+                self.for_expr(
+                    ty.clone(),
+                    ir::ExprKind::Binary {
+                        op: BinaryOp::Sub,
+                        left: cursor_value,
+                        right: one,
+                    },
+                )?
+            } else {
+                snapshot_cursor
+            };
             let available = self.for_expr(
                 ir::Ty::Bool,
                 ir::ExprKind::If {
@@ -8090,8 +8100,20 @@ impl<'a> Checker<'a> {
             } else {
                 ir::Completion::Never
             };
-            let block = ir::Block {
-                statements: vec![
+            let mut initialization = if reverse {
+                // Source bounds still evaluate exactly once, left to right.
+                vec![
+                    ir::Stmt::Let {
+                        local: limit,
+                        value: start,
+                    },
+                    ir::Stmt::Let {
+                        local: cursor,
+                        value: end,
+                    },
+                ]
+            } else {
+                vec![
                     ir::Stmt::Let {
                         local: cursor,
                         value: start,
@@ -8100,23 +8122,28 @@ impl<'a> Checker<'a> {
                         local: limit,
                         value: end,
                     },
-                    ir::Stmt::Let {
-                        local: current,
-                        value: initialize_cursor,
+                ]
+            };
+            initialization.extend([
+                ir::Stmt::Let {
+                    local: current,
+                    value: initialize_cursor,
+                },
+                ir::Stmt::Let {
+                    local: done,
+                    value: initial_no,
+                },
+                ir::Stmt::While {
+                    id,
+                    condition,
+                    body: ir::Block {
+                        statements: vec![ir::Stmt::Expr(matched)],
+                        tail: None,
                     },
-                    ir::Stmt::Let {
-                        local: done,
-                        value: initial_no,
-                    },
-                    ir::Stmt::While {
-                        id,
-                        condition,
-                        body: ir::Block {
-                            statements: vec![ir::Stmt::Expr(matched)],
-                            tail: None,
-                        },
-                    },
-                ],
+                },
+            ]);
+            let block = ir::Block {
+                statements: initialization,
                 tail: None,
             };
             let completes = sf.completes && ef.completes;

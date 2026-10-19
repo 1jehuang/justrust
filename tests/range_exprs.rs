@@ -10,6 +10,22 @@ fn range_exprs_match_stock() {
         "range-exprs",
         &[
             Case {
+                name: "reverse_bounds",
+                source: r#"fn bound(x: i32) -> i32 { print!("b{} ", x); x }
+fn main() {
+    for i in (bound(1)..bound(4)).rev() { if i == 2 { continue; } print!("{} ", i); }
+    println!();
+    for i in (0u8..=2u8).rev() { print!("{} ", i); }
+    println!();
+    for i in (0u8..0u8).rev() { println!("bad {}", i); }
+    for i in (3..1).rev() { println!("bad {}", i); }
+    for i in (-128i8..=-128i8).rev() { println!("{}", i); }
+    for i in (0..3).rev().rev() { print!("{} ", i); }
+    println!();
+}"#,
+                expect: Expect::Run("b1 b4 3 1 \n2 1 0 \n-128\n0 1 2 \n"),
+            },
+            Case {
                 name: "all_forms",
                 source: r#"fn take(r: std::ops::Range<i32>) -> i32 { r.end - r.start }
 fn main() {
