@@ -1,0 +1,118 @@
+[
+  {
+    "applications": 129,
+    "error": "generic planning resource limit exceeded",
+    "first_failure": {
+      "arithmetic_overflow": false,
+      "call_site": {
+        "column": 32,
+        "file": "src/compiler/traits.rs",
+        "file_truncated": false,
+        "line": 1243
+      },
+      "graph_id": 1,
+      "kind": "work",
+      "limit": 32000000,
+      "requested": 226,
+      "task_id": 13,
+      "used": 31999831
+    },
+    "side": "before",
+    "success": false,
+    "task": {
+      "kind": 113,
+      "node": 13,
+      "params": [],
+      "phase": "mono_plan"
+    },
+    "work": 32134173,
+    "workers": 1
+  },
+  {
+    "applications": 129,
+    "error": "generic planning resource limit exceeded",
+    "first_failure": {
+      "arithmetic_overflow": false,
+      "call_site": {
+        "column": 32,
+        "file": "src/compiler/traits.rs",
+        "file_truncated": false,
+        "line": 1243
+      },
+      "graph_id": 1,
+      "kind": "work",
+      "limit": 32000000,
+      "requested": 226,
+      "task_id": 13,
+      "used": 31999831
+    },
+    "side": "before",
+    "success": false,
+    "task": {
+      "kind": 113,
+      "node": 13,
+      "params": [],
+      "phase": "mono_plan"
+    },
+    "work": 32134173,
+    "workers": 8
+  },
+  {
+    "applications": 134,
+    "error": "generic planning depth limit exceeded",
+    "first_failure": {
+      "arithmetic_overflow": false,
+      "call_site": {
+        "column": 43,
+        "file": "src/compiler/traits.rs",
+        "file_truncated": false,
+        "line": 2388
+      },
+      "graph_id": 1,
+      "kind": "depth",
+      "limit": 128,
+      "requested": 129,
+      "task_id": 13,
+      "used": 0
+    },
+    "side": "after",
+    "success": false,
+    "task": {
+      "kind": 113,
+      "node": 13,
+      "params": [],
+      "phase": "mono_plan"
+    },
+    "work": 14640602,
+    "workers": 1
+  },
+  {
+    "applications": 134,
+    "error": "generic planning depth limit exceeded",
+    "first_failure": {
+      "arithmetic_overflow": false,
+      "call_site": {
+        "column": 43,
+        "file": "src/compiler/traits.rs",
+        "file_truncated": false,
+        "line": 2388
+      },
+      "graph_id": 1,
+      "kind": "depth",
+      "limit": 128,
+      "requested": 129,
+      "task_id": 13,
+      "used": 0
+    },
+    "side": "after",
+    "success": false,
+    "task": {
+      "kind": 113,
+      "node": 13,
+      "params": [],
+      "phase": "mono_plan"
+    },
+    "work": 14640602,
+    "workers": 8
+  }
+]
