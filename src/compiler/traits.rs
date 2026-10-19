@@ -1976,12 +1976,7 @@ impl ValidatedTraitWorld {
                     TypeUse::Referent { depth, .. } => depth.checked_add(1).ok_or_else(|| {
                         FactsError::resource(&self.budget, "reference value depth overflow")
                     })?,
-                    TypeUse::Actual => {
-                        return Err(FactsError::unsupported(
-                            &self.budget,
-                            "unsupported: reference-containing aggregate executable actual",
-                        ));
-                    }
+                    TypeUse::Actual => 1,
                 };
                 charged(&self.budget, self.budget.check_depth(usize::from(depth)))?;
                 child(
