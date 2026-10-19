@@ -16,9 +16,22 @@ Bootstrap validation used local justrust because exercising the installed
 unsafe hosted watcher could kill unrelated jobs: check passed, all 727 tests
 passed (3 ignored), including a real watcher/rsync failure with an unrelated
 run completing over the preserved framed transport. Retry tests cover
-24-to-success, persistent 24, exit 23, and 24 followed by exit 12. No build
-speedup is claimed. Run export was deferred while other hosted jobs are active
-at the coordinator's request.
+24-to-success, persistent 24, exit 23, and 24 followed by exit 12. Strict
+clippy and cargo fmt --check passed, then cargo install --path . --locked
+installed the stable client. No build speedup is claimed.
+
+Live acceptance on the normal billed hosted path also passed. A 45-second
+unrelated test completed after a second root's 350 tracked files became
+unreadable locally: at 09:22:31 daemon PID 2375875 logged rsync exit 23,
+without closing or reconnecting its agent. Restoring permissions and changing
+the second root's source caused a full mirror at 09:23:13, followed by the
+new identifiable latest_source_version_2 test passing. Hosted receipts
+`20261019-092216815-2383903` (survivor) and
+`20261019-092311807-2388837` (fresh source) both report exit 0.
+Upgrade was non-disruptive: at 09:21:01 the old daemon PID
+3666693 logged "shutdown requested, finishing 4 run(s) in flight", while
+PID 2375875 started the new daemon. No process was force-killed. Run export
+was deferred at the coordinator's request while other jobs are active.
 
 ## 2026-10-17: Jcode client usage audit focused validation
 
