@@ -21,7 +21,10 @@ milestone, not full Rust support (see RUST-COMPATIBILITY.md).
 - `justrust test --test full_programs -- --nocapture` prints per-program
   `PASS` or the first native diagnostic.
 
-## Status (2026-10-18, origin/clean-room-rewrite bf4ad37)
+## Status (2026-10-19, origin/clean-room-rewrite 6ae2c3e)
+
+Landed since bf4ad37: char literal/range patterns (671f9090f), argument-position
+`impl Trait` (8347eaf25), rvalue method receivers (2dcaa3841), char casts.
 
 0/20 pass. First native diagnostics: derive attribute 8, `for` 4,
 string literal in expression position 4, `vec!`/`write!` style macro 2,
@@ -57,13 +60,12 @@ that feature (values observed via `if cond { println!("ok") }`).
 | 17 | fmt-float | 3 | f64 `{}` shortest round-trip printing, `parse::<f64>` | float arithmetic works, printing does not |
 | 17 | autoderef | 3 | implicit autoderef for method calls, field access and indexing through `&`/`&&` | "implicit reference autodereference is unsupported in B1" |
 | 21 | generic-bounds | 2 | generic impls with `T: PartialOrd + Copy`, `T: Ord + Display`, comparisons on `T` | basic generics OK |
-| 21 | impl-trait | 2 | `impl Trait` in argument and return position | "expected ASCII identifier, found \"impl\"" |
+| 21 | impl-trait | 2 | `impl Trait` in return position (argument position landed 8347eaf25) | return position unsupported |
 | 21 | hashmap | 2 | `HashMap`/`BTreeMap`: insert/get/get_mut/entry/or_insert/or_default/remove/values/into_iter | std-paths first |
 | 21 | dyn | 2 | `dyn Trait` objects, vtables, `Box<dyn T>` and `Rc<dyn T>` | "expected ASCII identifier, found \"dyn\"" |
 | 21 | unsize | 2 | unsizing coercions `Box<S> -> Box<dyn T>`, `Rc<S> -> Rc<dyn T>`, `&Vec<T> -> &[T]` | needs dyn |
 | 21 | box | 2 | `Box<T>`, `Box::new`, deref, recursive enums | "unresolved function" |
 | 21 | or-pat | 2 | `a \| b` patterns (and inside `matches!`) | "or-patterns and @ patterns are unsupported" |
-| 21 | char-pat | 2 | char literal and range patterns `'0'..='9'` | "character literal and range patterns are unsupported" |
 | 21 | ref-ops | 2 | arithmetic and comparison on references (`&i32 * &i32`), via std impls | unprobed |
 | 21 | fmt-spec | 2 | format specs `{:.2}`, `{:02}`, `{:>8}` | unsupported placeholder |
 | 31 | const | 1 | `const` items in types and expressions (`[[i64; N]; N]`) | "const items ... unsupported" |
@@ -84,7 +86,7 @@ that feature (values observed via `if cond { println!("ok") }`).
 7. + derive: 08_enum_state_machine
 8. + closure + const + autoderef: 06_matrix
 9. + prim-methods + byte-lit: 10_string_processing
-10. + option-result + or-pat + char-pat: 09_vec_stack
+10. + option-result + or-pat: 09_vec_stack
 11. + box + ref-ops: 12_linked_list
 12. + std-paths + hashmap: 17_hashmap_word_count
 13. + user-fmt + ops-traits: 19_operator_overloading
