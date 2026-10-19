@@ -14,7 +14,7 @@ mod grouped_or;
 use std::sync::atomic::{AtomicU64, Ordering};
 #[path = "ir/closure.rs"]
 mod closure;
-pub use closure::{ClosureKind, ClosureTy};
+pub use closure::{CaptureKind, CaptureSource, ClosureKind, ClosureTy};
 #[path = "ir/intrinsics.rs"]
 mod intrinsics;
 #[cfg(test)]

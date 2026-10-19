@@ -12,6 +12,21 @@ pub enum ClosureKind {
     FnOnce,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CaptureKind {
+    Value,
+    Shared,
+    Mut,
+}
+
+/// Source authorization for a physical environment field. The place belongs to
+/// the canonical parent's checked body, never an alias spelled in the child.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CaptureSource {
+    pub place: Place,
+    pub kind: CaptureKind,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ClosureTy {
     owner: DeclId,
@@ -21,6 +36,7 @@ pub struct ClosureTy {
     params: Arc<[Ty]>,
     result: Arc<Ty>,
     captures: Arc<[Ty]>,
+    sources: Arc<[CaptureSource]>,
     kind: ClosureKind,
 }
 
@@ -44,8 +60,16 @@ impl ClosureTy {
             params,
             result: Arc::new(result),
             captures,
+            sources: Arc::from([]),
             kind,
         }
+    }
+    pub(in crate::compiler) fn with_sources(mut self, sources: Arc<[CaptureSource]>) -> Self {
+        self.sources = sources;
+        self
+    }
+    pub fn sources(&self) -> &[CaptureSource] {
+        &self.sources
     }
     pub(in crate::compiler) fn try_map<E>(
         &self,
@@ -72,7 +96,8 @@ impl ClosureTy {
                 .collect::<Result<Vec<_>, _>>()?
                 .into(),
             self.kind,
-        ))
+        )
+        .with_sources(self.sources.clone()))
     }
     pub(in crate::compiler) fn try_eq<'a, E>(
         &'a self,
@@ -83,6 +108,7 @@ impl ClosureTy {
             || self.site != other.site
             || self.provider != other.provider
             || self.kind != other.kind
+            || self.sources != other.sources
             || self.owner_args.len() != other.owner_args.len()
             || self.params.len() != other.params.len()
             || self.captures.len() != other.captures.len()

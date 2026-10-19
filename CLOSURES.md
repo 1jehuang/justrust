@@ -1,5 +1,14 @@
 # Closure callable foundation
 
+Stored closures now retain immutable parent-body capture environments. Value and
+`move` captures support direct calls and generic `Fn`/`FnOnce` bounds, with
+mode-specific concrete receiver bodies and ordinary move/drop checking. Capture
+source places, owner instantiation, site, provider and receiver capability are
+part of executable authorization. `tests/closure_captures.rs` compares valid
+execution and invalid move reuse against stock Rust at workers 1 and 8.
+Stored by-reference captures, closures in generic parents and opaque returns
+remain unsupported by this increment. This is not complete closure support.
+
 This is not full closure support or full Rust compatibility.
 The mutable scalar increment below is a private checkpoint with scoped replay
 passed on published `677ea96ab`, pending coordinator-composed full-suite

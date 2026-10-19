@@ -219,6 +219,7 @@ enum Input {
 struct TemplateBodyFact {
     checked: Arc<ir::CheckedFunction>,
     closure: Option<frontend::closures::check::CheckedClosure>,
+    closure_mode: Option<ir::ClosureKind>,
     publication: Option<Arc<source_replay::CanonicalSourcePublication>>,
 }
 struct ClosureBodiesFact {
@@ -360,6 +361,56 @@ impl Facts<'_> {
     async fn template(&self, index: usize) -> Result<Arc<TemplateBodyFact>, Error> {
         self.get(Self::item(TEMPLATE_BODY, index)).await
     }
+    async fn callee_templates(
+        &self,
+        types: &frontend::PlanCtx,
+        targets: Vec<(usize, ir::CallTarget)>,
+    ) -> Result<Vec<ownership::VerifiedTemplateCfg>, Error> {
+        // All independent canonical parent-body reads are requested first.
+        let mut pending = Vec::new();
+        for (index, target) in targets {
+            let handle = if types
+                .stored_closure_owner(target.declaration)
+                .map_err(Error::new)?
+                .is_some()
+            {
+                Some(self.cx.request(Self::item(TEMPLATE_BODY, index)).get(0))
+            } else {
+                None
+            };
+            pending.push((index, target, handle));
+        }
+        let mut keys = Vec::new();
+        for (index, target, handle) in pending {
+            let key = if let Some(handle) = handle {
+                let template: Arc<TemplateBodyFact> = self.cx.read_fact(handle).await?;
+                let closure = template
+                    .closure
+                    .as_ref()
+                    .ok_or_else(|| Error::new("closure admission omitted canonical metadata"))?;
+                types
+                    .validate_closure_instance(closure, &target)
+                    .map_err(Error::new)?;
+                let mode = types.closure_instance_mode(&target).map_err(Error::new)?;
+                closure_body_key(UNIVERSAL_ANALYZE, index, closure.ty.kind(), mode)
+            } else {
+                Self::item(UNIVERSAL_ANALYZE, index)
+            };
+            keys.push(key);
+        }
+        keys.sort_by(|left, right| left.params.cmp(&right.params));
+        keys.dedup();
+        let handles: Vec<_> = keys
+            .into_iter()
+            .map(|key| self.cx.request(key).get(0))
+            .collect();
+        let mut templates = Vec::new();
+        for handle in handles {
+            let proof: Arc<UniversalProofFact> = self.cx.read_fact(handle).await?;
+            templates.push(proof.verified.clone());
+        }
+        Ok(templates)
+    }
     async fn plan(&self) -> Result<Arc<PlanFact>, Error> {
         self.get(Self::root(MONO_PLAN)).await
     }
@@ -417,7 +468,12 @@ impl CompilerProvider {
             types
                 .trait_world()
                 .map_err(Error::new)?
-                .closure_callable_facts(closure.ty.clone())
+                .closure_callable_facts_for(
+                    closure.ty.clone(),
+                    template
+                        .closure_mode
+                        .ok_or_else(|| Error::new("closure template has no capability"))?,
+                )
                 .map_err(|e| source_fact_error(e, &self.0.budget))?
         } else if let Some(publication) = &template.publication {
             publication.facts().clone()
@@ -644,7 +700,7 @@ impl Provider for CompilerProvider {
                     cx.publish_fact(0, CaptureEnvironmentFact { environment })
                 }
                 TEMPLATE_BODY => {
-                    let index = item_index(&key, "missing declaration index")?;
+                    let (index, requested_mode) = closure_body_index(&key)?;
                     let types = facts.types().await?;
                     if let Some((owner, site)) = types
                         .stored_closure_owner(types.callable_decl(index).map_err(Error::new)?)
@@ -667,12 +723,17 @@ impl Provider for CompilerProvider {
                                 Error::new("closure body absent from its canonical parent fact")
                             })?
                             .clone();
+                        let mode = requested_mode.unwrap_or(closure.ty.kind());
+                        if requested_mode == Some(closure.ty.kind()) {
+                            return Err(Error::new("noncanonical primary closure capability key"));
+                        }
+                        let body = closure.body_for(mode).map_err(Error::new)?;
                         let closure_facts = types
                             .trait_world()
                             .map_err(Error::new)?
-                            .closure_callable_facts(closure.ty.clone())
+                            .closure_callable_facts_for(closure.ty.clone(), mode)
                             .map_err(|e| source_fact_error(e, &this.0.budget))?;
-                        ir::validate_call_evidence(&closure.body, &closure_facts, &this.0.budget)
+                        ir::validate_call_evidence(&body, &closure_facts, &this.0.budget)
                             .map_err(Error::new)?;
                         cx.publish_fact(
                             1,
@@ -683,11 +744,15 @@ impl Provider for CompilerProvider {
                         return cx.publish_fact(
                             0,
                             TemplateBodyFact {
-                                checked: closure.body.clone(),
+                                checked: body,
                                 publication: None,
                                 closure: Some(closure),
+                                closure_mode: Some(mode),
                             },
                         );
+                    }
+                    if requested_mode.is_some() {
+                        return Err(Error::new("receiver capability key on non-closure body"));
                     }
                     for owner in types
                         .closure_graph_owners(index, &this.0.budget)
@@ -784,6 +849,7 @@ impl Provider for CompilerProvider {
                             TemplateBodyFact {
                                 checked: publication.source().clone(),
                                 closure: None,
+                                closure_mode: None,
                                 publication: Some(publication),
                             }
                         }
@@ -800,6 +866,7 @@ impl Provider for CompilerProvider {
                             TemplateBodyFact {
                                 checked,
                                 closure: None,
+                                closure_mode: None,
                                 publication: None,
                             }
                         }
@@ -813,15 +880,22 @@ impl Provider for CompilerProvider {
                     cx.publish_fact(0, fact)
                 }
                 UNIVERSAL_LOWER => {
-                    let index = item_index(&key, "missing declaration index")?;
+                    let (index, _) = closure_body_index(&key)?;
                     let types = facts.types().await?;
-                    let template = facts.template(index).await?;
+                    let template: Arc<TemplateBodyFact> = facts
+                        .get(Key::new(TEMPLATE_BODY, key.params.clone()))
+                        .await?;
                     let declaration = types.callable_decl(index).map_err(Error::new)?;
                     let callable = if let Some(closure) = &template.closure {
                         types
                             .trait_world()
                             .map_err(Error::new)?
-                            .closure_callable_facts(closure.ty.clone())
+                            .closure_callable_facts_for(
+                                closure.ty.clone(),
+                                template.closure_mode.ok_or_else(|| {
+                                    Error::new("closure template has no capability")
+                                })?,
+                            )
                             .map_err(|e| source_fact_error(e, &this.0.budget))?
                     } else {
                         types.callable_facts(declaration).map_err(Error::new)?
@@ -849,9 +923,9 @@ impl Provider for CompilerProvider {
                     cx.publish_fact(0, lowered)
                 }
                 UNIVERSAL_ANALYZE => {
-                    let index = item_index(&key, "missing declaration index")?;
-                    let lowered: Arc<cfg::TemplateCfg> =
-                        facts.get(function(UNIVERSAL_LOWER, index)).await?;
+                    let (index, _) = closure_body_index(&key)?;
+                    let lower_key = Key::new(UNIVERSAL_LOWER, key.params.clone());
+                    let lowered: Arc<cfg::TemplateCfg> = facts.get(lower_key).await?;
                     let template_name = lowered.source().name.clone();
                     match ownership::verify_template(lowered.as_ref().clone()) {
                         Ok(verified) => {
@@ -872,14 +946,15 @@ impl Provider for CompilerProvider {
                     }
                 }
                 UNIVERSAL_EFFECTS_READY => {
-                    let index = item_index(&key, "missing declaration index")?;
+                    let (index, _) = closure_body_index(&key)?;
                     let types = facts.types().await?;
                     let declaration = types.callable_decl(index).map_err(Error::new)?;
                     if !Self::universal_body(&types, declaration)? {
                         return Err(Error::new("non-universal callable has no admission fact"));
                     }
-                    let proof: Arc<UniversalProofFact> =
-                        facts.get(function(UNIVERSAL_ANALYZE, index)).await?;
+                    let proof: Arc<UniversalProofFact> = facts
+                        .get(Key::new(UNIVERSAL_ANALYZE, key.params.clone()))
+                        .await?;
                     let mut callee_indices = Vec::new();
                     for expression in &proof.verified.source().exprs {
                         this.0.budget.charge_work(1).map_err(Error::new)?;
@@ -914,20 +989,10 @@ impl Provider for CompilerProvider {
                             .callable_index(target.declaration)
                             .map_err(Error::new)?;
                         if callee != index {
-                            callee_indices.push(callee);
+                            callee_indices.push((callee, target.clone()));
                         }
                     }
-                    callee_indices.sort_unstable();
-                    callee_indices.dedup();
-                    let handles: Vec<_> = callee_indices
-                        .iter()
-                        .map(|callee| cx.request(function(UNIVERSAL_ANALYZE, *callee)).get(0))
-                        .collect();
-                    let mut templates = Vec::with_capacity(handles.len());
-                    for handle in handles {
-                        let proof: Arc<UniversalProofFact> = cx.read_fact(handle).await?;
-                        templates.push(proof.verified.clone());
-                    }
+                    let templates = facts.callee_templates(&types, callee_indices).await?;
                     ownership::CarrierEffectTable::admit_reference_actual_calls(
                         &proof.verified,
                         &templates,
@@ -953,11 +1018,28 @@ impl Provider for CompilerProvider {
                     let index = item_index(&key, "missing instance index")?;
                     let types = facts.types().await?;
                     let (instance_target, instance_source) = facts.instance(index).await?;
-                    let template = facts.template(instance_source).await?;
+                    let mut template = facts.template(instance_source).await?;
+                    let mut proof_key = function(UNIVERSAL_ANALYZE, instance_source);
                     if let Some(closure) = &template.closure {
                         types
                             .validate_closure_instance(closure, &instance_target)
                             .map_err(Error::new)?;
+                        let mode = types
+                            .closure_instance_mode(&instance_target)
+                            .map_err(Error::new)?;
+                        proof_key = closure_body_key(
+                            UNIVERSAL_ANALYZE,
+                            instance_source,
+                            closure.ty.kind(),
+                            mode,
+                        );
+                        let template_key = closure_body_key(
+                            TEMPLATE_BODY,
+                            instance_source,
+                            closure.ty.kind(),
+                            mode,
+                        );
+                        template = facts.get(template_key).await?;
                     }
                     let source = this.validated_body(&types, instance_source, &template)?;
                     let fact = if !Self::universal_body(&types, instance_target.declaration)? {
@@ -985,9 +1067,7 @@ impl Provider for CompilerProvider {
                     } else {
                         let closed = types.instance_facts(&instance_target).map_err(Error::new)?;
                         let mut context = types.as_ref().clone();
-                        let proof: Arc<UniversalProofFact> = facts
-                            .get(function(UNIVERSAL_ANALYZE, instance_source))
-                            .await?;
+                        let proof: Arc<UniversalProofFact> = facts.get(proof_key).await?;
                         let verified = &proof.verified;
                         if closed
                             .is_source_callable(instance_target.declaration)
@@ -1118,20 +1198,10 @@ impl Provider for CompilerProvider {
                             let callee = types
                                 .callable_index(target.declaration)
                                 .map_err(Error::new)?;
-                            callee_indices.push(callee);
+                            callee_indices.push((callee, target.clone()));
                         }
                     }
-                    callee_indices.sort_unstable();
-                    callee_indices.dedup();
-                    let handles: Vec<_> = callee_indices
-                        .iter()
-                        .map(|callee| cx.request(function(UNIVERSAL_ANALYZE, *callee)).get(0))
-                        .collect();
-                    let mut templates = Vec::with_capacity(handles.len());
-                    for handle in handles {
-                        let proof: Arc<UniversalProofFact> = cx.read_fact(handle).await?;
-                        templates.push(proof.verified.clone());
-                    }
+                    let templates = facts.callee_templates(&types, callee_indices).await?;
                     let effects =
                         ownership::CarrierEffectTable::for_callees(&templates, &this.0.budget)
                             .map_err(Error::new)?;
@@ -1556,6 +1626,35 @@ fn has_drop(function: &cfg::Function) -> bool {
         .iter()
         .any(|block| matches!(block.terminator.value, cfg::Terminator::Drop { .. }))
 }
+fn closure_body_index(key: &Key) -> Result<(usize, Option<ir::ClosureKind>), Error> {
+    let (index, mode) = match key.params.as_slice() {
+        [index] => (*index, None),
+        [index, 0] => (*index, Some(ir::ClosureKind::Fn)),
+        [index, 1] => (*index, Some(ir::ClosureKind::FnMut)),
+        [index, 2] => (*index, Some(ir::ClosureKind::FnOnce)),
+        _ => return Err(Error::new("invalid closure body capability key")),
+    };
+    Ok((
+        usize::try_from(index).map_err(|_| Error::new("invalid declaration index"))?,
+        mode,
+    ))
+}
+fn closure_body_key(
+    kind: u32,
+    index: usize,
+    primary: ir::ClosureKind,
+    mode: ir::ClosureKind,
+) -> Key {
+    if primary == mode {
+        return Facts::item(kind, index);
+    }
+    let mode = match mode {
+        ir::ClosureKind::Fn => 0,
+        ir::ClosureKind::FnMut => 1,
+        ir::ClosureKind::FnOnce => 2,
+    };
+    Key::new(kind, vec![index as u64, mode])
+}
 fn item_index(key: &Key, missing: &str) -> Result<usize, Error> {
     let [index] = key.params.as_slice() else {
         return Err(Error::new(missing));
@@ -1955,6 +2054,9 @@ pub(super) fn compile_program_observed(
         budget,
     )
 }
+
+#[cfg(test)]
+mod closure_mode_tests;
 
 #[cfg(test)]
 mod owner_route_tests {

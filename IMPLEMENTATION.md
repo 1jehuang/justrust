@@ -525,8 +525,11 @@ cleanup failures.
       completion of this item.
       Stored noncapturing closures are checked in their parent body and published
       as immutable per-parent executable facts, with direct and generic Fn calls
-      (`tests/stored_closures.rs`). Captured stored environments, opaque returns
-      and iterator integration remain open.
+      (`tests/stored_closures.rs`). Stored value/move capture environments and
+      FnOnce consumption use canonical receiver-mode-specific executable facts
+      (`tests/closure_captures.rs`), including stock-matching move rejection.
+      Stored reference captures, generic-parent closures, opaque returns and
+      iterator integration remain open.
 - [ ] Extend monomorphization/recursive instance planning to the new forms while
       retaining universal checks, binder-qualified substitution and sealed native
       instances. Optimization must not bypass unused-body validation.

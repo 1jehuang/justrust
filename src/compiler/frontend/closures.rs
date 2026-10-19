@@ -1,7 +1,10 @@
 //! Immediate closures are separate callable declarations, never substituted bodies.
 use super::*;
+mod capture_rewrite;
+mod capture_use;
 pub(in crate::compiler) mod check;
 mod fn_sugar;
+mod prepare;
 pub(super) mod stored;
 mod trait_source;
 pub(super) use stored::StoredClosureSyntax;

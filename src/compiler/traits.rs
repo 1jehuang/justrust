@@ -13,6 +13,8 @@ use std::sync::{Arc, Mutex};
 mod associated_types;
 mod carrier_regions;
 mod catalog;
+#[path = "traits/closure_dispatch.rs"]
+mod closure_dispatch;
 mod closures;
 mod dynamic_objects;
 mod equality;
@@ -530,6 +532,7 @@ pub struct ValidatedFacts {
     predicates: Arc<PredicateEnv>,
     requirements: Arc<[ProofEvidence]>,
     closure: Option<Arc<ir::ClosureTy>>,
+    closure_mode: Option<ir::ClosureKind>,
 }
 
 /// An original header lookup, not an executable instantiation or body proof.
@@ -5038,6 +5041,7 @@ impl ValidatedTraitWorld {
             predicates,
             requirements: Arc::from([]),
             closure: None,
+            closure_mode: None,
         }))
     }
     pub fn callable_facts(self: &Arc<Self>, decl: DeclId) -> Result<Arc<ValidatedFacts>> {
@@ -5051,6 +5055,7 @@ impl ValidatedTraitWorld {
             predicates,
             requirements: Arc::from([]),
             closure: None,
+            closure_mode: None,
         }))
     }
     pub fn instance_facts(self: &Arc<Self>, target: &CallTarget) -> Result<Arc<ValidatedFacts>> {
@@ -5062,6 +5067,7 @@ impl ValidatedTraitWorld {
             predicates: self.empty.clone(),
             requirements: Arc::from([]),
             closure: None,
+            closure_mode: None,
         };
         let proof = self.discharge_direct(target, &facts)?;
         facts.requirements = proof.evidence;
@@ -6514,6 +6520,9 @@ impl TraitCx for ValidatedTraitWorld {
         match callee {
             Callee::Direct(target) => {
                 self.discharge_direct(target, facts)?;
+                if let Some(receiver) = self.closure_dispatch_receiver(target)? {
+                    return Ok(receiver);
+                }
                 Ok(self.info(target.declaration)?.receiver)
             }
             Callee::TraitItem(call) | Callee::Virtual(ir::VirtualCall { call }) => {

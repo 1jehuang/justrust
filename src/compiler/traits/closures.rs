@@ -41,6 +41,43 @@ impl ValidatedTraitWorld {
                 "closure adapter binder arity mismatch",
             ));
         }
+        if closure.sources().len() != closure.captures().len() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "closure capture authorization arity mismatch",
+            ));
+        }
+        for (source, ty) in closure.sources().iter().zip(closure.captures()) {
+            if source.place.projection.len() > ir::MAX_PATTERN_PROJECTION_DEPTH {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "closure capture projection depth exceeds limit",
+                ));
+            }
+            let valid = match source.kind {
+                ir::CaptureKind::Value => true,
+                ir::CaptureKind::Shared => matches!(
+                    ty,
+                    Ty::Ref {
+                        kind: ir::BorrowKind::Shared,
+                        ..
+                    }
+                ),
+                ir::CaptureKind::Mut => matches!(
+                    ty,
+                    Ty::Ref {
+                        kind: ir::BorrowKind::Mut,
+                        ..
+                    }
+                ),
+            };
+            if !valid {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "closure capture mode differs from environment field",
+                ));
+            }
+        }
         for ty in closure.types() {
             self.validate_ty_metadata_in(ty, env, 0)?;
         }
@@ -157,12 +194,20 @@ impl ValidatedTraitWorld {
         Ok(())
     }
 
-    pub(in crate::compiler) fn closure_callable_facts(
+    pub(in crate::compiler) fn closure_callable_facts_for(
         self: &Arc<Self>,
         closure: Arc<ir::ClosureTy>,
+        mode: ir::ClosureKind,
     ) -> Result<Arc<ValidatedFacts>> {
         let mut facts = self.callable_facts(closure.provider())?.as_ref().clone();
         self.validate_closure_metadata(&closure, facts.env())?;
+        if !closure.supports(mode) {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "closure receiver capability is unsupported",
+            ));
+        }
+        facts.closure_mode = Some(mode);
         facts.closure = Some(closure);
         retain::<ValidatedFacts>(&self.budget, 1)?;
         Ok(Arc::new(facts))
@@ -196,13 +241,9 @@ impl ValidatedTraitWorld {
         let Some(closure) = &facts.closure else {
             return Ok(None);
         };
-        let parameter = facts.env().ordered_params().next().ok_or_else(|| {
-            FactsError::invalid(&self.budget, "closure adapter has no receiver binder")
+        let mode = facts.closure_mode.ok_or_else(|| {
+            FactsError::invalid(&self.budget, "closure body lacks receiver capability")
         })?;
-        Ok(Some(Arc::from([
-            Ty::Param(parameter),
-            self.closure_arguments(closure)?,
-            closure.result().clone(),
-        ])))
+        Ok(Some(self.closure_target(closure, mode)?.type_args))
     }
 }

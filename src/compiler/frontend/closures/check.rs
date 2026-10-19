@@ -1,17 +1,163 @@
 //! Stored callable values and their immutable parent-body-owned executables.
-use super::super::type_check::{Checker, checked_ty};
+use super::super::type_check::Checker;
 use super::*;
 #[cfg(test)]
 #[path = "check_tests.rs"]
 mod tests;
 
 #[derive(Clone)]
+pub(in crate::compiler) struct CheckedClosureBody {
+    pub mode: ir::ClosureKind,
+    pub body: Arc<ir::CheckedFunction>,
+}
+#[derive(Clone)]
 pub(in crate::compiler) struct CheckedClosure {
     pub ty: Arc<ir::ClosureTy>,
     pub body: Arc<ir::CheckedFunction>,
+    pub modes: Arc<[CheckedClosureBody]>,
+}
+impl CheckedClosure {
+    pub(in crate::compiler) fn body_for(
+        &self,
+        mode: ir::ClosureKind,
+    ) -> Result<Arc<ir::CheckedFunction>, String> {
+        if !self.ty.supports(mode) {
+            return Err("closure does not support this receiver capability".into());
+        }
+        if mode == self.ty.kind() {
+            return Ok(self.body.clone());
+        }
+        self.modes
+            .iter()
+            .find(|body| body.mode == mode)
+            .map(|body| body.body.clone())
+            .ok_or_else(|| "closure capability has no final checked body".into())
+    }
 }
 
 impl PlanCtx {
+    fn bounded_closure_method_selection(
+        &self,
+        receiver: &ir::Ty,
+        name: &AstIdent,
+        caller: ir::FactsCtx<'_>,
+    ) -> Result<Option<MethodSelection>, String> {
+        if self
+            .program
+            .names
+            .spelling(*name)
+            .map_err(native_adapter::name_diagnostic)?
+            != "call"
+        {
+            return Ok(None);
+        }
+        let world = self.trait_world()?;
+        // Only the resolver's canonical callable-syntax member authorizes this
+        // adaptation, not an unrelated user method with the same spelling.
+        let mut syntax_member = false;
+        for (index, declaration) in self.registry.trait_ids.iter().enumerate() {
+            if world
+                .closure_trait_kind(*declaration)
+                .map_err(|e| e.into_legacy_diagnostic(&self.budget))?
+                == Some(ir::ClosureKind::Fn)
+            {
+                if let Some(item) = self.registry.trait_items[index].first() {
+                    if let DeclItemName::Source(member) = self.declaration(*item)?.path.item {
+                        let names = self.program.names.as_ref();
+                        syntax_member =
+                            super::super::super::semantic_name::occurrence_index(names, member)
+                                .map_err(native_adapter::name_diagnostic)?
+                                == super::super::super::semantic_name::occurrence_index(
+                                    names, *name,
+                                )
+                                .map_err(native_adapter::name_diagnostic)?;
+                    }
+                }
+                break;
+            }
+        }
+        if !syntax_member {
+            return Ok(None);
+        }
+        let ir::FactsCtx::Validated(facts) = caller else {
+            return Ok(None);
+        };
+        for mode in [
+            ir::ClosureKind::Fn,
+            ir::ClosureKind::FnMut,
+            ir::ClosureKind::FnOnce,
+        ] {
+            for predicate in facts.predicates().predicates() {
+                let ir::Predicate::Implements(bound) = predicate else {
+                    continue;
+                };
+                if world
+                    .closure_trait_kind(bound.declaration)
+                    .map_err(|e| e.into_legacy_diagnostic(&self.budget))?
+                    != Some(mode)
+                    || !world
+                        .types_equal(
+                            std::slice::from_ref(receiver),
+                            std::slice::from_ref(&bound.self_ty),
+                        )
+                        .map_err(|e| e.into_legacy_diagnostic(&self.budget))?
+                {
+                    continue;
+                }
+                let index = self
+                    .registry
+                    .trait_ids
+                    .iter()
+                    .position(|id| *id == bound.declaration)
+                    .ok_or("callable bound trait missing")?;
+                let item = *self.registry.trait_items[index]
+                    .first()
+                    .ok_or("callable bound item missing")?;
+                let DeclItemName::Source(member) = self.declaration(item)?.path.item else {
+                    return Err("callable bound item has no source identity".into());
+                };
+                let Some((target, signature, receiver_mode)) =
+                    self.select_trait(bound, &member, &[], caller, true, &self.budget)?
+                else {
+                    continue;
+                };
+                let adjustment = match mode {
+                    ir::ClosureKind::Fn => ReceiverAdjustment::SharedAutoref,
+                    ir::ClosureKind::FnMut => ReceiverAdjustment::MutAutoref,
+                    ir::ClosureKind::FnOnce => ReceiverAdjustment::Identity,
+                };
+                return Ok(Some(MethodSelection {
+                    target,
+                    signature,
+                    mode: receiver_mode,
+                    depth: 0,
+                    adjustment,
+                }));
+            }
+        }
+        Ok(None)
+    }
+    pub(in crate::compiler) fn closure_instance_mode(
+        &self,
+        target: &ir::CallTarget,
+    ) -> Result<ir::ClosureKind, String> {
+        match target
+            .type_args
+            .first()
+            .ok_or("closure instance has no receiver actual")?
+        {
+            ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent,
+            } if matches!(referent.as_ref(), ir::Ty::Closure(_)) => Ok(ir::ClosureKind::Fn),
+            ir::Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent,
+            } if matches!(referent.as_ref(), ir::Ty::Closure(_)) => Ok(ir::ClosureKind::FnMut),
+            ir::Ty::Closure(_) => Ok(ir::ClosureKind::FnOnce),
+            _ => Err("closure instance receiver is not a checked environment".into()),
+        }
+    }
     pub(in crate::compiler) fn validate_closure_instance(
         &self,
         original: &CheckedClosure,
@@ -40,6 +186,7 @@ impl PlanCtx {
                 "closure instance metadata differs from its original parent-body fact".into(),
             );
         }
+        original.body_for(self.closure_instance_mode(target)?)?;
         self.instance_facts(target)?;
         Ok(())
     }
@@ -50,7 +197,7 @@ impl PlanCtx {
         caller: ir::FactsCtx<'_>,
     ) -> Result<Option<MethodSelection>, String> {
         let ir::Ty::Closure(closure) = receiver else {
-            return Ok(None);
+            return self.bounded_closure_method_selection(receiver, name, caller);
         };
         if self
             .program
@@ -161,114 +308,9 @@ impl Checker<'_> {
         path: &AstPath,
         expected: Option<&ir::Signature>,
     ) -> Result<Option<ir::ExprId>, String> {
-        let plan = self.signatures.plan()?;
-        let Some(syntax) = plan.stored_closure_syntax(path)? else {
+        let Some(closure) = self.prepare_stored_closure(path, expected)? else {
             return Ok(None);
         };
-        let syntax = syntax.clone();
-        let key = name_scope::path_key(plan.program.names.as_ref(), path, Namespace::Value)?;
-        let provider = *plan
-            .registry
-            .functions
-            .get(&key)
-            .ok_or("closure adapter unavailable")?;
-        let owner = self.declaration.ok_or("closure outside a callable")?;
-        if plan.stored_closure_owner(provider)? != Some((owner, syntax.site)) {
-            return Err("closure belongs to another parent body".into());
-        }
-        let owner_env = plan.callable_env(owner)?;
-        if owner_env.is_generic() {
-            return Err("unsupported: stored closure in generic parent body".into());
-        }
-        let mut parameter_types = Vec::new();
-        for (index, (_, ty)) in syntax.params.iter().enumerate() {
-            parameter_types.push(if matches!(ty, Type::Infer) {
-                expected
-                    .and_then(|signature| signature.params.get(index))
-                    .cloned()
-                    .ok_or("closure parameter needs an inferred callable signature")?
-            } else {
-                checked_ty(ty, self.signatures)?
-            });
-        }
-        let result_hint = if matches!(syntax.result, Type::Infer) {
-            expected.map(|signature| signature.result.clone())
-        } else {
-            Some(checked_ty(&syntax.result, self.signatures)?)
-        };
-        let signatures = plan.environment(Some(provider))?;
-        let mut child = Checker::new(
-            &signatures,
-            result_hint.clone().unwrap_or(ir::Ty::Unit),
-            self.module,
-        );
-        child.declaration = Some(provider);
-        child.install_lexical_scope(syntax.lexical_scope)?;
-        let env = plan.callable_env(provider)?;
-        let receiver = child.temporary(
-            "closure self",
-            ir::Ty::Param(
-                env.ordered_params()
-                    .next()
-                    .ok_or("closure receiver binder missing")?,
-            ),
-            false,
-        )?;
-        let arguments_ty = if parameter_types.is_empty() {
-            ir::Ty::Unit
-        } else {
-            ir::Ty::Tuple(parameter_types.clone().into())
-        };
-        let arguments = child.temporary("closure arguments", arguments_ty.clone(), false)?;
-        let mut prefix = Vec::new();
-        for (index, ((name, _), ty)) in syntax.params.iter().zip(parameter_types.iter()).enumerate()
-        {
-            let local = child.bind(name, ty.clone())?;
-            child.locals[local.0].mutable = syntax.param_mut.get(index).copied().unwrap_or(false);
-            let base = child.for_expr(arguments_ty.clone(), ir::ExprKind::Local(arguments))?;
-            let value = child.for_expr(ty.clone(), ir::ExprKind::Field { base, index })?;
-            prefix.push(ir::Stmt::Let { local, value });
-        }
-        let (mut body, flow) = child.block_expected(&syntax.body, result_hint.as_ref())?;
-        let result = result_hint.unwrap_or(flow.ty.clone());
-        child.require(&flow, &result)?;
-        prefix.append(&mut body.statements);
-        body.statements = prefix;
-        let closure = Arc::new(ir::ClosureTy::new(
-            owner,
-            Arc::from([]),
-            syntax.site,
-            provider,
-            parameter_types.into(),
-            result.clone(),
-            Arc::from([]),
-            ir::ClosureKind::Fn,
-        ));
-        let facts = plan
-            .trait_world()?
-            .closure_callable_facts(closure.clone())
-            .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
-        let signature = facts
-            .world()
-            .closure_body_signature(&facts)
-            .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
-        let checked = ir::CheckedFunction {
-            name: format!("closure {:?}:{}", owner, syntax.site),
-            ref_contract: signature.ref_contract,
-            params: vec![receiver, arguments],
-            result,
-            locals: child.locals,
-            exprs: child.exprs,
-            call_evidence: child.call_evidence.into(),
-            body_substitution: None,
-            body,
-        };
-        self.checked_closures.extend(child.checked_closures);
-        self.checked_closures.push(CheckedClosure {
-            ty: closure.clone(),
-            body: Arc::new(checked),
-        });
-        self.for_expr(ir::Ty::Closure(closure), ir::ExprKind::Tuple(Vec::new()))
-            .map(Some)
+        self.construct_stored_closure(closure).map(Some)
     }
 }

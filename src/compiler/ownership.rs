@@ -154,7 +154,10 @@ impl CarrierEffectTable {
         if !Arc::ptr_eq(previous.facts().world(), template.facts().world()) {
             return Err("carrier effect table mixes canonical worlds".into());
         }
-        if previous.facts().declaration() == template.facts().declaration()
+        if previous
+            .facts()
+            .same_body_dispatch(template.facts())
+            .map_err(|error| error.into_legacy_diagnostic(previous.budget()))?
             && (!Arc::ptr_eq(previous.source(), template.source())
                 || !Arc::ptr_eq(previous.function(), template.function())
                 || !Arc::ptr_eq(previous.analysis(), template.analysis())
@@ -194,10 +197,18 @@ impl CarrierEffectTable {
                 return Err("unsupported abstract method reference-actual body admission".into());
             };
             budget.charge_work(templates.len())?;
-            let callee = std::iter::once(caller)
-                .chain(templates.iter())
-                .find(|candidate| candidate.facts().declaration() == target.declaration)
-                .ok_or("reference-actual call has no canonical universal body")?;
+            let mut callee = None;
+            for candidate in std::iter::once(caller).chain(templates.iter()) {
+                if candidate
+                    .facts()
+                    .body_dispatch_matches(target)
+                    .map_err(|error| error.into_legacy_diagnostic(budget))?
+                {
+                    callee = Some(candidate);
+                    break;
+                }
+            }
+            let callee = callee.ok_or("reference-actual call has no canonical universal body")?;
             if callee.carrier_effects().is_none() {
                 return Err(
                     "unsupported reference-actual call requires its callee's complete universal family proof".into(),
@@ -258,7 +269,7 @@ impl CarrierEffectTable {
             budget
                 .charge_work(1)
                 .map_err(|message| super::traits::FactsError::resource(budget, &message))?;
-            if template.facts().declaration() != target.declaration {
+            if !template.facts().body_dispatch_matches(target)? {
                 continue;
             }
             if !Arc::ptr_eq(template.env(), view.original_env()) {

@@ -1637,8 +1637,10 @@ pub(super) struct Checker<'a> {
     pub(super) signatures: &'a Signatures,
     pub(super) canonical: Option<&'a CanonicalSourceCapability>,
     pub(super) scopes: Vec<HashMap<LocalKey, ir::LocalId>>,
-    lexical_scope: Option<super::super::semantic_scope::ScopeId>,
+    pub(super) lexical_scope: Option<super::super::semantic_scope::ScopeId>,
     pub(super) checked_closures: Vec<closures::check::CheckedClosure>,
+    pub(super) capture_bindings: std::collections::HashSet<LocalKey>,
+    pub(super) capture_parent_scope: Option<super::super::semantic_scope::ScopeId>,
     pub(super) pending_references: Vec<PendingReferenceDecl>,
     pub(super) locals: Vec<ir::LocalDecl>,
     pub(super) exprs: Vec<ir::TypedExpr>,
@@ -3578,6 +3580,8 @@ impl<'a> Checker<'a> {
             scopes: vec![HashMap::new()],
             lexical_scope: None,
             checked_closures: Vec::new(),
+            capture_bindings: std::collections::HashSet::new(),
+            capture_parent_scope: None,
             pending_references: Vec::new(),
             locals: Vec::new(),
             exprs: Vec::new(),
@@ -3948,10 +3952,11 @@ impl<'a> Checker<'a> {
                     .map_err(scope_diagnostic)?,
             )
         } else {
-            if arena
+            let referenced_function = arena
                 .reference_function(names, occurrence)
-                .map_err(scope_diagnostic)?
-                != function
+                .map_err(scope_diagnostic)?;
+            if referenced_function != function
+                && Some(referenced_function) != self.capture_parent_scope
             {
                 return Err(scope_diagnostic(
                     super::super::semantic_scope::ScopeError::FunctionMismatch,
@@ -3962,7 +3967,9 @@ impl<'a> Checker<'a> {
                 .map_err(scope_diagnostic)?
         };
         if let Some(binding) = binding {
-            if arena.binding_function(binding).map_err(scope_diagnostic)? != function {
+            if arena.binding_function(binding).map_err(scope_diagnostic)? != function
+                && (declaration || !self.capture_bindings.contains(&LocalKey::Anchored(binding)))
+            {
                 return Err(scope_diagnostic(
                     super::super::semantic_scope::ScopeError::FunctionMismatch,
                 ));
@@ -6098,7 +6105,11 @@ impl<'a> Checker<'a> {
     }
     /// A nonconsuming read expression of a typed local-rooted place, built
     /// from Local / Field / Index / DynamicIndex(saved local) expressions.
-    fn place_read_expr(&mut self, place: &ir::Place, ty: ir::Ty) -> Result<ir::ExprId, String> {
+    pub(super) fn place_read_expr(
+        &mut self,
+        place: &ir::Place,
+        ty: ir::Ty,
+    ) -> Result<ir::ExprId, String> {
         let mut current_ty = self.locals[place.local.0].ty.clone();
         let mut id = self.for_expr(current_ty.clone(), ir::ExprKind::Local(place.local))?;
         for projection in &place.projection {
