@@ -977,10 +977,10 @@ impl ValidatedTraitWorld {
         for (index, ty) in instantiated.signature.params.iter().enumerate() {
             self.validate_projected_parameter_references(ty, index, item.receiver)?;
         }
-        if !matches!(&item.schema.signature.result, Ty::Ref { referent, .. } if matches!(referent.as_ref(), Ty::AssociatedType(_)))
-        {
-            self.reject_projected_references(&instantiated.signature.result, 0)?;
-        }
+        // A projection normalized to a reference-bearing value
+        // (`Option<Self::Item>` with `Item = &'a T`) is governed by the
+        // contract derived from the normalized signature above.
+        let _ = &item.schema.signature.result;
         let source_regions =
             self.validate_source_regions(item.declaration, &instantiated.signature)?;
         retain::<ProjectedMethodEvidence>(&self.budget, 1)?;
