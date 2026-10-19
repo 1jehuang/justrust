@@ -41,6 +41,10 @@ const PRELUDE_FILES: &[(&str, &str)] = &[
         include_str!("../../libraries/prelude/mem.rs"),
     ),
     (
+        "__justrust_std/boxed.rs",
+        include_str!("../../libraries/prelude/boxed.rs"),
+    ),
+    (
         "__justrust_std/process.rs",
         include_str!("../../libraries/prelude/process.rs"),
     ),
