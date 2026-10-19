@@ -3,6 +3,10 @@ use super::*;
 
 #[path = "local_literals.rs"]
 mod local_literals;
+#[path = "type_check/inferred_owner.rs"]
+mod inferred_owner;
+#[path = "try_operator.rs"]
+mod try_operator;
 
 /// Borrowed source bodies and the semantic unit value of an absent else.
 #[derive(Clone, Copy)]
@@ -8290,6 +8294,7 @@ impl<'a> Checker<'a> {
         }
         let (kind, flow) = match e {
             Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
+            Expr::Try(operand) => self.lower_try(operand)?,
             Expr::Cast { .. } => return Err("cast bypassed expression dispatcher".into()),
             Expr::Borrow { kind, place } => {
                 let (place, referent, _writable) = self.checked_place(place).map_err(|error|format!("B1 borrow requires an existing local-root static place; borrowed rvalues/non-local targets are unsupported: {error}"))?;

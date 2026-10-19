@@ -3142,6 +3142,7 @@ impl Resolver<'_> {
             Expr::Break {
                 value: Some(value), ..
             } => self.expr(value, module, locals)?,
+            Expr::Try(value) => self.expr(value, module, locals)?,
             _ => {}
         }
         Ok(())

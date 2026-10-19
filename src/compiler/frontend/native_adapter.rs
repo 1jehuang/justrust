@@ -1312,6 +1312,8 @@ pub(super) fn punctuation(s: &str) -> bool {
                 | "&"
                 | "|"
                 | "^"
+                | "?"
+                | "@"
         )
 }
 /// Expanded coordinates are rendered only from checked occurrence provenance.

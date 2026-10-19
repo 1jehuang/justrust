@@ -1736,6 +1736,9 @@ impl SourceInventory {
                     "unexpanded macro syntax cannot enter active source inventory",
                 ));
             }
+            Expr::Try(inner) => {
+                self.expr(inner, &node.child(40, 0, budget)?, None, None, budget, depth + 1)?
+            }
             Expr::Output(output) => validate_output_site(output, &self.names)
                 .map_err(|message| source_error(budget, &message))?,
             Expr::Format { arguments, .. } => {
@@ -5796,6 +5799,8 @@ pub enum Expr {
     },
     Output(Box<SourceOutput>),
     Panic(Box<SourcePanic>),
+    /// Postfix `?` on an Option or Result operand (TRY.md).
+    Try(Box<Expr>),
 }
 #[derive(Clone, Debug)]
 pub struct MatchArm {
@@ -12241,6 +12246,11 @@ impl<'input, 'names> Parser<'input, 'names> {
                 validate_depth(DepthNode::Expr(&left)).map_err(|e| self.depth_error(&e))?;
                 continue;
             }
+            if !self.token().string && self.eat("?") {
+                left = Expr::Try(Box::new(left));
+                validate_depth(DepthNode::Expr(&left)).map_err(|e| self.depth_error(&e))?;
+                continue;
+            }
             if statement_blocklike
                 && matches!(
                     left,
@@ -14040,6 +14050,7 @@ fn walk_depth_inspecting(
                 Expr::Break {
                     value: Some(value), ..
                 } => push(DepthNode::Expr(value))?,
+                Expr::Try(value) => push(DepthNode::Expr(value))?,
                 _ => {}
             },
             DepthNode::Block(block) => {

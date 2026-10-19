@@ -799,6 +799,7 @@ impl<'a> Validator<'a> {
                 }
             },
             Visit::Expr(expression) => match expression {
+                Expr::Try(inner) => self.push(Visit::Expr(inner))?,
                 Expr::UnexpandedMacro(_) => {
                     let mut error = crate::compiler::source::SourceError::syntax(
                         None,

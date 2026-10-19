@@ -624,7 +624,7 @@ pub(super) fn inventory(
             | Expr::Unsafe(v)
             | Expr::Loop { body: v, .. }
             | Expr::LabeledBlock { body: v, .. } => block(v, ds, b, d + 1)?,
-            Expr::Break { value: Some(v), .. } => expr(v, ds, b, d + 1)?,
+            Expr::Break { value: Some(v), .. } | Expr::Try(v) => expr(v, ds, b, d + 1)?,
             _ => {}
         }
         Ok(())
