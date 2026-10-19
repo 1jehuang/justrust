@@ -11670,3 +11670,20 @@ closures. `graph_integrity` now reports leaf closure growth 16->32 of exactly
 validation is currently blocked by unrelated tests that hard-code `/usr/bin/rustc`
 on this machine, but strict clippy passes and the targeted graph/workflow suites
 cover the changed boundaries.
+
+### Universal admission is per-caller, not a root join (2026-10-18)
+
+The remaining whole-program `effects_ready` node was only enforcing the
+reference-actual admission rule for universal bodies. Kind 115 is now one fact
+per universal callable instead of a root join. Each admission fact reads that
+caller's own `UNIVERSAL_ANALYZE` proof and only the universal callees actually
+needed by reference-actual calls. `CHECK` now waits on `TEMPLATE_BODY` for every
+callable plus the per-caller 115 facts for universal bodies, rather than one
+global join.
+
+This removes `effects_ready` from `WHOLE_PROGRAM_DEBT` and keeps the graph
+honest: the remaining root joins in this lane are no longer pretending to be
+item-local. Targeted graph suites all pass with the new shape (`graph_integrity`,
+`compiler`, `external_modules`, `generic_carriers_graph`, `generics_graph`,
+`modules`, `tuples`, `canonical_copy_graph`, run `20261018-182437837-2935726`),
+and strict clippy stays clean on hosted (`20261018-182437813-2935601`).

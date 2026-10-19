@@ -520,42 +520,66 @@ impl Provider for CompilerProvider {
                     }
                 }
                 UNIVERSAL_EFFECTS_READY => {
+                    let index = item_index(&key, "missing declaration index")?;
                     let types = facts.types().await?;
-                    // Join all body typing and every required universal proof before concrete work.
-                    let callable_count = types.callable_count();
-                    let count = callable_count
-                        .checked_mul(2)
-                        .ok_or_else(|| Error::new("generic declaration frontier limit exceeded"))?;
-                    let (mut handles, _handles_reservation) = this.scratch_vec(count)?;
-                    for index in 0..callable_count {
-                        handles.push((
-                            index,
-                            false,
-                            cx.request(function(TEMPLATE_BODY, index)).get(0),
-                        ));
-                        let declaration = types.callable_decl(index).map_err(Error::new)?;
-                        if Self::universal_body(&types, declaration)? {
-                            handles.push((
-                                index,
-                                true,
-                                cx.request(function(UNIVERSAL_ANALYZE, index)).get(0),
+                    let declaration = types.callable_decl(index).map_err(Error::new)?;
+                    if !Self::universal_body(&types, declaration)? {
+                        return Err(Error::new("non-universal callable has no admission fact"));
+                    }
+                    let proof: Arc<UniversalProofFact> =
+                        facts.get(function(UNIVERSAL_ANALYZE, index)).await?;
+                    let mut callee_indices = Vec::new();
+                    for expression in &proof.verified.source().exprs {
+                        this.0.budget.charge_work(1).map_err(Error::new)?;
+                        let ir::ExprKind::Call { target, .. } = &expression.kind else {
+                            continue;
+                        };
+                        let actuals = match target {
+                            ir::Callee::Direct(target) => target.type_args.as_ref(),
+                            ir::Callee::TraitItem(call) => call.method_args.as_ref(),
+                        };
+                        this.0
+                            .budget
+                            .charge_work(actuals.len())
+                            .map_err(Error::new)?;
+                        if !actuals.iter().any(|ty| matches!(ty, ir::Ty::Ref { .. })) {
+                            continue;
+                        }
+                        let ir::Callee::Direct(target) = target else {
+                            return Err(Error::new(
+                                "unsupported abstract method reference-actual body admission",
+                            ));
+                        };
+                        if !Self::universal_body(&types, target.declaration)? {
+                            return Err(Error::new(
+                                "reference-actual call has no canonical universal body",
                             ));
                         }
-                    }
-                    let (mut templates, _templates_reservation) =
-                        this.scratch_vec(callable_count)?;
-                    for (_, universal, handle) in handles {
-                        if universal {
-                            let proof: Arc<UniversalProofFact> = cx.read_fact(handle).await?;
-                            templates.push(proof.verified.clone());
-                        } else {
-                            cx.read(handle).await?;
+                        let callee = types
+                            .callable_index(target.declaration)
+                            .map_err(Error::new)?;
+                        if callee != index {
+                            callee_indices.push(callee);
                         }
                     }
-                    let table =
-                        ownership::CarrierEffectTable::from_verified(&templates, &this.0.budget)
-                            .map_err(Error::new)?;
-                    cx.publish_fact(0, table)
+                    callee_indices.sort_unstable();
+                    callee_indices.dedup();
+                    let handles: Vec<_> = callee_indices
+                        .iter()
+                        .map(|callee| cx.request(function(UNIVERSAL_ANALYZE, *callee)).get(0))
+                        .collect();
+                    let mut templates = Vec::with_capacity(handles.len());
+                    for handle in handles {
+                        let proof: Arc<UniversalProofFact> = cx.read_fact(handle).await?;
+                        templates.push(proof.verified.clone());
+                    }
+                    ownership::CarrierEffectTable::admit_reference_actual_calls(
+                        &proof.verified,
+                        &templates,
+                        &this.0.budget,
+                    )
+                    .map_err(Error::new)?;
+                    cx.publish(0, 1)
                 }
                 MONO_PLAN => {
                     let types = facts.types().await?;
@@ -762,12 +786,27 @@ impl Provider for CompilerProvider {
                 CHECK | BUILD => {
                     let plan = facts.plan().await?;
                     if key.kind == CHECK {
-                        // Program-wide universal admission (every body typed,
-                        // every universal proof, reference-actual call rule)
-                        // is a required check, not a prerequisite of
-                        // per-instance work.
-                        cx.read(cx.request(root(UNIVERSAL_EFFECTS_READY)).get(0))
-                            .await?;
+                        // Required universal admission is per-caller, not one
+                        // root join. CHECK only waits on the callables that
+                        // actually need universal admission.
+                        let types = facts.types().await?;
+                        let callable_count = types.callable_count();
+                        let (mut handles, _handles_reservation) =
+                            this.scratch_vec(callable_count.checked_mul(2).ok_or_else(|| {
+                                Error::new("universal admission frontier limit exceeded")
+                            })?)?;
+                        for index in 0..callable_count {
+                            handles.push(cx.request(function(TEMPLATE_BODY, index)).get(0));
+                            let declaration = types.callable_decl(index).map_err(Error::new)?;
+                            if Self::universal_body(&types, declaration)? {
+                                handles.push(
+                                    cx.request(function(UNIVERSAL_EFFECTS_READY, index)).get(0),
+                                );
+                            }
+                        }
+                        for handle in handles {
+                            cx.read(handle).await?;
+                        }
                     }
 
                     let kind = if key.kind == BUILD { OBJECT } else { ANALYZE };

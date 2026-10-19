@@ -507,7 +507,6 @@ fn tuple_checked_bodies_are_shared_once_and_check_does_not_demand_codegen() {
                     Key::new(101, vec![]),
                     Key::new(104, vec![]),
                     Key::new(113, vec![]),
-                    Key::new(115, vec![]),
                 ];
                 for index in 0..3 {
                     expected.push(Key::new(110, vec![index]));
@@ -534,10 +533,15 @@ fn tuple_checked_bodies_are_shared_once_and_check_does_not_demand_codegen() {
                     match plan.callable_provider(declaration).unwrap() {
                         compiler::frontend::CallableProvider::Source { .. } => {
                             assert!(index < result.functions);
+                            if plan.callable_env(declaration).unwrap().is_generic() {
+                                for kind in [111, 112, 115] {
+                                    expected.push(Key::new(kind, vec![index as u64]));
+                                }
+                            }
                         }
                         compiler::frontend::CallableProvider::Recipe { .. } => {
                             assert!(index >= result.functions);
-                            for kind in [110, 111, 112] {
+                            for kind in [110, 111, 112, 115] {
                                 expected.push(Key::new(kind, vec![index as u64]));
                             }
                         }
@@ -546,8 +550,8 @@ fn tuple_checked_bodies_are_shared_once_and_check_does_not_demand_codegen() {
                         }
                     }
                 }
-                // Effect publication joins every original body and required universal
-                // proof before the instance plan can publish any concrete work.
+                // Universal admission is per-caller. Each admission fact still
+                // publishes only after the body and required universal proofs.
                 let discovered = |key: &Key| {
                     let spelling = format!("{key:?}");
                     report
@@ -564,13 +568,19 @@ fn tuple_checked_bodies_are_shared_once_and_check_does_not_demand_codegen() {
                         .expect("required graph node did not publish")
                         .at_ns
                 };
-                let effects = published(discovered(&Key::new(115, vec![])).node.unwrap());
+                let effects = report
+                    .node_evaluations
+                    .iter()
+                    .filter(|(key, _)| key.kind == 115)
+                    .map(|(key, _)| published(discovered(key).node.unwrap()))
+                    .max()
+                    .expect("required universal admission fact missing");
                 for (key, _) in &report.node_evaluations {
                     let event = discovered(key);
                     if matches!(key.kind, 110 | 112) {
                         assert!(
                             published(event.node.unwrap()) <= effects,
-                            "effect publication preceded mandatory body proof: {key:?}"
+                            "universal admission preceded mandatory body proof: {key:?}"
                         );
                     }
                 }

@@ -126,7 +126,6 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                         Key::new(101, vec![]),
                         Key::new(104, vec![]),
                         Key::new(113, vec![]),
-                        Key::new(115, vec![]),
                     ];
                     for index in 0..3 {
                         for kind in [102, 108, 109] {
@@ -147,10 +146,15 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                         match context.callable_provider(declaration).unwrap() {
                             CallableProvider::Source { .. } => {
                                 assert!(index < compiled.functions);
+                                if context.callable_env(declaration).unwrap().is_generic() {
+                                    for kind in [111, 112, 115] {
+                                        expected.push(Key::new(kind, vec![index as u64]));
+                                    }
+                                }
                             }
                             CallableProvider::Recipe { .. } => {
                                 assert!(index >= compiled.functions);
-                                for kind in [111, 112] {
+                                for kind in [111, 112, 115] {
                                     expected.push(Key::new(kind, vec![index as u64]));
                                 }
                             }
@@ -185,7 +189,13 @@ fn invalid_unused_clone_and_unavailable_dispatch_never_reach_objects() {
                             .expect("required graph node did not publish")
                             .at_ns
                     };
-                    let effects = published(discovered(&Key::new(115, vec![])).node.unwrap());
+                    let effects = report
+                        .node_evaluations
+                        .iter()
+                        .filter(|(key, _)| key.kind == 115)
+                        .map(|(key, _)| published(discovered(key).node.unwrap()))
+                        .max()
+                        .expect("required universal admission fact missing");
                     for (key, _) in &report.node_evaluations {
                         let event = discovered(key);
                         if matches!(key.kind, 110 | 112) {
