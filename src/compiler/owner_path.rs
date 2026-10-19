@@ -15,13 +15,13 @@
 //!   created it. There is no positional or repeatable factory.
 //!
 //! Every path step is charged against the caller's [`ExpansionBudget`] before
-//! the step storage is allocated. Retained step storage holds a [`ByteLease`],
-//! so the charge is released when the last clone of the path drops.
+//! the step storage is allocated, then sealed into an immutable
+//! [`RetainedBytes`] receipt. Paths hold no budget handle or lock.
 //!
 //! Not yet activated: the process-global counters still issue live owner ids.
 #![allow(dead_code)]
 
-use super::expansion_budget::{BudgetFailure, ByteLease, Counter, ExpansionBudget, Storage};
+use super::expansion_budget::{BudgetFailure, Counter, ExpansionBudget, RetainedBytes, Storage};
 use crate::{EngineAuthority, OwnerRoot};
 use std::sync::Arc;
 
@@ -90,7 +90,9 @@ struct RootId {
 #[derive(Debug)]
 struct Steps {
     steps: Box<[Step]>,
-    _lease: ByteLease,
+    /// Prepaid immutable receipt for this storage. Holds no budget handle,
+    /// so a published path reaches no mutable state.
+    _receipt: RetainedBytes,
 }
 
 /// A complete, immutable owner identity. Clones share root and step storage.
@@ -170,9 +172,12 @@ fn paid_steps(
         .map_err(|_| OwnerError::Allocation)?;
     steps.extend_from_slice(prefix);
     steps.extend(last);
+    // Seal the paid reservation into an immutable receipt before the steps
+    // become shareable. The bytes stay charged for the ledger's lifetime.
+    let receipt = lease.retain()?;
     Ok(Arc::new(Steps {
         steps: steps.into_boxed_slice(),
-        _lease: lease,
+        _receipt: receipt,
     }))
 }
 
@@ -229,8 +234,8 @@ impl OwnerIssuer {
         })
     }
 
-    /// The path without the issuing capability, for publication. The issuer's
-    /// budget handle is dropped here, so published paths carry no budget.
+    /// The path without the issuing capability, for publication. Dropping
+    /// the issuer drops its budget handle; the path itself never held one.
     pub fn into_path(self) -> OwnerPath {
         self.path
     }
@@ -450,6 +455,26 @@ mod tests {
         let (c, outcome, _) = run(false);
         assert!(outcome.is_ok());
         assert!(a != b && b != c && a != c);
+    }
+
+    #[test]
+    fn published_path_outlives_issuer_and_budget_and_stays_charged() {
+        let budget = budget();
+        let before = budget.snapshot().retained_bytes;
+        let mut root = OwnerIssuer::new(OwnerRoot::standalone().unwrap(), &budget).unwrap();
+        let child = root.issue(OwnerDomain::TokenSession).unwrap().into_path();
+        let charged = budget.snapshot().retained_bytes;
+        assert!(charged >= before + path_bytes(0).unwrap() + path_bytes(1).unwrap());
+        drop(root);
+        // Receipts never refund: retained storage stays paid after the issuer drops.
+        assert_eq!(budget.snapshot().retained_bytes, charged);
+        drop(budget);
+        // The path is still a complete value with no ledger behind it.
+        let copy = child.clone();
+        assert_eq!(copy, child);
+        assert_eq!(child.depth(), 1);
+        fn assert_send_sync<T: Send + Sync>(_: &T) {}
+        assert_send_sync(&child);
     }
 
     #[test]

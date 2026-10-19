@@ -1408,7 +1408,6 @@ fn graph_facts_reach_no_new_mutable_state() {
 /// Owner paths will be carried inside published facts (PARSE-SPLIT.md), so
 /// they must reach no mutable state at all, before any fact names them.
 #[test]
-#[ignore = "activation blocker: OwnerPath steps still hold a ByteLease until RetainedBytes lands"]
 fn owner_path_reaches_no_mutable_state() {
     let (decls, _) = scanned_type_decls();
     assert!(
