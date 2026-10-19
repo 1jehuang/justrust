@@ -1,5 +1,20 @@
 # Findings: where agent build time goes
 
+## 2026-10-18: Recover sparse ownership byte accounting
+
+- Replaced stale dense selection charges with two-usize sparse entries per
+  enum path. Exact reservation before insertion prevents Vec minimum/geometric
+  capacity from exceeding that admitted bound. New tests cover retained capacity,
+  non-power-of-two slot counts and checked arithmetic overflow.
+- Hosted graph acceptance `20261018-194603349-1204567` on base `427b5db32`
+  plus the narrow patch compiled 996 generated functions. At 997, the unchanged
+  work limit rejected requested 1994 at used 31999051 / 32000000 in
+  `src/compiler/ir.rs:1941:47`. The size ratchet tightens from 540/570 to
+  adjacent 996/997, not a resource-limit increase or scalability completion.
+- Work growth 1.692 reflects additional fixed native-heap source proofs, not
+  an algorithmic speedup. No compile-time speed claim. Exact commands and
+  nine redacted exported validation records are in `data/runs/graph-recovery/`.
+
 ## 2026-10-18: Rust-source native heap foundation
 
 - Native `__justrust_linux_syscall6!` is an exact unsafe Linux x86-64 ABI
@@ -22,15 +37,22 @@
   stock oracle `20261018-193816682-887080` passed 15 tests, including six positive
   programs at stock opt-level 0/2 and native workers 1/8, plus stock E0204 for
   user Copy on the owning type and a positive legitimate Copy control.
+- After merging the latest source prelude, hosted check
+  `20261018-194345812-1132954`, heap/authority/prelude/unchanged graph gate
+  `20261018-194349971-1133289` (29 passed), and strict all-target clippy
+  `20261018-194400456-1132821` pass. Required local stock plus assertion/debug
+  graph and executable suites `20261018-194354287-1133496` pass all 23 tests.
+  The merged real-source harness preserves every library schema110 proof and
+  applicable universal111/112 proofs, without treating library bodies as roots.
 - Complete hosted test attempt `20261018-193311352-498403` passed 1470 tests
   before four assertions harness failures because /usr/bin/rustc is absent.
-  The subsequent full local no-fail-fast run additionally exposed frozen
-  assertion/debug-assertion graph harnesses treating schema-only prelude
-  callables as executable instance roots (e.g. missing key111/[3]). Reported
-  exact failures to the prelude worker updating dynamic library graph helpers.
-  This is not a full-suite pass; existing associated-bound/equality work is not
-  masked or changed here. Own slim receipts are retained separately in
-  `data/runs/xps14/2026-10-18-native-heap.jsonl`.
+  Earlier full local no-fail-fast run `20261018-193502577-635541` completed
+  3283 passing and 47 failing tests before the latest prelude harness updates.
+  Its user-only graph inventories produced shifted callable keys and source
+  counts. The final merged assertion/debug suites above resolve their observed
+  graph failures. This is not a full-suite pass; existing associated-bound/
+  equality work is not masked or changed here. Own slim receipts are retained
+  separately in `data/runs/xps14/2026-10-18-native-heap.jsonl`.
 - No compiler performance claim, no graph ratchet changes, no experimental
   package installation over the stable client. General allocation/layout,
   raw-pointer methods, automatic Drop and Box/Vec/String remain open.

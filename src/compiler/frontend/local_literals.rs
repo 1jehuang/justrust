@@ -2,11 +2,12 @@
 //!
 //! This is scratch owned by one checking node. It does not publish semantic
 //! facts or bypass ordinary checking: solved types are only expected types for
-//! unannotated initializers, whose complete checked IR is still validated.
+//! unannotated initializers and written iterable literals. Their complete checked
+//! IR is still validated.
 use super::*;
 
 type Term = usize;
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Domain {
     Unknown,
     Integer,
@@ -22,7 +23,7 @@ struct Solver<'a, 'b> {
     checker: &'a Checker<'b>,
     variables: Vec<Variable>,
     scopes: Vec<HashMap<LocalKey, Term>>,
-    lets: Vec<(usize, Term)>,
+    sites: Vec<(usize, Term)>,
 }
 
 pub(super) fn hints(
@@ -34,7 +35,7 @@ pub(super) fn hints(
         checker,
         variables: Vec::new(),
         scopes: Vec::new(),
-        lets: Vec::new(),
+        sites: Vec::new(),
     };
     // Existing parameters and enclosing locals are rigid, never reinferred.
     let mut outer = HashMap::new();
@@ -51,7 +52,7 @@ pub(super) fn hints(
         solver.unify(result, expected)?;
     }
     let mut hints = HashMap::new();
-    for (site, term) in &solver.lets {
+    for (site, term) in &solver.sites {
         let root = solver.root(*term);
         let ty = match &solver.variables[root].domain {
             // No new expectation for unresolved classes: expression checking
@@ -104,7 +105,19 @@ impl Solver<'_, '_> {
             | (Domain::Float, Domain::Fixed(ty @ ir::Ty::Float(_)))
             | (Domain::Fixed(ty @ ir::Ty::Float(_)), Domain::Float) => Domain::Fixed(ty.clone()),
             (Domain::Fixed(a), Domain::Fixed(b)) if a == b => Domain::Fixed(a.clone()),
-            _ => return Err("conflicting local scalar inference constraints".into()),
+            (left, right) => {
+                let message =
+                    format!("local scalar inference constraint {left:?} does not match {right:?}");
+                // An inconsistent source equality is a user type error, not
+                // corrupt compiler metadata. Keep its typed cause through the
+                // canonical node's existing diagnostic transport. Legacy
+                // noncanonical checking still receives the same diagnostic.
+                let error = FactsError::unproved(&self.checker.signatures.plan()?.budget, &message);
+                return Err(match self.checker.canonical {
+                    Some(capability) => capability.render(error),
+                    None => error.into_legacy_diagnostic(&self.checker.signatures.plan()?.budget),
+                });
+            }
         };
         if self.variables[a].rank < self.variables[b].rank {
             std::mem::swap(&mut a, &mut b);
@@ -158,7 +171,7 @@ impl Solver<'_, '_> {
                         self.unify(term, annotation)?;
                     } else {
                         self.checker.infer_storage(1)?;
-                        self.lets.push((stmt as *const Stmt as usize, term));
+                        self.sites.push((stmt as *const Stmt as usize, term));
                     }
                     self.bind(name, term)?;
                 }
@@ -209,8 +222,22 @@ impl Solver<'_, '_> {
                             self.unify(start, end)?;
                             start
                         }
+                        ForIterable::Value(value) if source.adapters.is_empty() => match value {
+                            Expr::Array(elements) => {
+                                let item = self.node(Domain::Unknown)?;
+                                for element in elements {
+                                    let element = self.expr(element, depth + 1)?;
+                                    self.unify(item, element)?;
+                                }
+                                item
+                            }
+                            Expr::Repeat { value, .. } => self.expr(value, depth + 1)?,
+                            _ => self.node(Domain::Unknown)?,
+                        },
                         _ => self.node(Domain::Unknown)?,
                     };
+                    self.checker.infer_storage(1)?;
+                    self.sites.push((stmt as *const Stmt as usize, term));
                     self.scopes.push(HashMap::new());
                     self.pattern(pattern, term)?;
                     self.block(body, depth + 1)?;
