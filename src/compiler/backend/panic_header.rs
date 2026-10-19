@@ -28,7 +28,7 @@ pub(super) fn emit(this: &mut dyn PanicSink) -> Result<(), String> {
     Ok(())
 }
 
-fn write(this: &mut dyn PanicSink) -> Result<(), String> {
+pub(super) fn write(this: &mut dyn PanicSink) -> Result<(), String> {
     let retry = this.position();
     this.bytes(&[0xb8, 1, 0, 0, 0, 0xbf, 2, 0, 0, 0, 0x0f, 0x05])?;
     this.bytes(&[0x48, 0x83, 0xf8, 0xfc])?;

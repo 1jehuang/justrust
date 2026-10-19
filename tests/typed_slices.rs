@@ -703,9 +703,11 @@ fn native_typed_slices_workers1_8_check_build_no_compiler_fallback() {
                         assert!(bytes.len() >= 64);
                         assert_eq!(&bytes[..6], b"\x7fELF\x02\x01");
                         let run = capture(&mut Command::new(&image), &scratch, 5);
-                        assert_eq!(run.code, 101, "{} unsigned bound trap:{run:?}", case.name);
+                        assert_eq!(run.code, -6, "{} source bounds abort:{run:?}", case.name);
                         assert!(run.stdout.is_empty());
-                        assert!(run.stderr.is_empty());
+                        assert!(
+                            String::from_utf8_lossy(&run.stderr).contains("index out of bounds")
+                        );
                     }
                     images += 1;
                 } else {

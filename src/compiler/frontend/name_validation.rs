@@ -781,6 +781,7 @@ impl<'a> Validator<'a> {
                     array,
                     index,
                     value,
+                    ..
                 }
                 | Stmt::AssignIndexOp {
                     array,
@@ -792,7 +793,7 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Expr(index))?;
                     self.push(Visit::Expr(value))?;
                 }
-                Stmt::AssignOp { place, value, .. } | Stmt::AssignPlace { place, value } => {
+                Stmt::AssignOp { place, value, .. } | Stmt::AssignPlace { place, value, .. } => {
                     self.push(Visit::Place(place))?;
                     self.push(Visit::Expr(value))?;
                 }
@@ -919,7 +920,7 @@ impl<'a> Validator<'a> {
                 | Expr::Repeat { value, .. }
                 | Expr::Index { base: value, .. }
                 | Expr::Unary { value, .. } => self.push(Visit::Expr(value))?,
-                Expr::DynamicIndex { base, index } => {
+                Expr::DynamicIndex { base, index, .. } => {
                     self.push(Visit::Expr(base))?;
                     self.push(Visit::Expr(index))?;
                 }

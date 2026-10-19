@@ -14,21 +14,40 @@ impl Checker<'_> {
             }
             | Expr::Unary {
                 site: Some(site), ..
+            }
+            | Expr::Index {
+                site: Some(site), ..
+            }
+            | Expr::DynamicIndex {
+                site: Some(site), ..
             } => site,
             _ => return Ok(()),
         };
         if !matches!(
             self.exprs[id.0].kind,
-            ir::ExprKind::Binary { .. } | ir::ExprKind::Unary { .. }
+            ir::ExprKind::Binary { .. }
+                | ir::ExprKind::Unary { .. }
+                | ir::ExprKind::Index { .. }
+                | ir::ExprKind::DynamicIndex { .. }
+                | ir::ExprKind::SliceIndex { .. }
+                | ir::ExprKind::BoundsCheck { .. }
         ) {
             return Ok(());
         }
+        self.record_runtime_span(*site, id)
+    }
+
+    pub(super) fn record_runtime_span(
+        &mut self,
+        site: super::super::expansion_span::SpanId,
+        id: ir::ExprId,
+    ) -> Result<(), String> {
         let names = self.names()?;
-        validate_source_site(*site, names)?;
+        validate_source_site(site, names)?;
         let original = names
             .session()
             .original(
-                panic_callsite(names.session(), *site).map_err(|error| {
+                panic_callsite(names.session(), site).map_err(|error| {
                     super::super::source::SourceError::from_token(error).to_string()
                 })?,
                 512,
@@ -81,6 +100,127 @@ impl CanonicalSourceCapability {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounds_publication_rejects_reused_indices_moves_and_swapped_origins() {
+        use crate::compiler::cfg;
+        let program = parse("fn f(a:&mut [i32],b:&mut [i32],i:usize){a[i]=9;}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let PublishedCallableBody::Source(publication) = plan
+            .publish_callable_body(plan.function_decl(0).unwrap(), &budget)
+            .unwrap()
+        else {
+            panic!("expected canonical source");
+        };
+        let source = publication.source();
+        let probe = source
+            .exprs
+            .iter()
+            .position(|value| matches!(value.kind, ir::ExprKind::BoundsCheck { .. }))
+            .unwrap();
+        let ir::ExprKind::BoundsCheck {
+            array,
+            index: probe_index,
+        } = source.exprs[probe].kind.clone()
+        else {
+            unreachable!()
+        };
+        let final_index = source
+            .body
+            .statements
+            .iter()
+            .find_map(|statement| match statement {
+                ir::Stmt::AssignIndex { index, .. } => Some(*index),
+                _ => None,
+            })
+            .unwrap();
+        assert_ne!(
+            probe_index, final_index,
+            "a probe and final write must have independent local-read identities"
+        );
+        assert_eq!(source.exprs[probe].ty, ir::Ty::Unit);
+        assert!(source.runtime_sites.get(ir::ExprId(probe)).is_some());
+        assert!(source.runtime_sites.get(final_index).is_none());
+        for change in 0..6 {
+            let mut forged = source.as_ref().clone();
+            match change {
+                0 => forged.runtime_sites = Default::default(),
+                1 => {
+                    let ir::ExprKind::BoundsCheck { array, .. } = &mut forged.exprs[probe].kind
+                    else {
+                        unreachable!()
+                    };
+                    array.local = ir::LocalId(1);
+                }
+                2 => {
+                    let ir::ExprKind::BoundsCheck { index, .. } = &mut forged.exprs[probe].kind
+                    else {
+                        unreachable!()
+                    };
+                    *index = ir::ExprId(probe);
+                }
+                3 => {
+                    for statement in &mut forged.body.statements {
+                        if let ir::Stmt::AssignIndex { index, .. } = statement {
+                            *index = probe_index;
+                        }
+                    }
+                }
+                4 => {
+                    forged.exprs[probe].kind = ir::ExprKind::Borrow {
+                        kind: ir::BorrowKind::Mut,
+                        place: array.clone(),
+                        timing: ir::BorrowTiming::Immediate,
+                    }
+                }
+                _ => forged.exprs[probe].ty = ir::Ty::Int(ir::IntTy::Usize),
+            }
+            assert!(
+                publication
+                    .validate_source(&Arc::new(forged), publication.facts(), &budget)
+                    .is_err(),
+                "forgery {change}"
+            );
+        }
+        let function = cfg::lower_source_closed(&publication, &budget).unwrap();
+        let (block, statement) = function
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(|(block, body)| {
+                body.statements
+                    .iter()
+                    .enumerate()
+                    .find_map(|(statement, value)| {
+                        matches!(value.value, cfg::Statement::IndexInspect { .. })
+                            .then_some((block, statement))
+                    })
+            })
+            .unwrap();
+        assert!(
+            function
+                .runtime_sites
+                .get(cfg::BlockId(block), statement)
+                .is_some()
+        );
+        for origin in [None, Some(final_index), Some(probe_index)] {
+            let mut forged = function.clone();
+            forged.blocks[block].statements[statement].origin = origin;
+            assert!(
+                forged
+                    .validate_provenance(publication.facts(), &budget)
+                    .is_err()
+            );
+        }
+        let mut erased = function.clone();
+        erased.runtime_sites = Default::default();
+        assert!(
+            erased
+                .validate_provenance(publication.facts(), &budget)
+                .is_err()
+        );
+    }
 
     #[test]
     fn runtime_locations_cannot_replace_sealed_source_or_cfg_origins() {

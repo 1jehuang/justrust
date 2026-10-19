@@ -2856,7 +2856,9 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
                     super::const_eval::ScalarValue::Bool(value) => ExprKind::Bool(value),
                 };
             }
-            ExprKind::Borrow { place, .. } => visitor.path(&mut place.projection)?,
+            ExprKind::Borrow { place, .. } | ExprKind::BoundsCheck { array: place, .. } => {
+                visitor.path(&mut place.projection)?
+            }
             ExprKind::Struct { ty, .. } => {
                 let Ty::Struct(value) = visitor.ty(&Ty::Struct(ty.clone()))? else {
                     return Err("struct application changed kind".into());
@@ -7160,6 +7162,13 @@ pub enum ExprKind {
     Deref {
         value: ExprId,
     },
+    /// Nonmoving bounds evaluation of a source indexing occurrence. The base
+    /// denotes storage, not an element value. Used before later index effects
+    /// and before borrowing or assigning the selected element.
+    BoundsCheck {
+        array: Place,
+        index: ExprId,
+    },
     DynamicIndex {
         base: ExprId,
         index: ExprId,
@@ -7858,7 +7867,9 @@ impl CheckedFunction {
         for expression in &self.exprs {
             facts.validate_value_ty_with_budget(&expression.ty, budget)?;
             match &expression.kind {
-                ExprKind::Borrow { place, .. } => path(&place.projection, budget)?,
+                ExprKind::Borrow { place, .. } | ExprKind::BoundsCheck { array: place, .. } => {
+                    path(&place.projection, budget)?
+                }
                 ExprKind::Struct { ty, fields } => {
                     facts.validate_ty_with_budget(&Ty::Struct(ty.clone()), budget)?;
                     storage(budget, fields.len(), std::mem::size_of::<(usize, ExprId)>())?;
@@ -8750,6 +8761,42 @@ impl CheckedFunction {
                     };
                     if !pattern_types_equal_with_facts(&value.ty, referent, &mut 0, facts)? {
                         return Err("dereference result type mismatch".into());
+                    }
+                }
+                ExprKind::BoundsCheck { array, index } => {
+                    expr(*index)?;
+                    let root = &self
+                        .locals
+                        .get(array.local.0)
+                        .ok_or("invalid bounds base local")?
+                        .ty;
+                    for part in &array.projection {
+                        if let Projection::DynamicIndex(local) = part
+                            && self.locals.get(local.0).map(|local| &local.ty)
+                                != Some(&Ty::Int(IntTy::Usize))
+                        {
+                            return Err("bounds projection requires saved usize index".into());
+                        }
+                    }
+                    if !matches!(
+                        indexed_array_ty(root, &array.projection, false)?,
+                        Ty::Array { .. } | Ty::Slice { .. }
+                    ) {
+                        return Err("bounds check requires array or slice storage".into());
+                    }
+                    if !matches!(self.exprs[index.0].ty, Ty::Int(IntTy::Usize) | Ty::Never) {
+                        return Err("bounds check requires usize index".into());
+                    }
+                    let completion = self.exprs[index.0].completion;
+                    let expected = if completion == Completion::Never {
+                        Ty::Never
+                    } else {
+                        Ty::Unit
+                    };
+                    if value.completion != completion || value.ty != expected {
+                        return Err(
+                            "bounds check must preserve index completion and produce unit".into(),
+                        );
                     }
                 }
                 ExprKind::DynamicIndex { base, index } => {

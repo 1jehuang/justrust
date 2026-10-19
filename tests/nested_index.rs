@@ -5,6 +5,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -133,7 +134,14 @@ fn runs_with_exit(source: &str, expected: &str, expected_exit: i32) {
             }
         }
         let result = capture(&mut Command::new(&output), &scratch, 5);
-        assert_eq!(result.status.code(), Some(expected_exit), "{result:?}");
+        assert_eq!(
+            result
+                .status
+                .code()
+                .or_else(|| result.status.signal().map(|signal| -signal)),
+            Some(expected_exit),
+            "{result:?}"
+        );
         assert_eq!(
             String::from_utf8_lossy(&result.stdout),
             expected,
@@ -156,30 +164,30 @@ fn nested_reads_through_fields_bools_and_whole_rows() {
 
 #[test]
 fn inner_level_trap_after_both_indexes_evaluated() {
-    // Trap/stdout parity only: native trap 101 versus stock abort 134.
+    // Original source bounds abort, with no later index effects.
     let (source, expected) = fixture("trap_inner");
-    runs_with_exit(&source, &expected, 101);
+    runs_with_exit(&source, &expected, -6);
 }
 
 #[test]
 fn outer_level_trap_before_inner_index_is_evaluated() {
-    // Trap/stdout parity only: native trap 101 versus stock abort 134.
+    // Original source bounds abort, with no later index effects.
     let (source, expected) = fixture("trap_outer");
-    runs_with_exit(&source, &expected, 101);
+    runs_with_exit(&source, &expected, -6);
 }
 
 #[test]
 fn nested_writes_value_then_each_index_in_order() {
-    // Trap/stdout parity only for the final OOB write: native 101, stock 134.
+    // Final source OOB write aborts after the earlier successful updates.
     let (source, expected) = fixture("writes_order");
-    runs_with_exit(&source, &expected, 101);
+    runs_with_exit(&source, &expected, -6);
 }
 
 #[test]
 fn nested_compound_write_outer_trap_before_inner_index() {
-    // Trap/stdout parity only: native 101 versus stock abort 134.
+    // Outer source bounds aborts before the next index expression.
     let (source, expected) = fixture("writes_compound_trap");
-    runs_with_exit(&source, &expected, 101);
+    runs_with_exit(&source, &expected, -6);
 }
 
 #[test]

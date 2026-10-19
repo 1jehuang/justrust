@@ -182,6 +182,16 @@ pub(super) fn analyze(
             ir::ExprKind::Deref { value } => {
                 projected.insert(*value);
             }
+            ir::ExprKind::BoundsCheck { array, .. } => record(
+                &mut uses,
+                candidates,
+                array.clone(),
+                CaptureUse {
+                    read: true,
+                    mutable: false,
+                    moved: false,
+                },
+            )?,
             ir::ExprKind::Borrow { kind, place, .. } => record(
                 &mut uses,
                 candidates,

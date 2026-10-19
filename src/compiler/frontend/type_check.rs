@@ -1279,7 +1279,7 @@ impl<'s> Checker<'s> {
                     self.infer_node(InferKind::Unknown(false))?
                 }
             }
-            Expr::Index { base, index } => {
+            Expr::Index { base, index, .. } => {
                 match self.inference_evidence(base, depth + 1)?.as_ref() {
                     InferKind::Array(element, len) if index < len => element.clone(),
                     InferKind::Array(_, _) => return Err("array index out of bounds".into()),
@@ -1641,7 +1641,7 @@ pub(super) fn static_source_place(mut expr: &Expr) -> Result<Place, String> {
                 fields.push(field.clone());
                 expr = base;
             }
-            Expr::Index { base, index } => {
+            Expr::Index { base, index, .. } => {
                 fields.push(FieldSelector::ConstantIndex(*index));
                 expr = base;
             }
@@ -4933,6 +4933,14 @@ impl<'a> Checker<'a> {
                 *inclusive,
             );
         }
+        // The parser keeps literal index occurrences until the receiver type
+        // is known. Preserve existing static array/raw-place borrowing when
+        // that projection is legal, without routing it through runtime probes.
+        if let Ok(place) = static_source_place(value)
+            && self.checked_place(&place).is_ok()
+        {
+            return self.expr(&Expr::Borrow { kind, place });
+        }
         if let Some(id) = self.borrow_indexed_place(kind, value)? {
             return Ok(id);
         }
@@ -5902,7 +5910,7 @@ impl<'a> Checker<'a> {
         enum NestedStep<'e> {
             Static(&'e FieldSelector),
             ConstIndex(usize),
-            Runtime(&'e Expr),
+            Runtime(&'e Expr, &'e Expr),
         }
         let mut steps = Vec::new();
         let mut cursor: &Expr = target;
@@ -5912,11 +5920,11 @@ impl<'a> Checker<'a> {
             }
             match cursor {
                 Expr::Var(path) => break path,
-                Expr::DynamicIndex { base, index } => {
-                    steps.push(NestedStep::Runtime(index));
+                Expr::DynamicIndex { base, index, .. } => {
+                    steps.push(NestedStep::Runtime(index, cursor));
                     cursor = base;
                 }
-                Expr::Index { base, index } => {
+                Expr::Index { base, index, .. } => {
                     steps.push(NestedStep::ConstIndex(*index));
                     cursor = base;
                 }
@@ -5948,7 +5956,7 @@ impl<'a> Checker<'a> {
                     self.field_type(&ty, field)?.1
                 }
                 NestedStep::ConstIndex(index) => self.index_type(&ty, *index)?,
-                NestedStep::Runtime(_) => {
+                NestedStep::Runtime(..) => {
                     let element = match &ty {
                         ir::Ty::Array { element, .. } => element.as_ref().clone(),
                         ir::Ty::Ref { .. } => {
@@ -5962,7 +5970,7 @@ impl<'a> Checker<'a> {
                         && !(matches!(element, ir::Ty::Array { .. })
                             && matches!(
                                 steps[position + 1],
-                                NestedStep::Runtime(_) | NestedStep::ConstIndex(_)
+                                NestedStep::Runtime(..) | NestedStep::ConstIndex(_)
                             ))
                     {
                         return Err("unsupported: field or whole-row access after a runtime index in an assignment target".into());
@@ -6029,7 +6037,7 @@ impl<'a> Checker<'a> {
                     place_ty = self.index_type(&place_ty, *index)?;
                     place.projection.push(ir::Projection::ConstantIndex(*index));
                 }
-                NestedStep::Runtime(index) => {
+                NestedStep::Runtime(index, original) => {
                     let index = self.expr_expected_when(
                         index,
                         self.reachable && completes,
@@ -6038,10 +6046,6 @@ impl<'a> Checker<'a> {
                     let index_flow = self.flow(index);
                     self.require_index(&index_flow)?;
                     completes &= index_flow.completes;
-                    if position == last {
-                        final_index = Some(index);
-                        break;
-                    }
                     let saved_index = self.temporary(
                         &format!("$ni{}", self.locals.len()),
                         usize_ty.clone(),
@@ -6052,10 +6056,15 @@ impl<'a> Checker<'a> {
                         local: saved_index,
                         value: index,
                     });
-                    // Bounds probe: an ignored runtime read of this row.
-                    let row = self.place_read_expr(&place, place_ty.clone())?;
                     let probe_index =
                         self.for_expr(usize_ty.clone(), ir::ExprKind::Local(saved_index))?;
+                    self.index_bounds_probe(&place, probe_index, original, statements)?;
+                    if position == last {
+                        final_index = Some(
+                            self.for_expr(usize_ty.clone(), ir::ExprKind::Local(saved_index))?,
+                        );
+                        break;
+                    }
                     let ir::Ty::Array {
                         element: row_ty, ..
                     } = &place_ty
@@ -6063,18 +6072,6 @@ impl<'a> Checker<'a> {
                         return Err("runtime index assignment requires an array".into());
                     };
                     let row_ty = row_ty.as_ref().clone();
-                    let probe = self.for_expr(
-                        row_ty.clone(),
-                        ir::ExprKind::DynamicIndex {
-                            base: row,
-                            index: probe_index,
-                        },
-                    )?;
-                    statements.push(ir::Stmt::LetPattern {
-                        value: probe,
-                        ty: row_ty.clone(),
-                        bindings: Vec::new(),
-                    });
                     place
                         .projection
                         .push(ir::Projection::DynamicIndex(saved_index));
@@ -6501,6 +6498,7 @@ impl<'a> Checker<'a> {
                     index,
                     op,
                     value,
+                    ..
                 } => self.deref_assignment(
                     carrier,
                     fields,
@@ -6576,6 +6574,7 @@ impl<'a> Checker<'a> {
                     array,
                     index,
                     value,
+                    ..
                 } if let Some(done) =
                     self.mut_slice_index_assignment(array, index, None, value)? =>
                 {
@@ -6585,6 +6584,7 @@ impl<'a> Checker<'a> {
                     array,
                     index,
                     value,
+                    ..
                 } => {
                     let (array, ty, writable) = self.checked_place(array)?;
                     if array.projection.contains(&ir::Projection::Deref) {
@@ -6615,18 +6615,21 @@ impl<'a> Checker<'a> {
                         flow.completes && index_flow.completes,
                     )
                 }
-                Stmt::AssignOp { place, op, value }
-                    if let Some(done) =
-                        self.mut_slice_constant_assignment(place, Some(*op), value)? =>
+                Stmt::AssignOp {
+                    place, op, value, ..
+                } if let Some(done) =
+                    self.mut_slice_constant_assignment(place, Some(*op), value)? =>
                 {
                     done
                 }
-                Stmt::AssignOp { place, op, value }
-                    if let Some(id) = self.overloaded_assign(s, place, *op, value)? =>
-                {
+                Stmt::AssignOp {
+                    place, op, value, ..
+                } if let Some(id) = self.overloaded_assign(s, place, *op, value)? => {
                     (ir::Stmt::Expr(id), self.flow(id).completes)
                 }
-                Stmt::AssignOp { place, op, value } => {
+                Stmt::AssignOp {
+                    place, op, value, ..
+                } => {
                     let (place, ty, _) = self.checked_place(place)?;
                     let (value, flow) = self.compound_value(*op, &ty, value)?;
                     (
@@ -6643,6 +6646,7 @@ impl<'a> Checker<'a> {
                     index,
                     op,
                     value,
+                    ..
                 } if let Some(done) =
                     self.mut_slice_index_assignment(array, index, Some(*op), value)? =>
                 {
@@ -6653,6 +6657,7 @@ impl<'a> Checker<'a> {
                     index,
                     op,
                     value,
+                    ..
                 } => {
                     let (mut array, mut ty, mut writable) = self.checked_place(array)?;
                     if let ir::Ty::Ref { kind, referent } = &ty {
@@ -6692,13 +6697,13 @@ impl<'a> Checker<'a> {
                         flow.completes && index_flow.completes,
                     )
                 }
-                Stmt::AssignPlace { place, value }
+                Stmt::AssignPlace { place, value, .. }
                     if let Some(done) =
                         self.mut_slice_constant_assignment(place, None, value)? =>
                 {
                     done
                 }
-                Stmt::AssignPlace { place, value } => {
+                Stmt::AssignPlace { place, value, .. } => {
                     let (place, ty, writable) = self.checked_place(place)?;
                     if !place.projection.is_empty()
                         && !writable
@@ -6784,6 +6789,24 @@ impl<'a> Checker<'a> {
                     body,
                     ..
                 } => self.while_let_statement(*label, pattern, scrutinee, body)?,
+            };
+            let statement = match s {
+                Stmt::AssignIndex {
+                    site: Some(site), ..
+                }
+                | Stmt::AssignIndexOp {
+                    site: Some(site), ..
+                }
+                | Stmt::AssignDeref {
+                    site: Some(site), ..
+                }
+                | Stmt::AssignPlace {
+                    site: Some(site), ..
+                }
+                | Stmt::AssignOp {
+                    site: Some(site), ..
+                } => self.assignment_bounds_probe(statement, *site, &mut statements)?,
+                _ => statement,
             };
             let statement = self.scope_borrow_temporaries(
                 temporaries_start,
@@ -7334,7 +7357,7 @@ impl<'a> Checker<'a> {
         }
         let (receiver, dynamic_index) = match root {
             Expr::Index { base, .. } => (base.as_ref(), None),
-            Expr::DynamicIndex { base, index } => (base.as_ref(), Some(index.as_ref())),
+            Expr::DynamicIndex { base, index, .. } => (base.as_ref(), Some(index.as_ref())),
             _ => return Ok(()),
         };
         let Some(hint) = self.scalar_hint(receiver)? else {
@@ -9705,7 +9728,7 @@ impl<'a> Checker<'a> {
                     },
                 )
             }
-            Expr::DynamicIndex { base, index }
+            Expr::DynamicIndex { base, index, .. }
                 if matches!(base.as_ref(), Expr::RangeIndex { .. }) =>
             {
                 let Expr::RangeIndex {
@@ -9720,7 +9743,7 @@ impl<'a> Checker<'a> {
                 let slice = self.subslice(base, start.as_deref(), end.as_deref(), *inclusive)?;
                 return self.slice_index(slice, index);
             }
-            Expr::DynamicIndex { base, index } => {
+            Expr::DynamicIndex { base, index, .. } => {
                 if Self::dynamic_place(base) && !Self::nested_array_place(base) {
                     return Err("nested/chained runtime indexed place bases are unsupported; snapshot the row first".into());
                 }
@@ -9762,7 +9785,7 @@ impl<'a> Checker<'a> {
                     },
                 )
             }
-            Expr::Index { base, index } if matches!(base.as_ref(), Expr::RangeIndex { .. }) => {
+            Expr::Index { base, index, .. } if matches!(base.as_ref(), Expr::RangeIndex { .. }) => {
                 let Expr::RangeIndex {
                     base,
                     start,
@@ -9782,7 +9805,7 @@ impl<'a> Checker<'a> {
                 });
                 return self.slice_index_checked(slice, constant);
             }
-            Expr::Index { base, index } => {
+            Expr::Index { base, index, .. } => {
                 if Self::dynamic_place(base) && !Self::nested_array_place(base) {
                     return Err("nested/chained runtime indexed place bases are unsupported; snapshot the row first".into());
                 }

@@ -1,8 +1,8 @@
 //! Full-width usize and dynamic indexing bounded native acceptance.
 //! All 32 exact fixtures were stock-classified with rustc 1.98.1, edition 2024.
 //! Stock is an external scratch oracle only and is never invoked by these tests.
-//! Arithmetic requires SIGABRT; legacy bounds guards retain exit 101/stdout.
-//! Native panic text/unwinding is not claimed or compared for those trap fixtures.
+//! Arithmetic and original source bounds checks require SIGABRT.
+//! Full source bounds text parity is covered by runtime_bounds.rs.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 use std::fs::{self, OpenOptions};
@@ -183,9 +183,7 @@ fn arithmetic_traps(source: &str, expected: &str) {
     runs_with_exit(source, expected, -6);
 }
 fn traps(source: &str, expected: &str) {
-    // Only declared runtime traps may differ from stock panic text/unwinding.
-    // Exact code 101 rejects signals, crashes, successful exits and all other codes.
-    runs_with_exit(source, expected, 101);
+    runs_with_exit(source, expected, -6);
 }
 
 #[test]

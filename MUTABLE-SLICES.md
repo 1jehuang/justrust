@@ -16,6 +16,6 @@ The same typed per-function facts validate source, universal IR, CFG and concret
 
 ## Acceptance gates
 
-`tests/mutable_slices.rs` compares frozen rustc 1.98.1 edition-2024 stdout witnesses for generic replacements, wide elements, repeated reborrows, empty/non-Copy length inspection and assignment evaluation order at workers 1 and 8. Trap checks require native exit 101 and preserved stdout, not stock abort exit parity.
+`tests/mutable_slices.rs` compares frozen rustc 1.98.1 edition-2024 stdout witnesses for generic replacements, wide elements, repeated reborrows, empty/non-Copy length inspection and assignment evaluation order at workers 1 and 8. Source indexing trap checks now require SIGABRT and preserved stdout. `RUNTIME-BOUNDS.md` adds exact stock diagnostic/effect-order gates; synthetic descriptor faults remain diagnostic 101.
 
 `tests/mutable_slices_authority.rs` rejects shared mutation, overlapping mutable borrows, use after move, dangling local storage and malformed types, including unused functions. `tests/mutable_slices_graph.rs` checks the real CHECK graph and dereferenced indexed writes at workers 1 and 8. The repository graph-integrity ratchets remain mandatory and unchanged.

@@ -31,7 +31,7 @@ impl RuntimeSites {
 }
 
 impl Lowerer<'_> {
-    pub(super) fn assign_source_arithmetic(
+    pub(super) fn assign_source_runtime(
         &mut self,
         destination: Place,
         value: Rvalue,
@@ -40,6 +40,22 @@ impl Lowerer<'_> {
         let block = self.current;
         let statement = self.blocks[block.0].statements.len();
         self.assign(destination, value, origin);
+        self.capture_runtime_statement(block, statement, origin);
+    }
+
+    pub(super) fn source_statement(&mut self, value: Statement, origin: Option<ExprId>) {
+        let block = self.current;
+        let statement = self.blocks[block.0].statements.len();
+        self.statement(value, origin);
+        self.capture_runtime_statement(block, statement, origin);
+    }
+
+    fn capture_runtime_statement(
+        &mut self,
+        block: BlockId,
+        statement: usize,
+        origin: Option<ExprId>,
+    ) {
         if self.blocks[block.0].statements.len() != statement + 1 {
             return;
         }

@@ -174,7 +174,7 @@ pub(super) fn rewrite(
             };
         }
         match &mut expression.kind {
-            ir::ExprKind::Borrow { place, .. } => {
+            ir::ExprKind::Borrow { place, .. } | ir::ExprKind::BoundsCheck { array: place, .. } => {
                 captured_place(place, receiver, borrowed_receiver, captures)?
             }
             ir::ExprKind::If {

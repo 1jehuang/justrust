@@ -5,6 +5,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -133,7 +134,14 @@ fn runs_with_exit(source: &str, expected: &str, expected_exit: i32) {
             }
         }
         let result = capture(&mut Command::new(&output), &scratch, 5);
-        assert_eq!(result.status.code(), Some(expected_exit), "{result:?}");
+        assert_eq!(
+            result
+                .status
+                .code()
+                .or_else(|| result.status.signal().map(|signal| -signal)),
+            Some(expected_exit),
+            "{result:?}"
+        );
         assert_eq!(
             String::from_utf8_lossy(&result.stdout),
             expected,
@@ -156,6 +164,6 @@ fn out_of_bounds_writes_trap() {
         let source = format!(
             "fn bad(s:&mut[i32]) {{ println!(\"before\"); s[{index}] = 7; println!(\"after\"); }} fn main() {{ let mut a:[i32;0]=[]; bad(&mut a); }}"
         );
-        runs_with_exit(&source, "before\n", 101);
+        runs_with_exit(&source, "before\n", -6);
     }
 }

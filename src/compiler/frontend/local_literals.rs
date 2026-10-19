@@ -1060,7 +1060,7 @@ impl<'s> Solver<'_, '_, 's> {
                     let value = self.expr(value, depth + 1)?;
                     self.coerce(value, target)?;
                 }
-                Stmt::AssignPlace { place, value } | Stmt::AssignOp { place, value, .. } => {
+                Stmt::AssignPlace { place, value, .. } | Stmt::AssignOp { place, value, .. } => {
                     let target = self.place(place)?;
                     let value = self.expr(value, depth + 1)?;
                     if !matches!(
@@ -1077,6 +1077,7 @@ impl<'s> Solver<'_, '_, 's> {
                     array,
                     index,
                     value,
+                    ..
                 }
                 | Stmt::AssignIndexOp {
                     array,
@@ -1417,7 +1418,7 @@ impl<'s> Solver<'_, '_, 's> {
                     .collect::<Result<_, _>>()?;
                 self.node(Domain::Tuple(fields))
             }
-            Expr::DynamicIndex { base, index } => {
+            Expr::DynamicIndex { base, index, .. } => {
                 let base = self.expr(base, depth + 1)?;
                 let index = self.expr(index, depth + 1)?;
                 if matches!(
@@ -1429,7 +1430,7 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 self.field(base, FieldSelector::ConstantIndex(0))
             }
-            Expr::Index { base, index } => {
+            Expr::Index { base, index, .. } => {
                 let base = self.expr(base, depth + 1)?;
                 self.field(base, FieldSelector::ConstantIndex(*index))
             }

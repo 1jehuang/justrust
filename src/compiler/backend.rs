@@ -28,6 +28,7 @@ use super::ir::{self, LocalId};
 use super::ownership;
 use std::collections::HashMap;
 
+mod panic_bounds;
 mod panic_header;
 mod runtime_traps;
 mod wide_float;
@@ -544,7 +545,7 @@ impl<'a> Emitter<'a> {
         if let (Some(kind), Some(location)) = (self.runtime_panic_kind, &self.runtime_location) {
             self.runtime_traps.push(runtime_traps::RuntimeTrap {
                 branch: at,
-                kind,
+                kind: Some(kind),
                 location: location.clone(),
             });
         } else {
@@ -865,7 +866,7 @@ impl<'a> Emitter<'a> {
             return Err("slice stride disagrees with exact array element layout".into());
         }
         self.bytes(&[0x48, 0x39, 0xd0]); // cmp rax, rdx
-        self.trap_if(0x83); // jae: unsigned, so high-bit indices trap
+        self.bounds_trap(); // source bounds, unlike descriptor extent faults below
         self.bytes(&[0x49, 0x89, 0xc0]); // r8 = index snapshot
         self.bytes(&[0x48, 0x89, 0xd0, 0xb9]); // rax = len, ecx = stride
         self.i32(stride);
@@ -1256,9 +1257,10 @@ impl<'a> Emitter<'a> {
         self.operand(index)?;
         // Read the full unsigned index and reject it before scaling or forming
         // any element address. The array length cap is not an index range cap.
-        self.bytes(&[0x48, 0x3d]);
-        self.i32(i32::try_from(*len).map_err(|_| "array length exceeds backend limit")?);
-        self.trap_if(0x83); // jae
+        self.bytes(&[0x48, 0xba]); // preserve exact length for a cold bounds diagnostic
+        self.bytes(&(*len as u64).to_le_bytes());
+        self.bytes(&[0x48, 0x39, 0xd0]);
+        self.bounds_trap();
         if *len != 0 {
             self.bytes(&[0x48, 0x69, 0xc0]); // rax *= physical element stride
             self.i32(value_size(element)?);
@@ -1293,8 +1295,9 @@ impl<'a> Emitter<'a> {
         self.bytes(&[0x4c, 0x8b, 0x50, 0x08]); // r10 = len
         self.bytes(&[0x4c, 0x8b, 0x18]); // r11 = data
         self.bytes(&[0x4c, 0x89, 0xc0]); // rax = index
-        self.bytes(&[0x4c, 0x39, 0xd0]); // cmp rax, r10
-        self.trap_if(0x83); // jae, before scaling/address formation
+        self.bytes(&[0x4c, 0x89, 0xd2]); // rdx = length snapshot for cold diagnostic
+        self.bytes(&[0x48, 0x39, 0xd0]); // cmp rax, rdx
+        self.bounds_trap();
         self.bytes(&[0x48, 0x69, 0xc0]);
         self.i32(stride); // rax *= stride
         self.bytes(&[0x4c, 0x01, 0xd8]); // rax += r11
@@ -2162,6 +2165,13 @@ impl<'a> Emitter<'a> {
     /// A panic is terminal, not a value-producing print followed by a trap.
     /// Linux's kernel sigaction layout uses an eight-byte signal mask here.
     fn panic(&mut self, panic: &ir::PanicMessage) -> Result<(), String> {
+        self.panic_with_bounds(panic, None)
+    }
+    fn panic_with_bounds(
+        &mut self,
+        panic: &ir::PanicMessage,
+        bounds: Option<&ir::RuntimeLocation>,
+    ) -> Result<(), String> {
         let budget = self.concrete.facts().budget().clone();
         let mut code = PanicAsm {
             object: std::mem::replace(
@@ -2177,7 +2187,7 @@ impl<'a> Emitter<'a> {
             ),
             budget: &budget,
         };
-        let result = emit_panic(&mut code, &panic.message, &panic.location);
+        let result = emit_panic_payload(&mut code, &panic.message, &panic.location, bounds);
         self.object = code.object;
         result
     }
@@ -2276,6 +2286,18 @@ pub(crate) fn emit_panic_into(
 }
 
 fn emit_panic(this: &mut dyn PanicSink, message: &str, location: &str) -> Result<(), String> {
+    emit_panic_payload(this, message, location, None)
+}
+
+fn emit_panic_payload(
+    this: &mut dyn PanicSink,
+    message: &str,
+    location: &str,
+    bounds: Option<&ir::RuntimeLocation>,
+) -> Result<(), String> {
+    if bounds.is_some() {
+        this.bytes(&[0x50, 0x52])?; // preserve unsigned index and length before syscalls
+    }
     let panic = PanicText { message, location };
     {
         let length = panic
@@ -2320,6 +2342,9 @@ fn emit_panic(this: &mut dyn PanicSink, message: &str, location: &str) -> Result
         this.bytes(&[0x48, 0x85, 0xc0])?;
         let failed_sigpipe = this.jump(&[0x0f, 0x85])?;
 
+        if let Some(site) = bounds {
+            panic_bounds::emit(this, site)?;
+        }
         if !panic.location.is_empty() {
             panic_header::emit(this)?;
         }

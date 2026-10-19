@@ -604,7 +604,7 @@ pub(super) fn inventory(
                     expr(bound, ds, b, d + 1)?;
                 }
             }
-            Expr::DynamicIndex { base, index }
+            Expr::DynamicIndex { base, index, .. }
             | Expr::Binary {
                 left: base,
                 right: index,

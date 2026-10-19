@@ -12,8 +12,10 @@ numeric inference solver exists. Existing i32 signed 32-bit behavior stays intac
 Native usize add/sub use carry/borrow overflow checks, multiplication checks the
 high product, division/remainder reject zero and use unsigned instructions, and
 comparisons/bounds use unsigned 64-bit flags. Unary minus rejects; unary not is
-full-width bitwise complement. Arithmetic/bounds failure exits101, without yet
-claiming Rust panic diagnostics or unwinding parity.
+full-width bitwise complement. Source arithmetic and builtin indexing failures
+now use source-aware panic-abort diagnostics. See `RUNTIME-BOUNDS.md` for the
+bounded indexing contract. Synthetic descriptor faults remain diagnostic 101;
+unwinding remains unsupported.
 
 Runtime indexing has no dynamic Place projection. Checked IR keeps literal
 Index and ConstantIndex and adds DynamicIndex with expression index, plus a

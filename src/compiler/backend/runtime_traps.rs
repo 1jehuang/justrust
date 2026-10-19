@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 pub(super) struct RuntimeTrap {
     pub branch: usize,
-    pub kind: PanicKind,
+    pub kind: Option<PanicKind>,
     pub location: Arc<ir::RuntimeLocation>,
 }
 
@@ -24,13 +24,38 @@ impl Emitter<'_> {
         };
     }
 
+    /// Entry snapshot contract: rax=index and rdx=len, before address scaling.
+    /// This only authorizes the exact source operation, never descriptor faults.
+    pub(super) fn bounds_trap(&mut self) {
+        let branch = self.jump(&[0x0f, 0x83]);
+        if let Some(location) = &self.runtime_location {
+            self.runtime_traps.push(RuntimeTrap {
+                branch,
+                kind: None,
+                location: location.clone(),
+            });
+        } else {
+            self.traps.push(branch);
+        }
+    }
+
     pub(super) fn runtime_panic_blocks(&mut self) -> Result<(), String> {
         for trap in std::mem::take(&mut self.runtime_traps) {
             self.patch(trap.branch, self.position())?;
-            self.panic(&ir::PanicMessage {
-                message: trap.kind.message().to_owned(),
-                location: trap.location.diagnostic_location(),
-            })?;
+            if let Some(kind) = trap.kind {
+                self.panic(&ir::PanicMessage {
+                    message: kind.message().to_owned(),
+                    location: trap.location.diagnostic_location(),
+                })?;
+            } else {
+                self.panic_with_bounds(
+                    &ir::PanicMessage {
+                        message: String::new(),
+                        location: String::new(),
+                    },
+                    Some(&trap.location),
+                )?;
+            }
         }
         Ok(())
     }

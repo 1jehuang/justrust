@@ -8,9 +8,9 @@ use super::*;
 
 enum IndexedBorrowStep<'e> {
     Field(&'e FieldSelector),
-    Const(usize),
+    Const(usize, &'e Expr),
     Deref,
-    Runtime(&'e Expr),
+    Runtime(&'e Expr, &'e Expr),
 }
 
 impl type_check::Checker<'_> {
@@ -21,7 +21,7 @@ impl type_check::Checker<'_> {
         kind: ir::BorrowKind,
         value: &Expr,
     ) -> Result<Option<ir::ExprId>, String> {
-        self.indexed_place_borrow(kind, value, false)
+        self.indexed_place_borrow(kind, value, true)
     }
 
     pub(super) fn format_indexed_place_borrow(
@@ -55,12 +55,12 @@ impl type_check::Checker<'_> {
                         return Ok(None);
                     };
                 }
-                Expr::DynamicIndex { base, index } => {
-                    steps.push(IndexedBorrowStep::Runtime(index));
+                Expr::DynamicIndex { base, index, .. } => {
+                    steps.push(IndexedBorrowStep::Runtime(index, cursor));
                     cursor = base;
                 }
-                Expr::Index { base, index } => {
-                    steps.push(IndexedBorrowStep::Const(*index));
+                Expr::Index { base, index, .. } => {
+                    steps.push(IndexedBorrowStep::Const(*index, cursor));
                     cursor = base;
                 }
                 Expr::Field { base, field } => {
@@ -75,8 +75,8 @@ impl type_check::Checker<'_> {
             }
         };
         if !steps.iter().any(|step| {
-            matches!(step, IndexedBorrowStep::Runtime(_))
-                || (constants && matches!(step, IndexedBorrowStep::Const(_)))
+            matches!(step, IndexedBorrowStep::Runtime(..))
+                || (constants && matches!(step, IndexedBorrowStep::Const(..)))
         }) {
             return Ok(None);
         }
@@ -124,7 +124,7 @@ impl type_check::Checker<'_> {
                     projection.push(ir::Projection::Field(index));
                     ty = field_ty;
                 }
-                IndexedBorrowStep::Const(index) => {
+                IndexedBorrowStep::Const(index, original) => {
                     while matches!(ty, ir::Ty::Ref { .. }) {
                         peel(&mut ty, &mut writable, &mut projection)?;
                     }
@@ -145,6 +145,17 @@ impl type_check::Checker<'_> {
                             local: saved,
                             value,
                         });
+                        let checked_index =
+                            self.for_expr(usize_ty.clone(), ir::ExprKind::Local(saved))?;
+                        self.index_bounds_probe(
+                            &ir::Place {
+                                local: root,
+                                projection: projection.clone(),
+                            },
+                            checked_index,
+                            original,
+                            &mut statements,
+                        )?;
                         projection.push(ir::Projection::DynamicIndex(saved));
                         ty = element;
                     } else {
@@ -155,7 +166,7 @@ impl type_check::Checker<'_> {
                         projection.push(ir::Projection::ConstantIndex(index));
                     }
                 }
-                IndexedBorrowStep::Runtime(index) => {
+                IndexedBorrowStep::Runtime(index, original) => {
                     while matches!(ty, ir::Ty::Ref { .. }) {
                         peel(&mut ty, &mut writable, &mut projection)?;
                     }
@@ -186,6 +197,17 @@ impl type_check::Checker<'_> {
                         local: saved,
                         value: index,
                     });
+                    let checked_index =
+                        self.for_expr(usize_ty.clone(), ir::ExprKind::Local(saved))?;
+                    self.index_bounds_probe(
+                        &ir::Place {
+                            local: root,
+                            projection: projection.clone(),
+                        },
+                        checked_index,
+                        original,
+                        &mut statements,
+                    )?;
                     projection.push(ir::Projection::DynamicIndex(saved));
                     ty = element;
                 }

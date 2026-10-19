@@ -887,13 +887,20 @@ host macro and compiles its generated target source.
       process ID, original source location, message and stock default backtrace
       hint. PID-only-normalized exact stderr compares with stock at workers 1/8
       (`tests/runtime_panic_header.rs`, RUST_BACKTRACE=0). Backtrace generation,
-      unwind mode and ordinary bounds panic source sites remain open.
+      unwind mode remains open. Source indexing diagnostics are covered separately
+      by the bounded `RUNTIME-BOUNDS.md` contract.
 - [x] Native scalar/wide integer overflow, division/remainder by zero and invalid
       shifts retain original source locations through checked graph facts, CFG,
       SSA inlining and constant folding, including location-sensitive cache keys.
       Stock panic=abort stderr and SIGABRT agree for 13 arithmetic forms at
       workers 1/8 with optimization off/adaptive/final (`tests/runtime_traps.rs`).
-      Unwinding, bounds trap payloads and compound-assignment site coverage remain open.
+      Unwinding and compound-assignment arithmetic site coverage remain open.
+- [x] Source-aware builtin array/slice bounds aborts retain exact original sites,
+      full-width unsigned index/length and stock effect order. Nonmoving probes
+      cover shared/mutable non-Copy borrowing, ignored values and checked writes,
+      with canonical source/CFG forgery controls (`RUNTIME-BOUNDS.md`). This advances
+      G0/G2/G3/G6/G9/G10/G12 without closing any full-Rust gate. Synthetic descriptor
+      faults, range panic diagnostics and unwinding remain separate/open.
 - [ ] Provide debug/source information and runtime failure/exit diagnostics.
       Expand architectures/OSes only with target-specific executable evidence.
 

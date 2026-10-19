@@ -3673,9 +3673,9 @@ impl Lowerer<'_> {
         let array = self.pattern_source(base)?;
         if !matches!(
             self.result.indexed_array_place_ty(&array)?,
-            Ty::Array { .. }
+            Ty::Array { .. } | Ty::Slice { .. }
         ) {
-            return Err("dynamic indexing requires array place".into());
+            return Err("dynamic indexing requires array or slice place".into());
         }
         let index = self.expression(index)?;
         self.result
@@ -3689,7 +3689,7 @@ impl Lowerer<'_> {
     fn pattern_source(&mut self, id: ExprId) -> Result<Place, String> {
         enum PendingProjection {
             Static(Projection),
-            Dynamic(ExprId),
+            Dynamic(ExprId, ExprId),
         }
         let mut root = id;
         let mut projection = Vec::new();
@@ -3718,7 +3718,7 @@ impl Lowerer<'_> {
                         && matches!(
                             projection.last(),
                             Some(
-                                PendingProjection::Dynamic(_)
+                                PendingProjection::Dynamic(..)
                                     | PendingProjection::Static(Projection::ConstantIndex(_))
                             )
                         ) =>
@@ -3726,7 +3726,7 @@ impl Lowerer<'_> {
                     if projection.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
                         return Err("pattern initializer projection depth exceeds limit 128".into());
                     }
-                    projection.push(PendingProjection::Dynamic(*index));
+                    projection.push(PendingProjection::Dynamic(*index, root));
                     root = *base;
                 }
                 ir::ExprKind::DynamicIndex { .. }
@@ -3773,7 +3773,7 @@ impl Lowerer<'_> {
                     }
                     part
                 }
-                PendingProjection::Dynamic(index) => {
+                PendingProjection::Dynamic(index, occurrence) => {
                     if !ends_in_runtime_row(&source)
                         && !matches!(self.result.place_ty(&source)?, Ty::Array { .. })
                     {
@@ -3785,12 +3785,12 @@ impl Lowerer<'_> {
                     {
                         return Err("runtime place index requires a usize local".into());
                     }
-                    self.statement(
+                    self.source_statement(
                         Statement::IndexInspect {
                             array: source.clone(),
                             index: Operand::Copy(value.clone()),
                         },
-                        Some(index),
+                        Some(occurrence),
                     );
                     Projection::DynamicIndex(value.local)
                 }
@@ -3957,7 +3957,10 @@ impl Lowerer<'_> {
                             .kind
                     {
                         let (array, index) = self.dynamic_source(base, index)?;
-                        self.statement(Statement::IndexInspect { array, index }, Some(*value));
+                        self.source_statement(
+                            Statement::IndexInspect { array, index },
+                            Some(*value),
+                        );
                         if self.drop_enabled {
                             self.cleanup(self.scopes.len() - 1, None);
                             self.scopes.pop();
@@ -4242,11 +4245,15 @@ impl Lowerer<'_> {
                 let (slice, start, end, inclusive) = (*slice, *start, *end, *inclusive);
                 self.lower_subslice(&destination, slice, start, end, inclusive, origin)?;
             }
-            // Receiver first, then index, each once into a distinct snapshot.
+            // Evaluate the receiver place first, but read its descriptor only
+            // after the index. An index expression can reassign that carrier.
             ir::ExprKind::SliceIndex { slice, index } => {
-                let slice = self.expression(*slice)?;
+                let source = self.pattern_source(*slice)?;
                 let index = self.expression(*index)?;
-                self.assign(
+                let carrier = self.temporary(self.source.exprs[slice.0].ty.clone(), origin);
+                self.assign(carrier.clone(), Rvalue::Use(Operand::Copy(source)), origin);
+                let slice = Operand::Copy(carrier);
+                self.assign_source_runtime(
                     destination.clone(),
                     Rvalue::SliceIndex { slice, index },
                     origin,
@@ -4313,12 +4320,28 @@ impl Lowerer<'_> {
                 self.result.operand_ty_with_facts(&operand, self.facts)?;
                 self.assign(destination.clone(), Rvalue::Use(operand), origin);
             }
+            ir::ExprKind::BoundsCheck { array, index } => {
+                self.inspect_indexed_array_prefixes(array, origin)?;
+                let index = self.expression(*index)?;
+                self.source_statement(
+                    Statement::IndexInspect {
+                        array: array.clone(),
+                        index,
+                    },
+                    origin,
+                );
+                self.assign(
+                    destination.clone(),
+                    Rvalue::Use(Operand::Constant(Constant::Unit)),
+                    origin,
+                );
+            }
             ir::ExprKind::DynamicIndex { base, index } => {
                 if !self.facts.must_copy(&expression.ty)? {
                     return Err("unsupported: non-Copy dynamic array element extraction; only direct let _ is supported".into());
                 }
                 let (array, index) = self.dynamic_source(*base, *index)?;
-                self.assign(
+                self.assign_source_runtime(
                     destination.clone(),
                     Rvalue::IndexCopy { array, index },
                     origin,
@@ -4522,7 +4545,7 @@ impl Lowerer<'_> {
             }
             ir::ExprKind::Unary { op, value } => {
                 let operand = self.expression(*value)?;
-                self.assign_source_arithmetic(
+                self.assign_source_runtime(
                     destination.clone(),
                     Rvalue::Unary {
                         op: *op,
@@ -4593,7 +4616,7 @@ impl Lowerer<'_> {
             ir::ExprKind::Binary { op, left, right } => {
                 let left = self.expression(*left)?;
                 let right = self.expression(*right)?;
-                self.assign_source_arithmetic(
+                self.assign_source_runtime(
                     destination.clone(),
                     Rvalue::Binary {
                         op: *op,

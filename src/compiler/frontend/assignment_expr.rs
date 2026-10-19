@@ -33,16 +33,18 @@ impl<'input, 'names> Parser<'input, 'names> {
         if nested_runtime_target(&target) {
             return Ok(Stmt::AssignNestedIndex { target, op, value });
         }
-        if let Expr::DynamicIndex { base, index } = target {
+        if let Expr::DynamicIndex { base, index, site } = target {
             let array = self.assignment_place(*base)?;
             return Ok(match op {
                 Some(op) => Stmt::AssignIndexOp {
+                    site,
                     array,
                     index: *index,
                     op,
                     value,
                 },
                 None => Stmt::AssignIndex {
+                    site,
                     array,
                     index: *index,
                     value,
@@ -62,14 +64,23 @@ impl<'input, 'names> Parser<'input, 'names> {
         ) {
             return Err(self.error("invalid assignment target: expected a place expression"));
         }
+        let site = match &target {
+            Expr::Index { site, .. } => *site,
+            _ => None,
+        };
         let place = self.assignment_place(target)?;
         Ok(match op {
-            Some(op) => Stmt::AssignOp { place, op, value },
+            Some(op) => Stmt::AssignOp {
+                site,
+                place,
+                op,
+                value,
+            },
             None if place.fields.is_empty() => Stmt::Assign {
                 name: place.local,
                 value,
             },
-            None => Stmt::AssignPlace { place, value },
+            None => Stmt::AssignPlace { site, place, value },
         })
     }
 }

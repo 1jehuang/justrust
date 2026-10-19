@@ -763,10 +763,10 @@ fn borrow_place(mut expr: &Expr) -> Option<Place> {
                 fields.push(field.clone());
                 expr = base;
             }
-            Expr::Index { base, index } => {
-                fields.push(FieldSelector::ConstantIndex(*index));
-                expr = base;
-            }
+            // Keep indexing as an expression until the receiver type is known.
+            // A literal slice index is a runtime check, unlike a fixed array
+            // projection, and must retain its original source occurrence.
+            Expr::Index { .. } => return None,
             _ => return None,
         }
     }
@@ -2201,7 +2201,7 @@ impl SourceInventory {
                     depth + 1,
                 )?;
             }
-            Expr::DynamicIndex { base, index }
+            Expr::DynamicIndex { base, index, .. }
             | Expr::Binary {
                 left: base,
                 right: index,
@@ -4904,6 +4904,7 @@ mod const_inputs;
 mod const_items;
 #[cfg(test)]
 mod const_source_tests;
+mod index_bounds;
 mod indexed_borrow;
 #[cfg(test)]
 mod leading_zero_tests;
@@ -5829,6 +5830,7 @@ pub enum Stmt {
     /// Stock evaluates `value`, then `carrier`, then `index`, exactly once.
     /// `fields` follow the implicit/explicit carrier Deref; `op` is None for `=`.
     AssignDeref {
+        site: Option<super::expansion_span::SpanId>,
         carrier: Expr,
         fields: Vec<FieldSelector>,
         index: Option<Expr>,
@@ -5836,6 +5838,7 @@ pub enum Stmt {
         value: Expr,
     },
     AssignIndex {
+        site: Option<super::expansion_span::SpanId>,
         array: Place,
         index: Expr,
         value: Expr,
@@ -5849,17 +5852,20 @@ pub enum Stmt {
         value: Expr,
     },
     AssignOp {
+        site: Option<super::expansion_span::SpanId>,
         place: Place,
         op: BinaryOp,
         value: Expr,
     },
     AssignIndexOp {
+        site: Option<super::expansion_span::SpanId>,
         array: Place,
         index: Expr,
         op: BinaryOp,
         value: Expr,
     },
     AssignPlace {
+        site: Option<super::expansion_span::SpanId>,
         place: Place,
         value: Expr,
     },
@@ -6292,6 +6298,7 @@ pub enum Expr {
     DynamicIndex {
         base: Box<Expr>,
         index: Box<Expr>,
+        site: Option<super::expansion_span::SpanId>,
     },
     /// `base[start..end]` / `..=` / open bounds (SUBSLICE.md).
     RangeIndex {
@@ -6308,6 +6315,7 @@ pub enum Expr {
     Index {
         base: Box<Expr>,
         index: usize,
+        site: Option<super::expansion_span::SpanId>,
     },
     EnumVariant {
         name: AstPath,
@@ -6612,8 +6620,12 @@ fn call_rooted_target(
     if genuine_call(base) || !rooted(base) {
         return Err(Box::new((target, value)));
     }
+    let site = match &target {
+        Expr::DynamicIndex { site, .. } | Expr::Index { site, .. } => *site,
+        _ => None,
+    };
     let (mut expr, index) = match target {
-        Expr::DynamicIndex { base, index } => (*base, Some(*index)),
+        Expr::DynamicIndex { base, index, .. } => (*base, Some(*index)),
         other => (other, None),
     };
     let mut fields = Vec::new();
@@ -6623,6 +6635,7 @@ fn call_rooted_target(
                 fields.push(FieldSelector::Deref);
                 fields.reverse();
                 return Ok(Stmt::AssignDeref {
+                    site,
                     carrier: *carrier,
                     fields,
                     index,
@@ -6634,6 +6647,7 @@ fn call_rooted_target(
                 fields.push(field);
                 fields.reverse();
                 return Ok(Stmt::AssignDeref {
+                    site,
                     carrier: *base,
                     fields,
                     index,
@@ -6644,10 +6658,12 @@ fn call_rooted_target(
             Expr::Index {
                 base,
                 index: constant,
+                ..
             } if genuine_call(&base) => {
                 fields.push(FieldSelector::ConstantIndex(constant));
                 fields.reverse();
                 return Ok(Stmt::AssignDeref {
+                    site,
                     carrier: *base,
                     fields,
                     index,
@@ -6666,6 +6682,7 @@ fn call_rooted_target(
             Expr::Index {
                 base,
                 index: constant,
+                ..
             } => {
                 fields.push(FieldSelector::ConstantIndex(constant));
                 *base
@@ -12087,13 +12104,18 @@ impl<'input, 'names> Parser<'input, 'names> {
                 value,
             });
         }
-        if let Expr::DynamicIndex { base, index } = target {
+        if let Expr::DynamicIndex { base, index, site } = target {
             return Ok(Stmt::AssignIndex {
+                site,
                 array: self.assignment_place(*base)?,
                 index: *index,
                 value,
             });
         }
+        let site = match &target {
+            Expr::Index { site, .. } => *site,
+            _ => None,
+        };
         let place = self.assignment_place(target)?;
         Ok(if place.fields.is_empty() {
             Stmt::Assign {
@@ -12101,7 +12123,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 value,
             }
         } else {
-            Stmt::AssignPlace { place, value }
+            Stmt::AssignPlace { site, place, value }
         })
     }
     /// After `base[` and an optional start, at `..` or `..=`: parse the rest
@@ -12143,15 +12165,21 @@ impl<'input, 'names> Parser<'input, 'names> {
                 value,
             });
         }
-        if let Expr::DynamicIndex { base, index } = target {
+        if let Expr::DynamicIndex { base, index, site } = target {
             return Ok(Stmt::AssignIndexOp {
+                site,
                 array: self.assignment_place(*base)?,
                 index: *index,
                 op,
                 value,
             });
         }
+        let site = match &target {
+            Expr::Index { site, .. } => *site,
+            _ => None,
+        };
         Ok(Stmt::AssignOp {
+            site,
             place: self.assignment_place(target)?,
             op,
             value,
@@ -12327,7 +12355,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
                 Expr::Deref {value}=>{fields.push(FieldSelector::Deref);expr = *value;}
                 Expr::Field { base, field } => { fields.push(field); expr = *base; }
-                Expr::Index { base,index } => {fields.push(FieldSelector::ConstantIndex(index));expr = *base;}
+                Expr::Index { base,index, .. } => {fields.push(FieldSelector::ConstantIndex(index));expr = *base;}
                 _ => return Err(self.unsupported("assignment requires a local-rooted place; destructuring and temporary assignment are unsupported")),
             }
         }
@@ -13265,6 +13293,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     left = Expr::Index {
                         base: Box::new(left),
                         index,
+                        site: Some(site),
                     };
                 } else {
                     if self.is("..") || self.is("..=") {
@@ -13282,6 +13311,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     left = Expr::DynamicIndex {
                         base: Box::new(left),
                         index: Box::new(index),
+                        site: Some(site),
                     };
                 }
                 validate_depth(DepthNode::Expr(&left)).map_err(|e| self.depth_error(&e))?;
@@ -15132,7 +15162,7 @@ fn walk_depth_inspecting(
                     push(DepthNode::Expr(value))?
                 }
                 Expr::Repeat { value, .. } => push(DepthNode::Expr(value))?,
-                Expr::DynamicIndex { base, index } => {
+                Expr::DynamicIndex { base, index, .. } => {
                     push(DepthNode::Expr(base))?;
                     push(DepthNode::Expr(index))?;
                 }

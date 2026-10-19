@@ -159,8 +159,8 @@ impl type_check::Checker<'_> {
         pointer: usize,
     ) -> Result<Option<ir::ExprId>, String> {
         let (base, literal, index) = match value {
-            Expr::DynamicIndex { base, index } => (base.as_ref(), None, Some(index.as_ref())),
-            Expr::Index { base, index } => (
+            Expr::DynamicIndex { base, index, .. } => (base.as_ref(), None, Some(index.as_ref())),
+            Expr::Index { base, index, .. } => (
                 base.as_ref(),
                 Some(Expr::Integer(IntegerLiteral {
                     magnitude: *index as u128,
@@ -206,20 +206,24 @@ impl type_check::Checker<'_> {
                 array,
                 index,
                 value,
+                ..
             } => (array.clone(), None, Some(index), None, value),
             Stmt::AssignIndexOp {
                 array,
                 index,
                 op,
                 value,
+                ..
             } => (array.clone(), None, Some(index), Some(*op), value),
-            Stmt::AssignPlace { place, value } => {
+            Stmt::AssignPlace { place, value, .. } => {
                 let Some((base, index)) = Self::static_index_parts(place) else {
                     return Ok(None);
                 };
                 (base, Some(index), None, None, value)
             }
-            Stmt::AssignOp { place, op, value } => {
+            Stmt::AssignOp {
+                place, op, value, ..
+            } => {
                 let Some((base, index)) = Self::static_index_parts(place) else {
                     return Ok(None);
                 };
@@ -474,7 +478,7 @@ impl type_check::Checker<'_> {
                 self.record_operator(e as *const Expr as usize, call)?;
                 self.deref_overloaded_result(call).map(Some)
             }
-            Expr::DynamicIndex { base, index } => {
+            Expr::DynamicIndex { base, index, .. } => {
                 let Some(ty) = self.method_receiver_hint(base)? else {
                     return Ok(None);
                 };
@@ -491,7 +495,7 @@ impl type_check::Checker<'_> {
                 self.record_operator(e as *const Expr as usize, call)?;
                 self.deref_overloaded_result(call).map(Some)
             }
-            Expr::Index { base, index } => {
+            Expr::Index { base, index, .. } => {
                 let Some(ty) = self.method_receiver_hint(base)? else {
                     return Ok(None);
                 };

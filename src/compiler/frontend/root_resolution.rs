@@ -2291,6 +2291,7 @@ impl Resolver<'_> {
         };
         fields.insert(0, FieldSelector::Deref);
         *stmt = Stmt::AssignDeref {
+            site: None,
             carrier: Expr::Call {
                 name: path,
                 args: Vec::new(),
@@ -2869,6 +2870,7 @@ impl Resolver<'_> {
                         self.expr(value, module, locals)?;
                         if !place.fields.is_empty() {
                             *stmt = Stmt::AssignPlace {
+                                site: None,
                                 place,
                                 value: std::mem::replace(value, Expr::Tuple(Vec::new())),
                             };
@@ -3485,7 +3487,7 @@ impl Resolver<'_> {
                     }
                 }
             }
-            Expr::DynamicIndex { base, index } => {
+            Expr::DynamicIndex { base, index, .. } => {
                 self.expr(base, module, locals)?;
                 self.expr(index, module, locals)?;
             }
