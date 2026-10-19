@@ -794,14 +794,21 @@ pub(super) enum RecipeAdmission {
     IntrinsicLimit(RecipeLimit),
 }
 
-fn ownership_state_bytes(locals: usize, paths: usize, blocks: usize) -> Result<usize, Exhausted> {
+fn ownership_state_bytes(
+    locals: usize,
+    paths: usize,
+    selected_slots: usize,
+    blocks: usize,
+) -> Result<usize, Exhausted> {
     let per_state = locals
         .div_ceil(64)
         .checked_mul(2)
         .and_then(|n| n.checked_add(paths.div_ceil(64).checked_mul(3)?))
-        .and_then(|n| n.checked_add(paths))
         .ok_or(Exhausted)?
         .checked_mul(8)
+        .and_then(|n| {
+            n.checked_add(selected_slots.checked_mul(std::mem::size_of::<(usize, usize)>())?)
+        })
         .and_then(|n| n.checked_add(std::mem::size_of::<State>()))
         .ok_or(Exhausted)?;
     per_state
@@ -889,8 +896,15 @@ pub(super) fn preflight_recipe_counts(
             .and_then(|n| n.checked_add(counts.lifetime_dependency_memberships))
             .and_then(|n| n.checked_add(counts.target_memberships))
             .ok_or(Exhausted)?;
-        let ownership_bytes =
-            ownership_state_bytes(counts.locals, counts.path_nodes, counts.blocks)?;
+        // Sparse variant-selection storage carries at most one entry per enum
+        // path node, and `variant_offsets` is a safe preflight upper bound on
+        // that count because every such node has at least one variant.
+        let ownership_bytes = ownership_state_bytes(
+            counts.locals,
+            counts.path_nodes,
+            counts.variant_offsets,
+            counts.blocks,
+        )?;
         let mut borrow_bytes = if origins != 0 || counts.carrier_slots != 0 {
             borrow::plan_storage_bytes(
                 counts.locals,
@@ -3150,10 +3164,20 @@ fn analyze_with_context(
         drop(verification_scratch);
         let paths = Paths::with_facts(f, limits.paths, facts, &mut budget)?;
         report.stats.move_paths = paths.nodes.len();
-        // Account for dense retained entry states and transient states as well
-        // as Vec headers. No allocation proportional to blocks*paths precedes
-        // this checked bound.
-        let bytes = ownership_state_bytes(f.locals.len(), paths.nodes.len(), f.blocks.len())?;
+        // Account for retained entry states and transient states up front,
+        // including sparse variant-selection storage and Vec headers. No
+        // allocation proportional to blocks*paths precedes this checked bound.
+        let selected_slots = paths
+            .nodes
+            .iter()
+            .filter(|node| !node.variant_offsets.is_empty())
+            .count();
+        let bytes = ownership_state_bytes(
+            f.locals.len(),
+            paths.nodes.len(),
+            selected_slots,
+            f.blocks.len(),
+        )?;
         if bytes > limits.state_bytes {
             return Err(Exhausted);
         }
@@ -3529,7 +3553,7 @@ mod tests {
         assert_eq!(footprint.memberships, 17);
         assert_eq!(
             footprint.ownership_bytes,
-            ownership_state_bytes(8, 11, 3).unwrap()
+            ownership_state_bytes(8, 11, 2, 3).unwrap()
         );
         assert_eq!(footprint.path_bytes, paths_storage_bytes(8, 11, 2).unwrap());
         assert_eq!(
