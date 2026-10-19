@@ -3,6 +3,8 @@ use super::*;
 
 #[path = "format_lowering.rs"]
 mod format_lowering;
+#[path = "type_check/constructor_expectations.rs"]
+mod constructor_expectations;
 #[path = "type_check/generic_placeholders.rs"]
 mod generic_placeholders;
 #[path = "type_check/inferred_owner.rs"]
@@ -192,6 +194,8 @@ pub(super) struct LoopFrame {
     pub(super) checking_condition: bool,
     pub(super) break_ty: Option<ir::Ty>,
     pub(super) expected: Option<ir::Ty>,
+    pub(super) expected_is_inferred: bool,
+    pub(super) expected_source_schema: Option<InferTerm>,
     pub(super) can_exit: bool,
 }
 pub(super) struct PatternLocal {
@@ -1651,16 +1655,71 @@ pub(super) struct Checker<'a> {
     pub(super) extending_borrows: Vec<usize>,
 }
 #[derive(Clone, Copy)]
+pub(super) struct ApplicationExpectation<'a> {
+    outer: Expectation<'a>,
+    arguments: &'a [Type],
+}
+#[derive(Clone, Copy)]
 pub(super) enum Expectation<'a> {
     None,
     HasType(&'a ir::Ty),
+    /// Solved local evidence is not a source-written coercion site. In
+    /// particular, it must not turn a move of `&mut T` into a reborrow.
+    Inferred(&'a ir::Ty),
+    /// A constructor's declared field shape, before replacing its type
+    /// parameters. Substitution cannot invent a written reference context.
+    SourceSchema(&'a ir::Ty, &'a InferTerm),
+    Application(&'a ApplicationExpectation<'a>),
     CastableToInt(ir::IntTy),
 }
 impl<'a> Expectation<'a> {
     pub(super) fn hard(self) -> Option<&'a ir::Ty> {
         match self {
-            Self::HasType(ty) => Some(ty),
+            Self::HasType(ty) | Self::Inferred(ty) | Self::SourceSchema(ty, _) => Some(ty),
+            Self::Application(application) => application.outer.hard(),
             _ => None,
+        }
+    }
+    fn coercion(self) -> Option<&'a ir::Ty> {
+        match self {
+            Self::HasType(ty) => Some(ty),
+            Self::SourceSchema(actual, formal)
+                if !matches!(actual, ir::Ty::Ref { .. })
+                    || matches!(formal.as_ref(), InferKind::Ref(..)) => Some(actual),
+            Self::Application(application) => application.outer.coercion(),
+            _ => None,
+        }
+    }
+    fn inherited<'b>(self, ty: Option<&'b ir::Ty>) -> Expectation<'b>
+    where
+        'a: 'b,
+    {
+        match self {
+            Self::Inferred(_) => ty.map_or(Expectation::None, Expectation::Inferred),
+            Self::SourceSchema(_, formal) => {
+                ty.map_or(Expectation::None, |actual| Expectation::SourceSchema(actual, formal))
+            }
+            Self::Application(application) => application.outer.inherited(ty),
+            _ => ty.into(),
+        }
+    }
+    fn aggregate_child<'b>(self, ty: Option<&'b ir::Ty>, index: usize) -> Expectation<'b>
+    where
+        'a: 'b,
+    {
+        match self {
+            Self::SourceSchema(_, formal) => {
+                let child = match formal.as_ref() {
+                    InferKind::Tuple(fields) => fields.get(index),
+                    InferKind::Array(element, _) => Some(element),
+                    _ => None,
+                };
+                match (ty, child) {
+                    (Some(actual), Some(formal)) => Expectation::SourceSchema(actual, formal),
+                    _ => ty.map_or(Expectation::None, Expectation::Inferred),
+                }
+            }
+            _ => self.inherited(ty),
         }
     }
     pub(super) fn literal(
@@ -3769,6 +3828,8 @@ impl<'a> Checker<'a> {
             checking_condition: !accepts_value,
             break_ty: None,
             expected: None,
+            expected_is_inferred: false,
+            expected_source_schema: None,
             can_exit: false,
         });
         id
@@ -5422,9 +5483,17 @@ impl<'a> Checker<'a> {
         reachable: bool,
         expected: Option<&ir::Ty>,
     ) -> Result<ir::ExprId, String> {
+        self.expr_with_expectation_when(e, reachable, expected.into())
+    }
+    fn expr_with_expectation_when(
+        &mut self,
+        e: &Expr,
+        reachable: bool,
+        expectation: Expectation<'_>,
+    ) -> Result<ir::ExprId, String> {
         let previous = self.reachable;
         self.reachable = reachable;
-        let result = self.expr_expected(e, expected);
+        let result = self.expr_with_expectation(e, expectation);
         self.reachable = previous;
         result
     }
@@ -6192,9 +6261,17 @@ impl<'a> Checker<'a> {
         reachable: bool,
         expected: Option<&ir::Ty>,
     ) -> Result<(ir::Block, Flow), String> {
+        self.block_with_expectation_when(b, reachable, expected.into())
+    }
+    fn block_with_expectation_when(
+        &mut self,
+        b: &Block,
+        reachable: bool,
+        expectation: Expectation<'_>,
+    ) -> Result<(ir::Block, Flow), String> {
         let previous = self.reachable;
         self.reachable = reachable;
-        let result = self.block_expected(b, expected);
+        let result = self.block_with_expectation(b, expectation);
         self.reachable = previous;
         result
     }
@@ -6275,7 +6352,12 @@ impl<'a> Checker<'a> {
                     };
                     let extending = self.extending_borrows.len();
                     self.mark_extending_borrows(value, 0)?;
-                    let value = self.expr_expected(value, annotation.as_ref());
+                    let expected = if matches!(written, Type::Infer) {
+                        annotation.as_ref().map_or(Expectation::None, Expectation::Inferred)
+                    } else {
+                        annotation.as_ref().into()
+                    };
+                    let value = self.expr_with_expectation(value, expected);
                     self.extending_borrows.truncate(extending);
                     let value = value?;
                     let f = self.flow(value);
@@ -6763,7 +6845,7 @@ impl<'a> Checker<'a> {
         }
         let result = self.expr_with_expectation_inner(e, expectation)?;
         let result = self.record_original_call(e, result)?;
-        match expectation.hard() {
+        match expectation.coercion() {
             Some(expected)
                 if expected.slice_ref_element().is_some_and(|(kind, _)| {
                     self.exprs[result.0]
@@ -7337,7 +7419,11 @@ impl<'a> Checker<'a> {
             } else {
                 self.push_application(path, application_namespace(value)?)?;
             }
-            let result = self.expr_with_expectation(value, expectation);
+            let application = ApplicationExpectation {
+                outer: expectation,
+                arguments: path.application()?.1,
+            };
+            let result = self.expr_with_expectation(value, Expectation::Application(&application));
             self.applications.borrow_mut().truncate(previous);
             return result;
         }
@@ -8109,8 +8195,9 @@ impl<'a> Checker<'a> {
         &mut self,
         name: &AstPath,
         fields: &[Expr],
-        expected: Option<&ir::Ty>,
+        expectation: Expectation<'_>,
     ) -> Result<(ir::ExprKind, Flow), String> {
+        let expected = expectation.hard();
         self.infer_storage(fields.len())?;
         let evidence_fields = fields
             .iter()
@@ -8136,8 +8223,12 @@ impl<'a> Checker<'a> {
         let mut completes = true;
         for (index, field) in fields.iter().enumerate() {
             let (_, field_ty) = self.field_type(&actual, &FieldSelector::Tuple(index))?;
-            let value =
-                self.expr_expected_when(field, self.reachable && completes, Some(&field_ty))?;
+            let formal = self.constructor_field_schema(ty.def().source_decl, None, index, expectation)?;
+            let value = self.expr_with_expectation_when(
+                field,
+                self.reachable && completes,
+                Expectation::SourceSchema(&field_ty, &formal),
+            )?;
             let flow = self.flow(value);
             self.require(&flow, &field_ty)?;
             completes &= flow.completes;
@@ -8777,10 +8868,21 @@ impl<'a> Checker<'a> {
         reachable: bool,
         expected: Option<&ir::Ty>,
     ) -> Result<ir::ExprId, String> {
+        self.match_arm_body_with_expectation(body, reachable, expected.into())
+    }
+    fn match_arm_body_with_expectation(
+        &mut self,
+        body: MatchBody<'_>,
+        reachable: bool,
+        expectation: Expectation<'_>,
+    ) -> Result<ir::ExprId, String> {
         let (kind, flow) = match body {
-            MatchBody::Expr(expr) => return self.expr_expected_when(expr, reachable, expected),
+            MatchBody::Expr(expr) => {
+                return self.expr_with_expectation_when(expr, reachable, expectation);
+            }
             MatchBody::Block(block) => {
-                let (block, flow) = self.block_expected_when(block, reachable, expected)?;
+                let (block, flow) =
+                    self.block_with_expectation_when(block, reachable, expectation)?;
                 (ir::ExprKind::Block(block), flow)
             }
             MatchBody::ImplicitUnit => (
@@ -8833,13 +8935,13 @@ impl<'a> Checker<'a> {
         &mut self,
         scrutinee: &Expr,
         arms: impl ExactSizeIterator<Item = BorrowedMatchArm<'source>> + Clone,
-        expected: Option<&ir::Ty>,
+        expectation: Expectation<'_>,
     ) -> Result<(ir::ExprKind, Flow), String> {
         if arms.len() > 4096 {
             return Err("match arm count exceeds limit 4096".into());
         }
         let scrutinee = self.expr(scrutinee)?;
-        self.lower_match_value(scrutinee, arms, expected)
+        self.lower_match_value_with_expectation(scrutinee, arms, expectation)
     }
     fn match_pattern_domain(&self, pattern: &Pattern, ty: &ir::Ty) -> Result<ir::Ty, String> {
         if *ty != ir::Ty::Never {
@@ -8931,6 +9033,14 @@ impl<'a> Checker<'a> {
         scrutinee: ir::ExprId,
         arms: impl ExactSizeIterator<Item = BorrowedMatchArm<'source>> + Clone,
         expected: Option<&ir::Ty>,
+    ) -> Result<(ir::ExprKind, Flow), String> {
+        self.lower_match_value_with_expectation(scrutinee, arms, expected.into())
+    }
+    fn lower_match_value_with_expectation<'source>(
+        &mut self,
+        scrutinee: ir::ExprId,
+        arms: impl ExactSizeIterator<Item = BorrowedMatchArm<'source>> + Clone,
+        expectation: Expectation<'_>,
     ) -> Result<(ir::ExprKind, Flow), String> {
         if arms.len() > 4096 {
             return Err("match arm count exceeds limit 4096".into());
@@ -9176,10 +9286,10 @@ impl<'a> Checker<'a> {
                         Ok(id)
                     })
                     .transpose()?;
-                let body = self.match_arm_body(
+                let body = self.match_arm_body_with_expectation(
                     arm.body,
                     self.reachable && source.completes && useful,
-                    expected,
+                    expectation,
                 )?;
                 Ok::<_, String>((pattern, coverage, body, useful, guard))
             })();
@@ -9281,7 +9391,7 @@ impl<'a> Checker<'a> {
     ) -> Result<ir::ExprId, String> {
         // A castable hint is not a hard result constraint or reference coercion site.
         let expected = expectation.hard();
-        if let Some(ir::Ty::Ref { kind, referent }) = expected {
+        if let Some(ir::Ty::Ref { kind, referent }) = expectation.coercion() {
             if let Expr::Var(name) = e {
                 let local = self.lookup(name)?;
                 if let ir::Ty::Ref {
@@ -9390,8 +9500,11 @@ impl<'a> Checker<'a> {
                 let mut values = Vec::new();
                 let mut completes = true;
                 for expression in elements {
-                    let value =
-                        self.expr_expected_when(expression, self.reachable && completes, hint)?;
+                    let value = self.expr_with_expectation_when(
+                        expression,
+                        self.reachable && completes,
+                        expectation.aggregate_child(hint, 0),
+                    )?;
                     let flow = self.flow(value);
                     completes &= flow.completes;
                     if let Some(expected) = hint {
@@ -9420,7 +9533,7 @@ impl<'a> Checker<'a> {
                     Some(ir::Ty::Array { element, .. }) => Some(element.as_ref()),
                     _ => None,
                 };
-                let value = self.expr_expected(value, hint)?;
+                let value = self.expr_with_expectation(value, expectation.aggregate_child(hint, 0))?;
                 let flow = self.flow(value);
                 if let Some(expected) = hint {
                     self.require(&flow, expected)?;
@@ -9619,10 +9732,16 @@ impl<'a> Checker<'a> {
                         return Err("duplicate variant constructor field".into());
                     }
                     self.accessible(&field.ty)?;
-                    let value = self.expr_expected_when(
+                    let formal = self.constructor_field_schema(
+                        ty.def().source_decl,
+                        Some(variant),
+                        index,
+                        expectation,
+                    )?;
+                    let value = self.expr_with_expectation_when(
                         value,
                         self.reachable && completes,
-                        Some(&field.ty),
+                        Expectation::SourceSchema(&field.ty, &formal),
                     )?;
                     let flow = self.flow(value);
                     self.require(&flow, &field.ty)?;
@@ -9652,7 +9771,7 @@ impl<'a> Checker<'a> {
                     guard: arm.guard.as_deref(),
                     body: MatchBody::Expr(&arm.body),
                 }),
-                expected,
+                expectation,
             )?,
             Expr::IfLet {
                 pattern,
@@ -9678,7 +9797,7 @@ impl<'a> Checker<'a> {
                     },
                 ]
                 .into_iter(),
-                expected,
+                expectation,
             )?,
             Expr::Tuple(fields) => {
                 if fields.is_empty() {
@@ -9692,8 +9811,11 @@ impl<'a> Checker<'a> {
                         Some(ir::Ty::Tuple(types)) => types.get(index),
                         _ => None,
                     };
-                    let value =
-                        self.expr_expected_when(field, self.reachable && completes, hint)?;
+                    let value = self.expr_with_expectation_when(
+                        field,
+                        self.reachable && completes,
+                        expectation.aggregate_child(hint, index),
+                    )?;
                     let flow = self.flow(value);
                     completes &= flow.completes;
                     types.push(flow.ty);
@@ -9714,7 +9836,7 @@ impl<'a> Checker<'a> {
                 return Err("application dispatcher invariant".into());
             }
             Expr::TupleStruct { name, fields } => {
-                self.tuple_struct_value(name, fields, expected)?
+                self.tuple_struct_value(name, fields, expectation)?
             }
             Expr::Struct { name, fields } => {
                 self.infer_storage(fields.len())?;
@@ -9742,10 +9864,11 @@ impl<'a> Checker<'a> {
                     if !seen.insert(index) {
                         return Err(format!("duplicate field {name:?}"));
                     }
-                    let value = self.expr_expected_when(
+                    let formal = self.constructor_field_schema(ty.def().source_decl, None, index, expectation)?;
+                    let value = self.expr_with_expectation_when(
                         value,
                         self.reachable && completes,
-                        Some(&expected),
+                        Expectation::SourceSchema(&expected, &formal),
                     )?;
                     let flow = self.flow(value);
                     self.require(&flow, &expected)?;
@@ -10171,7 +10294,23 @@ impl<'a> Checker<'a> {
                     let (_, args, regions) = self.applications.borrow_mut().pop().unwrap();
                     (args, regions)
                 } else if plan.param_env(declaration)?.arity() > 0 {
-                    (self.infer_call_args(declaration,args,expected,true)?.ok_or("unsupported generic inference: insufficient evidence; explicit type arguments required")?, Arc::from([]))
+                    // A solved local reference hint is not an original expected
+                    // context. Prefer argument-owned evidence so the canonical
+                    // replay retains its original borrow frontier.
+                    let from_arguments = if expectation.coercion().is_none()
+                        && matches!(expected, Some(ir::Ty::Ref { .. }))
+                    {
+                        self.infer_call_args(declaration, args, None, false)?
+                    } else {
+                        None
+                    };
+                    let actuals = match from_arguments {
+                        Some(actuals) => actuals,
+                        None => self
+                            .infer_call_args(declaration, args, expected, true)?
+                            .ok_or("unsupported generic inference: insufficient evidence; explicit type arguments required")?,
+                    };
+                    (actuals, Arc::from([]))
                 } else {
                     (Vec::new(), Arc::from([]))
                 };
@@ -10254,8 +10393,15 @@ impl<'a> Checker<'a> {
                     None
                 };
                 let expected = expected.or(inferred.as_ref());
-                let (then_block, t) = self.block_expected_when(then_block, reachable, expected)?;
-                let (else_block, e) = self.block_expected_when(else_block, reachable, expected)?;
+                let expected = if inferred.is_some() {
+                    expected.map_or(Expectation::None, Expectation::Inferred)
+                } else {
+                    expectation.inherited(expected)
+                };
+                let (then_block, t) =
+                    self.block_with_expectation_when(then_block, reachable, expected)?;
+                let (else_block, e) =
+                    self.block_with_expectation_when(else_block, reachable, expected)?;
                 let ty = self.join(&t.ty, &e.ty, "if branches")?;
                 let completes = c.completes && (t.completes || e.completes);
                 (
@@ -10272,6 +10418,12 @@ impl<'a> Checker<'a> {
                 let key = self.label_key(*label)?;
                 self.loops.last_mut().unwrap().label = key;
                 self.loops.last_mut().unwrap().expected = expected.cloned();
+                self.loops.last_mut().unwrap().expected_is_inferred =
+                    matches!(expectation, Expectation::Inferred(_));
+                self.loops.last_mut().unwrap().expected_source_schema = match expectation {
+                    Expectation::SourceSchema(_, formal) => Some(formal.clone()),
+                    _ => None,
+                };
                 // A loop has its own intrinsic completion facts even when the
                 // enclosing expression is unreachable. Only its own body paths
                 // determine whether one of its breaks can complete.
@@ -10288,9 +10440,19 @@ impl<'a> Checker<'a> {
                 let index = self.loop_target("break", *label)?;
                 let target = self.loops[index].id;
                 let expected = self.loops[index].expected.clone();
+                let source_schema = self.loops[index].expected_source_schema.clone();
+                let expectation = if let (Some(actual), Some(formal)) =
+                    (expected.as_ref(), source_schema.as_ref())
+                {
+                    Expectation::SourceSchema(actual, formal)
+                } else if self.loops[index].expected_is_inferred {
+                    expected.as_ref().map_or(Expectation::None, Expectation::Inferred)
+                } else {
+                    expected.as_ref().into()
+                };
                 let value = value
                     .as_ref()
-                    .map(|e| self.expr_expected(e, expected.as_ref()))
+                    .map(|e| self.expr_with_expectation(e, expectation))
                     .transpose()?;
                 let flow = value.map_or(Flow::value(ir::Ty::Unit), |e| self.flow(e));
                 let frame = &self.loops[index];
@@ -10322,7 +10484,13 @@ impl<'a> Checker<'a> {
                 frame.label = key;
                 frame.is_block = true;
                 frame.expected = expected.cloned();
-                let (body, body_flow) = self.block_expected_when(body, true, expected)?;
+                frame.expected_is_inferred = matches!(expectation, Expectation::Inferred(_));
+                frame.expected_source_schema = match expectation {
+                    Expectation::SourceSchema(_, formal) => Some(formal.clone()),
+                    _ => None,
+                };
+                let (body, body_flow) =
+                    self.block_with_expectation_when(body, true, expectation)?;
                 let frame = self.loops.pop().unwrap();
                 let ty = self.join(
                     &body_flow.ty,

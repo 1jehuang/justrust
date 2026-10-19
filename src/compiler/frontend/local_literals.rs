@@ -96,6 +96,10 @@ pub(super) fn hints(
 
 impl<'s> Solver<'_, '_, 's> {
     fn node(&mut self, domain: Domain) -> Result<Term, String> {
+        let domain = match domain {
+            Domain::Tuple(fields) if fields.is_empty() => Domain::Fixed(ir::Ty::Unit),
+            domain => domain,
+        };
         self.checker.infer_storage(1)?;
         let term = self.variables.len();
         self.variables.push(Variable {
@@ -968,7 +972,15 @@ impl<'s> Solver<'_, '_, 's> {
                     let base = self.place(array)?;
                     let target = self.field(base, FieldSelector::ConstantIndex(0))?;
                     let value = self.expr(value, depth + 1)?;
-                    self.coerce(value, target)?;
+                    if !matches!(
+                        stmt,
+                        Stmt::AssignIndexOp {
+                            op: BinaryOp::Shl | BinaryOp::Shr,
+                            ..
+                        }
+                    ) {
+                        self.coerce(value, target)?;
+                    }
                     let index = self.expr(index, depth + 1)?;
                     let usize = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
                     self.unify(index, usize)?;

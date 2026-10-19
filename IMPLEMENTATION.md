@@ -364,8 +364,13 @@ missing-file changes invalidate only justified consumers without stale lookup.
       nominal bindings (`tests/body_inference.rs`). Nominal payload patterns,
       Option assignment and nested returns propagate constraints, with delayed
       method results preserving reference-pattern binding modes and authoritative
-      Deref coercions. Closure constraints and general iterator-item projections
-      remain follow-up work.
+      Deref coercions. Solved hints do not create source reborrow contexts:
+      unique-reference moves through locals, aggregates and generic constructors
+      remain moves, while declaration-written reference fields and written actuals
+      retain reborrows (`tests/inference_move_authority.rs`). Partial nominal
+      applications and newly inferred generic reference consumers retain explicit
+      unsupported boundaries. Closure constraints and general iterator-item
+      projections remain follow-up work.
 
 **Next:** enumerate remaining type/pattern forms and freeze one end-to-end slice,
 such as general slice metadata or nested patterns, with resource accounting.
