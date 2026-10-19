@@ -609,6 +609,12 @@ host macro and compiles its generated target source.
       branch/early return, replacement and break transport. Missing cleanup,
       stale universal CFG shape and missing destructor demand reject. Generic
       owning structs, nested aggregate glue and typed drop-in-place remain open.
+- [x] Bounded generic named-field owners containing only scalars/raw pointers
+      retain distinct concrete canonical Drop targets and symbols per type
+      arguments. Stock/native exact-count execution and Copy, explicit drop,
+      move, borrowed replacement and invalid specialization controls pass.
+      Additional nominal/impl bounds, owned parameter fields, nested glue,
+      typed layout/drop-in-place and actual source Box<T> remain open.
 - [ ] Provide debug/source information and runtime failure/exit diagnostics.
       Expand architectures/OSes only with target-specific executable evidence.
 

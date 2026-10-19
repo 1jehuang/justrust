@@ -1,5 +1,29 @@
 # Findings: where agent build time goes
 
+## 2026-10-19: bounded generic pointer-field owner cleanup
+
+- Generic scalar/raw-pointer-field owners use canonical Drop resolution. An
+  unresolved universal target stays unresolved until closed instantiation;
+  concrete i32/u8 owners retain distinct target arguments and symbols. No
+  generated unchecked call, nominal side slot or per-container backend case
+  was added. Specialized/repeated owner arguments reject. Extra impl bounds
+  and nominal bounds remain explicit unsupported boundaries, with stock
+  distinguishing invalid impls from valid unsupported bounded declarations.
+- Required local stock/native heap suite passes 25 tests, including exact two
+  destructor calls, pointer writes/reads and Copy/E0184, direct-drop/E0040,
+  move/E0382 and replacement/E0506 controls
+  (`20261018-203948377-2777425`). Local is required because hosted lacks stock
+  rustc. Frozen stock-first 56-source Drop corpus passes without source or
+  receipt changes and retains 29 native positives
+  (`20261018-204034101-2785264`). This does not implement Box or pointee drop.
+- Hosted check (`20261018-203933239-2767358`), all 1377 library tests
+  (`20261018-203955782-2781262`), seven unchanged graph gates including the
+  1165/1166 size boundary (`20261018-204011264-2783332`) and strict all-target
+  lint (`20261018-204023450-2777404`) pass on the composed 57ccb foundation.
+  Broader concurrent cache/authority integration is a separate coordinator
+  gate. No work/byte ceiling or graph ratchet changed. Receipts:
+  `data/runs/xps14/2026-10-19-generic-pointer-drop.jsonl`.
+
 ## 2026-10-19: concrete cleanup for generic functions
 
 - Existing universal proof plus fresh closed lowering now admits generic

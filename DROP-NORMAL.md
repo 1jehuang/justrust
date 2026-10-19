@@ -204,10 +204,27 @@ reject explicitly. Frozen `unsupported/generic_function.rs` and
 `unsupported/dead_generic.rs` sources and receipts are unchanged and promoted
 to native-positive (29 native positives).
 
-## Next prerequisite: generic owners and pointee destruction
+## Bounded generic pointer-field owners (2026-10-19)
 
-Then admit generic pointer-field owners through canonical trait resolution of
-closed owner arguments. Layout and `drop_in_place` need typed graph facts keyed
+Canonical Drop also admits generic named-field owners whose fields are scalars
+or raw pointers. Universal unresolved targets remain unresolved, and every
+closed owner must resolve its own canonical destructor. A graph regression
+requires `Guard<i32>` and `Guard<u8>` cleanup demands to retain different type
+arguments and symbols even though they share one declaration. Stock/native
+executables require exactly two destructor calls while both pointees remain
+readable and writable before cleanup.
+
+Drop implementations must cover distinct nominal parameters, not specialize
+an argument or identify two parameters. Copy plus Drop, explicit destructor
+calls, use after move and conflicting borrowed replacement remain semantic
+rejections. Additional impl predicates and bounds on nominal declarations are
+explicitly unsupported, including Rust-valid bounded-owner declarations. Owned
+parameter fields, nested owning fields and aggregate glue remain unsupported.
+This is a pointer-field owner prerequisite, not source Box support.
+
+## Next prerequisite: pointee destruction
+
+Layout and `drop_in_place` need typed graph facts keyed
 by the closed type, never process-global reflection or unvalidated backend
 calls. A source `Box<T>` must destroy its pointee before freeing its allocation,
 transfer/disarm allocation ownership exactly once, and preserve nested-owner,

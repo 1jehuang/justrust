@@ -1484,6 +1484,33 @@ mod tests {
     }
 
     #[test]
+    fn generic_owner_cleanup_targets_keep_concrete_type_arguments() {
+        let text = "struct D<T>{pointer:*mut T}impl<T> Drop for D<T>{fn drop(&mut self){}}fn main(){let a=D::<i32>{pointer:0usize as *mut i32};let b=D::<u8>{pointer:0usize as *mut u8};}";
+        let program = frontend::parse(text).unwrap();
+        let budget = ir::PlanBudget::default();
+        let mut context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let mut sources = Vec::new();
+        for index in 0..context.callable_count() {
+            let current = context.callable_decl(index).unwrap();
+            match context.publish_callable_body(current, &budget).unwrap() {
+                frontend::PublishedCallableBody::Source(source) => {
+                    sources.push(source.source().clone())
+                }
+                frontend::PublishedCallableBody::Recipe(source) => sources.push(source),
+            }
+        }
+        let plan = build(&mut context, &sources, &budget).unwrap();
+        assert_eq!(plan.cleanup_targets.len(), 2);
+        let first = &plan.cleanup_targets[0];
+        let second = &plan.cleanup_targets[1];
+        assert_eq!(first.declaration, second.declaration);
+        assert_eq!(first.type_args.len(), 1);
+        assert_eq!(second.type_args.len(), 1);
+        assert_ne!(first.type_args, second.type_args);
+        assert_ne!(plan.symbol(first).unwrap(), plan.symbol(second).unwrap());
+    }
+
+    #[test]
     fn relocation_symbol_copies_share_the_plan_byte_limit() {
         let budget = ir::PlanBudget::new(ir::PlanLimits {
             bytes: 12 + 4 * std::mem::size_of::<(usize, String)>(),
