@@ -385,7 +385,10 @@ missing-file changes invalidate only justified consumers without stale lookup.
       remain moves, while declaration-written reference fields and written actuals
       retain reborrows (`tests/inference_move_authority.rs`). Partial nominal
       applications and newly inferred generic reference consumers retain explicit
-      unsupported boundaries. Array-loop constraints preserve owned, shared and
+      unsupported boundaries. Canonical generic-call inference represents slice
+      elements structurally, preserving callee/caller binder substitution through
+      shared and mutable slice signatures and raw-pointer forwarding. Array-loop
+      constraints preserve owned, shared and
       mutable binding modes, and resolved non-array receivers request the canonical
       IntoIterator::Item projection. Adapter execution and full-program 08 still
       depend on the ordinary iterator lowering/library activation. Closure

@@ -46,6 +46,9 @@ impl Checker<'_> {
             InferKind::Array(element, len) => {
                 InferKind::Array(self.method_owner_term(element, bindings, depth + 1)?, *len)
             }
+            InferKind::Slice(element) => {
+                InferKind::Slice(self.method_owner_term(element, bindings, depth + 1)?)
+            }
             _ => return Ok(term.clone()),
         };
         self.infer_node(kind)

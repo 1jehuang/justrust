@@ -16,6 +16,7 @@ pub(super) enum InferKind {
     Unknown(bool),
     Tuple(Arc<[InferTerm]>),
     Array(InferTerm, usize),
+    Slice(InferTerm),
     Ref(ir::BorrowKind, InferTerm),
     RawPtr(ir::BorrowKind, InferTerm),
     Nominal(ir::DeclId, Arc<[InferTerm]>),
@@ -108,6 +109,17 @@ impl CallInferenceState {
                     })
                 } else {
                     None
+                }
+            }
+            InferKind::Slice(term) => {
+                match self.resolve(term, fallback, depth + 1, materialize)? {
+                    Some(element) => {
+                        self.storage(1)?;
+                        Some(ir::Ty::Slice {
+                            element: Arc::new(element),
+                        })
+                    }
+                    None => None,
                 }
             }
             InferKind::Array(term, len) => {
@@ -251,6 +263,7 @@ impl CallInferenceState {
             InferKind::Array(element, len) => {
                 InferKind::Array(self.taint(element, depth + 1)?, *len)
             }
+            InferKind::Slice(element) => InferKind::Slice(self.taint(element, depth + 1)?),
             InferKind::Nominal(decl, args) => {
                 self.storage(args.len())?;
                 InferKind::Nominal(
@@ -334,6 +347,9 @@ impl CallInferenceState {
             (InferKind::Array(x, n), InferKind::Array(y, m)) if n == m => {
                 self.node(InferKind::Array(self.merge(x, y, depth + 1)?, *n))
             }
+            (InferKind::Slice(x), InferKind::Slice(y)) => {
+                self.node(InferKind::Slice(self.merge(x, y, depth + 1)?))
+            }
             (InferKind::Nominal(d, x), InferKind::Nominal(e, y))
                 if d == e && x.len() == y.len() =>
             {
@@ -369,6 +385,7 @@ impl CallInferenceState {
                 }
             }
             InferKind::Array(element, _)
+            | InferKind::Slice(element)
             | InferKind::Ref(_, element)
             | InferKind::RawPtr(_, element) => self.occurs(slot, element, depth + 1)?,
             _ => {}
@@ -476,6 +493,14 @@ impl CallInferenceState {
                     "generic nominal inference identity mismatch",
                 )),
             },
+            InferKind::Slice(element) => match evidence.as_ref() {
+                InferKind::Slice(actual) => self.constrain(element, actual, depth + 1),
+                InferKind::Unknown(_) => Ok(()),
+                _ => Err(FactsError::invalid(
+                    &self.budget,
+                    "generic slice inference shape mismatch",
+                )),
+            },
             InferKind::Rigid(_) => {
                 if matches!(evidence.as_ref(), InferKind::Unknown(_)) {
                     Ok(())
@@ -515,6 +540,9 @@ impl CallInferenceState {
             }
             ir::Ty::Array { element, len } => {
                 InferKind::Array(self.type_term(element, schema, depth + 1)?, *len)
+            }
+            ir::Ty::Slice { element } => {
+                InferKind::Slice(self.type_term(element, schema, depth + 1)?)
             }
             ir::Ty::Struct(ty) => {
                 self.storage(ty.def().type_args.len())?;
@@ -916,6 +944,7 @@ fn terms_equal(
         (InferKind::Array(x, a), InferKind::Array(y, b)) => {
             a == b && terms_equal(x, y, budget, at + 1)?
         }
+        (InferKind::Slice(x), InferKind::Slice(y)) => terms_equal(x, y, budget, at + 1)?,
         (InferKind::Tuple(x), InferKind::Tuple(y))
         | (InferKind::Nominal(_, x), InferKind::Nominal(_, y)) => {
             if let (InferKind::Nominal(a, _), InferKind::Nominal(b, _)) =

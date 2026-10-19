@@ -1390,7 +1390,9 @@ impl<'s> Checker<'s> {
             {
                 self.infer_work(1)?;
                 let actual = match referent.as_ref() {
-                    InferKind::Array(element, _) => Some(element.clone()),
+                    InferKind::Array(element, _) | InferKind::Slice(element) => {
+                        Some(element.clone())
+                    }
                     InferKind::Rigid(ir::Ty::Slice { element }) => {
                         Some(self.infer_type_term(element, None, 1)?)
                     }
@@ -1470,9 +1472,10 @@ impl<'s> Checker<'s> {
                     self.check_slot_free_evidence(field, depth + 1)?;
                 }
             }
-            InferKind::Array(inner, _) | InferKind::Ref(_, inner) | InferKind::RawPtr(_, inner) => {
-                self.check_slot_free_evidence(inner, depth + 1)?
-            }
+            InferKind::Array(inner, _)
+            | InferKind::Slice(inner)
+            | InferKind::Ref(_, inner)
+            | InferKind::RawPtr(_, inner) => self.check_slot_free_evidence(inner, depth + 1)?,
             _ => {}
         }
         Ok(())

@@ -98,6 +98,9 @@ impl Checker<'_> {
                 self.replace_constructor_slots(inner, arguments, depth + 1)?,
                 *len,
             ),
+            InferKind::Slice(inner) => {
+                InferKind::Slice(self.replace_constructor_slots(inner, arguments, depth + 1)?)
+            }
             InferKind::Tuple(fields) => {
                 self.infer_storage(fields.len())?;
                 InferKind::Tuple(
@@ -165,6 +168,10 @@ impl Checker<'_> {
             (InferKind::Array(inner, len), InferKind::Array(value, actual)) if len == actual => {
                 let inner = self.merge_constructor_context(inner, Some(value), depth + 1)?;
                 self.infer_node(InferKind::Array(inner, *len))
+            }
+            (InferKind::Slice(inner), InferKind::Slice(value)) => {
+                let inner = self.merge_constructor_context(inner, Some(value), depth + 1)?;
+                self.infer_node(InferKind::Slice(inner))
             }
             // Reference shape is already firmly written, regardless of holes
             // below the referent. No reference-value move occurs inside it.

@@ -18,6 +18,7 @@ impl Checker<'_> {
             Type::Array(element, len) => {
                 InferKind::Array(self.partial_type_term(element, depth + 1)?, *len)
             }
+            Type::Slice(element) => InferKind::Slice(self.partial_type_term(element, depth + 1)?),
             Type::Tuple(fields) => {
                 self.infer_storage(fields.len())?;
                 InferKind::Tuple(
