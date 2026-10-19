@@ -436,6 +436,9 @@ acceptance.
 - [ ] Extend dynamic borrowed places, temporary scopes/lifetime extension,
       aggregate carrier flows, general reborrows and loop/SCC-carried loans.
       Preserve the delivered current-cell and per-occurrence provenance rules.
+      Conditional reference replacement now preserves alternative origin worlds
+      instead of conflating them with simultaneous aliases. Explicit-loan pair
+      proofs fail closed for unknown origins, incomplete evidence and exhaustion.
       Delivered: assignment/compound assignment through call-returned `&mut`
       places with stock value->carrier->index order (TEMP-PLACES.md); by-value
       temporary fields and plain runtime index through a call stay Unsupported.

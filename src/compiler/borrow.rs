@@ -12,6 +12,7 @@ use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 use std::sync::Arc;
 
+mod correlation;
 mod renewal;
 
 #[cfg(test)]
@@ -5615,6 +5616,7 @@ impl Plan {
     }
     pub fn check(
         &self,
+        f: &cfg::Function,
         target: &Target,
         access: Access,
         block: BlockId,
@@ -5624,7 +5626,7 @@ impl Plan {
     ) -> Result<Option<Problem>, Exhausted> {
         let point = self.point_data(block, statement, phase);
         let active = self.active(&point.origins, &point.live, budget)?;
-        for loan in active.members() {
+        'loans: for loan in active.members() {
             budget.spend(target.authority.len() + 1)?;
             if target.authority.contains(&loan)
                 || matches!(access, Access::ActivateMut(id) if id.0 == loan)
@@ -5645,6 +5647,15 @@ impl Plan {
             }
             for borrowed in &self.targets[loan] {
                 if overlap(&target.place, &borrowed.place, budget)? {
+                    for authority in &target.authority {
+                        if active.has(*authority)
+                            && self.exclusive_origins(
+                                f, *authority, loan, block, statement, phase, budget,
+                            )?
+                        {
+                            continue 'loans;
+                        }
+                    }
                     return Ok(Some(Problem::Conflict(format!(
                         "access conflicts with live {:?} loan {}",
                         self.kinds[loan], loan

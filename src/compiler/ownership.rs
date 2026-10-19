@@ -2365,6 +2365,7 @@ impl Transfer<'_> {
     fn check_access(&mut self, target: &Target, access: Access) -> Result<(), Exhausted> {
         if let Some(loans) = self.loans
             && let Some(problem) = loans.check(
+                self.f,
                 target,
                 access,
                 self.block,
