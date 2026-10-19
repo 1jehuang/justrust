@@ -163,13 +163,12 @@ and a wrapping graph-id counter; all three are fixed. Roots are single-mint
 and not `Clone`, files are issued rather than positional, steps are paid
 before allocation, and graph ids fail closed at exhaustion.
 
-Open before activation: each step's `ByteLease` holds an `ExpansionBudget`,
-which contains a `Mutex`. Once an `OwnerPath` is reachable from a published
-fact, `graph_facts_reach_no_new_mutable_state` would record a new
-`ByteLease`/`ExpansionBudget` triple, which the ratchet forbids. Published
-paths must carry no lease: pay at admission, then retain through the
-producing node's meter (as `PlanBudget::retain_bytes` does) instead of a
-budget handle. Waiting on the coordinator's choice.
+Resolved (scratch 46bf8c9e6 + a95b5df48): step storage is sealed into hare's
+immutable `RetainedBytes` receipt before the path is shared.
+`owner_path_reaches_no_mutable_state` in `tests/graph_integrity.rs` enforces
+it. It failed before the swap and passes after. Remaining before activation:
+coordinator review of mint semantics, the hog constructor hunk, and the main
+freeze.
 
 1. Deterministic owner ids derived from file ordinals. No behavior change.
    Shrinks the static/atomic baseline.
