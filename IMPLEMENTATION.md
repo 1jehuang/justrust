@@ -73,6 +73,13 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       124-binary hosted gate. Actual trailing semicolon syntax preserves source
       Unit obligations separately from intrinsic runtime loop divergence.
       Expression-position while-let, chains and refutable payload matrices remain open.
+- [x] Genuine statement-position integer range for loops (`start..end` and
+      `start..=end`) through existing checked while/match IR. Bounds evaluate
+      once, left to right, before body-only source bindings. Pre-body advancement
+      preserves break/continue/labels and never increments an inclusive maximum.
+      `tests/loops.rs` compares stock execution and invalid type/scope/control
+      cases with native check/build at one and eight workers. General iterable
+      values, adapters and expression-position for loops remain open.
 - [x] Genuine let-else with old-frontier initializer/else validation, dedicated
       persistent-binding IR and checked failure divergence. LET-ELSE.md records
       stock33/native132 cells per bootstrap profile,26 public authority controls
