@@ -1,0 +1,463 @@
+//! Injective process-local graph coordinates for canonical callable instances.
+//! These are not persistent symbols. Nominals encode declaration applications,
+//! never allocation-order-dependent application IDs or diagnostic names.
+use super::*;
+
+const VERSION: u64 = 0x4a52_494e_5354_0001;
+const INTS: [ir::IntTy; 12] = [
+    ir::IntTy::I8,
+    ir::IntTy::I16,
+    ir::IntTy::I32,
+    ir::IntTy::I64,
+    ir::IntTy::I128,
+    ir::IntTy::Isize,
+    ir::IntTy::U8,
+    ir::IntTy::U16,
+    ir::IntTy::U32,
+    ir::IntTy::U64,
+    ir::IntTy::U128,
+    ir::IntTy::Usize,
+];
+
+pub(in crate::compiler) fn encode(
+    target: &ir::CallTarget,
+    budget: &ir::PlanBudget,
+) -> Result<Vec<u64>, String> {
+    let mut words = vec![VERSION];
+    declaration(&mut words, target.declaration);
+    types(&mut words, &target.type_args, budget, 0)?;
+    budget.charge_work(words.len())?;
+    budget.retain_bytes(
+        words
+            .len()
+            .checked_mul(16)
+            .ok_or("instance key size overflow")?,
+    )?;
+    Ok(words)
+}
+
+fn declaration(words: &mut Vec<u64>, id: ir::DeclId) {
+    words.extend([id.snapshot.graph_word(), u64::from(id.index)]);
+}
+fn types(
+    words: &mut Vec<u64>,
+    values: &[ir::Ty],
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<(), String> {
+    budget.charge_work(values.len())?;
+    words.push(values.len() as u64);
+    for value in values {
+        ty(words, value, budget, depth + 1)?;
+    }
+    Ok(())
+}
+fn ty(
+    words: &mut Vec<u64>,
+    value: &ir::Ty,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<(), String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    let start = words.len();
+    words.extend([0, 0]);
+    let tag = match value {
+        ir::Ty::Int(value) => {
+            words.push(
+                INTS.iter()
+                    .position(|candidate| candidate == value)
+                    .ok_or("unknown integer key type")? as u64,
+            );
+            1
+        }
+        ir::Ty::Float(value) => {
+            words.push(match value {
+                ir::FloatTy::F32 => 0,
+                ir::FloatTy::F64 => 1,
+            });
+            2
+        }
+        ir::Ty::Bool => 3,
+        ir::Ty::Unit => 4,
+        ir::Ty::Never => 5,
+        ir::Ty::Char => 6,
+        ir::Ty::Str => 7,
+        ir::Ty::Ref { kind, referent } => {
+            words.push(borrow(*kind));
+            ty(words, referent, budget, depth + 1)?;
+            8
+        }
+        ir::Ty::RawPtr { kind, pointee } => {
+            words.push(borrow(*kind));
+            ty(words, pointee, budget, depth + 1)?;
+            9
+        }
+        ir::Ty::Tuple(fields) => {
+            if fields.is_empty() {
+                return Err("noncanonical empty tuple in instance key".into());
+            }
+            types(words, fields, budget, depth + 1)?;
+            10
+        }
+        ir::Ty::Array { element, len } => {
+            words.push(*len as u64);
+            ty(words, element, budget, depth + 1)?;
+            11
+        }
+        ir::Ty::Slice { element } => {
+            ty(words, element, budget, depth + 1)?;
+            12
+        }
+        ir::Ty::Struct(value) => {
+            declaration(words, value.def().source_decl);
+            types(words, &value.def().type_args, budget, depth + 1)?;
+            13
+        }
+        ir::Ty::Enum(value) => {
+            declaration(words, value.def().source_decl);
+            types(words, &value.def().type_args, budget, depth + 1)?;
+            14
+        }
+        ir::Ty::Dyn(value) => {
+            if !value.args.is_empty() || !value.associated_types.is_empty() {
+                return Err(
+                    "unsupported: rich dyn instance graph key requires complete principal metadata"
+                        .into(),
+                );
+            }
+            declaration(words, value.principal);
+            15
+        }
+        ir::Ty::Closure(_) => {
+            return Err(
+                "unsupported: canonical closure graph key requires parent metadata replay".into(),
+            );
+        }
+        ir::Ty::Param(_) | ir::Ty::AssociatedType(_) => {
+            return Err("instance graph key requires closed actuals".into());
+        }
+    };
+    words[start] = tag;
+    words[start + 1] = (words.len() - start - 2) as u64;
+    Ok(())
+}
+fn borrow(kind: ir::BorrowKind) -> u64 {
+    match kind {
+        ir::BorrowKind::Shared => 0,
+        ir::BorrowKind::Mut => 1,
+    }
+}
+
+pub(in crate::compiler) fn decode(
+    words: &[u64],
+    context: &frontend::PlanCtx,
+    budget: &ir::PlanBudget,
+) -> Result<ir::CallTarget, String> {
+    budget.charge_work(words.len())?;
+    let mut reader = Reader {
+        words,
+        at: 0,
+        context,
+        budget,
+    };
+    if reader.word()? != VERSION {
+        return Err("unsupported canonical instance graph key version".into());
+    }
+    let declaration = reader.declaration()?;
+    let facts = context.callable_facts(declaration)?;
+    let type_args = reader.types(ir::FactsCtx::from_validated(&facts), 0)?;
+    if reader.at != words.len() {
+        return Err("trailing instance graph key words".into());
+    }
+    let target = ir::CallTarget {
+        declaration,
+        type_args: type_args.into(),
+    };
+    // Metadata decoding grants no executable permission. Replay exact target
+    // obligations through canonical instance facts before returning a target.
+    context.instance_facts(&target)?;
+    if encode(&target, budget)?.as_slice() != words {
+        return Err("noncanonical instance graph key".into());
+    }
+    Ok(target)
+}
+struct Reader<'a> {
+    words: &'a [u64],
+    at: usize,
+    context: &'a frontend::PlanCtx,
+    budget: &'a ir::PlanBudget,
+}
+impl Reader<'_> {
+    fn word(&mut self) -> Result<u64, String> {
+        let value = *self
+            .words
+            .get(self.at)
+            .ok_or("truncated instance graph key")?;
+        self.at += 1;
+        Ok(value)
+    }
+    fn count(&mut self) -> Result<usize, String> {
+        let count =
+            usize::try_from(self.word()?).map_err(|_| "instance graph key count overflow")?;
+        if count > self.words.len().saturating_sub(self.at) {
+            return Err("instance graph key count exceeds input".into());
+        }
+        Ok(count)
+    }
+    fn declaration(&mut self) -> Result<ir::DeclId, String> {
+        let id = ir::DeclId {
+            snapshot: ir::SnapshotId::from_graph_word(self.word()?),
+            index: u32::try_from(self.word()?)
+                .map_err(|_| "instance declaration index overflow")?,
+        };
+        self.context.declaration(id)?;
+        Ok(id)
+    }
+    fn types(&mut self, facts: ir::FactsCtx<'_>, depth: usize) -> Result<Vec<ir::Ty>, String> {
+        self.budget.check_depth(depth)?;
+        let count = self.count()?;
+        self.budget.charge_work(count)?;
+        self.budget.retain_bytes(
+            count
+                .checked_mul(std::mem::size_of::<ir::Ty>() * 2)
+                .ok_or("instance key allocation overflow")?,
+        )?;
+        let mut output = Vec::new();
+        output
+            .try_reserve_exact(count)
+            .map_err(|_| "instance key allocation failed")?;
+        for _ in 0..count {
+            output.push(self.ty(facts, depth + 1)?);
+        }
+        Ok(output)
+    }
+    fn kind(&mut self) -> Result<ir::BorrowKind, String> {
+        match self.word()? {
+            0 => Ok(ir::BorrowKind::Shared),
+            1 => Ok(ir::BorrowKind::Mut),
+            _ => Err("invalid instance key borrow kind".into()),
+        }
+    }
+    fn ty(&mut self, facts: ir::FactsCtx<'_>, depth: usize) -> Result<ir::Ty, String> {
+        self.budget.check_depth(depth)?;
+        self.budget.charge_work(1)?;
+        let tag = self.word()?;
+        let length = self.count()?;
+        let end = self
+            .at
+            .checked_add(length)
+            .ok_or("instance key frame overflow")?;
+        let outer_words = self.words;
+        self.words = &outer_words[..end];
+        let result = (|| {
+            if tag != 1 {
+                return self.other_ty(tag, end, facts, depth);
+            }
+            let ty = *INTS
+                .get(usize::try_from(self.word()?).map_err(|_| "integer key overflow")?)
+                .ok_or("unknown instance integer tag")?;
+            if self.at != end {
+                return Err("instance key scalar frame length mismatch".into());
+            }
+            Ok(ir::Ty::Int(ty))
+        })();
+        self.words = outer_words;
+        result
+    }
+    fn other_ty(
+        &mut self,
+        tag: u64,
+        end: usize,
+        facts: ir::FactsCtx<'_>,
+        depth: usize,
+    ) -> Result<ir::Ty, String> {
+        let value = match tag {
+            2 => ir::Ty::Float(match self.word()? {
+                0 => ir::FloatTy::F32,
+                1 => ir::FloatTy::F64,
+                _ => return Err("invalid float key tag".into()),
+            }),
+            3 => ir::Ty::Bool,
+            4 => ir::Ty::Unit,
+            5 => ir::Ty::Never,
+            6 => ir::Ty::Char,
+            7 => ir::Ty::Str,
+            8 => ir::Ty::Ref {
+                kind: self.kind()?,
+                referent: Arc::new(self.ty(facts, depth + 1)?),
+            },
+            9 => ir::Ty::RawPtr {
+                kind: self.kind()?,
+                pointee: Arc::new(self.ty(facts, depth + 1)?),
+            },
+            10 => {
+                let fields = self.types(facts, depth + 1)?;
+                if fields.is_empty() {
+                    return Err("noncanonical empty tuple graph key".into());
+                }
+                ir::Ty::Tuple(fields.into())
+            }
+            11 => {
+                let len = usize::try_from(self.word()?).map_err(|_| "array key length overflow")?;
+                ir::Ty::Array {
+                    len,
+                    element: Arc::new(self.ty(facts, depth + 1)?),
+                }
+            }
+            12 => ir::Ty::Slice {
+                element: Arc::new(self.ty(facts, depth + 1)?),
+            },
+            13 | 14 => {
+                let declaration = self.declaration()?;
+                let args = self.types(facts, depth + 1)?;
+                let ty = self
+                    .context
+                    .intern_nominal(declaration, &args, facts, self.budget)?;
+                if !matches!((tag, &ty), (13, ir::Ty::Struct(_)) | (14, ir::Ty::Enum(_))) {
+                    return Err("nominal graph key changed declaration kind".into());
+                }
+                ty
+            }
+            15 => ir::Ty::Dyn(Arc::new(ir::DynTy {
+                principal: self.declaration()?,
+                args: Arc::from([]),
+                associated_types: Arc::from([]),
+            })),
+            16 => {
+                return Err(
+                    "unsupported: opaque instance graph key requires owner metadata replay".into(),
+                );
+            }
+            _ => return Err("unsupported instance graph type tag".into()),
+        };
+        if self.at != end {
+            return Err("instance key type frame length mismatch".into());
+        }
+        facts.validate_ty_metadata(&value)?;
+        Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn target(args: Vec<ir::Ty>) -> ir::CallTarget {
+        ir::CallTarget {
+            declaration: ir::DeclId {
+                snapshot: ir::SnapshotId::allocate().unwrap(),
+                index: 1,
+            },
+            type_args: args.into(),
+        }
+    }
+    fn fixture() -> (frontend::PlanCtx, ir::PlanBudget, ir::DeclId) {
+        let program = frontend::parse("fn item<T>(x:T)->T{x}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = (0..context.callable_count())
+            .map(|i| context.callable_decl(i).unwrap())
+            .find(|id| {
+                matches!(
+                    context.persistent_decl_path(*id).unwrap().item(),
+                    frontend::PersistentDeclItem::Name("item")
+                )
+            })
+            .unwrap();
+        (context, budget, declaration)
+    }
+    #[test]
+    fn canonical_decode_roundtrips_and_rejects_foreign_or_malformed_keys() {
+        let (context, budget, declaration) = fixture();
+        for value in [
+            ir::Ty::Bool,
+            ir::Ty::Int(ir::IntTy::I32),
+            ir::Ty::Tuple(Arc::from([ir::Ty::Bool, ir::Ty::Int(ir::IntTy::U8)])),
+        ] {
+            let target = ir::CallTarget {
+                declaration,
+                type_args: Arc::from([value]),
+            };
+            let words = encode(&target, &budget).unwrap();
+            assert_eq!(target, decode(&words, &context, &budget).unwrap());
+            for end in 0..words.len() {
+                assert!(
+                    decode(&words[..end], &context, &budget).is_err(),
+                    "accepted truncated key at {end}"
+                );
+            }
+            let mut trailing = words.clone();
+            trailing.push(0);
+            assert!(decode(&trailing, &context, &budget).is_err());
+            let mut foreign = words.clone();
+            foreign[1] = ir::SnapshotId::allocate().unwrap().graph_word();
+            assert!(decode(&foreign, &context, &budget).is_err());
+            let mut overflowing = words.clone();
+            overflowing[5] = u64::MAX;
+            assert!(decode(&overflowing, &context, &budget).is_err());
+            let mut short_frame = words.clone();
+            short_frame[5] = 0;
+            if words[4] != 3 {
+                assert!(decode(&short_frame, &context, &budget).is_err());
+            }
+        }
+        let wrong_arity = ir::CallTarget {
+            declaration,
+            type_args: Arc::from([]),
+        };
+        assert!(decode(&encode(&wrong_arity, &budget).unwrap(), &context, &budget).is_err());
+    }
+    #[test]
+    fn nominal_alias_coordinates_share_and_nested_frames_remain_bounded() {
+        let program = frontend::parse("struct Pair<T>{value:T} type Alias=Pair<i32>; fn first(x:Pair<i32>){} fn second(x:Alias){} fn item<T>(x:T)->T{x} fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let named = |name| {
+            (0..context.callable_count()).map(|i| context.callable_decl(i).unwrap()).find(|id| matches!(context.persistent_decl_path(*id).unwrap().item(), frontend::PersistentDeclItem::Name(found) if found == name)).unwrap()
+        };
+        let first = context.signature(named("first")).unwrap().signature.params[0].clone();
+        let second = context.signature(named("second")).unwrap().signature.params[0].clone();
+        let target = |ty| ir::CallTarget {
+            declaration: named("item"),
+            type_args: Arc::from([ty]),
+        };
+        let words = encode(&target(first.clone()), &budget).unwrap();
+        assert_eq!(words, encode(&target(second), &budget).unwrap());
+        assert_eq!(decode(&words, &context, &budget).unwrap(), target(first));
+        for end in 0..words.len() {
+            assert!(decode(&words[..end], &context, &budget).is_err());
+        }
+        let mut wrong_kind = words.clone();
+        wrong_kind[4] = 14;
+        assert!(decode(&wrong_kind, &context, &budget).is_err());
+        let mut foreign_nominal = words.clone();
+        foreign_nominal[6] = ir::SnapshotId::allocate().unwrap().graph_word();
+        assert!(decode(&foreign_nominal, &context, &budget).is_err());
+        let mut opaque = encode(&target(ir::Ty::Bool), &budget).unwrap();
+        opaque[4] = 16;
+        assert!(
+            decode(&opaque, &context, &budget)
+                .unwrap_err()
+                .contains("opaque")
+        );
+    }
+    #[test]
+    fn tags_boundaries_and_order_are_injective() {
+        let budget = ir::PlanBudget::default();
+        let mut original = target(vec![ir::Ty::Int(ir::IntTy::I32), ir::Ty::Bool]);
+        let first = encode(&original, &budget).unwrap();
+        original.type_args = Arc::from([ir::Ty::Bool, ir::Ty::Int(ir::IntTy::I32)]);
+        assert_ne!(first, encode(&original, &budget).unwrap());
+        original.type_args = Arc::from([ir::Ty::Tuple(Arc::from([
+            ir::Ty::Int(ir::IntTy::I32),
+            ir::Ty::Bool,
+        ]))]);
+        assert_ne!(first, encode(&original, &budget).unwrap());
+        let mut other = original.clone();
+        other.declaration.snapshot = ir::SnapshotId::allocate().unwrap();
+        assert_ne!(
+            encode(&original, &budget).unwrap(),
+            encode(&other, &budget).unwrap()
+        );
+    }
+}

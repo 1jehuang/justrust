@@ -2,6 +2,11 @@
 //! Local declaration/application IDs are lookup handles, never persistent keys.
 use super::{frontend, ir, traits};
 use std::sync::Arc;
+#[expect(
+    dead_code,
+    reason = "shared codec prerequisite; remove when graph consumers land"
+)]
+pub(super) mod graph_key;
 
 const SEMANTICS: &[u8] =
     b"jr-native-normal-drop-v5/linux-x86_64/checked/scalar-root-flags/atomic-canonical-drop/carrier-regions-storage-effects/structured-declaration-paths/complete-trait-applications";

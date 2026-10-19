@@ -548,7 +548,10 @@ cleanup failures.
       iterator integration remain open.
 - [ ] Extend monomorphization/recursive instance planning to the new forms while
       retaining universal checks, binder-qualified substitution and sealed native
-      instances. Optimization must not bypass unused-body validation.
+      instances. Optimization must not bypass unused-body validation. Shared
+      snapshot-local target codec (`INSTANCE-KEYS.md`) retains ordered type frames
+      and validates decoding. Associated-constant/opaque consumers and their
+      sealed use authority remain separate open work.
 
 **Next:** extend equality to composite symbolic relationships and
 unconstrained projection facts, then projected defaults and general associated

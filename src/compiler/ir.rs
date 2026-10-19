@@ -39,6 +39,12 @@ pub use intrinsics::{Intrinsic, IntrinsicOp, IntrinsicSignature, ScalarTy};
 pub struct SnapshotId(u64);
 
 impl SnapshotId {
+    pub(in crate::compiler) fn graph_word(self) -> u64 {
+        self.0
+    }
+    pub(in crate::compiler) fn from_graph_word(value: u64) -> Self {
+        Self(value)
+    }
     pub fn allocate() -> Result<Self, String> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         Self::allocate_from(&NEXT)
