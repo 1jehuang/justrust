@@ -1,6 +1,9 @@
 //! Source checking, local inference and checked body construction.
 use super::*;
 
+#[path = "local_literals.rs"]
+mod local_literals;
+
 /// Borrowed source bodies and the semantic unit value of an absent else.
 #[derive(Clone, Copy)]
 enum MatchBody<'a> {
@@ -5251,6 +5254,7 @@ impl<'a> Checker<'a> {
         b: &Block,
         expectation: Expectation<'_>,
     ) -> Result<(ir::Block, Flow), String> {
+        let literal_hints = local_literals::hints(self, b, expectation.hard())?;
         let entered_reachable = self.reachable;
         let pending_start = self.pending_references.len();
         let temporaries_start = self.borrow_temporaries.len();
@@ -5300,7 +5304,7 @@ impl<'a> Checker<'a> {
                     value,
                 } => {
                     let annotation = if matches!(ty, Type::Infer) {
-                        None
+                        literal_hints.get(&(s as *const Stmt as usize)).cloned()
                     } else {
                         Some(checked_local_ty(ty, self.signatures)?)
                     };
