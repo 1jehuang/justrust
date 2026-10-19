@@ -10,6 +10,17 @@ pub enum FragmentKind {
     Tt,
     Ident,
     Literal,
+    Expr,
+    Ty,
+    Pat,
+    PatParam,
+    Path,
+    Stmt,
+    Block,
+    Item,
+    Vis,
+    Lifetime,
+    Meta,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LiteralCapture {

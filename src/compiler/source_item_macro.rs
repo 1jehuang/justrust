@@ -43,6 +43,10 @@ struct Definition {
     name: NameKey,
     point: ModuleFrontierId,
     rules: RulesDef,
+    /// Original rule body, kept so expression-position calls can register
+    /// the same rules with a function-local driver.
+    body: TokenSlice,
+    site: DefinitionSite,
 }
 #[derive(Clone, Copy)]
 pub(super) struct CheckedDef {
@@ -105,9 +109,15 @@ impl SourceItemMacroDriver {
             });
         }
         let name = names.key(name, LookupClass::Item(Namespace::Macro))?;
-        let rules = names.compile_local_rules(body, site)?;
+        let rules = names.compile_local_rules(body.clone(), site)?;
         u32::try_from(self.definitions.len()).map_err(|_| TokenError::IdExhausted)?;
-        self.definitions.push(Definition { name, point, rules })?;
+        self.definitions.push(Definition {
+            name,
+            point,
+            rules,
+            body,
+            site,
+        })?;
         Ok(())
     }
     pub(super) fn select(
@@ -141,6 +151,32 @@ impl SourceItemMacroDriver {
             message: "unknown module macro at this lexical point",
         }
         .into())
+    }
+    /// The latest module definition of `name` visible at `call`, as its
+    /// original rule body and site (for function-local re-registration).
+    pub(super) fn visible_body(
+        &self,
+        name: AstIdent,
+        call: ModuleFrontierId,
+        scopes: &ScopeArenaBuilder,
+        names: &NameStoreBuilder,
+    ) -> Result<Option<(TokenSlice, DefinitionSite)>, DriverError> {
+        self.check(names)?;
+        let key = names.key(name, LookupClass::Item(Namespace::Macro))?;
+        for definition in self.definitions.as_slice().iter().rev() {
+            names.budget().charge(Counter::Work, 1)?;
+            if definition.name == key
+                && scopes
+                    .module_visible_from(definition.point, call)
+                    .map_err(DriverError::Scope)?
+            {
+                return Ok(Some((definition.body.clone(), definition.site)));
+            }
+        }
+        Ok(None)
+    }
+    pub(super) fn is_empty(&self) -> bool {
+        self.definitions.len() == 0
     }
     pub(super) fn known(
         &self,

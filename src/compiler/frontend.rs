@@ -6988,23 +6988,20 @@ impl<'input, 'names> Parser<'input, 'names> {
             let start = child.cursor.checkpoint();
             let previous_count = product.program.functions.len();
             let (visibility, explicit_visibility) = child.visibility(module)?;
-            if !child.is("fn") {
+            let item_start = [
+                "fn", "trait", "impl", "struct", "enum", "type", "const", "static", "pub",
+            ]
+            .iter()
+            .any(|token| child.is(token));
+            if !item_start {
                 let valid_unadmitted_item = [
-                    "#",
-                    "mod",
-                    "use",
-                    "trait",
-                    "impl",
                     "macro_rules",
-                    "struct",
-                    "enum",
-                    "type",
-                    "const",
-                    "static",
                     "extern",
                     "unsafe",
                     "async",
-                    ";",
+                    "mod",
+                    "use",
+                    "#",
                 ]
                 .iter()
                 .any(|token| child.is(token))
@@ -7012,8 +7009,10 @@ impl<'input, 'names> Parser<'input, 'names> {
                         && child.cursor.peek(1).is_some_and(|token| token.matches("!"));
                 return Err(if valid_unadmitted_item {
                     child.unsupported("item macro output must contain only nongeneric free functions; generated attributes and other items are unsupported")
-                } else {
+                } else if native_adapter::punctuation(child.token().text) && !child.is("@") {
                     child.error("expected a complete free function or end of item macro output")
+                } else {
+                    child.unsupported("expected an item in item macro output")
                 });
             }
             child.nonmodule_item(
@@ -7023,13 +7022,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                 visibility,
                 explicit_visibility,
             )?;
-            if child.cursor.is_at(start)
-                || product.program.functions.len().checked_sub(previous_count) != Some(1)
-            {
+            if child.cursor.is_at(start) {
                 return Err(native_adapter::transport_error(
                     super::token_session::TokenError::InvalidHandle,
                 ));
             }
+            let _ = previous_count;
         }
         // No function or empty expansion is published until the entire native
         // token buffer has been consumed. The shared expansion is provenance,
@@ -7057,25 +7055,28 @@ impl<'input, 'names> Parser<'input, 'names> {
                 product.program.functions.len(),
             )
             .map_err(scope_parse_error)?;
-        if product.items.len() != product.program.functions.len() {
-            return Err(native_adapter::transport_error(
-                super::token_session::TokenError::InvalidHandle,
-            ));
-        }
         for key in product.items.keys() {
             if parsed.items.contains_key(key) {
                 return Err(self.error("duplicate item name"));
             }
         }
-        for function in product.program.functions {
-            let key = function.name.key(Namespace::Type);
-            let items = product.items.remove(&key).ok_or_else(|| {
-                native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
-            })?;
+        for (key, items) in product.items.drain() {
             self.reserve_item_publication(parsed)?;
             parsed.items.insert(key, items);
-            parsed.program.functions.push(function);
         }
+        let generated = product.program;
+        parsed.program.functions.extend(generated.functions);
+        parsed.program.constants.extend(generated.constants);
+        parsed.program.structs.extend(generated.structs);
+        parsed.program.enums.extend(generated.enums);
+        parsed.program.impls.extend(generated.impls);
+        parsed.program.traits.extend(generated.traits);
+        parsed.program.trait_imports.extend(generated.trait_imports);
+        parsed
+            .program
+            .closure_sources
+            .extend(generated.closure_sources);
+        parsed.empty_use_prefixes.extend(product.empty_use_prefixes);
         Ok(())
     }
     fn reserve_item_publication(
@@ -8070,6 +8071,62 @@ impl<'input, 'names> Parser<'input, 'names> {
         validate_depth(DepthNode::Expr(&expression)).map_err(|e| self.depth_error(&e))?;
         Ok(expression)
     }
+    /// Registers the visible module-level `macro_rules!` definition of `name`
+    /// with this function's local driver, so expression/statement-position
+    /// invocations expand through the ordinary local path.
+    fn import_module_macro(
+        &mut self,
+        name: AstIdent,
+        call: super::semantic_scope::FrontierId,
+    ) -> Result<Option<super::source_macro::CheckedDef>, ParseError> {
+        let (Some(items), Some(module_call), Some(scopes)) = (
+            &self.lexical.item_macros,
+            self.module_frontier,
+            &self.lexical.scopes,
+        ) else {
+            return Ok(None);
+        };
+        let Some((body, site)) = items
+            .visible_body(name, module_call, scopes, self.names)
+            .map_err(|error| self.driver_error(error))?
+        else {
+            return Ok(None);
+        };
+        let function = self.lexical.function.as_mut().ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+        })?;
+        let driver = function.driver.as_mut().ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+        })?;
+        let defined = driver.define(name, body, site, call, self.names);
+        defined.map_err(|error| self.driver_error(error))?;
+        let scopes = self.lexical.scopes.as_ref().ok_or_else(|| {
+            native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+        })?;
+        let driver = self
+            .lexical
+            .function
+            .as_ref()
+            .and_then(|function| function.driver.as_ref())
+            .ok_or_else(|| {
+                native_adapter::transport_error(super::token_session::TokenError::InvalidHandle)
+            })?;
+        let found = driver.lookup(name, call, scopes, self.names);
+        found.map_err(|error| self.driver_error(error))
+    }
+    fn probe_module_macro(&mut self, probe: &TokenCursor<'input>) -> Result<bool, ParseError> {
+        let mut at = TokenCursor::new(self.input);
+        if !at.restore(probe.checkpoint()) {
+            return Ok(false);
+        }
+        let saved = std::mem::replace(&mut self.cursor, at);
+        let name = self.ident();
+        self.cursor = saved;
+        match name {
+            Ok(name) => self.known_module_macro(name),
+            Err(_) => Ok(false),
+        }
+    }
     fn known_module_macro(&self, name: AstIdent) -> Result<bool, ParseError> {
         let (Some(driver), Some(call), Some(scopes)) = (
             &self.lexical.item_macros,
@@ -8139,15 +8196,19 @@ impl<'input, 'names> Parser<'input, 'names> {
             .map_err(|error| self.driver_error(error))?
         {
             Some(selected) => selected,
-            None => {
-                if self.known_module_macro(name)? {
-                    return Err(
-                        self.unsupported("module macros in expression position are unsupported")
-                    );
+            None => match self.import_module_macro(name, call)? {
+                Some(selected) => selected,
+                None => {
+                    return Err(self.error("unknown function-local macro at this lexical point"));
                 }
-                return Err(self.error("unknown function-local macro at this lexical point"));
-            }
+            },
         };
+        let driver = self
+            .lexical
+            .function
+            .as_ref()
+            .and_then(|function| function.driver.as_ref())
+            .ok_or_else(|| self.unsupported("function-local macro context required"))?;
         let expanded = driver
             .expand(
                 selected,
@@ -8474,6 +8535,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         let mut depth = 0usize;
         let mut found = false;
+        let module_macros = self
+            .lexical
+            .item_macros
+            .as_ref()
+            .is_some_and(|driver| !driver.is_empty());
         loop {
             self.names
                 .budget()
@@ -8486,6 +8552,13 @@ impl<'input, 'names> Parser<'input, 'names> {
                 break;
             }
             if token.matches("macro_rules") && probe.peek(1).is_some_and(|token| token.matches("!"))
+            {
+                found = true;
+                break;
+            }
+            if module_macros
+                && probe.peek(1).is_some_and(|token| token.matches("!"))
+                && self.probe_module_macro(&probe)?
             {
                 found = true;
                 break;

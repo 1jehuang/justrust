@@ -173,14 +173,14 @@ fn cases() -> Vec<Case> {
             source: r#"macro_rules! make{()=>{trait Generated{}};}make!();fn main(){println!("ok");}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "generated_impl_boundary",
             source: r#"struct Marker;macro_rules! make{()=>{impl Marker{fn answer()->i32{42}}};}make!();fn main(){println!("ok");}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "empty_item_output",
@@ -236,7 +236,7 @@ fn cases() -> Vec<Case> {
             source: r#"struct Marker{x:i32}macro_rules! make{()=>{impl Marker{fn answer()->i32{42}}};}make!();fn main(){println!("ok");}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "repeat_names_values",
@@ -537,7 +537,7 @@ fn stock_all() {
         }
     }
     assert_eq!(counts, (27, 15));
-    assert_eq!(partition, (16, 5, 9, 12));
+    assert_eq!(partition, (19, 5, 9, 9));
 }
 #[test]
 fn stock_original_module_macro_item_oracle_edition2024() {
@@ -572,14 +572,6 @@ fn item_source_parser_categories_preserve_unsupported_and_macro_frontier_syntax(
             _ => unreachable!(),
         };
         assert_eq!(error.kind, expected, "{}:{error}", case.name);
-        if case.name == "generated_impl_fielded_struct_boundary" {
-            assert!(
-                error
-                    .message
-                    .contains("item macro output must contain only nongeneric free functions"),
-                "fielded struct must reach generated output guard, not an earlier original syntax boundary:{error}"
-            );
-        }
         if case.name == "generated_false_cfg_missing_module"
             || case.name == "generated_module_boundary"
         {
@@ -589,7 +581,7 @@ fn item_source_parser_categories_preserve_unsupported_and_macro_frontier_syntax(
             counts.2 += 1;
         }
     }
-    assert_eq!(counts, (5, 12, 2));
+    assert_eq!(counts, (5, 9, 2));
     let invalid = cases()
         .into_iter()
         .find(|c| c.name == "unused_generated_invalid_body")
@@ -725,9 +717,9 @@ fn native_item_source_macros_workers1_8_check_build_no_compiler_fallback() {
         }
     }
     assert_eq!(gates, 168);
-    assert_eq!(modes, (32, 32, 28, 28, 24, 24));
+    assert_eq!(modes, (38, 38, 28, 28, 18, 18));
     eprintln!(
-        "NATIVE ITEM SOURCE:168 cells, modes{modes:?};32 executed native images;48 Unsupported cells are phase boundaries, not Rust-invalid parity"
+        "NATIVE ITEM SOURCE:168 cells, modes{modes:?};38 executed native images;36 Unsupported cells are phase boundaries, not Rust-invalid parity"
     );
 }
 

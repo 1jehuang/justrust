@@ -414,6 +414,17 @@ fn parse(input: TokenSlice, matcher: bool, session: &TokenSession) -> Result<Syn
                                 "tt" => FragmentKind::Tt,
                                 "ident" => FragmentKind::Ident,
                                 "literal" => FragmentKind::Literal,
+                                "expr" | "expr_2021" => FragmentKind::Expr,
+                                "ty" => FragmentKind::Ty,
+                                "pat" => FragmentKind::Pat,
+                                "pat_param" => FragmentKind::PatParam,
+                                "path" => FragmentKind::Path,
+                                "stmt" => FragmentKind::Stmt,
+                                "block" => FragmentKind::Block,
+                                "item" => FragmentKind::Item,
+                                "vis" => FragmentKind::Vis,
+                                "lifetime" => FragmentKind::Lifetime,
+                                "meta" => FragmentKind::Meta,
                                 _ => {
                                     return Err(MacroError::Unsupported {
                                         span: fragment.span,

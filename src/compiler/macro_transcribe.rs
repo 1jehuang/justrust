@@ -336,6 +336,28 @@ pub(super) fn transcribe(
                                     &mut output,
                                     session,
                                 )?,
+                                CaptureValue::Grouped(tokens) => {
+                                    let tokens = tokens.clone();
+                                    invocation.emit(2)?;
+                                    let open = occurrence(*span, true, expansion, session)?;
+                                    output.push(InputToken::Open {
+                                        kind: Delimiter::Parenthesis,
+                                        span: open,
+                                    })?;
+                                    emit_slice(
+                                        tokens,
+                                        false,
+                                        expansion,
+                                        invocation,
+                                        &mut output,
+                                        session,
+                                    )?;
+                                    let close = occurrence(*span, true, expansion, session)?;
+                                    output.push(InputToken::Close {
+                                        kind: Delimiter::Parenthesis,
+                                        span: close,
+                                    })?;
+                                }
                                 CaptureValue::Literal { id, span } => emit_leaf(
                                     Token {
                                         kind: TokenKind::Opaque(*id),

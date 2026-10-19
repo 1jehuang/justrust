@@ -1060,7 +1060,7 @@ fn utility_definition_syntax_and_valid_unsupported_fragments_are_distinct() {
             "{rules}"
         );
     }
-    // Valid fragment specifiers, but not admitted by this bounded utility.
+    // Every Rust fragment specifier is admitted; unknown specifiers stay unsupported.
     for fragment in [
         "expr",
         "expr_2021",
@@ -1068,6 +1068,7 @@ fn utility_definition_syntax_and_valid_unsupported_fragments_are_distinct() {
         "ty",
         "path",
         "pat",
+        "pat_param",
         "item",
         "block",
         "stmt",
@@ -1076,14 +1077,13 @@ fn utility_definition_syntax_and_valid_unsupported_fragments_are_distinct() {
     ] {
         let rules = format!("($x:{fragment})=>{{yes}}");
         let mut f = Fixture::new(&[&rules]);
-        match f.definition(0) {
-            Err(MacroError::Unsupported {
-                fragment: symbol, ..
-            }) => assert_eq!(f.session.symbol(symbol).unwrap(), fragment),
-            Err(e) => panic!("unsupported {fragment} became {e:?}"),
-            Ok(_) => panic!("unexpected promotion of unsupported {fragment}"),
-        }
+        assert!(f.definition(0).is_ok(), "{fragment}");
     }
+    let mut f = Fixture::new(&["($x:bogus)=>{yes}"]);
+    assert!(matches!(
+        f.definition(0),
+        Err(MacroError::Unsupported { .. })
+    ));
 }
 
 #[test]

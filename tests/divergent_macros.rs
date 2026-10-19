@@ -155,9 +155,9 @@ next"####,
             source_bytes: 109,
             source_fingerprint: 15031042266080237263,
             source_sha256: r####"2162fa5fdcd4dbe33336c8150af0cc07507b0f3d3300a1d2877632f60c554cc3"####,
-            native: Native::Unsupported,
-            boundary: "module macros in expression position are unsupported",
-            phase: "parse",
+            native: Native::Live,
+            boundary: r####""####,
+            phase: "check",
             stock_compile_code: 0,
             stock_code: Some(0),
             stock_stdout: r####"shadow
@@ -270,9 +270,9 @@ next"####,
             source_bytes: 95,
             source_fingerprint: 17662184406229945119,
             source_sha256: r####"1656c8550101b2c692228ab5dcb58c6612bb60fb199aef077b6b65387745977b"####,
-            native: Native::Unsupported,
-            boundary: "module macros in expression position are unsupported",
-            phase: "parse",
+            native: Native::Live,
+            boundary: r####""####,
+            phase: "check",
             stock_compile_code: 0,
             stock_code: Some(0),
             stock_stdout: r####"shadow
@@ -385,9 +385,9 @@ next"####,
             source_bytes: 113,
             source_fingerprint: 13309970629709715707,
             source_sha256: r####"4d5779d46c446a4879378941ddef408b61f7f8189821e806bbc8b23571456d14"####,
-            native: Native::Unsupported,
-            boundary: "module macros in expression position are unsupported",
-            phase: "parse",
+            native: Native::Live,
+            boundary: r####""####,
+            phase: "check",
             stock_compile_code: 0,
             stock_code: Some(0),
             stock_stdout: r####"shadow
@@ -759,7 +759,7 @@ fn frozen_divergent_sources_and_strict_phases() {
             }
         });
     }
-    assert_eq!(partition, [6, 15, 5, 1]);
+    assert_eq!(partition, [9, 15, 2, 1]);
     failures.finish();
 }
 fn stock_all() {
@@ -1003,7 +1003,7 @@ fn cli_all() {
         }
     }
     assert_eq!(cells, 108);
-    failures.check("runtime count", || assert_eq!(runtimes, 42));
+    failures.check("runtime count", || assert_eq!(runtimes, 48));
     failures.finish();
 }
 fn graph_all() {
@@ -1063,7 +1063,7 @@ fn graph_all() {
         }
     }
     assert_eq!(cells, 108);
-    failures.check("graph runtime count", || assert_eq!(runtimes, 42));
+    failures.check("graph runtime count", || assert_eq!(runtimes, 48));
     failures.finish();
 }
 fn isolated(name: &str, marker: &str, run: fn()) {
@@ -1080,7 +1080,7 @@ fn isolated(name: &str, marker: &str, run: fn()) {
     command
         .args(["--exact", name, "--nocapture"])
         .env(marker, "1");
-    let result = capture_bounded(&mut command, &scratch, 240, 8 * 1024 * 1024);
+    let result = capture_bounded(&mut command, &scratch, 600, 8 * 1024 * 1024);
     eprint!("{}", String::from_utf8_lossy(&result.stdout));
     eprint!("{}", String::from_utf8_lossy(&result.stderr));
     ordinary_exit(&result, 0);

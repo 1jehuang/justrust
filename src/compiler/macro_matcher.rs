@@ -323,7 +323,13 @@ fn atom_equal(
 #[derive(Clone)]
 pub(super) enum CaptureValue {
     Tokens(TokenSlice),
-    Literal { id: FragmentId, span: SpanId },
+    /// A multi-tree `expr` capture: transcribed inside invisible-group
+    /// parentheses so operator precedence is preserved (`$e * $e`).
+    Grouped(TokenSlice),
+    Literal {
+        id: FragmentId,
+        span: SpanId,
+    },
 }
 #[derive(Clone)]
 enum HistoryEvent {
@@ -478,6 +484,17 @@ fn probe(
         return Ok(None);
     }
     match kind {
+        FragmentKind::Expr
+        | FragmentKind::Ty
+        | FragmentKind::Pat
+        | FragmentKind::PatParam
+        | FragmentKind::Path
+        | FragmentKind::Stmt
+        | FragmentKind::Block
+        | FragmentKind::Item
+        | FragmentKind::Vis
+        | FragmentKind::Lifetime
+        | FragmentKind::Meta => syntactic(kind, events, position, session),
         FragmentKind::Tt => Ok(Some((
             event.end.get() + 1,
             CaptureValue::Tokens(event.tokens.clone()),
@@ -542,6 +559,191 @@ fn probe(
             }
         }
     }
+}
+
+fn punct_of(event: &Event) -> Option<([char; 3], u8)> {
+    match &event.kind {
+        EventKind::Atom(LogicalToken::Leaf(Token {
+            kind: TokenKind::Punct { ch, .. },
+            ..
+        })) => Some(([*ch, '\0', '\0'], 1)),
+        EventKind::Atom(LogicalToken::Operator { chars, len, .. }) => Some((*chars, *len)),
+        _ => None,
+    }
+}
+fn ident_of<'a>(event: &Event, session: &'a TokenSession) -> Result<Option<&'a str>, MacroError> {
+    Ok(match &event.kind {
+        EventKind::Atom(LogicalToken::Leaf(Token {
+            kind: TokenKind::Ident(ident),
+            ..
+        })) if !ident.raw => Some(session.symbol(ident.symbol)?),
+        _ => None,
+    })
+}
+/// Token-tree level recognizer for the syntactic fragment kinds. It consumes
+/// the longest run of top-level token trees that cannot belong to the
+/// fragment's FOLLOW set (Rust Reference, "Follow-set ambiguity
+/// restrictions"), so the remaining matcher sees exactly what rustc's parser
+/// would leave. The captured tokens are parsed by the real grammar after
+/// transcription; malformed fragments are rejected there.
+fn syntactic(
+    kind: FragmentKind,
+    events: &[Event],
+    position: usize,
+    session: &mut TokenSession,
+) -> Result<Option<(usize, CaptureValue)>, MacroError> {
+    let Some(first) = events.get(position) else {
+        return Ok(None);
+    };
+    if matches!(first.kind, EventKind::Close(_)) {
+        return Ok(None);
+    }
+    let next_tree = |at: usize| -> usize {
+        match events[at].kind {
+            EventKind::Open(_) => events[at].end.get() + 1,
+            _ => at + 1,
+        }
+    };
+    let mut end = position;
+    let mut trees = 0usize;
+    match kind {
+        FragmentKind::Lifetime => {
+            if !matches!(first.kind, EventKind::Atom(LogicalToken::Lifetime { .. })) {
+                return Ok(None);
+            }
+            end = position + 1;
+            trees = 1;
+        }
+        FragmentKind::Block => {
+            if !matches!(first.kind, EventKind::Open(Delimiter::Brace)) {
+                return Ok(None);
+            }
+            end = next_tree(position);
+            trees = 1;
+        }
+        FragmentKind::Vis => {
+            if ident_of(first, session)? == Some("pub") {
+                end = position + 1;
+                trees = 1;
+                if let Some(next) = events.get(end)
+                    && matches!(next.kind, EventKind::Open(Delimiter::Parenthesis))
+                {
+                    end = next_tree(end);
+                    trees = 2;
+                }
+            }
+        }
+        FragmentKind::Item => {
+            while let Some(event) = events.get(end) {
+                work(session)?;
+                if matches!(event.kind, EventKind::Close(_)) {
+                    break;
+                }
+                let brace = matches!(event.kind, EventKind::Open(Delimiter::Brace));
+                let semi = punct_of(event) == Some([';', '\0', '\0']).map(|c| (c, 1));
+                end = next_tree(end);
+                trees += 1;
+                if brace || semi {
+                    break;
+                }
+            }
+        }
+        _ => {
+            // expr, stmt, ty, path, pat, pat_param, meta
+            let mut angle = 0i64;
+            let typeish = matches!(kind, FragmentKind::Ty | FragmentKind::Path);
+            while let Some(event) = events.get(end) {
+                work(session)?;
+                if matches!(event.kind, EventKind::Close(_)) {
+                    break;
+                }
+                if let Some((chars, len)) = punct_of(event) {
+                    let op = &chars[..len as usize];
+                    let stop = match op {
+                        [','] | [';'] | ['=', '>'] => angle == 0,
+                        ['='] => {
+                            matches!(
+                                kind,
+                                FragmentKind::Ty
+                                    | FragmentKind::Path
+                                    | FragmentKind::Pat
+                                    | FragmentKind::PatParam
+                            ) && angle == 0
+                        }
+                        ['|'] => {
+                            matches!(
+                                kind,
+                                FragmentKind::PatParam | FragmentKind::Ty | FragmentKind::Path
+                            ) && angle == 0
+                        }
+                        [':'] => typeish && angle == 0 && trees > 0,
+                        ['>'] | ['>', '>'] | ['>', '='] | ['>', '>', '='] if typeish => {
+                            let closes = op.iter().filter(|c| **c == '>').count() as i64;
+                            if angle < closes {
+                                true
+                            } else {
+                                angle -= closes;
+                                false
+                            }
+                        }
+                        _ => false,
+                    };
+                    if stop {
+                        break;
+                    }
+                    if typeish && op.first() == Some(&'<') {
+                        angle += op.iter().filter(|c| **c == '<').count() as i64;
+                    }
+                    if typeish && op == ['-', '>'] && trees == 0 {
+                        break;
+                    }
+                }
+                if let Some(word) = ident_of(event, session)? {
+                    let stop = match kind {
+                        FragmentKind::Ty | FragmentKind::Path => {
+                            trees > 0 && angle == 0 && matches!(word, "as" | "where")
+                        }
+                        FragmentKind::Pat | FragmentKind::PatParam => {
+                            trees > 0 && matches!(word, "if" | "in")
+                        }
+                        _ => false,
+                    };
+                    if stop {
+                        break;
+                    }
+                }
+                if typeish && trees > 0 && angle == 0 {
+                    if let EventKind::Open(Delimiter::Brace | Delimiter::Bracket) = event.kind {
+                        break;
+                    }
+                }
+                end = next_tree(end);
+                trees += 1;
+            }
+        }
+    }
+    let last = if end > position {
+        // The last top-level tree starts at or before `end - 1`; its physical
+        // range is recorded on its closing/atom event.
+        &events[end - 1]
+    } else {
+        first
+    };
+    if trees == 0 && kind != FragmentKind::Vis {
+        return Ok(None);
+    }
+    let range = if trees == 0 {
+        first.physical.start..first.physical.start
+    } else {
+        first.physical.start..last.physical.end
+    };
+    let tokens = first.container.subslice(session, range)?;
+    let value = if trees > 1 && kind == FragmentKind::Expr {
+        CaptureValue::Grouped(tokens)
+    } else {
+        CaptureValue::Tokens(tokens)
+    };
+    Ok(Some((end, value)))
 }
 
 pub(super) fn run(
@@ -627,6 +829,7 @@ pub(super) fn run(
                             probe(*kind, event, events.as_slice(), position, session)?
                     {
                         fragments += 1;
+                        let empty = end == position;
                         let tip = record(
                             &mut history,
                             thread.history,
@@ -636,7 +839,11 @@ pub(super) fn run(
                             },
                             session,
                         )?;
-                        transitions.push(state(next, end, tip, invocation)?)?;
+                        if empty {
+                            closure.push(state(next, end, tip, invocation)?)?;
+                        } else {
+                            transitions.push(state(next, end, tip, invocation)?)?;
+                        }
                     }
                 }
                 Op::Atom(pattern) => {
