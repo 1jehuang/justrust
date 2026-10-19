@@ -736,12 +736,14 @@ pub fn emit(
         traps: meter.buf(bound.traps)?,
         meter: *meter,
     };
-    // `symbols` pays the call symbol strings inside `calls` and the panic
-    // payloads inside `strings`. It is declared BEFORE them so that on any
-    // early return (locals drop in reverse order) the payload buffers are
-    // destroyed before the lease that pays for their contents refunds.
-    let mut symbols = meter.lease(0)?;
+    // Split payments: `call_symbols` pays only the symbol strings inside
+    // `calls`, `panic_payloads` only the diagnostics inside `strings`. No
+    // lease pays across buffers. Each payment lease is declared BEFORE the
+    // buffer whose contents it pays, so on any early return (locals drop in
+    // reverse order) the buffer and its contents are destroyed first.
+    let mut call_symbols = meter.lease(0)?;
     let mut calls = meter.buf::<(usize, String)>(bound.calls)?;
+    let mut panic_payloads = meter.lease(0)?;
     let mut strings = meter.buf::<(usize, Vec<u8>)>(bound.panic_texts)?;
     asm.bytes(&[0x55, 0x48, 0x89, 0xe5])?; // push rbp; mov rbp, rsp
     if layout.frame > 0 {
@@ -929,7 +931,7 @@ pub fn emit(
                     // The symbol string is a new copy owned by the object:
                     // admitted before allocation, surplus capacity after.
                     // Conservative: the plan's symbol table also charged it.
-                    let symbol = meter.clone_string(&callee.symbol, &mut symbols)?;
+                    let symbol = meter.clone_string(&callee.symbol, &mut call_symbols)?;
                     calls.push_growing(meter, (at, symbol))?;
                     if !args.is_empty() {
                         asm.bytes(&[0x48, 0x81, 0xc4])?;
@@ -960,7 +962,7 @@ pub fn emit(
                 let mut sink = MachinePanic {
                     asm: &mut asm,
                     strings: &mut strings,
-                    diagnostics: &mut symbols,
+                    diagnostics: &mut panic_payloads,
                     meter,
                 };
                 crate::compiler::backend::emit_panic_into(
@@ -1049,31 +1051,40 @@ pub fn emit(
     // The trap table is scratch (data then lease).
     drop(traps);
     // Every output stays a coupled Buf (Vec + its lease) until all fallible
-    // merges finished. `symbols` pays the call symbol strings inside `calls`
-    // and the panic payloads inside `strings`, so on any failure those
-    // buffers (and everything they own) are destroyed before `symbols`, and
-    // extracted vectors before the lease that now pays for them.
-    if let Err((symbols, error)) = calls.lease_mut().try_absorb(meter, symbols) {
+    // merges finished. First each payment lease merges into the buffer whose
+    // contents it pays (after which that buffer is self-contained), then the
+    // buffers merge into `code`. Failure branches drop strings, then calls,
+    // then code (contents before any lease that could pay for them), and a
+    // returned payment lease only after the buffer it pays.
+    if let Err((panic_payloads, error)) = merge_lease(&mut strings, meter, panic_payloads, 0) {
+        merge_fault::drop_strings(strings, meter);
+        drop(panic_payloads);
         drop(calls);
-        drop(strings);
-        drop(symbols);
+        drop(call_symbols);
         drop(code);
         return Err(error);
     }
-    let calls = match code.absorb_from(meter, calls) {
+    if let Err((call_symbols, error)) = merge_lease(&mut calls, meter, call_symbols, 1) {
+        merge_fault::drop_strings(strings, meter);
+        drop(calls);
+        drop(call_symbols);
+        drop(code);
+        return Err(error);
+    }
+    let calls = match merge_buf(&mut code, meter, calls, 2) {
         Ok(calls) => calls,
         Err((calls, error)) => {
+            merge_fault::drop_strings(strings, meter);
             drop(calls);
-            drop(strings);
             drop(code);
             return Err(error);
         }
     };
-    let strings = match code.absorb_from(meter, strings) {
+    let strings = match merge_buf(&mut code, meter, strings, 3) {
         Ok(strings) => strings,
         Err((strings, error)) => {
+            merge_fault::drop_strings(strings, meter);
             drop(calls);
-            drop(strings);
             drop(code);
             return Err(error);
         }
@@ -1098,6 +1109,42 @@ pub fn emit(
     };
     let owned = store::Owned::adopt(lease, object, actual, meter)?;
     Ok((owned, stats))
+}
+
+/// Merge a payment lease into the buffer whose contents it pays.
+#[allow(
+    clippy::result_large_err,
+    reason = "returns the intact paid lease by value; boxing would be unpaid storage"
+)]
+fn merge_lease<T>(
+    buf: &mut meter::Buf<T>,
+    meter: &Meter<'_>,
+    lease: meter::Lease,
+    _step: usize,
+) -> Result<(), (meter::Lease, String)> {
+    #[cfg(test)]
+    if merge_fault::hits(_step, meter) {
+        return Err((lease, "injected merge failure (test)".into()));
+    }
+    buf.lease_mut().try_absorb(meter, lease)
+}
+
+/// Merge a self-contained buffer into `code`, returning its data.
+#[allow(
+    clippy::result_large_err,
+    reason = "returns the intact coupled buffer by value; boxing would be unpaid storage"
+)]
+fn merge_buf<T>(
+    code: &mut meter::Buf<u8>,
+    meter: &Meter<'_>,
+    other: meter::Buf<T>,
+    _step: usize,
+) -> Result<Vec<T>, (meter::Buf<T>, String)> {
+    #[cfg(test)]
+    if merge_fault::hits(_step, meter) {
+        return Err((other, "injected merge failure (test)".into()));
+    }
+    code.absorb_from(meter, other)
 }
 
 /// Paid panic adapter: the shared abort sequence written into the machine's
@@ -1188,5 +1235,69 @@ pub(crate) mod bound_override {
         let out = f();
         CAP.with(|c| c.set(None));
         out
+    }
+}
+
+#[cfg(not(test))]
+mod merge_fault {
+    #[inline(always)]
+    pub(super) fn drop_strings<T>(strings: T, _meter: &super::Meter<'_>) {
+        drop(strings);
+    }
+}
+
+/// Test-only fault injection for the end-of-emission merges (step 0: panic
+/// payloads into `strings`, 1: call symbols into `calls`, 2: `calls` into
+/// `code`, 3: `strings` into `code`).
+#[cfg(test)]
+pub(crate) mod merge_fault {
+    use std::cell::Cell;
+    thread_local! {
+        static STEP: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+    /// Destroy the strings buffer, recording the ledger bytes held right
+    /// before destruction and the panic payload capacity it owned.
+    pub(crate) fn drop_strings(
+        strings: crate::compiler::ssa::meter::Buf<(usize, Vec<u8>)>,
+        meter: &crate::compiler::ssa::meter::Meter<'_>,
+    ) {
+        let payload: usize = strings.iter().map(|(_, p)| p.capacity()).sum();
+        let before = meter.budget().usage_snapshot().bytes;
+        drop(strings);
+        // (bytes refunded between the injected failure and this destruction,
+        // panic payload bytes destroyed here)
+        let at_fault = AT_FAULT.with(Cell::get).unwrap_or(before);
+        record(at_fault.saturating_sub(before), payload);
+    }
+    thread_local! {
+        static AT_FAULT: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+    /// True when `step` is the injected failure; records the ledger bytes at
+    /// that moment.
+    pub(crate) fn hits(step: usize, meter: &crate::compiler::ssa::meter::Meter<'_>) -> bool {
+        let hit = STEP.with(Cell::get) == Some(step);
+        if hit {
+            AT_FAULT.with(|c| c.set(Some(meter.budget().usage_snapshot().bytes)));
+        }
+        hit
+    }
+    pub(crate) fn with<R>(step: usize, f: impl FnOnce() -> R) -> R {
+        STEP.with(|c| c.set(Some(step)));
+        SEEN.with(|c| c.set(None));
+        AT_FAULT.with(|c| c.set(None));
+        let out = f();
+        STEP.with(|c| c.set(None));
+        out
+    }
+    thread_local! {
+        /// (bytes refunded after the injected failure but before the strings
+        /// buffer was destroyed, panic payload bytes it destroyed).
+        static SEEN: Cell<Option<(usize, usize)>> = const { Cell::new(None) };
+    }
+    pub(crate) fn seen() -> Option<(usize, usize)> {
+        SEEN.with(Cell::get)
+    }
+    pub(crate) fn record(before: usize, payload: usize) {
+        SEEN.with(|c| c.set(Some((before, payload))));
     }
 }

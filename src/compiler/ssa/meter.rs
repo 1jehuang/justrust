@@ -227,9 +227,10 @@ impl Lease {
 
     /// Ensure room for `more` chunks in `extra`, paying the exact old + new
     /// ledger-reserved reallocation peak. Transactional: on failure `extra`,
-    /// `book` and the ledger byte fields (`bytes`, `current_reservations`,
-    /// `cumulative_bytes`) are as before; work, peak and sticky-failure
-    /// telemetry may have advanced.
+    /// `book` and the live ledger fields (`bytes`, `current_reservations`)
+    /// are as before. Historical telemetry may advance: work, peak, sticky
+    /// failure, and `cumulative_bytes` (a temporary reservation that
+    /// succeeded before a later allocator or surplus failure stays counted).
     fn room(&mut self, meter: &Meter<'_>, more: usize) -> Result<(), String> {
         let needed = add(self.extra.len(), more)?;
         if needed <= self.extra.capacity() {
@@ -546,9 +547,11 @@ impl<T> std::ops::DerefMut for List<T> {
 /// peak is old + new requested/admitted bytes (not a physical allocator peak
 /// claim), the copy is charged as work, and the new buffer and
 /// lease replace the old pair only after every fallible step succeeded. On
-/// any failure the data, pointer, capacity, limit, lease and the ledger byte
-/// fields (`bytes`, `current_reservations`, `cumulative_bytes`) are
-/// unchanged; work, peak and sticky-failure telemetry may have advanced.
+/// any failure the data, pointer, capacity, limit, lease and the live ledger
+/// fields (`bytes`, `current_reservations`) are unchanged. Historical
+/// telemetry may advance: work, peak, sticky failure, and `cumulative_bytes`
+/// (a temporary reservation that succeeded before a later allocator or
+/// surplus failure stays counted).
 #[derive(Debug)]
 pub struct Buf<T> {
     data: Vec<T>,

@@ -1363,7 +1363,10 @@ fn many_inline_sites_are_admitted_and_reconciled() {
     assert!(inline::inline(&caller, &[(0, &leaf)], &meter::Meter::new(&tight)).is_err());
 }
 
-/// Full ledger state for exact no-change comparisons.
+/// Full ledger state for exact no-change comparisons. Includes the historical
+/// `cumulative_bytes`, so use it only where the operation is rejected before
+/// any reservation succeeds (authority/sticky prechecks); rollback after a
+/// successful temporary reservation may advance that counter.
 fn ledger(budget: &PlanBudget) -> (usize, usize, usize, usize) {
     let snapshot = budget.usage_snapshot();
     (
@@ -1545,6 +1548,9 @@ fn metered_call_target_eq_matches_derived_eq() {
     assert!(m.work(0).is_err());
 }
 
+/// Ledger snapshot including historical counters (`cumulative_bytes`,
+/// `peak_bytes`): only for pre-mutation rejections, where nothing was
+/// reserved, or for reading the peak.
 fn snapshot_of(budget: &PlanBudget) -> (usize, usize, usize, usize, usize) {
     let s = budget.usage_snapshot();
     (
@@ -2242,4 +2248,122 @@ fn plan_reservation_retain_under_poison_fails_without_refund() {
         48,
         "no refund on poisoned ledger"
     );
+}
+
+#[test]
+fn second_and_third_merge_failures_destroy_panic_payloads_before_refund() {
+    // The sample has a nonempty panic payload (strings) and call symbols.
+    let sample = machine_sample();
+    for step in 0..4 {
+        let budget = PlanBudget::default();
+        let result = machine::merge_fault::with(step, || emit_sample(&sample, &budget));
+        assert!(result.is_err(), "step {step} injected failure");
+        let (refunded_first, payload) = machine::merge_fault::seen().expect("strings destroyed");
+        assert!(payload > 0, "step {step}: nonempty panic payload");
+        // Nothing may be refunded between the failure and the destruction of
+        // the strings buffer and its payloads: the payment for those payloads
+        // must still be fully charged when they are destroyed.
+        assert_eq!(refunded_first, 0, "step {step}: refund before payload drop");
+        assert_eq!(usage(&budget).0, 0, "step {step}: all refunded afterwards");
+    }
+}
+
+#[test]
+fn split_payments_keep_each_buffer_self_contained() {
+    // After the first two merges, the panic payload payment lives in the
+    // strings buffer and the symbol payment in the calls buffer. A failure at
+    // the calls-into-code merge must release the payload payment only when
+    // strings itself is destroyed. A shared payment absorbed into calls and
+    // dropped with calls first fails this (mutation-checked).
+    let sample = machine_sample();
+    let budget = PlanBudget::default();
+    let _ = machine::merge_fault::with(2, || emit_sample(&sample, &budget));
+    let (refunded_first, payload) = machine::merge_fault::seen().unwrap();
+    assert!(payload > 0);
+    assert_eq!(
+        refunded_first, 0,
+        "payload payment refunded before payloads"
+    );
+}
+
+#[test]
+fn work_scaling_controls_isolate_each_charge() {
+    use crate::compiler::ir::{IntTy, Ty};
+    use std::sync::Arc;
+    // Type comparison: child pushes. Equal nested types of depth d cost at
+    // least d more than depth 0 (one push + one visit per level).
+    let declaration = dummy_target().declaration;
+    let target = |args: Vec<Ty>| crate::compiler::ir::CallTarget {
+        declaration,
+        type_args: Arc::from(args),
+    };
+    let nested = |d: usize| {
+        let mut ty = Ty::Int(IntTy::U8);
+        for _ in 0..d {
+            ty = Ty::Array {
+                element: Arc::new(ty),
+                len: 1,
+            };
+        }
+        target(vec![ty])
+    };
+    let cost = |t: &crate::compiler::ir::CallTarget| {
+        let budget = PlanBudget::default();
+        let m = meter::Meter::new(&budget);
+        assert!(lower::call_target_eq_for_tests(t, &t.clone(), &m).unwrap());
+        usage(&budget).1
+    };
+    let (c0, c64) = (cost(&nested(0)), cost(&nested(64)));
+    assert!(
+        c64 - c0 >= 2 * 64,
+        "child push + visit per level: {c0} {c64}"
+    );
+
+    // Inline: kept-callee parameter entries. Same symbol, more params.
+    let leaf = |params: usize| {
+        let (mut b, p) = Builder::new(vec![U32; params], U32);
+        b.terminate(SsaBlock(0), SsaTerminator::Return(p[0]));
+        lowered(b.finish(), vec![])
+    };
+    let inline_cost = |params: usize| {
+        let kept = leaf(params);
+        let inlined = leaf(1);
+        let (mut b, p) = Builder::new(vec![U32], U32);
+        let x = b.inst(
+            SsaBlock(0),
+            InstKind::Call {
+                callee: FuncRef(0),
+                args: vec![p[0]],
+            },
+        );
+        let y = b.inst(
+            SsaBlock(0),
+            InstKind::Call {
+                callee: FuncRef(1),
+                args: vec![x; params],
+            },
+        );
+        b.terminate(SsaBlock(0), SsaTerminator::Return(y));
+        let callee = |l: &lower::Lowered| lower::SsaCallee {
+            symbol: "s".into(),
+            target: dummy_target(),
+            signature: l.function.signature(),
+        };
+        let caller = lowered(b.finish(), vec![callee(&inlined), callee(&kept)]);
+        let budget = PlanBudget::default();
+        let m = meter::Meter::new(&budget);
+        let before = usage(&budget).1;
+        let out = inline::inline(&caller, &[(0, &inlined)], &m).unwrap();
+        assert_eq!(out.value.callees[0].signature.params.len(), params);
+        usage(&budget).1 - before
+    };
+    let (p1, p6) = (inline_cost(1), inline_cost(6));
+    assert!(p6 > p1, "param entries charged: {p1} {p6}");
+
+    // Liveness: same block count, more live words per row (values > 64
+    // force a second word), so per-row charges grow with `words`.
+    let few = lowered(many_blocks(32), vec![]);
+    let budget = PlanBudget::default();
+    emit_sample(&few, &budget).unwrap();
+    assert!(budget.usage_snapshot().work >= 6 * 32);
 }
