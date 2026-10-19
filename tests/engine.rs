@@ -379,3 +379,60 @@ fn typed_facts_flow_through_recorded_dependency_edges() {
         assert!(sum.fact::<String>(0).is_err());
     }
 }
+
+#[test]
+fn fact_inspection_requires_completed_execution() {
+    let engine = Engine::new(Facts);
+    let leaf = Key::new(0, vec![7]);
+    let demand = engine.request(leaf.clone());
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine.fact_of::<Vec<u64>>(&leaf, 0)
+        }))
+        .is_err()
+    );
+    engine.run(2).unwrap();
+    assert_eq!(*demand.fact::<Vec<u64>>(0).unwrap(), vec![7; 3]);
+    assert_eq!(*engine.fact_of::<Vec<u64>>(&leaf, 0).unwrap(), vec![7; 3]);
+    assert!(engine.fact_of::<String>(&leaf, 0).is_none());
+    assert!(engine.fact_of::<u64>(&Key::new(99, vec![]), 0).is_none());
+}
+
+struct InspectFinishedEngine(Arc<Engine>);
+
+impl Provider for InspectFinishedEngine {
+    fn outputs(&self, _: &Key) -> usize {
+        1
+    }
+
+    fn start(&self, cx: Context, _: Key) -> TaskFuture {
+        let engine = self.0.clone();
+        Box::pin(async move {
+            // Even a completed foreign engine cannot supply an untracked fact
+            // to a provider. The poll guard must precede lifecycle inspection.
+            let _ = engine.fact_of::<Vec<u64>>(&Key::new(0, vec![7]), 0);
+            cx.publish(0, 1)
+        })
+    }
+}
+
+#[test]
+fn providers_cannot_inspect_even_completed_foreign_engine_facts() {
+    for workers in [1, 8] {
+        let completed = Arc::new(Engine::new(Facts));
+        let leaf = Key::new(0, vec![7]);
+        let _demand = completed.request(leaf.clone());
+        completed.run(workers).unwrap();
+        let engine = Engine::new(InspectFinishedEngine(completed.clone()));
+        let root = engine.request(Key::new(0, vec![]));
+        let report = engine.run(workers).unwrap();
+        assert!(report.failures > 0);
+        let error = root.result(0).unwrap_err();
+        assert!(error.0.contains("post-run only"), "{error}");
+        // A rejected provider read neither poisons nor changes the fact.
+        assert_eq!(
+            *completed.fact_of::<Vec<u64>>(&leaf, 0).unwrap(),
+            vec![7; 3]
+        );
+    }
+}
