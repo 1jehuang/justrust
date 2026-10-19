@@ -12,7 +12,7 @@ mod compiler_profile;
 static ALLOCATION_PROFILE: allocation_profile::ProfilingAllocator<std::alloc::System> =
     allocation_profile::ProfilingAllocator::new(std::alloc::System);
 
-const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--debug-assertions yes|no] [--cfg NAME_OR_KEY_VALUE] [--trace NEW_TRACE] [--profile NEW_JSON]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n--cfg may be repeated for user names or key=\"value\" predicates; native target cfg is fixed.\n--debug-assertions yes|no sets native debug assertions (default: yes); may be supplied once.\n--opt off|adaptive|final selects the graph-native optimizer (default: adaptive, or $JR_OPT).\n--source-lock PATH --source-item NAME adds a verified source declaration probe, not a library crate.\n--profile writes bounded task timings and exact first budget failure without CFG dumps.\nAllocator counters require a binary built with --features allocation-profile.\n";
+const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--debug-assertions yes|no] [--cfg NAME_OR_KEY_VALUE] [--trace NEW_TRACE] [--profile NEW_JSON]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n--cfg may be repeated for user names or key=\"value\" predicates; native target cfg is fixed.\n--debug-assertions yes|no sets native debug assertions (default: yes); may be supplied once.\n--opt off|adaptive|final selects the graph-native optimizer (default: off, or $JR_OPT).\n--source-lock PATH --source-item NAME adds a verified source declaration probe, not a library crate.\n--profile writes bounded task timings and exact first budget failure without CFG dumps.\nAllocator counters require a binary built with --features allocation-profile.\n";
 
 fn allocator_json() -> String {
     #[cfg(feature = "allocation-profile")]
@@ -62,10 +62,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut profile: Option<PathBuf> = None;
     let mut workers = 1usize;
     let mut check = false;
-    let mut source_options = compiler::source::SourceOptions {
-        opt: compiler::ssa::OptMode::Adaptive,
-        ..compiler::source::SourceOptions::default()
-    };
+    let mut source_options = compiler::source::SourceOptions::default();
     // JR_OPT selects the optimizer mode; --opt overrides it. The compiler
     // itself only sees the resulting explicit input.
     if let Some(value) = std::env::var_os("JR_OPT") {

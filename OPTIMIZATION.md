@@ -344,10 +344,13 @@ flowchart LR
   read through `Context::read_fact`. No side slots, no new integrity baseline.
 - `OptMode::Off` demands none of these nodes, which gives the cold
   no-optimization baseline. CHECK never demands them.
-- Defaults: the `jr-rust` CLI uses `adaptive` (override with `--opt` or
-  `JR_OPT`). The library default stays `off` until a measured default
-  promotion, so existing graph schema tests keep pinning the stack-emitter
-  BUILD node set. The full suite (3,424 tests) passes with both.
+- Defaults: both the `jr-rust` CLI and library stay `off`. Explicit `--opt`
+  or `JR_OPT` selects the optimizer, with the CLI flag taking precedence.
+  Promotion requires complete paid work/storage accounting and the required
+  broad matched benchmark gate. The synthetic Collatz result below and passing
+  semantic suites are not substitutes. Review found unadmitted SSA/IPO buffers,
+  retained body storage and optimizer/backend traversal work; these remain open
+  implementation work, with no budget or integrity-baseline exemption.
 - Scope: scalar functions only (integers up to 64 bits, bool, unit). Other
   functions publish an `unsupported` reason and OBJECT uses the stack emitter.
   Both kinds link together because the SSA backend uses the same private ABI.

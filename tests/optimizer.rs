@@ -16,6 +16,58 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn cli_optimizer_requires_explicit_opt_in() {
+    let base = std::env::var_os("JCODE_SCRATCH_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let dir = base.join(format!(
+        "jr-opt-cli-{}-{}",
+        std::process::id(),
+        NEXT_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir(&dir).unwrap();
+    let source = dir.join("main.rs");
+    fs::write(
+        &source,
+        "fn f(x:i32)->i32{x+1} fn main(){if f(2)==3{println!(\"ok\")}}\n",
+    )
+    .unwrap();
+    for (name, env, flag, optimized) in [
+        ("default", None, None, false),
+        ("flag", None, Some("adaptive"), true),
+        ("env", Some("adaptive"), None, true),
+        ("override", Some("adaptive"), Some("off"), false),
+    ] {
+        let trace = dir.join(format!("{name}.trace"));
+        let output = dir.join(format!("{name}.elf"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+        command.env_remove("JR_OPT");
+        if let Some(value) = env {
+            command.env("JR_OPT", value);
+        }
+        if let Some(value) = flag {
+            command.args(["--opt", value]);
+        }
+        let result = command
+            .arg(&source)
+            .arg("--trace")
+            .arg(&trace)
+            .arg("-o")
+            .arg(&output)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{name}: {result:?}");
+        let trace = fs::read_to_string(trace).unwrap();
+        assert_eq!(trace.contains("kind: 130,"), optimized, "{name}: {trace}");
+        let result = Command::new(output).output().unwrap();
+        assert!(result.status.success(), "{name}: {result:?}");
+        assert_eq!(result.stdout, b"ok\n", "{name}");
+        assert!(result.stderr.is_empty(), "{name}");
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
 fn options(opt: OptMode) -> SourceOptions {
     SourceOptions {
         opt,
