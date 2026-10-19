@@ -1405,6 +1405,63 @@ fn graph_facts_reach_no_new_mutable_state() {
     }
 }
 
+/// Builder-only owner types: refundable leases and minting capabilities.
+/// No published fact may reach them by type, regardless of runtime variant.
+const BUILDER_ONLY_OWNER_TYPES: &[&str] = &[
+    "BuilderOwnedPath",
+    "OwnerIssuer",
+    "Issued",
+    "TagMint",
+    "SessionOwner",
+];
+
+/// Every builder-only owner type reachable by type from `root`, with a path.
+fn reachable_builder_types(decls: &BTreeMap<String, TypeDecl>, root: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut parent: HashMap<String, String> = HashMap::new();
+    let mut seen: HashSet<String> = HashSet::from([root.to_string()]);
+    let mut queue = std::collections::VecDeque::from([root.to_string()]);
+    while let Some(name) = queue.pop_front() {
+        for next in decls.get(&name).map(|d| d.refs.clone()).unwrap_or_default() {
+            if !seen.insert(next.clone()) {
+                continue;
+            }
+            parent.insert(next.clone(), name.clone());
+            if BUILDER_ONLY_OWNER_TYPES.contains(&next.as_str()) {
+                let mut path = vec![next.clone()];
+                let mut at = next.clone();
+                while let Some(p) = parent.get(&at) {
+                    path.push(p.clone());
+                    at = p.clone();
+                }
+                path.reverse();
+                found.push(path.join(" -> "));
+            } else if decls.contains_key(&next) {
+                queue.push_back(next);
+            }
+        }
+    }
+    found
+}
+
+/// Published name stores and parsed programs must not reach a builder-only
+/// owner type at all (PARSE-SPLIT.md). A runtime "published" enum variant is
+/// not enough: the builder variant would still be reachable by type.
+#[test]
+#[ignore = "known flaw: NameStore -> TokenSession -> SessionOwner; fixed by the FrozenSession type split"]
+fn published_stores_reach_no_builder_owner_types() {
+    let (decls, _) = scanned_type_decls();
+    for root in ["NameStore", "ParsedProgram", "Program", "OwnerPath"] {
+        assert!(decls.contains_key(root), "{root} declaration not scanned");
+        let found = reachable_builder_types(&decls, root);
+        assert!(
+            found.is_empty(),
+            "published {root} reaches builder-only owner types:\n  {}",
+            found.join("\n  ")
+        );
+    }
+}
+
 /// Owner paths will be carried inside published facts (PARSE-SPLIT.md), so
 /// they must reach no mutable state at all, before any fact names them.
 #[test]
