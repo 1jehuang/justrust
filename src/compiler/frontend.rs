@@ -30,6 +30,7 @@ use super::semantic_name::{
 pub use super::semantic_path::{AstPath, PathAnchor};
 use super::semantic_path::{NameAccess, PathKey};
 use native_adapter::{NativeParserInput, NativeTokenBuffer};
+mod assignment_expr;
 mod char_literal;
 pub(super) mod closures;
 mod let_chains;
@@ -12150,6 +12151,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         let left = self.expr_continuation(left, min, statement_blocklike)?;
         if min == 0 && !self.token().string && (self.is("..") || self.is("..=")) {
             return self.range_expression(Some(left));
+        }
+        if min == 0 && !statement {
+            return self.assignment_expression(left);
         }
         Ok(left)
     }

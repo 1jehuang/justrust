@@ -336,6 +336,9 @@ missing-file changes invalidate only justified consumers without stale lookup.
       subpatterns) and edition-2024 if-let/while-let chains with short-circuit
       evaluation and then-only scopes. Non-Copy by-value @ and runtime slice
       patterns remain explicit Unsupported boundaries.
+      Assignment/compound-assignment expressions now produce unit in match arms,
+      parentheses and other expression positions, reusing ordinary checked place
+      operations for fields and indexed targets (`tests/assignment_expressions.rs`).
 - [ ] Extend bidirectional/local inference, coercion sites, partial type holes,
       omitted method arguments and control-flow joins, preserving rigid universal
       parameters and diagnostics for unresolved constraints.
