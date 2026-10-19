@@ -613,12 +613,12 @@ fn valid_borrowed_projection_reference_elements_returns_mutability_and_ranges_st
         };
         let message = error.to_string();
         let expected = match case.name {
-            "reference_elements" => "references in generic or aggregate types are unsupported",
+            "reference_elements" => {
+                "slice elements containing references or slices, or nested slice carriers"
+            }
             // This source reaches the earlier inferred-reference replay boundary,
             // not a proof that concrete substitution rejected a reference element.
-            "generic_reference_substitution" => {
-                "Unsupported: new inferred reference is outside direct shared Var replay"
-            }
+            "generic_reference_substitution" => "reference generic arguments are unsupported",
             _ => "unsupported:",
         };
         assert!(
@@ -676,7 +676,7 @@ fn native_typed_slices_workers1_8_check_build_no_compiler_fallback() {
                         assert_eq!(case.outcome, Outcome::Unsupported);
                         assert!(
                             diagnostic.contains(
-                                "references in generic or aggregate types are unsupported"
+                                "slice elements containing references or slices, or nested slice carriers"
                             ),
                             "{}:{diagnostic}",
                             case.name
@@ -685,8 +685,9 @@ fn native_typed_slices_workers1_8_check_build_no_compiler_fallback() {
                         // Earlier replay boundary, not post-substitution admission proof.
                         assert_eq!(case.outcome, Outcome::Unsupported);
                         assert!(
-                            diagnostic.contains("Unsupported: new inferred reference is outside direct shared Var replay"),
-                            "{}:{diagnostic}", case.name
+                            diagnostic.contains("reference generic arguments are unsupported"),
+                            "{}:{diagnostic}",
+                            case.name
                         );
                     } else {
                         assert_eq!(

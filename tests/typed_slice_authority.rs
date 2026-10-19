@@ -468,7 +468,7 @@ fn reference_generic_argument_boundary_precedes_slice_instantiation() {
 fn reference_containing_generic_argument_boundary_precedes_slice_instantiation() {
     observed_generic_argument_unsupported(
         "struct Wrap<T>{value:T}fn length<T>(values:&[T])->usize{values.len()}fn main(){let value=1i32;let values=[Wrap::<&i32>{value:&value}];length::<Wrap<&i32>>(&values);}",
-        "reference-containing generic arguments are unsupported",
+        "reference generic arguments are unsupported",
     );
 }
 #[test]

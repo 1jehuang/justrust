@@ -4277,7 +4277,11 @@ impl ValidatedTraitWorld {
                     return Ok(false);
                 }
                 if !destination.path.0.is_empty() || !input.location.path.0.is_empty() {
-                    return Ok(false);
+                    // Reference carriers nested in aggregates have no
+                    // per-position region rows yet. Conservatively let the
+                    // result borrow from every input carrier: the caller then
+                    // keeps every input loan alive for the result's lifetime.
+                    return Ok(true);
                 }
                 for row in signature.ref_contract.results.iter() {
                     charged(&self.budget, self.budget.charge_work(1))?;
@@ -7473,6 +7477,7 @@ mod tests {
                 c.modules
                     .catalog_module(super::super::module_identity::CatalogModule::Ops),
             ),
+            lifetime_bound: false,
         }]);
         let forged = Ty::Struct(StructTy::new(definition));
         assert!(
@@ -7485,6 +7490,7 @@ mod tests {
             name: "field".into(),
             ty: Ty::Unit,
             visibility: ir::Visibility::Public,
+            lifetime_bound: false,
         }]);
         let valid = Ty::Struct(StructTy::new(definition));
         validate_nominal_modules(&valid, &c.modules, &c.budget).unwrap();
@@ -7715,6 +7721,7 @@ mod tests {
             name: "borrow".into(),
             ty: reference(Ty::Bool),
             visibility: ir::Visibility::Public,
+            lifetime_bound: false,
         }]);
         let argument = Ty::Struct(StructTy::new(definition));
         c.types.push(argument.clone());

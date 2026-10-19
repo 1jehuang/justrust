@@ -738,17 +738,14 @@ fn main() {}
         panic!("canonical Hidden")
     };
     let reference = scalar.locals[scalar.params[3].0].ty.clone();
-    // Canonical nominal construction already rejects reference-bearing actuals.
-    // It must not be bypassed just to fabricate an instance test fixture.
-    let hidden_error = plan
-        .intern_nominal(
-            hidden.def().source_decl,
-            std::slice::from_ref(&reference),
-            FactsCtx::Validated(&facts),
-            &budget,
-        )
-        .expect_err("reference-bearing nominal was unexpectedly constructed");
-    assert!(hidden_error.contains("reference-containing generic arguments"));
+    // Reference-bearing nominal actuals are admitted (G3 aggregates).
+    plan.intern_nominal(
+        hidden.def().source_decl,
+        std::slice::from_ref(&reference),
+        FactsCtx::Validated(&facts),
+        &budget,
+    )
+    .expect("reference-bearing nominal is constructible");
     for (name, rhs, admitted) in [
         ("scalar", Ty::Int(ir::IntTy::I32), true),
         ("reference", reference.clone(), false),

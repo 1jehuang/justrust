@@ -2496,11 +2496,29 @@ impl CarrierBuilder<'_, '_> {
                     _ => false,
                 };
                 for (index, operand) in fields.iter().enumerate() {
+                    // Only a `&str` field without a declared lifetime is
+                    // `&'static str`. Other reference fields belong to a
+                    // lifetime-parameterized nominal and carry their loans.
+                    let static_field = match value {
+                        Rvalue::EnumVariant { ty, variant, .. } => ty
+                            .def()
+                            .variants
+                            .get(*variant)
+                            .and_then(|v| v.fields.get(index))
+                            .is_some_and(|f| f.ty.is_shared_str() && !f.lifetime_bound),
+                        Rvalue::Aggregate {
+                            ty: Ty::Struct(ty), ..
+                        } => ty
+                            .def()
+                            .fields
+                            .get(index)
+                            .is_some_and(|f| f.ty.is_shared_str() && !f.lifetime_bound),
+                        _ => false,
+                    };
                     for (mut location, origins) in self.operand_value(state, operand)? {
-                        // Nominal declarations have no lifetime parameters, so
-                        // their only admitted reference fields are `&'static
-                        // str`. Data borrowed from any storage cannot flow in.
+                        // A `&'static str` field admits no borrowed storage.
                         if nominal
+                            && static_field
                             && self.diagnosing
                             && origins
                                 .references
@@ -5058,6 +5076,24 @@ impl Plan {
                                 && projection == target.place.projection.as_slice());
                     }
                 }
+                if !contained && !position.path.0.is_empty() {
+                    // A reference stored inside an aggregate behind a borrowed
+                    // parameter (`s.x` with `s: &'r S<'a>`). Nominal lifetimes
+                    // are erased, so admit it only when the result region is
+                    // the region of that parameter's outer borrow: the caller
+                    // then keeps the aggregate, and its loans, borrowed for
+                    // the whole result lifetime ('a: 'r by well-formedness).
+                    if let Some(param) = f.params.iter().position(|p| p == local) {
+                        contained = f.ref_contract.input_regions.iter().any(|row| {
+                            row.input.param == param
+                                && row.input.position.depth == 0
+                                && (row.region == result.region
+                                    || f.ref_contract
+                                        .outlives
+                                        .contains(&(row.region, result.region)))
+                        });
+                    }
+                }
                 if !contained {
                     if target.precision == TargetPrecision::Subtree && declared_input {
                         return Ok(Some(Problem::Unsupported(
@@ -5086,9 +5122,24 @@ impl Plan {
                     .position(|param| param == local)
                     .expect("formal canonical root");
                 budget.spend(f.ref_contract.input_regions.len())?;
-                let region = f.ref_contract.input_regions.iter().find(|row| {
-                    row.input.param == param && fixed_location(row.input.position) == *position
-                });
+                let region = f
+                    .ref_contract
+                    .input_regions
+                    .iter()
+                    .find(|row| {
+                        row.input.param == param && fixed_location(row.input.position) == *position
+                    })
+                    .or_else(|| {
+                        // A carrier nested in an aggregate behind the outer
+                        // borrow shares that borrow's (erased) region.
+                        (!position.path.0.is_empty())
+                            .then(|| {
+                                f.ref_contract.input_regions.iter().find(|row| {
+                                    row.input.param == param && row.input.position.depth == 0
+                                })
+                            })
+                            .flatten()
+                    });
                 let Some(region) = region.map(|row| row.region) else {
                     return Ok(Some(Problem::Invalid(
                         "returned reference depends on an unbound input carrier region".into(),

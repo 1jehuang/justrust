@@ -3889,6 +3889,9 @@ pub struct FieldDef {
     pub name: String,
     pub ty: Ty,
     pub visibility: Visibility,
+    /// The source field type names a declared (non-`'static`) lifetime, so
+    /// its references carry loans rather than being `&'static` data.
+    pub lifetime_bound: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -12094,6 +12097,7 @@ mod tests {
                     name: "0".into(),
                     ty: Ty::Int(IntTy::I32),
                     visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
+                    lifetime_bound: false,
                 }]),
             }]),
         });
@@ -12777,6 +12781,7 @@ mod tests {
                         name: "0".into(),
                         ty: Ty::Tuple(vec![Ty::Int(IntTy::I32)].into()),
                         visibility: crate::compiler::ir::Visibility::Public,
+                        lifetime_bound: false,
                     }]
                     .into(),
                 },
@@ -13149,6 +13154,7 @@ mod tests {
                     name: format!("f{index}"),
                     ty,
                     visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
+                    lifetime_bound: false,
                 })
                 .collect::<Vec<_>>()
                 .into(),
@@ -13802,6 +13808,7 @@ mod tests {
                     name: "0".into(),
                     ty: Ty::Bool,
                     visibility: Visibility::Public,
+                    lifetime_bound: false,
                 }]
                 .into(),
             }]

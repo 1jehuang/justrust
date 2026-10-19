@@ -490,13 +490,12 @@ fn main(){run();}
 }
 
 #[test]
-fn rejects_legal_unsupported_reference_type_actual_and_hidden_reference_nominal() {
-    rejects(
-        "reference_type_actual_and_hidden_reference_nominal",
+fn accepts_reference_type_actual_and_reference_nominal() {
+    runs(
         r###"struct Wrap<T>{x:T}fn id<T>(x:T)->T{x}fn run()->i32{let x=7;let r=id::<&i32>(&x);let w=Wrap::<&i32>{x:r};*w.x}
 fn main(){if run()==7{println!("generic references oracle ok");}}
 "###,
-        false,
+        "generic references oracle ok\n",
     );
 }
 

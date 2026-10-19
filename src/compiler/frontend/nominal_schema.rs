@@ -326,12 +326,6 @@ impl PlanState {
                 referent: slice,
                 ..
             } if matches!(slice.as_ref(), Type::Slice(_)) => {
-                if !allow_ref {
-                    return Err(
-                        "unsupported: slice references in generic, nested or aggregate types"
-                            .into(),
-                    );
-                }
                 admit_shared_slice_kind(*kind, slice)?;
                 let Type::Slice(element) = slice.as_ref() else {
                     return Err("invalid shared slice source shape".into());
@@ -377,9 +371,7 @@ impl PlanState {
                 }
             }
             Type::Ref { kind, referent, .. } => {
-                if !allow_ref {
-                    return Err("references in generic or aggregate types are unsupported".into());
-                }
+                let _ = allow_ref;
                 let layers = source_reference_layers(ty)?;
                 let inner = self.source_ty_with_transport(
                     registry,
@@ -601,6 +593,9 @@ impl PlanState {
                     }
                     let name =
                         state.schema_field_text(registry.names.as_ref(), field.name, budget)?;
+                    if source_elides_lifetime(&field.ty) {
+                        return Err("E0106: missing lifetime specifier in a field type; declare a lifetime parameter".into());
+                    }
                     let ty = state.source_ty_with_transport(
                         registry,
                         &field.ty,
@@ -615,6 +610,7 @@ impl PlanState {
                         name,
                         ty,
                         visibility: field.visibility.clone(),
+                        lifetime_bound: source_names_lifetime(&field.ty),
                     });
                 }
                 Ok(result.into())
@@ -865,5 +861,52 @@ mod tests {
                 .unwrap_err()
                 .contains("wrong generic arity")
         );
+    }
+}
+
+/// Whether a source field type mentions a declared (non-`'static`) lifetime.
+pub(super) fn source_names_lifetime(ty: &Type) -> bool {
+    match ty {
+        Type::Ref {
+            region, referent, ..
+        } => matches!(region, Some(RegionName::Named(_))) || source_names_lifetime(referent),
+        Type::Array(inner, _) | Type::Slice(inner) => source_names_lifetime(inner),
+        Type::RawPtr { pointee, .. } => source_names_lifetime(pointee),
+        Type::Tuple(items) => items.iter().any(source_names_lifetime),
+        Type::Apply(path) => path
+            .segments
+            .iter()
+            .any(|segment| segment.args.iter().any(source_names_lifetime)),
+        _ => false,
+    }
+}
+
+/// Whether a source field type contains a reference with an elided lifetime.
+fn source_elides_lifetime(ty: &Type) -> bool {
+    match ty {
+        Type::Ref {
+            region, referent, ..
+        } => region.is_none() || source_elides_lifetime(referent),
+        Type::Array(inner, _) | Type::Slice(inner) => source_elides_lifetime(inner),
+        Type::RawPtr { pointee, .. } => source_elides_lifetime(pointee),
+        Type::Tuple(items) => items.iter().any(source_elides_lifetime),
+        Type::Apply(path) => path
+            .segments
+            .iter()
+            .any(|segment| segment.args.iter().any(source_elides_lifetime)),
+        _ => false,
+    }
+}
+
+/// Whether a source type mentions a nominal (whose lifetime arguments are
+/// erased), so a named lifetime may be reachable only through it.
+pub(super) fn source_mentions_nominal(ty: &Type) -> bool {
+    match ty {
+        Type::Named(_) | Type::Apply(_) | Type::SelfType => true,
+        Type::Ref { referent, .. } => source_mentions_nominal(referent),
+        Type::Array(inner, _) | Type::Slice(inner) => source_mentions_nominal(inner),
+        Type::RawPtr { pointee, .. } => source_mentions_nominal(pointee),
+        Type::Tuple(items) => items.iter().any(source_mentions_nominal),
+        _ => false,
     }
 }

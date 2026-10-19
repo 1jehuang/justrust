@@ -178,6 +178,7 @@ mod tests {
             name: "0".into(),
             ty: Ty::Int(ir::IntTy::I32),
             visibility: rewritten.fields[0].visibility.clone(),
+            lifetime_bound: false,
         }]);
         let forged = Ty::Struct(ir::StructTy::new(rewritten));
         assert!(

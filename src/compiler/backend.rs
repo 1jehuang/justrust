@@ -7273,6 +7273,7 @@ mod tests {
                     name: "0".into(),
                     ty: ir::Ty::Int(ir::IntTy::I32),
                     visibility: crate::compiler::ir::Visibility::Public,
+                    lifetime_bound: false,
                 }]
                 .into(),
             }]
@@ -7416,6 +7417,7 @@ mod tests {
             name: name.into(),
             ty: ir::Ty::Int(ir::IntTy::I32),
             visibility: crate::compiler::ir::Visibility::Public,
+            lifetime_bound: false,
         };
         let snapshot = ir::SnapshotId::allocate().unwrap();
         let ty = ir::EnumTy::new(ir::EnumDef {

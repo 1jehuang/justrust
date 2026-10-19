@@ -226,11 +226,7 @@ fn nested_shared_source_authority_and_closed_boundaries_remain_distinct() {
                 .contains("missing lifetime specifier")
         );
     }
-    assert!(
-        parse("struct Holder<'a>{r:&'a i32}fn main(){}")
-            .unwrap_err()
-            .contains("lifetime parameters on nominal and impl declarations are unsupported")
-    );
+    parse("struct Holder<'a>{r:&'a i32}fn main(){}").unwrap();
     assert!(
         parse("struct Holder<'fn>{r:i32}fn main(){}")
             .unwrap_err()
@@ -247,8 +243,7 @@ fn nested_shared_source_authority_and_closed_boundaries_remain_distinct() {
             .and_then(|p| check(&p))
             .unwrap_or_else(|error| panic!("{source}: {error}"));
     }
-    // Source-declared lifetime-bearing nominal fields remain outside the
-    // internally certified carrier-substitution domain.
+    // A reference field without a declared lifetime is still rejected.
     let source = "struct S{x:&&i32}fn main(){}";
     assert!(
         parse(source).and_then(|p| check(&p)).is_err(),
@@ -381,14 +376,12 @@ fn generic_carrier_internal_nominal_transport_does_not_relax_source_actuals() {
     assert!(caller.exprs.iter().any(|expr| matches!(&expr.ty, ir::Ty::Enum(ty) if matches!(ty.def().variants[0].fields[0].ty, ir::Ty::Ref { .. }))));
     for source in [
         "struct Wrap<T>{value:T}fn main(){let x=1;let w=Wrap::<&i32>{value:&x};}",
-        "fn id<T>(x:T)->T{x}fn main(){let x=1;let r=id(&x);}",
+        "fn id<T>(x:T)->T{x}fn main(){let x=1i32;let r=id::<&i32>(&x);}",
     ] {
-        assert!(
-            parse(source)
-                .and_then(|program| check(&program))
-                .unwrap_err()
-                .contains("unsupported")
-        );
+        // Reference generic arguments are admitted (G3 aggregates).
+        parse(source)
+            .and_then(|program| check(&program))
+            .unwrap_or_else(|e| panic!("{source}: {e}"));
     }
 }
 #[test]
@@ -430,11 +423,7 @@ fn generic_reference_declarations_keep_rigid_envelopes_and_canonical_regions() {
         "struct W<T>{x:T}fn main(){let x=1;let w=W::<&i32>{x:&x};}",
     ] {
         let result = parse(source).and_then(|p| check(&p));
-        if source != "struct W<T>{x:T}fn main(){let x=1;let w=W::<&i32>{x:&x};}" {
-            result.unwrap();
-        } else {
-            assert!(result.is_err(), "accepted {source}");
-        }
+        result.unwrap();
     }
 }
 #[test]
@@ -875,7 +864,6 @@ fn generic_all_body_semantics_do_not_specialize_away_invalid_templates() {
         "fn bad<T>(x:T)->T{x+1}fn main(){}",
         "fn bad<T>(x:T)->T{7i32}fn main(){}",
         "fn id<T>(x:T)->T{x}fn main(){let n=id::<i32,u8>(1);}",
-        "struct W<T>{v:T}fn main(){let x=1;let w=W::<&i32>{v:&x};}",
         "fn bad<T>(x:T){return;let r=&x;}fn main(){}",
     ] {
         if source.contains("return;let r=&x;") {
@@ -2607,7 +2595,12 @@ fn b2_noescape_restrictions_hold_for_unused_declarations_and_explicit_borrows() 
         "fn read(r:&i32){}fn main(){let mut x=1;read(&mut x);}",
         "fn main(){let mut x=1;let r=&mut x;let q:&mut i32=loop{break r;};}",
     ] {
-        if source == "fn unused(r:&&i32){}fn main(){}" {
+        if matches!(
+            source,
+            "fn unused(r:&&i32){}fn main(){}"
+                | "fn unused(r:&[&i32;0]){}fn main(){}"
+                | "fn unused(r:(&i32,)){}fn main(){}"
+        ) {
             check(&parse(source).unwrap()).unwrap();
             continue;
         }

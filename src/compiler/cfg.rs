@@ -6884,6 +6884,7 @@ mod tests {
                     visibility: crate::compiler::ir::Visibility::Restricted(
                         modules.source_root().unwrap(),
                     ),
+                    lifetime_bound: false,
                 })
                 .collect::<Vec<_>>()
                 .into(),
@@ -10682,11 +10683,13 @@ mod tests {
                             name: "a".into(),
                             ty: Ty::Int(IntTy::I32),
                             visibility: crate::compiler::ir::Visibility::Public,
+                            lifetime_bound: false,
                         },
                         ir::FieldDef {
                             name: "b".into(),
                             ty: Ty::Int(IntTy::I32),
                             visibility: crate::compiler::ir::Visibility::Public,
+                            lifetime_bound: false,
                         },
                     ]
                     .into(),

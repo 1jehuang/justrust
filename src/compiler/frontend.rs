@@ -6769,6 +6769,10 @@ struct Parser<'input, 'names> {
     pending_bounds: Vec<TypeBound>,
     /// Indices of type parameters written `= Self` by the last parameter list.
     pending_self_defaults: Vec<usize>,
+    /// Lifetime parameters written by the last nominal/impl parameter list.
+    pending_regions: RegionDecls,
+    /// Lifetime parameters of the enclosing impl, inherited by its methods.
+    impl_regions: RegionDecls,
     /// Anonymous parameters minted for argument-position `impl Trait` while a
     /// function parameter list is parsed. `None` forbids `impl Trait` (E0562).
     impl_trait_params: Option<Vec<AstIdent>>,
@@ -6942,6 +6946,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             alias_target: false,
             pending_bounds: Vec::new(),
             pending_self_defaults: Vec::new(),
+            pending_regions: RegionDecls::default(),
+            impl_regions: RegionDecls::default(),
             impl_trait_params: None,
             cursor: TokenCursor::new(&buffer),
             nesting: self.nesting,
@@ -8187,6 +8193,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             alias_target: false,
             pending_bounds: Vec::new(),
             pending_self_defaults: Vec::new(),
+            pending_regions: RegionDecls::default(),
+            impl_regions: RegionDecls::default(),
             impl_trait_params: None,
             cursor: TokenCursor::new(buffer),
             nesting: self.nesting,
@@ -8548,6 +8556,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             alias_target: false,
             pending_bounds: Vec::new(),
             pending_self_defaults: Vec::new(),
+            pending_regions: RegionDecls::default(),
+            impl_regions: RegionDecls::default(),
             impl_trait_params: None,
             cursor: TokenCursor::new(tokens),
             nesting: 0,
@@ -8969,6 +8979,19 @@ impl<'input, 'names> Parser<'input, 'names> {
             if args.len() + associated_types.len() >= 32 {
                 return Err(self.limit("generic argument resource limit 32"));
             }
+            if self.token().is_lifetime() && !self.token().string {
+                // Lifetime arguments are erased: nominal reference fields are
+                // checked through carrier paths, which conservatively tie every
+                // reference inside an aggregate to every input carrier.
+                if !args.is_empty() || !associated_types.is_empty() {
+                    return Err(self.error("lifetime arguments must precede type arguments"));
+                }
+                self.cursor.bump();
+                if !self.eat(",") || self.token().text.starts_with('>') {
+                    break;
+                }
+                continue;
+            }
             if self.token().is_ident()
                 && self.cursor.peek(1).is_some_and(|token| token.matches("="))
             {
@@ -9054,6 +9077,7 @@ impl<'input, 'names> Parser<'input, 'names> {
     fn type_parameters(&mut self) -> Result<Vec<AstIdent>, ParseError> {
         self.pending_bounds.clear();
         self.pending_self_defaults.clear();
+        self.pending_regions = RegionDecls::default();
         let declarations = self.predeclare_type_parameters()?;
         if !self.eat("<") {
             return Ok(Vec::new());
@@ -9068,10 +9092,25 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return Err(self.unsupported("const generic parameters are unsupported"));
             }
             if self.token().is_lifetime() {
-                self.lifetime()?;
-                return Err(self.error(
-                    "lifetime parameters on nominal and impl declarations are unsupported",
-                ));
+                if !params.is_empty() {
+                    return Err(self.error("lifetime parameters must precede type parameters"));
+                }
+                if self.pending_regions.params.len() >= 64 {
+                    return Err(self.limit("declared lifetime limit64"));
+                }
+                let name = self.lifetime()?;
+                let RegionName::Named(ident) = name else {
+                    return Err(self.error("expected declared lifetime"));
+                };
+                let mut regions = std::mem::take(&mut self.pending_regions);
+                regions.params.push(ident);
+                let bounded = self.region_bounds(name, &mut regions);
+                self.pending_regions = regions;
+                bounded?;
+                if !self.eat(",") || self.token().text.starts_with('>') {
+                    break;
+                }
+                continue;
             }
             let name = self.predeclared_parameter(&declarations, params.len())?;
             if self.contains_name(&params, name, LookupClass::TypeParameter)? {
@@ -10100,6 +10139,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return Err(self.error("pub impl is invalid"));
             }
             let type_params = self.type_parameters()?;
+            self.impl_regions = std::mem::take(&mut self.pending_regions);
             self.type_params = type_params.clone();
             let mut bounds = std::mem::take(&mut self.pending_bounds);
             let first_ty = self.ty()?;
@@ -10182,6 +10222,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 associated_types,
             });
             self.type_params.clear();
+            self.impl_regions = RegionDecls::default();
             return Ok(());
         } else if self.is("static") && self.cursor.peek(1).is_some_and(|t| t.text == "mut") {
             let function = self.static_mut_item(module)?;
@@ -10631,7 +10672,11 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         self.expect("fn")?;
         let name = self.ident()?;
-        let mut regions = RegionDecls::default();
+        let mut regions = if associated {
+            self.impl_regions.clone()
+        } else {
+            RegionDecls::default()
+        };
         self.type_params.clear();
         let mut visible = std::mem::take(&mut self.type_params);
         self.reserve_parser_items(&mut visible, inherited.len())?;
@@ -19251,12 +19296,8 @@ fn argument_height(
         },
         // `&'static str` is an origin-free leaf.
         ir::Ty::Ref { .. } if ty.is_shared_str() => {}
-        ir::Ty::Ref { .. } => {
-            return Err("reference-containing generic arguments are unsupported".into());
-        }
-        ir::Ty::Slice { .. } => {
-            return Err("unsupported: slice generic arguments".into());
-        }
+        ir::Ty::Ref { referent, .. } => child(referent)?,
+        ir::Ty::Slice { element } => child(element)?,
         ir::Ty::Tuple(fields) => {
             for field in fields.iter() {
                 child(field)?;

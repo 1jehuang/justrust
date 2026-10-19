@@ -450,13 +450,13 @@ fn main() { if run() == 7 { println!("borrow oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_reference_aggregate_field() {
-    // Stock accepts and runs this fixture, outside this bounded B1 slice.
-    rejects(
-        "reference_aggregate_field",
+fn accepts_reference_aggregate_field() {
+    // Lifetime-parameterized nominals with reference fields (G3).
+    runs(
         r#"struct R<'a>{r:&'a i32} fn run()->i32{let x=7;let r=R{r:&x};*r.r}
 fn main() { if run() == 7 { println!("borrow oracle ok"); } }
 "#,
+        "borrow oracle ok\n",
     );
 }
 

@@ -7056,6 +7056,7 @@ mod tests {
                     visibility: crate::compiler::ir::Visibility::Restricted(
                         modules.source_root().unwrap(),
                     ),
+                    lifetime_bound: false,
                 })
                 .collect::<Vec<_>>()
                 .into(),
@@ -7159,6 +7160,7 @@ mod tests {
                             visibility: crate::compiler::ir::Visibility::Restricted(
                                 modules.source_root().unwrap(),
                             ),
+                            lifetime_bound: false,
                         })
                         .collect::<Vec<_>>()
                         .into(),

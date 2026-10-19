@@ -908,16 +908,13 @@ impl<'c, 's> Inference<'c, 's> {
             return Ok(None);
         };
         for ty in &args {
-            if let Some(cap) = self.checker.canonical
-                && contains_source_ref(ty, &plan.budget, 0).map_err(|e| cap.render(e))?
+            // Only the canonical (replayed) checker carries inferred reference
+            // actuals with origins. Legacy cloned-Program adapters cannot.
+            if self.checker.canonical.is_none()
+                && contains_source_ref(ty, &plan.budget, 0)
+                    .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?
             {
-                return Err(cap.render(FactsError::unsupported(
-                    &plan.budget,
-                    "new inferred reference is outside direct shared Var replay",
-                )));
-            }
-            if matches!(ty, ir::Ty::Ref { .. }) {
-                return Err("unsupported generic inference: newly inferred structural reference actual; use explicit type arguments".into());
+                return Err("unsupported generic inference: newly inferred reference actual requires the canonical source checker".into());
             }
             validate_argument(ty, self.checker.facts(), &plan.budget, 0)?;
         }
@@ -1908,7 +1905,24 @@ pub(super) fn canonical_ref_contract(
             // input reference can supply. Only origin-free data may flow out.
             fresh(None)?
         } else if let Some(name) = region {
-            lookup(name)?
+            let named = lookup(name)?;
+            let via_nominal = !inputs.iter().any(|input| input.region == named)
+                && (receiver_region.is_some() && regions.receiver.is_none()
+                    || source_params
+                        .iter()
+                        .any(|(_, ty)| super::nominal_schema::source_mentions_nominal(ty)));
+            if !via_nominal {
+                named
+            } else if let Some(region) = receiver_region {
+                // The lifetime is only reachable through an erased nominal
+                // argument such as `&self` of `S<'a>`. Conservatively tie the
+                // result to the borrow that reaches that nominal.
+                region
+            } else if inputs.len() == 1 {
+                inputs[0].region
+            } else {
+                return Err("unsupported: result lifetime reachable only through a lifetime-parameterized nominal argument with several input references".into());
+            }
         } else if let Some(region) = receiver_region {
             region
         } else {

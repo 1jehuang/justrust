@@ -876,6 +876,7 @@ mod tests {
                         name: "0".into(),
                         ty: Ty::Bool,
                         visibility: ir::Visibility::Public,
+                        lifetime_bound: false,
                     }]),
                 })
                 .collect::<Vec<_>>()
