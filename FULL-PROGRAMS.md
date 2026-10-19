@@ -60,6 +60,14 @@ that fixing one diagnostic makes the program pass. In particular, most remaining
 programs still need reusable library types, trait dispatch and iterator machinery.
 Only stock-matching CHECK, BUILD and execution can promote a manifest entry.
 
+A scoped follow-up on `af5c06a69` after scalar source constants rechecked the
+unchanged `06_matrix` at workers 1 and 8. Both CHECK requests reject at line 3,
+column 23: `const-expression array length is unsupported; use an integer literal`.
+This replaces the earlier const-item boundary for this one program, not the
+other rows above. The exact source and binary hashes and exit codes are recorded
+in `data/runs/const-source/matrix-boundary.json`. No BUILD, execution or stock
+oracle rerun was performed for this follow-up, and the manifest remains 3/20.
+
 ## Historical feature-demand matrix
 
 The counts below describe features required by the original 20 programs, before

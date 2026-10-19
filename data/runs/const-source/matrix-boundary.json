@@ -1,0 +1,15 @@
+{
+  "kind": "native-cli-boundary-probe",
+  "source_commit": "af5c06a69dd862e10f181721a9878e15e9014cf5",
+  "source": "tests/fixtures/full_programs/06_matrix.rs",
+  "source_sha256": "cf587003391d434884b59ba2665044700d70dde1712b17bc4d3323c74283dc84",
+  "binary_sha256": "0aa8281559c5096315be07f2849c350145b510f9593462c7457365f47ddcab04",
+  "command": "jr-rust tests/fixtures/full_programs/06_matrix.rs --check --workers N",
+  "workers": [1, 8],
+  "exit_codes": [1, 1],
+  "location": {"line": 3, "column": 23},
+  "boundary": "unsupported: const-expression array length is unsupported; use an integer literal, found \"]\"",
+  "scope": "CHECK-only first-rejection probe of unchanged source, not BUILD/execution acceptance or a stock-oracle rerun",
+  "corpus_pass_count": "3/20",
+  "manifest_changed": false
+}
