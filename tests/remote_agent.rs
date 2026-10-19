@@ -208,6 +208,67 @@ fn read(p: &Path) -> String {
 }
 
 #[test]
+fn authenticated_enrollment_survives_agent_exit_and_native_gc_defaults_dry() {
+    let mut agent = Agent::start("durable-gc-restart");
+    agent.send(
+        Msg::Write {
+            path: "/project/src/lib.rs".into(),
+            mode: 0o644,
+        },
+        b"// source survives GC\n",
+    );
+    assert!(agent.barrier(1).is_empty());
+    let target = agent.at("/project/target/debug");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("artifact"), b"recomputable").unwrap();
+    agent.send(
+        Msg::Synced {
+            path: "/project".into(),
+        },
+        &[],
+    );
+    assert!(agent.barrier(2).is_empty());
+    agent.send(
+        Msg::Run {
+            id: 3,
+            cwd: "/project".into(),
+            args: vec!["--version".into()],
+            env: vec![],
+            roots: vec![],
+            start: false,
+            run_id: String::new(),
+        },
+        &[],
+    );
+    let (version, code) = agent.wait_run(3);
+    assert_eq!(code, 0);
+    assert!(version.starts_with("justrust "), "{version}");
+    drop(agent.w.take());
+    assert!(agent.child.wait().unwrap().success());
+    let output = Command::new(env!("CARGO_BIN_EXE_justrust"))
+        .args(["remote", "gc", "--prefix"])
+        .arg(agent.dir.join("root"))
+        .env("JUSTRUST_HOME", agent.dir.join("home"))
+        .env("JUSTRUST_REMOTE_EVICT", "on")
+        .env("JUSTRUST_NO_TELEMETRY", "1")
+        .env("JUSTRUST_NO_UPDATE", "1")
+        .output()
+        .unwrap();
+    let diagnostics = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{diagnostics}");
+    assert!(
+        diagnostics.contains("native dry plan registered=1"),
+        "{diagnostics}"
+    );
+    assert!(diagnostics.contains("Recent"), "{diagnostics}");
+    assert_eq!(
+        read(&agent.at("/project/src/lib.rs")),
+        "// source survives GC\n"
+    );
+    assert!(target.join("artifact").exists());
+}
+
+#[test]
 fn writes_deletes_and_barriers() {
     let mut a = Agent::start("writes");
     a.send(

@@ -269,7 +269,16 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
     };
     let pids: Arc<Mutex<HashMap<u64, RunStatus>>> = Arc::default();
     // Mirrored roots and their builds, for low-disk `target/` eviction.
-    let roots: crate::remote_evict::Shared = Arc::default();
+    // An explicitly prefixed agent owns this mirror namespace. Create its
+    // directory before opening the canonical durable scope, including first boot.
+    if !prefix.is_empty() {
+        std::fs::create_dir_all(&prefix)?;
+    }
+    let registry = crate::remote_evict::Registry::open(&prefix).unwrap_or_else(|e| {
+        eprintln!("justrust agent: target GC disabled: cannot load private registry: {e}");
+        crate::remote_evict::Registry::disabled(e.to_string())
+    });
+    let roots: crate::remote_evict::Shared = Arc::new(Mutex::new(registry));
     // Paths whose latest Write or Delete failed: the tree differs from what
     // the daemon believes. Reported with every barrier until a later frame
     // for the same path succeeds, so no build runs on a stale file.
@@ -323,8 +332,10 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                 let _ = std::fs::create_dir_all(at(&path));
             }
             Msg::Synced { path } => {
-                if let Ok(mut r) = roots.lock() {
-                    r.touch(&at(&path));
+                if let Ok(mut r) = roots.lock()
+                    && let Err(e) = r.register(&at(&path))
+                {
+                    eprintln!("justrust agent: target GC enrollment refused for {path}: {e}");
                 }
                 let under = format!("{}/", path.trim_end_matches('/'));
                 failed.retain(|p| !p.starts_with(&under));
@@ -408,19 +419,58 @@ pub fn serve<R: Read>(mut input: R, out: Box<dyn Write + Send>, prefix: String) 
                     }
                     // Shared per-root lock: eviction of this root's target/
                     // waits for the build, and the build for an eviction.
-                    let _build_lock = root.as_deref().and_then(crate::remote_evict::build_lock);
-                    if let (Some(root), Ok(mut r)) = (&root, roots.lock()) {
-                        r.begin(root);
-                    }
+                    let setup = (|| -> anyhow::Result<_> {
+                        let Some(root) = &root else {
+                            return Ok(None);
+                        };
+                        let lock = crate::remote_evict::build_lock(root).ok_or_else(|| {
+                            anyhow::anyhow!("cannot acquire source-root build lock")
+                        })?;
+                        roots
+                            .lock()
+                            .map_err(|_| anyhow::anyhow!("activity registry poisoned"))?
+                            .begin(root)?;
+                        Ok(Some(lock))
+                    })();
+                    let _build_lock = match setup {
+                        Ok(lock) => lock,
+                        Err(e) => {
+                            pids.lock().unwrap().remove(&id);
+                            send(
+                                &out,
+                                &Msg::Error {
+                                    id,
+                                    msg: format!(
+                                        "build not started: cannot protect source activity: {e:#}"
+                                    ),
+                                },
+                                &[],
+                            );
+                            return;
+                        }
+                    };
                     let result =
                         start_run(&executable, id, &cwd, &args, &env, &run_id, &out, &pids);
-                    if let (Some(root), Ok(mut r)) = (&root, roots.lock()) {
-                        r.end(
+                    if let (Some(root), Ok(mut r)) = (&root, roots.lock())
+                        && let Err(e) = r.end(
                             root,
                             crate::remote_evict::Probe::now(&crate::remote_evict::System),
+                        )
+                    {
+                        eprintln!(
+                            "justrust agent: activity end failed for {} (GC stays protected): {e}",
+                            root.display()
                         );
                     }
                     drop(_build_lock);
+                    if let (Some(root), Ok(r)) = (&root, roots.lock())
+                        && let Err(e) = r.finish_idle(root)
+                    {
+                        eprintln!(
+                            "justrust agent: activity finalization failed for {} (GC stays protected): {e}",
+                            root.display()
+                        );
+                    }
                     evict_now(&roots);
                     let code = match result {
                         Ok(c) => c,

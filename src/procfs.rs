@@ -46,6 +46,79 @@ pub fn running_executable() -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
+/// Conservative live-use exclusion for native target GC. Non-Linux hosts
+/// cannot prove inactivity here and must retain targets.
+pub fn path_in_use_by_other(path: &std::path::Path) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let me = std::process::id().to_string();
+        let Ok(procs) = std::fs::read_dir("/proc") else {
+            return true;
+        };
+        for entry in procs {
+            let Ok(entry) = entry else {
+                return true;
+            };
+            let name = entry.file_name();
+            let Some(pid) = name
+                .to_str()
+                .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+            else {
+                continue;
+            };
+            if pid == me {
+                continue;
+            }
+            let base = entry.path();
+            // Inspect all readable processes. Inaccessible processes of this
+            // principal are uncertainty, not proof of inactivity. Foreign
+            // private /proc entries cannot disable the whole account's GC.
+            use std::os::unix::fs::MetadataExt;
+            let meta = match std::fs::metadata(&base) {
+                Ok(meta) => meta,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => return true,
+            };
+            let same_principal = meta.uid() == unsafe { libc::geteuid() };
+            match std::fs::read_link(base.join("cwd")) {
+                Ok(cwd) if cwd.starts_with(path) => return true,
+                Err(e) if same_principal && e.kind() != std::io::ErrorKind::NotFound => {
+                    return true;
+                }
+                _ => (),
+            }
+            match std::fs::read_dir(base.join("fd")) {
+                Ok(fds) => {
+                    for fd in fds {
+                        let Ok(fd) = fd else {
+                            return true;
+                        };
+                        match std::fs::read_link(fd.path()) {
+                            Ok(p) if p.starts_with(path) => return true,
+                            Err(e)
+                                if same_principal && e.kind() != std::io::ErrorKind::NotFound =>
+                            {
+                                return true;
+                            }
+                            _ => (),
+                        }
+                    }
+                }
+                Err(e) if same_principal && e.kind() != std::io::ErrorKind::NotFound => {
+                    return true;
+                }
+                _ => (),
+            }
+        }
+        false
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = path;
+        true
+    }
+}
+
 /// Read the caller's file creation mask without changing process-global state.
 /// Linux exposes it in procfs. Other Unix callers use an isolated shell child.
 pub fn current_umask() -> Option<u32> {

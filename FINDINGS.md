@@ -1,5 +1,43 @@
 # Findings: where agent build time goes
 
+## 2026-10-19: Durable authenticated target-GC authority across agent upgrades
+
+The mirrored-target collector previously kept its only registry in an agent's
+`Arc::default()`. Upgrading that agent forgot all roots and activity, so even
+an explicit later collection could not account for old targets. Automatic GC
+also intentionally defaults to dry mode, so replacing the agent did not fix
+repeated hosted ENOSPC incidents.
+
+Added versioned private per-UID/canonical-agent-prefix receipts binding exact
+canonical root path, device and inode. Only authenticated `Synced` enrolls a
+root. Build activity is fsynced in receipt metadata, including a durable unclean
+marker. Shared per-root flock covers the whole run; only exclusive idle
+completion clears uncertainty. A crashed or failed end update remains excluded
+across restarts until a subsequent successful build completes cleanly. Fresh
+receipt/grace/process checks run under the exclusive eviction lock, not just
+against the agent's initial plan. Source, private caches, external target dirs,
+foreign principals, aliases, and unknown historical mirrors are not authority.
+
+`justrust remote gc` is an explicit native command on the machine where invoked,
+with dry-plan default even if automatic `JUSTRUST_REMOTE_EVICT=on` is set.
+`--apply` authorizes one watermark-bounded pass, never a filesystem source scan
+or a reduction of the two-hour grace. Diagnostics separate exact allocated tree
+bytes from measured free-space before/after and observed net delta, since
+hardlinks and concurrent writes prevent claiming tree size as physical reclaim.
+Deletion failures propagate to its exit status. See `docs/remote-target-gc.md`.
+
+Regression coverage includes real native agent `Synced`, an enrolled framed run,
+agent exit, and a separate native GC process reading the durable registry and
+preserving recent targets. Hermetic tests cover restart/unclean leases,
+concurrent agents, late activity between planning and locking, existing flock
+holders, recent activity from another agent, foreign scope/permissions,
+symlink receipts, replaced root inodes, manifestless monorepos, unknown roots,
+and an actual live process cwd. No hosted source export or production target
+collection was performed for this repair. Bootstrap checks/tests/lint reuse the
+existing stable target locally under the verified hosted ENOSPC outage.
+Automatic deletion is not promoted. Pre-registry historical mirrors still need
+a normal authenticated sync and full grace before they become eligible.
+
 ## 2026-10-19: Hosted disk recovery using native dependency-artifact LRU
 
 At 16:42:41 UTC the hosted root filesystem had 94,478,336 bytes available

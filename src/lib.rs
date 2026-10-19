@@ -543,6 +543,17 @@ enum RemoteCmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         cmd: Vec<String>,
     },
+    /// Inspect authenticated target-GC receipts ON THIS MACHINE (no SSH or
+    /// source scan). Run on the host through `remote ssh` for hosted maintenance.
+    #[cfg(unix)]
+    Gc {
+        /// Delete only eligible registered targets needed by disk watermarks.
+        #[arg(long)]
+        apply: bool,
+        /// Exact canonical prefix used by the authenticated agent (normally empty).
+        #[arg(long, default_value = "")]
+        prefix: String,
+    },
     /// `justrust check` on the machine (syncs the source first).
     #[command(disable_help_flag = true)]
     Check(RemoteArgs),
@@ -923,6 +934,8 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 waybar,
                 watch,
             } => remote::status(json, waybar, watch)?,
+            #[cfg(unix)]
+            RemoteCmd::Gc { apply, prefix } => remote_evict::command(apply, &prefix)?,
             RemoteCmd::Ssh { cmd } => remote::ssh(cmd)?,
             RemoteCmd::Check(a) => remote_build::run("check", a.args)?,
             RemoteCmd::Test(a) => remote_build::run("test", a.args)?,

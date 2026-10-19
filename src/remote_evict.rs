@@ -22,6 +22,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
+#[path = "remote_evict_registry.rs"]
+mod durable;
+
 /// Keep free space at least this fraction of the disk, or this many bytes,
 /// whichever is larger.
 pub const LOW_FRACTION: f64 = 0.15;
@@ -123,6 +127,11 @@ pub fn target_of(root: &Path) -> Result<PathBuf, Skip> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
+        if meta.uid() != unsafe { libc::geteuid() } || root_meta.uid() != meta.uid() {
+            return Err(Skip::Unsafe(
+                "root/target belongs to another principal".into(),
+            ));
+        }
         if meta.dev() != root_meta.dev() {
             return Err(Skip::Unsafe("target is on another filesystem".into()));
         }
@@ -192,13 +201,107 @@ pub fn plan(
     (chosen, skipped)
 }
 
+type Snapshot = (BTreeMap<PathBuf, RootState>, Vec<(PathBuf, Skip)>);
+
 /// Registry of mirrored roots and their build activity, owned by the agent.
 #[derive(Default)]
 pub struct Registry {
     pub roots: BTreeMap<PathBuf, RootState>,
+    #[cfg(unix)]
+    store: Option<durable::Store>,
+    disabled: Option<String>,
 }
 
 impl Registry {
+    /// Load only this SSH principal's authenticated enrollment receipts.
+    #[cfg(unix)]
+    pub fn open(prefix: &str) -> std::io::Result<Self> {
+        Self::from_store(durable::Store::open(prefix)?)
+    }
+
+    #[cfg(unix)]
+    fn from_store(store: durable::Store) -> std::io::Result<Self> {
+        let (mut roots, _) = store.snapshot()?;
+        for state in roots.values_mut() {
+            state.leases = 0;
+        }
+        Ok(Self {
+            roots,
+            store: Some(store),
+            disabled: None,
+        })
+    }
+
+    pub fn disabled(reason: String) -> Self {
+        Self {
+            disabled: Some(reason),
+            ..Self::default()
+        }
+    }
+
+    pub fn register(&mut self, root: &Path) -> std::io::Result<()> {
+        // Remember synchronization roots even if durable enrollment fails, so
+        // a subsequent run cannot bypass the cross-agent lock/record checks.
+        self.roots.entry(root.to_path_buf()).or_default();
+        #[cfg(unix)]
+        if let Some(store) = &self.store {
+            let _lock = build_lock(root)
+                .ok_or_else(|| std::io::Error::other("cannot lock source registration"))?;
+            store.register(root)?;
+            self.roots
+                .entry(root.to_path_buf())
+                .or_default()
+                .last_build_end = store.state(root)?.last_build_end;
+            return Ok(());
+        }
+        self.touch(root);
+        Ok(())
+    }
+
+    /// Fresh receipts prevent another agent's activity being lost on upgrade.
+    #[cfg(unix)]
+    fn snapshot(&self) -> std::io::Result<Snapshot> {
+        if let Some(reason) = &self.disabled {
+            return Err(std::io::Error::other(reason.clone()));
+        }
+        let Some(store) = &self.store else {
+            return Ok((self.roots.clone(), Vec::new()));
+        };
+        let (mut roots, skipped) = store.snapshot()?;
+        for (root, state) in &mut roots {
+            if let Some(local) = self.roots.get(root) {
+                state.leases = state.leases.max(local.leases);
+                state.last_build_end = state.last_build_end.max(local.last_build_end);
+            }
+        }
+        Ok((roots, skipped))
+    }
+
+    #[cfg(unix)]
+    fn fresh_state(&self, root: &Path) -> std::io::Result<RootState> {
+        let mut state = match &self.store {
+            Some(store) => store.state(root)?,
+            None => self
+                .roots
+                .get(root)
+                .cloned()
+                .ok_or_else(|| std::io::Error::other("unregistered root"))?,
+        };
+        if let Some(local) = self.roots.get(root) {
+            state.leases = state.leases.max(local.leases);
+            state.last_build_end = state.last_build_end.max(local.last_build_end);
+        }
+        Ok(state)
+    }
+
+    fn record_activity(&self, root: &Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        if let Some(store) = &self.store {
+            store.activity(root)?;
+        }
+        Ok(())
+    }
+
     /// A root became known through a sync.
     pub fn touch(&mut self, root: &Path) {
         self.roots.entry(root.to_path_buf()).or_default();
@@ -211,13 +314,39 @@ impl Registry {
             .max_by_key(|r| r.as_os_str().len())
             .cloned()
     }
-    pub fn begin(&mut self, root: &Path) {
+    pub fn begin(&mut self, root: &Path) -> std::io::Result<()> {
+        if let Some(reason) = &self.disabled {
+            return Err(std::io::Error::other(reason.clone()));
+        }
+        #[cfg(unix)]
+        if let Some(store) = &self.store {
+            store.begin(root)?;
+        }
         self.roots.entry(root.to_path_buf()).or_default().leases += 1;
+        Ok(())
     }
-    pub fn end(&mut self, root: &Path, now: u64) {
+    pub fn end(&mut self, root: &Path, now: u64) -> std::io::Result<()> {
+        self.record_activity(root)?;
         let s = self.roots.entry(root.to_path_buf()).or_default();
         s.leases = s.leases.saturating_sub(1);
         s.last_build_end = now;
+        Ok(())
+    }
+    /// Clear the durable uncertainty marker only after every agent has
+    /// released its shared build lock. A crashed/failed activity write stays
+    /// protected until a later successful build finishes cleanly.
+    #[cfg(unix)]
+    pub fn finish_idle(&self, root: &Path) -> std::io::Result<()> {
+        if self.roots.get(root).is_some_and(|s| s.leases != 0) {
+            return Ok(());
+        }
+        let Some(_lock) = evict_lock(root) else {
+            return Ok(());
+        };
+        if let Some(store) = &self.store {
+            store.finish(root)?;
+        }
+        Ok(())
     }
 }
 
@@ -228,7 +357,20 @@ pub struct RootLock(#[allow(dead_code)] std::fs::File);
 fn lock_path(root: &Path) -> Option<PathBuf> {
     let name = format!("{:016x}.lock", fxhash(root.as_os_str().as_encoded_bytes()));
     let dir = crate::remote::dir().ok()?.join("evict-locks");
-    std::fs::create_dir_all(&dir).ok()?;
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)
+        .ok()?;
+    let meta = std::fs::symlink_metadata(&dir).ok()?;
+    if !meta.is_dir()
+        || meta.uid() != unsafe { libc::geteuid() }
+        || meta.mode() & 0o022 != 0
+        || dir.canonicalize().ok()? != dir
+    {
+        return None;
+    }
     Some(dir.join(name))
 }
 
@@ -244,13 +386,24 @@ fn fxhash(bytes: &[u8]) -> u64 {
 #[cfg(unix)]
 fn flock(root: &Path, exclusive: bool, blocking: bool) -> Option<RootLock> {
     use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let path = lock_path(root)?;
     let f = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)
         .ok()?;
+    let meta = f.metadata().ok()?;
+    if !meta.is_file()
+        || meta.uid() != unsafe { libc::geteuid() }
+        || meta.mode() & 0o022 != 0
+        || meta.nlink() != 1
+    {
+        return None;
+    }
     let mut op = if exclusive {
         libc::LOCK_EX
     } else {
@@ -334,34 +487,7 @@ impl Probe for System {
         walk(path)
     }
     fn in_use_by_other(&self, path: &Path) -> bool {
-        let me = std::process::id().to_string();
-        let Ok(procs) = std::fs::read_dir("/proc") else {
-            return true;
-        };
-        for p in procs.flatten() {
-            let name = p.file_name();
-            let Some(pid) = name
-                .to_str()
-                .filter(|s| s.bytes().all(|b| b.is_ascii_digit()))
-            else {
-                continue;
-            };
-            if pid == me {
-                continue;
-            }
-            let base = p.path();
-            if std::fs::read_link(base.join("cwd")).is_ok_and(|c| c.starts_with(path)) {
-                return true;
-            }
-            if let Ok(fds) = std::fs::read_dir(base.join("fd")) {
-                for fd in fds.flatten() {
-                    if std::fs::read_link(fd.path()).is_ok_and(|t| t.starts_with(path)) {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
+        crate::procfs::path_in_use_by_other(path)
     }
     fn now(&self) -> u64 {
         SystemTime::now()
@@ -370,8 +496,8 @@ impl Probe for System {
     }
 }
 
-/// One collection pass: plan, lock, delete (unless dry), log every decision.
-/// Returns bytes freed (or that would be freed in dry mode).
+/// One collection pass. Return allocated tree bytes, not physical bytes
+/// reclaimed: hardlinks and concurrent filesystem activity can differ.
 #[cfg(unix)]
 pub fn collect(
     registry: &Registry,
@@ -381,27 +507,69 @@ pub fn collect(
     probe: &dyn Probe,
     log: &mut dyn FnMut(String),
 ) -> u64 {
+    collect_report(registry, home, mode, grace, probe, log).bytes
+}
+
+#[derive(Default)]
+struct Collection {
+    bytes: u64,
+    failed: bool,
+}
+
+#[cfg(unix)]
+fn collect_report(
+    registry: &Registry,
+    home: &Path,
+    mode: Mode,
+    grace: Duration,
+    probe: &dyn Probe,
+    log: &mut dyn FnMut(String),
+) -> Collection {
     if mode == Mode::Off {
-        return 0;
+        return Collection::default();
     }
     let Some((free, total)) = probe.disk(home) else {
-        return 0;
+        log("evict: cannot measure filesystem, refusing collection".into());
+        return Collection {
+            failed: true,
+            ..Collection::default()
+        };
     };
     let need = deficit(free, total);
     if need == 0 {
-        return 0;
+        return Collection::default();
     }
-    let (chosen, skipped) = plan(&registry.roots, need, grace, probe);
-    for (root, why) in &skipped {
+    let (roots, mut rejected) = match registry.snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(e) => {
+            log(format!(
+                "evict: registry unavailable, refusing collection: {e}"
+            ));
+            return Collection {
+                failed: true,
+                ..Collection::default()
+            };
+        }
+    };
+    log(format!(
+        "evict: registered={} free_bytes={free} total_bytes={total} needed_bytes={need} grace_seconds={}",
+        roots.len(),
+        grace.as_secs()
+    ));
+    let (chosen, skipped) = plan(&roots, need, grace, probe);
+    rejected.extend(skipped);
+    for (root, why) in &rejected {
         log(format!("evict: skip {} ({why:?})", root.display()));
     }
     let mut freed = 0u64;
+    let mut failed = false;
     for e in chosen {
         let gib = e.bytes as f64 / (1u64 << 30) as f64;
         if mode == Mode::Dry {
             log(format!(
-                "evict (dry run): would delete {} ({gib:.1} GiB, last build {})",
+                "evict (dry run): would delete {} ({gib:.1} GiB, allocated_tree_bytes={}, last activity {})",
                 e.target.display(),
+                e.bytes,
                 e.last_build_end
             ));
             freed += e.bytes;
@@ -414,19 +582,99 @@ pub fn collect(
             log(format!("evict: skip {} (build holds lock)", root.display()));
             continue;
         };
+        // A different agent can finish a build between planning and flock.
+        // Reload authenticated durable activity while holding exclusive access.
+        let state = match registry.fresh_state(root) {
+            Ok(s) => s,
+            Err(err) => {
+                log(format!(
+                    "evict: skip {} (fresh receipt unavailable: {err})",
+                    root.display()
+                ));
+                continue;
+            }
+        };
+        if state.leases != 0
+            || state.last_build_end.saturating_add(grace.as_secs()) > probe.now()
+            || probe.in_use_by_other(root)
+        {
+            log(format!(
+                "evict: skip {} (fresh lease/recent/process check)",
+                root.display()
+            ));
+            continue;
+        }
         match evict(&e) {
             Ok(()) => {
                 log(format!(
-                    "evict: deleted {} ({gib:.1} GiB, last build {}, free was {free} of {total})",
+                    "evict: deleted {} ({gib:.1} GiB, allocated_tree_bytes={}, last activity {}, free was {free} of {total})",
                     e.target.display(),
-                    e.last_build_end
+                    e.bytes,
+                    state.last_build_end
                 ));
                 freed += e.bytes;
             }
-            Err(err) => log(format!("evict: failed {}: {err}", e.target.display())),
+            Err(err) => {
+                failed = true;
+                log(format!("evict: failed {}: {err}", e.target.display()));
+            }
         }
     }
-    freed
+    if let Some((after, _)) = probe.disk(home) {
+        log(format!(
+            "evict: summary allocated_tree_bytes={freed} free_before_bytes={free} free_after_bytes={after} observed_free_delta_bytes={} (net filesystem change, not attributed to deleted hardlinks)",
+            i128::from(after) - i128::from(free)
+        ));
+    }
+    Collection {
+        bytes: freed,
+        failed,
+    }
+}
+
+/// Explicit native maintenance on this machine, not a source sync or build.
+/// CLI --apply is the only opt-in here; the automatic default remains dry.
+#[cfg(unix)]
+pub fn command(apply: bool, prefix: &str) -> anyhow::Result<()> {
+    let registry = Registry::open(prefix)?;
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home directory"))?;
+    let (roots, skipped) = registry.snapshot()?;
+    eprintln!(
+        "evict: native {} registered={} rejected_receipts={} prefix={prefix:?}; unknown old mirrors are NOT enrolled or scanned",
+        if apply { "apply" } else { "dry plan" },
+        roots.len(),
+        skipped.len()
+    );
+    let (free, total) = System
+        .disk(&home)
+        .ok_or_else(|| anyhow::anyhow!("cannot measure filesystem"))?;
+    if deficit(free, total) == 0 {
+        for (root, reason) in skipped {
+            eprintln!("evict: skip {} ({reason:?})", root.display());
+        }
+        let (_, skipped) = plan(&roots, u64::MAX, DEFAULT_GRACE, &System);
+        for (root, reason) in skipped {
+            eprintln!("evict: skip {} ({reason:?})", root.display());
+        }
+        eprintln!(
+            "evict: no collection needed free_bytes={free} total_bytes={total} grace_seconds={}",
+            DEFAULT_GRACE.as_secs()
+        );
+        return Ok(());
+    }
+    let result = collect_report(
+        &registry,
+        &home,
+        if apply { Mode::On } else { Mode::Dry },
+        DEFAULT_GRACE,
+        &System,
+        &mut |line| eprintln!("{line}"),
+    );
+    anyhow::ensure!(
+        !result.failed,
+        "target collection failed; see diagnostics above"
+    );
+    Ok(())
 }
 
 /// Free space after an attempt, for the pre-build floor check.
@@ -568,12 +816,12 @@ mod tests {
         let a = mirrored(&base, "a");
         let mut reg = Registry::default();
         reg.touch(&a);
-        reg.begin(&a);
+        reg.begin(&a).unwrap();
         let p = fake(GIB, 484 * GIB, 1_000_000);
         let (chosen, skipped) = plan(&reg.roots, u64::MAX, DEFAULT_GRACE, &p);
         assert!(chosen.is_empty());
         assert_eq!(skipped[0].1, Skip::Leased);
-        reg.end(&a, 1_000_000 - 60);
+        reg.end(&a, 1_000_000 - 60).unwrap();
         let (chosen, skipped) = plan(&reg.roots, u64::MAX, DEFAULT_GRACE, &p);
         assert!(chosen.is_empty());
         assert_eq!(skipped[0].1, Skip::Recent);
