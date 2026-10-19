@@ -297,8 +297,30 @@ site is in `frontend.rs`. The sites in `backend.rs`, `cfg.rs`, `ir.rs`,
 - Owner map from the coordinator: dromedary owns the frontend.rs production
   hunks (ACK pending). Dragon's `associated_types.rs` is not touched.
 
-## Coordination
+#### Review of activation step 1 (scratch 76eef8201): two defects
 
+1. Bare tag replay. `TokenSession::with_owner(.., OwnerTag)` accepts a `Copy`
+   tag, so a caller could build two sessions with one tag, possibly over
+   unrelated snapshots, and grafts between them would pass. The agreed
+   contract was a non-`Copy` issued pair. Fix: `with_owner` consumes an
+   `Issued` (path plus tag, not `Clone`). The session stores the `OwnerPath`
+   next to the tag, so one issuance yields exactly one session. A test
+   asserts that `Issued` cannot be reused (a compile-fail doctest) and that
+   the session exposes its path.
+2. Standalone accounting bypass. `standalone_tag` charged the new root to a
+   private default ledger, so an exhausted or zero caller budget could still
+   mint a root and session. Fix: every standalone root and path is paid
+   through the caller's budget, before allocation. Session-owned owner
+   storage is a refundable `ByteLease` while the session is live (so drop
+   still returns the caller to zero, which keeps the existing accounting
+   tests honest). It becomes an immutable `RetainedBytes` receipt only when
+   the store is frozen for publication. Tests: an exhausted caller budget
+   rejects before any root or session allocation; a zero-byte limit rejects
+   at admission.
+
+No accounting exclusions, no widened debt.
+
+## Coordination
 - Kind ids reserved by cricket: 121 `PARSE_FILE`, 122 `MODULE_INDEX`,
   123 `RESOLVE_IMPORT`, 124 `RESOLVE_ITEM`. 114 stays retired. 116/117 are
   lexical/capture, 118-120 are reserved for const work.
