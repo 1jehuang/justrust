@@ -181,6 +181,8 @@ it. `RUST-COMPATIBILITY.md` defines the contract and dependency ordering.
       items of any type (non-scalar ones inlined at each use, still checked when
       unused), `const fn` with ordinary bodies (E0015 for non-const calls),
       inline `const { }` blocks, const-item expressions as array lengths.
+      Canonical `const unsafe fn` declarations preserve both qualifiers and unsafe
+      call obligations. Duplicate/reversed qualifiers reject; async/extern stay unsupported.
       Open: const generics, static mut, unsafe/raw-pointer ops, unions,
       extern "C", constant patterns, real CTFE of non-scalar values.
 - [x] Immutable production parser cursor over the existing lexer, exact type-only

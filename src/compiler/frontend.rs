@@ -33,6 +33,7 @@ use native_adapter::{NativeParserInput, NativeTokenBuffer};
 mod assignment_expr;
 mod char_literal;
 pub(super) mod closures;
+mod function_qualifiers;
 mod let_chains;
 mod name_scope;
 mod name_validation;
@@ -45,10 +46,10 @@ mod token_cursor;
 use char_literal::{parse_byte_literal, parse_char_literal};
 mod deref_coercion;
 mod format_args;
+mod format_macros;
 mod int_consts;
 mod item_module;
 mod let_statement;
-mod format_macros;
 pub use format_macros::SourceFormatInto;
 mod format_spec;
 mod inherited_associated;
@@ -10052,12 +10053,13 @@ impl<'input, 'names> Parser<'input, 'names> {
         visibility: ir::Visibility,
         explicit_visibility: bool,
     ) -> Result<(), ParseError> {
-        if !self.token().string
+        if (!self.token().string
             && matches!(
                 self.token().text,
                 "async" | "extern" | "union" | "macro_rules"
             )
-            || (self.is("unsafe") && !self.cursor.peek(1).is_some_and(|t| t.text == "fn"))
+            || (self.is("unsafe") && !self.cursor.peek(1).is_some_and(|t| t.text == "fn")))
+            && !self.starts_qualified_function()
         {
             return Err(self.unsupported("item syntax is unsupported"));
         }
@@ -10513,9 +10515,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 .map_err(native_adapter::name_error)?;
             parsed.program.functions.push(function);
             (name, ItemKind::Function)
-        } else if self.is("static")
-            || (self.is("const") && !self.cursor.peek(1).is_some_and(|t| t.text == "fn"))
-        {
+        } else if self.is("static") || (self.is("const") && !self.starts_qualified_function()) {
             if self.item_expansion.is_some() {
                 return Err(self.unsupported("generated const item authority is unsupported"));
             }
@@ -10541,7 +10541,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 initializer,
             });
             (name, ItemKind::Const)
-        } else if self.is("fn") || self.is("const") || self.is("unsafe") {
+        } else if self.starts_qualified_function() {
             let mut function = self.function()?;
             function.visibility = visibility.clone();
             let name = function
@@ -10949,15 +10949,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         // so the qualifier carries no further obligation in this draft.
         // Associated `const fn`s are ordinary methods here: their qualifier
         // only matters inside constant initializers, which are inlined.
-        let constness = if self.eat("const") && !associated {
-            Constness::Const
-        } else {
-            Constness::Runtime
-        };
-        let unsafety = !self.token().string && self.eat("unsafe");
-        if !self.token().string && self.is("extern") {
-            return Err(self.unsupported("extern ABI function qualifiers are unsupported"));
-        }
+        let (constness, unsafety) = self.function_qualifiers(associated)?;
         self.expect("fn")?;
         let name = self.ident()?;
         let mut regions = if associated {
