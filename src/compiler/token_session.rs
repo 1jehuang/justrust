@@ -1000,6 +1000,59 @@ impl Iterator for ExpansionTrace<'_> {
 }
 
 #[cfg(test)]
+mod owner_defect_tests {
+    use super::*;
+    use crate::compiler::expansion_budget::{ExpansionBudget, ExpansionLimits};
+
+    fn snapshot() -> SourceSnapshot {
+        let mut map = SourceMap::default();
+        map.add("owner.rs".into(), Arc::from("x"));
+        SourceSnapshot::new(map).unwrap()
+    }
+
+    /// Defect 1 (review of 76eef8201): one issued tag can build two sessions.
+    #[test]
+    #[ignore = "known defect: bare OwnerTag replay, fixed by with_owner(Issued)"]
+    fn one_issuance_cannot_build_two_sessions() {
+        let budget = ExpansionBudget::default();
+        let mut issuer = super::super::owner_path::OwnerIssuer::new(
+            crate::OwnerRoot::standalone().unwrap(),
+            &budget,
+        )
+        .unwrap();
+        let tag = issuer
+            .issue(super::super::owner_path::OwnerDomain::TokenSession)
+            .unwrap()
+            .tag;
+        let a = TokenSession::with_owner(snapshot(), budget.clone(), tag).unwrap();
+        let b = TokenSession::with_owner(snapshot(), budget.clone(), tag).unwrap();
+        assert_ne!(
+            a.id(),
+            b.id(),
+            "two sessions share one owner: grafts would pass"
+        );
+    }
+
+    /// Defect 2: an exhausted caller budget must reject before minting.
+    #[test]
+    #[ignore = "known defect: standalone root paid to a private ledger"]
+    fn exhausted_caller_budget_rejects_standalone_session() {
+        let zero = ExpansionBudget::new(ExpansionLimits {
+            bytes: 0,
+            ..ExpansionLimits::default()
+        });
+        let before = crate::engine::TAG_PROVENANCE.lock().unwrap().len();
+        let result = TokenSession::standalone(snapshot(), zero);
+        let after = crate::engine::TAG_PROVENANCE.lock().unwrap().len();
+        assert!(result.is_err());
+        assert_eq!(
+            after, before,
+            "a tag was minted despite a zero caller budget"
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::super::expansion_budget::{BudgetFailureKind, BudgetResource, ExpansionLimits};
     use super::super::token::{Edition, Ident, LiteralKind, Spacing, Token, TokenKind};
