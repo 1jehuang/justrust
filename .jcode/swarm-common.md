@@ -8,14 +8,19 @@ Repository: /home/jeremy/justrust-clean-room, branch `clean-room-rewrite`
 (remote origin). Read AGENTS.md (top clean-room section), GRAPH-INTEGRITY.md,
 RUST-COMPATIBILITY.md, IMPLEMENTATION.md and COMPILER.md first.
 
-Isolation: many agents edit the big shared files (frontend.rs, ir.rs, cfg.rs,
-ownership.rs, borrow.rs, backend.rs) at once. Do NOT edit in the main checkout.
-Create your own worktree:
-  git -C /home/jeremy/justrust-clean-room fetch origin
-  git -C /home/jeremy/justrust-clean-room worktree add --detach ~/.jcode/scratch/cr-<yourlabel> origin/clean-room-rewrite
-Work there. Integrate often: commit small, `git fetch && git rebase origin/clean-room-rewrite`,
-re-run the relevant tests, then `git push origin HEAD:clean-room-rewrite`. Resolve
-conflicts by preserving other agents' work. Never force-push. Never rewrite others' commits.
+Shared checkout: work in /home/jeremy/justrust-clean-room on `clean-room-rewrite`.
+Do NOT create git worktrees (global rule in ~/AGENTS.md: each one costs 10-17 GB
+of target/ locally and is mirrored onto the hosted build machine, which filled its
+disk on 2026-10-19). Many agents edit the big shared files (frontend.rs, ir.rs,
+cfg.rs, ownership.rs, borrow.rs, backend.rs), so:
+  - Claim the files or functions you will edit with cricket before editing, and
+    keep edits small and focused.
+  - Commit only your own hunks (`git add -p`), never `git add -A`.
+  - Integrate often: `git fetch && git rebase origin/clean-room-rewrite` (with
+    `--autostash` if needed), re-run the relevant tests, then
+    `git push origin HEAD:clean-room-rewrite`.
+  - Never reset, stash-drop or checkout over files you did not change.
+Resolve conflicts by preserving other agents' work. Never force-push. Never rewrite others' commits.
 Use the user's git identity (already configured). Push every working increment.
 
 Ownership: src/engine.rs, src/compiler/mod.rs and src/compiler/instances.rs belong to
@@ -35,9 +40,9 @@ Hard rules:
   The aim is breadth toward real programs. Keep correctness, but don't spend hours on
   ceremony documents. A short `<FEATURE>.md` plus tests and a line in IMPLEMENTATION.md is enough.
 - Full-suite regressions: run `justrust test` before pushing (hosted is fine).
-- Server restarts happen often and stop idle workers. Commit to your worktree
-  (even WIP commits, `git commit -m "WIP: ..."`) at least every ~20 minutes so a
-  replacement can pick up from history. Squash or clean up before pushing if needed.
+- Server restarts happen often and stop idle workers. Commit your own hunks
+  (even WIP commits, `git commit -m "WIP: ..."`) at least every ~20 minutes and
+  push them to `refs/heads/wip/<yourlabel>` so a replacement can pick up from history.
 - Hosted disk can fill up. If you see "No space left on device", use `--local`.
 - Report progress to cricket with swarm dm (to_session cricket) when you push a
   milestone or are blocked. When finished, give a final report with commits.
