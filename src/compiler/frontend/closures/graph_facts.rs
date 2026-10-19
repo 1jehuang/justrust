@@ -46,6 +46,7 @@ pub(in crate::compiler) struct LexicalClosureSite {
 }
 #[derive(Clone, Debug)]
 pub(in crate::compiler) struct LexicalBody {
+    pub subject: ir::DeclId,
     pub owner: sr::OriginalBodyId,
     pub declaration: usize,
     pub sites: Arc<[LexicalClosureSite]>,
@@ -133,12 +134,11 @@ impl PlanCtx {
             sr::OriginalBodyId::new(budget).map_err(|e| e.into_legacy_diagnostic(budget))?;
         let inventory = SourceInventory::build(&self.program, function, owner.clone(), budget)
             .map_err(|e| e.into_legacy_diagnostic(budget))?;
-        let offset = usize::from(
-            self.program
-                .closure_sources
-                .get(&owner_key)
-                .is_some_and(|source| !source.captures.is_empty()),
-        );
+        let offset = self
+            .program
+            .closure_sources
+            .get(&owner_key)
+            .map_or(0, |source| source.captures.len());
         let mut sites = Vec::new();
         for call in &inventory.calls {
             budget.charge_work(1)?;
@@ -213,6 +213,7 @@ impl PlanCtx {
             return Err("captured source-site inventory changed".into());
         }
         Ok(LexicalBody {
+            subject: declaration,
             owner,
             declaration: index,
             sites: sites.into(),
@@ -237,10 +238,8 @@ impl PlanCtx {
                     .checked_add(1)
                     .ok_or("capture path work overflow")?,
             )?;
-            if site.node.path.as_ref() == path {
-                if selected.replace(site).is_some() {
-                    return Err("duplicate captured source path".into());
-                }
+            if site.node.path.as_ref() == path && selected.replace(site).is_some() {
+                return Err("duplicate captured source path".into());
             }
         }
         let site = selected.ok_or("capture graph path is not an original closure site")?;
@@ -248,22 +247,17 @@ impl PlanCtx {
             return Err("capture graph source owner changed".into());
         }
         let parent = self.callable_decl(lexical.declaration)?;
+        if parent != lexical.subject {
+            return Err("capture lexical fact belongs to another source snapshot".into());
+        }
         let callee = self.callable_decl(site.declaration)?;
         let parent = self.signature(parent)?;
         let callee = self.signature(callee)?;
-        let Some(ir::Ty::Ref {
-            kind: ir::BorrowKind::Shared,
-            referent,
-        }) = callee.signature.params.first()
-        else {
-            return Err("capture callee lacks shared environment parameter".into());
-        };
-        let ir::Ty::Tuple(fields) = referent.as_ref() else {
-            return Err("capture environment is not a tuple".into());
-        };
-        if fields.len() != site.captures.len() {
-            return Err("capture environment field count changed".into());
-        }
+        let fields = callee
+            .signature
+            .params
+            .get(..site.captures.len())
+            .ok_or("capture callee lacks shared environment parameters")?;
         for (index, capture) in site.captures.iter().enumerate() {
             budget.charge_work(1)?;
             if capture.binding.owner != lexical.owner {

@@ -448,7 +448,12 @@ impl Provider for CompilerProvider {
                     cx.publish_fact(0, BodyLexicalFact { lexical })
                 }
                 CAPTURE_ENV => {
-                    let index = item_index(&key, "missing capture owner declaration")?;
+                    let index = usize::try_from(
+                        *key.params
+                            .first()
+                            .ok_or_else(|| Error::new("missing capture owner declaration"))?,
+                    )
+                    .map_err(|_| Error::new("invalid capture owner index"))?;
                     let length = key
                         .params
                         .len()

@@ -463,12 +463,13 @@ impl NameStoreBuilder {
         &mut self,
         origin: SpanId,
         ordinal: usize,
+        field: usize,
     ) -> Result<AstIdent, NameError> {
         self.check_origin(origin)?;
         let spelling = self
             .store
             .session
-            .intern_symbol(&format!("$closure_env${ordinal}"))?;
+            .intern_symbol(&format!("$closure_env${ordinal}${field}"))?;
         self.append(NameData {
             atom: NameAtomId(spelling),
             spelling,

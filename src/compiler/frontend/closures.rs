@@ -12,13 +12,14 @@ pub(super) struct ClosureParent {
 pub(super) struct SourceCapture {
     pub parameter: usize,
     pub name: AstIdent,
+    pub environment: AstIdent,
     pub ty: Type,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct ClosureSource {
     pub name: AstPath,
-    pub environment: AstIdent,
+    pub environments: Vec<AstIdent>,
     pub parent: Option<ClosureParent>,
     pub by_move: bool,
     pub captures: Vec<SourceCapture>,
@@ -117,14 +118,19 @@ impl Parser<'_, '_> {
             .anonymous_closure(origin, serial)
             .map_err(native_adapter::name_error)?;
         let name = self.closure_path(ident)?;
-        let environment = self
-            .names
-            .anonymous_closure_environment(origin, serial)
-            .map_err(native_adapter::name_error)?;
         let parent = self.lexical.closure_parent.replace(ClosureParent {
             name: name.clone(),
             params: params.clone(),
         });
+        let mut environments = Vec::new();
+        for field in 0..parent.as_ref().map_or(0, |parent| parent.params.len()) {
+            let environment = self
+                .names
+                .anonymous_closure_environment(origin, serial, field)
+                .map_err(native_adapter::name_error)?;
+            self.reserve_parser_items(&mut environments, 1)?;
+            environments.push(environment);
+        }
         // A closure's body cannot inherit its parent's return/loop/binding or
         // macro frontier. The ordinary independent checker owns all its locals.
         let previous = self.lexical.function.take();
@@ -173,7 +179,7 @@ impl Parser<'_, '_> {
         self.reserve_parser_items(&mut sources, 1)?;
         sources.push(ClosureSource {
             name: name.clone(),
-            environment,
+            environments,
             parent,
             by_move,
             captures: Vec::new(),

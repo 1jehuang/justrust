@@ -38,36 +38,31 @@ impl Resolver<'_> {
             return Ok(());
         };
         if !source.captures.is_empty() {
-            let fields = source
-                .captures
-                .iter()
-                .map(|capture| Type::Ref {
-                    kind: ir::BorrowKind::Shared,
-                    region: None,
-                    referent: Box::new(capture.ty.clone()),
-                })
-                .collect();
-            self.charge_entries::<(BindingName, Type)>(1)?;
+            self.charge_entries::<(BindingName, Type)>(source.captures.len())?;
             function
                 .params
-                .try_reserve(1)
+                .try_reserve(source.captures.len())
                 .map_err(|_| "closure environment parameter allocation")?;
-            function.params.insert(
-                0,
-                (
-                    BindingName::Named(source.environment),
-                    Type::Ref {
-                        kind: ir::BorrowKind::Shared,
-                        region: None,
-                        referent: Box::new(Type::Tuple(fields)),
-                    },
-                ),
+            function.params.splice(
+                0..0,
+                source.captures.iter().map(|capture| {
+                    (
+                        BindingName::Named(capture.environment),
+                        Type::Ref {
+                            kind: ir::BorrowKind::Shared,
+                            region: None,
+                            referent: Box::new(capture.ty.clone()),
+                        },
+                    )
+                }),
             );
             function
                 .param_mut
-                .try_reserve(1)
+                .try_reserve(source.captures.len())
                 .map_err(|_| "closure environment mutability allocation")?;
-            function.param_mut.insert(0, false);
+            function
+                .param_mut
+                .splice(0..0, source.captures.iter().map(|_| false));
         }
         self.charge_entries::<closures::ClosureSource>(1)?;
         self.resolved_closures
@@ -140,16 +135,18 @@ impl Resolver<'_> {
             .captures
             .iter()
             .position(|capture| capture.parameter == parameter);
-        let environment = source.environment;
-        let slot = if let Some(slot) = existing {
-            slot
+        let environment = if let Some(slot) = existing {
+            source.captures[slot].environment
         } else {
             self.charge_entries::<closures::SourceCapture>(1)?;
             let source = self
                 .active_closure
                 .as_mut()
                 .ok_or("missing active closure source")?;
-            let slot = source.captures.len();
+            let environment = *source
+                .environments
+                .get(parameter)
+                .ok_or("capture field binder outside original source")?;
             source
                 .captures
                 .try_reserve(1)
@@ -157,17 +154,14 @@ impl Resolver<'_> {
             source.captures.push(closures::SourceCapture {
                 parameter,
                 name,
+                environment,
                 ty,
             });
-            slot
+            environment
         };
         Ok(Place {
             local: LocalName::Named(environment),
-            fields: vec![
-                FieldSelector::Deref,
-                FieldSelector::Tuple(slot),
-                FieldSelector::Deref,
-            ],
+            fields: vec![FieldSelector::Deref],
         })
     }
 
@@ -176,16 +170,8 @@ impl Resolver<'_> {
         let LocalName::Named(environment) = place.local else {
             return Err("invalid closure environment root".into());
         };
-        let FieldSelector::Tuple(slot) = place.fields[1] else {
-            return Err("invalid closure capture slot".into());
-        };
         Ok(Expr::Deref {
-            value: Box::new(Expr::Field {
-                base: Box::new(Expr::Deref {
-                    value: Box::new(Expr::Var(self.single_path(environment)?)),
-                }),
-                field: FieldSelector::Tuple(slot),
-            }),
+            value: Box::new(Expr::Var(self.single_path(environment)?)),
         })
     }
 
@@ -251,16 +237,10 @@ impl Resolver<'_> {
                 },
             });
         }
-        self.charge_entries::<Expr>(1)?;
-        args.try_reserve(1)
+        self.charge_entries::<Expr>(fields.len())?;
+        args.try_reserve(fields.len())
             .map_err(|_| "closure environment argument allocation")?;
-        args.insert(
-            0,
-            Expr::BorrowValue {
-                kind: ir::BorrowKind::Shared,
-                value: Box::new(Expr::Tuple(fields)),
-            },
-        );
+        args.splice(0..0, fields);
         Ok(())
     }
 }

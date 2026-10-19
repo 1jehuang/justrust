@@ -172,6 +172,11 @@ fn unsupported_closure_values_and_inference_fail_explicitly() {
         "fn main() { (|x: &i32| -> &i32 { x })(&1); }",
         "fn global(x: i32) -> i32 { x } fn main() { let global = 1; (|| -> i32 { global(1) })(); }",
         "fn main() { let n = 1i32; (|| -> i32 { n })(); }",
+        "fn run(n:i32){let n=2; (||->i32{n})();}fn main(){}",
+        "fn run(n:i32){(move ||->i32{n})();}fn main(){}",
+        "fn run(mut n:i32){(||->i32{n+=1;n})();}fn main(){}",
+        "fn run(mut n:i32){(||->i32{let r=&mut n;*r})();}fn main(){}",
+        "fn run(n:&i32){(||->i32{*n})();}fn main(){}",
         "struct Value; fn main() { let Value = 1i32; (|| -> i32 { Value })(); }",
     ] {
         for workers in [1, 8] {
@@ -182,6 +187,31 @@ fn unsupported_closure_values_and_inference_fail_explicitly() {
                 failure.to_string().contains("unsupported"),
                 "{failure}\n{source}"
             );
+        }
+    }
+}
+
+#[test]
+fn capture_facts_are_per_owner_and_source_site_across_workers() {
+    let source = "fn run(a:i32,b:i32)->i32{let x=(||->i32{b+a+b})();x+(||->i32{a})()}fn main(){assert_eq!(run(1,20),42);}";
+    let mut previous = None;
+    for workers in [1, 8] {
+        for build in [false, true] {
+            let compiled = compiler::compile(source.into(), workers, build).unwrap();
+            let keys: std::collections::BTreeSet<_> = compiled
+                .report
+                .node_evaluations
+                .iter()
+                .filter(|(key, _)| matches!(key.kind, 116 | 117))
+                .map(|(key, _)| (key.kind, key.params.clone()))
+                .collect();
+            assert_eq!(keys.iter().filter(|(kind, _)| *kind == 116).count(), 1);
+            assert_eq!(keys.iter().filter(|(kind, _)| *kind == 117).count(), 2);
+            assert!(keys.iter().all(|(_, params)| !params.is_empty()));
+            if let Some(previous) = &previous {
+                assert_eq!(&keys, previous);
+            }
+            previous = Some(keys);
         }
     }
 }
