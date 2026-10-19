@@ -398,17 +398,63 @@ impl PlanCtx {
         if !traits_only {
             return Ok(None);
         }
+        let mut selected: Option<(ir::Callee, ir::Signature, ReceiverKind)> = None;
+        for (application, _) in self
+            .method_trait_candidates(owner, name, caller, module, budget)?
+            .as_slice()
+        {
+            if let Some(call) = self.select_trait_filtered(
+                application,
+                name,
+                method_args,
+                caller,
+                dot,
+                filter,
+                budget,
+            )? {
+                if let Some((ir::Callee::TraitItem(previous), _, _)) = &selected
+                    && previous.trait_ref.declaration == application.declaration
+                {
+                    return Err(trait_application_ambiguity());
+                }
+                if selected.is_some() {
+                    return Err("ambiguous in-scope trait item".into());
+                }
+                selected = Some(call);
+            }
+        }
+        Ok(selected)
+    }
+
+    /// Reuse the ordinary visibility and exact application discovery for
+    /// nonexecuting method-argument inference. Selection still discharges the
+    /// final ordered arguments and predicates independently.
+    pub(super) fn method_trait_candidates(
+        &self,
+        owner: &ir::Ty,
+        name: &AstIdent,
+        caller: ir::FactsCtx<'_>,
+        module: &ModuleId,
+        budget: &ir::PlanBudget,
+    ) -> Result<super::super::token_session::BudgetVec<(ir::TraitRef, ir::DeclId)>, String> {
+        use super::super::{expansion_budget::Storage, token_session::BudgetVec};
+        self.check_budget(budget)?;
+        self.program
+            .modules
+            .check(*module)
+            .map_err(module_diagnostic)?;
+        self.program
+            .names
+            .key(*name, LookupClass::Member)
+            .map_err(native_adapter::name_diagnostic)?;
         let ir::FactsCtx::Validated(facts) = caller else {
             return Err("trait selection requires validated facts".into());
         };
-        let mut selected: Option<(ir::Callee, ir::Signature, ReceiverKind)> = None;
+        let mut candidates = BudgetVec::new(self.program.names.budget(), Storage::Temporary)
+            .map_err(selection_token_error)?;
         for trait_id in &self.registry.trait_ids {
             budget.charge_work(1)?;
             let info = self.declaration(*trait_id)?;
-            self.program
-                .modules
-                .check(*module)
-                .map_err(module_diagnostic)?;
             let mut visible =
                 info.path.module == *module || self.catalog.declaration(*trait_id).is_some();
             for (import_module, path) in &self.registry.trait_imports {
@@ -433,35 +479,19 @@ impl PlanCtx {
             if !visible {
                 continue;
             }
-            if self.trait_item(*trait_id, name, budget)?.is_none() {
+            let Some(item) = self.trait_item(*trait_id, name, budget)? else {
                 continue;
-            }
+            };
             for application in self
                 .trait_applications(owner, *trait_id, facts, budget)?
                 .as_slice()
             {
-                if let Some(call) = self.select_trait_filtered(
-                    application,
-                    name,
-                    method_args,
-                    caller,
-                    dot,
-                    filter,
-                    budget,
-                )? {
-                    if let Some((ir::Callee::TraitItem(previous), _, _)) = &selected
-                        && previous.trait_ref.declaration == application.declaration
-                    {
-                        return Err(trait_application_ambiguity());
-                    }
-                    if selected.is_some() {
-                        return Err("ambiguous in-scope trait item".into());
-                    }
-                    selected = Some(call);
-                }
+                candidates
+                    .push((application.clone(), item))
+                    .map_err(selection_token_error)?;
             }
         }
-        Ok(selected)
+        Ok(candidates)
     }
 }
 impl PlanCtx {

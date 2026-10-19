@@ -135,105 +135,16 @@ impl Checker<'_> {
         explicit: &[Type],
         expected: Option<&ir::Ty>,
     ) -> Result<Option<Vec<ir::Ty>>, String> {
-        let plan = self.signatures.plan()?;
-        let mut root = receiver;
-        while let ir::Ty::Ref { referent, .. } = root {
-            root = referent;
-        }
-        let Some((nominal, _)) = nominal_parts(root) else {
-            return Ok(None);
-        };
-        let mut candidate = None;
-        for id in &plan.registry.function_ids {
-            plan.budget.charge_work(1)?;
-            let info = plan.declaration(*id)?;
-            let Some(associated) = &info.path.associated else {
-                continue;
-            };
-            if associated.trait_decl.is_some()
-                || associated.nominal != nominal
-                || !plan.registry.source_member_equal(info.path.item, *name)?
-            {
-                continue;
-            }
-            let impl_env = plan.param_env(associated.impl_decl)?;
-            let mut bindings = HashMap::new();
-            if !match_impl_type(
-                &associated.self_pattern,
-                root,
-                &impl_env,
-                &mut bindings,
-                &plan.budget,
-                0,
-            )? {
-                continue;
-            }
-            if candidate.replace((*id, bindings)).is_some() {
-                return Ok(None);
-            }
-        }
-        let Some((id, owner_bindings)) = candidate else {
-            return Ok(None);
-        };
-        let info = plan.declaration(id)?;
-        let schema = plan.function_schema(id)?;
-        if info.param_env.arity() == 0 {
-            return Ok(None);
-        }
-        let params = &schema.signature.params;
-        let formals = match params.len().checked_sub(args.len()) {
-            Some(0) => &params[..],
-            Some(1) => &params[1..],
-            _ => return Ok(None),
-        };
-        let mut solver = Inference::new(self, info.param_env.clone())?;
-        if !explicit.is_empty() {
-            let anonymous = plan
-                .registry
-                .source_callable(id)
-                .map_or(0, |f| f.impl_params);
-            if explicit.len() + anonymous != info.param_env.arity() {
-                return Err("E0107: wrong number of method generic arguments".into());
-            }
-            for (slot, ty) in explicit.iter().enumerate() {
-                let formal = self.infer_node(InferKind::Slot(slot))?;
-                let actual = self.partial_type_term(ty, 0)?;
-                solver.constrain(&formal, &actual, 0)?;
-            }
-        }
-        if let Some(expected) = expected {
-            let formal = self.method_owner_term(
-                &solver.schema(&schema.signature.result, 0)?,
-                &owner_bindings,
-                0,
-            )?;
-            let actual = self.infer_type_term(expected, None, 0)?;
-            solver.constrain(&formal, &actual, 0)?;
-        }
-        for (formal, expr) in formals.iter().zip(args) {
-            // Arguments that do not mention a method parameter carry no
-            // evidence; skip them (they are checked normally afterwards).
-            if !mentions_param(formal) {
-                continue;
-            }
-            let Ok(evidence) = self.inference_evidence(expr, 0) else {
-                return Ok(None);
-            };
-            let Ok(formal) = solver
-                .schema(formal, 0)
-                .and_then(|term| self.method_owner_term(&term, &owner_bindings, 0))
-            else {
-                return Ok(None);
-            };
-            if solver.constrain(&formal, &evidence, 0).is_err() {
-                return Ok(None);
-            }
-        }
-        Ok(solver.finish(true).ok().flatten())
+        Ok(
+            match self.inherent_method_actuals(receiver, name, args, explicit, expected, None)? {
+                inherent_method_hint::InherentMethodInference::Missing => None,
+                inherent_method_hint::InherentMethodInference::Applicable(actuals) => actuals,
+            },
+        )
     }
 }
 
-fn mentions_param(ty: &ir::Ty) -> bool {
+pub(super) fn mentions_param(ty: &ir::Ty) -> bool {
     match ty {
         ir::Ty::Param(_) => true,
         ir::Ty::Ref { referent, .. } => mentions_param(referent),

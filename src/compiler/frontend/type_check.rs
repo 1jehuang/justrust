@@ -14,9 +14,13 @@ mod format_lowering;
 mod generic_placeholders;
 #[path = "type_check/inferred_owner.rs"]
 mod inferred_owner;
+#[path = "type_check/inherent_method_hint.rs"]
+mod inherent_method_hint;
 mod iterator_loop;
 #[path = "local_literals.rs"]
 mod local_literals;
+#[path = "type_check/method_argument_hint.rs"]
+mod method_argument_hint;
 #[path = "type_check/method_owner.rs"]
 mod method_owner;
 #[path = "type_check/partial_annotation.rs"]
@@ -4428,8 +4432,9 @@ impl<'a> Checker<'a> {
                     self.facts(),
                     &plan.budget,
                 )?;
-                let Some(actuals) =
-                    self.inferred_trait_method_actuals(&trait_ref, name, type_args, args, None)?
+                let Some(actuals) = self.inferred_trait_method_actuals(
+                    &trait_ref, name, type_args, args, None, false,
+                )?
                 else {
                     return Ok(None);
                 };
@@ -4482,25 +4487,8 @@ impl<'a> Checker<'a> {
                 args: call_args,
             } => {
                 if let Some(owner) = self.method_receiver_hint(receiver)? {
-                    let plan = self
-                        .signatures
-                        .plan
-                        .as_ref()
-                        .ok_or("missing associated registry")?;
-                    let args =
-                        self.resolved_method_actuals(&owner, name, type_args, call_args, None)?;
-                    Some(
-                        plan.select_method(
-                            &owner,
-                            name,
-                            &args,
-                            self.facts(),
-                            &self.module,
-                            &plan.budget,
-                        )?
-                        .signature
-                        .result,
-                    )
+                    self.method_selection_with_inference(&owner, name, type_args, call_args, None)?
+                        .map(|selected| selected.signature.result)
                 } else {
                     None
                 }
@@ -7876,23 +7864,12 @@ impl<'a> Checker<'a> {
         args: &[Expr],
         expected: Option<&ir::Ty>,
     ) -> Result<ir::ExprId, String> {
-        let plan = self
-            .signatures
-            .plan
-            .clone()
-            .ok_or("method call requires registry")?;
         let ty = self
             .method_receiver_hint(receiver)?
             .ok_or("unsupported unresolved receiver type")?;
-        let actuals = self.resolved_method_actuals(&ty, name, type_args, args, expected)?;
-        let selected = plan.select_method(
-            &ty,
-            name,
-            &actuals,
-            self.facts(),
-            &self.module,
-            &plan.budget,
-        )?;
+        let selected = self
+            .method_selection_with_inference(&ty, name, type_args, args, expected)?
+            .ok_or("no applicable method or unresolved method generic arguments")?;
         let region_offset = match &selected.target {
             ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
             ir::Callee::TraitItem(_) | ir::Callee::Virtual(_) => 0,
@@ -8147,7 +8124,7 @@ impl<'a> Checker<'a> {
                 self.facts(),
                 &plan.budget,
             )?;
-            self.inferred_trait_method_actuals(&trait_ref, name, type_args, args, expected)?
+            self.inferred_trait_method_actuals(&trait_ref, name, type_args, args, expected, false)?
                 .ok_or("E0282: type annotations needed for trait method arguments")?
         } else {
             type_args

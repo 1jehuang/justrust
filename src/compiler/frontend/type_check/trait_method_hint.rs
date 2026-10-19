@@ -10,11 +10,15 @@ impl Checker<'_> {
         explicit: &[Type],
         arguments: &[Expr],
         expected: Option<&ir::Ty>,
+        dot: bool,
     ) -> Result<Option<Vec<ir::Ty>>, String> {
         let plan = self.signatures.plan()?;
         let item = plan
             .trait_item(application.declaration, name, &plan.budget)?
             .ok_or("unknown required trait method")?;
+        if dot && plan.declaration(item)?.receiver == ReceiverKind::None {
+            return Err("associated function without self is not dot-callable".into());
+        }
         let own = plan.param_env(item)?;
         if !explicit.is_empty() && explicit.len() != own.arity() {
             return Err("E0107: wrong number of trait method generic arguments".into());
@@ -56,7 +60,8 @@ impl Checker<'_> {
         // terms. It grants no executable authority. Final select_trait checks
         // the complete application, inferred method actuals and obligations.
         let schema = plan.raw_schema(item)?;
-        if schema.signature.params.len() != arguments.len() {
+        let offset = usize::from(dot);
+        if schema.signature.params.len() != arguments.len() + offset {
             return Err("trait method argument count mismatch".into());
         }
         let mut solver = Inference::new(self, own)?;
@@ -71,7 +76,7 @@ impl Checker<'_> {
             let evidence = self.infer_type_term(expected, None, 0)?;
             solver.constrain(&formal, &evidence, 0)?;
         }
-        for (formal, argument) in schema.signature.params.iter().zip(arguments) {
+        for (formal, argument) in schema.signature.params[offset..].iter().zip(arguments) {
             let formal = self.method_owner_term(&solver.schema(formal, 0)?, &bindings, 0)?;
             let evidence = self.inference_evidence(argument, 0)?;
             solver.constrain(&formal, &evidence, 0)?;

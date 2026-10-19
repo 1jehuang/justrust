@@ -42,7 +42,22 @@ impl Parser<'_, '_> {
                 if found.is_some() {
                     ambiguous = true;
                 } else {
-                    found = Some(path.clone());
+                    let mut application = path.clone();
+                    let TraitPath::Source(source) = &mut application else {
+                        unreachable!()
+                    };
+                    // The bound is retained unchanged above, including every
+                    // equality obligation and its original source occurrence.
+                    // A shorthand qualifier denotes only its trait application:
+                    // copying bound constraints would fabricate the invalid
+                    // explicit syntax `<I as Trait<Item = T>>::Other`.
+                    // Keep the original anchor, names, ordered type and region
+                    // arguments. Canonical resolution still checks the bound
+                    // and the shorthand's own parameter/member occurrences.
+                    for segment in &mut source.segments {
+                        segment.associated_types.clear();
+                    }
+                    found = Some(application);
                 }
             }
         }
@@ -93,6 +108,45 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.message.contains("without a trait bound"), "{error}");
+    }
+
+    #[test]
+    fn shorthand_qualifier_does_not_duplicate_original_bound_equalities() {
+        let parsed = parse_syntax_unprepared(
+            "trait Has<A>{type Out;}fn id<I:Has<bool,Out=u8>>(x:I::Out)->I::Out{x}fn main(){}",
+        )
+        .unwrap();
+        let function = &parsed.program.functions[0];
+        let TraitPath::Source(bound) = &function.bounds[0].traits[0] else {
+            panic!("source bound required")
+        };
+        let Type::Projection(projection) = &function.params[0].1 else {
+            panic!("projection required")
+        };
+        let SourceProjection::Qualified {
+            trait_path: TraitPath::Source(qualifier),
+            ..
+        } = projection.as_ref()
+        else {
+            panic!("source qualifier required")
+        };
+        let original = bound.segments.last().unwrap();
+        let projected = qualifier.segments.last().unwrap();
+        let names = parsed.program.names.as_ref();
+        assert_eq!(
+            crate::compiler::semantic_name::occurrence_index(names, original.name).unwrap(),
+            crate::compiler::semantic_name::occurrence_index(names, projected.name).unwrap()
+        );
+        assert!(original.region_args.is_empty());
+        assert!(projected.region_args.is_empty());
+        assert!(matches!(original.args.as_slice(), [Type::Bool]));
+        assert!(matches!(projected.args.as_slice(), [Type::Bool]));
+        assert_eq!(original.associated_types.len(), 1);
+        assert!(matches!(
+            original.associated_types[0].value,
+            Type::Int(ir::IntTy::U8)
+        ));
+        assert!(projected.associated_types.is_empty());
     }
 
     #[test]

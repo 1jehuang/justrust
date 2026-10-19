@@ -1899,6 +1899,7 @@ impl ValidatedTraitWorld {
         parameter: ParamId,
         owner: DeclId,
         predicates: &[Predicate],
+        caller: &GenericEnv,
     ) -> Result<Option<ParamId>> {
         let mut declared = Vec::new();
         self.append_predicate(
@@ -1908,7 +1909,7 @@ impl ValidatedTraitWorld {
         for predicate in predicates {
             self.append_predicate(&mut declared, predicate)?;
         }
-        self.close_predicates(&mut declared, &self.trait_header(owner)?.env)?;
+        self.close_predicates(&mut declared, caller)?;
         Ok((!self.predicates_prove_sized(parameter, &declared)?).then_some(parameter))
     }
     fn validate_ty(
@@ -2800,6 +2801,7 @@ impl ValidatedTraitWorld {
                 trait_header.self_param,
                 item.trait_decl,
                 &item.schema.predicates,
+                &item.schema.env,
             )?;
             if !projected {
                 self.validate_schema_signature(
@@ -2845,6 +2847,7 @@ impl ValidatedTraitWorld {
                     self.trait_header(item.trait_decl)?.self_param,
                     item.trait_decl,
                     &callable.schema.predicates,
+                    &callable.schema.env,
                 )?,
                 None => None,
             };

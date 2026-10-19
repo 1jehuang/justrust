@@ -3,6 +3,33 @@
 Status: accepted bounded implementation on October 17, 2026. Full Rust
 compatibility remains open.
 
+## Method-argument inference composition (October 19, 2026)
+
+Generic dot calls infer only the selected member's own method parameters. The
+existing bounded receiver-depth, identity/autoref, inherent-before-trait and
+receiver-mode search is shared with explicit method calls. Inference runs at
+that exact candidate, never by separately stripping references or choosing the
+first trait by spelling. An applicable but unresolved inherent candidate cannot
+fall through to an unrelated trait candidate. Trait applications retain their
+canonical declaration, Self and ordered owner actuals independently of method
+actuals. Ordinary final selection still proves method arity, bounds, signature
+and source authority before a call is constructed.
+
+`generic_dot_methods`, `method_owner_inference`, `explicit_method_owner` and
+`trait_method_callable_bounds` compare real CHECK/BUILD/run with stock at workers
+1 and 8. Invalid unused calls retain wrong-owner/type/order/arity/bound and
+ambiguity rejection. Canonical publication controls reject forged method actuals,
+receiver operands and foreign binder handles. Trait method equality bounds have
+an exact retained trait/item/module source context, while trait-header and
+supertrait equality restrictions are unchanged.
+
+Shorthand `I::Item` copies the selected bound's exact trait occurrence and ordered
+type/region arguments into its qualifier, but not the bound's equality list.
+The original bound retains every equality obligation. Explicit invalid qualified
+equality syntax and unsatisfied or ambiguous bounds remain rejected
+(`shorthand_bound_equalities`). Full native Iterator library activation remains
+separate from these compiler helper gates.
+
 ## Source and binder contract
 
 Admit existing reference-free type parameters on source traits and genuine typed

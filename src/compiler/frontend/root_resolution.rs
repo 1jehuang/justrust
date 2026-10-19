@@ -1229,6 +1229,37 @@ impl Resolver<'_> {
     }
     fn bounds(&mut self, bounds: &mut [TypeBound], module: ModuleId) -> Result<(), String> {
         let allow_equalities = !matches!(self.source_owner, SourceOwnerContext::Trait { .. });
+        self.bounds_with_equality_policy(bounds, module, allow_equalities)
+    }
+
+    fn trait_method_bounds(
+        &mut self,
+        bounds: &mut [TypeBound],
+        module: ModuleId,
+        trait_index: usize,
+        item_index: usize,
+    ) -> Result<(), String> {
+        if self.source_owner
+            != (SourceOwnerContext::Trait {
+                source_index: trait_index,
+            })
+            || self
+                .program
+                .traits
+                .get(trait_index)
+                .is_none_or(|owner| owner.module != module || owner.items.get(item_index).is_none())
+        {
+            return Err("trait method bounds have no exact source owner".into());
+        }
+        self.bounds_with_equality_policy(bounds, module, true)
+    }
+
+    fn bounds_with_equality_policy(
+        &mut self,
+        bounds: &mut [TypeBound],
+        module: ModuleId,
+        allow_equalities: bool,
+    ) -> Result<(), String> {
         let mut boundary = None;
         for bound in bounds {
             self.ty(&mut bound.subject, module)?;
@@ -4059,7 +4090,7 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                     bounds: bounds.into(),
                 });
             }
-            for item in &mut declaration.items {
+            for (item_index, item) in declaration.items.iter_mut().enumerate() {
                 clone_vector(&declaration.type_params, &resolver.alias_budget)?;
                 resolver.type_params = declaration.type_params.clone();
                 resolver.charge_entries::<AstIdent>(item.signature.type_params.len())?;
@@ -4071,7 +4102,12 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                     .type_params
                     .extend_from_slice(&item.signature.type_params);
                 defer_equality_boundary(
-                    resolver.bounds(&mut item.signature.bounds, declaration.module),
+                    resolver.trait_method_bounds(
+                        &mut item.signature.bounds,
+                        declaration.module,
+                        source_index,
+                        item_index,
+                    ),
                     &mut equality_boundary,
                 )?;
                 resolver.ty(&mut item.signature.result, declaration.module)?;
@@ -4090,7 +4126,12 @@ pub fn resolve(parsed: &ParsedProgram) -> Result<Program, String> {
                         .type_params
                         .extend_from_slice(&function.type_params);
                     defer_equality_boundary(
-                        resolver.bounds(&mut function.bounds, declaration.module),
+                        resolver.trait_method_bounds(
+                            &mut function.bounds,
+                            declaration.module,
+                            source_index,
+                            item_index,
+                        ),
                         &mut equality_boundary,
                     )?;
                     resolver.ty(&mut function.result, declaration.module)?;
@@ -4279,6 +4320,77 @@ mod associated_projection_tests {
         ));
         assert!(matches!(&implementation.associated_types[1].value,
             Type::Projection(p) if matches!(p.as_ref(), SourceProjection::SelfItem { .. })));
+    }
+
+    #[test]
+    fn trait_method_equalities_retain_exact_callable_sources() {
+        let program = parse("trait Call<A>{type Out;}trait Apply{fn required<F:Call<i32,Out=i32>>(&self,f:F)->i32;fn provided<F:Call<i32,Out=i32>>(&self,f:F)->i32{3}}fn main(){}").unwrap();
+        let owner = &program.traits[1];
+        assert_eq!(owner.items.len(), 2);
+        for item in &owner.items {
+            assert_eq!(item.signature.bounds.len(), 1);
+            let TraitPath::Source(path) = &item.signature.bounds[0].traits[0] else {
+                panic!("method bound lost its canonical source path");
+            };
+            assert_eq!(path.segments.last().unwrap().associated_types.len(), 1);
+            if let Some(default) = &item.default {
+                assert_eq!(default.bounds.len(), 1);
+            }
+        }
+        for source in [
+            "trait Call<A>{type Out;}trait Apply<F:Call<i32,Out=i32>>{}fn main(){}",
+            "trait Call<A>{type Out;}trait Apply:Call<i32,Out=i32>{}fn main(){}",
+        ] {
+            let error = parse(source)
+                .err()
+                .expect("trait header equality was admitted");
+            assert!(error.contains("associated equalities"), "{error}");
+        }
+    }
+
+    #[test]
+    fn trait_method_equalities_reject_wrong_source_owner_item_and_module() {
+        let program = parse(
+            "trait Apply{fn call(&self);}mod foreign{pub trait Other{fn call(&self);}}fn main(){}",
+        )
+        .unwrap();
+        let items = HashMap::new();
+        let mut resolver = Resolver {
+            program: &program,
+            type_depth: 0,
+            alias_cache: HashMap::new(),
+            alias_active: Default::default(),
+            alias_budget: ir::PlanBudget::default(),
+            nominal_arity: HashMap::new(),
+            self_nominal: None,
+            self_allowed: false,
+            source_owner: SourceOwnerContext::Trait { source_index: 0 },
+            items: &items,
+            imports: HashMap::new(),
+            active: Default::default(),
+            type_params: Vec::new(),
+            lexical_function: None,
+            user_crate_anchor: false,
+            anonymous_closure_body: false,
+            active_closure: None,
+            resolved_closures: HashMap::new(),
+            resolved_closure_owners: HashMap::new(),
+            current_function_name: None,
+            static_muts: Default::default(),
+            globs: &[],
+            active_globs: Default::default(),
+        };
+        let module = program.traits[0].module;
+        assert!(resolver.trait_method_bounds(&mut [], module, 0, 0).is_ok());
+        assert!(resolver.trait_method_bounds(&mut [], module, 0, 1).is_err());
+        assert!(resolver.trait_method_bounds(&mut [], module, 1, 0).is_err());
+        assert!(
+            resolver
+                .trait_method_bounds(&mut [], program.traits[1].module, 0, 0)
+                .is_err()
+        );
+        resolver.source_owner = SourceOwnerContext::None;
+        assert!(resolver.trait_method_bounds(&mut [], module, 0, 0).is_err());
     }
 
     #[test]

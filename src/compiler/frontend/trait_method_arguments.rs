@@ -28,12 +28,14 @@ fn ufcs_method_arguments_remain_separate_and_bounded_source_inputs() {
     recipes::inventory(program, &budget).unwrap();
 }
 
-fn canonical_ufcs_publication() -> (ir::PlanBudget, Arc<sr::CanonicalSourcePublication>) {
+fn canonical_method_publication(
+    source: &str,
+) -> (ir::PlanBudget, Arc<sr::CanonicalSourcePublication>) {
     use crate::compiler::{CompilerProvider, Input, RESOLVE, SIGNATURES, Snapshot};
     use crate::engine::{Engine, Key};
     let budget = ir::PlanBudget::default();
     let snapshot = Arc::new(Snapshot {
-        input: Input::Text("trait Choose{fn choose<U,V>(u:U,v:V)->U;}fn probe<I:Choose>(u:u8,v:char)->u8{<I as Choose>::choose::<u8,char>(u,v)}fn main(){}".into()),
+        input: Input::Text(source.into()),
         source_options: crate::compiler::source::SourceOptions::default(),
         budget: budget.clone(),
     });
@@ -67,8 +69,21 @@ fn canonical_ufcs_publication() -> (ir::PlanBudget, Arc<sr::CanonicalSourcePubli
 
 #[test]
 fn ufcs_ordered_method_actuals_cannot_be_forged_at_source_publication() {
-    let (budget, publication) = canonical_ufcs_publication();
-    let (_, foreign) = canonical_ufcs_publication();
+    method_actual_forgery_controls(
+        "trait Choose{fn choose<U,V>(u:U,v:V)->U;}fn probe<I:Choose>(u:u8,v:char)->u8{<I as Choose>::choose::<u8,char>(u,v)}fn main(){}",
+    );
+}
+
+#[test]
+fn dot_method_actuals_and_receiver_cannot_be_forged_at_source_publication() {
+    method_actual_forgery_controls(
+        "trait Choose{fn choose<U,V>(&self,u:U,v:V)->U;}fn probe<I:Choose>(receiver:&I,u:u8,v:char)->u8{receiver.choose(u,v)}fn main(){}",
+    );
+}
+
+fn method_actual_forgery_controls(source: &str) {
+    let (budget, publication) = canonical_method_publication(source);
+    let (_, foreign) = canonical_method_publication(source);
     let foreign_scope = foreign
         .facts()
         .env()
@@ -94,6 +109,31 @@ fn ufcs_ordered_method_actuals_cannot_be_forged_at_source_publication() {
             )
         })
         .unwrap();
+    if let ir::ExprKind::Call { args, .. } = &source.exprs[call].kind
+        && args.len() == 3
+    {
+        for mode in 0..2 {
+            let mut changed = source.as_ref().clone();
+            let ir::ExprKind::Call { args, .. } = &mut changed.exprs[call].kind else {
+                unreachable!()
+            };
+            if mode == 0 {
+                args.swap(0, 1);
+            } else {
+                args.remove(0);
+            }
+            assert!(
+                changed
+                    .validate_with_facts(ir::FactsCtx::Validated(publication.facts()))
+                    .is_err()
+            );
+            assert!(
+                publication
+                    .validate_source(&Arc::new(changed), publication.facts(), &budget)
+                    .is_err()
+            );
+        }
+    }
     for mode in 0..4 {
         let mut changed = source.as_ref().clone();
         let ir::ExprKind::Call {

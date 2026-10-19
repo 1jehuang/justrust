@@ -531,6 +531,13 @@ cleanup failures.
       postfix invocation retains the actual callee expression and evaluation
       order (`GENERATED-CALLABLES.md`). Full Iterator source activation remains
       separate and is not established by these helper gates.
+- [x] Generic dot method arguments are inferred at the canonical receiver
+      candidate, preserving bounded receiver depth/mode and inherent-before-trait
+      precedence. Final selection still discharges exact owner/method actuals and
+      predicates (`generic_dot_methods`). Shorthand associated qualifiers retain
+      the original complete bound separately from its constraint-free qualifier
+      (`shorthand_bound_equalities`). These compiler helpers do not establish full
+      native Iterator library support.
 - [x] General associated declaration trait applications and equality bounds under
       ASSOCIATED-BOUNDS.md retain exact source/owner/ordered argument identity and
       prove every assignment, including unused generic impls. Transitive symbolic
