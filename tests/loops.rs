@@ -494,7 +494,8 @@ fn stock(source: &str, expected: Option<&str>) {
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
     let result = capture(
         Command::new(rustc)
-            .arg("--edition=2024")
+            .env_remove("RUSTC_BOOTSTRAP")
+            .args(["--edition=2024", "-Cpanic=abort"])
             .arg(&input)
             .arg("-o")
             .arg(&output),
@@ -555,7 +556,9 @@ fn main(){
     for x in 126i8..=127i8 {if x==126i8 || x==127i8 {count=count+1;}}
     for x in 18446744073709551615u64..=18446744073709551615u64 {if x==18446744073709551615u64 {count=count+1;}}
     for x in -128i8..=-127i8 {if x== -128i8 || x== -127i8 {count=count+1;}}
-    if count==7 {println!("maxima ok");}
+    for x in 340282366920938463463374607431768211455u128..=340282366920938463463374607431768211455u128 {if x==340282366920938463463374607431768211455u128 {count=count+1;}}
+    for x in 170141183460469231731687303715884105727i128..=170141183460469231731687303715884105727i128 {if x==170141183460469231731687303715884105727i128 {count=count+1;}}
+    if count==9 {println!("maxima ok");}
     for _ in 2..=1 {println!("bad");}
 }
 "#;
