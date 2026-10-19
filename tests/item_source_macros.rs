@@ -1,6 +1,6 @@
-//! Stock-first original module macros producing exactly one nongeneric free function.
-//! Generated attributes/modules/imports/traits/impls/definitions and empty/multiple
-//! outputs remain explicit Unsupported boundaries, not invalid Rust examples.
+//! Stock-first original module macros producing zero or many nongeneric free functions.
+//! Generated attributes/modules/imports/traits/impls/definitions remain explicit
+//! Unsupported boundaries, not invalid Rust examples.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use justrust_engine::compiler::{self, frontend, source};
 use std::fs::{self, OpenOptions};
@@ -183,18 +183,18 @@ fn cases() -> Vec<Case> {
             outcome: Outcome::Unsupported,
         },
         Case {
-            name: "empty_item_output_boundary",
+            name: "empty_item_output",
             source: r#"macro_rules! make{()=>{};}make!();fn main(){println!("ok");}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
-            name: "multiple_function_output_boundary",
+            name: "multiple_function_output",
             source: r#"macro_rules! make{()=>{fn first()->i32{40}fn second()->i32{2}};}make!();fn main(){println!("ok");}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
         },
         Case {
             name: "generic_function_output_boundary",
@@ -237,6 +237,136 @@ fn cases() -> Vec<Case> {
             stdout: Some("ok\n"),
             stock_diagnostic: None,
             outcome: Outcome::Unsupported,
+        },
+        Case {
+            name: "repeat_names_values",
+            source: concat!(
+                r#"macro_rules! make{($($n:ident=$v:literal),*)=>{$(fn $n()->i32{$v})*};}make!(first=40,second=2);fn main(){if first()+second()==42{println!("ok");}}"#,
+                "\n"
+            ),
+            stdout: Some("ok\n"),
+            stock_diagnostic: None,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "empty_repeat",
+            source: concat!(
+                r#"macro_rules! make{($($n:ident),*)=>{$(fn $n()->i32{42})*};}make!();fn main(){println!("ok");}"#,
+                "\n"
+            ),
+            stdout: Some("ok\n"),
+            stock_diagnostic: None,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "sibling_forward_call",
+            source: concat!(
+                r#"macro_rules! make{()=>{fn first()->i32{second()+40}fn second()->i32{2}};}make!();fn main(){if first()==42{println!("ok");}}"#,
+                "\n"
+            ),
+            stdout: Some("ok\n"),
+            stock_diagnostic: None,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "unused_bad_second",
+            source: concat!(
+                r#"macro_rules! make{()=>{fn good()->i32{42}fn unused()->i32{true}};}make!();fn main(){if good()==42{println!("ok");}}"#,
+                "\n"
+            ),
+            stdout: None,
+            stock_diagnostic: Some("mismatched types"),
+            outcome: Outcome::Semantic,
+        },
+        Case {
+            name: "unused_bad_first",
+            source: concat!(
+                r#"macro_rules! make{()=>{fn unused()->i32{true}fn good()->i32{42}};}make!();fn main(){if good()==42{println!("ok");}}"#,
+                "\n"
+            ),
+            stdout: None,
+            stock_diagnostic: Some("mismatched types"),
+            outcome: Outcome::Semantic,
+        },
+        Case {
+            name: "unused_bad_repeat",
+            source: concat!(
+                r#"macro_rules! make{($($n:ident=$v:literal),*)=>{$(fn $n()->i32{$v})*};}make!(good=42,unused=true);fn main(){if good()==42{println!("ok");}}"#,
+                "\n"
+            ),
+            stdout: None,
+            stock_diagnostic: Some("mismatched types"),
+            outcome: Outcome::Semantic,
+        },
+        Case {
+            name: "duplicate_siblings",
+            source: concat!(
+                r#"macro_rules! make{()=>{fn answer()->i32{40}fn answer()->i32{2}};}make!();fn main(){}"#,
+                "\n"
+            ),
+            stdout: None,
+            stock_diagnostic: Some("the name `answer` is defined multiple times"),
+            outcome: Outcome::Semantic,
+        },
+        Case {
+            name: "malformed_second",
+            source: concat!(
+                r#"macro_rules! make{()=>{fn good()->i32{42}fn broken()->i32{let =1;0}};}make!();fn main(){}"#,
+                "\n"
+            ),
+            stdout: None,
+            stock_diagnostic: Some("expected pattern"),
+            outcome: Outcome::Syntax,
+        },
+        Case {
+            name: "trailing_garbage",
+            source: concat!(
+                r#"macro_rules! make{()=>{fn good()->i32{42}@};}make!();fn main(){}"#,
+                "\n"
+            ),
+            stdout: None,
+            stock_diagnostic: Some("macro expansion ignores `@`"),
+            outcome: Outcome::Unsupported,
+        },
+        Case {
+            name: "second_module_boundary",
+            source: concat!(
+                r#"macro_rules! make{()=>{fn good()->i32{42}mod nested{}};}make!();fn main(){println!("ok");}"#,
+                "\n"
+            ),
+            stdout: Some("ok\n"),
+            stock_diagnostic: None,
+            outcome: Outcome::Unsupported,
+        },
+        Case {
+            name: "sibling_capture_hygiene",
+            source: concat!(
+                r#"macro_rules! make{($a:ident,$b:ident,$p:ident)=>{fn $a($p:i32)->i32{let x:i32=2;$p+x}fn $b($p:i32)->i32{let x:i32=3;$p+x}};}make!(first,second,x);fn main(){if first(38)+second(0)==43{println!("ok");}}"#,
+                "\n"
+            ),
+            stdout: Some("ok\n"),
+            stock_diagnostic: None,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "second_private_module",
+            source: concat!(
+                r#"macro_rules! make{()=>{pub fn first()->i32{40}fn second()->i32{2}};}mod api{make!();}fn main(){let n=api::second();}"#,
+                "\n"
+            ),
+            stdout: None,
+            stock_diagnostic: Some("function `second` is private"),
+            outcome: Outcome::Semantic,
+        },
+        Case {
+            name: "trailing_supported_punct",
+            source: concat!(
+                r#"macro_rules! make{()=>{fn good()->i32{42}+};}make!();fn main(){}"#,
+                "\n"
+            ),
+            stdout: None,
+            stock_diagnostic: Some("macro expansion ignores `+`"),
+            outcome: Outcome::Syntax,
         },
     ]
 }
@@ -406,8 +536,8 @@ fn stock_all() {
             assert!(!image.exists());
         }
     }
-    assert_eq!(counts, (22, 7));
-    assert_eq!(partition, (10, 3, 4, 12));
+    assert_eq!(counts, (27, 15));
+    assert_eq!(partition, (16, 5, 9, 12));
 }
 #[test]
 fn stock_original_module_macro_item_oracle_edition2024() {
@@ -446,7 +576,7 @@ fn item_source_parser_categories_preserve_unsupported_and_macro_frontier_syntax(
             assert!(
                 error
                     .message
-                    .contains("item macro output must be exactly one nongeneric free function"),
+                    .contains("item macro output must contain only nongeneric free functions"),
                 "fielded struct must reach generated output guard, not an earlier original syntax boundary:{error}"
             );
         }
@@ -459,7 +589,7 @@ fn item_source_parser_categories_preserve_unsupported_and_macro_frontier_syntax(
             counts.2 += 1;
         }
     }
-    assert_eq!(counts, (3, 12, 2));
+    assert_eq!(counts, (5, 12, 2));
     let invalid = cases()
         .into_iter()
         .find(|c| c.name == "unused_generated_invalid_body")
@@ -528,6 +658,31 @@ fn native_item_source_macros_workers1_8_check_build_no_compiler_fallback() {
                 if case.outcome != Outcome::Runtime {
                     assert!(result.stdout.is_empty());
                     assert!(!diagnostic.is_empty());
+                    if case.name.starts_with("unused_bad_") {
+                        assert!(
+                            diagnostic.contains("expected Int(I32), got Bool"),
+                            "{} must reject the unused generated function semantically, not by a resource/contract boundary:{diagnostic}",
+                            case.name
+                        );
+                    }
+                    if matches!(case.name, "trailing_supported_punct" | "malformed_second") {
+                        let location = if case.name == "trailing_supported_punct" {
+                            ":1:42:"
+                        } else {
+                            ":1:63:"
+                        };
+                        assert!(diagnostic.contains(location), "{}:{diagnostic}", case.name);
+                        assert!(
+                            diagnostic.contains("expanded at file"),
+                            "{}:{diagnostic}",
+                            case.name
+                        );
+                        assert!(
+                            diagnostic.contains("defined at file"),
+                            "{}:{diagnostic}",
+                            case.name
+                        );
+                    }
                     if case.outcome == Outcome::Unsupported {
                         assert!(
                             diagnostic.contains("unsupported:"),
@@ -569,10 +724,10 @@ fn native_item_source_macros_workers1_8_check_build_no_compiler_fallback() {
             }
         }
     }
-    assert_eq!(gates, 116);
-    assert_eq!(modes, (20, 20, 14, 14, 24, 24));
+    assert_eq!(gates, 168);
+    assert_eq!(modes, (32, 32, 28, 28, 24, 24));
     eprintln!(
-        "NATIVE ITEM SOURCE:116 cells, modes{modes:?};20 executed native images;48 Unsupported cells are boundaries, not Rust-invalid parity"
+        "NATIVE ITEM SOURCE:168 cells, modes{modes:?};32 executed native images;48 Unsupported cells are phase boundaries, not Rust-invalid parity"
     );
 }
 
@@ -602,4 +757,70 @@ fn generated_function_original_helper_alias_and_nominal_sources_parse_before_che
         count += 1;
     }
     assert_eq!(count, 3);
+}
+
+#[test]
+fn zero_and_sibling_products_share_provenance_not_function_identity_or_source_copies() {
+    for case in cases().into_iter().filter(|case| {
+        matches!(
+            case.name,
+            "empty_repeat"
+                | "repeat_names_values"
+                | "sibling_forward_call"
+                | "sibling_capture_hygiene"
+        )
+    }) {
+        let prepared = source::prepare_text(
+            "products.rs",
+            case.source,
+            &source::SourceOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(prepared.files, 1);
+        assert_eq!(prepared.sources.files.len(), 1);
+        assert_eq!(prepared.sources.files[0].contents.as_ref(), case.source);
+        let parsed = frontend::parse_prepared(&prepared)
+            .unwrap_or_else(|error| panic!("{}:{error}", case.name));
+        let program = &parsed.program;
+        let generated: Vec<_> = program
+            .functions
+            .iter()
+            .filter(|function| {
+                let name = *function.name.segments().last().unwrap();
+                let span = program.names.span(name).unwrap();
+                program
+                    .names
+                    .session()
+                    .span(span)
+                    .unwrap()
+                    .expansion
+                    .is_some()
+            })
+            .collect();
+        if case.name == "empty_repeat" {
+            assert!(generated.is_empty());
+        } else {
+            assert_eq!(generated.len(), 2);
+            let first = *generated[0].name.segments().last().unwrap();
+            let second = *generated[1].name.segments().last().unwrap();
+            assert_ne!(
+                program.names.span(first).unwrap(),
+                program.names.span(second).unwrap()
+            );
+            assert_ne!(generated[0].lexical_scope, generated[1].lexical_scope);
+            let first_span = program
+                .names
+                .session()
+                .span(program.names.span(first).unwrap())
+                .unwrap();
+            let second_span = program
+                .names
+                .session()
+                .span(program.names.span(second).unwrap())
+                .unwrap();
+            assert_eq!(first_span.expansion, second_span.expansion);
+        }
+        assert_eq!(prepared.sources.files.len(), 1);
+        assert_eq!(prepared.sources.files[0].contents.as_ref(), case.source);
+    }
 }

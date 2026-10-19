@@ -1,0 +1,87 @@
+{
+  "date_utc": "2026-10-19",
+  "base": "942b537dc",
+  "purpose": "Stock-first zero/many original module macro output oracle. The first twelve fixtures were measured before parser implementation, the trailing + fixture before parser implementation. This retained transcript repeats those unchanged bytes after scoped implementation.",
+  "command": "rustc --edition=2024 --crate-name=macro_many_oracle --color=never -Cpanic=abort SOURCE -o IMAGE; run IMAGE on compile success",
+  "cases": [
+    {
+      "name": "repeat_names_values",
+      "source": "macro_rules! make{($($n:ident=$v:literal),*)=>{$(fn $n()->i32{$v})*};}make!(first=40,second=2);fn main(){if first()+second()==42{println!(\"ok\");}}\n",
+      "stock_compile_success": true,
+      "expected_stdout": "ok\n"
+    },
+    {
+      "name": "empty_repeat",
+      "source": "macro_rules! make{($($n:ident),*)=>{$(fn $n()->i32{42})*};}make!();fn main(){println!(\"ok\");}\n",
+      "stock_compile_success": true,
+      "expected_stdout": "ok\n"
+    },
+    {
+      "name": "sibling_forward_call",
+      "source": "macro_rules! make{()=>{fn first()->i32{second()+40}fn second()->i32{2}};}make!();fn main(){if first()==42{println!(\"ok\");}}\n",
+      "stock_compile_success": true,
+      "expected_stdout": "ok\n"
+    },
+    {
+      "name": "unused_bad_second",
+      "source": "macro_rules! make{()=>{fn good()->i32{42}fn unused()->i32{true}};}make!();fn main(){if good()==42{println!(\"ok\");}}\n",
+      "stock_compile_success": false,
+      "expected_stdout": null
+    },
+    {
+      "name": "unused_bad_first",
+      "source": "macro_rules! make{()=>{fn unused()->i32{true}fn good()->i32{42}};}make!();fn main(){if good()==42{println!(\"ok\");}}\n",
+      "stock_compile_success": false,
+      "expected_stdout": null
+    },
+    {
+      "name": "unused_bad_repeat",
+      "source": "macro_rules! make{($($n:ident=$v:literal),*)=>{$(fn $n()->i32{$v})*};}make!(good=42,unused=true);fn main(){if good()==42{println!(\"ok\");}}\n",
+      "stock_compile_success": false,
+      "expected_stdout": null
+    },
+    {
+      "name": "duplicate_siblings",
+      "source": "macro_rules! make{()=>{fn answer()->i32{40}fn answer()->i32{2}};}make!();fn main(){}\n",
+      "stock_compile_success": false,
+      "expected_stdout": null
+    },
+    {
+      "name": "malformed_second",
+      "source": "macro_rules! make{()=>{fn good()->i32{42}fn broken()->i32{let =1;0}};}make!();fn main(){}\n",
+      "stock_compile_success": false,
+      "expected_stdout": null
+    },
+    {
+      "name": "trailing_garbage",
+      "source": "macro_rules! make{()=>{fn good()->i32{42}@};}make!();fn main(){}\n",
+      "stock_compile_success": false,
+      "expected_stdout": null
+    },
+    {
+      "name": "second_module_boundary",
+      "source": "macro_rules! make{()=>{fn good()->i32{42}mod nested{}};}make!();fn main(){println!(\"ok\");}\n",
+      "stock_compile_success": true,
+      "expected_stdout": "ok\n"
+    },
+    {
+      "name": "sibling_capture_hygiene",
+      "source": "macro_rules! make{($a:ident,$b:ident,$p:ident)=>{fn $a($p:i32)->i32{let x:i32=2;$p+x}fn $b($p:i32)->i32{let x:i32=3;$p+x}};}make!(first,second,x);fn main(){if first(38)+second(0)==43{println!(\"ok\");}}\n",
+      "stock_compile_success": true,
+      "expected_stdout": "ok\n"
+    },
+    {
+      "name": "second_private_module",
+      "source": "macro_rules! make{()=>{pub fn first()->i32{40}fn second()->i32{2}};}mod api{make!();}fn main(){let n=api::second();}\n",
+      "stock_compile_success": false,
+      "expected_stdout": null
+    },
+    {
+      "name": "trailing_supported_punct",
+      "source": "macro_rules! make{()=>{fn good()->i32{42}+};}make!();fn main(){}\n",
+      "stock_compile_success": false,
+      "expected_stdout": null
+    }
+  ],
+  "transcript": "rustc 1.98.1 (48a229cea 2026-09-01) (Arch Linux rust 1:1.98.1-1)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8\na19127bdf47faf31c2ed9a7f5c9c9b5ef84c27de3aad436b97c1eda5074e2f5f  duplicate_siblings.rs\n5115435bb93ea5e06c0a20b5a16fe35852a24abbd81ba935d67af80befa942be  empty_repeat.rs\ndac13a9d50ba4bac5b8bffd4480ab757670d471da92478679e90632ba2ff2c62  malformed_second.rs\n71d66455cab588ff7cbe70bb929134972f6fffadecedc9e3268075ccdfd4ceac  repeat_names_values.rs\n12eec1cfdc10915942bd0bf5f4c36fb160a0fe94511076dfb04aab4be8a159b5  second_module_boundary.rs\n17ce8ab708cc2fb76616fb0674c641cce43a925597f2863fbd9337c4e72c30c3  second_private_module.rs\n66b0a1404ecff2c4e6368c41ff2872a2d31c5aa344f30a267c61e3a420b727b5  sibling_capture_hygiene.rs\n50b5efa7078d6598138d45fcb20571cb8d20f8eeae7e0e22095eae606b05189d  sibling_forward_call.rs\n7d93ed11203073e6e841f347bc2dc817facdd97ec06fb8582642226fed485adf  trailing_garbage.rs\n1eb02c616d72953217108ee4c3d778e6d8b1bd2764ce7ded6add999af8e60cd9  trailing_supported_punct.rs\ne809eaf755496b20a39f7a57b52fc5f27c8cda4eac4a3b135e7036083da4da67  unused_bad_first.rs\nc021dfaf9eb272a2cc08481d8dafd217b79c17495dcbd423fff4da5e05663fc6  unused_bad_repeat.rs\n366ca6c6a18be445d28bc21e0bdeefe2bac911657ec4457dfb0a727d8001bc11  unused_bad_second.rs\n\n=== duplicate_siblings.rs ===\nerror[E0428]: the name `answer` is defined multiple times\n --> duplicate_siblings.rs:1:44\n  |\n1 | macro_rules! make{()=>{fn answer()->i32{40}fn answer()->i32{2}};}make!();fn main(){}\n  |                        ----------------    ^^^^^^^^^^^^^^^^      ------- in this macro invocation\n  |                        |                   |\n  |                        |                   `answer` redefined here\n  |                        previous definition of the value `answer` here\n  |\n  = note: `answer` must be defined only once in the value namespace of this module\n  = note: this error originates in the macro `make` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0428`.\nSTOCK EXIT=1\n\n=== empty_repeat.rs ===\nSTOCK EXIT=0\nok\n\n=== malformed_second.rs ===\nerror: expected pattern, found `=`\n --> malformed_second.rs:1:63\n  |\n1 | macro_rules! make{()=>{fn good()->i32{42}fn broken()->i32{let =1;0}};}make!();fn main(){}\n  |                                                               ^       ------- in this macro invocation\n  |                                                               |\n  |                                                               expected pattern\n  |\n  = note: this error originates in the macro `make` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nerror: aborting due to 1 previous error\n\nSTOCK EXIT=1\n\n=== repeat_names_values.rs ===\nSTOCK EXIT=0\nok\n\n=== second_module_boundary.rs ===\nwarning: function `good` is never used\n --> second_module_boundary.rs:1:27\n  |\n1 | macro_rules! make{()=>{fn good()->i32{42}mod nested{}};}make!();fn main(){println!(\"ok\");}\n  |                           ^^^^                          ------- in this macro invocation\n  |\n  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default\n  = note: this warning originates in the macro `make` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nwarning: 1 warning emitted\n\nSTOCK EXIT=0\nok\n\n=== second_private_module.rs ===\nerror[E0603]: function `second` is private\n --> second_private_module.rs:1:107\n  |\n1 | macro_rules! make{()=>{pub fn first()->i32{40}fn second()->i32{2}};}mod api{make!();}fn main(){let n=api::second();}\n  |                                                                                                           ^^^^^^ private function\n  |\nnote: the function `second` is defined here\n --> second_private_module.rs:1:47\n  |\n1 | macro_rules! make{()=>{pub fn first()->i32{40}fn second()->i32{2}};}mod api{make!();}fn main(){let n=api::second();}\n  |                                               ^^^^^^^^^^^^^^^^              ------- in this macro invocation\n  = note: this error originates in the macro `make` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nwarning: unused variable: `n`\n --> second_private_module.rs:1:100\n  |\n1 | macro_rules! make{()=>{pub fn first()->i32{40}fn second()->i32{2}};}mod api{make!();}fn main(){let n=api::second();}\n  |                                                                                                    ^ help: if this is intentional, prefix it with an underscore: `_n`\n  |\n  = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default\n\nerror: aborting due to 1 previous error; 1 warning emitted\n\nFor more information about this error, try `rustc --explain E0603`.\nSTOCK EXIT=1\n\n=== sibling_capture_hygiene.rs ===\nSTOCK EXIT=0\nok\n\n=== sibling_forward_call.rs ===\nSTOCK EXIT=0\nok\n\n=== trailing_garbage.rs ===\nerror: macro expansion ignores `@` and any tokens following\n --> trailing_garbage.rs:1:42\n  |\n1 | macro_rules! make{()=>{fn good()->i32{42}@};}make!();fn main(){}\n  |                                          ^   ------- caused by the macro expansion here\n  |\n  = note: the usage of `make!` is likely invalid in item context\n\nerror: aborting due to 1 previous error\n\nSTOCK EXIT=1\n\n=== trailing_supported_punct.rs ===\nerror: macro expansion ignores `+` and any tokens following\n --> trailing_supported_punct.rs:1:42\n  |\n1 | macro_rules! make{()=>{fn good()->i32{42}+};}make!();fn main(){}\n  |                                          ^   ------- caused by the macro expansion here\n  |\n  = note: the usage of `make!` is likely invalid in item context\n\nerror: aborting due to 1 previous error\n\nSTOCK EXIT=1\n\n=== unused_bad_first.rs ===\nerror[E0308]: mismatched types\n --> unused_bad_first.rs:1:41\n  |\n1 | macro_rules! make{()=>{fn unused()->i32{true}fn good()->i32{42}};}make!();fn main(){if good()==42{println!(\"ok\");}}\n  |                                     --- ^^^^                      ------- in this macro invocation\n  |                                     |   |\n  |                                     |   expected `i32`, found `bool`\n  |                                     expected `i32` because of return type\n  |\n  = note: this error originates in the macro `make` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0308`.\nSTOCK EXIT=1\n\n=== unused_bad_repeat.rs ===\nerror[E0308]: mismatched types\n --> unused_bad_repeat.rs:1:92\n  |\n1 | macro_rules! make{($($n:ident=$v:literal),*)=>{$(fn $n()->i32{$v})*};}make!(good=42,unused=true);fn main(){if good()==42{println!(\"ok...\n  |                                                           ---                              ^^^^ expected `i32`, found `bool`\n  |                                                           |\n  |                                                           expected `i32` because of return type\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0308`.\nSTOCK EXIT=1\n\n=== unused_bad_second.rs ===\nerror[E0308]: mismatched types\n --> unused_bad_second.rs:1:59\n  |\n1 | macro_rules! make{()=>{fn good()->i32{42}fn unused()->i32{true}};}make!();fn main(){if good()==42{println!(\"ok\");}}\n  |                                                       --- ^^^^    ------- in this macro invocation\n  |                                                       |   |\n  |                                                       |   expected `i32`, found `bool`\n  |                                                       expected `i32` because of return type\n  |\n  = note: this error originates in the macro `make` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0308`.\nSTOCK EXIT=1\n\n--- Command finished with exit code: 0 ---\n"
+}
