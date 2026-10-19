@@ -12,6 +12,8 @@ use std::collections::{HashMap, VecDeque};
 use std::mem::size_of;
 use std::sync::Arc;
 
+mod renewal;
+
 #[cfg(test)]
 #[path = "borrow/projection_family_tests.rs"]
 mod projection_family_tests;
@@ -4909,6 +4911,7 @@ impl Plan {
             for loan in active.members() {
                 if let Some(birth) = births[loan]
                     && component[birth] == component[block]
+                    && !self.killed_before_rebirth(f, BlockId(next), loan, budget)?
                 {
                     self.problems.push((
                         BlockId(block),

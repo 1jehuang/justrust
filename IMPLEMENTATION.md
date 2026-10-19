@@ -369,9 +369,10 @@ missing-file changes invalidate only justified consumers without stale lookup.
       Guarded ordinary/macro or-patterns retry overlapping alternatives with
       Copy bindings and binding-sensitive side effects. Explicit checked groups
       share one source guard/body; canonical call authority and cross-arm fresh
-      bindings are retained. Borrowed payload retries remain explicitly unsupported
-      until SCC loan renewal is proved; the stock-positive fixture stays active
-      as a native CHECK/BUILD rejection boundary, not a support claim.
+      bindings are retained. Borrowed payload retries now use an all-path
+      kill-before-rebirth proof over solved live origins, including transitive
+      reborrow dependencies. Unknown returned-carrier origins retain conservative
+      boundaries. The retained borrowed fixture runs natively at workers 1 and 8.
 - [ ] Extend bidirectional/local inference, coercion sites, partial type holes,
       omitted method arguments and control-flow joins, preserving rigid universal
       parameters and diagnostics for unresolved constraints.

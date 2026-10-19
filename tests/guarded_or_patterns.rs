@@ -4,10 +4,9 @@
 mod oracle;
 use oracle::{Case, Expect};
 
-/// This stock-valid future acceptance fixture remains an explicit native
-/// boundary until SCC loan renewal has a proof, rather than weakening B1.
+/// Borrowed retry bindings use an all-path renewal proof without weakening B1.
 #[test]
-fn borrowed_guarded_or_keeps_explicit_scc_boundary() {
+fn borrowed_guarded_or_workers1_8_check_build_run() {
     use std::{fs, process::Command};
     let directory = std::env::var_os("JCODE_SCRATCH_DIR")
         .map(std::path::PathBuf::from)
@@ -51,13 +50,18 @@ fn borrowed_guarded_or_keeps_explicit_scc_boundary() {
                 command.arg("-o").arg(&image);
             }
             let output = command.output().unwrap();
-            assert!(!output.status.success());
-            let error = String::from_utf8_lossy(&output.stderr);
             assert!(
-                error.contains("SCC-born loan live across a backedge is unsupported"),
-                "{error}"
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
             );
-            assert!(!image.exists());
+            if check {
+                assert!(!image.exists());
+            } else {
+                let ran = Command::new(&image).output().unwrap();
+                assert!(ran.status.success());
+                assert_eq!(ran.stdout, b"true 2\n");
+            }
         }
     }
     fs::remove_dir_all(directory).unwrap();
