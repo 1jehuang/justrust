@@ -59,6 +59,7 @@ mod iterator_traits;
 mod nominal_bounds;
 mod operators;
 mod panic_format;
+mod param_projection;
 mod trait_selection;
 mod vec_macro;
 pub use program_symbols::ProgramSymbols;
@@ -7029,6 +7030,9 @@ struct Parser<'input, 'names> {
     module: ModuleId,
     alias_target: bool,
     pending_bounds: Vec<TypeBound>,
+    /// Bounds of the enclosing impl and of the current parameter list, read
+    /// by `Param::Item` shorthand projections.
+    visible_bounds: Vec<TypeBound>,
     /// Indices of type parameters written `= Self` by the last parameter list.
     pending_self_defaults: Vec<usize>,
     /// Lifetime parameters written by the last nominal/impl parameter list.
@@ -7210,6 +7214,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_self_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
             impl_regions: RegionDecls::default(),
+            visible_bounds: Vec::new(),
             impl_trait_params: None,
             cursor: TokenCursor::new(&buffer),
             nesting: self.nesting,
@@ -8517,6 +8522,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_self_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
             impl_regions: RegionDecls::default(),
+            visible_bounds: Vec::new(),
             impl_trait_params: None,
             cursor: TokenCursor::new(buffer),
             nesting: self.nesting,
@@ -8898,6 +8904,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_self_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
             impl_regions: RegionDecls::default(),
+            visible_bounds: Vec::new(),
             impl_trait_params: None,
             cursor: TokenCursor::new(tokens),
             nesting: 0,
@@ -9147,7 +9154,7 @@ impl<'input, 'names> Parser<'input, 'names> {
         } else if let Some(name) = self.current_type_parameter()? {
             self.cursor.bump();
             if self.is("::") {
-                return Err(self.unsupported("associated type projections are unsupported"));
+                return self.param_shorthand_projection(name);
             }
             Ok(Type::Param(name))
         } else if let Some(ty) = integer_type(self.token().text) {
@@ -9304,7 +9311,10 @@ impl<'input, 'names> Parser<'input, 'names> {
     fn path_arguments(
         &mut self,
     ) -> Result<(Vec<RegionName>, Vec<Type>, Vec<AssociatedTypeBinding>), ParseError> {
-        self.expect("<")?;
+        // Split the first `<` of a nested qualified associated projection.
+        if !self.cursor.consume_type_lt() {
+            return Err(self.error("expected \"<\""));
+        }
         let mut args = Vec::new();
         let mut region_args = Vec::new();
         let mut associated_types = Vec::new();
@@ -9384,7 +9394,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             let (region_args, args, associated_types) = if callable_sugar {
                 let (args, associated_types) = self.callable_sugar_arguments(sugar_site)?;
                 (Vec::new(), args, associated_types)
-            } else if type_context && self.is("<") {
+            } else if type_context && (self.is("<") || self.is("<<")) {
                 self.path_arguments()?
             } else {
                 (Vec::new(), Vec::new(), Vec::new())
@@ -10292,6 +10302,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             let region_params = self.pending_regions.params.clone();
             self.type_params = type_params.clone();
             let bounds = self.nominal_bounds()?;
+            self.set_visible_bounds(&bounds)?;
             self.expect("{")?;
             let mut variants: Vec<VariantDecl> = Vec::new();
             while !self.is("}") {
@@ -10397,6 +10408,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             let region_params = self.pending_regions.params.clone();
             self.type_params = type_params.clone();
             let mut bounds = self.nominal_bounds()?;
+            self.set_visible_bounds(&bounds)?;
             let mut fields = Vec::new();
             let shape = if self.eat(";") {
                 StructShape::Unit
@@ -10488,6 +10500,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     }
                 }
             }
+            self.set_visible_bounds(&bounds)?;
             self.expect("{")?;
             let mut items = Vec::new();
             let mut associated_types = Vec::new();
@@ -10543,6 +10556,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 associated_types,
             });
             self.type_params.clear();
+            self.visible_bounds.clear();
             self.impl_regions = RegionDecls::default();
             return Ok(());
         } else if self.is("static") && self.cursor.peek(1).is_some_and(|t| t.text == "mut") {
@@ -10621,6 +10635,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Err(self.error("expected fn, inline mod or simple use item"));
         };
         self.type_params.clear();
+        self.visible_bounds.clear();
         self.insert_item(
             parsed,
             module,
@@ -10832,7 +10847,12 @@ impl<'input, 'names> Parser<'input, 'names> {
         inherited: &[AstIdent],
         associated: bool,
     ) -> Result<(Function, ReceiverKind), ParseError> {
+        let enclosing_bounds = self.visible_bounds.clone();
         let (head, receiver) = self.function_head(inherited, associated)?;
+        let mut body_bounds = enclosing_bounds.clone();
+        self.reserve_parser_items(&mut body_bounds, head.bounds.len())?;
+        body_bounds.extend(head.bounds.iter().cloned());
+        self.set_visible_bounds(&body_bounds)?;
         let previous_parent = self.lexical.closure_parent.take();
         if !associated {
             self.lexical.closure_parent = Some(closures::ClosureParent {
@@ -10898,6 +10918,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             ))
         })();
         self.lexical.closure_parent = previous_parent;
+        self.visible_bounds = enclosing_bounds;
         result
     }
     fn callable_generics(
@@ -11008,6 +11029,13 @@ impl<'input, 'names> Parser<'input, 'names> {
         self.type_params = visible;
         let type_params = self.callable_generics(&mut regions)?;
         let mut bounds = std::mem::take(&mut self.pending_bounds);
+        let enclosing_bounds = std::mem::take(&mut self.visible_bounds);
+        {
+            let mut visible = enclosing_bounds.clone();
+            self.reserve_parser_items(&mut visible, bounds.len())?;
+            visible.extend(bounds.iter().cloned());
+            self.visible_bounds = visible;
+        }
         let mut visible = std::mem::take(&mut self.type_params);
         visible.clear();
         self.reserve_parser_items(&mut visible, inherited.len())?;
@@ -11135,6 +11163,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
             }
         }
+        self.visible_bounds = enclosing_bounds;
         Ok((
             FunctionHead {
                 constness,
