@@ -625,6 +625,10 @@ fn kind_name(kind: u32) -> String {
         115 => "universal_admission",
         116 => "body_lexical",
         117 => "capture_environment",
+        130 => "ssa",
+        131 => "local_opt",
+        132 => "summary",
+        133 => "ipo_opt",
         _ => return format!("kind{kind}"),
     }
     .to_string()
@@ -710,8 +714,19 @@ impl Graph {
 }
 
 fn build_graph(count: usize) -> Graph {
-    let compilation = compiler::compile_observed(flat_source(count), 1, false)
-        .unwrap_or_else(|failure| panic!("{count} functions failed: {failure}"));
+    build_graph_with(count, compiler::ssa::OptMode::Off)
+}
+
+/// The same flat program with an explicit optimizer mode, so the gates also
+/// measure the optimizer nodes (SSA, LOCAL_OPT, SUMMARY, IPO_OPT).
+fn build_graph_with(count: usize, opt: compiler::ssa::OptMode) -> Graph {
+    let options = compiler::source::SourceOptions {
+        opt,
+        ..compiler::source::SourceOptions::default()
+    };
+    let compilation =
+        compiler::compile_observed_with_options(flat_source(count), 1, false, options)
+            .unwrap_or_else(|failure| panic!("{count} functions failed: {failure}"));
     Graph::from_report(&compilation.report)
 }
 
@@ -1491,5 +1506,192 @@ const S: &str = "struct InString { m: Mutex<u8> }";
     assert!(
         !roots.contains("T"),
         "generic helper parameter is not a root"
+    );
+}
+
+/// Flat program shaped for the optimizer: independent scalar leaves plus a
+/// scalar driver that calls every leaf, so IPO_OPT really inlines and its
+/// fan-in is exercised. `main` only prints the result.
+fn optimizer_source(count: usize) -> String {
+    let mut lines: Vec<String> = (0..count)
+        .map(|i| format!("fn f{i}(x:i32)->i32 {{ if x < 0 {{ -x }} else {{ x + {i} }} }}"))
+        .collect();
+    let calls: Vec<String> = (0..count).map(|i| format!("f{i}(x)")).collect();
+    lines.push(format!("fn drive(x:i32)->i32 {{ {} }}", calls.join(" + ")));
+    let expected: i64 = (0..count as i64).map(|i| 2 + i).sum();
+    lines.push(format!(
+        "fn main(){{ if drive(2) == {expected} {{ println!(\"compiled correctly\"); }} }}"
+    ));
+    lines.join("\n")
+}
+
+fn optimizer_graph(source: String) -> Graph {
+    let options = compiler::source::SourceOptions {
+        opt: compiler::ssa::OptMode::Adaptive,
+        ..compiler::source::SourceOptions::default()
+    };
+    let compilation = compiler::compile_observed_with_options(source, 1, false, options)
+        .unwrap_or_else(|failure| panic!("optimizer build failed: {failure}"));
+    assert!(compilation.optimizer.optimized > 0, "optimizer did not run");
+    Graph::from_report(&compilation.report)
+}
+
+/// The same shape gates as `no_new_whole_program_barriers`, with the optimizer
+/// on, so SSA/LOCAL_OPT/SUMMARY/IPO_OPT are inside the measured graph. Uses
+/// the existing constants unchanged; adds no recorded debt.
+#[test]
+fn optimizer_nodes_add_no_whole_program_barriers() {
+    for (label, small, large) in [
+        (
+            "flat",
+            build_graph_with(16, compiler::ssa::OptMode::Adaptive),
+            build_graph_with(32, compiler::ssa::OptMode::Adaptive),
+        ),
+        (
+            "inlining driver",
+            optimizer_graph(optimizer_source(16)),
+            optimizer_graph(optimizer_source(32)),
+        ),
+    ] {
+        let optimizer_kinds = ["ssa", "local_opt", "summary", "ipo_opt"];
+        let present: BTreeSet<&str> = large
+            .keys
+            .values()
+            .filter_map(|(kind, _)| optimizer_kinds.iter().find(|k| **k == kind).copied())
+            .collect();
+        for kind in ["ssa", "local_opt", "ipo_opt"] {
+            assert!(
+                present.contains(kind),
+                "{label}: optimizer kind {kind} not measured"
+            );
+        }
+        // No optimizer node may be whole-program.
+        for (kind, params) in large.keys.values() {
+            if optimizer_kinds.contains(&kind.as_str()) {
+                assert_eq!(
+                    params.len(),
+                    1,
+                    "{label}: {kind}{params:?} is not per-item. {RULE}"
+                );
+            }
+        }
+        let whole: BTreeSet<String> = large
+            .keys
+            .values()
+            .filter(|(_, params)| params.is_empty())
+            .map(|(kind, _)| kind.clone())
+            .collect();
+        let added: Vec<_> = whole
+            .iter()
+            .filter(|k| !PERMANENT_WHOLE_PROGRAM.contains(&k.as_str()))
+            .filter(|k| !WHOLE_PROGRAM_DEBT.contains(&k.as_str()))
+            .collect();
+        assert!(
+            added.is_empty(),
+            "{label}: new whole-program nodes {added:?}. {RULE}"
+        );
+        // Leaf facts (indices below 16 are the same leaf in both programs)
+        // keep bounded fan-in and closure. The driver legitimately reads one
+        // summary per direct callee, so it is excluded from the leaf checks.
+        let small_keys = small.by_key();
+        let mut worst = (1.0f64, String::new());
+        for (id, key) in &large.keys {
+            if key.1.is_empty() || key.1[0] >= 16 {
+                continue;
+            }
+            let Some(&small_id) = small_keys.get(key) else {
+                continue;
+            };
+            let (a, b) = (small.fan_in(small_id), large.fan_in(*id));
+            assert!(
+                b <= a,
+                "{label}: {}{:?} fan-in grew {a} -> {b} with program size. {RULE}",
+                key.0,
+                key.1
+            );
+            let (ca, cb) = (small.closure(small_id), large.closure(*id));
+            if ca > 0 && cb as f64 / ca as f64 > worst.0 {
+                worst = (cb as f64 / ca as f64, format!("{}{:?}", key.0, key.1));
+            }
+        }
+        eprintln!(
+            "{label}: optimizer leaf closure growth 16->32: {:.3} {}",
+            worst.0, worst.1
+        );
+        assert!(
+            worst.0 <= LEAF_CLOSURE_GROWTH_CEILING,
+            "{label}: leaf closure grew {:.3}x with the optimizer on ({}). {RULE}",
+            worst.0,
+            worst.1
+        );
+    }
+}
+
+/// Build-mode work growth with the optimizer on stays within the existing
+/// work ceiling (the base gate measures CHECK, which never runs it).
+#[test]
+fn optimizer_build_work_scales_linearly() {
+    let work = |count: usize| {
+        let options = compiler::source::SourceOptions {
+            opt: compiler::ssa::OptMode::Adaptive,
+            ..compiler::source::SourceOptions::default()
+        };
+        compiler::compile_observed_with_options(optimizer_source(count), 1, false, options)
+            .unwrap_or_else(|failure| panic!("{count} functions failed: {failure}"))
+            .resource_usage
+            .work
+    };
+    let growth = work(32) as f64 / work(16) as f64;
+    eprintln!("optimizer build work growth 16->32: {growth:.3}");
+    assert!(
+        growth <= WORK_GROWTH_CEILING,
+        "optimizer build work grew {growth:.3}x when the program doubled. {RULE}"
+    );
+}
+
+/// Caller-side IPO_OPT fan-in is pinned exactly: doubling the driver's direct
+/// leaf callees from 16 to 32 adds exactly one SUMMARY read per added callee
+/// plus one LOCAL_OPT body read per added inlined callee, and nothing else.
+/// A planted join reading any extra fact per callee fails this.
+#[test]
+fn optimizer_caller_fan_in_grows_exactly_per_direct_callee() {
+    let measure = |count: usize| {
+        let graph = optimizer_graph(optimizer_source(count));
+        let drive = count as u64; // drive is the slot after the leaves
+        let (id, _) = graph
+            .keys
+            .iter()
+            .find(|(_, key)| key.0 == "ipo_opt" && key.1 == vec![drive])
+            .expect("driver IPO_OPT measured");
+        let deps = graph.deps.get(id).cloned().unwrap_or_default();
+        let kind_of = |dep: &u64| graph.keys[dep].0.clone();
+        let summaries = deps.iter().filter(|d| kind_of(d) == "summary").count();
+        let bodies = deps
+            .iter()
+            .filter(|d| kind_of(d) == "local_opt" && graph.keys[*d].1 != vec![drive])
+            .count();
+        (deps.len(), summaries, bodies)
+    };
+    let (a, a_summaries, a_bodies) = measure(16);
+    let (b, b_summaries, b_bodies) = measure(32);
+    eprintln!(
+        "driver IPO_OPT fan-in: 16 leaves {a} ({a_summaries} summaries, {a_bodies} bodies), \
+         32 leaves {b} ({b_summaries} summaries, {b_bodies} bodies)"
+    );
+    assert_eq!(
+        (a_summaries, b_summaries),
+        (16, 32),
+        "one SUMMARY per direct callee"
+    );
+    // Every leaf is inlinable today, so each callee also contributes its body.
+    assert_eq!(
+        (a_bodies, b_bodies),
+        (16, 32),
+        "one LOCAL_OPT per inlined callee"
+    );
+    assert_eq!(
+        b - a,
+        (b_summaries - a_summaries) + (b_bodies - a_bodies),
+        "caller fan-in grew by more than added callee summaries and bodies. {RULE}"
     );
 }

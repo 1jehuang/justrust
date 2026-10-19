@@ -355,7 +355,16 @@ flowchart LR
   functions publish an `unsupported` reason and OBJECT uses the stack emitter.
   Both kinds link together because the SSA backend uses the same private ABI.
 - Inlining: leaves of up to 24 instructions, chosen from direct-callee
-  summaries. Inlined bodies are recorded graph edges.
+  summaries. Inlined bodies are recorded graph edges. IPO_OPT fan-in is
+  exactly one SUMMARY per direct callee plus one LOCAL_OPT per inlined callee.
+  No per-caller inline cap yet: a caller with many leaf callees is one node
+  whose fan-in grows with its own call count. A cap is a separate policy
+  proposal, pending complete accounting.
+- Gate coverage: `tests/graph_integrity.rs` also runs the shape and work gates
+  with the optimizer on (`optimizer_nodes_add_no_whole_program_barriers`,
+  `optimizer_build_work_scales_linearly`) and pins the caller fan-in formula
+  exactly (`optimizer_caller_fan_in_grows_exactly_per_direct_callee`). Planted
+  joins (read every summary; one extra read per callee) fail these gates.
 - Machine code: linear-scan allocation over 11 registers. Values live across
   calls go to stack slots.
 - Overflow checks are always on in the native profile today (matching the
