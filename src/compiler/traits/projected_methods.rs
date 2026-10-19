@@ -1121,7 +1121,16 @@ impl ValidatedTraitWorld {
             None,
         )?;
         for (index, ty) in instantiated.signature.params.iter().enumerate() {
-            self.validate_projected_parameter_references(ty, index, item.receiver)?;
+            if !self.closed_closure_tuple_input(
+                item,
+                goal,
+                &instantiated.signature,
+                &selection,
+                index,
+                context,
+            )? {
+                self.validate_projected_parameter_references(ty, index, item.receiver)?;
+            }
         }
         // A projection normalized to a reference-bearing value
         // (`Option<Self::Item>` with `Item = &'a T`) is governed by the

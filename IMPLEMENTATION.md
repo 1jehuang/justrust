@@ -515,8 +515,14 @@ cleanup failures.
       independent Fn Output equality noninterference pass stock/native CHECK,
       BUILD and run at workers 1/8. Numeric projection receivers default to
       i32/f64 only after constraint quiescence, preserving later explicit widths
-      (`tests/projection_defaults.rs`). Reference-bearing callable tuples, named
-      function-item values and full Iterator adapter execution remain open.
+      (`tests/projection_defaults.rs`). General reference-bearing callable support,
+      named function-item values and full Iterator adapter execution remain open.
+- [x] Closed checked stored closures accept shared/mutable reference argument tuples
+      with carrier-free results (`CALLABLE-REFERENCE-INPUTS.md`). Exact closed proof,
+      canonical Fn trait/mode and checked adapter ABI replay retain structural input
+      carriers. Shared Fn and mutable FnMut CHECK/BUILD/run match stock at workers
+      1/8, with forged proof/site/world/tuple, strengthening, alias and escape
+      rejection controls. Reference results and generic method discovery are separate.
 - [x] Source UFCS calls retain explicit method actuals separately from ordered
       trait-owner actuals. Omitted method arguments use canonical schema-based
       inference, including zero-argument expected-result inference; final trait

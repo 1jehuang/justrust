@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 
 mod associated_bounds;
 mod associated_types;
+mod callable_inputs;
 mod carrier_regions;
 mod catalog;
 #[path = "traits/closure_dispatch.rs"]
